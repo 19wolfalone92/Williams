@@ -1,0 +1,10 @@
+pandas>=2.2
+numpy>=1.26
+requests>=2.32
+python-dotenv>=1.0
+matplotlib>=3.9
+fastapi>=0.115
+uvicorn[standard]>=0.30
+pydantic>=2.8
+websocket-client>=1.8
+cryptography>=44.0

@@ -1,0 +1,151 @@
+# Williams Binance Bot + Android Dashboard 4.10.0
+
+Полноценная Testnet-first версия торгового бота по Williams (Alligator + AO + Fractals) с Android Dashboard, SQLite recovery, Binance WebSocket и защитными risk-фильтрами.
+
+## Что сделано в 4.10.0
+
+### Торговое ядро
+- Настоящая state machine: `FLAT → ENTRY_PENDING → OPEN → EXIT_PENDING → FLAT`.
+- `RECONCILE_REQUIRED` является жёсткой блокировкой новых входов.
+- Если BUY выполнился, но ответ API потерялся, recovery ищет его по уникальному `clientOrderId`.
+- Entry привязывается к конкретному OCO `orderListId`.
+- Recovery не принимает чужой BTC на кошельке за позицию бота.
+- Любое существенное расхождение ожидаемого и фактического BTC переводит систему в `RECONCILE_REQUIRED`.
+- Missing OCO восстанавливается только для подтверждённой позиции бота.
+- Выходная сделка при recovery привязывается к зарегистрированному OCO, когда это возможно.
+- Все критические действия журналируются в SQLite.
+
+### Risk engine
+Перед каждым новым входом проверяются:
+- дневной лимит убытка;
+- максимум сделок в день;
+- максимум последовательных убытков;
+- cooldown после сделки;
+- минимальное Risk/Reward;
+- spread;
+- ATR/волатильность;
+- подтверждение старшего таймфрейма;
+- размер позиции ограничивается одновременно долей капитала и риском на сделку.
+
+По умолчанию:
+- риск на сделку: 1%;
+- максимум дневного убытка: 3%;
+- максимум 5 сделок в день;
+- максимум 3 последовательных убытка;
+- cooldown 30 минут;
+- minimum R/R 1.5;
+- старший таймфрейм: 4h.
+
+Это защитные ограничения, а не гарантия прибыли.
+
+### WebSocket
+- realtime market stream;
+- Binance user-data stream;
+- автоматический reconnect с backoff;
+- обработка `eventStreamTerminated`;
+- проактивная ротация user stream до 24-часового срока;
+- Android получает realtime snapshot/candles/account updates.
+
+REST остаётся обязательным reconciliation-слоем: WebSocket не используется как единственный источник истины для финансового состояния.
+
+### Android
+- Compose dashboard;
+- свечной график с Alligator;
+- BUY/TP/SL;
+- PnL;
+- сделки и логи;
+- START / PAUSE / RESUME / STOP / RECOVER;
+- API key/secret хранятся через Android Keystore-backed encrypted storage;
+- release manifest запрещает cleartext HTTP;
+- debug build разрешает HTTP только для локального Testnet/LAN;
+- отображается реальное состояние state machine, включая `RECONCILE_REQUIRED`.
+
+## Безопасность
+
+1. Начинать только с Binance Spot Testnet.
+2. `TESTNET=true` — значение по умолчанию.
+3. LIVE требует явного `ALLOW_LIVE=true`.
+4. Никогда не помещать реальные API keys в Git или ZIP.
+5. Для API приложения использовать длинный случайный `MOBILE_API_TOKEN`.
+6. Для LIVE использовать HTTPS/WSS.
+7. API key Binance должен иметь только необходимые торговые права; вывод средств не нужен.
+
+## Запуск Python backend
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+python recovery_test.py
+python run_server.py
+```
+
+Windows:
+
+```text
+.venv\\Scripts\\activate
+```
+
+## Проверки
+
+```bash
+python -m compileall -q .
+python recovery_test.py
+```
+
+Recovery suite включает 10 сценариев:
+- BUY → OCO → crash → TP;
+- BUY → OCO → crash → SL;
+- BUY → crash → missing OCO;
+- restart с открытой позицией;
+- чужой BTC не становится позицией;
+- избыток BTC блокирует торговлю;
+- `RECONCILE_REQUIRED` блокирует новый BUY;
+- timeout после BUY восстанавливается по clientOrderId;
+- Entry связан с точным OCO list.
+
+## Backtester
+
+```bash
+python run_backtest.py --symbol BTCUSDT --interval 1h --start 2024-01-01 --end 2026-10-01
+```
+
+Исторический `fetch_klines()` поддерживает как live-вызов через Binance client, так и позиционный вызов `fetch_klines(symbol, interval, start, end)`.
+
+## Android
+
+Открыть корень проекта в Android Studio и собрать `app`.
+
+Версия приложения: **4.10.0**, versionCode **10**.
+
+Среда, в которой подготовлен этот архив, не содержит Android SDK/Gradle distribution, поэтому APK здесь не заявляется как собранный. Исходники Gradle-проекта подготовлены для сборки Android Studio.
+
+## Важное ограничение
+
+Даже после всех защит автоматическая торговля остаётся рискованной. Recovery и risk engine предназначены для снижения технических и риск-ошибок, а не для гарантии положительного результата стратегии.
+
+## Сборка APK
+
+Полная инструкция: `BUILD_APK_RU.md`.
+
+Проект подготовлен с AGP 8.7.3, Gradle 8.9, Java/Kotlin target 17 и compile/target SDK 35. Для локальной сборки можно использовать Android Studio. Для автоматической debug-сборки в GitHub предусмотрен workflow `.github/workflows/android.yml`.
+
+Release-подпись не хранится в проекте: создайте собственный keystore и локальный `keystore.properties`. Это необходимо для безопасного выпуска обновлений приложения.
+
+## 24/7 VPS mode
+
+The intended production architecture is now:
+
+`Android APK -> HTTPS/WSS -> Caddy -> Williams backend on VPS -> Binance`
+
+The backend persists encrypted Binance credentials and bot state on the VPS. Docker is configured with `restart: unless-stopped`, and `AUTO_START=true` resumes the bot after a VPS/container restart when credentials are present. See `deploy/README_RU.md`.
+
+## 4.10.0 — запуск без домена
+
+Для удалённой работы с телефона собственный домен больше не обязателен. Используйте `deploy/install_no_domain.sh`: после установки VPS он настраивает Tailscale Funnel и выдаёт HTTPS URL. Телефон работает как панель управления, а торговый процесс остаётся на VPS 24/7.
+
+
+## Автоматическая сборка APK через GitHub Actions
+
+См. `APK_BUILD_AUTO_RU.md`. После push в `main` GitHub Actions автоматически собирает устанавливаемый `app-debug.apk` и публикует его в Artifacts.

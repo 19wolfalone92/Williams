@@ -1,0 +1,12 @@
+#cloud-config
+# Optional template for a Linux VPS provider supporting cloud-init.
+# Replace TS_AUTH_KEY before using. Prefer a one-off/pre-approved key.
+package_update: true
+packages:
+  - curl
+  - openssl
+  - git
+runcmd:
+  - [ bash, -lc, 'curl -fsSL https://tailscale.com/install.sh | sh' ]
+  - [ bash, -lc, 'export TS_AUTH_KEY="REPLACE_WITH_TAILSCALE_AUTH_KEY"; tailscale up --auth-key="$TS_AUTH_KEY" --hostname=williams-bot' ]
+  - [ bash, -lc, 'tailscale funnel --bg 8000' ]

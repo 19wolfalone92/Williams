@@ -1,0 +1,104 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'app/**'
+      - '*.gradle.kts'
+      - 'gradle.properties'
+      - 'gradle/**'
+      - 'settings.gradle.kts'
+      - '.github/workflows/**'
+  pull_request:
+    paths:
+      - 'app/**'
+      - '*.gradle.kts'
+      - 'gradle.properties'
+      - 'gradle/**'
+      - 'settings.gradle.kts'
+      - '.github/workflows/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GRADLE_VERSION: '8.9'
+  ANDROID_PLATFORM: 'platforms;android-35'
+  ANDROID_BUILD_TOOLS: 'build-tools;35.0.0'
+
+jobs:
+  build-apk:
+    name: Build APKs
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "${ANDROID_PLATFORM}" "${ANDROID_BUILD_TOOLS}"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: ${{ env.GRADLE_VERSION }}
+
+      - name: Build debug APK (installable)
+        run: gradle --no-daemon :app:assembleDebug --stacktrace
+
+      - name: Build release APK (unsigned when no signing key is configured)
+        run: gradle --no-daemon :app:assembleRelease --stacktrace
+
+      - name: Generate SHA-256 checksums
+        run: |
+          cd app/build/outputs/apk
+          sha256sum debug/app-debug.apk > debug/app-debug.apk.sha256
+          sha256sum release/app-release-unsigned.apk > release/app-release-unsigned.apk.sha256
+
+      - name: Upload installable debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: williams-bot-debug-apk-${{ github.run_number }}
+          path: |
+            app/build/outputs/apk/debug/app-debug.apk
+            app/build/outputs/apk/debug/app-debug.apk.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload release APK and checksum
+        uses: actions/upload-artifact@v4
+        with:
+          name: williams-bot-release-unsigned-${{ github.run_number }}
+          path: |
+            app/build/outputs/apk/release/app-release-unsigned.apk
+            app/build/outputs/apk/release/app-release-unsigned.apk.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Build summary
+        run: |
+          {
+            echo '## Android build complete'
+            echo ''
+            echo '- **Installable APK:** `app-debug.apk`'
+            echo '- **Release artifact:** `app-release-unsigned.apk`'
+            echo '- Both APKs are available in the workflow **Artifacts** section.'
+          } >> "$GITHUB_STEP_SUMMARY"

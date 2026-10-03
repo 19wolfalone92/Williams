@@ -1,0 +1,16 @@
+#cloud-config
+# Williams Bot — Oracle Cloud / any cloud-init Ubuntu instance.
+# Replace REPLACE_WITH_TAILSCALE_AUTH_KEY with a one-off/pre-approved Tailscale auth key.
+# The project archive must be uploaded to /opt/williams before this script runs,
+# or clone/copy the repository in the commands below.
+package_update: true
+packages:
+  - curl
+  - openssl
+  - ca-certificates
+  - git
+runcmd:
+  - [ bash, -lc, 'curl -fsSL https://get.docker.com | sh' ]
+  - [ bash, -lc, 'curl -fsSL https://tailscale.com/install.sh | sh' ]
+  - [ bash, -lc, 'export TS_AUTH_KEY="REPLACE_WITH_TAILSCALE_AUTH_KEY"; tailscale up --auth-key="$TS_AUTH_KEY" --hostname=williams-bot' ]
+  - [ bash, -lc, 'cd /opt/williams/deploy && chmod +x install_no_domain.sh && ./install_no_domain.sh' ]
