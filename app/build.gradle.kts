@@ -1,5 +1,6 @@
 import java.io.FileInputStream
 import java.util.Properties
+import java.util.Base64
 
 plugins {
     id("com.android.application")
@@ -23,7 +24,7 @@ val debugKeystoreBase64 = System.getenv("WILLIAMS_DEBUG_KEYSTORE_B64")
 if (!debugKeystoreBase64.isNullOrBlank() && !debugKeystorePassword.isNullOrBlank()) {
     debugKeystoreFile.parentFile.mkdirs()
     if (!debugKeystoreFile.exists()) {
-        java.util.Base64.getDecoder().decode(debugKeystoreBase64)
+        Base64.getDecoder().decode(debugKeystoreBase64)
             .let { debugKeystoreFile.writeBytes(it) }
     }
 }
