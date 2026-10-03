@@ -35,21 +35,24 @@ env:
 jobs:
   build-apk:
     name: Build APKs
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '17'
           cache: gradle
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
 
       - name: Install Android SDK packages
         run: |
@@ -57,24 +60,50 @@ jobs:
           sdkmanager "${ANDROID_PLATFORM}" "${ANDROID_BUILD_TOOLS}"
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v5
         with:
           gradle-version: ${{ env.GRADLE_VERSION }}
 
-      - name: Build debug APK (installable)
+      - name: Build debug APK
         run: gradle --no-daemon :app:assembleDebug --stacktrace
 
-      - name: Build release APK (unsigned when no signing key is configured)
+      - name: Build release APK
         run: gradle --no-daemon :app:assembleRelease --stacktrace
+
+      - name: Verify APK files
+        run: |
+          set -e
+
+          DEBUG_APK="app/build/outputs/apk/debug/app-debug.apk"
+          RELEASE_APK="app/build/outputs/apk/release/app-release-unsigned.apk"
+
+          echo "Checking debug APK..."
+          test -f "$DEBUG_APK"
+
+          echo "Checking release APK..."
+          test -f "$RELEASE_APK"
+
+          echo ""
+          echo "=== APK files ==="
+          ls -lh "$DEBUG_APK" "$RELEASE_APK"
 
       - name: Generate SHA-256 checksums
         run: |
-          cd app/build/outputs/apk
-          sha256sum debug/app-debug.apk > debug/app-debug.apk.sha256
-          sha256sum release/app-release-unsigned.apk > release/app-release-unsigned.apk.sha256
+          sha256sum \
+            app/build/outputs/apk/debug/app-debug.apk \
+            > app/build/outputs/apk/debug/app-debug.apk.sha256
+
+          sha256sum \
+            app/build/outputs/apk/release/app-release-unsigned.apk \
+            > app/build/outputs/apk/release/app-release-unsigned.apk.sha256
+
+          echo ""
+          echo "=== SHA-256 ==="
+          cat app/build/outputs/apk/debug/app-debug.apk.sha256
+          cat app/build/outputs/apk/release/app-release-unsigned.apk.sha256
 
       - name: Upload installable debug APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: williams-bot-debug-apk-${{ github.run_number }}
           path: |
@@ -84,7 +113,7 @@ jobs:
           retention-days: 14
 
       - name: Upload release APK and checksum
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: williams-bot-release-unsigned-${{ github.run_number }}
           path: |
@@ -98,7 +127,16 @@ jobs:
           {
             echo '## Android build complete'
             echo ''
-            echo '- **Installable APK:** `app-debug.apk`'
-            echo '- **Release artifact:** `app-release-unsigned.apk`'
-            echo '- Both APKs are available in the workflow **Artifacts** section.'
+            echo '### APKs'
+            echo '- **Installable debug APK:** `app-debug.apk`'
+            echo '- **Unsigned release APK:** `app-release-unsigned.apk`'
+            echo ''
+            echo '### Environment'
+            echo '- **OS:** Ubuntu 24.04'
+            echo '- **Java:** 17'
+            echo '- **Gradle:** 8.9'
+            echo '- **Android Platform:** 35'
+            echo '- **Build Tools:** 35.0.0'
+            echo ''
+            echo 'Both APKs and their SHA-256 checksums are available in the workflow **Artifacts** section.'
           } >> "$GITHUB_STEP_SUMMARY"
