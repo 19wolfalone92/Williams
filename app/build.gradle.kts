@@ -13,6 +13,21 @@ if (keystorePropertiesFile.exists()) {
     FileInputStream(keystorePropertiesFile).use { keystoreProperties.load(it) }
 }
 
+val ciRunNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()
+val resolvedVersionCode = maxOf(10, ciRunNumber ?: 10)
+
+val debugKeystoreFile = rootProject.file("build/williams-debug.p12")
+val debugKeystorePassword = System.getenv("WILLIAMS_DEBUG_KEYSTORE_PASSWORD")
+val debugKeystoreBase64 = System.getenv("WILLIAMS_DEBUG_KEYSTORE_B64")
+
+if (!debugKeystoreBase64.isNullOrBlank() && !debugKeystorePassword.isNullOrBlank()) {
+    debugKeystoreFile.parentFile.mkdirs()
+    if (!debugKeystoreFile.exists()) {
+        java.util.Base64.getDecoder().decode(debugKeystoreBase64)
+            .let { debugKeystoreFile.writeBytes(it) }
+    }
+}
+
 android {
     namespace = "com.williamsbot"
     compileSdk = 35
@@ -21,7 +36,7 @@ android {
         applicationId = "com.williamsbot"
         minSdk = 26
         targetSdk = 35
-        versionCode = 10
+        versionCode = resolvedVersionCode
         versionName = "4.10.0"
     }
 
@@ -43,6 +58,17 @@ android {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
             isDebuggable = true
+
+            if (debugKeystoreFile.exists() &&
+                !debugKeystorePassword.isNullOrBlank()) {
+                signingConfig = signingConfigs.create("williamsDebug") {
+                    storeFile = debugKeystoreFile
+                    storePassword = debugKeystorePassword
+                    storeType = "PKCS12"
+                    keyAlias = "williams-debug"
+                    keyPassword = debugKeystorePassword
+                }
+            }
         }
         release {
             isMinifyEnabled = false

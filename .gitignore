@@ -39,3 +39,7 @@ data/credential_master.key
 # Runtime logs
 *.log
 server.log
+
+# Android signing material
+.signing/
+*.jks

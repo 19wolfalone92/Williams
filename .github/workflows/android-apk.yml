@@ -64,31 +64,116 @@ jobs:
         with:
           gradle-version: ${{ env.GRADLE_VERSION }}
 
+      - name: Restore persistent debug signing key
+        env:
+          DEBUG_KEYSTORE_B64: ${{ secrets.WILLIAMS_DEBUG_KEYSTORE_B64 }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${DEBUG_KEYSTORE_B64:-}" ]; then
+            echo "::error::WILLIAMS_DEBUG_KEYSTORE_B64 GitHub Secret is not configured."
+            echo "The debug APK must use a persistent signing key."
+            exit 1
+          fi
+
+          mkdir -p build
+
+          printf '%s' "$DEBUG_KEYSTORE_B64" \
+            | base64 --decode > build/williams-debug.p12
+
+          chmod 600 build/williams-debug.p12
+
+          echo "Persistent debug keystore restored."
+
+      - name: Validate debug signing configuration
+        env:
+          WILLIAMS_DEBUG_KEYSTORE_PASSWORD: ${{ secrets.WILLIAMS_DEBUG_KEYSTORE_PASSWORD }}
+          WILLIAMS_DEBUG_KEYSTORE_B64: ${{ secrets.WILLIAMS_DEBUG_KEYSTORE_B64 }}
+        run: |
+          set -euo pipefail
+
+          test -s build/williams-debug.p12
+
+          echo "Debug signing material: PRESENT"
+
       - name: Build debug APK
-        run: gradle --no-daemon :app:assembleDebug --stacktrace
+        env:
+          WILLIAMS_DEBUG_KEYSTORE_PASSWORD: ${{ secrets.WILLIAMS_DEBUG_KEYSTORE_PASSWORD }}
+          WILLIAMS_DEBUG_KEYSTORE_B64: ${{ secrets.WILLIAMS_DEBUG_KEYSTORE_B64 }}
+        run: |
+          gradle --no-daemon :app:assembleDebug --stacktrace
 
       - name: Build release APK
-        run: gradle --no-daemon :app:assembleRelease --stacktrace
+        run: |
+          gradle --no-daemon :app:assembleRelease --stacktrace
 
       - name: Verify APK files
         run: |
-          set -e
+          set -euo pipefail
 
           DEBUG_APK="app/build/outputs/apk/debug/app-debug.apk"
           RELEASE_APK="app/build/outputs/apk/release/app-release-unsigned.apk"
 
-          echo "Checking debug APK..."
           test -f "$DEBUG_APK"
-
-          echo "Checking release APK..."
           test -f "$RELEASE_APK"
 
-          echo ""
           echo "=== APK files ==="
           ls -lh "$DEBUG_APK" "$RELEASE_APK"
 
+      - name: Inspect APK metadata
+        run: |
+          set -euo pipefail
+
+          echo "=== DEBUG APK ==="
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging \
+            app/build/outputs/apk/debug/app-debug.apk \
+            | grep -E "package:|sdkVersion:|targetSdkVersion:"
+
+          echo
+          echo "=== RELEASE APK ==="
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging \
+            app/build/outputs/apk/release/app-release-unsigned.apk \
+            | grep -E "package:|sdkVersion:|targetSdkVersion:"
+
+      - name: Verify persistent debug keystore
+        run: |
+          set -euo pipefail
+          test -s build/williams-debug.p12
+          echo "Persistent debug PKCS12 keystore: PRESENT"
+
+      - name: Verify persistent debug APK signature
+        env:
+          WILLIAMS_DEBUG_KEYSTORE_PASSWORD: ${{ secrets.WILLIAMS_DEBUG_KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          APKSIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
+          KEYTOOL="$JAVA_HOME/bin/keytool"
+
+          test -f "$APK"
+          test -f "$APKSIGNER"
+          test -f "build/williams-debug.p12"
+
+          KEYSTORE_SHA="$("$KEYTOOL" -list -v             -keystore build/williams-debug.p12             -storetype PKCS12             -storepass "$WILLIAMS_DEBUG_KEYSTORE_PASSWORD"             -alias williams-debug             | awk -F': ' '/SHA256:/{print $2; exit}')"
+
+          APK_SHA="$("$APKSIGNER" verify --print-certs "$APK"             | awk -F': ' '/Signer #1 certificate SHA-256 digest:/{print $2; exit}')"
+
+          echo "Keystore SHA-256: $KEYSTORE_SHA"
+          echo "APK SHA-256:      $APK_SHA"
+
+          test -n "$KEYSTORE_SHA"
+          test -n "$APK_SHA"
+          test "$KEYSTORE_SHA" = "$APK_SHA"
+
+          "$APKSIGNER" verify --verbose "$APK"
+
+          echo "Persistent debug signing verification: PASS"
+
       - name: Generate SHA-256 checksums
         run: |
+          set -euo pipefail
+
           sha256sum \
             app/build/outputs/apk/debug/app-debug.apk \
             > app/build/outputs/apk/debug/app-debug.apk.sha256
@@ -97,7 +182,6 @@ jobs:
             app/build/outputs/apk/release/app-release-unsigned.apk \
             > app/build/outputs/apk/release/app-release-unsigned.apk.sha256
 
-          echo ""
           echo "=== SHA-256 ==="
           cat app/build/outputs/apk/debug/app-debug.apk.sha256
           cat app/build/outputs/apk/release/app-release-unsigned.apk.sha256
@@ -112,7 +196,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Upload release APK and checksum
+      - name: Upload release APK
         uses: actions/upload-artifact@v7
         with:
           name: williams-bot-release-unsigned-${{ github.run_number }}
@@ -127,16 +211,13 @@ jobs:
           {
             echo '## Android build complete'
             echo ''
+            echo "Version code: ${{ github.run_number }}"
+            echo ''
             echo '### APKs'
-            echo '- **Installable debug APK:** `app-debug.apk`'
-            echo '- **Unsigned release APK:** `app-release-unsigned.apk`'
+            echo '- Installable debug APK: `app-debug.apk`'
+            echo '- Release APK: `app-release-unsigned.apk`'
             echo ''
-            echo '### Environment'
-            echo '- **OS:** Ubuntu 24.04'
-            echo '- **Java:** 17'
-            echo '- **Gradle:** 8.9'
-            echo '- **Android Platform:** 35'
-            echo '- **Build Tools:** 35.0.0'
-            echo ''
-            echo 'Both APKs and their SHA-256 checksums are available in the workflow **Artifacts** section.'
+            echo '### Signing'
+            echo '- Debug: persistent GitHub Secret keystore'
+            echo '- Release: existing release signing configuration when available'
           } >> "$GITHUB_STEP_SUMMARY"
