@@ -92,6 +92,7 @@ class ReconnectingSocket(private val client:OkHttpClient,private val request:Req
 }
 
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable fun WilliamsApp(context:Context){
     val store=remember{SecureStore(context)}
     var host by remember{mutableStateOf(store.get("host",""))}
