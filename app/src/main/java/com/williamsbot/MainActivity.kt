@@ -202,3 +202,5 @@ fun TradingChart(c: List<Candle>, s: Status) {
         level(s.sl, colors.error, "SL")
     }
 }
+
+}
