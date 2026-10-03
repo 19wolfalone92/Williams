@@ -37,7 +37,7 @@ class Trader:
         if not self.client.testnet and os.getenv('ALLOW_LIVE','false').lower()!='true': raise RuntimeError('LIVE trading is disabled. Set TESTNET=true or explicitly ALLOW_LIVE=true.')
         if not self.client.api_key or not self.client.api_secret: raise RuntimeError('BINANCE_API_KEY and BINANCE_API_SECRET are required.')
         self.client.sync_time(); info=self.client.exchange_info(self.symbol); s=info['symbols'][0]; self.filters={f['filterType']:f for f in s['filters']}; self.base_asset=s['baseAsset']; self.quote_asset=s['quoteAsset']
-        self.db.log_event('INFO','startup','Trader initialized',{'symbol':self.symbol,'interval':self.interval,'testnet':self.client.testnet}); self.recover_state()
+        self.db.log_event('INFO','startup','Trader initialized',{'symbol':self.symbol,'interval':self.interval,'testnet':self.client.testnet}); self.ensure_foreign_base_balance_baseline(); self.recover_state()
         self.notify(f'Williams STARTED\n{self.symbol} {self.interval}\nTESTNET={self.client.testnet}\nSTATE={self.state()}')
 
     def state(self): return self.db.state_get('position_state','FLAT')
@@ -49,10 +49,60 @@ class Trader:
         f=self.filters.get('LOT_SIZE') or self.filters.get('MARKET_LOT_SIZE'); step=f['stepSize'] if f else '0.000001'; min_qty=float(f['minQty']) if f else 0; q=self.client.decimal_floor(qty,step); return float(q) if float(q)>=min_qty else 0.0
     def normalize_price(self,price):
         f=self.filters.get('PRICE_FILTER'); tick=f['tickSize'] if f else '0.01'; return float(self.client.decimal_floor(price,tick))
+    def _ensure_symbol_assets(self):
+        if self.base_asset and self.quote_asset:
+            return
+        info=self.client.exchange_info(self.symbol)
+        symbols=info.get('symbols',[])
+        if not symbols:
+            raise RuntimeError(f'Symbol {self.symbol} not found in Binance exchange info')
+        s=symbols[0]
+        self.base_asset=s.get('baseAsset')
+        self.quote_asset=s.get('quoteAsset')
+        if not self.quote_asset:
+            raise RuntimeError(f'Quote asset not found for {self.symbol}')
+
     def available_quote(self):
-        a=self.client.account(); return next((float(b['free']) for b in a.get('balances',[]) if b['asset']==self.quote_asset),0.0)
+        self._ensure_symbol_assets()
+        a=self.client.account()
+        return next((float(b['free']) for b in a.get('balances',[]) if b.get('asset')==self.quote_asset),0.0)
     def base_balance_total(self):
-        a=self.client.account(); return next((float(b['free'])+float(b['locked']) for b in a.get('balances',[]) if b['asset']==self.base_asset),0.0)
+        self._ensure_symbol_assets()
+        a=self.client.account()
+        return next((float(b['free'])+float(b['locked']) for b in a.get('balances',[]) if b.get('asset')==self.base_asset),0.0)
+
+    def bot_base_balance(self, total_balance=None):
+        if total_balance is None:
+            total_balance=self.base_balance_total()
+        baseline=self.db.state_get('foreign_base_balance')
+        if baseline is None:
+            raise RuntimeError('foreign_base_balance baseline is not initialized')
+        return max(0.0, float(total_balance)-float(baseline))
+
+    def ensure_foreign_base_balance_baseline(self, total_balance=None):
+        baseline=self.db.state_get('foreign_base_balance')
+        if baseline is not None:
+            return float(baseline)
+
+        if total_balance is None:
+            total_balance=self.base_balance_total()
+
+        open_trade=self.db.open_trade()
+        entry_intent=self.db.state_get('entry_client_order_id')
+
+        if open_trade is None and not entry_intent and self.state() in {'FLAT','RECONCILE_REQUIRED'}:
+            self.db.state_set('foreign_base_balance', float(total_balance))
+            self.db.log_event(
+                'INFO',
+                'foreign_balance_baselined',
+                'Captured pre-existing base-asset balance',
+                {'asset':self.base_asset,'balance':float(total_balance)}
+            )
+            return float(total_balance)
+
+        raise RuntimeError(
+            'Cannot initialize foreign_base_balance while a managed position or unresolved entry exists'
+        )
     def _min_qty(self):
         f=self.filters.get('LOT_SIZE') or self.filters.get('MARKET_LOT_SIZE'); return float(f['minQty']) if f else 0.0
     def _min_notional(self):
@@ -104,24 +154,25 @@ class Trader:
         bot_open_lists=[x for x in open_lists if self._is_bot_oco_list(x)]
         open_oco_ids={str(x.get('orderListId')) for x in bot_open_lists if x.get('orderListId') is not None}
         position_qty=self.base_balance_total()
+        bot_position_qty=self.bot_base_balance(position_qty)
         if open_trade is None:
             candidates=[]
             for buy in all_orders:
                 if buy.get('side')!='BUY' or buy.get('status')!='FILLED' or not self._is_bot_order(buy):continue
                 bought=float(buy.get('executedQty',0) or 0); sold=self._filled_sell_qty_after(buy,all_orders); remaining=max(0,bought-sold)
-                if remaining>=self._min_qty() and position_qty>=self._min_qty():candidates.append((int(buy.get('time',buy.get('transactTime',0)) or 0),buy,remaining))
+                if remaining>=self._min_qty() and bot_position_qty>=self._min_qty():candidates.append((int(buy.get('time',buy.get('transactTime',0)) or 0),buy,remaining))
             if candidates:
-                _,buy,remaining=max(candidates,key=lambda x:x[0]); quote=float(buy.get('cummulativeQuoteQty',0) or 0); bought=float(buy.get('executedQty',0) or 0); entry=quote/bought if quote and bought else float(buy.get('price',0) or 0); qty=min(remaining,position_qty)
+                _,buy,remaining=max(candidates,key=lambda x:x[0]); quote=float(buy.get('cummulativeQuoteQty',0) or 0); bought=float(buy.get('executedQty',0) or 0); entry=quote/bought if quote and bought else float(buy.get('price',0) or 0); qty=min(remaining,bot_position_qty)
                 self.db.save_trade(entry_time=datetime.fromtimestamp(int(buy.get('transactTime',buy.get('time',0)))/1000,tz=timezone.utc).isoformat(),symbol=self.symbol,side='LONG',entry_price=entry,quantity=qty,entry_order_id=str(buy.get('orderId')),fees=0); open_trade=self.db.open_trade(); self.db.log_event('WARNING','trade_reconstructed','Reconstructed unresolved bot-owned LONG',buy)
         if open_trade:
             expected_qty=self._trade_remaining_qty(open_trade,all_orders)
             tolerance=max(self._min_qty(),expected_qty*float(os.getenv('BALANCE_TOLERANCE_PCT','0.002')))
             if expected_qty < self._min_qty(): self._recover_closed_trade(open_trade,all_orders); self._set_state('FLAT')
-            elif abs(position_qty-expected_qty)>tolerance:
-                self._set_state('RECONCILE_REQUIRED'); self.notify(f'RECOVERY BLOCKED\nExpected {expected_qty:.8f} {self.base_asset}; actual {position_qty:.8f}. Manual reconciliation required.'); self.recovered=True; return
+            elif abs(bot_position_qty-expected_qty)>tolerance:
+                self._set_state('RECONCILE_REQUIRED'); self.notify(f'RECOVERY BLOCKED\nExpected Williams {expected_qty:.8f} {self.base_asset}; actual Williams balance {bot_position_qty:.8f}. Total account balance={position_qty:.8f}; foreign baseline={position_qty-bot_position_qty:.8f}. Manual reconciliation required.'); self.recovered=True; return
             else:
                 if not open_oco_ids:
-                    qty=min(expected_qty,position_qty); self._set_state('EXIT_PENDING'); self.place_oco(qty,float(open_trade['entry_price']),trade_id=open_trade['id'])
+                    qty=min(expected_qty,bot_position_qty); self._set_state('EXIT_PENDING'); self.place_oco(qty,float(open_trade['entry_price']),trade_id=open_trade['id'])
                 self._set_state('OPEN')
         else:
             # Never allow a foreign balance to create a bot position. An unresolved
@@ -210,7 +261,7 @@ class Trader:
         return result,tp,sl
 
     def has_open_position(self):return self.db.open_trade() is not None and self._is_meaningful_position()
-    def _is_meaningful_position(self):return self.base_balance_total()>=self._min_qty()
+    def _is_meaningful_position(self):return self.bot_base_balance()>=self._min_qty()
 
     def process(self):
         self.recover_state()

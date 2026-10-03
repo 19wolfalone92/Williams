@@ -39,10 +39,34 @@ class BinanceSpotClient:
         if order_list_id is not None: p['orderListId']=order_list_id
         if list_client_order_id is not None: p['origClientOrderId']=list_client_order_id
         return self._request('GET','/api/v3/orderList',p,signed=True)
-    def open_order_lists(self,symbol=None): return self._request('GET','/api/v3/openOrderList',{'symbol':symbol} if symbol else {},signed=True)
-    def all_order_lists(self,symbol,limit=100): return self._request('GET','/api/v3/allOrderList',{'symbol':symbol,'limit':limit},signed=True)
+    def open_order_lists(self,symbol=None): return self._request('GET','/api/v3/openOrderList',{},signed=True)
+    def all_order_lists(self,symbol=None,limit=100): return self._request('GET','/api/v3/allOrderList',{'limit':limit},signed=True)
     def open_orders(self,symbol=None): return self._request('GET','/api/v3/openOrders',{'symbol':symbol} if symbol else {},signed=True)
-    def create_user_listen_token(self): return self._request('POST','/sapi/v1/userListenToken',signed=True)
+    def websocket_signature_params(self, recv_window=None):
+        params = {
+            "apiKey": self.api_key,
+            "timestamp": int(time.time() * 1000) + self.time_offset_ms,
+            "recvWindow": int(
+                recv_window if recv_window is not None else self.recv_window
+            ),
+        }
+
+        # Binance signed requests use the canonical query-string form.
+        query = urlencode(sorted(params.items()), doseq=True)
+
+        params["signature"] = hmac.new(
+            self.api_secret.encode(),
+            query.encode(),
+            hashlib.sha256,
+        ).hexdigest()
+
+        return params
+
+    def create_user_listen_token(self):
+        raise BinanceAPIError(
+            'Spot Testnet does not support /sapi/v1/userListenToken; '
+            'use userDataStream.subscribe.signature'
+        )
     def order(self,symbol,side,type_,quantity=None,quote_order_qty=None,price=None,stop_price=None,time_in_force=None,new_client_order_id=None):
         p={'symbol':symbol,'side':side,'type':type_,'newOrderRespType':'FULL'}
         if quantity is not None:p['quantity']=quantity

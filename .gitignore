@@ -34,6 +34,7 @@ deploy/credentials/
 deploy/backups/
 
 # Local encrypted credential key
+data/binance_credentials.enc
 data/credential_master.key
 
 # Runtime logs
