@@ -164,7 +164,13 @@ jobs:
 
           test -n "$KEYSTORE_SHA"
           test -n "$APK_SHA"
-          test "$KEYSTORE_SHA" = "$APK_SHA"
+
+          KEYSTORE_SHA_NORMALIZED="$(printf '%s' "$KEYSTORE_SHA" | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+          APK_SHA_NORMALIZED="$(printf '%s' "$APK_SHA" | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+
+          test "$KEYSTORE_SHA_NORMALIZED" = "$APK_SHA_NORMALIZED"
+
+          echo "Signing certificate match: PASS"
 
           "$APKSIGNER" verify --verbose "$APK"
 
