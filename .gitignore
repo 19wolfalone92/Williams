@@ -32,3 +32,10 @@ local.properties
 # Deployment runtime data
 deploy/credentials/
 deploy/backups/
+
+# Local encrypted credential key
+data/credential_master.key
+
+# Runtime logs
+*.log
+server.log
