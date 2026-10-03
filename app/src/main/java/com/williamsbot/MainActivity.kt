@@ -22,13 +22,16 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import kotlinx.coroutines.*
-import com.google.mlkit.vision.barcode.GmsBarcodeScanning
+import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 import okhttp3.*
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Locale
@@ -99,7 +102,7 @@ class ReconnectingSocket(private val client:OkHttpClient,private val request:Req
     val scope=rememberCoroutineScope();val httpClient=remember{OkHttpClient.Builder().connectTimeout(10,TimeUnit.SECONDS).readTimeout(20,TimeUnit.SECONDS).build()}
     fun api()=Api(host,token)
     fun applySnapshot(j:JSONObject){val p=j.optJSONObject("position");status=status.copy(symbol=j.optString("symbol",status.symbol),interval=j.optString("interval",status.interval),testnet=j.optBoolean("testnet",status.testnet),running=j.optBoolean("running",status.running),paused=j.optBoolean("paused",status.paused),recovered=j.optBoolean("recovered",status.recovered),state=j.optString("state",status.state),price=j.optDouble("price").takeUnless{it.isNaN()},balance=j.optDouble("quote_balance").takeUnless{it.isNaN()},qty=p?.optDouble("quantity")?.takeUnless{it.isNaN()},entry=p?.optDouble("entry_price")?.takeUnless{it.isNaN()},tp=j.optDouble("take_profit_price").takeUnless{it.isNaN()||it==0.0},sl=j.optDouble("stop_loss_price").takeUnless{it.isNaN()||it==0.0},pnl=j.optDouble("pnl").takeUnless{it.isNaN()},pnlPct=j.optDouble("pnl_pct").takeUnless{it.isNaN()},error=j.optString("last_error").takeIf{it.isNotBlank()},serverTime=j.optString("server_time",status.serverTime),wsConnected=j.optBoolean("ws_connected",status.wsConnected),binanceConfigured=j.optBoolean("binance_configured",status.binanceConfigured),riskPerTrade=j.optDouble("risk_per_trade_pct",status.riskPerTrade),maxDailyLoss=j.optDouble("max_daily_loss_pct",status.maxDailyLoss),tradesToday=j.optInt("trades_today",status.tradesToday),maxTrades=j.optInt("max_trades_per_day",status.maxTrades),consecutiveLosses=j.optInt("consecutive_losses",status.consecutiveLosses),maxConsecutiveLosses=j.optInt("max_consecutive_losses",status.maxConsecutiveLosses));j.optJSONArray("candles")?.let{a->candles=List(a.length()){i->val x=a.getJSONObject(i);Candle(x.optString("time"),x.optDouble("open"),x.optDouble("close"),x.optDouble("high"),x.optDouble("low"),x.optDouble("jaw").takeUnless{it.isNaN()},x.optDouble("teeth").takeUnless{it.isNaN()},x.optDouble("lips").takeUnless{it.isNaN()},x.optBoolean("long_signal"),x.optBoolean("fractal_up"),x.optBoolean("fractal_down"))}}}
-    fun refresh(){scope.launch(Dispatchers.IO){try{refreshing=true;val a=api();val j=JSONObject(a.get("/api/v1/status"));val k=JSONObject(a.get("/api/v1/market/klines"));val snap=JSONObject(j.toString()).apply{put("candles",k.getJSONArray("candles"))};val ta=JSONArray(a.get("/api/v1/trades"));val la=JSONArray(a.get("/api/v1/logs"));val nt=List(ta.length()){i->{val x=ta.getJSONObject(i);Trade(x.optString("id"),x.optString("side"),x.optDouble("entry_price").takeUnless{it.isNaN()},x.optDouble("exit_price").takeUnless{it.isNaN()},x.optDouble("pnl").takeUnless{it.isNaN()},x.optString("reason"))}};val nl=List(la.length()){i->{val x=la.getJSONObject(i);"${x.optString("created_at")} ${x.optString("level")} ${x.optString("message")}"}};withContext(Dispatchers.Main){applySnapshot(snap);trades=nt;logs=nl;refreshing=false}}catch(e:Exception){withContext(Dispatchers.Main){message=e.message?:"Ошибка соединения";refreshing=false}}}}
+    fun refresh(){scope.launch(Dispatchers.IO){try{refreshing=true;val a=api();val j=JSONObject(a.get("/api/v1/status"));val k=JSONObject(a.get("/api/v1/market/klines"));val snap=JSONObject(j.toString()).apply{put("candles",k.getJSONArray("candles"))};val ta=JSONArray(a.get("/api/v1/trades"));val la=JSONArray(a.get("/api/v1/logs"));val nt=List(ta.length()){i->val x=ta.getJSONObject(i);Trade(x.optString("id"),x.optString("side"),x.optDouble("entry_price").takeUnless{it.isNaN()},x.optDouble("exit_price").takeUnless{it.isNaN()},x.optDouble("pnl").takeUnless{it.isNaN()},x.optString("reason"))};val nl=List(la.length()){i->val x=la.getJSONObject(i);"${x.optString("created_at")} ${x.optString("level")} ${x.optString("message")}"}};withContext(Dispatchers.Main){applySnapshot(snap);trades=nt;logs=nl;refreshing=false}}catch(e:Exception){withContext(Dispatchers.Main){message=e.message?:"Ошибка соединения";refreshing=false}}}}
     fun command(path:String){scope.launch(Dispatchers.IO){try{api().post(path);refresh()}catch(e:Exception){withContext(Dispatchers.Main){message=e.message?:"Ошибка"}}}}
     fun applyPairing(raw:String){
         try{
@@ -151,6 +154,7 @@ fun TradingChart(c: List<Candle>, s: Status) {
     if (c.isEmpty()) { Text("Нет рыночных данных"); return }
     var scale by remember { mutableFloatStateOf(1f) }
     var offset by remember { mutableFloatStateOf(0f) }
+    val colors = MaterialTheme.colorScheme
     Canvas(
         Modifier.fillMaxWidth().height(390.dp)
             .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(16.dp))
@@ -168,13 +172,13 @@ fun TradingChart(c: List<Candle>, s: Status) {
         val minP = min(v.minOf { it.low }, levels.minOrNull() ?: Double.MAX_VALUE)
         val maxP = max(v.maxOf { it.high }, levels.maxOrNull() ?: Double.MIN_VALUE)
         val range = max(1e-9, maxP - minP)
-        fun y(p: Double) = size.height - (p - minP) / range * size.height
+        fun y(p: Double): Float = (size.height - (p - minP) / range * size.height).toFloat()
         fun x(i: Int) = if (v.size == 1) size.width / 2 else i.toFloat() / (v.size - 1) * size.width
         for (i in v.indices) {
             val q = v[i]
-            drawLine(MaterialTheme.colorScheme.outline, Offset(x(i), y(q.high)), Offset(x(i), y(q.low)), 1f)
+            drawLine(colors.outline, Offset(x(i), y(q.high)), Offset(x(i), y(q.low)), 1f)
             val top = y(max(q.open, q.close)); val bot = y(min(q.open, q.close))
-            drawRect(if (q.close >= q.open) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error, Offset(x(i) - 3, top), androidx.compose.ui.geometry.Size(6f, max(2f, bot - top)))
+            drawRect(if (q.close >= q.open) colors.primary else colors.error, Offset(x(i) - 3, top), androidx.compose.ui.geometry.Size(6f, max(2f, bot - top)))
         }
         fun line(sel: (Candle) -> Double?, col: Color) {
             val p = Path(); var begun = false
@@ -183,17 +187,17 @@ fun TradingChart(c: List<Candle>, s: Status) {
             }
             if (begun) drawPath(p, col, style = androidx.compose.ui.graphics.drawscope.Stroke(2f, cap = StrokeCap.Round))
         }
-        line({ it.jaw }, MaterialTheme.colorScheme.tertiary)
-        line({ it.teeth }, MaterialTheme.colorScheme.secondary)
-        line({ it.lips }, MaterialTheme.colorScheme.primary)
+        line({ it.jaw }, colors.tertiary)
+        line({ it.teeth }, colors.secondary)
+        line({ it.lips }, colors.primary)
         fun level(p: Double?, col: Color, label: String) {
             if (p == null) return
             val yy = y(p)
             drawLine(col, Offset(0f, yy), Offset(size.width, yy), 2f)
-            drawContext.canvas.nativeCanvas.drawText("$label ${fmt(p)}", 12f, yy - 6f, android.graphics.Paint().apply { color = col.toArgb(); textSize = 28f })
+            drawIntoCanvas { canvas -> canvas.nativeCanvas.drawText("$label ${fmt(p)}", 12f, yy - 6f, android.graphics.Paint().apply { color = col.toArgb(); textSize = 28f }) }
         }
-        level(s.entry, MaterialTheme.colorScheme.primary, "BUY")
-        level(s.tp, MaterialTheme.colorScheme.tertiary, "TP")
-        level(s.sl, MaterialTheme.colorScheme.error, "SL")
+        level(s.entry, colors.primary, "BUY")
+        level(s.tp, colors.tertiary, "TP")
+        level(s.sl, colors.error, "SL")
     }
 }
