@@ -134,7 +134,7 @@ class SecureStore(context: Context) {
 class Api(private val base: String, private val token: String) {
     private val client = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(20, TimeUnit.SECONDS)
+        .readTimeout(45, TimeUnit.SECONDS)
         .build()
 
     fun get(path: String) = request("GET", path, null)
@@ -329,9 +329,10 @@ fun WilliamsApp(context: Context) {
                 val snapshot = JSONObject(statusJson.toString()).apply {
                     put("candles", klinesJson.getJSONArray("candles"))
                 }
-                val scannerJson = JSONArray(
+                val scannerResponse = JSONObject(
                     a.get("/api/v1/scanner?refresh=$scannerRefresh")
                 )
+                val scannerJson = scannerResponse.optJSONArray("candidates") ?: JSONArray()
                 val tradesJson = JSONArray(a.get("/api/v1/trades"))
                 val logsJson = JSONArray(a.get("/api/v1/logs"))
 
@@ -352,13 +353,20 @@ fun WilliamsApp(context: Context) {
                     "${x.optString("created_at")} ${x.optString("level")} ${x.optString("message")}"
                 }
 
+                val scannerStarted = scannerResponse.optBoolean("started", false)
+                val scannerScanning = scannerResponse.optBoolean("scanning", false)
+
                 withContext(Dispatchers.Main) {
                     applySnapshot(snapshot)
                     candidates = parseCandidates(scannerJson)
                     trades = newTrades
                     logs = newLogs
                     refreshing = false
-                    message = "Данные обновлены"
+                    message = if (scannerRefresh && (scannerStarted || scannerScanning)) {
+                        "Сканирование запущено в фоне"
+                    } else {
+                        "Данные обновлены"
+                    }
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
@@ -459,8 +467,6 @@ fun WilliamsApp(context: Context) {
         if (token.isBlank()) {
             onDispose { }
         } else {
-            refresh()
-
             val wsUrl = host.trimEnd('/')
                 .replaceFirst(Regex("^http://"), "ws://")
                 .replaceFirst(Regex("^https://"), "wss://") +
@@ -520,12 +526,10 @@ fun WilliamsApp(context: Context) {
         }
     }
 
-    LaunchedEffect(Unit) {
-        if (token.isNotBlank() && host.isNotBlank()) refresh()
-    }
-
-    LaunchedEffect(tab) {
-        if (tab == 1 || tab == 2 || tab == 3) refresh()
+    LaunchedEffect(host, token) {
+        if (token.isNotBlank() && host.isNotBlank()) {
+            refresh()
+        }
     }
 
     val colors = darkColorScheme(
