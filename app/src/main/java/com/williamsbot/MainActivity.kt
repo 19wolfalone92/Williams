@@ -431,9 +431,9 @@ fun WilliamsApp(context: Context) {
             )
         }.sortedByDescending { it.score }
 
-    fun refresh(scannerRefresh: Boolean = false) {
-        if (host.isBlank() || token.isBlank()) return
-        scope.launch(Dispatchers.IO) {
+    suspend fun refresh(scannerRefresh: Boolean = false) {
+        if (host.isBlank() || confirmedToken.isBlank()) return
+        withContext(Dispatchers.IO) {
             try {
                 withContext(Dispatchers.Main) { refreshing = true }
                 val a = api()
@@ -487,6 +487,12 @@ fun WilliamsApp(context: Context) {
                     message = e.message ?: "Ошибка соединения"
                 }
             }
+        }
+    }
+
+    fun refreshUi(scannerRefresh: Boolean = false) {
+        scope.launch {
+            refresh(scannerRefresh)
         }
     }
 
@@ -643,7 +649,10 @@ fun WilliamsApp(context: Context) {
 
     LaunchedEffect(host, confirmedToken) {
         if (confirmedToken.length >= 32 && host.isNotBlank()) {
-            refresh()
+            while (isActive) {
+                refresh(false)
+                delay(15_000L)
+            }
         }
     }
 
@@ -723,8 +732,8 @@ fun WilliamsApp(context: Context) {
                     contentPadding = PaddingValues(vertical = 12.dp)
                 ) {
                     when (tab) {
-                        0 -> dashboard(status, candidates, ::command, message, refreshing, ::refresh)
-                        1 -> scannerScreen(candidates, refreshing, { refresh(true) })
+                        0 -> dashboard(status, candidates, ::command, message, refreshing, ::refreshUi)
+                        1 -> scannerScreen(candidates, refreshing, { refreshUi(true) })
                         2 -> positionScreen(status, candles)
                         3 -> historyScreen(trades, logs)
                         4 -> settingsScreen(
@@ -741,7 +750,7 @@ fun WilliamsApp(context: Context) {
                             onTestnet = { testnet = it },
                             onScan = ::scanPairing,
                             onConfigure = ::configure,
-                            onRefresh = { refresh(true) },
+                            onRefresh = { refreshUi(true) },
                             onDelete = {
                                 scope.launch(Dispatchers.IO) {
                                     try {

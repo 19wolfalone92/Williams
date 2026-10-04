@@ -190,7 +190,7 @@ class WebSocketHub:
 
                 app.run_forever(
                     ping_interval=30,
-                    ping_timeout=10
+                    ping_timeout=20
                 )
 
                 delay=1
@@ -301,8 +301,8 @@ class WebSocketHub:
                 self._user_ws=app
 
                 app.run_forever(
-                    ping_interval=20,
-                    ping_timeout=10
+                    ping_interval=30,
+                    ping_timeout=20
                 )
 
             except Exception as e:
