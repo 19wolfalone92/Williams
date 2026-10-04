@@ -13,18 +13,73 @@ class BinanceSpotClient:
         self.session=requests.Session(); self.session.headers.update({'X-MBX-APIKEY': self.api_key})
         self.time_offset_ms=0
     def _request(self, method, path, params=None, signed=False):
-        p=dict(params or {})
-        if signed:
-            p.setdefault('recvWindow', self.recv_window)
-            p['timestamp']=int(time.time()*1000)+self.time_offset_ms
-            query=urlencode(p,doseq=True)
-            p['signature']=hmac.new(self.api_secret.encode(),query.encode(),hashlib.sha256).hexdigest()
-        r=self.session.request(method,self.base_url+path,params=p,timeout=self.timeout)
-        try: payload=r.json()
-        except ValueError: payload={'code':r.status_code,'msg':r.text}
-        if r.status_code>=400 or (isinstance(payload,dict) and payload.get('code',0)<0):
-            raise BinanceAPIError(f'Binance {r.status_code}: {payload}')
-        return payload
+        """
+        Execute a Binance REST request.
+
+        GET requests are safe to retry on transient network failures.
+        POST/DELETE requests are intentionally NOT retried because repeating
+        an order/cancel request can create dangerous duplicate side effects.
+
+        Signed requests rebuild timestamp/signature on every attempt so a
+        retry cannot reuse an expired timestamp.
+        """
+        method = method.upper()
+        max_attempts = 3 if method == "GET" else 1
+        delays = (0.5, 1.0, 2.0)
+
+        last_exc = None
+
+        for attempt in range(max_attempts):
+            p = dict(params or {})
+
+            if signed:
+                p.setdefault('recvWindow', self.recv_window)
+                p['timestamp'] = int(time.time() * 1000) + self.time_offset_ms
+                query = urlencode(p, doseq=True)
+                p['signature'] = hmac.new(
+                    self.api_secret.encode(),
+                    query.encode(),
+                    hashlib.sha256,
+                ).hexdigest()
+
+            try:
+                r = self.session.request(
+                    method,
+                    self.base_url + path,
+                    params=p,
+                    timeout=self.timeout,
+                )
+            except (requests.Timeout, requests.ConnectionError) as exc:
+                last_exc = exc
+
+                if attempt + 1 >= max_attempts:
+                    raise
+
+                time.sleep(delays[attempt])
+
+                continue
+
+            try:
+                payload = r.json()
+            except ValueError:
+                payload = {'code': r.status_code, 'msg': r.text}
+
+            if r.status_code >= 400 or (
+                isinstance(payload, dict)
+                and payload.get('code', 0) < 0
+            ):
+                raise BinanceAPIError(
+                    f'Binance {r.status_code}: {payload}'
+                )
+
+            return payload
+
+        if last_exc is not None:
+            raise last_exc
+
+        raise BinanceAPIError(
+            f'Binance request failed: {method} {path}'
+        )
     def sync_time(self):
         server=self._request('GET','/api/v3/time'); self.time_offset_ms=int(server['serverTime'])-int(time.time()*1000); return server
     def ping(self): return self._request('GET','/api/v3/ping')
