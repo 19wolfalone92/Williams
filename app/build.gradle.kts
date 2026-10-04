@@ -24,8 +24,9 @@ val debugKeystoreBase64 = System.getenv("WILLIAMS_DEBUG_KEYSTORE_B64")
 if (!debugKeystoreBase64.isNullOrBlank() && !debugKeystorePassword.isNullOrBlank()) {
     debugKeystoreFile.parentFile.mkdirs()
     if (!debugKeystoreFile.exists()) {
-        Base64.getDecoder().decode(debugKeystoreBase64)
-            .let { debugKeystoreFile.writeBytes(it) }
+        Base64.getDecoder().decode(debugKeystoreBase64).let {
+            debugKeystoreFile.writeBytes(it)
+        }
     }
 }
 
@@ -38,7 +39,7 @@ android {
         minSdk = 26
         targetSdk = 35
         versionCode = resolvedVersionCode
-        versionName = "4.10.0"
+        versionName = "4.11.0"
     }
 
     buildFeatures {
@@ -60,8 +61,7 @@ android {
             versionNameSuffix = "-debug"
             isDebuggable = true
 
-            if (debugKeystoreFile.exists() &&
-                !debugKeystorePassword.isNullOrBlank()) {
+            if (debugKeystoreFile.exists() && !debugKeystorePassword.isNullOrBlank()) {
                 signingConfig = signingConfigs.create("williamsDebug") {
                     storeFile = debugKeystoreFile
                     storePassword = debugKeystorePassword
@@ -71,6 +71,7 @@ android {
                 }
             }
         }
+
         release {
             isMinifyEnabled = false
             isShrinkResources = false
@@ -79,9 +80,12 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+
             if (keystorePropertiesFile.exists()) {
                 signingConfig = signingConfigs.create("release") {
-                    storeFile = rootProject.file(keystoreProperties.getProperty("storeFile"))
+                    storeFile = rootProject.file(
+                        keystoreProperties.getProperty("storeFile")
+                    )
                     storePassword = keystoreProperties.getProperty("storePassword")
                     keyAlias = keystoreProperties.getProperty("keyAlias")
                     keyPassword = keystoreProperties.getProperty("keyPassword")

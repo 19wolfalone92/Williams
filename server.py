@@ -10,8 +10,9 @@ from data import fetch_klines
 from strategy import calculate_indicators, config_from_env
 from ws_hub import WebSocketHub
 from credentials_store import CredentialStore
+from market_scanner import MarketScanner
 
-load_dotenv(); API_TOKEN=os.getenv('MOBILE_API_TOKEN','').strip(); VERSION='4.10.0'
+load_dotenv(); API_TOKEN=os.getenv('MOBILE_API_TOKEN','').strip(); VERSION='4.11.0'
 app=FastAPI(title='Williams Binance Bot API',version=VERSION); hub=WebSocketHub()
 class CredentialPayload(BaseModel): api_key:str; api_secret:str; testnet:bool=True
 class ControlState:
@@ -63,6 +64,13 @@ class ControlState:
         with self.lock:self.paused=False
         return True
 state=ControlState()
+
+scanner_lock = threading.Lock()
+scanner_cache = {"time": 0.0, "data": []}
+SCANNER_CACHE_SECONDS = max(
+    10,
+    int(os.getenv("SCANNER_CACHE_SECONDS", "30"))
+)
 @app.on_event('startup')
 def startup():
     hub.configure_credentials(state.api_key,state.api_secret,state.testnet)
@@ -120,6 +128,55 @@ def status():
             if 'TAKE_PROFIT' in typ and o.get('price'):tp=float(o['price'])
             elif 'STOP_LOSS' in typ:sl=float(o.get('stop_price') or o.get('price') or 0) or None
     return {'version':VERSION,'symbol':t.symbol,'interval':t.interval,'testnet':t.client.testnet,'running':state.running,'paused':state.paused,'state':t.state(),'recovered':t.recovered,'last_error':state.last_error,'binance_configured':bool(t.client.api_key and t.client.api_secret),'price':ticker,'quote_balance':balance,'position':position,'pnl':pnl,'pnl_pct':pnl_pct,'take_profit_price':tp,'stop_loss_price':sl,'stop_loss_pct':t.stop_pct,'take_profit_pct':t.target_pct,'risk_per_trade_pct':t.risk_per_trade_pct,'max_daily_loss_pct':t.max_daily_loss_pct,'max_trades_per_day':t.max_trades_day,'consecutive_losses':t.db.consecutive_losses(t.symbol),'trades_today':t.db.trades_today(t.symbol),'server_time':datetime.now(timezone.utc).isoformat()}
+@app.get('/api/v1/scanner',dependencies=[Depends(auth)])
+def scanner(refresh:bool=False):
+    now = time.time()
+
+    if (
+        not refresh
+        and scanner_cache["data"]
+        and now - scanner_cache["time"] < SCANNER_CACHE_SECONDS
+    ):
+        return {
+            "version": VERSION,
+            "cached": True,
+            "age_seconds": round(now - scanner_cache["time"], 2),
+            "candidates": scanner_cache["data"],
+        }
+
+    if not scanner_lock.acquire(blocking=False):
+        if scanner_cache["data"]:
+            return {
+                "version": VERSION,
+                "cached": True,
+                "scanning": True,
+                "age_seconds": round(now - scanner_cache["time"], 2),
+                "candidates": scanner_cache["data"],
+            }
+        raise HTTPException(409, "Scanner is already running")
+
+    try:
+        t = state.ensure_trader()
+        results = MarketScanner(t.client).scan()
+        data = [candidate.to_dict() for candidate in results]
+
+        scanner_cache["time"] = time.time()
+        scanner_cache["data"] = data
+
+        return {
+            "version": VERSION,
+            "cached": False,
+            "age_seconds": 0,
+            "candidates": data,
+        }
+    except Exception as exc:
+        raise HTTPException(
+            503,
+            f"Scanner unavailable: {type(exc).__name__}: {exc}"
+        )
+    finally:
+        scanner_lock.release()
+
 @app.get('/api/v1/market/klines',dependencies=[Depends(auth)])
 def market_klines(limit:int=120):
     t=state.ensure_trader();df=fetch_klines(t.client,t.symbol,t.interval,limit=max(30,min(limit,250)));ind=calculate_indicators(df.iloc[:-1].copy(),config_from_env());rows=[]
