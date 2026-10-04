@@ -463,8 +463,8 @@ fun WilliamsApp(context: Context) {
         }
     }
 
-    DisposableEffect(host, token) {
-        if (token.isBlank()) {
+    DisposableEffect(host, token.length >= 32) {
+        if (token.length < 32) {
             onDispose { }
         } else {
             val wsUrl = host.trimEnd('/')
@@ -526,8 +526,8 @@ fun WilliamsApp(context: Context) {
         }
     }
 
-    LaunchedEffect(host, token) {
-        if (token.isNotBlank() && host.isNotBlank()) {
+    LaunchedEffect(host, token.length >= 32) {
+        if (token.length >= 32 && host.isNotBlank()) {
             refresh()
         }
     }
