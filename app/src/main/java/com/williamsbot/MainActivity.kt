@@ -142,21 +142,47 @@ class Api(private val base: String, private val token: String) {
     fun delete(path: String) = request("DELETE", path, null)
 
     private fun request(method: String, path: String, body: String?): String {
-        val builder = Request.Builder()
-            .url(base.trimEnd('/') + path)
-            .header("Authorization", "Bearer $token")
+        val maxAttempts = if (method == "GET") 3 else 1
+        var lastError: Exception? = null
 
-        val requestBody = body?.toRequestBody("application/json".toMediaType())
-        val request = builder
-            .method(method, if (method == "POST") requestBody ?: "".toRequestBody(null) else null)
-            .build()
+        repeat(maxAttempts) { attempt ->
+            try {
+                val builder = Request.Builder()
+                    .url(base.trimEnd('/') + path)
+                    .header("Authorization", "Bearer $token")
 
-        client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) {
-                error("HTTP ${response.code}: ${response.body?.string()}")
+                val requestBody =
+                    body?.toRequestBody("application/json".toMediaType())
+
+                val request = builder
+                    .method(
+                        method,
+                        if (method == "POST") {
+                            requestBody ?: "".toRequestBody(null)
+                        } else {
+                            null
+                        }
+                    )
+                    .build()
+
+                client.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) {
+                        error("HTTP ${response.code}: ${response.body?.string()}")
+                    }
+                    return response.body?.string() ?: "{}"
+                }
+            } catch (e: java.io.IOException) {
+                lastError = e
+
+                if (attempt + 1 < maxAttempts && method == "GET") {
+                    Thread.sleep(250L * (attempt + 1))
+                } else {
+                    throw e
+                }
             }
-            return response.body?.string() ?: "{}"
         }
+
+        throw lastError ?: IllegalStateException("Request failed")
     }
 }
 
