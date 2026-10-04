@@ -225,6 +225,7 @@ fun WilliamsApp(context: Context) {
     val store = remember { SecureStore(context) }
     var host by remember { mutableStateOf(store.get("host", "http://localhost:8000")) }
     var token by remember { mutableStateOf(store.get("token", "")) }
+    var confirmedToken by remember { mutableStateOf(store.get("token", "")) }
     var apiKey by remember { mutableStateOf("") }
     var apiSecret by remember { mutableStateOf("") }
     var testnet by remember { mutableStateOf(store.getBool("testnet", true)) }
@@ -247,7 +248,7 @@ fun WilliamsApp(context: Context) {
             .build()
     }
 
-    fun api() = Api(host, token)
+    fun api() = Api(host, confirmedToken)
 
     fun applySnapshot(json: JSONObject) {
         val position = json.optJSONObject("position")
@@ -416,6 +417,7 @@ fun WilliamsApp(context: Context) {
 
             host = newHost
             token = newToken
+            confirmedToken = newToken
             store.put("host", newHost)
             store.put("token", newToken)
             message = "Сервер подключён через QR"
@@ -444,9 +446,10 @@ fun WilliamsApp(context: Context) {
                     .put("testnet", testnet)
                     .toString()
 
-                api().post("/api/v1/config/binance", body)
+                Api(host, token).post("/api/v1/config/binance", body)
                 store.put("host", host)
                 store.put("token", token)
+                confirmedToken = token
                 store.putBool("testnet", testnet)
                 apiKey = ""
                 apiSecret = ""
@@ -463,8 +466,8 @@ fun WilliamsApp(context: Context) {
         }
     }
 
-    DisposableEffect(host, token.length >= 32) {
-        if (token.length < 32) {
+    DisposableEffect(host, confirmedToken) {
+        if (confirmedToken.length < 32) {
             onDispose { }
         } else {
             val wsUrl = host.trimEnd('/')
@@ -476,7 +479,7 @@ fun WilliamsApp(context: Context) {
                 httpClient,
                 Request.Builder()
                     .url(wsUrl)
-                    .header("Authorization", "Bearer $token")
+                    .header("Authorization", "Bearer $confirmedToken")
                     .build(),
                 { root ->
                     scope.launch(Dispatchers.Main) {
@@ -526,8 +529,8 @@ fun WilliamsApp(context: Context) {
         }
     }
 
-    LaunchedEffect(host, token.length >= 32) {
-        if (token.length >= 32 && host.isNotBlank()) {
+    LaunchedEffect(host, confirmedToken) {
+        if (confirmedToken.length >= 32 && host.isNotBlank()) {
             refresh()
         }
     }
