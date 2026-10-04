@@ -667,9 +667,9 @@ class Trader:
         - any preparation/recovery error aborts the cycle.
         """
 
-        # First reconcile the currently active symbol.
-        self.recover_state()
-
+        # Full recovery is performed at startup, after symbol switches,
+        # and after ambiguous exchange operations. Do not run expensive
+        # REST reconciliation on every normal scanner cycle.
         current_state = self.state()
 
         if current_state != 'FLAT':
