@@ -49,3 +49,6 @@ server.log
 *.before_*
 data/test_backups/
 data/test_tmp/
+
+# All local runtime data
+data/

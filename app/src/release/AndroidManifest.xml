@@ -1,4 +1,5 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- Release intentionally keeps cleartext HTTP disabled; use HTTPS/WSS for any remote backend. -->
-    <application android:usesCleartextTraffic="false" />
+    <!-- Local Williams backend uses http://localhost:8000.
+         network_security_config restricts cleartext to localhost only. -->
+    <application android:usesCleartextTraffic="true" />
 </manifest>
