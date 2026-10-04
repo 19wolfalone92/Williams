@@ -692,6 +692,16 @@ class Trader:
                 'Automatic scanner currently supports exactly one open position'
             )
 
+        self.db.log_event(
+            'INFO',
+            'autoscan_start',
+            'Automatic multi-symbol scan started',
+            {
+                'symbols': self.auto_scan_symbols,
+                'interval': self.interval,
+            },
+        )
+
         balance = self.available_quote()
 
         if balance <= 0:
@@ -714,9 +724,26 @@ class Trader:
             log.info(
                 'AUTO-SCAN: no STRICT_SIGNAL candidate passed risk checks'
             )
+            self.db.log_event(
+                'INFO',
+                'autoscan_wait',
+                'No candidate passed strict signal and risk checks',
+            )
             return
 
         candidate = selection.candidate
+
+        self.db.log_event(
+            'INFO',
+            'autoscan_selection',
+            f'Selected candidate {candidate.symbol}',
+            {
+                'symbol': candidate.symbol,
+                'score': candidate.score,
+                'setup_state': candidate.setup_state,
+                'signal': candidate.signal,
+            },
+        )
 
         # Controller must never be allowed to hand execution
         # a weak/watch-only candidate.

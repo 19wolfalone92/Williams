@@ -511,15 +511,39 @@ class MarketScanner:
     def scan(self) -> List[Candidate]:
         candidates = []
 
+        log.info(
+            "AUTO-SCAN START: symbols=%s interval=%s",
+            ",".join(self.symbols),
+            self.interval,
+        )
+
         for symbol in self.symbols:
             candidate = self.analyse(symbol)
 
             if candidate is not None:
                 candidates.append(candidate)
+                log.info(
+                    "AUTO-SCAN CANDIDATE: %s state=%s strict=%s score=%.2f",
+                    candidate.symbol,
+                    candidate.setup_state,
+                    candidate.signal,
+                    candidate.score,
+                )
+            else:
+                log.info(
+                    "AUTO-SCAN SKIP: %s",
+                    symbol,
+                )
 
         candidates.sort(
             key=self._ranking_key,
             reverse=True,
+        )
+
+        log.info(
+            "AUTO-SCAN END: candidates=%d selected=%s",
+            len(candidates),
+            candidates[0].symbol if candidates else "NONE",
         )
 
         return candidates

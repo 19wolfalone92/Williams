@@ -68,7 +68,7 @@ class PortfolioController:
                     self.client.ticker_price(candidate.symbol)["price"]
                 )
 
-                atr = entry_price * (candidate.atr_pct / 100.0)
+                atr = entry_price * candidate.atr_pct
 
                 risk = self.risk_engine.analyse(
                     symbol=candidate.symbol,
