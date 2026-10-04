@@ -192,56 +192,142 @@ class ReconnectingSocket(
     private val onMessage: (JSONObject) -> Unit,
     private val onState: (Boolean, String?) -> Unit
 ) : WebSocketListener() {
-    @Volatile private var stopped = true
+
+    @Volatile
+    private var stopped = true
+
+    @Volatile
     private var socket: WebSocket? = null
+
     private var attempt = 0
-    private val scheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor()
+    private var reconnectScheduled = false
+
+    private val lock = Any()
+    private val scheduler =
+        java.util.concurrent.Executors.newSingleThreadScheduledExecutor()
 
     fun start() {
-        stopped = false
-        attempt = 0
+        synchronized(lock) {
+            if (!stopped) return
+            stopped = false
+            attempt = 0
+            reconnectScheduled = false
+        }
         connect()
     }
 
     fun stop() {
-        stopped = true
-        socket?.close(1000, "screen closed")
+        val oldSocket: WebSocket?
+
+        synchronized(lock) {
+            stopped = true
+            reconnectScheduled = false
+            attempt = 0
+            oldSocket = socket
+            socket = null
+        }
+
+        oldSocket?.close(1000, "screen closed")
         scheduler.shutdownNow()
     }
 
     private fun connect() {
-        if (!stopped) socket = client.newWebSocket(request, this)
+        synchronized(lock) {
+            if (stopped) return
+            reconnectScheduled = false
+        }
+
+        val newSocket = client.newWebSocket(request, this)
+
+        synchronized(lock) {
+            if (stopped) {
+                newSocket.close(1000, "screen closed")
+                return
+            }
+            socket = newSocket
+        }
     }
 
-    private fun schedule(reason: String) {
-        if (stopped) return
-        val delay = (1000L shl attempt.coerceAtMost(5)).coerceAtMost(30_000L)
-        attempt++
-        onState(false, reason)
-        scheduler.schedule({ connect() }, delay, TimeUnit.MILLISECONDS)
+    private fun schedule(reason: String, webSocket: WebSocket?) {
+        synchronized(lock) {
+            if (stopped) return
+            if (webSocket != null && socket !== webSocket) return
+            if (reconnectScheduled) return
+
+            reconnectScheduled = true
+
+            val delay =
+                (1000L shl attempt.coerceAtMost(5)).coerceAtMost(30_000L)
+            attempt++
+
+            onState(false, reason)
+
+            scheduler.schedule({
+                synchronized(lock) {
+                    if (stopped) {
+                        reconnectScheduled = false
+                        return@schedule
+                    }
+                }
+                connect()
+            }, delay, TimeUnit.MILLISECONDS)
+        }
     }
 
     override fun onOpen(webSocket: WebSocket, response: Response) {
-        attempt = 0
-        socket = webSocket
+        synchronized(lock) {
+            if (stopped) {
+                webSocket.close(1000, "screen closed")
+                return
+            }
+
+            socket = webSocket
+            attempt = 0
+            reconnectScheduled = false
+        }
+
         onState(true, null)
         webSocket.send("ping")
     }
 
     override fun onMessage(webSocket: WebSocket, text: String) {
-        runCatching { onMessage(JSONObject(text)) }
+        runCatching {
+            onMessage(JSONObject(text))
+        }
     }
 
-    override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-        schedule("WebSocket закрывается ($code)")
+    override fun onClosing(
+        webSocket: WebSocket,
+        code: Int,
+        reason: String
+    ) {
+        schedule(
+            "WebSocket закрывается ($code): ${reason.ifBlank { "без причины" }}",
+            webSocket
+        )
     }
 
-    override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-        schedule("WebSocket закрыт ($code)")
+    override fun onClosed(
+        webSocket: WebSocket,
+        code: Int,
+        reason: String
+    ) {
+        schedule(
+            "WebSocket закрыт ($code): ${reason.ifBlank { "без причины" }}",
+            webSocket
+        )
     }
 
-    override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-        schedule(t.message ?: "WebSocket error")
+    override fun onFailure(
+        webSocket: WebSocket,
+        t: Throwable,
+        response: Response?
+    ) {
+        val http = response?.code?.let { " HTTP $it" } ?: ""
+        schedule(
+            "WebSocket ошибка$http: ${t.message ?: t.javaClass.simpleName}",
+            webSocket
+        )
     }
 }
 
