@@ -650,7 +650,7 @@ fun WilliamsApp(context: Context) {
     LaunchedEffect(host, confirmedToken) {
         if (confirmedToken.length >= 32 && host.isNotBlank()) {
             while (isActive) {
-                refresh(false)
+                refresh(true)
                 delay(15_000L)
             }
         }
