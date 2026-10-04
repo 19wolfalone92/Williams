@@ -433,19 +433,62 @@ fun WilliamsApp(context: Context) {
 
     suspend fun refresh(scannerRefresh: Boolean = false) {
         if (host.isBlank() || confirmedToken.isBlank()) return
+
         withContext(Dispatchers.IO) {
             try {
                 withContext(Dispatchers.Main) { refreshing = true }
+
                 val a = api()
+
                 val statusJson = JSONObject(a.get("/api/v1/status"))
                 val klinesJson = JSONObject(a.get("/api/v1/market/klines"))
+
                 val snapshot = JSONObject(statusJson.toString()).apply {
                     put("candles", klinesJson.getJSONArray("candles"))
                 }
-                val scannerResponse = JSONObject(
+
+                var scannerResponse = JSONObject(
                     a.get("/api/v1/scanner?refresh=$scannerRefresh")
                 )
-                val scannerJson = scannerResponse.optJSONArray("candidates") ?: JSONArray()
+
+                var scannerJson =
+                    scannerResponse.optJSONArray("candidates") ?: JSONArray()
+
+                val scannerStarted =
+                    scannerResponse.optBoolean("started", false)
+
+                /*
+                 * A refresh starts the backend scanner asynchronously.
+                 * Do not trust Compose state here: poll the backend itself.
+                 *
+                 * Maximum wait: 20 seconds.
+                 * If the scan takes longer, the current cached result remains
+                 * visible and the next 15-second refresh will check again.
+                 */
+                if (scannerRefresh &&
+                    (scannerStarted ||
+                     scannerResponse.optBoolean("scanning", false))
+                ) {
+                    for (attempt in 0 until 20) {
+                        delay(1000L)
+
+                        scannerResponse = JSONObject(
+                            a.get("/api/v1/scanner?refresh=false")
+                        )
+
+                        scannerJson =
+                            scannerResponse.optJSONArray("candidates")
+                                ?: JSONArray()
+
+                        if (!scannerResponse.optBoolean("scanning", false)) {
+                            break
+                        }
+                    }
+                }
+
+                val scannerError =
+                    scannerResponse.optString("last_error", "")
+
                 val tradesJson = JSONArray(a.get("/api/v1/trades"))
                 val logsJson = JSONArray(a.get("/api/v1/logs"))
 
@@ -466,8 +509,8 @@ fun WilliamsApp(context: Context) {
                     "${x.optString("created_at")} ${x.optString("level")} ${x.optString("message")}"
                 }
 
-                val scannerStarted = scannerResponse.optBoolean("started", false)
-                val scannerScanning = scannerResponse.optBoolean("scanning", false)
+                val scannerScanning =
+                    scannerResponse.optBoolean("scanning", false)
 
                 withContext(Dispatchers.Main) {
                     applySnapshot(snapshot)
@@ -475,12 +518,22 @@ fun WilliamsApp(context: Context) {
                     trades = newTrades
                     logs = newLogs
                     refreshing = false
-                    message = if (scannerRefresh && (scannerStarted || scannerScanning)) {
-                        "Сканирование запущено в фоне"
-                    } else {
-                        "Данные обновлены"
+
+                    message = when {
+                        scannerError.isNotBlank() ->
+                            "Ошибка сканера: $scannerError"
+
+                        scannerRefresh && scannerScanning ->
+                            "Сканирование выполняется"
+
+                        scannerRefresh ->
+                            "Сканирование завершено"
+
+                        else ->
+                            "Данные обновлены"
                     }
                 }
+
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
                     refreshing = false

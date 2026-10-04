@@ -65,53 +65,77 @@ class ControlState:
         return True
 state=ControlState()
 
-scanner_lock = threading.Lock()
+scanner_lock = threading.RLock()
 scanner_cache = {
     "time": 0.0,
     "data": [],
     "scanning": False,
     "last_error": None,
 }
+
 SCANNER_CACHE_SECONDS = max(
     10,
     int(os.getenv("SCANNER_CACHE_SECONDS", "30"))
 )
 
+def _scanner_snapshot():
+    with scanner_lock:
+        now = time.time()
+        age = (
+            round(now - scanner_cache["time"], 2)
+            if scanner_cache["time"]
+            else None
+        )
+
+        return {
+            "cached": bool(scanner_cache["data"]),
+            "scanning": bool(scanner_cache["scanning"]),
+            "age_seconds": age,
+            "last_error": scanner_cache["last_error"],
+            "candidates": list(scanner_cache["data"]),
+        }
+
 def _scanner_worker():
-    global scanner_cache
-
-    if not scanner_lock.acquire(blocking=False):
-        return
-
     try:
-        scanner_cache["scanning"] = True
-        scanner_cache["last_error"] = None
+        with scanner_lock:
+            scanner_cache["last_error"] = None
 
         t = state.ensure_trader()
         results = MarketScanner(t.client).scan()
         data = [candidate.to_dict() for candidate in results]
 
-        scanner_cache["time"] = time.time()
-        scanner_cache["data"] = data
+        with scanner_lock:
+            scanner_cache["time"] = time.time()
+            scanner_cache["data"] = data
+
     except Exception as exc:
-        scanner_cache["last_error"] = (
-            f"{type(exc).__name__}: {exc}"
-        )
+        with scanner_lock:
+            scanner_cache["last_error"] = (
+                f"{type(exc).__name__}: {exc}"
+            )
+
     finally:
-        scanner_cache["scanning"] = False
-        scanner_lock.release()
+        with scanner_lock:
+            scanner_cache["scanning"] = False
 
 def _start_scanner_background():
-    if scanner_cache["scanning"]:
-        return False
+    with scanner_lock:
+        if scanner_cache["scanning"]:
+            return False
 
-    thread = threading.Thread(
-        target=_scanner_worker,
-        daemon=True,
-        name="williams-scanner",
-    )
-    thread.start()
-    return True
+        # Mark the scan as active BEFORE starting the thread.
+        # This prevents duplicate starts during the tiny thread
+        # creation/scheduling window.
+        scanner_cache["scanning"] = True
+
+        thread = threading.Thread(
+            target=_scanner_worker,
+            daemon=True,
+            name="williams-scanner",
+        )
+        thread.start()
+
+        return True
 @app.on_event('startup')
 def startup():
     hub.configure_credentials(state.api_key,state.api_secret,state.testnet)
@@ -171,36 +195,18 @@ def status():
     return {'version':VERSION,'symbol':t.symbol,'interval':t.interval,'testnet':t.client.testnet,'running':state.running,'paused':state.paused,'state':t.state(),'recovered':t.recovered,'last_error':state.last_error,'binance_configured':bool(t.client.api_key and t.client.api_secret),'price':ticker,'quote_balance':balance,'position':position,'pnl':pnl,'pnl_pct':pnl_pct,'take_profit_price':tp,'stop_loss_price':sl,'stop_loss_pct':t.stop_pct,'take_profit_pct':t.target_pct,'risk_per_trade_pct':t.risk_per_trade_pct,'max_daily_loss_pct':t.max_daily_loss_pct,'max_trades_per_day':t.max_trades_day,'consecutive_losses':t.db.consecutive_losses(t.symbol),'trades_today':t.db.trades_today(t.symbol),'server_time':datetime.now(timezone.utc).isoformat()}
 @app.get('/api/v1/scanner',dependencies=[Depends(auth)])
 def scanner(refresh:bool=False):
-    now = time.time()
-    age = (
-        round(now - scanner_cache["time"], 2)
-        if scanner_cache["time"]
-        else None
-    )
+    started = False
 
-    # Normal requests use the latest cached result.
-    if not refresh:
-        return {
-            "version": VERSION,
-            "cached": bool(scanner_cache["data"]),
-            "scanning": scanner_cache["scanning"],
-            "age_seconds": age,
-            "last_error": scanner_cache["last_error"],
-            "candidates": scanner_cache["data"],
-        }
+    if refresh:
+        started = _start_scanner_background()
 
-    # Manual refresh starts a background scan and returns immediately.
-    started = _start_scanner_background()
+    result = _scanner_snapshot()
+    result["version"] = VERSION
 
-    return {
-        "version": VERSION,
-        "cached": bool(scanner_cache["data"]),
-        "scanning": scanner_cache["scanning"],
-        "started": started,
-        "age_seconds": age,
-        "last_error": scanner_cache["last_error"],
-        "candidates": scanner_cache["data"],
-    }
+    if refresh:
+        result["started"] = started
+
+    return result
 
 @app.get('/api/v1/market/klines',dependencies=[Depends(auth)])
 def market_klines(limit:int=120):

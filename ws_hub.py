@@ -14,6 +14,10 @@ class WebSocketHub:
             or os.getenv('DB_PATH')
             or 'data/trader.sqlite3'
         ); self.client=BinanceSpotClient(self.api_key,self.api_secret,self.testnet); self.clients=set(); self.lock=threading.RLock(); self.stop_event=threading.Event(); self.threads=[]; self.price=None; self.candles=[]; self.position=None; self.orders=[]; self.tp=None; self.sl=None; self.balance=None; self.base_asset=None; self.quote_asset=None; self.last_error=None; self.market_connected=False; self.user_connected=False; self._market_ws=None; self._user_ws=None; self.user_subscription_id=None; self.started=False
+        self.market_connected_once=False
+        self.market_reconnects=0
+        self.market_last_message_at=None
+        self.market_last_error=None
     def configure_credentials(self,key,secret,testnet=True):
         with self.lock:
             self.api_key=key.strip()
@@ -70,6 +74,9 @@ class WebSocketHub:
                 'market_connected':self.market_connected,
                 'user_connected':self.user_connected,
                 'user_subscription_id':self.user_subscription_id,
+                'market_reconnects':self.market_reconnects,
+                'market_last_message_at':self.market_last_message_at,
+                'market_last_error':self.market_last_error,
                 'ws_connected':(
                     self.market_connected
                     and (not self.api_key or self.user_connected)
@@ -182,7 +189,7 @@ class WebSocketHub:
                     ),
                     on_close=lambda ws,c,m:self._set_market(
                         False,
-                        f'closed {c} {m}'
+                        f'connection closed (code={c}, reason={m or "none"})'
                     )
                 )
 
@@ -207,8 +214,26 @@ class WebSocketHub:
                 delay=min(delay*2,30)
 
     def _set_market(self,connected,error=None):
-        self.market_connected=connected
-        if error:self.last_error=f'market ws: {error}'
+        was_connected = self.market_connected
+        self.market_connected = connected
+
+        if connected:
+            if self.market_connected_once and not was_connected:
+                self.market_reconnects += 1
+
+            self.market_connected_once = True
+            self.market_last_error = None
+
+            # A successful reconnect/open clears the previous
+            # market WS error instead of leaving a stale red state.
+            if self.last_error and self.last_error.startswith('market ws:'):
+                self.last_error = None
+
+        else:
+            if error:
+                self.market_last_error = str(error)
+                self.last_error = f'market ws: {error}'
+
         self.broadcast({'type':'ticker','data':self._live()})
     def _user_loop(self):
         delay=1
@@ -339,10 +364,20 @@ class WebSocketHub:
 
     def _on_market_message(self,ws,raw):
         try:
-            d=json.loads(raw).get('data',{}); ev=d.get('e')
-            if ev=='aggTrade':self.price=float(d['p']);self.broadcast({'type':'ticker','data':self._live()})
-            elif ev=='kline':self._update_kline(d['k'])
-        except Exception as e:log.debug('market parse: %s',e)
+            self.market_last_message_at=datetime.now(timezone.utc).isoformat()
+
+            d=json.loads(raw).get('data',{})
+            ev=d.get('e')
+
+            if ev=='aggTrade':
+                self.price=float(d['p'])
+                self.broadcast({'type':'ticker','data':self._live()})
+
+            elif ev=='kline':
+                self._update_kline(d['k'])
+
+        except Exception as e:
+            log.debug('market parse: %s',e)
     def _update_kline(self,k):
         item={'time':datetime.fromtimestamp(int(k['t'])/1000,tz=timezone.utc).isoformat(),'open':float(k['o']),'high':float(k['h']),'low':float(k['l']),'close':float(k['c'])}
         raw=list(self.candles)
@@ -449,4 +484,22 @@ class WebSocketHub:
         with self.lock:p=self.price;pos=dict(self.position) if self.position else None;tp=self.tp;sl=self.sl;bal=self.balance
         pnl=pct=None
         if pos and p is not None and pos.get('entry_price'):pnl=(p-pos['entry_price'])*pos['quantity'];pct=p/pos['entry_price']-1
-        return {'symbol':self.symbol,'interval':self.interval,'testnet':self.testnet,'price':p,'quote_balance':bal,'position':pos,'take_profit_price':tp,'stop_loss_price':sl,'pnl':pnl,'pnl_pct':pct,'server_time':datetime.now(timezone.utc).isoformat(),'ws_connected':self.market_connected and (not self.api_key or self.user_connected),'last_error':self.last_error}
+        return {
+            'symbol':self.symbol,
+            'interval':self.interval,
+            'testnet':self.testnet,
+            'price':p,
+            'quote_balance':bal,
+            'position':pos,
+            'take_profit_price':tp,
+            'stop_loss_price':sl,
+            'pnl':pnl,
+            'pnl_pct':pct,
+            'server_time':datetime.now(timezone.utc).isoformat(),
+            'ws_connected':self.market_connected and (not self.api_key or self.user_connected),
+            'market_connected':self.market_connected,
+            'market_reconnects':self.market_reconnects,
+            'market_last_message_at':self.market_last_message_at,
+            'market_last_error':self.market_last_error,
+            'last_error':self.last_error,
+        }
