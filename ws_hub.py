@@ -9,7 +9,11 @@ from strategy import calculate_indicators,config_from_env
 log=logging.getLogger('williams-ws')
 class WebSocketHub:
     def __init__(self):
-        self.symbol=os.getenv('SYMBOL','BTCUSDT').upper(); self.interval=os.getenv('INTERVAL','1h'); self.testnet=os.getenv('TESTNET','true').lower()=='true'; self.api_key=os.getenv('BINANCE_API_KEY',''); self.api_secret=os.getenv('BINANCE_API_SECRET',''); self.db=Database(os.getenv('DB_PATH','data/trader.sqlite3')); self.client=BinanceSpotClient(self.api_key,self.api_secret,self.testnet); self.clients=set(); self.lock=threading.RLock(); self.stop_event=threading.Event(); self.threads=[]; self.price=None; self.candles=[]; self.position=None; self.orders=[]; self.tp=None; self.sl=None; self.balance=None; self.base_asset=None; self.quote_asset=None; self.last_error=None; self.market_connected=False; self.user_connected=False; self._market_ws=None; self._user_ws=None; self.user_subscription_id=None; self.started=False
+        self.symbol=os.getenv('SYMBOL','BTCUSDT').upper(); self.interval=os.getenv('INTERVAL','1h'); self.testnet=os.getenv('TESTNET','true').lower()=='true'; self.api_key=os.getenv('BINANCE_API_KEY',''); self.api_secret=os.getenv('BINANCE_API_SECRET',''); self.db=Database(
+            os.getenv('WILLIAMS_DB_PATH')
+            or os.getenv('DB_PATH')
+            or 'data/trader.sqlite3'
+        ); self.client=BinanceSpotClient(self.api_key,self.api_secret,self.testnet); self.clients=set(); self.lock=threading.RLock(); self.stop_event=threading.Event(); self.threads=[]; self.price=None; self.candles=[]; self.position=None; self.orders=[]; self.tp=None; self.sl=None; self.balance=None; self.base_asset=None; self.quote_asset=None; self.last_error=None; self.market_connected=False; self.user_connected=False; self._market_ws=None; self._user_ws=None; self.user_subscription_id=None; self.started=False
     def configure_credentials(self,key,secret,testnet=True):
         with self.lock:
             self.api_key=key.strip()

@@ -1,17 +1,45 @@
+import os
 import json, sqlite3
 from pathlib import Path
 from datetime import datetime, timezone
+from contextlib import contextmanager
 
 class Database:
     SCHEMA_VERSION = 2
-    def __init__(self, path='data/trader.sqlite3'):
+    def __init__(self, path=None):
+        path = path or os.getenv('WILLIAMS_DB_PATH') or 'data/trader.sqlite3'
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(path, check_same_thread=False, timeout=20)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute('PRAGMA busy_timeout=20000')
         self.conn.execute('PRAGMA journal_mode=WAL')
         self.conn.execute('PRAGMA synchronous=NORMAL')
+        self._transaction_active = False
         self.init()
+
+    @contextmanager
+    def transaction(self):
+        """
+        Atomic transaction for multi-step DB operations.
+
+        While active, state_set/state_delete/log_event do not commit
+        individually. The whole operation is committed together or
+        rolled back together on exception.
+        """
+        if self._transaction_active:
+            yield self
+            return
+
+        self._transaction_active = True
+        try:
+            self.conn.execute('BEGIN')
+            yield self
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
+        finally:
+            self._transaction_active = False
 
     def init(self):
         self.conn.executescript('''
@@ -31,15 +59,18 @@ class Database:
 
     def state_set(self, key, value):
         self.conn.execute('INSERT INTO bot_state(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value', (key, str(value)))
-        self.conn.commit()
+        if not self._transaction_active:
+            self.conn.commit()
 
     def state_delete(self, key):
         self.conn.execute('DELETE FROM bot_state WHERE key=?', (key,))
-        self.conn.commit()
+        if not self._transaction_active:
+            self.conn.commit()
 
     def log_event(self, level, event, message, raw=None):
         self.conn.execute('INSERT INTO events(level,event,message,raw_json) VALUES(?,?,?,?)', (level, event, message, json.dumps(raw, default=str) if raw is not None else None))
-        self.conn.commit()
+        if not self._transaction_active:
+            self.conn.commit()
 
     def save_order(self, data):
         oid = str(data.get('orderId')) if data.get('orderId') is not None else None
@@ -64,14 +95,26 @@ class Database:
         try: return float(v)
         except (TypeError, ValueError): return None
 
-    def open_trade(self):
-        r = self.conn.execute('SELECT * FROM trades WHERE exit_time IS NULL ORDER BY id DESC LIMIT 1').fetchone()
+    def open_trade(self, symbol=None):
+        if symbol:
+            r = self.conn.execute(
+                'SELECT * FROM trades WHERE symbol=? AND exit_time IS NULL ORDER BY id DESC LIMIT 1',
+                (str(symbol).upper(),)
+            ).fetchone()
+        else:
+            r = self.conn.execute(
+                'SELECT * FROM trades WHERE exit_time IS NULL ORDER BY id DESC LIMIT 1'
+            ).fetchone()
         return dict(r) if r else None
 
     def save_trade(self, **kwargs):
         cols = ','.join(kwargs)
-        self.conn.execute(f'INSERT INTO trades({cols}) VALUES({",".join("?" for _ in kwargs)})', tuple(kwargs.values()))
+        cur = self.conn.execute(
+            f'INSERT INTO trades({cols}) VALUES({",".join("?" for _ in kwargs)})',
+            tuple(kwargs.values())
+        )
         self.conn.commit()
+        return cur.lastrowid
 
     def update_trade_oco(self, trade_id, order_list_id):
         self.conn.execute('UPDATE trades SET exit_order_list_id=? WHERE id=? AND exit_time IS NULL', (str(order_list_id), trade_id))

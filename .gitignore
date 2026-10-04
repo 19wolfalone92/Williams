@@ -44,3 +44,8 @@ server.log
 # Android signing material
 .signing/
 *.jks
+
+# Local development backups / temporary test data
+*.before_*
+data/test_backups/
+data/test_tmp/
