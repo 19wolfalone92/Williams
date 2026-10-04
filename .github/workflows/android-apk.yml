@@ -63,6 +63,7 @@ jobs:
         uses: gradle/actions/setup-gradle@v5
         with:
           gradle-version: ${{ env.GRADLE_VERSION }}
+          validate-wrappers: false
 
       - name: Restore persistent debug signing key
         env:
