@@ -71,8 +71,42 @@ def scenario_oco_link():
     with tempfile.TemporaryDirectory() as d:
         c=FakeClient();t=new_trader(os.path.join(d,'x.sqlite3'),c);seed(t,c);trade=t.db.open_trade();res,_,_=t.place_oco(1,100,trade_id=trade['id']);row=t.db.open_trade();assert str(row['exit_order_list_id'])==str(res['orderListId'])
 
+
+def scenario_fresh_missing_baseline():
+    with tempfile.TemporaryDirectory() as d:
+        c=FakeClient(base_free=1)
+        path=os.path.join(d,'x.sqlite3')
+        t=new_trader(path,c)
+
+        # Simulate a genuinely fresh DB with no baseline.
+        t.db.state_delete('foreign_base_balance:BTCUSDT')
+
+        assert t.db.state_get('foreign_base_balance:BTCUSDT') is None
+
+        t.recover_state()
+
+        baseline=t.db.state_get('foreign_base_balance:BTCUSDT')
+
+        assert baseline is not None
+        assert abs(float(baseline)-1.0)<1e-9
+        assert t.state()=='FLAT'
+        assert t.recovered is True
+        assert c.created_oco_count==0
+
 def run():
-    tests=[('BUY -> OCO -> crash -> TP',lambda:scenario_exit(104)),('BUY -> OCO -> crash -> SL',lambda:scenario_exit(98)),('BUY -> crash -> missing OCO',scenario_missing),('BUY -> OCO -> crash -> restart',scenario_restart),('foreign BTC is never a bot position',scenario_foreign_balance),('excess BTC enters RECONCILE_REQUIRED',scenario_excess_balance_blocks),('RECONCILE_REQUIRED blocks new entry',scenario_state_machine_blocks_entry),('missing BUY result becomes a hard reconcile block',scenario_missing_entry_result_blocks),('timed-out BUY is recovered by clientOrderId',scenario_entry_intent_recovery),('Entry is linked to exact OCO list',scenario_oco_link)]
+    tests=[
+        ('fresh DB -> missing baseline -> safe FLAT recovery',scenario_fresh_missing_baseline),
+        ('BUY -> OCO -> crash -> TP',lambda:scenario_exit(104)),
+        ('BUY -> OCO -> crash -> SL',lambda:scenario_exit(98)),
+        ('BUY -> crash -> missing OCO',scenario_missing),
+        ('BUY -> OCO -> crash -> restart',scenario_restart),
+        ('foreign BTC is never a bot position',scenario_foreign_balance),
+        ('excess BTC enters RECONCILE_REQUIRED',scenario_excess_balance_blocks),
+        ('RECONCILE_REQUIRED blocks new entry',scenario_state_machine_blocks_entry),
+        ('missing BUY result becomes a hard reconcile block',scenario_missing_entry_result_blocks),
+        ('timed-out BUY is recovered by clientOrderId',scenario_entry_intent_recovery),
+        ('Entry is linked to exact OCO list',scenario_oco_link)
+    ]
     for n,f in tests:check(n,f)
     print(f'\nRecovery tests: {len(tests)}/{len(tests)} passed')
 if __name__=='__main__':run()

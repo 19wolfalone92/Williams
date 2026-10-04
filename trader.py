@@ -419,6 +419,55 @@ class Trader:
         bot_open_lists=[x for x in open_lists if self._is_bot_oco_list(x)]
         open_oco_ids={str(x.get('orderListId')) for x in bot_open_lists if x.get('orderListId') is not None}
         position_qty=self.base_balance_total()
+
+        # A fresh database has no foreign-balance baseline yet.
+        # Never assume zero: that could misclassify an existing user-owned
+        # base-asset balance as a Williams position.
+        #
+        # We can safely initialize the baseline only when there is no
+        # managed position, no unresolved entry intent, and no unresolved
+        # Williams BUY remaining on the exchange.
+        baseline_key=f'foreign_base_balance:{self.symbol}'
+        baseline=self.db.state_get(baseline_key)
+
+        if baseline is None:
+            entry_intent=self.db.state_get('entry_client_order_id')
+
+            unresolved_bot_buy=False
+            for buy in all_orders:
+                if (
+                    buy.get('side') == 'BUY'
+                    and buy.get('status') == 'FILLED'
+                    and self._is_bot_order(buy)
+                ):
+                    bought=float(buy.get('executedQty',0) or 0)
+                    sold=self._filled_sell_qty_after(buy,all_orders)
+                    remaining=max(0.0,bought-sold)
+
+                    if remaining >= self._min_qty():
+                        unresolved_bot_buy=True
+                        break
+
+            if open_trade is None and not entry_intent and not unresolved_bot_buy:
+                self.ensure_foreign_base_balance_baseline(position_qty)
+                baseline=self.db.state_get(baseline_key)
+            else:
+                self._set_state('RECONCILE_REQUIRED')
+                self.recovered=True
+                self.db.log_event(
+                    'ERROR',
+                    'recovery_baseline_missing',
+                    'Recovery blocked because foreign base balance baseline is missing while managed exchange activity exists',
+                    {
+                        'symbol':self.symbol,
+                        'total_balance':float(position_qty),
+                        'open_trade':bool(open_trade),
+                        'entry_intent':bool(entry_intent),
+                        'unresolved_bot_buy':bool(unresolved_bot_buy)
+                    }
+                )
+                return
+
         bot_position_qty=self.bot_base_balance(position_qty)
         if open_trade is None:
             candidates=[]
