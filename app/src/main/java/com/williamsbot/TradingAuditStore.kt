@@ -241,6 +241,52 @@ class TradingAuditStore(context: Context) :
     }
 
     @Synchronized
+    fun estimateFeesUsdt(
+        symbol: String,
+        openedAt: Long,
+        closedAt: Long,
+        exitPrice: Double
+    ): Pair<Double, Boolean> {
+        val baseAsset = symbol.removeSuffix("USDT")
+        var feeUsdt = 0.0
+        var known = true
+
+        writableDatabase.query(
+            "executions",
+            arrayOf(
+                "commission",
+                "commission_asset",
+                "last_price",
+                "transaction_time"
+            ),
+            "symbol=? AND transaction_time>=? AND transaction_time<=?",
+            arrayOf(
+                symbol,
+                openedAt.toString(),
+                closedAt.toString()
+            ),
+            null,
+            null,
+            "transaction_time ASC"
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                val commission = cursor.getDouble(0)
+                if (commission <= 0.0) continue
+                val asset = cursor.getString(1) ?: ""
+                val price = cursor.getDouble(2).takeIf { it > 0.0 } ?: exitPrice
+                when (asset) {
+                    "USDT" -> feeUsdt += commission
+                    baseAsset -> feeUsdt += commission * price
+                    "" -> Unit
+                    else -> known = false
+                }
+            }
+        }
+
+        return feeUsdt to known
+    }
+
+    @Synchronized
     fun recordState(from: TradingState, to: TradingState, reason: String) {
         val values = ContentValues()
         values.put("from_state", from.name)
