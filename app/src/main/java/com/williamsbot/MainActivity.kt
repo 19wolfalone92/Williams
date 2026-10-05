@@ -109,11 +109,11 @@ import kotlin.math.min
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        StandaloneRuntime.start(this)
         TradeNotificationHelper.ensureChannel(this)
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 7001)
         }
+        StandaloneRuntime.start(this)
         setContent {
             WilliamsTheme {
                 WilliamsApp(this)
@@ -322,7 +322,7 @@ fun WilliamsApp(context: Context) {
     suspend fun loadAll(scan: Boolean) {
         withContext(Dispatchers.Main) { refreshing = scan }
         try {
-            val (statusJson, klineJson, scannerJson, tradeArray, logArray) =
+            val (statusJson, klineJson, scannerJson, tradeArray, insightJson, logArray) =
                 coroutineScope {
                     val status = async(Dispatchers.IO) { JSONObject(api.get("/api/v1/status")) }
                     val klines = async(Dispatchers.IO) { JSONObject(api.get("/api/v1/market/klines")) }
@@ -349,6 +349,7 @@ fun WilliamsApp(context: Context) {
                 candles = parseCandles(klineJson.optJSONArray("candles") ?: JSONArray())
                 candidates = parseCandidates(scannerJson.optJSONArray("candidates") ?: JSONArray())
                 trades = parseTrades(tradeArray)
+                learning = parseLearning(insightJson)
                 logs = parseLogs(logArray)
                 refreshing = false
                 message =
