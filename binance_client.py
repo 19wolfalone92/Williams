@@ -85,6 +85,7 @@ class BinanceSpotClient:
     def ping(self): return self._request('GET','/api/v3/ping')
     def exchange_info(self,symbol=None): return self._request('GET','/api/v3/exchangeInfo',{'symbol':symbol} if symbol else {})
     def ticker_price(self,symbol): return self._request('GET','/api/v3/ticker/price',{'symbol':symbol})
+    def ticker_24hr(self,symbol=None): return self._request('GET','/api/v3/ticker/24hr',{'symbol':symbol} if symbol else {})
     def book_ticker(self,symbol): return self._request('GET','/api/v3/ticker/bookTicker',{'symbol':symbol})
     def klines(self,symbol,interval,limit=200): return self._request('GET','/api/v3/klines',{'symbol':symbol,'interval':interval,'limit':limit})
     def account(self): return self._request('GET','/api/v3/account',signed=True)
