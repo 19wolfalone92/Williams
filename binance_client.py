@@ -86,7 +86,7 @@ class BinanceSpotClient:
     def exchange_info(self,symbol=None): return self._request('GET','/api/v3/exchangeInfo',{'symbol':symbol} if symbol else {})
     def ticker_price(self,symbol): return self._request('GET','/api/v3/ticker/price',{'symbol':symbol})
     def ticker_24hr(self,symbol=None): return self._request('GET','/api/v3/ticker/24hr',{'symbol':symbol} if symbol else {})
-    def book_ticker(self,symbol): return self._request('GET','/api/v3/ticker/bookTicker',{'symbol':symbol})
+    def book_ticker(self,symbol=None): return self._request('GET','/api/v3/ticker/bookTicker',{'symbol':symbol} if symbol else {})
     def klines(self,symbol,interval,limit=200): return self._request('GET','/api/v3/klines',{'symbol':symbol,'interval':interval,'limit':limit})
     def account(self): return self._request('GET','/api/v3/account',signed=True)
     def all_orders(self,symbol,limit=1000): return self._request('GET','/api/v3/allOrders',{'symbol':symbol,'limit':limit},signed=True)
