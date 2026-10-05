@@ -498,6 +498,9 @@ private class NativeEngine(
     private val maxRiskPerTradePct = 0.005
     private val maxSpreadPct = 0.0015
     private val maxSlippagePct = 0.005
+    private val equityCircuitBreaker = EquityCircuitBreaker(maxDrawdownPct = 0.05)
+    @Volatile private var lastEquityCheckMs = 0L
+    @Volatile private var circuitBreakerTripInProgress = false
     private val feeBufferPerSidePct = 0.001
     @Volatile private var serverTimeOffsetMs = 0L
     private val BINANCE_RECV_WINDOW_MS = 60000L
@@ -754,6 +757,8 @@ private class NativeEngine(
             .put("open_positions", positionList().size)
             .put("max_open_positions", maxOpenPositions)
             .put("reserved_risk_pct", reservedRiskPct())
+            .put("circuit_breaker_tripped", equityCircuitBreaker.isTripped())
+            .put("managed_equity", estimateManagedEquity())
             .put("max_total_risk_pct", maxTotalRiskPct)
             .put("max_risk_per_trade_pct", maxRiskPerTradePct)
             .put("reconcile_required", reconcileRequired)
@@ -879,6 +884,18 @@ private class NativeEngine(
             recoverPendingEntries()
             reconcilePositionsWithExchange()
             auditManagedOpenOrders()
+            liveUsdtBalance = signedAccount()
+                .getJSONArray("balances")
+                .let { balances ->
+                    (0 until balances.length())
+                        .asSequence()
+                        .map { balances.getJSONObject(it) }
+                        .firstOrNull { it.optString("asset") == "USDT" }
+                        ?.optString("free")
+                        ?.toDoubleOrNull()
+                        ?: 0.0
+                }
+            equityCircuitBreaker.reset(estimateManagedEquity())
         } catch (x: Exception) {
             setReconcileRequired(
                 "startup exchange synchronization failed: " +
@@ -924,6 +941,7 @@ private class NativeEngine(
                                     "managed position restored"
                                 )
                             }
+                            checkAutomaticCircuitBreaker()
                             requestScan()
                         }
                     } catch (x: Exception) {
@@ -3192,17 +3210,20 @@ private class NativeEngine(
     }
 
     private fun floorStep(value: Double, step: Double): Double =
-        if (step <= 0.0) value else floor(value / step) * step
+        if (step <= 0.0) value else ExecutionMath.floorToStep(value, step)
 
     private fun fmtQty(value: Double, decimals: Int): String =
-        "%." + decimals.coerceAtMost(8) + "f"
-            .format(java.util.Locale.US, value)
+        ExecutionMath.floorToScale(value, decimals)
 
     private fun fmtPrice(value: Double, tick: Double): String {
-        val rounded = if (tick > 0.0) floor(value / tick) * tick else value
-        val decimals = max(0, tick.toString().substringAfter('.', "").trimEnd('0').length)
-        return "%." + decimals.coerceAtMost(8) + "f"
-            .format(java.util.Locale.US, rounded)
+        val rounded = if (tick > 0.0) {
+            ExecutionMath.priceToTick(value, tick)
+        } else value
+        val decimals = max(
+            0,
+            tick.toString().substringAfter('.', "").trimEnd('0').length
+        )
+        return ExecutionMath.floorToScale(rounded, decimals)
     }
 
     private fun validateLimitPrice(
@@ -3321,6 +3342,112 @@ private class NativeEngine(
             teeth
         ) - atr * 0.15
         return ((reference - structuralStop) / reference).coerceIn(0.005, 0.08)
+    }
+
+    private fun estimateMarketBuySlippage(
+        symbol: String,
+        quoteNotional: Double
+    ): Pair<Double, Double> {
+        require(quoteNotional > 0.0)
+        val book = JSONObject(
+            getBody("/api/v3/depth?symbol=" + symbol + "&limit=100")
+        )
+        val asks = book.optJSONArray("asks")
+            ?: error("Order book has no asks for $symbol")
+        require(asks.length() > 0) { "Order book is empty for $symbol" }
+
+        var remainingQuote = quoteNotional
+        var consumedBase = 0.0
+        var consumedQuote = 0.0
+        var bestAsk = 0.0
+
+        for (i in 0 until asks.length()) {
+            val row = asks.optJSONArray(i) ?: continue
+            val price = row.optString(0).toDoubleOrNull() ?: continue
+            val qty = row.optString(1).toDoubleOrNull() ?: continue
+            if (price <= 0.0 || qty <= 0.0) continue
+            if (bestAsk <= 0.0) bestAsk = price
+
+            val levelQuote = price * qty
+            val usedQuote = min(remainingQuote, levelQuote)
+            consumedQuote += usedQuote
+            consumedBase += usedQuote / price
+            remainingQuote -= usedQuote
+            if (remainingQuote <= 1e-9) break
+        }
+
+        require(remainingQuote <= 1e-9) {
+            "Insufficient visible ask liquidity for $symbol"
+        }
+        require(bestAsk > 0.0 && consumedBase > 0.0) {
+            "Invalid order book for $symbol"
+        }
+
+        val vwap = consumedQuote / consumedBase
+        val slippage = (vwap / bestAsk - 1.0).coerceAtLeast(0.0)
+        return vwap to slippage
+    }
+
+    private fun estimateManagedEquity(): Double {
+        var equity = liveUsdtBalance.coerceAtLeast(0.0)
+        positionList().forEach { position ->
+            val mark = livePrices[position.symbol]
+                ?: if (position.symbol == primarySymbol) {
+                    primaryCandles.lastOrNull()?.c ?: 0.0
+                } else 0.0
+            if (mark > 0.0) equity += position.qty * mark
+        }
+        return equity
+    }
+
+    private fun checkAutomaticCircuitBreaker() {
+        if (!running || paused || killLatched || circuitBreakerTripInProgress) return
+        val now = System.currentTimeMillis()
+        if (now - lastEquityCheckMs < 60_000L) return
+        lastEquityCheckMs = now
+
+        runCatching {
+            val account = signedAccount()
+            val balances = account.getJSONArray("balances")
+            var usdt = 0.0
+            for (i in 0 until balances.length()) {
+                val b = balances.getJSONObject(i)
+                if (b.optString("asset") == "USDT") {
+                    usdt = b.optString("free").toDoubleOrNull() ?: 0.0
+                    break
+                }
+            }
+            liveUsdtBalance = usdt
+
+            val snapshot = equityCircuitBreaker.observe(
+                estimateManagedEquity(),
+                now
+            )
+            if (snapshot.tripped) {
+                circuitBreakerTripInProgress = true
+                lastError =
+                    "AUTOMATIC CIRCUIT BREAKER: managed equity drawdown " +
+                        "%.2f%%".format(
+                            Locale.US,
+                            snapshot.drawdownPct * 100.0
+                        )
+                Thread {
+                    try {
+                        kill()
+                    } finally {
+                        circuitBreakerTripInProgress = false
+                    }
+                }.apply {
+                    isDaemon = true
+                    name = "williams-equity-circuit-breaker"
+                    start()
+                }
+            }
+        }.onFailure {
+            lastError =
+                "equity monitor: " +
+                    (it.message ?: it.javaClass.simpleName)
+        }
     }
 
     private fun executeBuyWithProtection(
@@ -3446,6 +3573,19 @@ private class NativeEngine(
 
         if (notional < 10.0) {
             error("order notional too small")
+        }
+
+        val (bookVwap, bookSlippage) =
+            estimateMarketBuySlippage(
+                candidate.symbol,
+                notional
+            )
+        require(bookSlippage <= maxSlippagePct) {
+            "Order-book slippage " +
+                "%.4f".format(Locale.US, bookSlippage * 100.0) +
+                "% exceeds configured " +
+                "%.4f".format(Locale.US, maxSlippagePct * 100.0) +
+                "% for " + candidate.symbol
         }
 
         val clientOrderId =
