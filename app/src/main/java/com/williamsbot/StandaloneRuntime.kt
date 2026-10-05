@@ -1464,6 +1464,7 @@ private class NativeEngine(
         if (!historyStore.isComplete(normalizedSymbol, frame)) {
             var endTime = System.currentTimeMillis()
             var page = 0
+            var reachedHistoryBeginning = false
             try {
                 while (page++ < 10000) {
                     val body = getBody(
@@ -1472,7 +1473,10 @@ private class NativeEngine(
                             "&limit=1000&endTime=" + endTime
                     )
                     val array = JSONArray(body)
-                    if (array.length() == 0) break
+                    if (array.length() == 0) {
+                        reachedHistoryBeginning = true
+                        break
+                    }
 
                     val batch = ArrayList<MarketHistoryStore.Candle>(
                         array.length()
@@ -1513,10 +1517,18 @@ private class NativeEngine(
                         oldest <= 0L ||
                         array.length() < 1000
                     ) {
+                        reachedHistoryBeginning = true
                         break
                     }
 
                     endTime = oldest - 1L
+                }
+
+                if (!reachedHistoryBeginning) {
+                    throw IllegalStateException(
+                        "Historical download page limit reached before beginning: " +
+                            normalizedSymbol + ":" + frame
+                    )
                 }
 
                 historyStore.markComplete(
