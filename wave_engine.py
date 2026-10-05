@@ -104,6 +104,9 @@ class MultiTimeframeWaveReport:
     nested_w3: bool = False
     nested_w3_parent_w5: bool = False
     nested_w3_count: int = 0
+    nested_countertrend_impulse: bool = False
+    nested_countertrend_count: int = 0
+    nested_w3_parent_w5: bool = False
     wave_path: str = ""
     htf_confirmed: bool = False
     setup_position: int = 0
@@ -1120,6 +1123,35 @@ class MultiTimeframeWaveEngine:
     # ------------------------------------------------------------------
     # MTF hierarchy
     # ------------------------------------------------------------------
+    def _nested_relationship(self, parent: WaveSnapshot, child: WaveSnapshot) -> str:
+        """Classify the fractal relationship between adjacent timeframes.
+
+        For a bullish parent impulse, W1/W3/W5 contain five-wave bullish
+        substructure, while W2/W4 are bearish corrections whose A and C legs
+        can themselves be five-wave bearish impulses.  The bearish case is
+        mirrored.  This prevents a countertrend five-wave correction from
+        being mistaken for a LONG setup.
+        """
+        if not (parent.data_ok and child.data_ok):
+            return "NONE"
+        if parent.direction not in (DIRECTION_UP, DIRECTION_DOWN):
+            return "NONE"
+        if child.position not in (1, 3, 5):
+            return "NONE"
+
+        if parent.position in (1, 3, 5):
+            return "ALIGNED_IMPULSE" if child.direction == parent.direction else "COUNTERTREND"
+
+        if parent.position in (2, 4):
+            expected_correction_direction = (
+                DIRECTION_DOWN if parent.direction == DIRECTION_UP else DIRECTION_UP
+            )
+            if child.direction == expected_correction_direction:
+                return "CORRECTION_IMPULSE"
+            if child.direction == parent.direction:
+                return "COUNTERTREND"
+        return "NONE"
+
     def _build_report(self, snapshots: Mapping[str, WaveSnapshot]) -> MultiTimeframeWaveReport:
         ordered = sorted(
             [
@@ -1159,6 +1191,8 @@ class MultiTimeframeWaveEngine:
                 nested_w3=False,
                 nested_w3_parent_w5=False,
                 nested_w3_count=0,
+                nested_countertrend_impulse=False,
+                nested_countertrend_count=0,
                 wave_path="",
                 htf_confirmed=False,
                 setup_position=int(setup.position if setup else 0),
@@ -1181,18 +1215,22 @@ class MultiTimeframeWaveEngine:
         nested_w3 = False
         nested_parent_w5 = False
         nested_count = 0
+        nested_countertrend_impulse = False
+        nested_countertrend_count = 0
 
         for parent, child in zip(ordered, ordered[1:]):
-            same_direction = parent.direction == child.direction and parent.direction in {
-                DIRECTION_UP,
-                DIRECTION_DOWN,
-            }
+            relation = self._nested_relationship(parent, child)
             child_w3 = child.position == 3 and child.confidence >= 45.0
-            if same_direction and child_w3:
+            if relation == "ALIGNED_IMPULSE" and child_w3:
                 nested_w3 = True
                 nested_count += 1
                 if parent.position == 5:
                     nested_parent_w5 = True
+            elif relation == "CORRECTION_IMPULSE" and child.confidence >= 40.0:
+                # A/B/C correction: A and C may each be five-wave impulses
+                # in the opposite direction to the parent impulse.
+                nested_countertrend_impulse = True
+                nested_countertrend_count += 1
 
         exhaustion = exhaustion_sum / max(total, 1e-12)
         impulse = impulse_sum / max(total, 1e-12)
@@ -1209,6 +1247,11 @@ class MultiTimeframeWaveEngine:
         nested_bonus = 10.0 if nested_w3 else 0.0
         if nested_parent_w5:
             nested_bonus += 10.0
+
+        # Countertrend five-wave structure inside parent W2/W4 is a correction,
+        # not a LONG continuation. Do not reward it as bullish alignment.
+        if nested_countertrend_impulse and setup is not None:
+            nested_bonus -= 12.0
 
         wave_score = (
             0.28 * alignment
@@ -1239,6 +1282,8 @@ class MultiTimeframeWaveEngine:
             reasons.append("nested W3 inside parent W5 detected - W5 context is not a veto")
         elif nested_w3:
             reasons.append("nested W3 alignment detected")
+        if nested_countertrend_impulse:
+            reasons.append("countertrend 5-wave impulse detected inside parent W2/W4 correction")
         if overall != DIRECTION_NEUTRAL:
             reasons.append(f"multi-timeframe direction={overall}")
         if exhaustion >= 60:
@@ -1257,6 +1302,8 @@ class MultiTimeframeWaveEngine:
             nested_w3=nested_w3,
             nested_w3_parent_w5=nested_parent_w5,
             nested_w3_count=nested_count,
+            nested_countertrend_impulse=nested_countertrend_impulse,
+            nested_countertrend_count=nested_countertrend_count,
             wave_path=path,
             htf_confirmed=htf_confirmed,
             setup_position=int(setup.position if setup else 0),
