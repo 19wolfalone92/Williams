@@ -627,6 +627,25 @@ private class NativeEngine(
         }
     }
 
+    private fun signedGetBody(path: String, params: String): String {
+        val query = if (params.isBlank()) {
+            "timestamp=" + System.currentTimeMillis() + "&recvWindow=5000"
+        } else {
+            params + "&timestamp=" + System.currentTimeMillis() + "&recvWindow=5000"
+        }
+        val signature = hmac(query, secret())
+        val request = Request.Builder()
+            .url(baseUrl + path + "?" + query + "&signature=" + signature)
+            .header("X-MBX-APIKEY", key())
+            .get()
+            .build()
+        http.newCall(request).execute().use { response ->
+            val body = response.body?.string() ?: "{}"
+            if (!response.isSuccessful) error("Binance " + response.code + ": " + body)
+            return body
+        }
+    }
+
     private fun signedAccount(): JSONObject {
         val timestamp = System.currentTimeMillis().toString()
         val params =
@@ -928,6 +947,38 @@ private class NativeEngine(
         }
 
         if (free <= 0.0) {
+            val closedSymbol = positionSymbol
+            val closedEntry = positionEntry
+            val recentOrder = runCatching {
+                val body = signedGetBody(
+                    "/api/v3/allOrders",
+                    "symbol=" + closedSymbol + "&limit=50"
+                )
+                val arr = JSONArray(body)
+                var chosen: JSONObject? = null
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    if (o.optString("side") == "SELL" && o.optString("status") == "FILLED") {
+                        chosen = o
+                    }
+                }
+                chosen
+            }.getOrNull()
+            val exitPrice = recentOrder?.let {
+                val q = it.optString("executedQty").toDoubleOrNull() ?: 0.0
+                val z = it.optString("cummulativeQuoteQty").toDoubleOrNull() ?: 0.0
+                if (q > 0.0 && z > 0.0) z / q else it.optString("price").toDoubleOrNull() ?: 0.0
+            } ?: 0.0
+            if (closedSymbol != null && closedEntry > 0.0 && exitPrice > 0.0) {
+                val type = recentOrder?.optString("type", "") ?: ""
+                val reason = when {
+                    type.contains("TAKE_PROFIT", true) -> "TAKE_PROFIT"
+                    type.contains("STOP", true) -> "STOP_LOSS"
+                    else -> "SELL_FILLED"
+                }
+                observeOpenTrade(exitPrice)
+                recordExit(exitPrice, reason, recentOrder)
+            }
             positionSymbol = null
             positionQty = 0.0
             positionEntry = 0.0
@@ -1093,6 +1144,7 @@ private class NativeEngine(
             .put("notional_usdt", notional)
             .put("stop_price", stop)
             .put("take_profit", take)
+        recordEntry(candidate, buy, qty, entry, stop, take, notional)
     }
 
     private fun analyseBase(
