@@ -190,6 +190,7 @@ def test_fractal_pivots_are_confirmed_only_after_right_window():
             "fractal_down": [False] * 8,
             "high": [1, 2, 3, 10, 4, 3, 2, 1],
             "low": [0] * 8,
+            "close": [1.0] * 8,
             "ao": [0.0] * 8,
             "ac": [0.0] * 8,
         },
