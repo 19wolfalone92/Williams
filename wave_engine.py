@@ -1093,17 +1093,34 @@ class MultiTimeframeWaveEngine:
         self,
         symbol: str,
         cache: Optional[Mapping[str, pd.DataFrame]] = None,
+        include_micro: Optional[bool] = None,
     ) -> MultiTimeframeWaveReport:
         cache = cache or {}
         snapshots: Dict[str, WaveSnapshot] = {}
 
+        use_micro = (
+            self.include_micro
+            if include_micro is None
+            else bool(include_micro)
+        )
+        analysis_intervals = list(self.intervals)
+        if use_micro:
+            for micro_interval in ("1s", "5s", "25s"):
+                if micro_interval not in analysis_intervals:
+                    analysis_intervals.append(micro_interval)
+            analysis_intervals = sorted(
+                analysis_intervals,
+                key=self.INTERVAL_SECONDS.get,
+                reverse=True,
+            )
+
         micro_source: Optional[pd.DataFrame] = None
 
-        for index, interval in enumerate(self.intervals):
+        for index, interval in enumerate(analysis_intervals):
             try:
                 frame = cache.get(interval)
 
-                if frame is None and self.include_micro and interval in {"1s", "5s", "25s"}:
+                if frame is None and use_micro and interval in {"1s", "5s", "25s"}:
                     if micro_source is None:
                         micro_source = self._fetch(
                             symbol,
