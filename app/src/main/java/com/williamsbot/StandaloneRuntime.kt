@@ -166,6 +166,12 @@ private class StandaloneServer(private val context: Context) {
 
     private val historyStore = MarketHistoryStore(context)
     private val rateGuard = BinanceRateGuard()
+    private val auditStore = TradingAuditStore(context)
+    private val stateMachine = TradingStateMachine(
+        onTransition = { from, to, reason ->
+            auditStore.recordState(from, to, reason)
+        }
+    )
 
     private var socket: ServerSocket? = null
     private var engine: NativeEngine? = null
@@ -427,6 +433,8 @@ private class NativeEngine(
     private val candleCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, List<CandleN>>>()
     private val liveCandleCache = java.util.concurrent.ConcurrentHashMap<String, MutableList<CandleN>>()
     private val indicatorSnapshots = java.util.concurrent.ConcurrentHashMap<String, JSONObject>()
+    private val livePrices = java.util.concurrent.ConcurrentHashMap<String, Double>()
+    private val lastUserEventTimeByType = java.util.concurrent.ConcurrentHashMap<String, Long>()
     private var marketSocket: WebSocket? = null
     @Volatile private var marketSocketConnected = false
     @Volatile private var marketSocketLastEventMs = 0L
@@ -471,7 +479,9 @@ private class NativeEngine(
     @Volatile private var reconcileRequired = false
     @Volatile private var killLatched = false
     @Volatile private var userStreamConnected = false
+    @Volatile private var userStreamSyncRequired = true
     @Volatile private var lastUserEventMs = 0L
+    @Volatile private var liveUsdtBalance = 0.0
     private val positions = mutableMapOf<String, PositionState>()
     private val pendingEntries = mutableMapOf<String, PendingEntry>()
 
@@ -484,11 +494,27 @@ private class NativeEngine(
         onConnection = { connected, error ->
             userStreamConnected = connected
             if (connected) {
-                if (lastError?.startsWith("user ws:") == true) {
-                    lastError = null
+                userStreamSyncRequired = true
+                Thread {
+                    try {
+                        recoverPendingEntries()
+                        reconcilePositionsWithExchange()
+                        userStreamSyncRequired = false
+                    } catch (x: Exception) {
+                        setReconcileRequired(
+                            "User stream reconnect reconciliation failed: " +
+                                (x.message ?: x.javaClass.simpleName)
+                        )
+                    }
+                }.apply {
+                    isDaemon = true
+                    start()
                 }
             } else if (!error.equals("stopped")) {
-                lastError = "user ws: " + (error ?: "disconnected")
+                userStreamSyncRequired = true
+                if (positions.isNotEmpty() && !killLatched) {
+                    lastError = "user ws: " + (error ?: "disconnected")
+                }
             }
         },
         onEvent = { event ->
@@ -498,6 +524,19 @@ private class NativeEngine(
 
     init {
         loadPersistedState()
+        stateMachine.force(
+            when {
+                killLatched -> TradingState.KILL_SWITCH_LATCHED
+                reconcileRequired -> TradingState.RECONCILE_REQUIRED
+                pendingEntries.isNotEmpty() -> TradingState.ENTRY_PENDING
+                positions.isEmpty() -> TradingState.STOPPED
+                positions.values.all {
+                    it.ocoListId.isNotBlank() || it.ocoListClientId.isNotBlank()
+                } -> TradingState.PROTECTED
+                else -> TradingState.OPEN_UNPROTECTED
+            },
+            "restore persisted trading state"
+        )
     }
 
     private fun key(): String =
@@ -519,12 +558,17 @@ private class NativeEngine(
         }
 
     private fun stateName(): String =
-        when {
-            killLatched -> "KILL_SWITCH_LATCHED"
-            reconcileRequired -> "RECONCILE_REQUIRED"
-            pendingEntries.isNotEmpty() -> "ENTRY_PENDING"
-            positions.isEmpty() -> "FLAT"
-            else -> "OPEN"
+        when (stateMachine.state) {
+            TradingState.KILL_SWITCH_LATCHED -> "KILL_SWITCH_LATCHED"
+            TradingState.RECONCILE_REQUIRED,
+            TradingState.SYNC_REQUIRED -> "RECONCILE_REQUIRED"
+            TradingState.ENTRY_PENDING -> "ENTRY_PENDING"
+            TradingState.OPEN_UNPROTECTED,
+            TradingState.PROTECTED,
+            TradingState.EXIT_PENDING -> "OPEN"
+            TradingState.READY_FLAT,
+            TradingState.STOPPED,
+            TradingState.INITIALIZING -> "FLAT"
         }
 
     private fun savePersistedState() {
@@ -656,7 +700,9 @@ private class NativeEngine(
             .put("websocket", marketSocketConnected)
             .put("market_stream_last_event_ms", marketSocketLastEventMs)
             .put("user_stream_connected", userStreamConnected)
+            .put("user_stream_sync_required", userStreamSyncRequired)
             .put("user_stream_last_event_ms", lastUserEventMs)
+            .put("fsm_state", stateMachine.state.name)
             .put("history_warmup_running", historyWarmupRunning)
             .put("history_ready", historyReady)
             .put("history", historyStore.status(coreSymbols, analysisFrames))
@@ -789,6 +835,19 @@ private class NativeEngine(
             .putBoolean("auto_run", true)
             .apply()
 
+        stateMachine.force(TradingState.INITIALIZING, "bot start")
+        userStreamSyncRequired = true
+
+        runCatching {
+            recoverPendingEntries()
+            reconcilePositionsWithExchange()
+        }.onFailure {
+            setReconcileRequired(
+                "startup exchange synchronization failed: " +
+                    (it.message ?: it.javaClass.simpleName)
+            )
+        }
+
         running = true
         paused = false
         startMarketDataStream()
@@ -803,7 +862,26 @@ private class NativeEngine(
                             if (!historyWarmupRunning) {
                                 warmCoreHistoryAsync()
                             }
-                        } else {
+                        } else if (
+                            marketSocketConnected &&
+                            userStreamConnected &&
+                            !userStreamSyncRequired &&
+                            !reconcileRequired &&
+                            !killLatched
+                        ) {
+                            if (positions.isEmpty()) {
+                                stateMachine.transition(
+                                    TradingState.READY_FLAT,
+                                    "exchange synchronized and streams ready"
+                                )
+                            } else if (
+                                stateMachine.state == TradingState.OPEN_UNPROTECTED
+                            ) {
+                                stateMachine.transition(
+                                    TradingState.PROTECTED,
+                                    "managed position restored"
+                                )
+                            }
                             requestScan()
                         }
                     } catch (x: Exception) {
@@ -1164,7 +1242,9 @@ private class NativeEngine(
             coreSymbols.flatMap { symbol ->
                 analysisFrames.map { frame ->
                     symbol.lowercase(Locale.US) + "@kline_" + frame
-                }
+                } + listOf(
+                    symbol.lowercase(Locale.US) + "@bookTicker"
+                )
             }.joinToString("/")
 
     private fun startMarketDataStream() {
@@ -1190,8 +1270,8 @@ private class NativeEngine(
 
             override fun onMessage(webSocket: WebSocket, text: String) {
                 marketSocketLastEventMs = System.currentTimeMillis()
-                runCatching { consumeKlineStream(JSONObject(text)) }
-                    .onFailure { lastError = "WS kline: " + (it.message ?: it.javaClass.simpleName) }
+                runCatching { consumeMarketStream(JSONObject(text)) }
+                    .onFailure { lastError = "WS market: " + (it.message ?: it.javaClass.simpleName) }
             }
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
@@ -1212,6 +1292,21 @@ private class NativeEngine(
                 if (running) Thread { Thread.sleep(2500); if (running) startMarketDataStream() }.start()
             }
         })
+    }
+
+    private fun consumeMarketStream(envelope: JSONObject) {
+        val data = envelope.optJSONObject("data") ?: return
+        when (data.optString("e")) {
+            "kline" -> consumeKlineStream(envelope)
+            "bookTicker" -> {
+                val symbol = data.optString("s").uppercase(Locale.US)
+                if (symbol !in coreSymbols) return
+                val bid = data.optString("b").toDoubleOrNull() ?: return
+                val ask = data.optString("a").toDoubleOrNull() ?: return
+                if (bid <= 0.0 || ask < bid) return
+                livePrices[symbol] = (bid + ask) / 2.0
+            }
+        }
     }
 
     private fun consumeKlineStream(envelope: JSONObject) {
@@ -2033,45 +2128,113 @@ private class NativeEngine(
 
     private fun handleUserEvent(event: JSONObject) {
         lastUserEventMs = System.currentTimeMillis()
-        when (event.optString("e")) {
+        auditStore.recordUserEvent(event)
+
+        val eventType = event.optString("e", "unknown")
+        val eventTime = event.optLong("E", 0L)
+        if (eventTime > 0L) {
+            val previous = lastUserEventTimeByType[eventType]
+            if (previous != null && eventTime < previous) {
+                userStreamSyncRequired = true
+                lastError =
+                    "user ws: out-of-order $eventType event; REST resync required"
+                return
+            }
+            lastUserEventTimeByType[eventType] =
+                max(previous ?: 0L, eventTime)
+        }
+
+        when (eventType) {
             "executionReport" -> {
+                val side = event.optString("S").uppercase(Locale.US)
+                val status = event.optString("X").uppercase(Locale.US)
+                val execution = event.optString("x").uppercase(Locale.US)
+                val clientId = event.optString("c")
+                val symbol = event.optString("s").uppercase(Locale.US)
+
                 lastOrder = JSONObject()
-                    .put("symbol", event.optString("s"))
-                    .put("side", event.optString("S"))
+                    .put("symbol", symbol)
+                    .put("side", side)
                     .put("type", event.optString("o"))
                     .put("orderId", event.optString("i"))
                     .put("orderListId", event.optString("g"))
-                    .put("clientOrderId", event.optString("c"))
-                    .put("executionType", event.optString("x"))
-                    .put("status", event.optString("X"))
-                    .put("price", event.optString("p"))
-                    .put("stopPrice", event.optString("P"))
-                    .put("origQty", event.optString("q"))
+                    .put("clientOrderId", clientId)
+                    .put("executionType", execution)
+                    .put("status", status)
+                    .put("rejectReason", event.optString("r"))
                     .put("lastQty", event.optString("l"))
+                    .put("lastPrice", event.optString("L"))
                     .put("executedQty", event.optString("z"))
                     .put("quoteQty", event.optString("Z"))
-                    .put("eventTime", event.optLong("E"))
+                    .put("commission", event.optString("n"))
+                    .put("commissionAsset", event.optString("N"))
+                    .put("eventTime", eventTime)
                     .put("transactionTime", event.optLong("T"))
 
-                val terminal =
-                    event.optString("X").uppercase(Locale.US) in
-                        setOf("FILLED", "CANCELED", "REJECTED", "EXPIRED")
-                val trade =
-                    event.optString("x").uppercase(Locale.US) == "TRADE"
+                when {
+                    clientId.startsWith("W4B_") &&
+                        status == "NEW" ->
+                        stateMachine.transition(
+                            TradingState.ENTRY_PENDING,
+                            "BUY NEW"
+                        )
 
-                if (terminal || trade) {
+                    clientId.startsWith("W4B_") &&
+                        status == "PARTIALLY_FILLED" ->
+                        stateMachine.transition(
+                            TradingState.ENTRY_PENDING,
+                            "BUY PARTIALLY_FILLED"
+                        )
+
+                    clientId.startsWith("W4B_") &&
+                        status == "FILLED" ->
+                        stateMachine.transition(
+                            TradingState.OPEN_UNPROTECTED,
+                            "BUY FILLED"
+                        )
+
+                    clientId.startsWith("W4B_") &&
+                        status in setOf(
+                            "CANCELED",
+                            "REJECTED",
+                            "EXPIRED"
+                        ) &&
+                        positions[symbol] == null ->
+                        stateMachine.transition(
+                            TradingState.READY_FLAT,
+                            "BUY terminal $status"
+                        )
+
+                    side == "SELL" &&
+                        status in setOf(
+                            "NEW",
+                            "PARTIALLY_FILLED"
+                        ) ->
+                        stateMachine.transition(
+                            TradingState.EXIT_PENDING,
+                            "SELL $status"
+                        )
+                }
+
+                if (
+                    status in setOf(
+                        "FILLED",
+                        "CANCELED",
+                        "REJECTED",
+                        "EXPIRED"
+                    ) || execution == "TRADE"
+                ) {
                     Thread {
-                        try {
-                            Thread.sleep(150L)
-                            synchronized(this) {
-                                recoverPendingEntries()
-                                reconcilePositionsWithExchange()
-                            }
-                        } catch (x: Exception) {
+                        runCatching {
+                            Thread.sleep(120L)
+                            recoverPendingEntries()
+                            reconcilePositionsWithExchange()
+                        }.onFailure {
                             if (!killLatched) {
-                                lastError =
-                                    "user event reconciliation: " +
-                                        (x.message ?: x.javaClass.simpleName)
+                                setReconcileRequired(
+                                    "executionReport reconciliation failed: " +
+                                        (it.message ?: it.javaClass.simpleName)
+                                )
                             }
                         }
                     }.apply {
@@ -2083,13 +2246,43 @@ private class NativeEngine(
 
             "listStatus" -> {
                 lastOrder = event
+                val listStatusType =
+                    event.optString("l").uppercase(Locale.US)
+                val listOrderStatus =
+                    event.optString("L").uppercase(Locale.US)
+
+                if (
+                    listStatusType.contains("EXEC") ||
+                    listOrderStatus.contains("EXECUTING")
+                ) {
+                    stateMachine.transition(
+                        TradingState.PROTECTED,
+                        "OCO active"
+                    )
+                }
+
+                if (
+                    listStatusType.contains("ALL_DONE") ||
+                    listStatusType == "ALL_DONE" ||
+                    listOrderStatus.contains("ALL_DONE")
+                ) {
+                    stateMachine.transition(
+                        TradingState.EXIT_PENDING,
+                        "OCO completed"
+                    )
+                }
+
                 Thread {
-                    try {
+                    runCatching {
                         Thread.sleep(100L)
-                        synchronized(this) {
-                            reconcilePositionsWithExchange()
+                        reconcilePositionsWithExchange()
+                    }.onFailure {
+                        if (!killLatched) {
+                            setReconcileRequired(
+                                "OCO event reconciliation failed: " +
+                                    (it.message ?: it.javaClass.simpleName)
+                            )
                         }
-                    } catch (_: Exception) {
                     }
                 }.apply {
                     isDaemon = true
@@ -2097,10 +2290,32 @@ private class NativeEngine(
                 }
             }
 
+            "outboundAccountPosition",
+            "balanceUpdate" -> {
+                val balances =
+                    event.optJSONArray("B")
+                        ?: event.optJSONObject("a")
+                            ?.optJSONArray("B")
+                if (balances != null) {
+                    for (i in 0 until balances.length()) {
+                        val row = balances.optJSONObject(i) ?: continue
+                        if (row.optString("a") == "USDT") {
+                            val free =
+                                row.optString("f").toDoubleOrNull()
+                                    ?: row.optDouble("f", 0.0)
+                            val locked =
+                                row.optString("l").toDoubleOrNull()
+                                    ?: row.optDouble("l", 0.0)
+                            liveUsdtBalance = free + locked
+                        }
+                    }
+                }
+            }
+
             "eventStreamTerminated" -> {
-                userStreamConnected = false
+                userStreamSyncRequired = true
                 lastError =
-                    "user ws: Binance stream terminated; reconnecting"
+                    "user ws: event stream terminated; reconnect + REST resync"
             }
         }
     }
@@ -2633,102 +2848,139 @@ private class NativeEngine(
     ): JSONObject = signedRequest("POST", path, params)
 
     private fun symbolFilters(symbol: String): SymbolRules {
-        val info =
-            JSONObject(
-                getBody(
-                    "/api/v3/exchangeInfo?symbol=" +
-                        symbol
-                )
-            )
-        val row =
-            info.getJSONArray("symbols")
-                .getJSONObject(0)
-        val filters =
-            row.getJSONArray("filters")
+        val info = JSONObject(
+            getBody("/api/v3/exchangeInfo?symbol=" + symbol)
+        )
+        val row = info.getJSONArray("symbols").getJSONObject(0)
+        val filters = row.getJSONArray("filters")
 
         var step = 0.000001
         var minQty = 0.0
+        var maxQty = Double.POSITIVE_INFINITY
+        var marketStep = 0.0
+        var marketMinQty = 0.0
+        var marketMaxQty = Double.POSITIVE_INFINITY
         var tick = 0.000001
+        var minPrice = 0.0
+        var maxPrice = Double.POSITIVE_INFINITY
         var minNotional = 0.0
+        var maxNotional = Double.POSITIVE_INFINITY
+        var percentUp = 0.0
+        var percentDown = 0.0
+        var bidUp = 0.0
+        var bidDown = 0.0
+        var askUp = 0.0
+        var askDown = 0.0
+        var avgPriceMins = 0
+        var maxNumOrders = Int.MAX_VALUE
+        var maxNumAlgoOrders = Int.MAX_VALUE
+        var maxNumOrderLists = Int.MAX_VALUE
 
         for (i in 0 until filters.length()) {
             val f = filters.getJSONObject(i)
             when (f.optString("filterType")) {
-                "LOT_SIZE", "MARKET_LOT_SIZE" -> {
-                    step =
-                        f.optString("stepSize")
-                            .toDoubleOrNull() ?: step
-                    minQty =
-                        max(
-                            minQty,
-                            f.optString("minQty")
-                                .toDoubleOrNull()
-                                ?: 0.0
-                        )
+                "LOT_SIZE" -> {
+                    step = f.optString("stepSize").toDoubleOrNull() ?: step
+                    minQty = f.optString("minQty").toDoubleOrNull() ?: minQty
+                    maxQty = f.optString("maxQty").toDoubleOrNull() ?: maxQty
+                }
+                "MARKET_LOT_SIZE" -> {
+                    marketStep = f.optString("stepSize").toDoubleOrNull() ?: marketStep
+                    marketMinQty = f.optString("minQty").toDoubleOrNull() ?: marketMinQty
+                    marketMaxQty = f.optString("maxQty").toDoubleOrNull() ?: marketMaxQty
                 }
                 "PRICE_FILTER" -> {
-                    tick =
-                        f.optString("tickSize")
-                            .toDoubleOrNull() ?: tick
+                    tick = f.optString("tickSize").toDoubleOrNull() ?: tick
+                    minPrice = f.optString("minPrice").toDoubleOrNull() ?: minPrice
+                    maxPrice = f.optString("maxPrice").toDoubleOrNull() ?: maxPrice
                 }
-                "MIN_NOTIONAL", "NOTIONAL" -> {
-                    minNotional =
-                        max(
-                            minNotional,
-                            f.optString("minNotional")
-                                .toDoubleOrNull() ?: 0.0
-                        )
+                "MIN_NOTIONAL" -> {
+                    minNotional = max(
+                        minNotional,
+                        f.optString("minNotional").toDoubleOrNull() ?: 0.0
+                    )
+                }
+                "NOTIONAL" -> {
+                    minNotional = max(
+                        minNotional,
+                        f.optString("minNotional").toDoubleOrNull() ?: 0.0
+                    )
+                    maxNotional = min(
+                        maxNotional,
+                        f.optString("maxNotional").toDoubleOrNull()
+                            ?: Double.POSITIVE_INFINITY
+                    )
+                }
+                "PERCENT_PRICE" -> {
+                    percentUp = f.optString("multiplierUp").toDoubleOrNull() ?: percentUp
+                    percentDown = f.optString("multiplierDown").toDoubleOrNull() ?: percentDown
+                    avgPriceMins = f.optInt("avgPriceMins", avgPriceMins)
+                }
+                "PERCENT_PRICE_BY_SIDE" -> {
+                    bidUp = f.optString("bidMultiplierUp").toDoubleOrNull() ?: bidUp
+                    bidDown = f.optString("bidMultiplierDown").toDoubleOrNull() ?: bidDown
+                    askUp = f.optString("askMultiplierUp").toDoubleOrNull() ?: askUp
+                    askDown = f.optString("askMultiplierDown").toDoubleOrNull() ?: askDown
+                    avgPriceMins = f.optInt("avgPriceMins", avgPriceMins)
+                }
+                "MAX_NUM_ORDERS" -> {
+                    maxNumOrders = f.optInt("maxNumOrders", maxNumOrders)
+                }
+                "MAX_NUM_ALGO_ORDERS" -> {
+                    maxNumAlgoOrders = f.optInt("maxNumAlgoOrders", maxNumAlgoOrders)
+                }
+                "MAX_NUM_ORDER_LISTS" -> {
+                    maxNumOrderLists = f.optInt("maxNumOrderLists", maxNumOrderLists)
                 }
             }
         }
 
-        val decimals =
-            max(
-                0,
-                step.toString()
-                    .substringAfter('.', "")
-                    .trimEnd('0')
-                    .length
-            )
-
-        val quoteAllowed =
-            row.optBoolean(
-                "quoteOrderQtyMarketAllowed",
-                true
-            )
-
-        val types =
-            row.optJSONArray("orderTypes")
-
-        val ocoAllowed =
-            row.optBoolean(
-                "ocoAllowed",
-                types?.let {
-                    var take = false
-                    var stop = false
-
-                    for (i in 0 until it.length()) {
-                        when (it.optString(i)) {
-                            "TAKE_PROFIT_LIMIT" ->
-                                take = true
-                            "STOP_LOSS_LIMIT" ->
-                                stop = true
-                        }
+        val decimals = max(
+            0,
+            step.toString().substringAfter('.', "").trimEnd('0').length
+        )
+        val quoteAllowed = row.optBoolean("quoteOrderQtyMarketAllowed", true)
+        val types = row.optJSONArray("orderTypes")
+        val ocoAllowed = row.optBoolean(
+            "ocoAllowed",
+            types?.let {
+                var take = false
+                var stop = false
+                for (i in 0 until it.length()) {
+                    when (it.optString(i)) {
+                        "TAKE_PROFIT_LIMIT" -> take = true
+                        "STOP_LOSS_LIMIT" -> stop = true
                     }
-
-                    take && stop
-                } ?: false
-            )
+                }
+                take && stop
+            } ?: false
+        )
 
         return SymbolRules(
             step = step,
             tick = tick,
             decimals = decimals,
             minQty = minQty,
+            maxQty = maxQty,
+            marketStep = marketStep,
+            marketMinQty = marketMinQty,
+            marketMaxQty = marketMaxQty,
+            minPrice = minPrice,
+            maxPrice = maxPrice,
             minNotional = minNotional,
-            quoteOrderQtyMarketAllowed =
-                quoteAllowed,
-            ocoAllowed = ocoAllowed
+            maxNotional = maxNotional,
+            quoteOrderQtyMarketAllowed = quoteAllowed,
+            ocoAllowed = ocoAllowed,
+            percentUp = percentUp,
+            percentDown = percentDown,
+            bidPercentUp = bidUp,
+            bidPercentDown = bidDown,
+            askPercentUp = askUp,
+            askPercentDown = askDown,
+            avgPriceMins = avgPriceMins,
+            maxNumOrders = maxNumOrders,
+            maxNumAlgoOrders = maxNumAlgoOrders,
+            maxNumOrderLists = maxNumOrderLists
         )
     }
 
@@ -2744,6 +2996,97 @@ private class NativeEngine(
         val decimals = max(0, tick.toString().substringAfter('.', "").trimEnd('0').length)
         return "%." + decimals.coerceAtMost(8) + "f"
             .format(java.util.Locale.US, rounded)
+    }
+
+    private fun validateLimitPrice(
+        symbol: String,
+        side: String,
+        price: Double,
+        rules: SymbolRules
+    ) {
+        require(price > 0.0) { "Price must be positive" }
+
+        if (rules.minPrice > 0.0) {
+            require(price >= rules.minPrice) { "Price below Binance minPrice" }
+        }
+        if (rules.maxPrice.isFinite()) {
+            require(price <= rules.maxPrice) { "Price above Binance maxPrice" }
+        }
+
+        val refPrice = runCatching {
+            JSONObject(
+                getBody("/api/v3/avgPrice?symbol=" + symbol)
+            ).optString("price").toDoubleOrNull()
+        }.getOrNull()?.takeIf { it > 0.0 } ?: return
+
+        val lower =
+            if (side == "SELL" && rules.askPercentDown > 0.0) {
+                refPrice * rules.askPercentDown
+            } else if (side == "BUY" && rules.bidPercentDown > 0.0) {
+                refPrice * rules.bidPercentDown
+            } else if (rules.percentDown > 0.0) {
+                refPrice * rules.percentDown
+            } else 0.0
+
+        val upper =
+            if (side == "SELL" && rules.askPercentUp > 0.0) {
+                refPrice * rules.askPercentUp
+            } else if (side == "BUY" && rules.bidPercentUp > 0.0) {
+                refPrice * rules.bidPercentUp
+            } else if (rules.percentUp > 0.0) {
+                refPrice * rules.percentUp
+            } else Double.POSITIVE_INFINITY
+
+        require(price >= lower && price <= upper) {
+            "Price outside Binance percent-price filter"
+        }
+    }
+
+    private fun checkOcoCapacity(
+        symbol: String,
+        rules: SymbolRules
+    ) {
+        val openOrders = runCatching {
+            val response = signedGet(
+                "/api/v3/openOrders",
+                "symbol=" + symbol
+            )
+            response.optJSONArray("orders")
+                ?: if (response.has("symbol")) {
+                    JSONArray().put(response)
+                } else JSONArray()
+        }.getOrElse { JSONArray() }
+
+        val openLists = runCatching {
+            signedGet("/api/v3/openOrderList", "")
+                .let {
+                    it.optJSONArray("orderList")
+                        ?: it.optJSONArray("ordersLists")
+                        ?: it.optJSONArray("orderLists")
+                        ?: JSONArray()
+                }
+        }.getOrElse { JSONArray() }
+
+        require(openOrders.length() + 2 <= rules.maxNumOrders) {
+            "Binance MAX_NUM_ORDERS would be exceeded"
+        }
+
+        val algoCount = (0 until openOrders.length()).count { i ->
+            val type = openOrders.optJSONObject(i)
+                ?.optString("type")
+                ?.uppercase(Locale.US)
+                ?: ""
+            type.contains("STOP") || type.contains("TAKE_PROFIT")
+        }
+
+        // One OCO contains one conditional leg; keep a conservative margin.
+        require(algoCount + 1 <= rules.maxNumAlgoOrders) {
+            "Binance MAX_NUM_ALGO_ORDERS would be exceeded"
+        }
+
+        require(openLists.length() + 1 <= rules.maxNumOrderLists) {
+            "Binance MAX_NUM_ORDER_LISTS would be exceeded"
+        )
     }
 
     private data class Protection(
@@ -2793,6 +3136,12 @@ private class NativeEngine(
         }
         if (!userStreamConnected) {
             error("USER_DATA_STREAM_NOT_READY")
+        }
+        if (userStreamSyncRequired) {
+            error("USER_DATA_STREAM_SYNC_REQUIRED")
+        }
+        require(stateMachine.state == TradingState.READY_FLAT) {
+            "FSM forbids BUY from state " + stateMachine.state.name
         }
         if (
             reservedRiskPct() >=
@@ -2898,6 +3247,13 @@ private class NativeEngine(
                     .toString()
                     .replace("-", "")
                     .take(28)
+
+        if (!stateMachine.transition(
+            TradingState.ENTRY_PENDING,
+            "BUY intent created"
+        )) {
+            error("FSM rejected BUY intent")
+        }
 
         synchronized(pendingEntries) {
             pendingEntries[candidate.symbol] =
@@ -3082,6 +3438,10 @@ private class NativeEngine(
                     candidate.symbol
                 )
             }
+            stateMachine.force(
+                TradingState.PROTECTED,
+                "BUY filled and OCO created"
+            )
             savePersistedState()
 
             lastOrder =
@@ -3113,42 +3473,93 @@ private class NativeEngine(
                     pendingEntries[candidate.symbol]
                 }
 
-            runCatching {
-                val order =
-                    signedGet(
-                        "/api/v3/order",
-                        "symbol=" + candidate.symbol +
-                            "&origClientOrderId=" +
-                            (pending?.clientOrderId
-                                ?: clientOrderId)
-                    )
+            val order = runCatching {
+                signedGet(
+                    "/api/v3/order",
+                    "symbol=" + candidate.symbol +
+                        "&origClientOrderId=" +
+                        (pending?.clientOrderId ?: clientOrderId)
+                )
+            }.getOrNull()
 
-                if (
-                    order.optString("status") == "FILLED"
-                ) {
-                    val filled =
-                        order.optString("executedQty")
-                            .toDoubleOrNull() ?: 0.0
+            if (order?.optString("status") == "FILLED") {
+                val filled =
+                    order.optString("executedQty").toDoubleOrNull() ?: 0.0
+                val quote =
+                    order.optString("cummulativeQuoteQty").toDoubleOrNull() ?: 0.0
 
-                    if (filled > 0.0) {
-                        signedPost(
-                            "/api/v3/order",
-                            "symbol=" + candidate.symbol +
-                                "&side=SELL&type=MARKET" +
-                                "&quantity=" +
-                                fmtQty(
-                                    filled,
-                                    rules.decimals
+                if (filled > 0.0) {
+                    val entryPrice =
+                        if (quote > 0.0) quote / filled
+                        else candidate.candles.lastOrNull()?.c ?: 0.0
+
+                    synchronized(positions) {
+                        positions[candidate.symbol] =
+                            PositionState(
+                                symbol = candidate.symbol,
+                                qty = filled,
+                                entry = entryPrice,
+                                stop = entryPrice * (1.0 - (pending?.stopDistance ?: 0.02)),
+                                take = entryPrice * (1.0 + (pending?.stopDistance ?: 0.02) * 4.0),
+                                riskPct = pending?.stopDistance ?: 0.02,
+                                entryOrderId = order.optString("orderId"),
+                                entryClientOrderId =
+                                    pending?.clientOrderId ?: clientOrderId,
+                                openedAt = order.optLong(
+                                    "transactTime",
+                                    System.currentTimeMillis()
                                 )
-                        )
-                        synchronized(pendingEntries) {
-                            pendingEntries.remove(
-                                candidate.symbol
                             )
+                    }
+
+                    stateMachine.force(
+                        TradingState.OPEN_UNPROTECTED,
+                        "BUY transport outcome unknown; REST proved FILLED"
+                    )
+                    synchronized(pendingEntries) {
+                        pendingEntries.remove(candidate.symbol)
+                    }
+                    savePersistedState()
+
+                    val protectionResult = runCatching {
+                        reconcilePositionsWithExchange()
+                    }
+
+                    if (protectionResult.isFailure) {
+                        // Never assume the failed protection request was harmless.
+                        // Reconcile again immediately; only emergency-close if the
+                        // exchange still cannot prove protection.
+                        val emergency = runCatching {
+                            reconcilePositionsWithExchange()
                         }
-                        savePersistedState()
+
+                        if (emergency.isFailure) {
+                            runCatching {
+                                signedPost(
+                                    "/api/v3/order",
+                                    "symbol=" + candidate.symbol +
+                                        "&side=SELL&type=MARKET" +
+                                        "&quantity=" +
+                                        fmtQty(filled, rules.decimals)
+                                )
+                            }.onFailure {
+                                setReconcileRequired(
+                                    "BUY filled without verifiable protection; emergency SELL failed: " +
+                                        (it.message ?: it.javaClass.simpleName)
+                                )
+                            }
+                        }
                     }
                 }
+            } else {
+                synchronized(pendingEntries) {
+                    pendingEntries.remove(candidate.symbol)
+                }
+                stateMachine.transition(
+                    TradingState.READY_FLAT,
+                    "BUY not filled / terminal after transport error"
+                )
+                savePersistedState()
             }
 
             throw IllegalStateException(
@@ -3176,11 +3587,19 @@ private class NativeEngine(
         val normalizedQty =
             floorStep(qty, rules.step)
 
-        if (normalizedQty < rules.minQty) {
-            error(
-                "Filled quantity is below Binance minimum"
-            )
+        val maxQty = min(
+            rules.maxQty,
+            if (rules.marketMaxQty.isFinite()) rules.marketMaxQty else rules.maxQty
+        )
+        val minQty = max(rules.minQty, rules.marketMinQty)
+        if (normalizedQty < minQty) {
+            error("Filled quantity is below Binance minimum")
         }
+        if (maxQty.isFinite() && normalizedQty > maxQty) {
+            error("Filled quantity is above Binance maximum")
+        }
+
+        checkOcoCapacity(symbol, rules)
 
         val stop =
             fmtPrice(
@@ -3203,6 +3622,18 @@ private class NativeEngine(
 
         if (stop >= entry || take <= entry) {
             error("Invalid TP/SL relationship")
+        }
+
+        validateLimitPrice(symbol, "SELL", take, rules)
+        validateLimitPrice(symbol, "SELL", stop, rules)
+        validateLimitPrice(symbol, "SELL", stopLimit, rules)
+
+        val notional = normalizedQty * entry
+        if (rules.minNotional > 0.0 && notional < rules.minNotional) {
+            error("OCO notional below Binance minimum")
+        }
+        if (rules.maxNotional.isFinite() && notional > rules.maxNotional) {
+            error("OCO notional above Binance maximum")
         }
 
         val ocoClientId =
@@ -3301,6 +3732,11 @@ private class NativeEngine(
 
         val rules = symbolFilters(symbol)
 
+        stateMachine.transition(
+            TradingState.EXIT_PENDING,
+            "manual SELL requested"
+        )
+
         return try {
             // Cancel only the bot-owned OCO. Never cancel unrelated
             // orders that happen to belong to the same symbol.
@@ -3396,6 +3832,10 @@ private class NativeEngine(
             synchronized(positions) {
                 positions.remove(symbol)
             }
+            stateMachine.force(
+                TradingState.READY_FLAT,
+                "manual SELL filled"
+            )
             savePersistedState()
 
             JSONObject()
@@ -4529,9 +4969,14 @@ private class NativeEngine(
             .put("server_time", System.currentTimeMillis())
             .put("market_ws_connected", marketSocketConnected)
             .put("user_ws_connected", userStreamConnected)
+            .put("user_stream_sync_required", userStreamSyncRequired)
             .put("user_stream_last_event_ms", lastUserEventMs)
             .put("history_ready", historyReady)
+            .put("fsm_state", stateMachine.state.name)
             .put("kill_switch_latched", killLatched)
+            .put("live_prices", JSONObject().apply {
+                livePrices.forEach { (symbol, price) -> put(symbol, price) }
+            })
             .put("rate_limits", rateGuard.snapshot())
             .put("history", historyStore.status(coreSymbols, analysisFrames))
             .put("scanner_scanning", scanning)
