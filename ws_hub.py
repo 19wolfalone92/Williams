@@ -306,6 +306,7 @@ class WebSocketHub:
                 def on_close(ws,code,msg):
                     self.user_connected=False
                     self.user_subscription_id=None
+                    self.user_sync_required=True
 
                     if not self.stop_event.is_set():
                         self.last_error=(
@@ -361,6 +362,7 @@ class WebSocketHub:
 
         if not connected:
             self.user_subscription_id=None
+            self.user_sync_required=True
 
         if error:
             self.last_error=f'user ws: {error}'
@@ -509,7 +511,7 @@ class WebSocketHub:
 
                 status=str(o.get('status','')).upper()
                 if status=='FILLED':
-                        self._refresh_account()
+                    self._refresh_account()
 
                 if status in {'FILLED','CANCELED','REJECTED','EXPIRED'}:
                     self.user_sync_required=True
