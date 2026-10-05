@@ -1183,7 +1183,6 @@ private fun ControlCard(
 }
 
 @Composable
-@Composable
 private fun ConnectionHealthCard(status: Status) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -1227,6 +1226,7 @@ private fun HealthRow(label: String, ok: Boolean) {
     }
 }
 
+@Composable
 private fun StatusMessage(message: String, onSettings: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
