@@ -2397,6 +2397,9 @@ private class NativeEngine(
         } else if (preliminaryWave.position == 5) {
             score -= 8.0
         }
+        if (preliminaryWave.aoBearishDivergence) {
+            score -= 12.0
+        }
 
         score = score.coerceIn(0.0, 100.0)
 
@@ -2571,6 +2574,11 @@ private class NativeEngine(
             // parent is Wave 3. A child W3 inside a parent W5 is allowed but
             // receives a smaller quality bonus.
             bonus += if (parent?.position == 3) 14.0 else 7.0
+            // AO bearish divergence warns that the junior impulse is losing
+            // momentum. It lowers priority rather than blindly vetoing a
+            // strong nested W3.
+            if (junior?.aoBearishDivergence == true) bonus -= 12.0
+            if (junior?.aoBullishDivergence == true) bonus += 4.0
         }
 
         var score = (baseCandidate.score + bonus).coerceIn(0.0, 100.0)
@@ -2671,6 +2679,8 @@ private class NativeEngine(
             .put("breakout_distance_pct", candidate.breakoutDistancePct * 100.0)
             .put("risk_pct", candidate.riskPct * 100.0)
             .put("risk_reward", riskReward)
+            .put("ao_bearish_divergence", wave.aoBearishDivergence)
+            .put("ao_bullish_divergence", wave.aoBullishDivergence)
             .put("atr_pct", candidate.atrPct)
             .put("spread_pct", candidate.spreadPct)
             .put("htf_confirmed", candidate.htfCandidate)
