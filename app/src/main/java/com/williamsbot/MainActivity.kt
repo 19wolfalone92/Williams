@@ -878,7 +878,7 @@ fun SetupScreen(
             Text("TRADER", style = MaterialTheme.typography.titleLarge)
             Spacer(Modifier.height(4.dp))
             Text(
-                "Автоматическая торговая система на телефоне. Termux запускает backend, SQLite, AutoScan и watchdog.",
+                "Автоматическая торговая система на телефоне. Standalone: движок работает внутри APK и подключается к Binance напрямую.",
                 style = MaterialTheme.typography.bodyMedium
             )
         }
@@ -891,7 +891,7 @@ fun SetupScreen(
                 ) {
                     Text("Подключение", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "Локальный режим: http://localhost:8000. Удалённый сервер — только HTTPS/WSS.",
+                        "Standalone режим: backend работает внутри APK. VPS и Termux не нужны.",
                         style = MaterialTheme.typography.bodySmall
                     )
                     Button(onClick = onScan, Modifier.fillMaxWidth()) {
@@ -1374,7 +1374,7 @@ fun androidx.compose.foundation.lazy.LazyListScope.settingsScreen(
             ) {
                 Text("Подключение", style = MaterialTheme.typography.titleMedium)
                 Text(
-                    "Локальный backend: http://localhost:8000",
+                    "Native backend внутри APK",
                     style = MaterialTheme.typography.bodySmall
                 )
                 OutlinedButton(onClick = onScan, Modifier.fillMaxWidth()) {
