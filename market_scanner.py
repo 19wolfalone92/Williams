@@ -102,8 +102,8 @@ class MarketScanner:
             else self._load_symbols()
         )
 
-        self.scan_all_usdt = os.getenv("SCAN_ALL_USDT", "true").lower() == "true"
-        self.scan_max_symbols = max(0, int(os.getenv("SCAN_MAX_SYMBOLS", "50")))
+        self.scan_all_usdt = False  # trading universe is intentionally fixed to five core pairs
+        self.scan_max_symbols = 5  # fixed core universe: BTC, ETH, BNB, SOL, XRP
         self.exclude_leveraged_tokens = (
             os.getenv("EXCLUDE_LEVERAGED_TOKENS", "true").lower() == "true"
         )
@@ -141,19 +141,14 @@ class MarketScanner:
 
     def _load_symbols(self):
         raw = os.getenv("SCAN_SYMBOLS", "").strip()
+        # Keep the execution universe deliberately small and stable. The bot
+        # performs deep multi-timeframe analysis on every core pair instead of
+        # shallow analysis of dozens of assets.
+        core = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"]
         if raw:
-            return [x.strip().upper() for x in raw.split(",") if x.strip()]
-
-        # Keep the previous AUTO_SCAN_SYMBOLS variable as an explicit
-        # compatibility override. With no value, the default is the full
-        # Spot/USDT universe.
-        raw_auto = os.getenv("AUTO_SCAN_SYMBOLS", "").strip()
-        if raw_auto and raw_auto.upper() not in {"ALL", "AUTO", "*"}:
-            return [x.strip().upper() for x in raw_auto.split(",") if x.strip()]
-
-        return []
-
-    @staticmethod
+            requested = [str(x).upper().strip() for x in raw.split(",") if str(x).strip()]
+            return [x for x in core if x in requested] or core
+        return core
     def _atr(df, period):
         prev = df["close"].shift(1)
         tr = pd.concat(
@@ -561,7 +556,7 @@ class MarketScanner:
         )
 
     def scan(self) -> List[Candidate]:
-        symbols = self._resolve_symbols()
+        symbols = self._resolve_symbols()\n        symbols = symbols[:5]
         self._refresh_spreads(symbols)
         candidates: List[Candidate] = []
         frames: Dict[str, pd.DataFrame] = {}
