@@ -5,7 +5,7 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.MediaType
+import okhttp3.MediaType.Companion.toMediaType
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
@@ -1049,7 +1049,7 @@ private class NativeEngine(
             .header("X-MBX-APIKEY", key())
             .post(
                 okhttp3.RequestBody.create(
-                    MediaType.parse("application/x-www-form-urlencoded"),
+                    "application/x-www-form-urlencoded".toMediaType(),
                     query + "&signature=" + signature
                 )
             )
