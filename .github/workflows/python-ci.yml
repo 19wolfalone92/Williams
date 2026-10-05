@@ -46,3 +46,4 @@ jobs:
           test_buy_safety.py
           test_williams_book_alignment.py
           test_book_wave_safety.py test_trade_journal.py
+          test_multi_position_lifecycle.py
