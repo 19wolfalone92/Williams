@@ -1732,8 +1732,11 @@ private class NativeEngine(
             .put("running", running)
             .put("paused", paused)
             .put("recovered", true)
-            .put("state", "FLAT")
-            .put("execution_enabled", false)
+            .put("state", if (positionSymbol == null) "FLAT" else "LONG")
+            .put("execution_enabled", true)
+            .put("position_symbol", positionSymbol ?: JSONObject.NULL)
+            .put("position_qty", if (positionSymbol == null) JSONObject.NULL else positionQty)
+            .put("position_entry", if (positionSymbol == null) JSONObject.NULL else positionEntry)
             .put(
                 "last_error",
                 lastError ?: JSONObject.NULL
@@ -1751,7 +1754,14 @@ private class NativeEngine(
                 "quote_balance",
                 balance ?: JSONObject.NULL
             )
-            .put("position", JSONObject.NULL)
+            .put(
+                "position",
+                if (positionSymbol == null) JSONObject.NULL else
+                    JSONObject()
+                        .put("symbol", positionSymbol)
+                        .put("qty", positionQty)
+                        .put("entry", positionEntry)
+            )
             .put("pnl", JSONObject.NULL)
             .put("pnl_pct", JSONObject.NULL)
             .put("take_profit_price", JSONObject.NULL)
