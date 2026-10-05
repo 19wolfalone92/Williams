@@ -12,7 +12,7 @@ from ws_hub import WebSocketHub
 from credentials_store import CredentialStore
 from market_scanner import MarketScanner
 
-load_dotenv(); API_TOKEN=os.getenv('MOBILE_API_TOKEN','').strip(); VERSION='4.11.0'
+load_dotenv(); API_TOKEN=os.getenv('MOBILE_API_TOKEN','').strip(); VERSION='4.12.0'
 app=FastAPI(title='Williams Binance Bot API',version=VERSION); hub=WebSocketHub()
 class CredentialPayload(BaseModel): api_key:str; api_secret:str; testnet:bool=True
 class ControlState:
@@ -87,13 +87,27 @@ def _scanner_snapshot():
             else None
         )
 
+        fresh = bool(
+            scanner_cache["time"]
+            and age is not None
+            and age < SCANNER_CACHE_SECONDS
+        )
+
         return {
             "cached": bool(scanner_cache["data"]),
+            "fresh": fresh,
+            "cache_ttl_seconds": SCANNER_CACHE_SECONDS,
             "scanning": bool(scanner_cache["scanning"]),
             "age_seconds": age,
             "last_error": scanner_cache["last_error"],
             "candidates": list(scanner_cache["data"]),
         }
+
+def _scanner_cache_fresh():
+    with scanner_lock:
+        if not scanner_cache["time"]:
+            return False
+        return (time.time() - scanner_cache["time"]) < SCANNER_CACHE_SECONDS
 
 def _scanner_worker():
     try:
@@ -197,7 +211,7 @@ def status():
 def scanner(refresh:bool=False):
     started = False
 
-    if refresh:
+    if refresh and not _scanner_cache_fresh():
         started = _start_scanner_background()
 
     result = _scanner_snapshot()
