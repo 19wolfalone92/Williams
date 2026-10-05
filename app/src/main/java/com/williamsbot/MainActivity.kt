@@ -322,27 +322,18 @@ fun WilliamsApp(context: Context) {
     suspend fun loadAll(scan: Boolean) {
         withContext(Dispatchers.Main) { refreshing = scan }
         try {
-            val (statusJson, klineJson, scannerJson, tradeArray, insightJson, logArray) =
-                coroutineScope {
-                    val status = async(Dispatchers.IO) { JSONObject(api.get("/api/v1/status")) }
-                    val klines = async(Dispatchers.IO) { JSONObject(api.get("/api/v1/market/klines")) }
-                    val scanner = async(Dispatchers.IO) {
-                        JSONObject(api.get("/api/v1/scanner?refresh=" + scan))
-                    }
-                    val trade = async(Dispatchers.IO) { JSONArray(api.get("/api/v1/trades")) }
-                    val insight = async(Dispatchers.IO) { JSONObject(api.get("/api/v1/insights")) }
-                    val logsJson = async(Dispatchers.IO) { JSONArray(api.get("/api/v1/logs")) }
-                    awaitAll(status, klines, scanner, trade, insight, logsJson).mapIndexed { i, value ->
-                        when (i) {
-                            0 -> value as JSONObject
-                1 -> value as JSONObject
-                2 -> value as JSONObject
-                3 -> value as JSONArray
-                4 -> value as JSONObject
-                else -> value as JSONArray
-                        }
-                    }
+            val root = withContext(Dispatchers.IO) {
+                if (scan) {
+                    api.get("/api/v1/scanner?refresh=true")
                 }
+                JSONObject(api.get("/api/v1/snapshot"))
+            }
+            val statusJson = root.getJSONObject("status")
+            val klineJson = root.getJSONObject("klines")
+            val scannerJson = root.getJSONObject("scanner")
+            val tradeArray = root.getJSONArray("trades")
+            val insightJson = root.getJSONObject("insights")
+            val logArray = root.getJSONArray("logs")
 
             withContext(Dispatchers.Main) {
                 status = parseStatus(statusJson)
@@ -356,7 +347,7 @@ fun WilliamsApp(context: Context) {
                     scannerJson.optString("last_error").takeIf { it.isNotBlank() }
                         ?: if (scan && scannerJson.optBoolean("scanning", false))
                             "Сканирование идёт в фоне"
-                        else if (scan) "Сканирование завершено"
+                        else if (scan) "Сканирование запущено"
                         else "Данные обновлены"
             }
             TradeNotificationHelper.processTradeList(this@MainActivity, tradeArray)
@@ -367,7 +358,6 @@ fun WilliamsApp(context: Context) {
             }
         }
     }
-
     fun refresh(scan: Boolean) {
         scope.launch {
             loadAll(scan)
