@@ -1215,6 +1215,13 @@ private class NativeEngine(
             http.newCall(request).execute().use { response ->
                 rateGuard.observe(response.headers, response.code)
                 lastBody = response.body?.string() ?: "{}"
+                auditStore.recordRestCall(
+                    method,
+                    path,
+                    response.code,
+                    params.ifBlank { null },
+                    lastBody
+                )
                 if (response.isSuccessful) return JSONObject(lastBody)
                 if (attempt == 0 && lastBody.contains("-1021")) {
                     runCatching { syncServerTime() }
@@ -1259,6 +1266,13 @@ private class NativeEngine(
             http.newCall(request).execute().use { response ->
                 rateGuard.observe(response.headers, response.code)
                 lastBody = response.body?.string() ?: "{}"
+                auditStore.recordRestCall(
+                    "GET",
+                    path,
+                    response.code,
+                    params.ifBlank { null },
+                    lastBody
+                )
                 if (response.isSuccessful) return lastBody
                 if (attempt == 0 && lastBody.contains("-1021")) {
                     runCatching { syncServerTime() }
