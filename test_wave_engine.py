@@ -212,3 +212,35 @@ def test_down_wave_3_is_mirrored():
     )
     assert position == 3
     assert label == "W3"
+
+
+def test_w5_exhaustion_does_not_veto_nested_w3_context():
+    e = engine(base_interval="1h", intervals=["4h", "1h"])
+    parent = WaveSnapshot(
+        interval="4h", wave_degree="MEDIUM_HIGH", direction=DIRECTION_UP,
+        phase="IMPULSE", position=5, wave_label="W5", confidence=70.0,
+        structural_confidence=70.0, impulse_score=70.0, exhaustion_risk=85.0,
+        alligator_bullish=True, ao=1.0, data_bars=200, data_ok=True,
+    )
+    child = WaveSnapshot(
+        interval="1h", wave_degree="MEDIUM", direction=DIRECTION_UP,
+        phase="IMPULSE", position=3, wave_label="W3", confidence=88.0,
+        structural_confidence=88.0, impulse_score=92.0, exhaustion_risk=12.0,
+        alligator_bullish=True, ao=3.0, data_bars=200, data_ok=True,
+    )
+    report = e._build_report({"4h": parent, "1h": child})
+    assert report.nested_w3_parent_w5 is True
+    assert report.wave_score > 50.0
+
+
+def test_primary_and_alternative_count_fields_are_serializable():
+    snap = WaveSnapshot(
+        interval="1h", wave_degree="MEDIUM", direction=DIRECTION_UP,
+        position=5, wave_label="W5", primary_count="W5",
+        alternative_count="W3_ALTERNATIVE", abc_phase="",
+        exhaustion_components={"ao_divergence": 30.0}, data_ok=True,
+    )
+    payload = snap.to_dict()
+    assert payload["primary_count"] == "W5"
+    assert payload["alternative_count"] == "W3_ALTERNATIVE"
+    assert payload["exhaustion_components"]["ao_divergence"] == 30.0
