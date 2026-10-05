@@ -265,6 +265,9 @@ private class StandaloneServer(private val context: Context) {
             method == "GET" && path == "/api/v1/trades" ->
                 x.trades().toString()
 
+            method == "GET" && path == "/api/v1/insights" ->
+                x.insights().toString()
+
             method == "GET" && path == "/api/v1/logs" ->
                 x.logs().toString()
 
@@ -2092,7 +2095,7 @@ private class NativeEngine(
             .put("candles", output)
     }
 
-    fun trades(): JSONArray = JSONArray()
+    fun trades(): JSONArray = tradeHistory()
 
     fun logs(): JSONArray =
         JSONArray().put(
