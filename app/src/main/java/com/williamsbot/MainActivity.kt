@@ -945,8 +945,8 @@ fun SetupScreen(
                         modifier = Modifier.fillMaxWidth()
                     )
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(testnet, onTestnetChange)
-                        Text("Использовать Binance Testnet")
+                        Checkbox(checked = true, onCheckedChange = null)
+                        Text("Binance Testnet (standalone)")
                     }
                     Text(
                         "Ключи передаются backend и не хранятся в открытом виде в приложении.",
