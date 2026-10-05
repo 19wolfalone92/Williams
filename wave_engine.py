@@ -119,6 +119,9 @@ class MultiTimeframeWaveEngine:
     """Build a direction-neutral, nested wave context from confirmed fractals."""
 
     INTERVAL_SECONDS = {
+        "1s": 1,
+        "5s": 5,
+        "25s": 25,
         "1m": 60,
         "3m": 180,
         "5m": 300,
@@ -156,6 +159,7 @@ class MultiTimeframeWaveEngine:
         intervals: Optional[Sequence[str]] = None,
         lookback: Optional[int] = None,
         min_bars: Optional[int] = None,
+        include_micro: Optional[bool] = None,
     ) -> None:
         self.client = client
         self.base_interval = (base_interval or os.getenv("INTERVAL", "1h")).lower()
@@ -167,6 +171,15 @@ class MultiTimeframeWaveEngine:
             min_bars if min_bars is not None else os.getenv("WAVE_MIN_BARS", str(MIN_WAVE_BARS_DEFAULT))
         )
         self.lookback = max(self.lookback, self.min_bars)
+        self.micro_min_bars = max(
+            40,
+            int(os.getenv("WAVE_MICRO_MIN_BARS", "40")),
+        )
+        self.include_micro = (
+            bool(include_micro)
+            if include_micro is not None
+            else os.getenv("WAVE_MICRO_ENABLED", "false").lower() == "true"
+        )
         self.cfg = config_from_env()
 
         raw = os.getenv("WAVE_TF_CHAIN", "").strip()
@@ -183,6 +196,11 @@ class MultiTimeframeWaveEngine:
         for interval in (self.context_interval, self.base_interval):
             if interval not in wanted:
                 wanted.append(interval)
+
+        if self.include_micro:
+            for interval in ("1s", "5s", "25s"):
+                if interval not in wanted:
+                    wanted.append(interval)
 
         # Highest timeframe first; unsupported values are retained so an invalid
         # configuration is visible in the report instead of silently disappearing.
@@ -214,7 +232,12 @@ class MultiTimeframeWaveEngine:
 
         return out
 
-    def _fetch(self, symbol: str, interval: str) -> pd.DataFrame:
+    def _fetch(
+        self,
+        symbol: str,
+        interval: str,
+        limit: Optional[int] = None,
+    ) -> pd.DataFrame:
         from data import fetch_klines
 
         return self._drop_unfinished(
@@ -222,9 +245,52 @@ class MultiTimeframeWaveEngine:
                 self.client,
                 symbol,
                 interval,
-                limit=self.lookback,
+                limit=max(
+                    1,
+                    int(
+                        limit if limit is not None
+                        else self.lookback
+                    ),
+                ),
             )
         )
+
+    @staticmethod
+    def _aggregate_seconds(
+        df: pd.DataFrame,
+        seconds: int,
+    ) -> pd.DataFrame:
+        if df is None or df.empty or seconds <= 1:
+            return df
+
+        bucket_ms = int(seconds) * 1000
+        open_ms = (
+            df.index.astype("int64") // 1_000_000
+        )
+        bucket = (open_ms // bucket_ms) * bucket_ms
+
+        work = df.copy()
+        work["_bucket"] = bucket
+        grouped = work.groupby("_bucket", sort=True)
+
+        out = pd.DataFrame({
+            "open": grouped["open"].first(),
+            "high": grouped["high"].max(),
+            "low": grouped["low"].min(),
+            "close": grouped["close"].last(),
+            "volume": grouped["volume"].sum(),
+        })
+        out.index = pd.to_datetime(
+            out.index,
+            unit="ms",
+            utc=True,
+        )
+        out.index.name = df.index.name
+        out["close_time"] = (
+            out.index +
+            pd.to_timedelta(bucket_ms - 1, unit="ms")
+        )
+        return out.dropna()
 
     # ------------------------------------------------------------------
     # Confirmed fractal / swing layer
@@ -727,7 +793,12 @@ class MultiTimeframeWaveEngine:
                 reason="No market data.",
             )
 
-        if len(clean) < self.min_bars:
+        required_bars = (
+            self.micro_min_bars
+            if interval in {"1s", "5s", "25s"}
+            else self.min_bars
+        )
+        if len(clean) < required_bars:
             return WaveSnapshot(
                 interval=interval,
                 wave_degree=degree,
@@ -1026,9 +1097,28 @@ class MultiTimeframeWaveEngine:
         cache = cache or {}
         snapshots: Dict[str, WaveSnapshot] = {}
 
+        micro_source: Optional[pd.DataFrame] = None
+
         for index, interval in enumerate(self.intervals):
             try:
                 frame = cache.get(interval)
+
+                if frame is None and self.include_micro and interval in {"1s", "5s", "25s"}:
+                    if micro_source is None:
+                        micro_source = self._fetch(
+                            symbol,
+                            "1s",
+                            limit=1000,
+                        )
+
+                    if interval == "1s":
+                        frame = micro_source
+                    else:
+                        frame = self._aggregate_seconds(
+                            micro_source,
+                            5 if interval == "5s" else 25,
+                        )
+
                 if frame is None:
                     frame = self._fetch(symbol, interval)
 
