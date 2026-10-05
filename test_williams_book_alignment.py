@@ -58,7 +58,7 @@ def test_wise_men_columns_are_present_and_signal_is_conservative():
 def test_config_defaults_keep_countertrend_disabled():
     cfg = config_from_env({})
     assert cfg['super_ao_bars'] == 3
-    assert cfg['min_wise_men_confirmations'] == 1
+    assert cfg['min_wise_men_confirmations'] == 2
     assert cfg['allow_countertrend_wise_man'] is False
 
 
