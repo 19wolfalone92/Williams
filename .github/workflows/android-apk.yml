@@ -103,9 +103,13 @@ jobs:
           WILLIAMS_DEBUG_KEYSTORE_PASSWORD: ${{ secrets.WILLIAMS_DEBUG_KEYSTORE_PASSWORD }}
           WILLIAMS_DEBUG_KEYSTORE_B64: ${{ secrets.WILLIAMS_DEBUG_KEYSTORE_B64 }}
         run: |
-          gradle --no-daemon :app:assembleDebug --stacktrace
+          set +e
+          gradle --no-daemon :app:assembleDebug --stacktrace 2>&1 | tee build-debug.log
+          rc=${PIPESTATUS[0]}
+          set -e
+          exit "$rc"
 
-      - name: Build release APK
+      - name: Upload debug build log\n        if: always()\n        uses: actions/upload-artifact@v7\n        with:\n          name: williams-debug-build-log-${{ github.run_number }}\n          path: build-debug.log\n          if-no-files-found: ignore\n          retention-days: 3\n\n      - name: Build release APK
         run: |
           gradle --no-daemon :app:assembleRelease --stacktrace
 
