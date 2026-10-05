@@ -84,7 +84,13 @@ private data class WaveInfo(
     val path: String,
     val alligatorBullish: Boolean,
     val aoPositive: Boolean,
-    val currentLegPct: Double
+    val currentLegPct: Double,
+    val entryFrame: String = "",
+    val entryWave: Int = 0,
+    val parentFrame: String = "",
+    val parentWave: Int = 0,
+    val entryConfidence: Double = 0.0,
+    val nestedW3ParentW5: Boolean = false
 )
 
 private data class PositionState(
@@ -1857,6 +1863,12 @@ private class NativeEngine(
                     .put("wave_confidence", candidate.wave.confidence)
                     .put("wave_exhaustion_risk", candidate.wave.exhaustionRisk)
                     .put("wave_path", candidate.wave.path)
+                    .put("entry_timeframe", candidate.wave.entryFrame)
+                    .put("entry_wave", candidate.wave.entryWave)
+                    .put("parent_timeframe", candidate.wave.parentFrame)
+                    .put("parent_wave", candidate.wave.parentWave)
+                    .put("entry_wave_confidence", candidate.wave.entryConfidence)
+                    .put("nested_w3_parent_w5", candidate.wave.nestedW3ParentW5)
                     .put("wave_alligator_bullish", candidate.wave.alligatorBullish)
                     .put("wave_ao_positive", candidate.wave.aoPositive)
             TradeJournal.recordEntry(
@@ -2351,7 +2363,10 @@ private class NativeEngine(
         val frames = mutableListOf<WaveInfo>()
         frames.add(baseCandidate.wave)
 
-        val mtfFrames = listOf("5m", "15m", "1h", "4h", "1d")
+        // The higher timeframe supplies the market context; a lower timeframe
+        // supplies the actual entry trigger. A child Wave 3 is therefore
+        // allowed inside a parent Wave 3 OR a parent Wave 5.
+        val mtfFrames = listOf("1m", "5m", "15m", "30m", "1h", "4h", "1d")
         for (frame in mtfFrames) {
             runCatching { fetchCandles(symbol, frame, 300) }
                 .getOrNull()?.takeIf { it.size >= 40 }
@@ -2368,54 +2383,147 @@ private class NativeEngine(
         val setup = baseCandidate.wave
         var bonus = 0.0
         var exhaustion = setup.exhaustionRisk
-        var htfConfirmed = false
 
-        frames.filter { it.path.startsWith("4h:") }.firstOrNull()?.let {
-            htfConfirmed = it.alligatorBullish && it.aoPositive && it.direction == "UP"
-            if (htfConfirmed) bonus += 8.0
-        }
+        val htf4h = frames.firstOrNull { it.path.startsWith("4h:") }
+        val htfConfirmed =
+            htf4h != null &&
+                htf4h.alligatorBullish &&
+                htf4h.aoPositive &&
+                htf4h.direction == "UP"
+
+        if (htfConfirmed) bonus += 8.0
         if (frames.any { it.path.startsWith("1d:") && it.direction == "UP" }) bonus += 4.0
-        if (setup.position == 3) { bonus += 6.0; exhaustion = min(exhaustion, 30.0) }
+        if (setup.position == 3) {
+            bonus += 6.0
+            exhaustion = min(exhaustion, 30.0)
+        }
 
-        val parentW5 = frames.filter { it.position == 5 && it.direction == "UP" }
-        val childW3 = frames.filter { it.position == 3 && it.direction == "UP" }
+        val parentW5 = frames.filter {
+            it.position == 5 && it.direction == "UP"
+        }
+        val childW3 = frames.filter {
+            it.position == 3 &&
+                it.direction == "UP" &&
+                it.alligatorBullish &&
+                it.aoPositive
+        }
+
         val nestedW3ParentW5 = parentW5.any { parent ->
             childW3.any { child ->
-                frameSeconds(child.path.substringBefore(":")) < frameSeconds(parent.path.substringBefore(":"))
+                frameSeconds(child.path.substringBefore(":")) <
+                    frameSeconds(parent.path.substringBefore(":"))
             }
         }
 
         if (nestedW3ParentW5) {
             bonus += 10.0
-            exhaustion = min(exhaustion, max(10.0, setup.exhaustionRisk - 10.0))
+            exhaustion =
+                min(
+                    exhaustion,
+                    max(10.0, setup.exhaustionRisk - 10.0)
+                )
         } else if (setup.position == 5) {
             bonus -= 12.0
             exhaustion = max(exhaustion, 65.0)
         }
 
+        // Find the lowest available timeframe with a fresh Wave 3 that is
+        // aligned with the higher-timeframe direction. This is the execution
+        // timeframe; the 1h/4h wave is context, not necessarily the entry.
+        val entryCandidates = frames
+            .filter {
+                it.position == 3 &&
+                    it.direction == "UP" &&
+                    it.alligatorBullish &&
+                    it.aoPositive
+            }
+            .sortedBy { frameSeconds(it.path.substringBefore(":")) }
+
+        val entry = entryCandidates.firstOrNull()
+
+        // Find the nearest larger-degree wave that contains the entry wave.
+        val parent = if (entry != null) {
+            frames
+                .filter {
+                    val seconds = frameSeconds(it.path.substringBefore(":"))
+                    seconds > frameSeconds(entry.path.substringBefore(":")) &&
+                        it.direction == "UP" &&
+                        it.position in 1..5
+                }
+                .sortedBy { frameSeconds(it.path.substringBefore(":")) }
+                .firstOrNull()
+        } else {
+            null
+        }
+
+        val entrySignal =
+            entry != null &&
+                (htfConfirmed || nestedW3ParentW5)
+
+        if (entrySignal) {
+            // A lower-TF Wave 3 is the preferred entry, especially when the
+            // parent is Wave 3. A child W3 inside a parent W5 is allowed but
+            // receives a smaller quality bonus.
+            bonus += if (parent?.position == 3) 14.0 else 7.0
+        }
+
         var score = (baseCandidate.score + bonus).coerceIn(0.0, 100.0)
-        val finalSignal = baseCandidate.signal && htfConfirmed &&
-            (baseCandidate.wave.position != 5 || nestedW3ParentW5)
-        if (!finalSignal && baseCandidate.signal) score = min(score, 84.0)
+
+        // Entry is no longer tied to the 1h candle's breakout. We enter on the
+        // lower-TF Wave 3 after higher-TF context confirms the direction.
+        val finalSignal =
+            entrySignal &&
+                (entry?.confidence ?: 0.0) >= 55.0 &&
+                (setup.position != 5 || nestedW3ParentW5)
+
+        if (!finalSignal && baseCandidate.signal) {
+            score = min(score, 84.0)
+        }
 
         val path = frames
             .sortedByDescending { frameSeconds(it.path.substringBefore(":")) }
-            .joinToString(" > ") { it.path.substringBefore(":") + ":" + if (it.position > 0) "W" + it.position else "?" }
+            .joinToString(" > ") {
+                it.path.substringBefore(":") +
+                    ":" +
+                    if (it.position > 0) "W" + it.position else "?"
+            }
+
+        val entryFrame =
+            entry?.path?.substringBefore(":") ?: ""
+        val parentFrame =
+            parent?.path?.substringBefore(":") ?: ""
 
         val reason = when {
-            nestedW3ParentW5 -> "MTF: parent W5 contains active W3 below; W5 is not a veto"
-            setup.position == 5 -> "MTF: W5/exhaustion context lowers confidence"
-            finalSignal -> "MTF confirmed: multi-timeframe Williams + Alligator/AO"
-            else -> baseCandidate.reason
+            entrySignal && parent?.position == 3 ->
+                "MTF ENTRY: $entryFrame Wave 3 inside parent $parentFrame Wave 3"
+            entrySignal && nestedW3ParentW5 ->
+                "MTF ENTRY: $entryFrame Wave 3 inside parent Wave 5; allowed with reduced priority"
+            setup.position == 5 && !nestedW3ParentW5 ->
+                "MTF: Wave 5/exhaustion context blocks entry"
+            finalSignal ->
+                "MTF ENTRY: lower-TF Wave 3 + higher-TF context confirmed"
+            else ->
+                baseCandidate.reason
         }
+
         return baseCandidate.copy(
             score = score,
             signal = finalSignal,
             htfCandidate = htfConfirmed,
             wave = setup.copy(
-                confidence = min(100.0, setup.confidence + if (htfConfirmed) 10.0 else 0.0),
+                confidence = min(
+                    100.0,
+                    setup.confidence +
+                        if (htfConfirmed) 10.0 else 0.0
+                ),
                 exhaustionRisk = exhaustion,
-                path = path
+                path = path,
+                entryFrame = entryFrame,
+                entryWave = entry?.position ?: 0,
+                parentFrame = parentFrame,
+                parentWave = parent?.position ?: 0,
+                entryConfidence = entry?.confidence ?: 0.0,
+                nestedW3ParentW5 = nestedW3ParentW5
             ),
             reason = reason
         )
@@ -2470,6 +2578,11 @@ private class NativeEngine(
             .put("wave_exhaustion_risk", wave.exhaustionRisk)
             .put("nested_w3", nestedW3)
             .put("nested_w3_parent_w5", nestedParentW5)
+            .put("entry_timeframe", wave.entryFrame)
+            .put("entry_wave", wave.entryWave)
+            .put("parent_timeframe", wave.parentFrame)
+            .put("parent_wave", wave.parentWave)
+            .put("entry_wave_confidence", wave.entryConfidence)
             .put(
                 "wave_path",
                 if (wave.path.isBlank()) {
@@ -2954,7 +3067,7 @@ private class NativeEngine(
 
     private fun scannerSnapshot(): JSONObject =
         JSONObject()
-            .put("version", "4.14.0")
+            .put("version", "4.16.0")
             .put("cached", true)
             .put("scanning", scanning)
             .put("last_error", lastError ?: JSONObject.NULL)
@@ -3228,7 +3341,7 @@ private class NativeEngine(
             .put("full_history_base_timeframe", "1h")
             .put("risk_per_trade_pct", maxRiskPerTradePct)
             .put("max_daily_loss_pct", 0.03)
-            .put("max_trades_per_day", 5)
+            .put("max_trades_per_day", 0)
             .put("max_consecutive_losses", 3)
             .put("cooldown_minutes", 30)
             .put("min_risk_reward", 1.5)
