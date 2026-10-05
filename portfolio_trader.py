@@ -23,7 +23,7 @@ class MultiPositionTrader:
 
     Lifecycle:
         ENTRY_PENDING -> OPEN/EXIT_PENDING -> OPEN -> FLAT
-                         \-> RECONCILE_REQUIRED on ambiguity
+        -> RECONCILE_REQUIRED on ambiguity
     """
 
     ENTRY_PREFIX = "WILLV4_ENTRY_"
