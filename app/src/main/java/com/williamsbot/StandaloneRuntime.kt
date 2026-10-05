@@ -381,7 +381,7 @@ private class NativeEngine(
     private val interval = "1h"
 
     private val maxScanSymbols = 60
-    private val waveTopN = 12
+    private val waveTopN = 8
     private val scanExecutor = Executors.newFixedThreadPool(12)
     private val candleCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, List<CandleN>>>()
     private val fullHistoryCache = java.util.concurrent.ConcurrentHashMap<String, List<CandleN>>()
@@ -836,23 +836,27 @@ private class NativeEngine(
         var lastBody = "{}"
         repeat(2) { attempt ->
             val query = if (params.isBlank()) {
-                "timestamp=" + signedTimestamp() +
-                    "&recvWindow=" + BINANCE_RECV_WINDOW_MS
+                "timestamp=" + signedTimestamp() + "&recvWindow=" + BINANCE_RECV_WINDOW_MS
             } else {
-                params + "&timestamp=" + signedTimestamp() +
-                    "&recvWindow=" + BINANCE_RECV_WINDOW_MS
+                params + "&timestamp=" + signedTimestamp() + "&recvWindow=" + BINANCE_RECV_WINDOW_MS
             }
             val signature = hmac(query, secret())
-            val requestBuilder = Request.Builder()
-                .url(baseUrl + path + "?" + query + "&signature=" + signature)
-                .header("X-MBX-APIKEY", key())
             val request = when (method) {
-                "POST" -> requestBuilder.post(
-                    (query + "&signature=" + signature)
-                        .toRequestBody("application/x-www-form-urlencoded".toMediaType())
-                ).build()
-                "DELETE" -> requestBuilder.delete().build()
-                else -> requestBuilder.get().build()
+                "POST" -> Request.Builder()
+                    .url(baseUrl + path)
+                    .header("X-MBX-APIKEY", key())
+                    .post((query + "&signature=" + signature).toRequestBody("application/x-www-form-urlencoded".toMediaType()))
+                    .build()
+                "DELETE" -> Request.Builder()
+                    .url(baseUrl + path + "?" + query + "&signature=" + signature)
+                    .header("X-MBX-APIKEY", key())
+                    .delete()
+                    .build()
+                else -> Request.Builder()
+                    .url(baseUrl + path + "?" + query + "&signature=" + signature)
+                    .header("X-MBX-APIKEY", key())
+                    .get()
+                    .build()
             }
             http.newCall(request).execute().use { response ->
                 lastBody = response.body?.string() ?: "{}"
