@@ -337,6 +337,15 @@ private class NativeEngine(
     private var scanSymbols = mutableListOf<String>()
     private var candidates = JSONArray()
     private var primaryCandles = emptyList<CandleN>()
+    @Volatile private var positionCandles = emptyList<CandleN>()
+    @Volatile private var positionCandlesSymbol: String? = null
+    @Volatile private var positionCandlesAt = 0L
+    @Volatile private var compactQuotes = JSONArray()
+    @Volatile private var compactQuotesAt = 0L
+    private val compactQuoteSymbols = listOf(
+        "ETHUSDT", "BNBUSDT", "SOLUSDT",
+        "XRPUSDT", "ADAUSDT", "DOGEUSDT"
+    )
     private var lastScanDurationMs = 0L
     private var lastSymbolsScanned = 0
     @Volatile private var positionSymbol: String? = null
@@ -1330,6 +1339,26 @@ private class NativeEngine(
             fetchCandles(symbol, "15m", 160)
         }.getOrNull()
 
+        val minute = runCatching {
+            fetchCandles(symbol, "1m", 160)
+        }.getOrNull()
+
+        val fiveMinute = runCatching {
+            fetchCandles(symbol, "5m", 160)
+        }.getOrNull()
+
+        val oneSecond = runCatching {
+            fetchCandles(symbol, "1s", 1000)
+        }.getOrNull()
+
+        val fiveSecond = oneSecond
+            ?.takeIf { it.size >= 40 }
+            ?.let { aggregateCandles(it, 5L) }
+
+        val twentyFiveSecond = oneSecond
+            ?.takeIf { it.size >= 40 }
+            ?.let { aggregateCandles(it, 25L) }
+
         val frames = mutableListOf<WaveInfo>()
         frames.add(baseCandidate.wave)
 
@@ -1343,6 +1372,26 @@ private class NativeEngine(
 
         if (!lower.isNullOrEmpty()) {
             frames.add(waveInfo(lower, "15m"))
+        }
+
+        if (!minute.isNullOrEmpty()) {
+            frames.add(waveInfo(minute, "1m"))
+        }
+
+        if (!fiveMinute.isNullOrEmpty()) {
+            frames.add(waveInfo(fiveMinute, "5m"))
+        }
+
+        if (!oneSecond.isNullOrEmpty()) {
+            frames.add(waveInfo(oneSecond, "1s"))
+        }
+
+        if (!fiveSecond.isNullOrEmpty()) {
+            frames.add(waveInfo(fiveSecond, "5s"))
+        }
+
+        if (!twentyFiveSecond.isNullOrEmpty()) {
+            frames.add(waveInfo(twentyFiveSecond, "25s"))
         }
 
         val setup = baseCandidate.wave
@@ -1512,7 +1561,7 @@ private class NativeEngine(
             .put(
                 "wave_path",
                 if (wave.path.isBlank()) {
-                    "1d ? > 4h ? > 1h ? > 15m ?"
+                    "1d ? > 4h ? > 1h ? > 15m ? > 25s ? > 5s ? > 1s ?"
                 } else {
                     wave.path
                 }
@@ -1920,8 +1969,39 @@ private class NativeEngine(
         return atrAbs(candles) / price
     }
 
+    private fun aggregateCandles(
+        candles: List<CandleN>,
+        seconds: Long
+    ): List<CandleN> {
+        if (seconds <= 1L || candles.isEmpty()) return candles
+
+        val bucketMs = seconds * 1000L
+        val groups = linkedMapOf<Long, MutableList<CandleN>>()
+
+        for (candle in candles) {
+            val bucketStart = (candle.t / bucketMs) * bucketMs
+            groups.getOrPut(bucketStart) { mutableListOf() }.add(candle)
+        }
+
+        return groups.map { (start, rows) ->
+            CandleN(
+                t = start,
+                o = rows.first().o,
+                h = rows.maxOf { it.h },
+                l = rows.minOf { it.l },
+                c = rows.last().c,
+                v = rows.sumOf { it.v }
+            )
+        }
+    }
+
     private fun frameSeconds(frame: String): Long =
         when (frame) {
+            "1s" -> 1L
+            "5s" -> 5L
+            "25s" -> 25L
+            "1m" -> 60L
+            "5m" -> 300L
             "15m" -> 900L
             "1h" -> 3600L
             "4h" -> 14400L
@@ -1967,6 +2047,10 @@ private class NativeEngine(
             }
         }
 
+        val activeCandles =
+            if (positionSymbol != null) getPositionCandles() else primaryCandles
+        val activePrice = activeCandles.lastOrNull()?.c
+
         var balance: Double? = null
 
         if (key().isNotBlank() && secret().isNotBlank()) {
@@ -2011,8 +2095,7 @@ private class NativeEngine(
             )
             .put(
                 "price",
-                primaryCandles.lastOrNull()?.c
-                    ?: JSONObject.NULL
+                activePrice ?: JSONObject.NULL
             )
             .put(
                 "quote_balance",
@@ -2026,10 +2109,10 @@ private class NativeEngine(
                         .put("quantity", positionQty)
                         .put("entry_price", positionEntry)
             )
-            .put("pnl", if (positionSymbol != null && primaryCandles.isNotEmpty())
-                (primaryCandles.last().c - positionEntry) * positionQty else JSONObject.NULL)
-            .put("pnl_pct", if (positionSymbol != null && positionEntry > 0.0 && primaryCandles.isNotEmpty())
-                primaryCandles.last().c / positionEntry - 1.0 else JSONObject.NULL)
+            .put("pnl", if (positionSymbol != null && activePrice != null)
+                (activePrice - positionEntry) * positionQty else JSONObject.NULL)
+            .put("pnl_pct", if (positionSymbol != null && positionEntry > 0.0 && activePrice != null)
+                activePrice / positionEntry - 1.0 else JSONObject.NULL)
             .put("take_profit_price", prefs.getString("position_take", null)?.toDoubleOrNull() ?: JSONObject.NULL)
             .put("stop_loss_price", prefs.getString("position_stop", null)?.toDoubleOrNull() ?: JSONObject.NULL)
             .put("stop_loss_pct", 0.02)
@@ -2051,34 +2134,92 @@ private class NativeEngine(
         return JSONObject()
             .put("status", status())
             .put("klines", klines())
+            .put("market", marketQuotes())
             .put("scanner", scanner(false))
             .put("trades", trades())
             .put("insights", insights())
             .put("logs", logs())
     }
 
-    fun klines(): JSONObject {
-        if (primaryCandles.isEmpty()) {
-            runCatching {
-                primaryCandles =
-                    fetchCandles(primarySymbol, interval, 150)
-            }
+    private fun marketQuotes(): JSONArray {
+        val now = System.currentTimeMillis()
+        if (compactQuotes.length() > 0 && now - compactQuotesAt < 10_000L) {
+            return compactQuotes
         }
 
+        return runCatching {
+            val rows = JSONArray(getBody("/api/v3/ticker/price"))
+            val wanted = compactQuoteSymbols.toSet()
+            val out = JSONArray()
+
+            for (i in 0 until rows.length()) {
+                val item = rows.optJSONObject(i) ?: continue
+                val symbol = item.optString("symbol")
+                if (!wanted.contains(symbol)) continue
+                val price = item.optString("price").toDoubleOrNull() ?: continue
+                if (price > 0.0) {
+                    out.put(
+                        JSONObject()
+                            .put("symbol", symbol)
+                            .put("price", price)
+                    )
+                }
+            }
+
+            if (out.length() > 0) {
+                compactQuotes = out
+                compactQuotesAt = now
+            }
+            compactQuotes
+        }.getOrDefault(compactQuotes)
+    }
+
+    private fun getPositionCandles(): List<CandleN> {
+        val symbol = positionSymbol ?: return emptyList()
+        val now = System.currentTimeMillis()
+
+        if (
+            positionCandlesSymbol == symbol &&
+            positionCandles.isNotEmpty() &&
+            now - positionCandlesAt < 5_000L
+        ) {
+            return positionCandles
+        }
+
+        val fresh = runCatching {
+            fetchCandles(symbol, interval, 150)
+        }.getOrDefault(emptyList())
+
+        if (fresh.isNotEmpty()) {
+            positionCandles = fresh
+            positionCandlesSymbol = symbol
+            positionCandlesAt = now
+        }
+
+        return positionCandles
+    }
+
+    fun klines(): JSONObject {
+        val symbol = positionSymbol
+        if (symbol == null) {
+            return JSONObject()
+                .put("symbol", JSONObject.NULL)
+                .put("interval", interval)
+                .put("candles", JSONArray())
+        }
+
+        val source = getPositionCandles()
         val output = JSONArray()
-        val prices =
-            primaryCandles.map { it.c }
+        val prices = source.map { it.c }
 
         if (prices.isNotEmpty()) {
             val jaw = smma(prices, 13)
             val teeth = smma(prices, 8)
             val lips = smma(prices, 5)
+            val start = max(0, source.size - 120)
 
-            val start =
-                max(0, primaryCandles.size - 120)
-
-            for (i in start until primaryCandles.size) {
-                val c = primaryCandles[i]
+            for (i in start until source.size) {
+                val c = source[i]
                 output.put(
                     JSONObject()
                         .put("time", c.t)
@@ -2086,54 +2227,28 @@ private class NativeEngine(
                         .put("high", c.h)
                         .put("low", c.l)
                         .put("close", c.c)
-                        .put(
-                            "jaw",
-                            jaw.getOrNull(i)
-                                ?: JSONObject.NULL
-                        )
-                        .put(
-                            "teeth",
-                            teeth.getOrNull(i)
-                                ?: JSONObject.NULL
-                        )
-                        .put(
-                            "lips",
-                            lips.getOrNull(i)
-                                ?: JSONObject.NULL
-                        )
-                        .put(
-                            "ao",
-                            ao(primaryCandles, i)
-                        )
+                        .put("jaw", jaw.getOrNull(i) ?: JSONObject.NULL)
+                        .put("teeth", teeth.getOrNull(i) ?: JSONObject.NULL)
+                        .put("lips", lips.getOrNull(i) ?: JSONObject.NULL)
+                        .put("ao", ao(source, i))
                         .put(
                             "long_signal",
                             i >= 40 &&
-                                alligator(
-                                    prices.subList(
-                                        0,
-                                        i + 1
-                                    )
-                                ).let { values ->
+                                alligator(prices.subList(0, i + 1)).let { values ->
                                     values.lips > values.teeth &&
                                         values.teeth > values.jaw &&
                                         prices[i] > values.lips &&
-                                        ao(primaryCandles, i) > 0.0
+                                        ao(source, i) > 0.0
                                 }
                         )
-                        .put(
-                            "fractal_up",
-                            isUpFractal(primaryCandles, i)
-                        )
-                        .put(
-                            "fractal_down",
-                            isDownFractal(primaryCandles, i)
-                        )
+                        .put("fractal_up", isUpFractal(source, i))
+                        .put("fractal_down", isDownFractal(source, i))
                 )
             }
         }
 
         return JSONObject()
-            .put("symbol", primarySymbol)
+            .put("symbol", symbol)
             .put("interval", interval)
             .put("candles", output)
     }
