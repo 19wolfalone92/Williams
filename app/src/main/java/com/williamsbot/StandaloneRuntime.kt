@@ -898,6 +898,48 @@ private class NativeEngine(
         error("Binance timestamp retry failed: " + lastBody)
     }
 
+    private fun signedRawGet(
+        path: String,
+        params: String
+    ): String {
+        var lastBody = "{}"
+        repeat(2) { attempt ->
+            val query = if (params.isBlank()) {
+                "timestamp=" + signedTimestamp() +
+                    "&recvWindow=" + BINANCE_RECV_WINDOW_MS
+            } else {
+                params +
+                    "&timestamp=" + signedTimestamp() +
+                    "&recvWindow=" + BINANCE_RECV_WINDOW_MS
+            }
+            val signature = hmac(query, secret())
+            val request = Request.Builder()
+                .url(
+                    baseUrl +
+                        path +
+                        if (query.isBlank()) {
+                            ""
+                        } else {
+                            "?" + query + "&signature=" + signature
+                        }
+                )
+                .header("X-MBX-APIKEY", key())
+                .get()
+                .build()
+
+            http.newCall(request).execute().use { response ->
+                lastBody = response.body?.string() ?: "{}"
+                if (response.isSuccessful) return lastBody
+                if (attempt == 0 && lastBody.contains("-1021")) {
+                    runCatching { syncServerTime() }
+                    return@use
+                }
+                error("Binance " + response.code + ": " + lastBody)
+            }
+        }
+        error("Binance signed GET failed: " + lastBody)
+    }
+
     private fun hmac(value: String, secretValue: String): String {
         val mac = Mac.getInstance("HmacSHA256")
         mac.init(
@@ -1402,8 +1444,7 @@ private class NativeEngine(
         }
 
         val account = signedAccount()
-        val balances =
-            account.getJSONArray("balances")
+        val balances = account.getJSONArray("balances")
         val openLists =
             runCatching {
                 signedGet(
@@ -1412,8 +1453,8 @@ private class NativeEngine(
                 )
             }.getOrNull()
 
-        val updated =
-            mutableListOf<PositionState>()
+        val updated = mutableListOf<PositionState>()
+        val minRecoveryQty = 0.000001
 
         for (stored in positionList()) {
             if (
@@ -1425,6 +1466,57 @@ private class NativeEngine(
                     "Invalid persisted position " +
                         stored.symbol
                 )
+            }
+
+            val allOrders = JSONArray(
+                signedRawGet(
+                    "/api/v3/allOrders",
+                    "symbol=" + stored.symbol +
+                        "&limit=1000"
+                )
+            )
+
+            val exitFills = mutableListOf<JSONObject>()
+            var soldQty = 0.0
+            var soldQuote = 0.0
+
+            for (i in 0 until allOrders.length()) {
+                val order = allOrders.optJSONObject(i) ?: continue
+                if (
+                    order.optString("symbol").uppercase() !=
+                        stored.symbol.uppercase()
+                ) continue
+                if (order.optString("side").uppercase() != "SELL") continue
+                if (order.optString("status").uppercase() != "FILLED") continue
+
+                val listId =
+                    order.optString("orderListId")
+                if (
+                    stored.ocoListId.isBlank() ||
+                    listId != stored.ocoListId
+                ) continue
+
+                val entryTime = stored.openedAt
+                val orderTime = order.optLong(
+                    "transactTime",
+                    order.optLong("time", 0L)
+                )
+                if (entryTime > 0L && orderTime > 0L &&
+                    orderTime < entryTime) {
+                    continue
+                }
+
+                val qty =
+                    order.optString("executedQty")
+                        .toDoubleOrNull() ?: 0.0
+                val quote =
+                    order.optString("cummulativeQuoteQty")
+                        .toDoubleOrNull() ?: 0.0
+                if (qty <= 0.0) continue
+
+                soldQty += qty
+                soldQuote += quote
+                exitFills.add(order)
             }
 
             val asset =
@@ -1445,31 +1537,101 @@ private class NativeEngine(
                 }
             }
 
-            if (total <= stored.qty * 0.02) {
+            val expectedRemaining =
+                max(0.0, stored.qty - soldQty)
+            val tolerance =
+                max(
+                    minRecoveryQty,
+                    max(
+                        expectedRemaining,
+                        stored.qty
+                    ) * 0.005
+                )
+
+            if (soldQty > 0.0 && expectedRemaining <= minRecoveryQty) {
+                if (total > tolerance) {
+                    throw IllegalStateException(
+                        stored.symbol +
+                            " reports full managed SELL but exchange still "
+                            + "holds " + total + " units"
+                    )
+                }
+
+                val lastExit =
+                    exitFills.maxByOrNull {
+                        it.optLong(
+                            "transactTime",
+                            it.optLong("time", 0L)
+                        )
+                    } ?: throw IllegalStateException(
+                        stored.symbol +
+                            ": managed SELL evidence missing"
+                    )
+
                 val exitPrice =
-                    runCatching {
-                        JSONObject(
-                            getBody("/api/v3/ticker/price?symbol=" + stored.symbol)
-                        ).optString("price").toDoubleOrNull() ?: stored.entry
-                    }.getOrDefault(stored.entry)
+                    if (soldQuote > 0.0 && soldQty > 0.0) {
+                        soldQuote / soldQty
+                    } else {
+                        lastExit.optString("price")
+                            .toDoubleOrNull()
+                            ?: stored.entry
+                    }
+                val pnl =
+                    (exitPrice - stored.entry) * stored.qty
+                val pnlPct =
+                    if (stored.entry > 0.0) {
+                        exitPrice / stored.entry - 1.0
+                    } else {
+                        0.0
+                    }
+                val exitType =
+                    lastExit.optString("type").uppercase()
+                val reason =
+                    when {
+                        exitType.contains("TAKE_PROFIT") ->
+                            "TAKE_PROFIT"
+                        exitType.contains("STOP_LOSS") ->
+                            "STOP_LOSS"
+                        else ->
+                            "BOT_OCO_EXIT"
+                    }
+
                 TradeJournal.close(
                     prefs = prefs,
                     symbol = stored.symbol,
                     exitPrice = exitPrice,
-                    reason = "OCO_OR_EXCHANGE_EXIT"
+                    reason = reason,
+                    order = lastExit
                 )
                 continue
             }
 
-            val delta =
-                abs(total - stored.qty) /
-                    stored.qty
-
-            if (delta > 0.05) {
+            if (
+                total <= tolerance &&
+                soldQty <= 0.0
+            ) {
                 throw IllegalStateException(
                     stored.symbol +
-                        " balance mismatch: expected " +
-                        stored.qty +
+                        ": exchange position disappeared without "
+                        + "managed SELL evidence"
+                )
+            }
+
+            if (expectedRemaining <= minRecoveryQty) {
+                throw IllegalStateException(
+                    stored.symbol +
+                        ": position quantity is inconsistent with "
+                        + "exchange history"
+                )
+            }
+
+            if (
+                abs(total - expectedRemaining) > tolerance
+            ) {
+                throw IllegalStateException(
+                    stored.symbol +
+                        " managed balance mismatch: expected " +
+                        expectedRemaining +
                         ", exchange " +
                         total
                 )
@@ -1477,18 +1639,26 @@ private class NativeEngine(
 
             var current =
                 stored.copy(
-                    qty = min(
-                        stored.qty,
-                        total
-                    )
+                    qty = expectedRemaining
+                        .coerceAtMost(total)
                 )
 
             val protected =
-                stored.ocoListClientId.isNotBlank() &&
-                    openListsContains(
-                        openLists,
-                        stored.symbol,
-                        stored.ocoListClientId
+                (
+                    stored.ocoListClientId.isNotBlank() &&
+                        openListsContains(
+                            openLists,
+                            stored.symbol,
+                            stored.ocoListClientId
+                        )
+                ) ||
+                    (
+                        stored.ocoListId.isNotBlank() &&
+                            openListsContainsListId(
+                                openLists,
+                                stored.symbol,
+                                stored.ocoListId
+                            )
                     )
 
             if (!protected) {
@@ -1555,6 +1725,30 @@ private class NativeEngine(
         for (i in 0 until rows.length()) {
             val row = rows.optJSONObject(i) ?: continue
             if (row.optString("symbol") == symbol) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private fun openListsContainsListId(
+        response: JSONObject?,
+        symbol: String,
+        listId: String
+    ): Boolean {
+        if (response == null || listId.isBlank()) return false
+        val rows =
+            response.optJSONArray("orderList")
+                ?: response.optJSONArray("ordersLists")
+                ?: response.optJSONArray("orderLists")
+                ?: return false
+
+        for (i in 0 until rows.length()) {
+            val row = rows.optJSONObject(i) ?: continue
+            if (
+                row.optString("symbol") == symbol &&
+                row.optString("orderListId") == listId
+            ) {
                 return true
             }
         }
