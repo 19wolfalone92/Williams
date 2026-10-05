@@ -120,7 +120,36 @@ private class NativeEngine(private val prefs:android.content.SharedPreferences,p
     private fun cycle(){try{if(scanSymbols.isEmpty())loadScanSymbols();for(sym in scanSymbols){try{candles=fetch(sym);score(candles.lastIndex)}catch(_:Exception){}};candles=fetch(symbol);scanner();if(key().isNotBlank()&&secret().isNotBlank())signedAccount();err=null}catch(x:Exception){err=x.javaClass.simpleName+": "+(x.message?:"")}}
     fun status():JSONObject{if(candles.isEmpty())try{candles=fetch()}catch(x:Exception){err=x.message};var bal:Double?=null;if(key().isNotBlank()&&secret().isNotBlank())try{val b=signedAccount().getJSONArray("balances");for(i in 0 until b.length())if(b.getJSONObject(i).getString("asset")=="USDT"){bal=b.getJSONObject(i).getString("free").toDouble();break}}catch(x:Exception){err=x.message};return JSONObject().put("version","4.13.0").put("symbol",symbol).put("interval",interval).put("testnet",true).put("running",running).put("paused",paused).put("recovered",true).put("state","FLAT").put("last_error",err?:JSONObject.NULL).put("binance_configured",key().isNotBlank()&&secret().isNotBlank()).put("price",candles.lastOrNull()?.c?:JSONObject.NULL).put("quote_balance",bal?:JSONObject.NULL).put("position",JSONObject.NULL).put("pnl",JSONObject.NULL).put("pnl_pct",JSONObject.NULL).put("take_profit_price",JSONObject.NULL).put("stop_loss_price",JSONObject.NULL).put("stop_loss_pct",0.02).put("take_profit_pct",0.04).put("risk_per_trade_pct",0.01).put("max_daily_loss_pct",0.03).put("max_trades_per_day",5).put("consecutive_losses",0).put("trades_today",0).put("server_time",System.currentTimeMillis())}
     fun klines():JSONObject{if(candles.isEmpty())try{candles=fetch()}catch(_:Exception){};val out=JSONArray();val pr=candles.map{it.c};val j=smma(pr,13);val t=smma(pr,8);val l=smma(pr,5);candles.takeLast(120).forEachIndexed{k,c->val i=candles.size-120+k;out.put(JSONObject().put("time",c.t).put("open",c.o).put("high",c.h).put("low",c.l).put("close",c.c).put("jaw",j.getOrNull(i)?:JSONObject.NULL).put("teeth",t.getOrNull(i)?:JSONObject.NULL).put("lips",l.getOrNull(i)?:JSONObject.NULL).put("ao",ao(pr,i)).put("long_signal",signal(i)).put("fractal_up",up(i)).put("fractal_down",down(i)))};return JSONObject().put("symbol",symbol).put("interval",interval).put("candles",out)}
-    fun scanner():JSONObject{if(candles.isEmpty())try{candles=fetch()}catch(_:Exception){};val i=candles.lastIndex;val pos=wave(i);val sig=signal(i);val c=JSONObject().put("symbol",symbol).put("score",score(i)).put("signal",sig).put("setup_score",score(i)).put("signal_strength",if(sig)"CONFIRMED" else "WATCHING").put("breakout_distance_pct",0.0).put("risk_pct",2.0).put("risk_reward",2.0).put("atr_pct",atr()).put("spread_pct",0.0).put("htf_confirmed",true).put("setup_state",if(sig)"SIGNAL" else "WATCHING").put("reason",if(pos==5)"Wave 5 context: native engine reduces confidence." else "Native Profitunity: Alligator + AO + Fractal + ATR.").put("wise_man_count",if(sig)2 else 0).put("signal_family","ALLIGATOR_AO_FRACTAL").put("wave_score",if(pos==3)85.0 else if(pos==5)45.0 else 65.0).put("wave_position",pos).put("wave_phase",if(pos==5)"EXHAUSTION_WATCH" else "IMPULSE").put("wave_confidence",55.0).put("wave_exhaustion_risk",if(pos==5)70.0 else 20.0).put("nested_w3",false).put("nested_w3_parent_w5",false).put("wave_path","1-2-3-4-5 / native heuristic");candidates=JSONArray().put(c);return JSONObject().put("version","4.13.0").put("cached",false).put("scanning",false).put("candidates",candidates)}
+    fun scanner():JSONObject{
+        if(scanSymbols.isEmpty())try{loadScanSymbols()}catch(_:Exception){}
+        val ranked=mutableListOf<JSONObject>()
+        for(sym in scanSymbols){
+            try{
+                candles=fetch(sym)
+                val i=candles.lastIndex
+                val pos=wave(i)
+                val sig=signal(i)
+                var sc=score(i)
+                if(pos==5) sc-=20.0
+                ranked.add(JSONObject().put("symbol",sym).put("score",sc).put("signal",sig).put("setup_score",sc)
+                    .put("signal_strength",if(sig)"CONFIRMED" else "WATCHING")
+                    .put("risk_pct",2.0).put("risk_reward",2.0).put("atr_pct",atr()).put("spread_pct",0.0)
+                    .put("htf_confirmed",true).put("setup_state",if(sig)"SIGNAL" else "WATCHING")
+                    .put("reason",if(pos==5)"Wave 5 context: reduced confidence." else "Profitunity: Alligator + AO + Fractal + ATR.")
+                    .put("signal_family","ALLIGATOR_AO_FRACTAL").put("wave_score",if(pos==3)85.0 else if(pos==5)45.0 else 65.0)
+                    .put("wave_position",pos).put("wave_phase",if(pos==5)"EXHAUSTION_WATCH" else "IMPULSE")
+                    .put("wave_confidence",55.0).put("wave_exhaustion_risk",if(pos==5)70.0 else 20.0)
+                    .put("nested_w3",false).put("nested_w3_parent_w5",false).put("wave_path","1-2-3-4-5 / native heuristic"))
+            }catch(_:Exception){}
+        }
+        ranked.sortByDescending{it.optDouble("score",0.0)}
+        val out=JSONArray()
+        ranked.take(20).forEach{out.put(it)}
+        candidates=out
+        return JSONObject().put("version","4.13.0").put("cached",false).put("scanning",false)
+            .put("symbols_scanned",scanSymbols.size).put("candidates",out)
+            .put("best_candidate",if(out.length()>0)out.getJSONObject(0) else JSONObject().put("symbol",symbol))
+    }
     fun trades()=JSONArray()
     fun logs()=JSONArray().put(JSONObject().put("created_at",System.currentTimeMillis()).put("level","INFO").put("message","Native standalone engine active; TESTNET; DRY_RUN"))
     fun settings()=JSONObject().put("version","4.13.0").put("symbol",symbol).put("interval",interval).put("position_fraction",0.95).put("stop_loss_pct",0.02).put("take_profit_pct",0.04).put("poll_seconds",15).put("risk_per_trade_pct",0.01).put("max_daily_loss_pct",0.03).put("max_trades_per_day",5).put("max_consecutive_losses",3).put("cooldown_minutes",30).put("min_risk_reward",1.5).put("atr_period",14).put("max_atr_pct",0.08).put("max_spread_pct",0.0015).put("require_htf_confirmation",true).put("htf_interval","4h").put("testnet",true).put("strategy_name","Williams Profitunity Conservative").put("standalone",true)
