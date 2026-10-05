@@ -446,22 +446,6 @@ private class NativeEngine(
             .put("state", "FLAT")
             .put("execution_enabled", false)
 
-    private fun get(path: String): String {
-        val request = Request.Builder()
-            .url(baseUrl + path)
-            .get()
-            .build()
-
-        http.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) {
-                val message = response.body?.string() ?: ""
-                error("Binance HTTP " + response.code + ": " + message)
-            }
-
-            return response.body?.string() ?: "{}"
-        }
-    }
-
     private fun getBody(path: String): String {
         val request = Request.Builder()
             .url(baseUrl + path)
@@ -888,15 +872,6 @@ private class NativeEngine(
         }
 
         val setup = baseCandidate.wave
-        val higher = frames.firstOrNull {
-            it.position == 5 &&
-                it.direction == "UP"
-        }
-
-        val nested = frames.any {
-            it.position == 3 &&
-                it.direction == "UP"
-        }
 
         var bonus = 0.0
         var exhaustion = setup.exhaustionRisk
@@ -922,22 +897,34 @@ private class NativeEngine(
             exhaustion = min(exhaustion, 30.0)
         }
 
+        val parentW5 = frames.filter {
+            it.position == 5 &&
+                it.direction == "UP"
+        }
+
+        val childW3 = frames.filter {
+            it.position == 3 &&
+                it.direction == "UP"
+        }
+
         val nestedW3ParentW5 =
-            higher != null &&
-                frames.any {
-                    it.interval == "1h" &&
-                        it.position == 3 &&
-                        it.direction == "UP"
+            parentW5.any { parent ->
+                childW3.any { child ->
+                    frameSeconds(child.path.substringBefore(":")) <
+                        frameSeconds(parent.path.substringBefore(":"))
                 }
+            }
 
         if (nestedW3ParentW5) {
             bonus += 10.0
             exhaustion =
-                min(exhaustion, max(10.0, setup.exhaustionRisk - 10.0))
+                min(
+                    exhaustion,
+                    max(10.0, setup.exhaustionRisk - 10.0)
+                )
         } else if (setup.position == 5) {
             bonus -= 12.0
-            exhaustion =
-                max(exhaustion, 65.0)
+            exhaustion = max(exhaustion, 65.0)
         }
 
         var score =
@@ -947,7 +934,10 @@ private class NativeEngine(
         val finalSignal =
             baseCandidate.signal &&
                 htfConfirmed &&
-                baseCandidate.wave.position != 5
+                (
+                    baseCandidate.wave.position != 5 ||
+                        nestedW3ParentW5
+                )
 
         if (!finalSignal && baseCandidate.signal) {
             score = min(score, 84.0)
