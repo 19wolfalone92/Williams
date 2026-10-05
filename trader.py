@@ -7,6 +7,7 @@ from db import Database
 from strategy import calculate_indicators, config_from_env
 from telegram_bot import Telegram
 from portfolio_controller import PortfolioController
+import trade_journal
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(message)s')
@@ -537,7 +538,13 @@ class Trader:
         if target_lid:sells=[o for o in sells if str(o.get('orderListId'))==target_lid] or sells
         sell=max(sells,key=lambda x:int(x.get('time',x.get('transactTime',0)) or 0)); qty=float(sell.get('executedQty',0) or 0); proceeds=float(sell.get('cummulativeQuoteQty',0) or 0); exit_price=proceeds/qty if qty else float(sell.get('price',0) or 0)
         entry=float(trade['entry_price']); pnl=(exit_price-entry)*min(qty,float(trade['quantity'])); pct=(exit_price/entry-1) if entry else 0
-        self.db.close_trade(trade['id'],datetime.fromtimestamp(int(sell.get('transactTime',sell.get('time',0)))/1000,tz=timezone.utc).isoformat(),exit_price,pnl,pct,'TAKE_PROFIT/STOP_LOSS (recovered)',sell.get('orderListId')); self.notify(f'RECOVERY\nPosition closed offline\nexit≈{exit_price:.8f}\nPnL≈{pnl:.8f} ({pct:.2%})')
+        exit_time=datetime.fromtimestamp(int(sell.get('transactTime',sell.get('time',0)))/1000,tz=timezone.utc).isoformat()
+        self.db.close_trade(trade['id'],exit_time,exit_price,pnl,pct,'TAKE_PROFIT/STOP_LOSS (recovered)',sell.get('orderListId'))
+        try:
+            trade_journal.record_exit(self.db,{**trade,'exit_time':exit_time},exit_price,pnl,pct,'TAKE_PROFIT/STOP_LOSS (recovered)')
+        except Exception as exc:
+            log.warning('trade journal exit capture failed: %s', exc)
+        self.notify(f'RECOVERY\nPosition closed offline\nexit≈{exit_price:.8f}\nPnL≈{pnl:.8f} ({pct:.2%})')
 
     def _spread_pct(self):
         b=self.client.book_ticker(self.symbol); bid=float(b['bidPrice']); ask=float(b['askPrice']); mid=(bid+ask)/2
@@ -1077,6 +1084,11 @@ class Trader:
         )
 
         trade = self.db.open_trade(self.symbol)
+        if trade:
+            try:
+                trade_journal.record_entry(self.db, trade['id'], fresh_candidate)
+            except Exception as exc:
+                log.warning('trade journal entry capture failed: %s', exc)
 
         try:
             self.place_oco(
@@ -1117,7 +1129,30 @@ class Trader:
             f'Order={order.get("orderId")}'
         )
 
+    def _observe_open_trade(self):
+        now = time.monotonic()
+        last = getattr(self, "_journal_last_observe", 0.0)
+        interval = max(5.0, float(os.getenv("JOURNAL_OBSERVE_SECONDS", "10")))
+        if now - last < interval:
+            return
+        trade = self.db.open_trade(self.symbol)
+        if not trade:
+            return
+        try:
+            price = float(self.client.ticker_price(self.symbol)["price"])
+            trade_journal.observe(
+                self.db,
+                trade["id"],
+                trade.get("entry_price"),
+                price,
+                trade.get("side", "LONG"),
+            )
+            self._journal_last_observe = now
+        except Exception as exc:
+            log.debug("trade journal observe failed: %s", exc)
+
     def process(self):
+        self._observe_open_trade()
         if getattr(self, 'auto_scan_enabled', False):
             self._auto_scan_process()
             return
