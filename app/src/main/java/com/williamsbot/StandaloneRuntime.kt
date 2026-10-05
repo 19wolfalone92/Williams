@@ -956,10 +956,10 @@ private class NativeEngine(
 
         val path = frames
             .sortedByDescending {
-                frameSeconds(it.interval)
+                frameSeconds(it.path.substringBefore(":"))
             }
             .joinToString(" > ") {
-                it.interval + ":" +
+                it.path.substringBefore(":") + ":" +
                     if (it.position > 0) {
                         "W" + it.position
                     } else {
