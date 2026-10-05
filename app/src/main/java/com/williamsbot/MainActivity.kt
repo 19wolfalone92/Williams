@@ -54,6 +54,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Divider
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -722,6 +723,8 @@ fun WilliamsApp(context: Context) {
                 status = status,
                 candles = candles,
                 selectedSymbol = selectedPositionSymbol,
+                interval = selectedChartInterval,
+                onIntervalChange = { selectedChartInterval = it; refresh(false) },
                 onSelect = { selectedPositionSymbol = it },
                 onSell = { symbol ->
                     scope.launch(Dispatchers.IO) {
@@ -1362,6 +1365,8 @@ private fun PositionScreen(
     status: Status,
     candles: List<Candle>,
     selectedSymbol: String?,
+    interval: String,
+    onIntervalChange: (String) -> Unit,
     onSelect: (String) -> Unit,
     onSell: (String) -> Unit
 ) {
