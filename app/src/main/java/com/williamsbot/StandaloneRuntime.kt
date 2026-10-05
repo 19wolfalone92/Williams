@@ -2459,9 +2459,39 @@ private class NativeEngine(
             null
         }
 
+        // Three-level hierarchy: senior = main trend, middle = order-control
+        // wave, junior = precise entry wave. Senior/middle do not need their
+        // own entry signal; only the junior setup triggers the order.
+        val junior = entry
+        val middle = junior?.let { j ->
+            frames
+                .filter {
+                    val s = frameSeconds(it.path.substringBefore(":"))
+                    s > frameSeconds(j.path.substringBefore(":")) &&
+                        it.direction == "UP" &&
+                        it.position in 1..5
+                }
+                .sortedBy { frameSeconds(it.path.substringBefore(":")) }
+                .firstOrNull()
+        }
+        val senior = middle?.let { m ->
+            frames
+                .filter {
+                    val s = frameSeconds(it.path.substringBefore(":"))
+                    s > frameSeconds(m.path.substringBefore(":")) &&
+                        it.direction == "UP" &&
+                        it.position in 1..5
+                }
+                .sortedBy { frameSeconds(it.path.substringBefore(":")) }
+                .firstOrNull()
+        }
+
         val entrySignal =
-            entry != null &&
-                (htfConfirmed || nestedW3ParentW5)
+            junior != null &&
+                junior.confidence >= 55.0 &&
+                junior.alligatorBullish &&
+                junior.aoPositive &&
+                junior.direction == "UP"
 
         if (entrySignal) {
             // A lower-TF Wave 3 is the preferred entry, especially when the
@@ -2476,8 +2506,9 @@ private class NativeEngine(
         // lower-TF Wave 3 after higher-TF context confirms the direction.
         val finalSignal =
             entrySignal &&
-                (entry?.confidence ?: 0.0) >= 55.0 &&
-                (setup.position != 5 || nestedW3ParentW5)
+                baseCandidate.atrPct <= 0.08 &&
+                baseCandidate.spreadPct <= 0.0015 &&
+                baseCandidate.riskReward >= 1.5
 
         if (!finalSignal && baseCandidate.signal) {
             score = min(score, 84.0)
@@ -2492,12 +2523,12 @@ private class NativeEngine(
             }
 
         val entryFrame =
-            entry?.path?.substringBefore(":") ?: ""
+            junior?.path?.substringBefore(":") ?: ""
         val parentFrame =
-            parent?.path?.substringBefore(":") ?: ""
+            middle?.path?.substringBefore(":") ?: ""
 
         val reason = when {
-            entrySignal && parent?.position == 3 ->
+            entrySignal && middle?.position == 3 ->
                 "MTF ENTRY: $entryFrame Wave 3 inside parent $parentFrame Wave 3"
             entrySignal && nestedW3ParentW5 ->
                 "MTF ENTRY: $entryFrame Wave 3 inside parent Wave 5; allowed with reduced priority"
@@ -2522,10 +2553,10 @@ private class NativeEngine(
                 exhaustionRisk = exhaustion,
                 path = path,
                 entryFrame = entryFrame,
-                entryWave = entry?.position ?: 0,
+                entryWave = junior?.position ?: 0,
                 parentFrame = parentFrame,
-                parentWave = parent?.position ?: 0,
-                entryConfidence = entry?.confidence ?: 0.0,
+                parentWave = middle?.position ?: 0,
+                entryConfidence = junior?.confidence ?: 0.0,
                 nestedW3ParentW5 = nestedW3ParentW5
             ),
             reason = reason
