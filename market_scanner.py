@@ -56,6 +56,9 @@ class Candidate:
     wave_context: dict = field(default_factory=dict)
     wave_entry_allowed: bool = True
     wave_block_reason: str = ""
+    wave_primary_count: str = ""
+    wave_alternative_count: str = ""
+    wave_abc_phase: str = ""
 
     def __post_init__(self):
         # Existing tests/integrations may construct Candidate(score=...) before
@@ -509,6 +512,7 @@ class MarketScanner:
                     and setup is not None
                     and setup.position == 5
                     and float(setup.exhaustion_risk) >= self.max_wave_exhaustion_for_entry
+                    and not report.nested_w3
                 )
             ),
             wave_block_reason=(
@@ -519,6 +523,7 @@ class MarketScanner:
                     and setup is not None
                     and setup.position == 5
                     and float(setup.exhaustion_risk) >= self.max_wave_exhaustion_for_entry
+                    and not report.nested_w3
                 )
                 else ""
             ),
@@ -534,6 +539,9 @@ class MarketScanner:
             wave_path=report.wave_path,
             wave_reason=report.reason,
             wave_context=report.to_dict(),
+            wave_primary_count=report.primary_count,
+            wave_alternative_count=report.alternative_count,
+            wave_abc_phase=(setup.abc_phase if setup else ""),
         )
 
     @staticmethod
