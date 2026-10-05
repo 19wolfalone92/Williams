@@ -13,7 +13,7 @@ import org.json.JSONObject
  * Binance told the bot, without relying on RAM or SharedPreferences.
  */
 class TradingAuditStore(context: Context) :
-    SQLiteOpenHelper(context, "williams_trading_audit.db", null, 2) {
+    SQLiteOpenHelper(context, "williams_trading_audit.db", null, 3) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("""
@@ -76,6 +76,26 @@ class TradingAuditStore(context: Context) :
         """.trimIndent())
 
         db.execSQL("""
+            CREATE TABLE trades(
+                trade_id TEXT PRIMARY KEY,
+                symbol TEXT NOT NULL,
+                side TEXT NOT NULL,
+                entry_price REAL NOT NULL,
+                exit_price REAL NOT NULL,
+                qty REAL NOT NULL,
+                notional_usdt REAL NOT NULL,
+                gross_pnl REAL NOT NULL,
+                net_pnl REAL NOT NULL,
+                r_multiple REAL NOT NULL,
+                opened_at INTEGER NOT NULL,
+                closed_at INTEGER NOT NULL,
+                outcome TEXT NOT NULL,
+                reason TEXT,
+                raw_json TEXT
+            )
+        """.trimIndent())
+
+        db.execSQL("""
             CREATE TABLE state_transitions(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 from_state TEXT NOT NULL,
@@ -91,6 +111,26 @@ class TradingAuditStore(context: Context) :
         oldVersion: Int,
         newVersion: Int
     ) {
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS trades(
+                trade_id TEXT PRIMARY KEY,
+                symbol TEXT NOT NULL,
+                side TEXT NOT NULL,
+                entry_price REAL NOT NULL,
+                exit_price REAL NOT NULL,
+                qty REAL NOT NULL,
+                notional_usdt REAL NOT NULL,
+                gross_pnl REAL NOT NULL,
+                net_pnl REAL NOT NULL,
+                r_multiple REAL NOT NULL,
+                opened_at INTEGER NOT NULL,
+                closed_at INTEGER NOT NULL,
+                outcome TEXT NOT NULL,
+                reason TEXT,
+                raw_json TEXT
+            )
+        """.trimIndent())
+
         db.execSQL("""
             CREATE TABLE IF NOT EXISTS rest_calls(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -120,6 +160,47 @@ class TradingAuditStore(context: Context) :
         values.put("response_json", responseJson)
         values.put("created_at", System.currentTimeMillis())
         writableDatabase.insert("rest_calls", null, values)
+    }
+
+    @Synchronized
+    fun recordTrade(
+        tradeId: String,
+        symbol: String,
+        entryPrice: Double,
+        exitPrice: Double,
+        qty: Double,
+        notionalUsdt: Double,
+        grossPnl: Double,
+        netPnl: Double,
+        rMultiple: Double,
+        openedAt: Long,
+        closedAt: Long,
+        outcome: String,
+        reason: String,
+        rawJson: String?
+    ) {
+        val values = ContentValues()
+        values.put("trade_id", tradeId)
+        values.put("symbol", symbol)
+        values.put("side", "BUY")
+        values.put("entry_price", entryPrice)
+        values.put("exit_price", exitPrice)
+        values.put("qty", qty)
+        values.put("notional_usdt", notionalUsdt)
+        values.put("gross_pnl", grossPnl)
+        values.put("net_pnl", netPnl)
+        values.put("r_multiple", rMultiple)
+        values.put("opened_at", openedAt)
+        values.put("closed_at", closedAt)
+        values.put("outcome", outcome)
+        values.put("reason", reason)
+        values.put("raw_json", rawJson)
+        writableDatabase.insertWithOnConflict(
+            "trades",
+            null,
+            values,
+            SQLiteDatabase.CONFLICT_REPLACE
+        )
     }
 
     @Synchronized
