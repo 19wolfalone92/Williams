@@ -669,6 +669,15 @@ def resume():
     return {'resumed': state.resume()}
 
 
+@app.post('/api/v1/control/sell', dependencies=[Depends(auth)])
+def manual_sell(symbol: str):
+    multi = state.ensure_multi()
+    result = multi.manual_sell(symbol)
+    if not result.get('sold') and result.get('state') == 'RECONCILE_REQUIRED':
+        raise HTTPException(409, result.get('error', 'Position requires reconciliation'))
+    return result
+
+
 @app.post('/api/v1/control/recover', dependencies=[Depends(auth)])
 def recover():
     t = state.ensure_trader()
