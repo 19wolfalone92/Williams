@@ -1492,8 +1492,8 @@ private fun PositionScreen(
                     candles,
                     status,
                     status.positions.firstOrNull { it.symbol == selectedSymbol },
-                    selectedChartInterval,
-                    onIntervalChange = { selectedChartInterval = it; refresh(false) }
+                    interval,
+                    onIntervalChange = onIntervalChange
                 )
             }
         }
