@@ -1,6 +1,7 @@
 package com.williamsbot
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -26,6 +27,7 @@ object TradeNotificationHelper {
         }
     }
 
+    @SuppressLint("MissingPermission")
     fun notify(context: Context, title: String, text: String, id: Int) {
         ensureChannel(context)
         if (Build.VERSION.SDK_INT >= 33 &&
