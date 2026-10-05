@@ -677,6 +677,10 @@ private class NativeEngine(
 
     private fun setReconcileRequired(reason: String) {
         reconcileRequired = true
+        stateMachine.force(
+            TradingState.RECONCILE_REQUIRED,
+            reason
+        )
         prefs.edit()
             .putBoolean("reconcile_required", true)
             .apply()
@@ -689,6 +693,12 @@ private class NativeEngine(
         prefs.edit()
             .putBoolean("reconcile_required", false)
             .apply()
+        if (!killLatched && pendingEntries.isEmpty() && positions.isEmpty()) {
+            stateMachine.force(
+                TradingState.READY_FLAT,
+                "reconciliation cleared"
+            )
+        }
     }
 
     fun health(): JSONObject =
@@ -927,6 +937,10 @@ private class NativeEngine(
     @Synchronized
     fun kill(): JSONObject {
         killLatched = true
+        stateMachine.force(
+            TradingState.KILL_SWITCH_LATCHED,
+            "kill switch requested"
+        )
         prefs.edit()
             .putBoolean("kill_latched", true)
             .putBoolean("auto_run", false)
@@ -1010,6 +1024,10 @@ private class NativeEngine(
             "Reconciliation is still required."
         }
         killLatched = false
+        stateMachine.force(
+            TradingState.READY_FLAT,
+            "kill switch reset"
+        )
         prefs.edit()
             .putBoolean("kill_latched", false)
             .apply()
