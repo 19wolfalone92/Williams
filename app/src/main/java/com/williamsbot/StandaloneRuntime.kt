@@ -3710,8 +3710,8 @@ private class NativeEngine(
         requestedInterval: String? = null
     ): JSONObject {
         val symbol = requestedSymbol?.trim()?.uppercase(Locale.US)?.takeIf { it.isNotBlank() } ?: primarySymbol
-        val selectedInterval = requestedInterval?.trim()?.lowercase(Locale.US)
-            ?.takeIf { it in listOf("1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w", "1M".lowercase()) }
+        val selectedInterval = requestedInterval?.trim()
+            ?.takeIf { it in listOf("1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w", "1M") }
             ?: interval
         val sourceCandles = if (symbol == primarySymbol && selectedInterval == interval) {
             if (primaryCandles.isEmpty()) runCatching { primaryCandles = fetchCandles(primarySymbol, selectedInterval, 150) }
