@@ -240,7 +240,22 @@ data class Trade(
     val entry: Double?,
     val exit: Double?,
     val pnl: Double?,
-    val reason: String
+    val reason: String,
+    val diagnosis: String = "",
+    val mfePct: Double? = null,
+    val maePct: Double? = null,
+    val durationSeconds: Double? = null,
+    val score: Double? = null,
+    val wavePosition: Int = 0
+)
+
+data class LearningSummary(
+    val total: Int = 0,
+    val wins: Int = 0,
+    val losses: Int = 0,
+    val winRate: Double = 0.0,
+    val pnl: Double = 0.0,
+    val diagnoses: Map<String, Int> = emptyMap()
 )
 
 private class StandaloneApi {
@@ -297,6 +312,7 @@ fun WilliamsApp(context: Context) {
     var candles by remember { mutableStateOf(emptyList<Candle>()) }
     var candidates by remember { mutableStateOf(emptyList<Candidate>()) }
     var trades by remember { mutableStateOf(emptyList<Trade>()) }
+    var learning by remember { mutableStateOf(LearningSummary()) }
     var logs by remember { mutableStateOf(emptyList<String>()) }
     var apiKey by remember { mutableStateOf("") }
     var apiSecret by remember { mutableStateOf("") }
@@ -314,14 +330,16 @@ fun WilliamsApp(context: Context) {
                         JSONObject(api.get("/api/v1/scanner?refresh=" + scan))
                     }
                     val trade = async(Dispatchers.IO) { JSONArray(api.get("/api/v1/trades")) }
+                    val insight = async(Dispatchers.IO) { JSONObject(api.get("/api/v1/insights")) }
                     val logsJson = async(Dispatchers.IO) { JSONArray(api.get("/api/v1/logs")) }
-                    awaitAll(status, klines, scanner, trade, logsJson).mapIndexed { i, value ->
+                    awaitAll(status, klines, scanner, trade, insight, logsJson).mapIndexed { i, value ->
                         when (i) {
                             0 -> value as JSONObject
-                            1 -> value as JSONObject
-                            2 -> value as JSONObject
-                            3 -> value as JSONArray
-                            else -> value as JSONArray
+                1 -> value as JSONObject
+                2 -> value as JSONObject
+                3 -> value as JSONArray
+                4 -> value as JSONObject
+                else -> value as JSONArray
                         }
                     }
                 }
@@ -1187,7 +1205,8 @@ private fun PositionScreen(
 private fun HistoryScreen(
     padding: PaddingValues,
     trades: List<Trade>,
-    logs: List<String>
+    logs: List<String>,
+    learning: LearningSummary
 ) {
     LazyColumn(
         modifier = Modifier
@@ -1199,6 +1218,26 @@ private fun HistoryScreen(
     ) {
         item {
             Text("История", style = MaterialTheme.typography.headlineSmall)
+        }
+
+        item {
+            Card(
+                Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = AppColors.surface2)
+            ) {
+                Column(
+                    Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text("Анализ сделок", style = MaterialTheme.typography.titleMedium)
+                    InfoRow("Win rate", "%.1f%%".format(Locale.US, learning.winRate * 100.0))
+                    InfoRow("Победы / убытки", learning.wins.toString() + " / " + learning.losses)
+                    InfoRow("PnL", fmt(learning.pnl, 2) + " USDT")
+                    learning.diagnoses.entries.sortedByDescending { it.value }.take(4).forEach {
+                        InfoRow(it.key, it.value.toString())
+                    }
+                }
+            }
         }
 
         item {
@@ -1847,6 +1886,28 @@ private fun parseCandidates(array: JSONArray): List<Candidate> =
         )
     }.sortedByDescending { it.score }
 
+private fun parseLearning(json: JSONObject): LearningSummary {
+    val diagnosis = mutableMapOf<String, Int>()
+    val d = json.optJSONObject("diagnoses")
+    if (d != null) {
+        for (key in d.keys()) diagnosis[key] = d.optInt(key)
+    } else {
+        val arr = json.optJSONArray("diagnoses")
+        if (arr != null) for (i in 0 until arr.length()) {
+            val x = arr.optJSONObject(i) ?: continue
+            diagnosis[x.optString("diagnosis","UNCLASSIFIED")] = x.optInt("count",0)
+        }
+    }
+    return LearningSummary(
+        total = json.optInt("total",0),
+        wins = json.optInt("wins",0),
+        losses = json.optInt("losses",0),
+        winRate = json.optDouble("win_rate",0.0),
+        pnl = json.optDouble("pnl",0.0),
+        diagnoses = diagnosis.toMap()
+    )
+}
+
 private fun parseTrades(array: JSONArray): List<Trade> =
     List(array.length()) { i ->
         val x = array.getJSONObject(i)
@@ -1856,7 +1917,13 @@ private fun parseTrades(array: JSONArray): List<Trade> =
             entry = x.optDouble("entry_price").takeUnless { it.isNaN() },
             exit = x.optDouble("exit_price").takeUnless { it.isNaN() },
             pnl = x.optDouble("pnl").takeUnless { it.isNaN() },
-            reason = x.optString("reason")
+            reason = x.optString("reason"),
+            diagnosis = x.optString("diagnosis"),
+            mfePct = x.optDouble("mfe_pct").takeUnless { it.isNaN() },
+            maePct = x.optDouble("mae_pct").takeUnless { it.isNaN() },
+            durationSeconds = x.optDouble("duration_seconds").takeUnless { it.isNaN() },
+            score = x.optDouble("score").takeUnless { it.isNaN() },
+            wavePosition = x.optInt("wave_position", 0)
         )
     }
 
