@@ -2440,7 +2440,7 @@ private class NativeEngine(
         // The higher timeframe supplies the market context; a lower timeframe
         // supplies the actual entry trigger. A child Wave 3 is therefore
         // allowed inside a parent Wave 3 OR a parent Wave 5.
-        val mtfFrames = listOf("1m", "5m", "15m", "30m", "1h", "4h", "1d")
+        val mtfFrames = listOf("1s", "5s", "15s", "30s", "1m", "5m", "15m", "30m", "1h", "2h", "4h", "5h", "6h", "8h", "10h", "12h", "15h", "20h", "25h", "1d")
         for (frame in mtfFrames) {
             runCatching { fetchCandles(symbol, frame, 300) }
                 .getOrNull()?.takeIf { it.size >= 40 }
