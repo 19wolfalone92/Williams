@@ -82,6 +82,10 @@ class WaveSnapshot:
     current_leg_atr: float = 0.0
     pivots: List[dict] = field(default_factory=list)
     structure: Dict[str, object] = field(default_factory=dict)
+    primary_count: str = ""
+    alternative_count: str = ""
+    abc_phase: str = ""
+    exhaustion_components: Dict[str, float] = field(default_factory=dict)
     reason: str = ""
     data_bars: int = 0
     data_ok: bool = True
@@ -104,6 +108,8 @@ class MultiTimeframeWaveReport:
     htf_confirmed: bool = False
     setup_position: int = 0
     setup_phase: str = WAVE_STATE_UNKNOWN
+    primary_count: str = ""
+    alternative_count: str = ""
     reason: str = ""
 
     def to_dict(self) -> dict:
@@ -718,6 +724,47 @@ class MultiTimeframeWaveEngine:
             f"Current impulse leg estimated as W{best_position} from confirmed fractal sequence.",
         )
 
+    def _abc_state(self, pivots: Sequence[Pivot], direction: str) -> str:
+        """Detect a developing A/B/C correction without forcing a textbook count."""
+        if direction not in (DIRECTION_UP, DIRECTION_DOWN) or len(pivots) < 4:
+            return ""
+        seq = list(pivots[-4:])
+        expected = ([DIRECTION_UP, DIRECTION_DOWN, DIRECTION_UP, DIRECTION_DOWN]
+                    if direction == DIRECTION_UP
+                    else [DIRECTION_DOWN, DIRECTION_UP, DIRECTION_DOWN, DIRECTION_UP])
+        if [p.kind for p in seq] != expected:
+            return ""
+        if direction == DIRECTION_UP:
+            ok = seq[1].price < seq[0].price and seq[2].price > seq[0].price and seq[3].price < seq[1].price
+        else:
+            ok = seq[1].price > seq[0].price and seq[2].price < seq[0].price and seq[3].price > seq[1].price
+        return "ABC_DEVELOPING" if ok else ""
+
+    @staticmethod
+    def _exhaustion_components(position: int, divergence: str, target_zone: bool,
+                               squatting_bar: bool, momentum_fading: bool,
+                               current_leg_atr: float) -> Dict[str, float]:
+        return {
+            "wave5_context": 20.0 if position == 5 else 0.0,
+            "ao_divergence": 30.0 if divergence != "NONE" else 0.0,
+            "target_zone": 20.0 if target_zone and position == 5 else 0.0,
+            "squat": 15.0 if squatting_bar else 0.0,
+            "momentum_fading": 15.0 if momentum_fading and position in (3, 5) else 0.0,
+            "extension": min(20.0, max(0.0, (current_leg_atr - 2.0) * 10.0)),
+        }
+
+    @staticmethod
+    def _alternative_count(position: int, abc_phase: str, exhaustion: float) -> str:
+        if abc_phase == "ABC_DEVELOPING":
+            return "ABC"
+        if position == 5 and exhaustion >= 55.0:
+            return "W3_ALTERNATIVE"
+        if position == 3 and exhaustion >= 45.0:
+            return "W5_ALTERNATIVE"
+        if position in (2, 4):
+            return "CORRECTION_ALTERNATIVE"
+        return ""
+
     # ------------------------------------------------------------------
     # Williams context / exhaustion
     # ------------------------------------------------------------------
@@ -971,7 +1018,14 @@ class MultiTimeframeWaveEngine:
             "AWAKE" if bool(last.get("alligator_awake", False)) else "SLEEPING_OR_TANGLED"
         )
 
+        abc_phase = self._abc_state(pivots, direction)
+        components = self._exhaustion_components(position, divergence, target_zone, squatting_bar, momentum_fading, current_leg_atr)
+        primary_count = wave_label if wave_label not in ("?", "") else phase
+        alternative_count = self._alternative_count(position, abc_phase, exhaustion)
+
         reason = f"{phase_reason} {structure_reason}"
+        if abc_phase:
+            reason += " ABC correction structure is developing."
         if divergence != "NONE":
             reason += f" {divergence} AO divergence detected."
         if target_zone:
@@ -1013,6 +1067,10 @@ class MultiTimeframeWaveEngine:
                 "squatting_bar": squatting_bar,
                 "momentum_fading": momentum_fading,
             },
+            primary_count=primary_count,
+            alternative_count=alternative_count,
+            abc_phase=abc_phase,
+            exhaustion_components=components,
             alligator_state=alligator_state,
             alligator_bullish=bool(last.get("bullish_alligator", False)),
             alligator_bearish=bool(last.get("bearish_alligator", False)),
@@ -1161,6 +1219,8 @@ class MultiTimeframeWaveEngine:
         if not reasons:
             reasons.append("insufficient multi-timeframe agreement")
 
+        primary_count = setup.primary_count if setup is not None else ""
+        alternative_count = setup.alternative_count if setup is not None else ""
         return MultiTimeframeWaveReport(
             frames=dict(snapshots),
             overall_direction=overall,
@@ -1174,6 +1234,8 @@ class MultiTimeframeWaveEngine:
             htf_confirmed=htf_confirmed,
             setup_position=int(setup.position if setup else 0),
             setup_phase=setup.phase if setup else WAVE_STATE_UNKNOWN,
+            primary_count=primary_count,
+            alternative_count=alternative_count,
             reason="; ".join(reasons),
         )
 
