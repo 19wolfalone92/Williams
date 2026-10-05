@@ -1069,6 +1069,15 @@ private class NativeEngine(
         val aoNow = ao(candles, i)
         val aoPrev = ao(candles, i - 1)
         val acNow = aoNow - (0 until 5).map { ao(candles, i - it) }.average()
+        val aoPrev2 = ao(candles, i - 2)
+        val acPrev = aoPrev - (0 until 5).map { ao(candles, i - 1 - it) }.average()
+        val greenZone = aoNow > aoPrev && acNow > acPrev
+        val redZone = aoNow < aoPrev && acNow < acPrev
+        val range = max(1e-12, candles[i].h - candles[i].l)
+        val mfiProxy = range / max(candles[i].v, 1e-12)
+        val previousRange = max(1e-12, candles[i - 1].h - candles[i - 1].l)
+        val previousMfiProxy = previousRange / max(candles[i - 1].v, 1e-12)
+        val mfiUp = mfiProxy > previousMfiProxy
         val upFractal = latestConfirmedUpFractal(candles, i)
         val downFractal = if (i >= 4 && isDownFractal(candles, i - 2)) i - 2 else null
         return JSONObject()
@@ -1079,6 +1088,11 @@ private class NativeEngine(
             .put("ao", aoNow).put("ao_previous", aoPrev)
             .put("ao_cross_up", aoPrev <= 0.0 && aoNow > 0.0)
             .put("ac", acNow).put("ac_positive", acNow > 0.0)
+            .put("zone", when { greenZone -> "GREEN"; redZone -> "RED"; else -> "GRAY" })
+            .put("green_zone", greenZone)
+            .put("red_zone", redZone)
+            .put("mfi_proxy", mfiProxy)
+            .put("mfi_up", mfiUp)
             .put("fractal_up_index", upFractal ?: JSONObject.NULL)
             .put("fractal_down_index", downFractal ?: JSONObject.NULL)
             .put("ao_bullish_divergence", aoBullishDivergence(candles))
