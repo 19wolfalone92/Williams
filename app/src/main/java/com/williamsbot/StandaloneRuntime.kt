@@ -1155,7 +1155,7 @@ private class NativeEngine(
             scanExecutor.submit(
                 Callable {
                     try {
-                        val candles = fetchCandles(symbol, selectedInterval, 150)
+                        val candles = fetchCandles(symbol, interval, 150)
                         analyseBase(
                             symbol = symbol,
                             candles = candles,
@@ -1215,7 +1215,7 @@ private class NativeEngine(
         runCatching { PositionsWidgetProvider.refresh(context) }
 
         runCatching {
-            primaryCandles = fetchCandles(primarySymbol, selectedInterval, 150)
+            primaryCandles = fetchCandles(primarySymbol, interval, 150)
         }
 
         if (
@@ -3276,8 +3276,8 @@ private class NativeEngine(
 
         return JSONObject()
             .put("version", "4.14.0")
-            .put("symbol", symbol)
-            .put("interval", selectedInterval)
+            .put("symbol", primarySymbol)
+            .put("interval", interval)
             .put("testnet", true)
             .put("running", running)
             .put("paused", paused)
@@ -3379,11 +3379,11 @@ private class NativeEngine(
         val selectedInterval = requestedInterval?.trim()?.lowercase(Locale.US)
             ?.takeIf { it in listOf("1m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "12h", "1d") }
             ?: interval
-        val sourceCandles = if (symbol == primarySymbol) {
-            if (primaryCandles.isEmpty()) runCatching { primaryCandles = fetchCandles(primarySymbol, interval, 150) }
+        val sourceCandles = if (symbol == primarySymbol && selectedInterval == interval) {
+            if (primaryCandles.isEmpty()) runCatching { primaryCandles = fetchCandles(primarySymbol, selectedInterval, 150) }
             primaryCandles
         } else {
-            runCatching { fetchCandles(symbol, interval, 150) }.getOrElse { emptyList() }
+            runCatching { fetchCandles(symbol, selectedInterval, 150) }.getOrElse { emptyList() }
         }
 
         val output = JSONArray()
