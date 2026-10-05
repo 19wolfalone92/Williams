@@ -919,7 +919,7 @@ private fun ControlCard(
             }
 
             Text(
-                "Сейчас execution disabled: приложение сканирует и ранжирует, но не отправляет BUY/SELL.",
+                "TESTNET execution включён: при подтверждённом сигнале бот может открыть BUY и сразу поставить защитный OCO SELL (TP/SL).",
                 style = MaterialTheme.typography.bodySmall,
                 color = AppColors.amber
             )
