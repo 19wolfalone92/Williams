@@ -438,6 +438,15 @@ private class NativeEngine(
     private val http: OkHttpClient
 ) {
     private val baseUrl = "https://testnet.binance.vision"
+    private val historyStore = MarketHistoryStore(context)
+    private val rateGuard = BinanceRateGuard()
+    private val auditStore = TradingAuditStore(context)
+    private val stateMachine = TradingStateMachine(
+        onTransition = { from, to, reason ->
+            auditStore.recordState(from, to, reason)
+        }
+    )
+
     private val primarySymbol = "BTCUSDT"
     private val interval = "1h"
 
@@ -503,7 +512,7 @@ private class NativeEngine(
     private val pendingEntries = mutableMapOf<String, PendingEntry>()
 
     private val userStream = BinanceUserDataStream(
-        http = client,
+        http = http,
         endpoint = "wss://ws-api.testnet.binance.vision/ws-api/v3",
         apiKeyProvider = { key() },
         apiSecretProvider = { secret() },
