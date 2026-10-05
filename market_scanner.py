@@ -502,24 +502,12 @@ class MarketScanner:
             reason=reason,
             base_score=round(float(candidate.base_score), 2),
             wave_entry_allowed=bool(
-                not (
-                    candidate.signal
-                    and setup is not None
-                    and setup.position == 5
-                    and float(setup.exhaustion_risk) >= self.max_wave_exhaustion_for_entry
-                    and not report.nested_w3
-                )
+                (not candidate.signal)
+                or bool(report.entry_allowed)
             ),
             wave_block_reason=(
-                f"Base timeframe W5 exhaustion {float(setup.exhaustion_risk):.1f}/100 exceeds "
-                f"entry threshold {self.max_wave_exhaustion_for_entry:.1f}/100"
-                if (
-                    candidate.signal
-                    and setup is not None
-                    and setup.position == 5
-                    and float(setup.exhaustion_risk) >= self.max_wave_exhaustion_for_entry
-                    and not report.nested_w3
-                )
+                report.entry_block_reason
+                if candidate.signal and not report.entry_allowed
                 else ""
             ),
             wave_score=round(float(report.wave_score), 2),
@@ -556,7 +544,8 @@ class MarketScanner:
         )
 
     def scan(self) -> List[Candidate]:
-        symbols = self._resolve_symbols()\n        symbols = symbols[:5]
+        symbols = self._resolve_symbols()
+        symbols = symbols[:5]
         self._refresh_spreads(symbols)
         candidates: List[Candidate] = []
         frames: Dict[str, pd.DataFrame] = {}
