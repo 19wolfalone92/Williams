@@ -61,7 +61,7 @@ class BinanceUserDataStream(
 
             if (apiKey.isBlank() || secret.isBlank()) {
                 onConnection(false, "credentials_not_configured")
-                wait(delayMs)
+                sleepBackoff(delayMs)
                 continue
             }
 
@@ -180,7 +180,7 @@ class BinanceUserDataStream(
             }
 
             if (stopping.get()) break
-            wait(delayMs)
+            sleepBackoff(delayMs)
             delayMs = (delayMs * 2L).coerceAtMost(30_000L)
         }
     }
@@ -228,7 +228,7 @@ class BinanceUserDataStream(
         ).joinToString("") { "%02x".format(it) }
     }
 
-    private fun wait(ms: Long) {
+    private fun sleepBackoff(ms: Long) {
         try {
             Thread.sleep(ms)
         } catch (_: InterruptedException) {
