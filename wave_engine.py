@@ -106,7 +106,6 @@ class MultiTimeframeWaveReport:
     nested_w3_count: int = 0
     nested_countertrend_impulse: bool = False
     nested_countertrend_count: int = 0
-    nested_w3_parent_w5: bool = False
     wave_path: str = ""
     htf_confirmed: bool = False
     setup_position: int = 0
