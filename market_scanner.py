@@ -104,7 +104,9 @@ class MarketScanner:
         self.exclude_leveraged_tokens = (
             os.getenv("EXCLUDE_LEVERAGED_TOKENS", "true").lower() == "true"
         )
-        self.scan_workers = max(1, int(os.getenv("SCAN_WORKERS", "4")))
+        self.scan_workers = max(1, int(os.getenv("SCAN_WORKERS", "12")))
+        self.liquidity_preselect = max(0, int(os.getenv("LIQUIDITY_PRESELECT", "120")))
+        self.scan_kline_limit = max(120, int(os.getenv("SCAN_KLINE_LIMIT", "220")))
         self.universe_cache_seconds = max(30, int(os.getenv("SCAN_UNIVERSE_CACHE_SECONDS", "300")))
         self.wave_top_n = max(0, int(os.getenv("WAVE_SCAN_TOP_N", "12")))
         self.max_wave_exhaustion_for_entry = max(0.0, min(100.0, float(os.getenv("MAX_WAVE_EXHAUSTION_FOR_ENTRY", "80"))))
@@ -219,6 +221,22 @@ class MarketScanner:
                 metadata[symbol] = item
 
         result = sorted(set(result))
+        # Two-stage universe selection: exchangeInfo gives correctness; the
+        # bulk 24h ticker selects the most liquid symbols for expensive candle
+        # analysis. This keeps broad coverage without spending latency on
+        # inactive pairs.
+        if self.liquidity_preselect:
+            try:
+                tickers = self.client.ticker_24hr()
+                volume = {
+                    str(x.get("symbol", "")).upper(): float(x.get("quoteVolume", 0) or 0)
+                    for x in tickers if isinstance(x, dict)
+                }
+                result.sort(key=lambda s: volume.get(s, 0.0), reverse=True)
+                result = result[: self.liquidity_preselect]
+            except Exception as exc:
+                log.warning("Liquidity preselect unavailable: %s", exc)
+
         if self.scan_max_symbols:
             result = result[: self.scan_max_symbols]
 
@@ -289,7 +307,7 @@ class MarketScanner:
             if not self._symbol_is_valid(symbol, metadata):
                 return None
 
-            df = fetch_klines(self.client, symbol, self.interval, limit=250)
+            df = fetch_klines(self.client, symbol, self.interval, limit=self.scan_kline_limit)
             if len(df) < 100:
                 return None
 
