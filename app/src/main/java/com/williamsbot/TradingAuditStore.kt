@@ -13,7 +13,7 @@ import org.json.JSONObject
  * Binance told the bot, without relying on RAM or SharedPreferences.
  */
 class TradingAuditStore(context: Context) :
-    SQLiteOpenHelper(context, "williams_trading_audit.db", null, 1) {
+    SQLiteOpenHelper(context, "williams_trading_audit.db", null, 2) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("""
@@ -64,6 +64,18 @@ class TradingAuditStore(context: Context) :
         """.trimIndent())
 
         db.execSQL("""
+            CREATE TABLE rest_calls(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                method TEXT NOT NULL,
+                path TEXT NOT NULL,
+                status_code INTEGER NOT NULL,
+                request_json TEXT,
+                response_json TEXT,
+                created_at INTEGER NOT NULL
+            )
+        """.trimIndent())
+
+        db.execSQL("""
             CREATE TABLE state_transitions(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 from_state TEXT NOT NULL,
@@ -78,7 +90,37 @@ class TradingAuditStore(context: Context) :
         db: SQLiteDatabase,
         oldVersion: Int,
         newVersion: Int
-    ) = Unit
+    ) {
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS rest_calls(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                method TEXT NOT NULL,
+                path TEXT NOT NULL,
+                status_code INTEGER NOT NULL,
+                request_json TEXT,
+                response_json TEXT,
+                created_at INTEGER NOT NULL
+            )
+        """.trimIndent())
+    }
+
+    @Synchronized
+    fun recordRestCall(
+        method: String,
+        path: String,
+        statusCode: Int,
+        requestJson: String?,
+        responseJson: String?
+    ) {
+        val values = ContentValues()
+        values.put("method", method)
+        values.put("path", path)
+        values.put("status_code", statusCode)
+        values.put("request_json", requestJson)
+        values.put("response_json", responseJson)
+        values.put("created_at", System.currentTimeMillis())
+        writableDatabase.insert("rest_calls", null, values)
+    }
 
     @Synchronized
     fun recordState(from: TradingState, to: TradingState, reason: String) {
