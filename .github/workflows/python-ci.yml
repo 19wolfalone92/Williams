@@ -1,0 +1,48 @@
+name: Python backend tests
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  backend-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt pytest
+
+      - name: Compile production Python
+        run: |
+          python -m py_compile             strategy.py data.py risk_engine.py db.py binance_client.py             market_scanner.py wave_engine.py portfolio_scanner.py             portfolio_controller.py trader.py server.py ws_hub.py
+
+      - name: Run safe offline tests
+        run: >-
+          python -m pytest -q
+          test_market_scanner.py
+          test_wave_engine.py
+          test_dynamic_scanner.py
+          test_portfolio_controller.py
+          test_portfolio_scanner.py
+          test_portfolio_scanner_atr.py
+          test_risk_engine.py
+          test_strategy_diagnostics.py
+          test_db_guard.py
+          test_db_isolation.py
+          test_atomic_real_db.py
+          test_atomic_switch_db_failure.py
+          test_atomic_switch_rollback.py
+          test_buy_safety.py
+          test_williams_book_alignment.py
+          test_book_wave_safety.py
