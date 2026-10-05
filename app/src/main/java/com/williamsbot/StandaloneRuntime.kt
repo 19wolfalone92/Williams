@@ -92,7 +92,8 @@ private data class WaveInfo(
     val parentFrame: String = "",
     val parentWave: Int = 0,
     val entryConfidence: Double = 0.0,
-    val nestedW3ParentW5: Boolean = false
+    val nestedW3ParentW5: Boolean = false,
+    val countertrendCorrectionImpulse: Boolean = false
 )
 
 private data class PositionState(
@@ -2768,6 +2769,22 @@ private class NativeEngine(
         )
     }
 
+    private fun isCountertrendCorrectionImpulse(
+        child: WaveInfo,
+        frames: List<WaveInfo>
+    ): Boolean {
+        if (child.position !in 1..5 || child.direction == "NEUTRAL") return false
+        val childSeconds = frameSeconds(child.path.substringBefore(":"))
+        val parent = frames
+            .filter { it.path != child.path && frameSeconds(it.path.substringBefore(":")) > childSeconds && it.direction == child.direction }
+            .sortedBy { frameSeconds(it.path.substringBefore(":")) }
+            .firstOrNull()
+        // Parent W2/W4 is a correction against its parent's impulse direction.
+        // Its A/C legs may be five-wave impulses, but they must not be treated
+        // as a continuation entry in the opposite direction.
+        return parent != null && parent.position in 2..4 && parent.direction != child.direction
+    }
+
     private fun enrichWithMtf(baseCandidate: BaseAnalysis): BaseAnalysis {
         val symbol = baseCandidate.symbol
         val frames = mutableListOf<WaveInfo>()
@@ -2825,6 +2842,16 @@ private class NativeEngine(
             }
         }
 
+        val countertrendCorrectionWaves = frames.filter { child ->
+            isCountertrendCorrectionImpulse(child, frames)
+        }
+        val countertrendCorrectionImpulse = countertrendCorrectionWaves.isNotEmpty()
+
+        if (countertrendCorrectionImpulse) {
+            bonus -= 10.0
+            exhaustion = max(exhaustion, 55.0)
+        }
+
         if (nestedW3ParentW5) {
             bonus += 10.0
             exhaustion =
@@ -2845,7 +2872,8 @@ private class NativeEngine(
                 it.position == 3 &&
                     it.direction == "UP" &&
                     it.alligatorBullish &&
-                    it.aoPositive
+                    it.aoPositive &&
+                    !isCountertrendCorrectionImpulse(it, frames)
             }
             .sortedBy { frameSeconds(it.path.substringBefore(":")) }
 
@@ -2942,6 +2970,8 @@ private class NativeEngine(
         val reason = when {
             entrySignal && middle?.position == 3 ->
                 "MTF ENTRY: $entryFrame Wave 3 inside parent $parentFrame Wave 3"
+            countertrendCorrectionImpulse && !entrySignal ->
+                "MTF: countertrend 5-wave structure belongs to W2/W4 correction; no LONG entry"
             entrySignal && nestedW3ParentW5 ->
                 "MTF ENTRY: $entryFrame Wave 3 inside parent Wave 5; allowed with reduced priority"
             setup.position == 5 && !nestedW3ParentW5 ->
@@ -2969,7 +2999,8 @@ private class NativeEngine(
                 parentFrame = parentFrame,
                 parentWave = middle?.position ?: 0,
                 entryConfidence = junior?.confidence ?: 0.0,
-                nestedW3ParentW5 = nestedW3ParentW5
+                nestedW3ParentW5 = nestedW3ParentW5,
+                countertrendCorrectionImpulse = countertrendCorrectionImpulse
             ),
             reason = reason
         )
