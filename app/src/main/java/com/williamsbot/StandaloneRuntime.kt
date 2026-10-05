@@ -509,7 +509,7 @@ private class NativeEngine(
         JSONObject()
             .put("ok", true)
             .put("service", "williams-native")
-            .put("version", "4.13.0")
+            .put("version", "4.14.0")
             .put("standalone", true)
             .put("websocket", false)
             .put("execution_enabled", true)
@@ -613,11 +613,15 @@ private class NativeEngine(
         return JSONObject().put("resumed", true)
     }
 
-    fun recover(): JSONObject =
-        JSONObject()
-            .put("recovered", true)
-            .put("state", "FLAT")
-            .put("execution_enabled", false)
+    fun recover(): JSONObject {
+        val state = runCatching { reconcilePosition(); if (positionSymbol == null) "FLAT" else "LONG" }
+            .getOrElse { "RECONCILE_REQUIRED" }
+        return JSONObject()
+            .put("recovered", state != "RECONCILE_REQUIRED")
+            .put("state", state)
+            .put("execution_enabled", true)
+            .put("error", if (state == "RECONCILE_REQUIRED") "Recovery failed" else JSONObject.NULL)
+    }
 
     private fun getBody(path: String): String {
         val request = Request.Builder()
@@ -2154,7 +2158,7 @@ private class NativeEngine(
             .put("htf_interval", "4h")
             .put("strategy_name", "Williams Profitunity Conservative")
             .put("standalone", true)
-            .put("execution_enabled", false)
+            .put("execution_enabled", true)
             .put("max_scan_symbols", maxScanSymbols)
             .put("wave_top_n", waveTopN)
 }
