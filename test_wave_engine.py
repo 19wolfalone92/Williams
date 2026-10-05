@@ -156,7 +156,10 @@ def test_no_valid_timeframe_data_keeps_wave_score_neutral():
 
 def test_default_chain_for_one_hour_contains_nested_context_frames():
     e = engine(base_interval="1h")
-    assert e.intervals == ["1d", "4h", "1h", "15m"]
+    assert e.intervals == [
+        "1M", "1w", "3d", "1d", "12h", "8h", "6h", "4h",
+        "2h", "1h", "30m", "15m", "5m", "3m", "1m",
+    ]
 
 
 def test_short_data_is_rejected_before_wave_labeling():
