@@ -607,7 +607,7 @@ private class NativeEngine(
         JSONObject()
             .put("ok", true)
             .put("service", "williams-native")
-            .put("version", "4.15.0")
+            .put("version", "4.17.0")
             .put("standalone", true)
             .put("websocket", marketSocketConnected)
             .put("market_stream_last_event_ms", marketSocketLastEventMs)
@@ -3823,7 +3823,7 @@ private class NativeEngine(
 
     private fun scannerSnapshot(): JSONObject =
         JSONObject()
-            .put("version", "4.16.0")
+            .put("version", "4.17.0")
             .put("cached", true)
             .put("scanning", scanning)
             .put("last_error", lastError ?: JSONObject.NULL)
