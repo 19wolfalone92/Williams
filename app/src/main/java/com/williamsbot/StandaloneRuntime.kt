@@ -531,13 +531,21 @@ private class NativeEngine(
             .putString("api_secret", newSecret)
             .apply()
 
-        return JSONObject()
-            .put(
-                "configured",
-                key().isNotBlank() && secret().isNotBlank()
-            )
-            .put("testnet", true)
-            .put("standalone", true)
+        if (newKey.isBlank() || newSecret.isBlank()) {
+            return JSONObject().put("configured", false).put("testnet", true).put("error", "API key and secret are required")
+        }
+
+        prefs.edit().putString("api_key", newKey).putString("api_secret", newSecret).apply()
+
+        return try {
+            syncBinanceTime()
+            signedAccount()
+            lastError = null
+            JSONObject().put("configured", true).put("testnet", true).put("standalone", true).put("connection", "OK")
+        } catch (x: Exception) {
+            prefs.edit().remove("api_key").remove("api_secret").apply()
+            JSONObject().put("configured", false).put("testnet", true).put("standalone", true).put("connection", "FAILED").put("error", x.message ?: "Binance connection failed")
+        }
     }
 
     fun clear(): JSONObject {
@@ -639,10 +647,11 @@ private class NativeEngine(
     }
 
     private fun signedGetBody(path: String, params: String): String {
+        val timestamp = System.currentTimeMillis() + serverTimeOffsetMs
         val query = if (params.isBlank()) {
-            "timestamp=" + System.currentTimeMillis() + "&recvWindow=5000"
+            "timestamp=" + timestamp + "&recvWindow=5000"
         } else {
-            params + "&timestamp=" + System.currentTimeMillis() + "&recvWindow=5000"
+            params + "&timestamp=" + timestamp + "&recvWindow=5000"
         }
         val signature = hmac(query, secret())
         val request = Request.Builder()
@@ -657,10 +666,20 @@ private class NativeEngine(
         }
     }
 
+    private fun syncBinanceTime() {
+        val before = System.currentTimeMillis()
+        val body = getBody("/api/v3/time")
+        val after = System.currentTimeMillis()
+        val server = JSONObject(body).optLong("serverTime", 0L)
+        if (server > 0L) {
+            serverTimeOffsetMs = server - (before + (after - before) / 2L)
+        }
+    }
+
     private fun signedAccount(): JSONObject {
-        val timestamp = System.currentTimeMillis().toString()
-        val params =
-            "timestamp=" + timestamp + "&recvWindow=5000"
+        syncBinanceTime()
+        val timestamp = (System.currentTimeMillis() + serverTimeOffsetMs).toString()
+        val params = "timestamp=" + timestamp + "&recvWindow=5000"
         val signature = hmac(params, secret())
 
         val request = Request.Builder()
