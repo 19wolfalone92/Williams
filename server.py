@@ -174,6 +174,64 @@ class ControlState:
             self.paused = False
         return True
 
+    def kill(self):
+        # Close only Williams-managed positions/orders; never cancel
+        # unrelated account orders via DELETE /openOrders.
+        with self.lock:
+            self.running = False
+            self.paused = True
+            thread = self.thread
+
+        t = self.ensure_trader()
+        multi = self.ensure_multi()
+        errors = []
+        closed = []
+
+        try:
+            open_trades = list(multi.open_trades())
+        except Exception as exc:
+            open_trades = []
+            errors.append("open_trades: " + str(exc))
+
+        for trade in open_trades:
+            symbol = str(trade.get("symbol", "")).upper()
+            if not symbol:
+                continue
+            try:
+                result = multi.manual_sell(symbol)
+                closed.append({"symbol": symbol, "result": result})
+            except Exception as exc:
+                errors.append(f"{symbol}: {exc}")
+
+        if thread is not None and thread.is_alive() and thread is not threading.current_thread():
+            thread.join(timeout=3)
+
+        t.db.log_event(
+            "ERROR" if errors else "WARNING",
+            "kill_switch",
+            "Emergency kill switch executed",
+            {
+                "closed_positions": [x["symbol"] for x in closed],
+                "errors": errors,
+            },
+        )
+        try:
+            t.notify(
+                "KILL SWITCH\n"
+                "Trading stopped; Williams-managed positions were closed.\n"
+                + ("Errors: " + "; ".join(errors) if errors else "No errors.")
+            )
+        except Exception:
+            pass
+
+        return {
+            "killed": True,
+            "trading_stopped": True,
+            "closed_positions": closed,
+            "errors": errors,
+            "state": "RECONCILE_REQUIRED" if errors else "FLAT",
+        }
+
 
 state = ControlState()
 
@@ -667,6 +725,11 @@ def pause():
 @app.post('/api/v1/control/resume', dependencies=[Depends(auth)])
 def resume():
     return {'resumed': state.resume()}
+
+
+@app.post('/api/v1/control/kill', dependencies=[Depends(auth)])
+def kill():
+    return state.kill()
 
 
 @app.post('/api/v1/control/sell', dependencies=[Depends(auth)])
