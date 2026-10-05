@@ -1371,33 +1371,58 @@ private class NativeEngine(
                             "/api/v3/openOrderList",
                             ""
                         )
+                    val entryPrice = quote / qty
 
-                    if (
-                        hasAnyOpenListForSymbol(
-                            lists,
-                            intent.symbol
-                        )
-                    ) {
-                        throw IllegalStateException(
-                            "Unrecognized open order list for " +
-                                intent.symbol
-                        )
-                    }
+                    val existingBotOco =
+                        (lists.optJSONArray("orderList")
+                            ?: lists.optJSONArray("ordersLists")
+                            ?: lists.optJSONArray("orderLists"))
+                            ?.let { rows ->
+                                (0 until rows.length())
+                                    .mapNotNull { rows.optJSONObject(it) }
+                                    .firstOrNull {
+                                        it.optString("symbol") ==
+                                            intent.symbol &&
+                                            it.optString("listClientOrderId")
+                                                .startsWith("W4O_")
+                                    }
+                            }
 
                     val protection =
-                        createProtection(
-                            symbol = intent.symbol,
-                            qty = qty,
-                            entry = quote / qty,
-                            stopDistance = intent.stopDistance
-                        )
+                        if (existingBotOco != null) {
+                            adoptExistingProtection(
+                                symbol = intent.symbol,
+                                qty = qty,
+                                entry = entryPrice,
+                                stopDistance = intent.stopDistance,
+                                oco = existingBotOco
+                            )
+                        } else {
+                            if (
+                                hasAnyOpenListForSymbol(
+                                    lists,
+                                    intent.symbol
+                                )
+                            ) {
+                                throw IllegalStateException(
+                                    "Unrecognized open order list for " +
+                                        intent.symbol
+                                )
+                            }
+                            createProtection(
+                                symbol = intent.symbol,
+                                qty = qty,
+                                entry = entryPrice,
+                                stopDistance = intent.stopDistance
+                            )
+                        }
 
                     synchronized(positions) {
                         positions[intent.symbol] =
                             PositionState(
                                 symbol = intent.symbol,
                                 qty = protection.qty,
-                                entry = quote / qty,
+                                entry = entryPrice,
                                 stop = protection.stop,
                                 take = protection.take,
                                 riskPct = protection.riskPct,
@@ -1435,6 +1460,48 @@ private class NativeEngine(
                 }
             }
         }
+    }
+
+    private fun adoptExistingProtection(
+        symbol: String,
+        qty: Double,
+        entry: Double,
+        stopDistance: Double,
+        oco: JSONObject
+    ): Protection {
+        val rules = symbolFilters(symbol)
+        val normalizedQty = floorStep(qty, rules.step)
+        if (normalizedQty < rules.minQty) {
+            error("Existing OCO quantity is below Binance minimum")
+        }
+
+        val stop = fmtPrice(
+            entry * (1.0 - stopDistance),
+            rules.tick
+        ).toDouble()
+        val take = fmtPrice(
+            entry * (1.0 + stopDistance * 1.5),
+            rules.tick
+        ).toDouble()
+        if (stop >= entry || take <= entry) {
+            error("Invalid adopted OCO prices")
+        }
+
+        val listId = oco.optString("orderListId")
+            .ifBlank { error("Existing OCO has no orderListId") }
+        val clientId = oco.optString("listClientOrderId")
+            .ifBlank { error("Existing OCO has no listClientOrderId") }
+
+        return Protection(
+            qty = normalizedQty,
+            stop = stop,
+            take = take,
+            riskPct =
+                ((entry - stop) / entry).coerceIn(0.0, 1.0) +
+                    feeBufferPerSidePct * 2.0,
+            ocoClientId = clientId,
+            ocoListId = listId
+        )
     }
 
     private fun reconcilePositionsWithExchange() {
