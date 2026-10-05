@@ -70,4 +70,5 @@ def test_symbol_limit_is_applied_after_validation(monkeypatch):
     monkeypatch.setenv("SCAN_ALL_USDT", "true")
     monkeypatch.setenv("SCAN_MAX_SYMBOLS", "1")
     scanner = MarketScanner(FakeClient(), symbols=None)
-    assert scanner._resolve_symbols() == ["BTCUSDT"]
+    # The autonomous trading universe is deliberately fixed to the five core pairs.
+    assert scanner._resolve_symbols() == ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"]
