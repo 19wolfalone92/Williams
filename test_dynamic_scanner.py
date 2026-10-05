@@ -57,7 +57,7 @@ def test_full_universe_discovers_spot_usdt_only(monkeypatch):
     monkeypatch.delenv("AUTO_SCAN_SYMBOLS", raising=False)
 
     scanner = MarketScanner(FakeClient(), symbols=None)
-    assert scanner._resolve_symbols() == ["BTCUSDT", "ETHUSDT"]
+    assert scanner._resolve_symbols() == ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"]
 
 
 def test_explicit_empty_test_universe_remains_empty(monkeypatch):
