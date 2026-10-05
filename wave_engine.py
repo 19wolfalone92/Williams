@@ -113,6 +113,12 @@ class MultiTimeframeWaveReport:
     primary_count: str = ""
     alternative_count: str = ""
     reason: str = ""
+    entry_interval: str = ""
+    entry_position: int = 0
+    entry_parent_interval: str = ""
+    entry_parent_position: int = 0
+    entry_allowed: bool = False
+    entry_block_reason: str = ""
 
     def to_dict(self) -> dict:
         payload = asdict(self)
@@ -1271,6 +1277,100 @@ class MultiTimeframeWaveEngine:
             and context.ao > 0
         )
 
+        # Select the actual execution wave from the nested hierarchy.
+        # Prefer W3 over W1, and prefer the lowest timeframe that is still
+        # inside an impulse parent. A child below a W2/W4 parent is correction
+        # structure (A/C or B), so it can never become a continuation LONG.
+        execution_direction = (
+            setup.direction
+            if setup is not None and setup.direction in (DIRECTION_UP, DIRECTION_DOWN)
+            else overall
+        )
+        entry_interval = ""
+        entry_position = 0
+        entry_parent_interval = ""
+        entry_parent_position = 0
+        entry_allowed = False
+        entry_block_reason = ""
+
+        ascending = sorted(
+            ordered,
+            key=lambda s: self.INTERVAL_SECONDS.get(s.interval, 0),
+        )
+        execution_candidates = sorted(
+            [
+                snap for snap in ascending
+                if (
+                    snap.direction == execution_direction
+                    and snap.position in (3, 1)
+                    and snap.confidence >= 45.0
+                    and (
+                        snap.alligator_bullish
+                        if execution_direction == DIRECTION_UP
+                        else snap.alligator_bearish
+                    )
+                    and (
+                        snap.ao > 0
+                        if execution_direction == DIRECTION_UP
+                        else snap.ao < 0
+                    )
+                )
+            ],
+            key=lambda snap: (
+                0 if snap.position == 3 else 1,
+                self.INTERVAL_SECONDS.get(snap.interval, 0),
+            ),
+        )
+
+        for child in execution_candidates:
+            parent = next(
+                (
+                    p for p in ordered
+                    if self.INTERVAL_SECONDS.get(p.interval, 0)
+                    > self.INTERVAL_SECONDS.get(child.interval, 0)
+                ),
+                None,
+            )
+
+            if parent is None:
+                entry_interval = child.interval
+                entry_position = child.position
+                entry_allowed = True
+                entry_block_reason = ""
+                break
+
+            entry_parent_interval = parent.interval
+            entry_parent_position = parent.position
+
+            if parent.position in (2, 4):
+                # Any child inside a higher corrective wave is part of the
+                # correction tree, even when that child itself has five legs.
+                continue
+
+            if parent.position in (1, 3, 5) and parent.direction != execution_direction:
+                # Opposite-direction five-wave structure is countertrend.
+                continue
+
+            entry_interval = child.interval
+            entry_position = child.position
+            entry_allowed = True
+            entry_block_reason = (
+                "W3 inside parent W5 allowed with reduced priority"
+                if child.position == 3 and parent.position == 5
+                else ""
+            )
+            break
+
+        if not entry_allowed:
+            if setup is not None and setup.position in (2, 4):
+                entry_block_reason = "Base timeframe is in corrective W2/W4 structure"
+            elif nested_countertrend_impulse:
+                entry_block_reason = "Only qualifying five-wave child structures are countertrend corrections"
+            elif setup is not None and setup.position == 5:
+                entry_block_reason = "Wave 5 has no qualifying lower-timeframe W3/W1 entry structure"
+            else:
+                entry_block_reason = "No qualifying impulse entry wave across the available timeframes"
+
         path = " > ".join(
             f"{snap.interval}:{snap.wave_label}"
             for snap in ordered
@@ -1310,6 +1410,12 @@ class MultiTimeframeWaveEngine:
             primary_count=primary_count,
             alternative_count=alternative_count,
             reason="; ".join(reasons),
+            entry_interval=entry_interval,
+            entry_position=entry_position,
+            entry_parent_interval=entry_parent_interval,
+            entry_parent_position=entry_parent_position,
+            entry_allowed=entry_allowed,
+            entry_block_reason=entry_block_reason,
         )
 
     def analyse(
