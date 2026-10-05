@@ -1069,7 +1069,6 @@ private class NativeEngine(
         val aoNow = ao(candles, i)
         val aoPrev = ao(candles, i - 1)
         val acNow = aoNow - (0 until 5).map { ao(candles, i - it) }.average()
-        val aoPrev2 = ao(candles, i - 2)
         val acPrev = aoPrev - (0 until 5).map { ao(candles, i - 1 - it) }.average()
         val greenZone = aoNow > aoPrev && acNow > acPrev
         val redZone = aoNow < aoPrev && acNow < acPrev
