@@ -311,7 +311,7 @@ def config_from_env(env=os.environ):
         "fractal_left": int(env.get("FRACTAL_LEFT", "2")),
         "fractal_right": int(env.get("FRACTAL_RIGHT", "2")),
         "super_ao_bars": int(env.get("SUPER_AO_BARS", "3")),
-        "min_wise_men_confirmations": int(env.get("MIN_WISE_MEN_CONFIRMATIONS", "1")),
+        "min_wise_men_confirmations": int(env.get("MIN_WISE_MEN_CONFIRMATIONS", "2")),
         "allow_countertrend_wise_man": env.get("ALLOW_COUNTERTREND_WISE_MAN", "false").lower() == "true",
         "min_alligator_spread_pct": float(env.get("MIN_ALLIGATOR_SPREAD_PCT", "0.001")),
     }
