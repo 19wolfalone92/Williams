@@ -1237,7 +1237,7 @@ private fun PositionScreen(
                         )
                     } else {
                         Text(
-                            "LONG " + status.symbol,
+                            "LONG " + (status.positionSymbol ?: status.symbol),
                             style = MaterialTheme.typography.headlineMedium
                         )
                         InfoRow("Quantity", fmt(status.qty, 6))
