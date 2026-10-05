@@ -3,162 +3,1676 @@ package com.williamsbot
 import android.content.Context
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
-import okhttp3.*
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.*
-import java.net.*
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.net.InetAddress
+import java.net.ServerSocket
+import java.net.Socket
+import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.Callable
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
-import kotlin.math.*
+import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.min
 
 object StandaloneRuntime {
     private var server: StandaloneServer? = null
+
     fun start(context: Context) {
         if (server == null) {
             server = StandaloneServer(context.applicationContext)
             server!!.start()
         }
     }
-    fun stop() { server?.stop(); server = null }
+
+    fun stop() {
+        server?.stop()
+        server = null
+    }
 }
 
-private data class CandleN(val t:Long,val o:Double,val h:Double,val l:Double,val c:Double,val v:Double)
+private data class CandleN(
+    val t: Long,
+    val o: Double,
+    val h: Double,
+    val l: Double,
+    val c: Double,
+    val v: Double
+)
+
+private data class PivotN(
+    val kind: String,
+    val price: Double,
+    val index: Int
+)
+
+private data class WaveInfo(
+    val position: Int,
+    val phase: String,
+    val confidence: Double,
+    val exhaustionRisk: Double,
+    val direction: String,
+    val path: String,
+    val alligatorBullish: Boolean,
+    val aoPositive: Boolean,
+    val currentLegPct: Double
+)
+
+private data class BaseAnalysis(
+    val symbol: String,
+    val candles: List<CandleN>,
+    val score: Double,
+    val signal: Boolean,
+    val htfCandidate: Boolean,
+    val wave: WaveInfo,
+    val atrPct: Double,
+    val riskPct: Double,
+    val riskReward: Double,
+    val spreadPct: Double,
+    val breakoutDistancePct: Double,
+    val reason: String
+)
 
 private class StandaloneServer(private val context: Context) {
     private val port = 18080
     private val prefs = EncryptedSharedPreferences.create(
-        context, "williams_native_secure",
-        MasterKey.Builder(context).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build(),
+        context,
+        "williams_native_secure",
+        MasterKey.Builder(context)
+            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+            .build(),
         EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM)
-    private val client = OkHttpClient.Builder().retryOnConnectionFailure(true).build()
+        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+    )
+
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(45, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(true)
+        .build()
+
     private var socket: ServerSocket? = null
     private var engine: NativeEngine? = null
 
     fun start() {
         if (socket != null) return
-        socket = ServerSocket(port, 32, InetAddress.getByName("127.0.0.1"))
+
+        socket = ServerSocket(
+            port,
+            32,
+            InetAddress.getByName("127.0.0.1")
+        )
+
         Thread {
             while (true) {
                 try {
                     val c = socket?.accept() ?: break
                     Thread { handle(c) }.start()
-                } catch (_: Exception) { break }
+                } catch (_: Exception) {
+                    break
+                }
             }
-        }.apply { isDaemon = true; start() }
+        }.apply {
+            isDaemon = true
+            start()
+        }
     }
-    fun stop() { try { socket?.close() } catch (_:Exception) {}; socket=null; engine?.stop() }
-    private fun e(): NativeEngine { if(engine==null) engine=NativeEngine(prefs,client); return engine!! }
 
-    private fun handle(s:Socket) {
+    fun stop() {
+        try {
+            socket?.close()
+        } catch (_: Exception) {
+        }
+        socket = null
+        engine?.stop()
+    }
+
+    private fun e(): NativeEngine {
+        if (engine == null) {
+            engine = NativeEngine(prefs, client)
+        }
+        return engine!!
+    }
+
+    private fun handle(s: Socket) {
         s.use {
             try {
-                val r=BufferedReader(InputStreamReader(s.getInputStream(),StandardCharsets.UTF_8))
-                val first=r.readLine() ?: return
-                val p=first.split(" "); if(p.size<2)return
-                val method=p[0]; val target=p[1]
-                var len=0
-                while(true){val line=r.readLine()?:return;if(line.isEmpty())break
-                    val h=line.split(":",limit=2);if(h.size==2&&h[0].equals("Content-Length",true))len=h[1].trim().toIntOrNull()?:0}
-                val chars=CharArray(len);if(len>0)r.read(chars)
-                val body=route(method,target,String(chars))
-                val b=body.toByteArray(StandardCharsets.UTF_8)
-                val out=s.getOutputStream()
-                out.write(("HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: "+b.size+"\r\nConnection: close\r\n\r\n").toByteArray())
-                out.write(b);out.flush()
-            } catch (x:Exception) {
-                val b=JSONObject().put("error",x.message?:x.javaClass.simpleName).toString().toByteArray()
-                try{s.getOutputStream().write(("HTTP/1.1 500 Error\r\nContent-Type: application/json\r\nContent-Length: "+b.size+"\r\n\r\n").toByteArray());s.getOutputStream().write(b)}catch(_:Exception){}
+                val reader = BufferedReader(
+                    InputStreamReader(
+                        s.getInputStream(),
+                        StandardCharsets.UTF_8
+                    )
+                )
+
+                val first = reader.readLine() ?: return
+                val parts = first.split(" ")
+                if (parts.size < 2) return
+
+                val method = parts[0]
+                val target = parts[1]
+
+                var length = 0
+                while (true) {
+                    val line = reader.readLine() ?: return
+                    if (line.isEmpty()) break
+
+                    val header = line.split(":", limit = 2)
+                    if (
+                        header.size == 2 &&
+                        header[0].equals("Content-Length", ignoreCase = true)
+                    ) {
+                        length = header[1].trim().toIntOrNull() ?: 0
+                    }
+                }
+
+                val chars = CharArray(length)
+                if (length > 0) {
+                    reader.read(chars)
+                }
+
+                val body = route(method, target, String(chars))
+                val bytes = body.toByteArray(StandardCharsets.UTF_8)
+
+                val output = s.getOutputStream()
+                output.write(
+                    (
+                        "HTTP/1.1 200 OK\r\n" +
+                            "Content-Type: application/json; charset=utf-8\r\n" +
+                            "Cache-Control: no-store\r\n" +
+                            "Content-Length: " + bytes.size + "\r\n" +
+                            "Connection: close\r\n\r\n"
+                        ).toByteArray(StandardCharsets.UTF_8)
+                )
+                output.write(bytes)
+                output.flush()
+            } catch (x: Exception) {
+                val bytes = JSONObject()
+                    .put("error", x.message ?: x.javaClass.simpleName)
+                    .toString()
+                    .toByteArray(StandardCharsets.UTF_8)
+
+                try {
+                    val out = s.getOutputStream()
+                    out.write(
+                        (
+                            "HTTP/1.1 500 Internal Server Error\r\n" +
+                                "Content-Type: application/json\r\n" +
+                                "Content-Length: " + bytes.size + "\r\n" +
+                                "Connection: close\r\n\r\n"
+                            ).toByteArray(StandardCharsets.UTF_8)
+                    )
+                    out.write(bytes)
+                    out.flush()
+                } catch (_: Exception) {
+                }
             }
         }
     }
-    private fun route(method:String,target:String,body:String):String {
-        val q=target.indexOf('?');val path=if(q<0)target else target.substring(0,q)
-        val params=if(q<0) emptyMap() else target.substring(q+1).split("&").filter{it.contains("=")}.associate{
-            val a=it.split("=",limit=2);URLDecoder.decode(a[0],"UTF-8") to URLDecoder.decode(a[1],"UTF-8")}
-        val x=e()
+
+    private fun route(
+        method: String,
+        target: String,
+        body: String
+    ): String {
+        val queryIndex = target.indexOf('?')
+        val path = if (queryIndex < 0) {
+            target
+        } else {
+            target.substring(0, queryIndex)
+        }
+
+        val params = if (queryIndex < 0) {
+            emptyMap()
+        } else {
+            target
+                .substring(queryIndex + 1)
+                .split("&")
+                .filter { it.contains("=") }
+                .associate {
+                    val item = it.split("=", limit = 2)
+                    URLDecoder.decode(item[0], "UTF-8") to
+                        URLDecoder.decode(item[1], "UTF-8")
+                }
+        }
+
+        val x = e()
+
         return when {
-            method=="GET"&&path=="/api/v1/health" -> JSONObject().put("ok",true).put("service","williams-native").put("version","4.13.0").put("standalone",true).put("websocket",false).put("auth_configured",true).toString()
-            method=="GET"&&path=="/api/v1/status" -> x.status().toString()
-            method=="GET"&&path=="/api/v1/market/klines" -> x.klines().toString()
-            method=="GET"&&path=="/api/v1/scanner" -> x.scanner().toString()
-            method=="GET"&&path=="/api/v1/trades" -> x.trades().toString()
-            method=="GET"&&path=="/api/v1/logs" -> x.logs().toString()
-            method=="GET"&&path=="/api/v1/settings" -> x.settings().toString()
-            method=="POST"&&path=="/api/v1/config/binance" -> x.configure(JSONObject(body)).toString()
-            method=="DELETE"&&path=="/api/v1/config/binance" -> x.clear().toString()
-            method=="POST"&&path=="/api/v1/control/start" -> x.start().toString()
-            method=="POST"&&path=="/api/v1/control/stop" -> x.stop().toString()
-            method=="POST"&&path=="/api/v1/control/pause" -> x.pause().toString()
-            method=="POST"&&path=="/api/v1/control/resume" -> x.resume().toString()
-            method=="POST"&&path=="/api/v1/control/recover" -> x.recover().toString()
-            else -> JSONObject().put("error","Not found")
+            method == "GET" && path == "/api/v1/health" ->
+                x.health().toString()
+
+            method == "GET" && path == "/api/v1/status" ->
+                x.status().toString()
+
+            method == "GET" && path == "/api/v1/market/klines" ->
+                x.klines().toString()
+
+            method == "GET" && path == "/api/v1/scanner" ->
+                x.scanner(
+                    refresh = params["refresh"].equals("true", true)
+                ).toString()
+
+            method == "GET" && path == "/api/v1/trades" ->
+                x.trades().toString()
+
+            method == "GET" && path == "/api/v1/logs" ->
+                x.logs().toString()
+
+            method == "GET" && path == "/api/v1/settings" ->
+                x.settings().toString()
+
+            method == "POST" && path == "/api/v1/config/binance" ->
+                x.configure(JSONObject(body)).toString()
+
+            method == "DELETE" && path == "/api/v1/config/binance" ->
+                x.clear().toString()
+
+            method == "POST" && path == "/api/v1/control/start" ->
+                x.start().toString()
+
+            method == "POST" && path == "/api/v1/control/stop" ->
+                x.stop().toString()
+
+            method == "POST" && path == "/api/v1/control/pause" ->
+                x.pause().toString()
+
+            method == "POST" && path == "/api/v1/control/resume" ->
+                x.resume().toString()
+
+            method == "POST" && path == "/api/v1/control/recover" ->
+                x.recover().toString()
+
+            else ->
+                JSONObject().put("error", "Not found").toString()
         }
     }
 }
 
-private class NativeEngine(private val prefs:android.content.SharedPreferences,private val http:OkHttpClient){
-    private val symbol="BTCUSDT";private val interval="1h";private val base="https://testnet.binance.vision";private val maxScanSymbols=60
-    private var scanSymbols=mutableListOf<String>()
-    private var running=false;private var paused=false;private var err:String?=null
-    private var candles=emptyList<CandleN>();private var candidates=JSONArray();private var worker:Thread?=null
-    private fun key()=prefs.getString("api_key","")?:"";private fun secret()=prefs.getString("api_secret","")?:""
+private class NativeEngine(
+    private val prefs: android.content.SharedPreferences,
+    private val http: OkHttpClient
+) {
+    private val baseUrl = "https://testnet.binance.vision"
+    private val primarySymbol = "BTCUSDT"
+    private val interval = "1h"
 
-    fun configure(j:JSONObject)=JSONObject().apply{prefs.edit().putString("api_key",j.optString("api_key").trim()).putString("api_secret",j.optString("api_secret").trim()).apply();put("configured",key().isNotBlank()&&secret().isNotBlank());put("testnet",true)}
-    fun clear():JSONObject{stop();prefs.edit().remove("api_key").remove("api_secret").apply();return JSONObject().put("configured",false).put("cleared",true)}
-    fun start():JSONObject{if(running)return JSONObject().put("started",false);running=true;paused=false;worker=Thread{while(running){if(!paused)cycle();try{Thread.sleep(15000)}catch(_:Exception){}}}.also{it.isDaemon=true;it.start()};return JSONObject().put("started",true)}
-    fun stop():JSONObject{running=false;paused=false;worker?.interrupt();worker=null;return JSONObject().put("stopped",true)}
-    fun pause()=JSONObject().put("paused",true).also{paused=true};fun resume()=JSONObject().put("resumed",true).also{paused=false}
-    fun recover()=JSONObject().put("recovered",true).put("state","FLAT")
-    private fun get(path:String):String{val r=Request.Builder().url(base+path).get().build();http.newCall(r).execute().use{x->if(!x.isSuccessful)error("HTTP "+x.code);return x.body?.string()?:"{}"}}
-    private fun signedAccount():JSONObject{val ts=System.currentTimeMillis().toString();val p="timestamp="+ts+"&recvWindow=5000";val sig=hmac(p,secret());val r=Request.Builder().url(base+"/api/v3/account?"+p+"&signature="+sig).header("X-MBX-APIKEY",key()).get().build();http.newCall(r).execute().use{x->if(!x.isSuccessful)error("Binance "+x.code+": "+x.body?.string());return JSONObject(x.body?.string()?:"{}")}}
-    private fun loadScanSymbols(){val a=JSONObject(get("/api/v3/exchangeInfo")).getJSONArray("symbols");scanSymbols.clear();for(i in 0 until a.length()){val x=a.getJSONObject(i);if(x.optString("status")=="TRADING"&&x.optString("quoteAsset")=="USDT")scanSymbols.add(x.optString("symbol"))};scanSymbols=scanSymbols.distinct().take(maxScanSymbols).toMutableList();if(!scanSymbols.contains(symbol))scanSymbols.add(0,symbol)}
-    private fun hmac(v:String,k:String):String{val m=Mac.getInstance("HmacSHA256");m.init(SecretKeySpec(k.toByteArray(),"HmacSHA256"));return m.doFinal(v.toByteArray()).joinToString(""){"%02x".format(it)}}
-    private fun fetch(sym:String):List<CandleN>{val a=JSONArray(get("/api/v3/klines?symbol="+sym+"&interval="+interval+"&limit=150"));return List(a.length()){i->val x=a.getJSONArray(i);CandleN(x.getLong(0),x.getString(1).toDouble(),x.getString(2).toDouble(),x.getString(3).toDouble(),x.getString(4).toDouble(),x.getString(5).toDouble())}}
-    private fun cycle(){try{if(scanSymbols.isEmpty())loadScanSymbols();for(sym in scanSymbols){try{candles=fetch(sym);score(candles.lastIndex)}catch(_:Exception){}};candles=fetch(symbol);scanner();if(key().isNotBlank()&&secret().isNotBlank())signedAccount();err=null}catch(x:Exception){err=x.javaClass.simpleName+": "+(x.message?:"")}}
-    fun status():JSONObject{if(candles.isEmpty())try{candles=fetch()}catch(x:Exception){err=x.message};var bal:Double?=null;if(key().isNotBlank()&&secret().isNotBlank())try{val b=signedAccount().getJSONArray("balances");for(i in 0 until b.length())if(b.getJSONObject(i).getString("asset")=="USDT"){bal=b.getJSONObject(i).getString("free").toDouble();break}}catch(x:Exception){err=x.message};return JSONObject().put("version","4.13.0").put("symbol",symbol).put("interval",interval).put("testnet",true).put("running",running).put("paused",paused).put("recovered",true).put("state","FLAT").put("last_error",err?:JSONObject.NULL).put("binance_configured",key().isNotBlank()&&secret().isNotBlank()).put("price",candles.lastOrNull()?.c?:JSONObject.NULL).put("quote_balance",bal?:JSONObject.NULL).put("position",JSONObject.NULL).put("pnl",JSONObject.NULL).put("pnl_pct",JSONObject.NULL).put("take_profit_price",JSONObject.NULL).put("stop_loss_price",JSONObject.NULL).put("stop_loss_pct",0.02).put("take_profit_pct",0.04).put("risk_per_trade_pct",0.01).put("max_daily_loss_pct",0.03).put("max_trades_per_day",5).put("consecutive_losses",0).put("trades_today",0).put("server_time",System.currentTimeMillis())}
-    fun klines():JSONObject{if(candles.isEmpty())try{candles=fetch()}catch(_:Exception){};val out=JSONArray();val pr=candles.map{it.c};val j=smma(pr,13);val t=smma(pr,8);val l=smma(pr,5);candles.takeLast(120).forEachIndexed{k,c->val i=candles.size-120+k;out.put(JSONObject().put("time",c.t).put("open",c.o).put("high",c.h).put("low",c.l).put("close",c.c).put("jaw",j.getOrNull(i)?:JSONObject.NULL).put("teeth",t.getOrNull(i)?:JSONObject.NULL).put("lips",l.getOrNull(i)?:JSONObject.NULL).put("ao",ao(pr,i)).put("long_signal",signal(i)).put("fractal_up",up(i)).put("fractal_down",down(i)))};return JSONObject().put("symbol",symbol).put("interval",interval).put("candles",out)}
-    fun scanner():JSONObject{
-        if(scanSymbols.isEmpty())try{loadScanSymbols()}catch(_:Exception){}
-        val ranked=mutableListOf<JSONObject>()
-        for(sym in scanSymbols){
-            try{
-                candles=fetch(sym)
-                val i=candles.lastIndex
-                val pos=wave(i)
-                val sig=signal(i)
-                var sc=score(i)
-                if(pos==5) sc-=20.0
-                ranked.add(JSONObject().put("symbol",sym).put("score",sc).put("signal",sig).put("setup_score",sc)
-                    .put("signal_strength",if(sig)"CONFIRMED" else "WATCHING")
-                    .put("risk_pct",2.0).put("risk_reward",2.0).put("atr_pct",atr()).put("spread_pct",0.0)
-                    .put("htf_confirmed",true).put("setup_state",if(sig)"SIGNAL" else "WATCHING")
-                    .put("reason",if(pos==5)"Wave 5 context: reduced confidence." else "Profitunity: Alligator + AO + Fractal + ATR.")
-                    .put("signal_family","ALLIGATOR_AO_FRACTAL").put("wave_score",if(pos==3)85.0 else if(pos==5)45.0 else 65.0)
-                    .put("wave_position",pos).put("wave_phase",if(pos==5)"EXHAUSTION_WATCH" else "IMPULSE")
-                    .put("wave_confidence",55.0).put("wave_exhaustion_risk",if(pos==5)70.0 else 20.0)
-                    .put("nested_w3",false).put("nested_w3_parent_w5",false).put("wave_path","1-2-3-4-5 / native heuristic"))
-            }catch(_:Exception){}
-        }
-        ranked.sortByDescending{it.optDouble("score",0.0)}
-        val out=JSONArray()
-        ranked.take(20).forEach{out.put(it)}
-        candidates=out
-        return JSONObject().put("version","4.13.0").put("cached",false).put("scanning",false)
-            .put("symbols_scanned",scanSymbols.size).put("candidates",out)
-            .put("best_candidate",if(out.length()>0)out.getJSONObject(0) else JSONObject().put("symbol",symbol))
+    private val maxScanSymbols = 60
+    private val waveTopN = 8
+    private val scanExecutor = Executors.newFixedThreadPool(6)
+
+    @Volatile
+    private var running = false
+
+    @Volatile
+    private var paused = false
+
+    @Volatile
+    private var scanning = false
+
+    @Volatile
+    private var lastError: String? = null
+
+    @Volatile
+    private var lastScanAt = 0L
+
+    private var worker: Thread? = null
+    private var scanSymbols = mutableListOf<String>()
+    private var candidates = JSONArray()
+    private var primaryCandles = emptyList<CandleN>()
+    private var lastScanDurationMs = 0L
+    private var lastSymbolsScanned = 0
+
+    private fun key(): String =
+        prefs.getString("api_key", "") ?: ""
+
+    private fun secret(): String =
+        prefs.getString("api_secret", "") ?: ""
+
+    fun health(): JSONObject =
+        JSONObject()
+            .put("ok", true)
+            .put("service", "williams-native")
+            .put("version", "4.13.0")
+            .put("standalone", true)
+            .put("websocket", false)
+            .put("execution_enabled", false)
+            .put(
+                "auth_configured",
+                key().isNotBlank() && secret().isNotBlank()
+            )
+
+    fun configure(j: JSONObject): JSONObject {
+        val newKey = j.optString("api_key").trim()
+        val newSecret = j.optString("api_secret").trim()
+
+        prefs.edit()
+            .putString("api_key", newKey)
+            .putString("api_secret", newSecret)
+            .apply()
+
+        return JSONObject()
+            .put(
+                "configured",
+                key().isNotBlank() && secret().isNotBlank()
+            )
+            .put("testnet", true)
+            .put("standalone", true)
     }
-    fun trades()=JSONArray()
-    fun logs()=JSONArray().put(JSONObject().put("created_at",System.currentTimeMillis()).put("level","INFO").put("message","Native standalone engine active; TESTNET; DRY_RUN"))
-    fun settings()=JSONObject().put("version","4.13.0").put("symbol",symbol).put("interval",interval).put("position_fraction",0.95).put("stop_loss_pct",0.02).put("take_profit_pct",0.04).put("poll_seconds",15).put("risk_per_trade_pct",0.01).put("max_daily_loss_pct",0.03).put("max_trades_per_day",5).put("max_consecutive_losses",3).put("cooldown_minutes",30).put("min_risk_reward",1.5).put("atr_period",14).put("max_atr_pct",0.08).put("max_spread_pct",0.0015).put("require_htf_confirmation",true).put("htf_interval","4h").put("testnet",true).put("strategy_name","Williams Profitunity Conservative").put("standalone",true)
-    private fun smma(v:List<Double>,n:Int):List<Double>{if(v.isEmpty())return emptyList();val o=MutableList(v.size){0.0};o[0]=v[0];for(i in 1 until v.size)o[i]=(o[i-1]*(n-1)+v[i])/n;return o}
-    private fun ao(v:List<Double>,i:Int):Double{if(i<34)return 0.0;val m=candles.map{(it.h+it.l)/2};return m.subList(i-4,i+1).average()-m.subList(i-33,i+1).average()}
-    private fun signal(i:Int):Boolean{if(i<34)return false;val p=candles.map{it.c};val j=smma(p,13)[i];val t=smma(p,8)[i];val l=smma(p,5)[i];return l>t&&t>j&&p[i]>l&&ao(p,i)>0}
-    private fun up(i:Int)=i>=2&&i+2<candles.size&&candles[i].h>candles[i-1].h&&candles[i].h>candles[i-2].h&&candles[i].h>candles[i+1].h&&candles[i].h>candles[i+2].h
-    private fun down(i:Int)=i>=2&&i+2<candles.size&&candles[i].l<candles[i-1].l&&candles[i].l<candles[i+1].l&&candles[i].l<candles[i+2].l
-    private fun atr():Double{if(candles.size<15)return 0.0;val tr=candles.zipWithNext().map{max(it.second.h-it.second.l,max(abs(it.second.h-it.first.c),abs(it.second.l-it.first.c)))};return tr.takeLast(14).average()/candles.last().c}
-    private fun score(i:Int):Double{if(i<34)return 0.0;var s=0.0;if(signal(i))s+=45.0;s+=min(25.0,max(0.0,(1-atr()/0.08)*25));if(up(i-2))s+=15.0;if(wave(i) in 1..4)s+=15.0;return s}
-    private fun wave(i:Int):Int{if(i<20)return 0;val a=candles.takeLast(min(40,candles.size)).map{it.c};val lo=a.minOrNull()?:a.first();val hi=a.maxOrNull()?:a.last();val p=(a.last()-lo)/max(1e-9,hi-lo);return when{p<.2->2;p<.5->3;p<.8->4;else->5}}
+
+    fun clear(): JSONObject {
+        stop()
+        prefs.edit()
+            .remove("api_key")
+            .remove("api_secret")
+            .apply()
+
+        candidates = JSONArray()
+        primaryCandles = emptyList()
+        scanSymbols = mutableListOf()
+
+        return JSONObject()
+            .put("configured", false)
+            .put("cleared", true)
+    }
+
+    fun start(): JSONObject {
+        if (running) {
+            return JSONObject()
+                .put("started", false)
+                .put("reason", "already_running")
+        }
+
+        running = true
+        paused = false
+
+        worker = Thread {
+            while (running) {
+                if (!paused) {
+                    try {
+                        requestScan()
+                    } catch (x: Exception) {
+                        lastError =
+                            x.javaClass.simpleName + ": " +
+                                (x.message ?: "")
+                    }
+                }
+
+                try {
+                    Thread.sleep(90_000L)
+                } catch (_: InterruptedException) {
+                    break
+                }
+            }
+        }.also {
+            it.isDaemon = true
+            it.start()
+        }
+
+        return JSONObject()
+            .put("started", true)
+            .put("interval_seconds", 90)
+    }
+
+    fun stop(): JSONObject {
+        running = false
+        paused = false
+        worker?.interrupt()
+        worker = null
+
+        return JSONObject().put("stopped", true)
+    }
+
+    fun pause(): JSONObject {
+        paused = true
+        return JSONObject().put("paused", true)
+    }
+
+    fun resume(): JSONObject {
+        paused = false
+        return JSONObject().put("resumed", true)
+    }
+
+    fun recover(): JSONObject =
+        JSONObject()
+            .put("recovered", true)
+            .put("state", "FLAT")
+            .put("execution_enabled", false)
+
+    private fun get(path: String): String {
+        val request = Request.Builder()
+            .url(baseUrl + path)
+            .get()
+            .build()
+
+        http.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                val message = response.body?.string() ?: ""
+                error("Binance HTTP " + response.code + ": " + message)
+            }
+
+            return response.body?.string() ?: "{}"
+        }
+    }
+
+    private fun getBody(path: String): String {
+        val request = Request.Builder()
+            .url(baseUrl + path)
+            .get()
+            .build()
+
+        http.newCall(request).execute().use { response ->
+            val body = response.body?.string() ?: "{}"
+            if (!response.isSuccessful) {
+                error("Binance HTTP " + response.code + ": " + body)
+            }
+            return body
+        }
+    }
+
+    private fun signedAccount(): JSONObject {
+        val timestamp = System.currentTimeMillis().toString()
+        val params =
+            "timestamp=" + timestamp + "&recvWindow=5000"
+        val signature = hmac(params, secret())
+
+        val request = Request.Builder()
+            .url(
+                baseUrl +
+                    "/api/v3/account?" +
+                    params +
+                    "&signature=" +
+                    signature
+            )
+            .header("X-MBX-APIKEY", key())
+            .get()
+            .build()
+
+        http.newCall(request).execute().use { response ->
+            val body = response.body?.string() ?: "{}"
+            if (!response.isSuccessful) {
+                error("Binance " + response.code + ": " + body)
+            }
+            return JSONObject(body)
+        }
+    }
+
+    private fun hmac(value: String, secretValue: String): String {
+        val mac = Mac.getInstance("HmacSHA256")
+        mac.init(
+            SecretKeySpec(
+                secretValue.toByteArray(StandardCharsets.UTF_8),
+                "HmacSHA256"
+            )
+        )
+
+        return mac.doFinal(
+            value.toByteArray(StandardCharsets.UTF_8)
+        ).joinToString("") {
+            "%02x".format(it)
+        }
+    }
+
+    private fun fetchCandles(
+        symbol: String,
+        frame: String,
+        limit: Int = 150
+    ): List<CandleN> {
+        val encodedSymbol = symbol.uppercase()
+        val body = getBody(
+            "/api/v3/klines?symbol=" +
+                encodedSymbol +
+                "&interval=" +
+                frame +
+                "&limit=" +
+                limit
+        )
+
+        val array = JSONArray(body)
+
+        return List(array.length()) { i ->
+            val row = array.getJSONArray(i)
+            CandleN(
+                t = row.getLong(0),
+                o = row.getString(1).toDouble(),
+                h = row.getString(2).toDouble(),
+                l = row.getString(3).toDouble(),
+                c = row.getString(4).toDouble(),
+                v = row.getString(5).toDouble()
+            )
+        }
+    }
+
+    private fun loadUniverse(): Triple<List<String>, Map<String, Double>, Map<String, Double>> {
+        val info = JSONObject(getBody("/api/v3/exchangeInfo"))
+        val infoRows = info.getJSONArray("symbols")
+
+        val tradingUsdt = HashSet<String>()
+        for (i in 0 until infoRows.length()) {
+            val item = infoRows.getJSONObject(i)
+            if (
+                item.optString("status") == "TRADING" &&
+                item.optString("quoteAsset") == "USDT"
+            ) {
+                val symbol = item.optString("symbol")
+                if (
+                    symbol.isNotBlank() &&
+                    !symbol.contains("UPUSDT") &&
+                    !symbol.contains("DOWNUSDT") &&
+                    !symbol.contains("BULLUSDT") &&
+                    !symbol.contains("BEARUSDT")
+                ) {
+                    tradingUsdt.add(symbol)
+                }
+            }
+        }
+
+        val volumeRows = JSONArray(getBody("/api/v3/ticker/24hr"))
+        val volumes = HashMap<String, Double>()
+
+        for (i in 0 until volumeRows.length()) {
+            val item = volumeRows.getJSONObject(i)
+            val symbol = item.optString("symbol")
+            if (tradingUsdt.contains(symbol)) {
+                volumes[symbol] =
+                    item.optString("quoteVolume").toDoubleOrNull() ?: 0.0
+            }
+        }
+
+        val bookRows = JSONArray(getBody("/api/v3/ticker/bookTicker"))
+        val spreads = HashMap<String, Double>()
+
+        for (i in 0 until bookRows.length()) {
+            val item = bookRows.getJSONObject(i)
+            val symbol = item.optString("symbol")
+            if (tradingUsdt.contains(symbol)) {
+                val bid =
+                    item.optString("bidPrice").toDoubleOrNull() ?: 0.0
+                val ask =
+                    item.optString("askPrice").toDoubleOrNull() ?: 0.0
+                if (bid > 0.0 && ask >= bid) {
+                    spreads[symbol] = (ask - bid) / bid
+                }
+            }
+        }
+
+        val symbols = tradingUsdt
+            .sortedByDescending { volumes[it] ?: 0.0 }
+            .take(maxScanSymbols)
+            .toMutableList()
+
+        if (!symbols.contains(primarySymbol)) {
+            symbols.add(0, primarySymbol)
+        }
+
+        return Triple(symbols.distinct(), volumes, spreads)
+    }
+
+    private fun requestScan() {
+        synchronized(this) {
+            if (scanning) return
+            scanning = true
+        }
+
+        Thread {
+            val startedAt = System.currentTimeMillis()
+            try {
+                performScan()
+                lastError = null
+            } catch (x: Exception) {
+                lastError =
+                    x.javaClass.simpleName + ": " +
+                        (x.message ?: "")
+            } finally {
+                lastScanDurationMs =
+                    System.currentTimeMillis() - startedAt
+                lastScanAt = System.currentTimeMillis()
+                scanning = false
+            }
+        }.also {
+            it.isDaemon = true
+            it.start()
+        }
+    }
+
+    private fun performScan() {
+        val universe = loadUniverse()
+        scanSymbols = universe.first.toMutableList()
+
+        val volumes = universe.second
+        val spreads = universe.third
+
+        val futures = scanSymbols.map { symbol ->
+            scanExecutor.submit(
+                Callable {
+                    try {
+                        val candles = fetchCandles(symbol, interval, 150)
+                        analyseBase(
+                            symbol = symbol,
+                            candles = candles,
+                            spread = spreads[symbol] ?: 0.0,
+                            volume = volumes[symbol] ?: 0.0
+                        )
+                    } catch (_: Exception) {
+                        null
+                    }
+                }
+            )
+        }
+
+        val preliminary = mutableListOf<BaseAnalysis>()
+        futures.forEach { future ->
+            runCatching {
+                future.get()
+            }.getOrNull()?.let {
+                if (it is BaseAnalysis) {
+                    preliminary.add(it)
+                }
+            }
+        }
+
+        if (preliminary.isEmpty()) {
+            error("Scanner received no market data")
+        }
+
+        val rankedBase =
+            preliminary.sortedByDescending { it.score }
+
+        val waveTargets =
+            rankedBase
+                .take(waveTopN)
+                .filter { it.candles.size >= 140 }
+
+        val final = waveTargets.map { baseCandidate ->
+            enrichWithMtf(baseCandidate)
+        }.toMutableList()
+
+        rankedBase
+            .drop(waveTargets.size)
+            .take(20)
+            .forEach {
+                final.add(it)
+            }
+
+        final.sortByDescending { it.score }
+
+        val output = JSONArray()
+        final.take(20).forEach { candidate ->
+            output.put(toJson(candidate))
+        }
+
+        candidates = output
+        lastSymbolsScanned = scanSymbols.size
+
+        runCatching {
+            primaryCandles = fetchCandles(primarySymbol, interval, 150)
+        }
+
+        if (
+            key().isNotBlank() &&
+            secret().isNotBlank()
+        ) {
+            runCatching { signedAccount() }
+        }
+    }
+
+    private fun analyseBase(
+        symbol: String,
+        candles: List<CandleN>,
+        spread: Double,
+        volume: Double
+    ): BaseAnalysis {
+        val i = candles.lastIndex
+        if (i < 40) {
+            return BaseAnalysis(
+                symbol = symbol,
+                candles = candles,
+                score = 0.0,
+                signal = false,
+                htfCandidate = false,
+                wave = neutralWave(candles),
+                atrPct = 0.0,
+                riskPct = 0.0,
+                riskReward = 0.0,
+                spreadPct = spread,
+                breakoutDistancePct = 0.0,
+                reason = "Недостаточно свечей"
+            )
+        }
+
+        val closes = candles.map { it.c }
+        val atrPct = atrPct(candles)
+        val atrAbs =
+            atrAbs(candles)
+
+        val alligator = alligator(closes)
+        val bullish =
+            alligator.lips > alligator.teeth &&
+                alligator.teeth > alligator.jaw &&
+                closes[i] > alligator.lips
+
+        val aoValue = ao(candles, i)
+        val aoPositive = aoValue > 0.0
+
+        val fractalIndex = latestConfirmedUpFractal(candles, i)
+        val fractalHigh =
+            fractalIndex?.let { candles[it].h }
+        val breakoutDistance =
+            if (fractalHigh != null && fractalHigh > 0.0) {
+                (closes[i] - fractalHigh) / fractalHigh
+            } else {
+                0.0
+            }
+
+        val breakout =
+            fractalHigh != null &&
+                closes[i] > fractalHigh &&
+                breakoutDistance <= 0.05
+
+        val trendScore = if (bullish) 35.0 else 0.0
+        val aoScore =
+            when {
+                aoPositive && ao(candles, i - 1) <= aoValue -> 20.0
+                aoPositive -> 12.0
+                else -> 0.0
+            }
+
+        val breakoutScore =
+            if (breakout) 25.0 else if (fractalHigh != null) 8.0 else 0.0
+
+        val atrScore =
+            when {
+                atrPct <= 0.0 -> 0.0
+                atrPct <= 0.08 -> (1.0 - atrPct / 0.08) * 10.0
+                else -> 0.0
+            }
+
+        val volumeScore =
+            when {
+                volume >= 100_000_000.0 -> 5.0
+                volume >= 10_000_000.0 -> 3.0
+                else -> 1.0
+            }
+
+        val preliminaryWave = waveInfo(candles, "1h")
+        var score =
+            trendScore +
+                aoScore +
+                breakoutScore +
+                atrScore +
+                volumeScore
+
+        val strictSignal =
+            bullish &&
+                aoPositive &&
+                breakout &&
+                atrPct in 0.0..0.08
+
+        if (preliminaryWave.position == 3) {
+            score += 5.0
+        } else if (preliminaryWave.position == 5) {
+            score -= 8.0
+        }
+
+        score = score.coerceIn(0.0, 100.0)
+
+        val riskPct =
+            min(0.08, max(0.0, atrPct * 2.0))
+
+        val rrValue =
+            if (atrAbs > 0.0) 2.0 else 0.0
+
+        val reason =
+            when {
+                strictSignal ->
+                    "Alligator + AO + подтверждённый Fractal breakout"
+                preliminaryWave.position == 5 ->
+                    "Wave 5: повышенный риск истощения"
+                bullish && aoPositive ->
+                    "Бычья пасть + положительный AO; ждём breakout"
+                else ->
+                    "Наблюдение: структура ещё не готова"
+            }
+
+        return BaseAnalysis(
+            symbol = symbol,
+            candles = candles,
+            score = score,
+            signal = strictSignal,
+            htfCandidate = bullish && aoPositive,
+            wave = preliminaryWave,
+            atrPct = atrPct,
+            riskPct = riskPct,
+            riskReward = rrValue,
+            spreadPct = spread,
+            breakoutDistancePct = breakoutDistance,
+            reason = reason
+        )
+    }
+
+    private fun enrichWithMtf(baseCandidate: BaseAnalysis): BaseAnalysis {
+        val symbol = baseCandidate.symbol
+
+        val htf = runCatching {
+            fetchCandles(symbol, "4h", 160)
+        }.getOrNull()
+
+        val daily = runCatching {
+            fetchCandles(symbol, "1d", 160)
+        }.getOrNull()
+
+        val lower = runCatching {
+            fetchCandles(symbol, "15m", 160)
+        }.getOrNull()
+
+        val frames = mutableListOf<WaveInfo>()
+        frames.add(baseCandidate.wave)
+
+        if (!htf.isNullOrEmpty()) {
+            frames.add(waveInfo(htf, "4h"))
+        }
+
+        if (!daily.isNullOrEmpty()) {
+            frames.add(waveInfo(daily, "1d"))
+        }
+
+        if (!lower.isNullOrEmpty()) {
+            frames.add(waveInfo(lower, "15m"))
+        }
+
+        val setup = baseCandidate.wave
+        val higher = frames.firstOrNull {
+            it.position == 5 &&
+                it.direction == "UP"
+        }
+
+        val nested = frames.any {
+            it.position == 3 &&
+                it.direction == "UP"
+        }
+
+        var bonus = 0.0
+        var exhaustion = setup.exhaustionRisk
+        var htfConfirmed = false
+
+        htf?.let {
+            val info = waveInfo(it, "4h")
+            htfConfirmed =
+                info.alligatorBullish &&
+                    info.aoPositive &&
+                    info.direction == "UP"
+
+            if (htfConfirmed) bonus += 8.0
+        }
+
+        val dayInfo = daily?.let { waveInfo(it, "1d") }
+        if (dayInfo?.direction == "UP") {
+            bonus += 4.0
+        }
+
+        if (setup.position == 3) {
+            bonus += 6.0
+            exhaustion = min(exhaustion, 30.0)
+        }
+
+        val nestedW3ParentW5 =
+            higher != null &&
+                frames.any {
+                    it.interval == "1h" &&
+                        it.position == 3 &&
+                        it.direction == "UP"
+                }
+
+        if (nestedW3ParentW5) {
+            bonus += 10.0
+            exhaustion =
+                min(exhaustion, max(10.0, setup.exhaustionRisk - 10.0))
+        } else if (setup.position == 5) {
+            bonus -= 12.0
+            exhaustion =
+                max(exhaustion, 65.0)
+        }
+
+        var score =
+            (baseCandidate.score + bonus)
+                .coerceIn(0.0, 100.0)
+
+        val finalSignal =
+            baseCandidate.signal &&
+                htfConfirmed &&
+                baseCandidate.wave.position != 5
+
+        if (!finalSignal && baseCandidate.signal) {
+            score = min(score, 84.0)
+        }
+
+        val path = frames
+            .sortedByDescending {
+                frameSeconds(it.interval)
+            }
+            .joinToString(" > ") {
+                it.interval + ":" +
+                    if (it.position > 0) {
+                        "W" + it.position
+                    } else {
+                        "?"
+                    }
+            }
+
+        val reason =
+            when {
+                nestedW3ParentW5 ->
+                    "MTF: parent W5 contains active W3 below; W5 is not a veto"
+                setup.position == 5 ->
+                    "MTF: W5/exhaustion context lowers confidence"
+                finalSignal ->
+                    "MTF confirmed: 4h aligned + 1h Williams breakout"
+                else ->
+                    baseCandidate.reason
+            }
+
+        return baseCandidate.copy(
+            score = score,
+            signal = finalSignal,
+            htfCandidate = htfConfirmed,
+            wave = setup.copy(
+                confidence =
+                    min(
+                        100.0,
+                        setup.confidence +
+                            if (htfConfirmed) 10.0 else 0.0
+                    ),
+                exhaustionRisk = exhaustion,
+                path = path
+            ),
+            reason = reason
+        )
+    }
+
+    private fun toJson(candidate: BaseAnalysis): JSONObject {
+        val wave = candidate.wave
+        val signalStrength =
+            if (candidate.signal) "CONFIRMED" else "WATCHING"
+
+        val setupState =
+            if (candidate.signal) "SIGNAL" else "WATCHING"
+
+        val nestedW3 =
+            wave.path.contains("W3")
+
+        val nestedParentW5 =
+            wave.path.contains("W5") &&
+                wave.path.contains("W3")
+
+        val displayWaveScore =
+            when {
+                nestedParentW5 -> 92.0
+                wave.position == 3 -> 86.0
+                wave.position == 5 -> 42.0
+                else -> 65.0
+            }
+
+        val riskReward =
+            candidate.riskReward
+
+        return JSONObject()
+            .put("symbol", candidate.symbol)
+            .put("score", candidate.score)
+            .put("signal", candidate.signal)
+            .put("setup_score", candidate.score)
+            .put("signal_strength", signalStrength)
+            .put("breakout_distance_pct", candidate.breakoutDistancePct * 100.0)
+            .put("risk_pct", candidate.riskPct * 100.0)
+            .put("risk_reward", riskReward)
+            .put("atr_pct", candidate.atrPct)
+            .put("spread_pct", candidate.spreadPct)
+            .put("htf_confirmed", candidate.htfCandidate)
+            .put("setup_state", setupState)
+            .put("reason", candidate.reason)
+            .put("wise_man_count", wiseManCount(candidate))
+            .put("signal_family", "ALLIGATOR_AO_FRACTAL")
+            .put("wave_score", displayWaveScore)
+            .put("wave_position", wave.position)
+            .put("wave_phase", wave.phase)
+            .put("wave_confidence", wave.confidence)
+            .put("wave_exhaustion_risk", wave.exhaustionRisk)
+            .put("nested_w3", nestedW3)
+            .put("nested_w3_parent_w5", nestedParentW5)
+            .put(
+                "wave_path",
+                if (wave.path.isBlank()) {
+                    "1d ? > 4h ? > 1h ? > 15m ?"
+                } else {
+                    wave.path
+                }
+            )
+    }
+
+    private fun wiseManCount(candidate: BaseAnalysis): Int {
+        var count = 0
+        if (candidate.wave.alligatorBullish) count++
+        if (candidate.wave.aoPositive) count++
+        if (candidate.breakoutDistancePct > 0.0) count++
+        return count.coerceIn(0, 3)
+    }
+
+    private fun alligator(
+        closes: List<Double>
+    ): TripleValues {
+        val jaw = smma(closes, 13).lastOrNull() ?: 0.0
+        val teeth = smma(closes, 8).lastOrNull() ?: 0.0
+        val lips = smma(closes, 5).lastOrNull() ?: 0.0
+        return TripleValues(jaw, teeth, lips)
+    }
+
+    private data class TripleValues(
+        val jaw: Double,
+        val teeth: Double,
+        val lips: Double
+    )
+
+    private fun smma(
+        values: List<Double>,
+        length: Int
+    ): List<Double> {
+        if (values.isEmpty()) return emptyList()
+
+        val output = MutableList(values.size) { values[0] }
+        for (i in 1 until values.size) {
+            output[i] =
+                (
+                    output[i - 1] * (length - 1) +
+                        values[i]
+                    ) / length
+        }
+        return output
+    }
+
+    private fun ao(
+        candles: List<CandleN>,
+        index: Int
+    ): Double {
+        if (index < 34) return 0.0
+
+        val medians =
+            candles.map { (it.h + it.l) / 2.0 }
+
+        val fast =
+            medians.subList(index - 4, index + 1).average()
+
+        val slow =
+            medians.subList(index - 34, index + 1).average()
+
+        return fast - slow
+    }
+
+    private fun latestConfirmedUpFractal(
+        candles: List<CandleN>,
+        currentIndex: Int
+    ): Int? {
+        val lastConfirmedCenter =
+            currentIndex - 2
+
+        if (lastConfirmedCenter < 2) return null
+
+        val start =
+            max(2, lastConfirmedCenter - 6)
+
+        for (i in lastConfirmedCenter downTo start) {
+            if (isUpFractal(candles, i)) {
+                return i
+            }
+        }
+
+        return null
+    }
+
+    private fun isUpFractal(
+        candles: List<CandleN>,
+        i: Int
+    ): Boolean {
+        if (i < 2 || i + 2 >= candles.size) {
+            return false
+        }
+
+        return candles[i].h > candles[i - 1].h &&
+            candles[i].h > candles[i - 2].h &&
+            candles[i].h > candles[i + 1].h &&
+            candles[i].h > candles[i + 2].h
+    }
+
+    private fun isDownFractal(
+        candles: List<CandleN>,
+        i: Int
+    ): Boolean {
+        if (i < 2 || i + 2 >= candles.size) {
+            return false
+        }
+
+        return candles[i].l < candles[i - 1].l &&
+            candles[i].l < candles[i - 2].l &&
+            candles[i].l < candles[i + 1].l &&
+            candles[i].l < candles[i + 2].l
+    }
+
+    private fun fractalPivots(
+        candles: List<CandleN>
+    ): List<PivotN> {
+        if (candles.size < 10) return emptyList()
+
+        val pivots = mutableListOf<PivotN>()
+        for (i in 2 until candles.size - 2) {
+            val up = isUpFractal(candles, i)
+            val down = isDownFractal(candles, i)
+
+            if (up && !down) {
+                pivots.add(PivotN("UP", candles[i].h, i + 2))
+            } else if (down && !up) {
+                pivots.add(PivotN("DOWN", candles[i].l, i + 2))
+            }
+        }
+
+        val alternating = mutableListOf<PivotN>()
+        for (pivot in pivots) {
+            if (alternating.isEmpty()) {
+                alternating.add(pivot)
+                continue
+            }
+
+            val last = alternating.last()
+            if (pivot.kind != last.kind) {
+                alternating.add(pivot)
+            } else {
+                val moreExtreme =
+                    if (pivot.kind == "UP") {
+                        pivot.price > last.price
+                    } else {
+                        pivot.price < last.price
+                    }
+
+                if (moreExtreme) {
+                    alternating[alternating.lastIndex] = pivot
+                }
+            }
+        }
+
+        return alternating.takeLast(8)
+    }
+
+    private fun waveInfo(
+        candles: List<CandleN>,
+        frame: String
+    ): WaveInfo {
+        if (candles.size < 40) {
+            return neutralWave(candles, frame)
+        }
+
+        val pivots = fractalPivots(candles)
+        val current = candles.last().c
+        val previous = candles[candles.lastIndex - 1].c
+
+        val series = candles.takeLast(
+            min(70, candles.size)
+        )
+
+        val low =
+            series.minOfOrNull { it.l } ?: current
+        val high =
+            series.maxOfOrNull { it.h } ?: current
+        val range = max(1e-9, high - low)
+
+        val normalized =
+            (current - low) / range
+
+        val direction =
+            if (current > previous) {
+                "UP"
+            } else if (current < previous) {
+                "DOWN"
+            } else {
+                "NEUTRAL"
+            }
+
+        val alligatorValues =
+            alligator(candles.map { it.c })
+
+        val bullish =
+            alligatorValues.lips >
+                alligatorValues.teeth &&
+                alligatorValues.teeth >
+                alligatorValues.jaw &&
+                current >
+                alligatorValues.lips
+
+        val aoPositive =
+            ao(candles, candles.lastIndex) > 0.0
+
+        var position = 0
+        var phase = "UNKNOWN"
+        var confidence = 40.0
+        var exhaustion = 20.0
+
+        if (pivots.size >= 2) {
+            val p = pivots.takeLast(6)
+            val sequence =
+                p.joinToString("") {
+                    if (it.kind == "DOWN") "D" else "U"
+                }
+
+            when {
+                direction == "UP" &&
+                    sequence.endsWith("D") &&
+                    p.size >= 5 -> {
+                    position = 5
+                    phase = "IMPULSE"
+                    confidence = 64.0
+                    exhaustion = 78.0
+                }
+
+                direction == "UP" &&
+                    sequence.endsWith("D") &&
+                    p.size >= 3 -> {
+                    position = 3
+                    phase = "IMPULSE"
+                    confidence = 72.0
+                    exhaustion = 24.0
+                }
+
+                direction == "DOWN" &&
+                    sequence.endsWith("U") &&
+                    p.size >= 5 -> {
+                    position = 5
+                    phase = "IMPULSE"
+                    confidence = 64.0
+                    exhaustion = 78.0
+                }
+
+                direction == "DOWN" &&
+                    sequence.endsWith("U") &&
+                    p.size >= 3 -> {
+                    position = 3
+                    phase = "IMPULSE"
+                    confidence = 72.0
+                    exhaustion = 24.0
+                }
+
+                p.last().kind == "UP" -> {
+                    position = 4
+                    phase = "CORRECTION"
+                    confidence = 58.0
+                    exhaustion = 35.0
+                }
+
+                p.last().kind == "DOWN" -> {
+                    position = 2
+                    phase = "CORRECTION"
+                    confidence = 58.0
+                    exhaustion = 28.0
+                }
+            }
+
+            val progression =
+                if (p.size >= 4) {
+                    val a = p[p.size - 4]
+                    val b = p[p.size - 3]
+                    val c = p[p.size - 2]
+                    val d = p[p.size - 1]
+
+                    if (direction == "UP") {
+                        b.price > a.price && d.price > c.price
+                    } else {
+                        b.price < a.price && d.price < c.price
+                    }
+                } else {
+                    false
+                }
+
+            if (progression) {
+                confidence =
+                    min(92.0, confidence + 12.0)
+                if (position == 5) {
+                    exhaustion =
+                        min(95.0, exhaustion + 8.0)
+                }
+            }
+        } else if (bullish) {
+            position = 1
+            phase = "IMPULSE"
+            confidence = 48.0
+            exhaustion = 18.0
+        }
+
+        if (bullish && aoPositive) {
+            confidence =
+                min(98.0, confidence + 6.0)
+        }
+
+        val currentLegPct =
+            if (range > 0.0) {
+                abs(current - low) / range
+            } else {
+                0.0
+            }
+
+        val lastPivot =
+            pivots.lastOrNull()
+
+        val path =
+            if (position > 0) {
+                frame + ":W" + position
+            } else {
+                frame + ":?"
+            }
+
+        return WaveInfo(
+            position = position,
+            phase = phase,
+            confidence = confidence,
+            exhaustionRisk = exhaustion,
+            direction = direction,
+            path = path,
+            alligatorBullish = bullish,
+            aoPositive = aoPositive,
+            currentLegPct = currentLegPct
+        )
+    }
+
+    private fun neutralWave(
+        candles: List<CandleN>,
+        frame: String = "1h"
+    ): WaveInfo =
+        WaveInfo(
+            position = 0,
+            phase = "UNKNOWN",
+            confidence = 0.0,
+            exhaustionRisk = 0.0,
+            direction = "NEUTRAL",
+            path = frame + ":?",
+            alligatorBullish = false,
+            aoPositive = false,
+            currentLegPct = 0.0
+        )
+
+    private fun atrAbs(
+        candles: List<CandleN>,
+        length: Int = 14
+    ): Double {
+        if (candles.size < length + 1) return 0.0
+
+        val trueRanges = mutableListOf<Double>()
+        for (i in 1 until candles.size) {
+            val current = candles[i]
+            val previous = candles[i - 1]
+            trueRanges.add(
+                max(
+                    current.h - current.l,
+                    max(
+                        abs(current.h - previous.c),
+                        abs(current.l - previous.c)
+                    )
+                )
+            )
+        }
+
+        return trueRanges
+            .takeLast(length)
+            .average()
+    }
+
+    private fun atrPct(
+        candles: List<CandleN>
+    ): Double {
+        val price =
+            candles.lastOrNull()?.c ?: 0.0
+
+        if (price <= 0.0) return 0.0
+
+        return atrAbs(candles) / price
+    }
+
+    private fun frameSeconds(frame: String): Long =
+        when (frame) {
+            "15m" -> 900L
+            "1h" -> 3600L
+            "4h" -> 14400L
+            "1d" -> 86400L
+            else -> 0L
+        }
+
+    private fun scannerSnapshot(): JSONObject =
+        JSONObject()
+            .put("version", "4.13.0")
+            .put("cached", true)
+            .put("scanning", scanning)
+            .put("last_error", lastError ?: JSONObject.NULL)
+            .put("last_scan_at", lastScanAt)
+            .put("last_scan_duration_ms", lastScanDurationMs)
+            .put("symbols_scanned", lastSymbolsScanned)
+            .put("candidates", candidates)
+            .put(
+                "best_candidate",
+                if (candidates.length() > 0) {
+                    candidates.getJSONObject(0)
+                } else {
+                    JSONObject().put("symbol", primarySymbol)
+                }
+            )
+
+    fun scanner(refresh: Boolean): JSONObject {
+        if (refresh) {
+            requestScan()
+        }
+
+        return scannerSnapshot()
+    }
+
+    fun status(): JSONObject {
+        if (primaryCandles.isEmpty()) {
+            runCatching {
+                primaryCandles =
+                    fetchCandles(primarySymbol, interval, 150)
+            }.onFailure {
+                lastError =
+                    it.message ?: it.javaClass.simpleName
+            }
+        }
+
+        var balance: Double? = null
+
+        if (key().isNotBlank() && secret().isNotBlank()) {
+            runCatching {
+                val balances =
+                    signedAccount().getJSONArray("balances")
+                for (i in 0 until balances.length()) {
+                    val item = balances.getJSONObject(i)
+                    if (item.optString("asset") == "USDT") {
+                        balance =
+                            item.optString("free")
+                                .toDoubleOrNull()
+                        break
+                    }
+                }
+            }.onFailure {
+                lastError =
+                    it.message ?: it.javaClass.simpleName
+            }
+        }
+
+        return JSONObject()
+            .put("version", "4.13.0")
+            .put("symbol", primarySymbol)
+            .put("interval", interval)
+            .put("testnet", true)
+            .put("running", running)
+            .put("paused", paused)
+            .put("recovered", true)
+            .put("state", "FLAT")
+            .put("execution_enabled", false)
+            .put(
+                "last_error",
+                lastError ?: JSONObject.NULL
+            )
+            .put(
+                "binance_configured",
+                key().isNotBlank() && secret().isNotBlank()
+            )
+            .put(
+                "price",
+                primaryCandles.lastOrNull()?.c
+                    ?: JSONObject.NULL
+            )
+            .put(
+                "quote_balance",
+                balance ?: JSONObject.NULL
+            )
+            .put("position", JSONObject.NULL)
+            .put("pnl", JSONObject.NULL)
+            .put("pnl_pct", JSONObject.NULL)
+            .put("take_profit_price", JSONObject.NULL)
+            .put("stop_loss_price", JSONObject.NULL)
+            .put("stop_loss_pct", 0.02)
+            .put("take_profit_pct", 0.04)
+            .put("risk_per_trade_pct", 0.01)
+            .put("max_daily_loss_pct", 0.03)
+            .put("max_trades_per_day", 5)
+            .put("consecutive_losses", 0)
+            .put("max_consecutive_losses", 3)
+            .put("trades_today", 0)
+            .put("server_time", System.currentTimeMillis())
+            .put("scanner_scanning", scanning)
+            .put("scanner_symbols", lastSymbolsScanned)
+            .put("scanner_last_scan_at", lastScanAt)
+            .put("scanner_duration_ms", lastScanDurationMs)
+    }
+
+    fun klines(): JSONObject {
+        if (primaryCandles.isEmpty()) {
+            runCatching {
+                primaryCandles =
+                    fetchCandles(primarySymbol, interval, 150)
+            }
+        }
+
+        val output = JSONArray()
+        val prices =
+            primaryCandles.map { it.c }
+
+        if (prices.isNotEmpty()) {
+            val jaw = smma(prices, 13)
+            val teeth = smma(prices, 8)
+            val lips = smma(prices, 5)
+
+            val start =
+                max(0, primaryCandles.size - 120)
+
+            for (i in start until primaryCandles.size) {
+                val c = primaryCandles[i]
+                output.put(
+                    JSONObject()
+                        .put("time", c.t)
+                        .put("open", c.o)
+                        .put("high", c.h)
+                        .put("low", c.l)
+                        .put("close", c.c)
+                        .put(
+                            "jaw",
+                            jaw.getOrNull(i)
+                                ?: JSONObject.NULL
+                        )
+                        .put(
+                            "teeth",
+                            teeth.getOrNull(i)
+                                ?: JSONObject.NULL
+                        )
+                        .put(
+                            "lips",
+                            lips.getOrNull(i)
+                                ?: JSONObject.NULL
+                        )
+                        .put(
+                            "ao",
+                            ao(primaryCandles, i)
+                        )
+                        .put(
+                            "long_signal",
+                            i >= 40 &&
+                                alligator(
+                                    prices.subList(
+                                        0,
+                                        i + 1
+                                    )
+                                ).let { values ->
+                                    values.lips > values.teeth &&
+                                        values.teeth > values.jaw &&
+                                        prices[i] > values.lips &&
+                                        ao(primaryCandles, i) > 0.0
+                                }
+                        )
+                        .put(
+                            "fractal_up",
+                            isUpFractal(primaryCandles, i)
+                        )
+                        .put(
+                            "fractal_down",
+                            isDownFractal(primaryCandles, i)
+                        )
+                )
+            }
+        }
+
+        return JSONObject()
+            .put("symbol", primarySymbol)
+            .put("interval", interval)
+            .put("candles", output)
+    }
+
+    fun trades(): JSONArray = JSONArray()
+
+    fun logs(): JSONArray =
+        JSONArray().put(
+            JSONObject()
+                .put("created_at", System.currentTimeMillis())
+                .put("level", "INFO")
+                .put(
+                    "message",
+                    if (scanning) {
+                        "Standalone scanner is running; TESTNET; execution disabled"
+                    } else {
+                        "Standalone native engine active; TESTNET; execution disabled"
+                    }
+                )
+        )
+
+    fun settings(): JSONObject =
+        JSONObject()
+            .put("version", "4.13.0")
+            .put("symbol", primarySymbol)
+            .put("interval", interval)
+            .put("position_fraction", 0.95)
+            .put("stop_loss_pct", 0.02)
+            .put("take_profit_pct", 0.04)
+            .put("poll_seconds", 15)
+            .put("risk_per_trade_pct", 0.01)
+            .put("max_daily_loss_pct", 0.03)
+            .put("max_trades_per_day", 5)
+            .put("max_consecutive_losses", 3)
+            .put("cooldown_minutes", 30)
+            .put("min_risk_reward", 1.5)
+            .put("atr_period", 14)
+            .put("max_atr_pct", 0.08)
+            .put("max_spread_pct", 0.0015)
+            .put("require_htf_confirmation", true)
+            .put("htf_interval", "4h")
+            .put("strategy_name", "Williams Profitunity Conservative")
+            .put("standalone", true)
+            .put("execution_enabled", false)
+            .put("max_scan_symbols", maxScanSymbols)
+            .put("wave_top_n", waveTopN)
 }
