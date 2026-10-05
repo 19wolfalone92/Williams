@@ -1362,6 +1362,8 @@ private class NativeEngine(
             }
         }
 
+        runCatching { manageWilliamsStops() }
+
         val universe = loadUniverse()
         scanSymbols = universe.first.toMutableList()
 
@@ -1486,6 +1488,74 @@ private class NativeEngine(
 
                         if (reconcileRequired) return@forEach
                     }
+            }
+        }
+    }
+
+    private fun manageWilliamsStops() {
+        for (stored in positionList()) {
+            val candles = runCatching { fetchCandles(stored.symbol, "1h", 120) }.getOrElse { continue }
+            if (candles.size < 40) continue
+            val prices = candles.map { it.c }
+            val teeth = smma(prices, 8).last()
+            val last = candles.last()
+            var consecutiveGreen = 0
+            var fifthLow = Double.POSITIVE_INFINITY
+            for (i in candles.lastIndex downTo max(4, candles.lastIndex - 7)) {
+                val aoNow = ao(candles, i)
+                val aoPrev = ao(candles, i - 1)
+                val acNow = aoNow - (max(0, i - 4)..i).map { ao(candles, it) }.average()
+                val acPrev = aoPrev - (max(0, i - 5)..i - 1).map { ao(candles, it) }.average()
+                if (!(aoNow > aoPrev && acNow > acPrev)) break
+                consecutiveGreen++
+                fifthLow = min(fifthLow, candles[i].l)
+                if (consecutiveGreen >= 5) break
+            }
+
+            val tick = runCatching { symbolFilters(stored.symbol).tick }.getOrDefault(0.0)
+            val candidateStop = when {
+                consecutiveGreen >= 5 && tick > 0.0 ->
+                    max(stored.stop, min(fifthLow, last.l) - tick)
+                last.c < teeth && last.c > stored.entry && tick > 0.0 ->
+                    max(stored.stop, teeth - tick)
+                else -> stored.stop
+            }
+
+            if (candidateStop <= stored.stop + tick || candidateStop >= last.c) continue
+
+            try {
+                if (stored.ocoListId.isNotBlank()) {
+                    signedDelete("/api/v3/orderList", "symbol=" + stored.symbol + "&orderListId=" + stored.ocoListId)
+                } else if (stored.ocoListClientId.isNotBlank()) {
+                    signedDelete("/api/v3/orderList", "symbol=" + stored.symbol + "&listClientOrderId=" + stored.ocoListClientId)
+                } else {
+                    continue
+                }
+
+                val distance = ((stored.entry - candidateStop) / stored.entry).coerceIn(0.001, 0.08)
+                val protection = createProtection(
+                    symbol = stored.symbol,
+                    qty = stored.qty,
+                    entry = stored.entry,
+                    stopDistance = distance
+                )
+
+                synchronized(positions) {
+                    positions[stored.symbol] = stored.copy(
+                        stop = protection.stop,
+                        take = protection.take,
+                        riskPct = protection.riskPct,
+                        ocoListClientId = protection.ocoClientId,
+                        ocoListId = protection.ocoListId
+                    )
+                }
+                savePersistedState()
+            } catch (x: Exception) {
+                setReconcileRequired(
+                    "Williams trailing stop update failed for " + stored.symbol + ": " +
+                        (x.message ?: x.javaClass.simpleName)
+                )
+                return
             }
         }
     }
@@ -1639,7 +1709,7 @@ private class NativeEngine(
             rules.tick
         ).toDouble()
         val take = fmtPrice(
-            entry * (1.0 + stopDistance * 1.5),
+            entry * (1.0 + stopDistance * 4.0),
             rules.tick
         ).toDouble()
         if (stop >= entry || take <= entry) {
@@ -2139,6 +2209,24 @@ private class NativeEngine(
         val ocoListId: String
     )
 
+    private fun initialWilliamsStopDistance(candidate: BaseAnalysis): Double {
+        val candles = candidate.candles
+        if (candles.size < 20) return (candidate.atrPct * 2.0).coerceIn(0.01, 0.08)
+        val prices = candles.map { it.c }
+        val teeth = smma(prices, 8).lastOrNull() ?: prices.last()
+        var swingLow = Double.POSITIVE_INFINITY
+        for (i in max(2, candles.lastIndex - 30)..candles.lastIndex - 2) {
+            if (isDownFractal(candles, i)) swingLow = min(swingLow, candles[i].l)
+        }
+        val reference = prices.last()
+        val atr = reference * candidate.atrPct
+        val structuralStop = min(
+            if (swingLow.isFinite()) swingLow else reference - atr * 2.0,
+            teeth
+        ) - atr * 0.15
+        return ((reference - structuralStop) / reference).coerceIn(0.005, 0.08)
+    }
+
     private fun executeBuyWithProtection(
         candidate: BaseAnalysis
     ) {
@@ -2219,9 +2307,8 @@ private class NativeEngine(
             )
         }
 
-        val stopDistance =
-            (candidate.atrPct * 2.0)
-                .coerceIn(0.01, 0.08)
+        // Williams-style initial protection: structure/Teeth first, ATR as guard.
+        val stopDistance = initialWilliamsStopDistance(candidate)
 
         val effectiveRiskDistance =
             stopDistance +
@@ -2549,7 +2636,7 @@ private class NativeEngine(
         val take =
             fmtPrice(
                 entry *
-                    (1.0 + stopDistance * 1.5),
+                    (1.0 + stopDistance * 4.0),
                 rules.tick
             ).toDouble()
 
