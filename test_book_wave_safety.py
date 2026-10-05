@@ -38,6 +38,12 @@ def report(position, exhaustion, nested=False):
         nested_w3_count=1 if nested else 0,
         wave_path="4h:W5 > 1h:W3" if nested else "4h:W3 > 1h:W5",
         htf_confirmed=True, setup_position=position, setup_phase="IMPULSE",
+        entry_interval="1h" if nested else "",
+        entry_position=3 if nested else 0,
+        entry_parent_interval="4h" if nested else "",
+        entry_parent_position=5 if nested else 0,
+        entry_allowed=nested,
+        entry_block_reason="" if nested else "W5 exhaustion",
         reason="test",
     )
 
