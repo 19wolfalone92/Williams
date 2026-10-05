@@ -91,7 +91,9 @@ class TradingAuditStore(context: Context) :
                 closed_at INTEGER NOT NULL,
                 outcome TEXT NOT NULL,
                 reason TEXT,
-                raw_json TEXT
+                raw_json TEXT,
+                fee_usdt REAL NOT NULL DEFAULT 0,
+                fee_known INTEGER NOT NULL DEFAULT 1
             )
         """.trimIndent())
 
@@ -130,6 +132,37 @@ class TradingAuditStore(context: Context) :
                 raw_json TEXT
             )
         """.trimIndent())
+
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS trades(
+                trade_id TEXT PRIMARY KEY,
+                symbol TEXT NOT NULL,
+                side TEXT NOT NULL,
+                entry_price REAL NOT NULL,
+                exit_price REAL NOT NULL,
+                qty REAL NOT NULL,
+                notional_usdt REAL NOT NULL,
+                gross_pnl REAL NOT NULL,
+                net_pnl REAL NOT NULL,
+                r_multiple REAL NOT NULL,
+                opened_at INTEGER NOT NULL,
+                closed_at INTEGER NOT NULL,
+                outcome TEXT NOT NULL,
+                reason TEXT,
+                raw_json TEXT,
+                fee_usdt REAL NOT NULL DEFAULT 0,
+                fee_known INTEGER NOT NULL DEFAULT 1
+            )
+        """.trimIndent())
+
+        try {
+            db.execSQL("ALTER TABLE trades ADD COLUMN fee_usdt REAL NOT NULL DEFAULT 0")
+        } catch (_: Exception) {
+        }
+        try {
+            db.execSQL("ALTER TABLE trades ADD COLUMN fee_known INTEGER NOT NULL DEFAULT 1")
+        } catch (_: Exception) {
+        }
 
         db.execSQL("""
             CREATE TABLE IF NOT EXISTS rest_calls(
@@ -177,7 +210,9 @@ class TradingAuditStore(context: Context) :
         closedAt: Long,
         outcome: String,
         reason: String,
-        rawJson: String?
+        rawJson: String?,
+        feeUsdt: Double = 0.0,
+        feeKnown: Boolean = true
     ) {
         val values = ContentValues()
         values.put("trade_id", tradeId)
@@ -195,6 +230,8 @@ class TradingAuditStore(context: Context) :
         values.put("outcome", outcome)
         values.put("reason", reason)
         values.put("raw_json", rawJson)
+        values.put("fee_usdt", feeUsdt)
+        values.put("fee_known", if (feeKnown) 1 else 0)
         writableDatabase.insertWithOnConflict(
             "trades",
             null,
