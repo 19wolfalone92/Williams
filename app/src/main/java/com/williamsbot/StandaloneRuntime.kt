@@ -3517,7 +3517,7 @@ private class NativeEngine(
         val dailyGuard = dailyTradeGuard()
 
         return JSONObject()
-            .put("version", "4.14.0")
+            .put("version", "4.16.0")
             .put("symbol", primarySymbol)
             .put("interval", interval)
             .put("testnet", true)
@@ -3724,7 +3724,7 @@ private class NativeEngine(
 
     fun settings(): JSONObject =
         JSONObject()
-            .put("version", "4.14.0")
+            .put("version", "4.16.0")
             .put("symbol", primarySymbol)
             .put("interval", interval)
             .put("position_fraction", 0.95)
