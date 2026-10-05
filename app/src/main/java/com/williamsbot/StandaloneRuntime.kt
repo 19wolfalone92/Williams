@@ -125,9 +125,26 @@ private data class SymbolRules(
     val tick: Double,
     val decimals: Int,
     val minQty: Double,
+    val maxQty: Double,
+    val marketStep: Double,
+    val marketMinQty: Double,
+    val marketMaxQty: Double,
+    val minPrice: Double,
+    val maxPrice: Double,
     val minNotional: Double,
+    val maxNotional: Double,
     val quoteOrderQtyMarketAllowed: Boolean,
-    val ocoAllowed: Boolean
+    val ocoAllowed: Boolean,
+    val percentUp: Double,
+    val percentDown: Double,
+    val bidPercentUp: Double,
+    val bidPercentDown: Double,
+    val askPercentUp: Double,
+    val askPercentDown: Double,
+    val avgPriceMins: Int,
+    val maxNumOrders: Int,
+    val maxNumAlgoOrders: Int,
+    val maxNumOrderLists: Int
 )
 
 private data class BaseAnalysis(
@@ -848,14 +865,19 @@ private class NativeEngine(
         stateMachine.force(TradingState.INITIALIZING, "bot start")
         userStreamSyncRequired = true
 
-        runCatching {
+        try {
             recoverPendingEntries()
             reconcilePositionsWithExchange()
-        }.onFailure {
+            auditManagedOpenOrders()
+        } catch (x: Exception) {
             setReconcileRequired(
                 "startup exchange synchronization failed: " +
-                    (it.message ?: it.javaClass.simpleName)
+                    (x.message ?: x.javaClass.simpleName)
             )
+            return JSONObject()
+                .put("started", false)
+                .put("state", "RECONCILE_REQUIRED")
+                .put("error", x.message ?: x.javaClass.simpleName)
         }
 
         running = true
@@ -1290,6 +1312,14 @@ private class NativeEngine(
                 marketSocketLastEventMs = System.currentTimeMillis()
                 runCatching { consumeMarketStream(JSONObject(text)) }
                     .onFailure { lastError = "WS market: " + (it.message ?: it.javaClass.simpleName) }
+
+                runCatching {
+                    val data = JSONObject(text).optJSONObject("data")
+                    if (data?.optString("e") == "serverShutdown") {
+                        marketSocketConnected = false
+                        webSocket.close(1000, "serverShutdown")
+                    }
+                }
             }
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
@@ -1507,7 +1537,11 @@ private class NativeEngine(
         // execution timeframes (including seconds) synthetically from the
         // smallest reliable market data available instead of sending invalid
         // intervals such as 5s/2h/25h to Binance.
-        val nativeFrames = setOf("1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d")
+        val nativeFrames = setOf(
+            "1m", "3m", "5m", "15m", "30m", "1h",
+            "2h", "4h", "6h", "8h", "12h", "1d",
+            "3d", "1w", "1M"
+        )
         val sourceFrame = when {
             frame in nativeFrames -> frame
             frame.endsWith("s") -> "1m"
@@ -2512,6 +2546,56 @@ private class NativeEngine(
     }
 
     @Synchronized
+    private fun auditManagedOpenOrders() {
+        val openOrders = JSONArray(
+            signedRawGet("/api/v3/openOrders", "")
+        )
+        val openLists =
+            signedGet("/api/v3/openOrderList", "")
+                .let {
+                    it.optJSONArray("orderList")
+                        ?: it.optJSONArray("ordersLists")
+                        ?: it.optJSONArray("orderLists")
+                        ?: JSONArray()
+                }
+
+        val expectedSymbols =
+            pendingEntries.keys.toSet() +
+                positionList().map { it.symbol }
+
+        for (i in 0 until openOrders.length()) {
+            val order = openOrders.optJSONObject(i) ?: continue
+            val clientId = order.optString("clientOrderId")
+            if (!clientId.startsWith("W4B_") &&
+                !clientId.startsWith("W4S_")
+            ) continue
+
+            val symbol =
+                order.optString("symbol").uppercase(Locale.US)
+            if (symbol !in expectedSymbols) {
+                throw IllegalStateException(
+                    "Unmanaged Williams open order after restart: " +
+                        symbol + " clientOrderId=" + clientId
+                )
+            }
+        }
+
+        for (i in 0 until openLists.length()) {
+            val list = openLists.optJSONObject(i) ?: continue
+            val listClientId = list.optString("listClientOrderId")
+            if (!listClientId.startsWith("W4O_")) continue
+
+            val symbol =
+                list.optString("symbol").uppercase(Locale.US)
+            if (positionList().none { it.symbol == symbol }) {
+                throw IllegalStateException(
+                    "Unmanaged Williams OCO after restart: " +
+                        symbol + " listClientOrderId=" + listClientId
+                )
+            }
+        }
+    }
+
     private fun reconcilePositionsWithExchange() {
         if (positions.isEmpty()) {
             savePersistedState()
@@ -4872,6 +4956,21 @@ private class NativeEngine(
         }
 
         var balance: Double? = null
+        var livePnl = 0.0
+        var livePnlPct = 0.0
+
+        positionList().forEach { position ->
+            val mark = livePrices[position.symbol]
+                ?: if (position.symbol == primarySymbol) primaryCandles.lastOrNull()?.c else 0.0
+            if (mark > 0.0) {
+                livePnl += (mark - position.entry) * position.qty
+            }
+        }
+        val totalEntryNotional =
+            positionList().sumOf { it.entry * it.qty }
+        if (totalEntryNotional > 0.0) {
+            livePnlPct = livePnl / totalEntryNotional
+        }
 
         if (key().isNotBlank() && secret().isNotBlank()) {
             runCatching {
@@ -4883,6 +4982,7 @@ private class NativeEngine(
                         balance =
                             item.optString("free")
                                 .toDoubleOrNull()
+                        liveUsdtBalance = balance ?: 0.0
                         break
                     }
                 }
@@ -4926,7 +5026,8 @@ private class NativeEngine(
             )
             .put(
                 "price",
-                primaryCandles.lastOrNull()?.c
+                livePrices[primarySymbol]
+                    ?: primaryCandles.lastOrNull()?.c
                     ?: JSONObject.NULL
             )
             .put(
@@ -4966,8 +5067,8 @@ private class NativeEngine(
             .put("max_total_risk_pct", maxTotalRiskPct)
             .put("max_risk_per_trade_pct", maxRiskPerTradePct)
             .put("reconcile_required", reconcileRequired)
-            .put("pnl", JSONObject.NULL)
-            .put("pnl_pct", JSONObject.NULL)
+            .put("pnl", if (positionList().isEmpty()) JSONObject.NULL else livePnl)
+            .put("pnl_pct", if (positionList().isEmpty()) JSONObject.NULL else livePnlPct)
             .put(
                 "take_profit_price",
                 positionList().firstOrNull()?.take ?: JSONObject.NULL
