@@ -133,9 +133,11 @@ class MarketHistoryStore(context: Context) :
             state.put("oldest_open_time", row[0])
             state.put("newest_open_time", row[1])
             state.put("candle_count", row[2])
-            val completeValue =
-                complete ?: run {
-                    writableDatabase.query(
+            val completeInt =
+                when (complete) {
+                    true -> 1
+                    false -> 0
+                    null -> writableDatabase.query(
                         "sync_state",
                         arrayOf("complete"),
                         "symbol=? AND interval=?",
@@ -147,7 +149,7 @@ class MarketHistoryStore(context: Context) :
                         if (cursor.moveToFirst()) cursor.getInt(0) else 0
                     }
                 }
-            state.put("complete", completeValue)
+            state.put("complete", completeInt)
             state.put("updated_at", System.currentTimeMillis())
             db.insertWithOnConflict(
                 "sync_state",
