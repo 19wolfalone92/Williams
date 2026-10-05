@@ -1110,7 +1110,7 @@ class MultiTimeframeWaveEngine:
                     analysis_intervals.append(micro_interval)
             analysis_intervals = sorted(
                 analysis_intervals,
-                key=self.INTERVAL_SECONDS.get,
+                key=lambda value: self.INTERVAL_SECONDS.get(value, 0),
                 reverse=True,
             )
 
