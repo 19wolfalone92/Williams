@@ -355,7 +355,7 @@ fun WilliamsApp(context: Context) {
                         else if (scan) "Сканирование запущено"
                         else "Данные обновлены"
             }
-            TradeNotificationHelper.processTradeList(this@MainActivity, tradeArray)
+            TradeNotificationHelper.processTradeList(context, tradeArray)
         } catch (e: Exception) {
             withContext(Dispatchers.Main) {
                 refreshing = false
@@ -553,7 +553,8 @@ fun WilliamsApp(context: Context) {
             3 -> HistoryScreen(
                 padding = padding,
                 trades = trades,
-                logs = logs
+                logs = logs,
+                learning = learning
             )
 
             else -> SettingsScreen(
