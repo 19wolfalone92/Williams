@@ -18,6 +18,10 @@ class WebSocketHub:
         self.market_reconnects=0
         self.market_last_message_at=None
         self.market_last_error=None
+        self.user_sync_required=True
+        self.user_last_event_at=None
+        self._last_user_event_by_type={}
+        self.user_stream_reconnects=0
     def configure_credentials(self,key,secret,testnet=True):
         with self.lock:
             self.api_key=key.strip()
@@ -74,6 +78,9 @@ class WebSocketHub:
                 'market_connected':self.market_connected,
                 'user_connected':self.user_connected,
                 'user_subscription_id':self.user_subscription_id,
+                'user_sync_required':self.user_sync_required,
+                'user_last_event_at':self.user_last_event_at,
+                'user_stream_reconnects':self.user_stream_reconnects,
                 'market_reconnects':self.market_reconnects,
                 'market_last_message_at':self.market_last_message_at,
                 'market_last_error':self.market_last_error,
@@ -269,6 +276,7 @@ class WebSocketHub:
 
                 self.user_connected=False
                 self.user_subscription_id=None
+                self.user_sync_required=True
 
                 def opened(ws):
                     self._user_ws=ws
@@ -398,7 +406,22 @@ class WebSocketHub:
                     msg['result']['subscriptionId']
                 )
                 self.last_error=None
+                self.user_sync_required=True
+                self.user_stream_reconnects += 1
                 self._set_user(True)
+
+                # Every successful reconnect starts with a REST snapshot.
+                # This closes the window in which executionReport events could
+                # have been missed while the socket was down.
+                try:
+                    self._refresh_account()
+                    self._refresh_orders()
+                    self.user_sync_required=False
+                except Exception as e:
+                    self._set_user(
+                        False,
+                        f'resync after user-stream reconnect: {type(e).__name__}: {e}'
+                    )
                 return
 
             # WS API error.
@@ -424,6 +447,30 @@ class WebSocketHub:
                 return
 
             event_type=event.get('e')
+            event_time=int(event.get('E') or 0)
+            self.user_last_event_at=datetime.now(timezone.utc).isoformat()
+
+            if event_time:
+                previous=self._last_user_event_by_type.get(event_type)
+                if previous is not None and event_time < previous:
+                    self.user_sync_required=True
+                    self.db.log_event(
+                        'ERROR',
+                        'user_stream_out_of_order',
+                        f'Out-of-order {event_type}: previous={previous}, current={event_time}',
+                        raw=event,
+                    )
+                self._last_user_event_by_type[event_type]=max(
+                    previous or 0,
+                    event_time,
+                )
+
+            self.db.log_event(
+                'INFO',
+                'user_stream_event',
+                event_type,
+                raw=event,
+            )
 
             if event_type=='eventStreamTerminated':
                 self._set_user(
@@ -460,8 +507,20 @@ class WebSocketHub:
                     self.db.save_order(o)
                     self._refresh_orders()
 
-                    if str(o['status']).upper()=='FILLED':
+                status=str(o.get('status','')).upper()
+                if status=='FILLED':
                         self._refresh_account()
+
+                if status in {'FILLED','CANCELED','REJECTED','EXPIRED'}:
+                    self.user_sync_required=True
+                    try:
+                        self._refresh_account()
+                        self.user_sync_required=False
+                    except Exception as e:
+                        self._set_user(
+                            False,
+                            f'post-execution resync: {type(e).__name__}: {e}'
+                        )
 
             elif event_type=='outboundAccountPosition':
                 self._refresh_account()
