@@ -234,7 +234,7 @@ data class Trade(
 )
 
 private class StandaloneApi {
-    private val base = "http://127.0.0.1:18080"
+    private val base = "http://localhost:18080"
     private val token = "standalone"
     private val client = OkHttpClient.Builder()
         .connectTimeout(8, TimeUnit.SECONDS)
