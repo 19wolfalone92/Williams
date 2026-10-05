@@ -107,6 +107,10 @@ class MarketScanner:
         self.scan_workers = max(1, int(os.getenv("SCAN_WORKERS", "12")))
         self.liquidity_preselect = max(0, int(os.getenv("LIQUIDITY_PRESELECT", "120")))
         self.scan_kline_limit = max(120, int(os.getenv("SCAN_KLINE_LIMIT", "220")))
+        self.wave_scan_workers = max(1, int(os.getenv("WAVE_SCAN_WORKERS", "6")))
+        self.kline_cache_seconds = max(5, int(os.getenv("KLINE_CACHE_SECONDS", "45")))
+        self._kline_cache = {}
+        self._spread_map = {}
         self.universe_cache_seconds = max(30, int(os.getenv("SCAN_UNIVERSE_CACHE_SECONDS", "300")))
         self.wave_top_n = max(0, int(os.getenv("WAVE_SCAN_TOP_N", "12")))
         self.max_wave_exhaustion_for_entry = max(0.0, min(100.0, float(os.getenv("MAX_WAVE_EXHAUSTION_FOR_ENTRY", "80"))))
@@ -158,7 +162,24 @@ class MarketScanner:
         ).max(axis=1)
         return float(tr.rolling(period).mean().iloc[-1])
 
+    def _refresh_spreads(self, symbols):
+        try:
+            rows = self.client.book_ticker()
+            self._spread_map = {
+                str(x.get("symbol","")).upper(): (
+                    (float(x["askPrice"]) - float(x["bidPrice"])) /
+                    ((float(x["askPrice"]) + float(x["bidPrice"])) / 2.0)
+                )
+                for x in rows
+                if float(x.get("bidPrice",0) or 0) > 0 and float(x.get("askPrice",0) or 0) > 0
+            }
+        except Exception as exc:
+            log.debug("Bulk spread refresh unavailable: %s", exc)
+
     def _spread(self, symbol):
+        cached = self._spread_map.get(str(symbol).upper())
+        if cached is not None:
+            return float(cached)
         book = self.client.book_ticker(symbol)
         bid = float(book["bidPrice"])
         ask = float(book["askPrice"])
@@ -307,7 +328,13 @@ class MarketScanner:
             if not self._symbol_is_valid(symbol, metadata):
                 return None
 
-            df = fetch_klines(self.client, symbol, self.interval, limit=self.scan_kline_limit)
+            import time
+            cached = self._kline_cache.get(symbol)
+            if cached and time.monotonic() - cached[0] < self.kline_cache_seconds:
+                df = cached[1].copy()
+            else:
+                df = fetch_klines(self.client, symbol, self.interval, limit=self.scan_kline_limit)
+                self._kline_cache[symbol] = (time.monotonic(), df.copy())
             if len(df) < 100:
                 return None
 
@@ -526,6 +553,7 @@ class MarketScanner:
 
     def scan(self) -> List[Candidate]:
         symbols = self._resolve_symbols()
+        self._refresh_spreads(symbols)
         candidates: List[Candidate] = []
         frames: Dict[str, pd.DataFrame] = {}
 
@@ -578,46 +606,49 @@ class MarketScanner:
 
         enriched: List[Candidate] = []
         blocked_symbols = set()
-        for candidate in wave_targets:
+
+        def enrich_one(candidate):
             frame = frames.get(candidate.symbol)
             if frame is None:
-                continue
+                return candidate, None, None
             try:
-                enriched_candidate = self._apply_wave(candidate, frame)
+                return candidate, self._apply_wave(candidate, frame), None
+            except Exception as exc:
+                return candidate, None, exc
+
+        if wave_targets:
+            with ThreadPoolExecutor(max_workers=min(self.wave_scan_workers, len(wave_targets))) as pool:
+                wave_results = list(pool.map(enrich_one, wave_targets))
+        else:
+            wave_results = []
+
+        for candidate, enriched_candidate, exc in wave_results:
+            if enriched_candidate is not None:
                 if candidate.signal and self.require_htf_confirmation and not enriched_candidate.htf_confirmed:
-                    log.info(
-                        "AUTO-SCAN HTF BLOCK: %s strict signal has no bullish HTF confirmation",
-                        candidate.symbol,
-                    )
+                    log.info("AUTO-SCAN HTF BLOCK: %s strict signal has no bullish HTF confirmation", candidate.symbol)
                     blocked_symbols.add(candidate.symbol)
                     continue
                 if candidate.signal and not enriched_candidate.wave_entry_allowed:
-                    log.info(
-                        "AUTO-SCAN WAVE BLOCK: %s %s",
-                        candidate.symbol,
-                        enriched_candidate.wave_block_reason,
-                    )
+                    log.info("AUTO-SCAN WAVE BLOCK: %s %s", candidate.symbol, enriched_candidate.wave_block_reason)
                     blocked_symbols.add(candidate.symbol)
                     continue
                 enriched.append(enriched_candidate)
-            except Exception as exc:
-                log.warning("Wave analysis failed for %s: %s", candidate.symbol, exc)
-                # Strict candidates must still be safe/compatible if the wave
-                # module has a temporary data problem. Keep a neutral wave score
-                # rather than fabricating a bullish wave state.
-                neutral = replace(
-                    candidate,
-                    htf_confirmed=(
-                        self._htf_confirmation(candidate.symbol)
-                        if candidate.signal and self.require_htf_confirmation
-                        else False
-                    ),
-                    wave_reason=f"Wave analysis unavailable: {type(exc).__name__}: {exc}",
-                )
-                if candidate.signal and self.require_htf_confirmation and not neutral.htf_confirmed:
-                    blocked_symbols.add(candidate.symbol)
-                    continue
-                enriched.append(neutral)
+                continue
+
+            log.warning("Wave analysis failed for %s: %s", candidate.symbol, exc)
+            neutral = replace(
+                candidate,
+                htf_confirmed=(
+                    self._htf_confirmation(candidate.symbol)
+                    if candidate.signal and self.require_htf_confirmation
+                    else False
+                ),
+                wave_reason=f"Wave analysis unavailable: {type(exc).__name__}: {exc}",
+            )
+            if candidate.signal and self.require_htf_confirmation and not neutral.htf_confirmed:
+                blocked_symbols.add(candidate.symbol)
+                continue
+            enriched.append(neutral)
 
         enriched_by_symbol = {c.symbol: c for c in enriched}
         final = []
