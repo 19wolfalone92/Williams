@@ -772,12 +772,15 @@ private class NativeEngine(
         val now = System.currentTimeMillis()
         if (
             now - lastServerTimeSyncMs >
-                60 * 1000L
+                15 * 1000L
         ) {
             runCatching { syncServerTime() }
         }
+        // Binance rejects timestamps even slightly ahead of its clock.
+        // Keep a small safety margin on the safe side of server time.
         return System.currentTimeMillis() +
-            serverTimeOffsetMs
+            serverTimeOffsetMs -
+            750L
     }
 
     @Synchronized
@@ -793,8 +796,10 @@ private class NativeEngine(
         }
 
         val after = System.currentTimeMillis()
-        serverTimeOffsetMs =
-            remote - ((syncStartedAtMs + after) / 2L)
+        val midpoint = (syncStartedAtMs + after) / 2L
+        // Estimate network latency using the request midpoint and bias
+        // slightly behind Binance to avoid -1021 "timestamp ahead".
+        serverTimeOffsetMs = remote - midpoint
         lastServerTimeSyncMs = after
     }
 
