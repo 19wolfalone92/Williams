@@ -1,6 +1,9 @@
 package com.williamsbot
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -85,6 +88,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -104,6 +110,10 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         StandaloneRuntime.start(this)
+        TradeNotificationHelper.ensureChannel(this)
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 7001)
+        }
         setContent {
             WilliamsTheme {
                 WilliamsApp(this)
@@ -294,57 +304,47 @@ fun WilliamsApp(context: Context) {
     var refreshing by remember { mutableStateOf(false) }
 
     suspend fun loadAll(scan: Boolean) {
-        withContext(Dispatchers.IO) {
-            try {
-                withContext(Dispatchers.Main) { refreshing = scan }
-
-                val statusJson = JSONObject(api.get("/api/v1/status"))
-                val klineJson = JSONObject(api.get("/api/v1/market/klines"))
-                var scannerJson =
-                    JSONObject(api.get("/api/v1/scanner?refresh=" + scan))
-
-                if (scan && scannerJson.optBoolean("scanning", false)) {
-                    for (i in 0 until 20) {
-                        delay(1000L)
-                        scannerJson =
-                            JSONObject(api.get("/api/v1/scanner?refresh=false"))
-                        if (!scannerJson.optBoolean("scanning", false)) {
-                            break
+        withContext(Dispatchers.Main) { refreshing = scan }
+        try {
+            val (statusJson, klineJson, scannerJson, tradeArray, logArray) =
+                coroutineScope {
+                    val status = async(Dispatchers.IO) { JSONObject(api.get("/api/v1/status")) }
+                    val klines = async(Dispatchers.IO) { JSONObject(api.get("/api/v1/market/klines")) }
+                    val scanner = async(Dispatchers.IO) {
+                        JSONObject(api.get("/api/v1/scanner?refresh=" + scan))
+                    }
+                    val trade = async(Dispatchers.IO) { JSONArray(api.get("/api/v1/trades")) }
+                    val logsJson = async(Dispatchers.IO) { JSONArray(api.get("/api/v1/logs")) }
+                    awaitAll(status, klines, scanner, trade, logsJson).mapIndexed { i, value ->
+                        when (i) {
+                            0 -> value as JSONObject
+                            1 -> value as JSONObject
+                            2 -> value as JSONObject
+                            3 -> value as JSONArray
+                            else -> value as JSONArray
                         }
                     }
                 }
 
-                val tradeArray = JSONArray(api.get("/api/v1/trades"))
-                val logArray = JSONArray(api.get("/api/v1/logs"))
-
-                withContext(Dispatchers.Main) {
-                    status = parseStatus(statusJson)
-                    candles = parseCandles(klineJson.optJSONArray("candles") ?: JSONArray())
-                    candidates = parseCandidates(
-                        scannerJson.optJSONArray("candidates") ?: JSONArray()
-                    )
-                    trades = parseTrades(tradeArray)
-                    logs = parseLogs(logArray)
-
-                    message =
-                        scannerJson.optString("last_error").takeIf { it.isNotBlank() }
-                            ?: if (scan) {
-                                if (scannerJson.optBoolean("scanning", false)) {
-                                    "Сканирование продолжается в фоне"
-                                } else {
-                                    "Сканирование завершено"
-                                }
-                            } else {
-                                "Данные обновлены"
-                            }
-
-                    refreshing = false
-                }
-            } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    refreshing = false
-                    message = e.message ?: "Ошибка соединения"
-                }
+            withContext(Dispatchers.Main) {
+                status = parseStatus(statusJson)
+                candles = parseCandles(klineJson.optJSONArray("candles") ?: JSONArray())
+                candidates = parseCandidates(scannerJson.optJSONArray("candidates") ?: JSONArray())
+                trades = parseTrades(tradeArray)
+                logs = parseLogs(logArray)
+                refreshing = false
+                message =
+                    scannerJson.optString("last_error").takeIf { it.isNotBlank() }
+                        ?: if (scan && scannerJson.optBoolean("scanning", false))
+                            "Сканирование идёт в фоне"
+                        else if (scan) "Сканирование завершено"
+                        else "Данные обновлены"
+            }
+            TradeNotificationHelper.processTradeList(this@MainActivity, tradeArray)
+        } catch (e: Exception) {
+            withContext(Dispatchers.Main) {
+                refreshing = false
+                message = e.message ?: "Ошибка соединения"
             }
         }
     }
@@ -420,7 +420,7 @@ fun WilliamsApp(context: Context) {
     LaunchedEffect(Unit) {
         loadAll(false)
         while (isActive) {
-            delay(15_000L)
+            delay(5_000L)
             loadAll(false)
         }
     }
