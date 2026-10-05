@@ -3474,26 +3474,21 @@ private class NativeEngine(
     }
 
     private fun frameSeconds(frame: String): Long = when (frame) {
-        "1s" -> 1L
-        "5s" -> 5L
-        "15s" -> 15L
-        "30s" -> 30L
         "1m" -> 60L
+        "3m" -> 180L
         "5m" -> 300L
         "15m" -> 900L
         "30m" -> 1800L
         "1h" -> 3600L
         "2h" -> 7200L
         "4h" -> 14400L
-        "5h" -> 18000L
         "6h" -> 21600L
         "8h" -> 28800L
-        "10h" -> 36000L
         "12h" -> 43200L
-        "15h" -> 54000L
-        "20h" -> 72000L
-        "25h" -> 90000L
         "1d" -> 86400L
+        "3d" -> 259200L
+        "1w" -> 604800L
+        "1M" -> 2592000L
         else -> 0L
     }
 
@@ -3517,14 +3512,20 @@ private class NativeEngine(
             count++
             pnl += row.optDouble("pnl", 0.0)
         }
+        val closedToday = mutableListOf<JSONObject>()
         for (i in 0 until rows.length()) {
             val row = rows.getJSONObject(i)
             val closedAt = row.optLong("closed_at", 0L)
-            if (closedAt < start || row.optString("status") != "CLOSED") continue
-            when (row.optString("outcome")) {
+            if (closedAt >= start && row.optString("status") == "CLOSED") {
+                closedToday.add(row)
+            }
+        }
+        closedToday.sortByDescending { it.optLong("closed_at", 0L) }
+        for (row in closedToday) {
+            when (row.optString("outcome").uppercase(Locale.US)) {
                 "LOSS" -> {
                     consecutiveLosses++
-                    if (lastLossAt == 0L) lastLossAt = closedAt
+                    if (lastLossAt == 0L) lastLossAt = row.optLong("closed_at", 0L)
                 }
                 "WIN", "BREAKEVEN" -> break
             }
@@ -3710,7 +3711,7 @@ private class NativeEngine(
     ): JSONObject {
         val symbol = requestedSymbol?.trim()?.uppercase(Locale.US)?.takeIf { it.isNotBlank() } ?: primarySymbol
         val selectedInterval = requestedInterval?.trim()?.lowercase(Locale.US)
-            ?.takeIf { it in listOf("1m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "12h", "1d") }
+            ?.takeIf { it in listOf("1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w", "1M".lowercase()) }
             ?: interval
         val sourceCandles = if (symbol == primarySymbol && selectedInterval == interval) {
             if (primaryCandles.isEmpty()) runCatching { primaryCandles = fetchCandles(primarySymbol, selectedInterval, 150) }
@@ -3771,7 +3772,7 @@ private class NativeEngine(
                                     values.lips > values.teeth &&
                                         values.teeth > values.jaw &&
                                         prices[i] > values.lips &&
-                                        ao(primaryCandles, i) > 0.0
+                                        ao(sourceCandles, i) > 0.0
                                 }
                         )
                         .put(
@@ -3823,7 +3824,7 @@ private class NativeEngine(
             .put("take_profit_pct", 0.04)
             .put("poll_seconds", 15)
             .put("scan_mode", "adaptive_parallel_cached")
-            .put("wave_timeframes", "1s,5s,15s,30s,1m,5m,15m,30m,1h,2h,4h,5h,6h,8h,10h,12h,15h,20h,25h")
+            .put("wave_timeframes", "1m,3m,5m,15m,30m,1h,2h,4h,6h,8h,12h,1d,3d,1w,1M")
             .put("full_history_wave_analysis", true)
             .put("full_history_base_timeframe", "1h")
             .put("risk_per_trade_pct", maxRiskPerTradePct)
