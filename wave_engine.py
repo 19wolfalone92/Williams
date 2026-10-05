@@ -404,63 +404,151 @@ class MultiTimeframeWaveEngine:
         direction: str,
         current_position: int,
     ) -> float:
-        """Soft structural fit for pivots that precede the current leg."""
-        if not seq:
+        """Score a candidate wave skeleton using structural constraints.
+
+        This is deliberately a soft Williams/Profitunity-style structure layer:
+        fractals provide the swing anchors, while price progression, correction
+        depth, momentum and the five-wave geometry decide whether a W1/W3/W5
+        interpretation is credible.  It avoids hard Fibonacci rules because
+        wave counting is a pattern-recognition task rather than an exact formula.
+        """
+        if not seq or direction not in (DIRECTION_UP, DIRECTION_DOWN):
             return 0.0
 
         expected = [self._expected_kind(direction, i) for i in range(len(seq))]
         if any(p.kind != k for p, k in zip(seq, expected)):
             return 0.0
 
-        score = 45.0
+        score = 50.0
 
-        # Progression checks are deliberately soft. They strengthen a count;
-        # they do not act as undocumented hard author rules.
-        if direction == DIRECTION_UP:
-            if len(seq) >= 3 and seq[2].price > seq[0].price:
+        def signed(a: Pivot, b: Pivot) -> float:
+            return (b.price - a.price) if direction == DIRECTION_UP else (a.price - b.price)
+
+        def retracement(start_p: Pivot, end_p: Pivot, correction_p: Pivot) -> float:
+            impulse = abs(end_p.price - start_p.price)
+            if impulse <= 0:
+                return 9.0
+            return abs(end_p.price - correction_p.price) / impulse
+
+        # W1 must actually travel in the intended direction.
+        if len(seq) >= 2:
+            w1 = signed(seq[0], seq[1])
+            if w1 > 0:
+                score += 8.0
+            else:
+                score -= 18.0
+
+        # W2 should correct W1 without invalidating its origin.  Very deep
+        # corrections are penalised, but not treated as impossible because
+        # real markets and crypto can produce irregular structures.
+        if len(seq) >= 3:
+            w2_valid = (
+                seq[2].price > seq[0].price
+                if direction == DIRECTION_UP
+                else seq[2].price < seq[0].price
+            )
+            if w2_valid:
                 score += 10.0
-            elif len(seq) >= 3:
+            else:
+                score -= 28.0
+            r2 = retracement(seq[0], seq[1], seq[2])
+            if 0.236 <= r2 <= 0.786:
+                score += 7.0
+            elif r2 > 1.0:
                 score -= 10.0
-            if len(seq) >= 4 and seq[3].price > seq[1].price:
-                score += 10.0
-            elif len(seq) >= 4:
+
+        # W3 should extend beyond W1 and should normally be a meaningful
+        # impulse leg.  It is a high-quality location when momentum agrees.
+        if len(seq) >= 4:
+            w3_extends = (
+                seq[3].price > seq[1].price
+                if direction == DIRECTION_UP
+                else seq[3].price < seq[1].price
+            )
+            if w3_extends:
+                score += 12.0
+            else:
+                score -= 25.0
+
+            w1_len = abs(seq[1].price - seq[0].price)
+            w3_len = abs(seq[3].price - seq[2].price)
+            if w1_len > 0 and w3_len >= w1_len * 0.9:
+                score += 8.0
+            elif w1_len > 0 and w3_len < w1_len * 0.65:
                 score -= 8.0
-            if len(seq) >= 5 and seq[4].price > seq[2].price:
-                score += 10.0
-            elif len(seq) >= 5:
-                score -= 10.0
-        else:
-            if len(seq) >= 3 and seq[2].price < seq[0].price:
-                score += 10.0
-            elif len(seq) >= 3:
-                score -= 10.0
-            if len(seq) >= 4 and seq[3].price < seq[1].price:
-                score += 10.0
-            elif len(seq) >= 4:
-                score -= 8.0
-            if len(seq) >= 5 and seq[4].price < seq[2].price:
-                score += 10.0
-            elif len(seq) >= 5:
-                score -= 10.0
 
-        # A wave-3 context is structurally stronger when the first completed
-        # impulse leg is not dramatically larger than the start of the third.
-        if current_position == 3 and len(seq) >= 3:
-            first_leg = self._leg(seq[0], seq[1])
-            completed_correction = self._leg(seq[1], seq[2])
-            if first_leg > 0 and completed_correction < first_leg * 2.5:
-                score += 5.0
+            if seq[3].ao != 0.0 and seq[3].ao * (1 if direction == DIRECTION_UP else -1) > 0:
+                score += 4.0
 
-        # A wave-5 context gets a small bonus when the preceding W3 swing is
-        # still extending the impulse skeleton.
-        if current_position == 5 and len(seq) >= 5:
-            third_leg = self._leg(seq[2], seq[3])
-            fourth_leg = self._leg(seq[3], seq[4])
-            if third_leg > 0 and fourth_leg < third_leg * 2.5:
-                score += 5.0
+        # W4 should remain inside the impulse structure and normally must not
+        # erase the W1 endpoint.  This is a soft standard-impulse rule; we do
+        # not reject diagonal/irregular market structures outright.
+        if len(seq) >= 5:
+            w4_valid = (
+                seq[4].price > seq[1].price
+                if direction == DIRECTION_UP
+                else seq[4].price < seq[1].price
+            )
+            w4_before_w3 = (
+                seq[4].price < seq[3].price
+                if direction == DIRECTION_UP
+                else seq[4].price > seq[3].price
+            )
+            if w4_valid and w4_before_w3:
+                score += 10.0
+            elif w4_valid:
+                score += 2.0
+            else:
+                score -= 18.0
+
+            w3_len = abs(seq[3].price - seq[2].price)
+            w4_len = abs(seq[4].price - seq[3].price)
+            if w3_len > 0 and w4_len <= w3_len * 0.95:
+                score += 4.0
+
+        # Completed W5 must extend W3 for a normal impulse.  If it does not,
+        # downgrade the count rather than forcing a W5 label.
+        if len(seq) >= 6:
+            w5_extends = (
+                seq[5].price > seq[3].price
+                if direction == DIRECTION_UP
+                else seq[5].price < seq[3].price
+            )
+            if w5_extends:
+                score += 10.0
+            else:
+                score -= 22.0
+
+            w1_len = abs(seq[1].price - seq[0].price)
+            w3_len = abs(seq[3].price - seq[2].price)
+            w5_len = abs(seq[5].price - seq[4].price)
+            if min(w1_len, w3_len, w5_len) > 0:
+                # W3 should not be the shortest of the three impulse legs.
+                if w3_len >= min(w1_len, w5_len) * 0.85:
+                    score += 5.0
+                else:
+                    score -= 12.0
+
+        # A candidate W3 gets a small quality bonus when the AO on its endpoint
+        # agrees with the impulse direction.  This matches the Profitunity use
+        # of AO as momentum confirmation without making AO the wave counter.
+        if current_position == 3 and len(seq) >= 4:
+            ao = seq[3].ao
+            if (direction == DIRECTION_UP and ao > 0) or (direction == DIRECTION_DOWN and ao < 0):
+                score += 6.0
+
+        # W5 is never an automatic veto, but a structurally weak W5 is explicitly
+        # downgraded so a nested/earlier W3 can win the MTF score.
+        if current_position == 5:
+            if len(seq) >= 5:
+                w3_anchor = seq[-2]
+                w5_origin = seq[-1]
+                if (direction == DIRECTION_UP and w5_origin.price <= w3_anchor.price) or (
+                    direction == DIRECTION_DOWN and w5_origin.price >= w3_anchor.price
+                ):
+                    score -= 12.0
 
         return max(0.0, min(100.0, score))
-
     def _full_impulse_completed(self, pivots: Sequence[Pivot], direction: str) -> bool:
         if len(pivots) < 6:
             return False
