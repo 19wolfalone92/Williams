@@ -257,6 +257,9 @@ private class StandaloneServer(private val context: Context) {
             method == "GET" && path == "/api/v1/market/klines" ->
                 x.klines().toString()
 
+            method == "GET" && path == "/api/v1/snapshot" ->
+                x.snapshot().toString()
+
             method == "GET" && path == "/api/v1/scanner" ->
                 x.scanner(
                     refresh = params["refresh"].equals("true", true)
@@ -2018,6 +2021,16 @@ private class NativeEngine(
             .put("scanner_symbols", lastSymbolsScanned)
             .put("scanner_last_scan_at", lastScanAt)
             .put("scanner_duration_ms", lastScanDurationMs)
+    }
+
+    fun snapshot(): JSONObject {
+        return JSONObject()
+            .put("status", status())
+            .put("klines", klines())
+            .put("scanner", scanner(false))
+            .put("trades", trades())
+            .put("insights", insights())
+            .put("logs", logs())
     }
 
     fun klines(): JSONObject {
