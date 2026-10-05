@@ -100,8 +100,23 @@ jobs:
 
       - name: Run Android unit tests
         run: |
-          set -euo pipefail
-          gradle --no-daemon :app:testDebugUnitTest --stacktrace
+          set +e
+          gradle --no-daemon :app:testDebugUnitTest --stacktrace 2>&1 | tee android-unit-tests.log
+          rc=${PIPESTATUS[0]}
+          set -e
+          exit "$rc"
+
+      - name: Upload Android unit-test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: williams-android-unit-test-diagnostics-${{ github.run_number }}
+          path: |
+            android-unit-tests.log
+            app/build/test-results/testDebugUnitTest/**/*.xml
+            app/build/reports/tests/testDebugUnitTest/**
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Run Android lint
         run: |
