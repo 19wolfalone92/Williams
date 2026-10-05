@@ -1511,7 +1511,7 @@ private class NativeEngine(
             val rawCandles =
                 runCatching {
                     fetchCandles(stored.symbol, "1h", 140)
-                }.getOrElse { continue }
+                }.getOrNull() ?: continue
 
             // Binance klines include the currently forming candle. Williams'
             // close-based decisions must be made on a completed bar.
@@ -4250,5 +4250,4 @@ private class NativeEngine(
             .put("wave_top_n", waveTopN)
             .put("trade_journal", true)
             .put("trade_journal_max_rows", 500)
-}
 }
