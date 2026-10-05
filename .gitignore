@@ -52,3 +52,6 @@ data/test_tmp/
 
 # All local runtime data
 data/
+
+# Local Binance historical kline cache (generated at runtime)
+data_cache/
