@@ -167,6 +167,7 @@ private fun WilliamsTheme(content: @Composable () -> Unit) {
 
 data class Status(
     val symbol: String = "BTCUSDT",
+    val positionSymbol: String? = null,
     val interval: String = "1h",
     val testnet: Boolean = true,
     val running: Boolean = false,
@@ -206,6 +207,11 @@ data class Candle(
     val longSignal: Boolean,
     val fractalUp: Boolean,
     val fractalDown: Boolean
+)
+
+data class MarketQuote(
+    val symbol: String,
+    val price: Double
 )
 
 data class Candidate(
@@ -316,6 +322,7 @@ fun WilliamsApp(context: Context) {
     var status by remember { mutableStateOf(Status()) }
     var candles by remember { mutableStateOf(emptyList<Candle>()) }
     var candidates by remember { mutableStateOf(emptyList<Candidate>()) }
+    var marketQuotes by remember { mutableStateOf(emptyList<MarketQuote>()) }
     var trades by remember { mutableStateOf(emptyList<Trade>()) }
     var learning by remember { mutableStateOf(LearningSummary()) }
     var logs by remember { mutableStateOf(emptyList<String>()) }
@@ -336,6 +343,7 @@ fun WilliamsApp(context: Context) {
             val statusJson = root.getJSONObject("status")
             val klineJson = root.getJSONObject("klines")
             val scannerJson = root.getJSONObject("scanner")
+            val marketArray = root.optJSONArray("market") ?: JSONArray()
             val tradeArray = root.getJSONArray("trades")
             val insightJson = root.getJSONObject("insights")
             val logArray = root.getJSONArray("logs")
@@ -344,6 +352,7 @@ fun WilliamsApp(context: Context) {
                 status = parseStatus(statusJson)
                 candles = parseCandles(klineJson.optJSONArray("candles") ?: JSONArray())
                 candidates = parseCandidates(scannerJson.optJSONArray("candidates") ?: JSONArray())
+                marketQuotes = parseMarketQuotes(marketArray)
                 trades = parseTrades(tradeArray)
                 learning = parseLearning(insightJson)
                 logs = parseLogs(logArray)
@@ -525,6 +534,7 @@ fun WilliamsApp(context: Context) {
                 padding = padding,
                 status = status,
                 candidates = candidates,
+                marketQuotes = marketQuotes,
                 message = message,
                 refreshing = refreshing,
                 onStart = { command("/api/v1/control/start") },
@@ -577,6 +587,7 @@ private fun DashboardScreen(
     padding: PaddingValues,
     status: Status,
     candidates: List<Candidate>,
+    marketQuotes: List<MarketQuote>,
     message: String,
     refreshing: Boolean,
     onStart: () -> Unit,
@@ -604,20 +615,24 @@ private fun DashboardScreen(
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 MetricCard(
                     modifier = Modifier.weight(1f),
-                    title = "Цена",
-                    value = fmt(status.price, 2),
-                    icon = Icons.Filled.ShowChart,
-                    accent = AppColors.primary
-                )
-                MetricCard(
-                    modifier = Modifier.weight(1f),
                     title = "Баланс",
                     value = fmt(status.balance, 2),
                     suffix = " USDT",
                     icon = Icons.Filled.AccountBalanceWallet,
                     accent = AppColors.green
                 )
+                MetricCard(
+                    modifier = Modifier.weight(1f),
+                    title = "Позиция",
+                    value = status.positionSymbol ?: "FLAT",
+                    icon = Icons.Filled.ShowChart,
+                    accent = if (status.positionSymbol != null) AppColors.primary else AppColors.textMuted
+                )
             }
+        }
+
+        item {
+            MarketQuotesCard(marketQuotes)
         }
 
         item {
@@ -783,6 +798,66 @@ private fun ScanSummaryCard(
             } else {
                 IconButton(onClick = onScan) {
                     Icon(Icons.Filled.Refresh, contentDescription = "Обновить")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MarketQuotesCard(quotes: List<MarketQuote>) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = AppColors.surface)
+    ) {
+        Column(
+            Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Рынок • USDT", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "котировки",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AppColors.textMuted
+                )
+            }
+
+            if (quotes.isEmpty()) {
+                Text(
+                    "Ожидание котировок Binance Testnet…",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AppColors.textMuted
+                )
+            } else {
+                quotes.chunked(3).forEach { row ->
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        row.forEach { quote ->
+                            Column(
+                                Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
+                                Text(
+                                    quote.symbol.removeSuffix("USDT") + "/USDT",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = AppColors.textMuted
+                                )
+                                Text(
+                                    fmtMarketPrice(quote.price),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
+                        repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
+                    }
                 }
             }
         }
@@ -1177,22 +1252,32 @@ private fun PositionScreen(
             }
         }
 
-        item {
-            Text(
-                "BTCUSDT • 1h • Williams context",
-                style = MaterialTheme.typography.titleMedium
-            )
-        }
+        if (status.positionSymbol != null) {
+            item {
+                Text(
+                    status.positionSymbol + " • " + status.interval + " • Williams context",
+                    style = MaterialTheme.typography.titleMedium
+                )
+            }
 
-        item {
-            if (candles.isEmpty()) {
+            item {
+                if (candles.isEmpty()) {
+                    EmptyState(
+                        icon = Icons.Filled.ShowChart,
+                        title = "Нет графика позиции",
+                        subtitle = "Данные для активной позиции ещё не получены."
+                    )
+                } else {
+                    TradingChart(candles, status)
+                }
+            }
+        } else {
+            item {
                 EmptyState(
                     icon = Icons.Filled.ShowChart,
-                    title = "Нет графика",
-                    subtitle = "Подключи Binance Testnet и обнови данные."
+                    title = "Активной позиции нет",
+                    subtitle = "График показывается только для реально открытой позиции."
                 )
-            } else {
-                TradingChart(candles, status)
             }
         }
     }
@@ -1827,6 +1912,7 @@ private fun parseStatus(json: JSONObject): Status {
     val position = json.optJSONObject("position")
     return Status(
         symbol = json.optString("symbol", "BTCUSDT"),
+        positionSymbol = position?.optString("symbol")?.takeIf { it.isNotBlank() },
         interval = json.optString("interval", "1h"),
         testnet = json.optBoolean("testnet", true),
         running = json.optBoolean("running", false),
@@ -1872,6 +1958,15 @@ private fun parseCandles(array: JSONArray): List<Candle> =
             fractalDown = x.optBoolean("fractal_down")
         )
     }
+
+private fun parseMarketQuotes(array: JSONArray): List<MarketQuote> =
+    List(array.length()) { i ->
+        val x = array.getJSONObject(i)
+        MarketQuote(
+            symbol = x.optString("symbol", "-"),
+            price = x.optDouble("price", Double.NaN)
+        )
+    }.filter { !it.price.isNaN() && it.price > 0.0 }
 
 private fun parseCandidates(array: JSONArray): List<Candidate> =
     List(array.length()) { i ->
@@ -1996,6 +2091,16 @@ private fun commandLabel(path: String): String =
         path.endsWith("/stop") -> "Двигатель остановлен"
         else -> "Команда выполнена"
     }
+
+private fun fmtMarketPrice(value: Double): String {
+    val digits = when {
+        value >= 1000.0 -> 2
+        value >= 1.0 -> 4
+        value >= 0.01 -> 6
+        else -> 8
+    }
+    return String.format(Locale.US, "%." + digits + "f", value)
+}
 
 private fun fmt(value: Double?, digits: Int = 2): String =
     if (value == null || value.isNaN()) {
