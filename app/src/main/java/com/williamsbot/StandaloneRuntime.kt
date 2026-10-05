@@ -1498,7 +1498,22 @@ private class NativeEngine(
                             liveCandleCache[key] = recentCandleN.toMutableList()
                             candleCache[key] = System.currentTimeMillis() to recentCandleN
                             if (recent.size >= 40) {
-                                indicatorSnapshots[key] = buildIndicatorSnapshot(recent, symbol, frame)
+                                val recentN = recent.map {
+                                    CandleN(
+                                        it.openTime,
+                                        it.open,
+                                        it.high,
+                                        it.low,
+                                        it.close,
+                                        it.volume
+                                    )
+                                }
+                                indicatorSnapshots[key] =
+                                    buildIndicatorSnapshot(
+                                        recentN,
+                                        symbol,
+                                        frame
+                                    )
                             }
                         }
                     }
@@ -5089,8 +5104,14 @@ private class NativeEngine(
         var livePnlPct = 0.0
 
         positionList().forEach { position ->
-            val mark = livePrices[position.symbol]
-                ?: if (position.symbol == primarySymbol) primaryCandles.lastOrNull()?.c else 0.0
+            val mark = (
+                livePrices[position.symbol]
+                    ?: if (position.symbol == primarySymbol) {
+                        primaryCandles.lastOrNull()?.c
+                    } else {
+                        null
+                    }
+                ) ?: 0.0
             if (mark > 0.0) {
                 livePnl += (mark - position.entry) * position.qty
             }
