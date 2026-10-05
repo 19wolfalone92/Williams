@@ -255,6 +255,11 @@ data class LearningSummary(
     val losses: Int = 0,
     val winRate: Double = 0.0,
     val pnl: Double = 0.0,
+    val expectancy: Double = 0.0,
+    val profitFactor: Double? = null,
+    val maxDrawdown: Double = 0.0,
+    val avgMfe: Double? = null,
+    val avgMae: Double? = null,
     val diagnoses: Map<String, Int> = emptyMap()
 )
 
@@ -1224,6 +1229,10 @@ private fun HistoryScreen(
                     InfoRow("Win rate", "%.1f%%".format(Locale.US, learning.winRate * 100.0))
                     InfoRow("Победы / убытки", learning.wins.toString() + " / " + learning.losses)
                     InfoRow("PnL", fmt(learning.pnl, 2) + " USDT")
+                    InfoRow("Expectancy", fmt(learning.expectancy, 4) + " USDT")
+                    InfoRow("Profit factor", learning.profitFactor?.let { fmt(it, 2) } ?: "—")
+                    InfoRow("Max drawdown", fmt(learning.maxDrawdown, 2) + " USDT")
+                    InfoRow("Средний MFE / MAE", fmt(learning.avgMfe, 2) + "% / " + fmt(learning.avgMae, 2) + "%")
                     learning.diagnoses.entries.sortedByDescending { it.value }.take(4).forEach {
                         InfoRow(it.key, it.value.toString())
                     }
@@ -1911,6 +1920,11 @@ private fun parseLearning(json: JSONObject): LearningSummary {
         losses = json.optInt("losses",0),
         winRate = json.optDouble("win_rate",0.0),
         pnl = json.optDouble("pnl",0.0),
+        expectancy = json.optDouble("expectancy",0.0),
+        profitFactor = json.optDouble("profit_factor").takeUnless { it.isNaN() },
+        maxDrawdown = json.optDouble("max_drawdown_quote",0.0),
+        avgMfe = json.optDouble("avg_mfe_pct").takeUnless { it.isNaN() },
+        avgMae = json.optDouble("avg_mae_pct").takeUnless { it.isNaN() },
         diagnoses = diagnosis.toMap()
     )
 }
