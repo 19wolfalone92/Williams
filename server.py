@@ -29,13 +29,20 @@ class ControlState:
                 raise RuntimeError('Stop the bot before changing Binance credentials.')
             if self.running and key==self.api_key and secret==self.api_secret and testnet==self.testnet:
                 return
-            self.api_key=key; self.api_secret=secret; self.testnet=testnet; self.trader=None
+            self.api_key=key; self.api_secret=secret; self.testnet=testnet; self.trader=None; self.scanner=None
             self.credentials.save(self.api_key,self.api_secret,self.testnet)
         hub.configure_credentials(self.api_key,self.api_secret,self.testnet)
     def ensure_trader(self):
         with self.lock:
             if self.trader is None:self.trader=Trader(api_key=self.api_key or None,api_secret=self.api_secret or None,testnet=self.testnet)
             return self.trader
+    def ensure_scanner(self):
+        with self.lock:
+            t=self.ensure_trader()
+            if self.scanner is None:
+                self.scanner=MarketScanner(t.client)
+            return self.scanner
+
     def loop(self):
         t=self.ensure_trader()
         try:
@@ -71,6 +78,9 @@ scanner_cache = {
     "data": [],
     "scanning": False,
     "last_error": None,
+    "started_at": 0.0,
+    "duration_ms": 0,
+    "symbols_scanned": 0,
 }
 
 SCANNER_CACHE_SECONDS = max(
@@ -95,6 +105,8 @@ def _scanner_snapshot():
 
         return {
             "cached": bool(scanner_cache["data"]),
+            "duration_ms": int(scanner_cache["duration_ms"]),
+            "symbols_scanned": int(scanner_cache["symbols_scanned"]),
             "fresh": fresh,
             "cache_ttl_seconds": SCANNER_CACHE_SECONDS,
             "scanning": bool(scanner_cache["scanning"]),
@@ -114,13 +126,17 @@ def _scanner_worker():
         with scanner_lock:
             scanner_cache["last_error"] = None
 
+        started = time.monotonic()
         t = state.ensure_trader()
-        results = MarketScanner(t.client).scan()
+        scanner = state.ensure_scanner()
+        results = scanner.scan()
         data = [candidate.to_dict() for candidate in results]
 
         with scanner_lock:
             scanner_cache["time"] = time.time()
             scanner_cache["data"] = data
+            scanner_cache["duration_ms"] = int((time.monotonic() - started) * 1000)
+            scanner_cache["symbols_scanned"] = len(getattr(scanner, "symbols", []) or [])
 
     except Exception as exc:
         with scanner_lock:
@@ -243,6 +259,25 @@ def trades(limit:int=50):return [dict(r) for r in db().conn.execute('SELECT * FR
 def orders(limit:int=50):return db().recent_orders(state.ensure_trader().symbol,max(1,min(limit,200)))
 @app.get('/api/v1/logs',dependencies=[Depends(auth)])
 def logs(limit:int=100):return [dict(r) for r in db().conn.execute('SELECT * FROM events ORDER BY id DESC LIMIT ?',(max(1,min(limit,300)),)).fetchall()]
+@app.get('/api/v1/trade-journal',dependencies=[Depends(auth)])
+def trade_journal_endpoint(limit:int=100):
+    return db().recent_trade_journal(limit)
+
+@app.get('/api/v1/insights',dependencies=[Depends(auth)])
+def insights():
+    return db().learning_summary()
+
+@app.get('/api/v1/scanner/diagnostics',dependencies=[Depends(auth)])
+def scanner_diagnostics():
+    scanner=state.ensure_scanner()
+    snap=_scanner_snapshot()
+    snap.update({
+        "scan_workers": scanner.scan_workers,
+        "wave_top_n": scanner.wave_top_n,
+        "liquidity_preselect": getattr(scanner, "liquidity_preselect", 0),
+    })
+    return snap
+
 @app.get('/api/v1/settings',dependencies=[Depends(auth)])
 def settings():
     t=state.ensure_trader();return {'version':VERSION,'symbol':t.symbol,'interval':t.interval,'position_fraction':t.position_fraction,'stop_loss_pct':t.stop_pct,'take_profit_pct':t.target_pct,'poll_seconds':t.poll_seconds,'risk_per_trade_pct':t.risk_per_trade_pct,'max_daily_loss_pct':t.max_daily_loss_pct,'max_trades_per_day':t.max_trades_day,'max_consecutive_losses':t.max_consecutive_losses,'cooldown_minutes':t.cooldown_minutes,'min_risk_reward':t.min_risk_reward,'atr_period':t.atr_period,'max_atr_pct':t.max_atr_pct,'max_spread_pct':t.max_spread_pct,'require_htf_confirmation':t.require_htf_confirmation,'htf_interval':t.htf_interval,'testnet':t.client.testnet,'alligator':config_from_env(),'strategy_name':'Williams Profitunity Conservative','binance_configured':bool(t.client.api_key and t.client.api_secret)}
