@@ -2946,96 +2946,96 @@ private class NativeEngine(
         var confidence = 40.0
         var exhaustion = 20.0
 
+        // Structural W1-W5 estimate: fractals are only the swing anchors.
+        // Price progression and correction depth validate the count; AO/Alligator
+        // confirm momentum but do not manufacture a wave label by themselves.
         if (pivots.size >= 2) {
             val p = pivots.takeLast(6)
-            val sequence =
-                p.joinToString("") {
-                    if (it.kind == "DOWN") "D" else "U"
-                }
+            val expected = if (direction == "UP") listOf("DOWN","UP","DOWN","UP","DOWN","UP")
+            else listOf("UP","DOWN","UP","DOWN","UP","DOWN")
 
-            when {
-                direction == "UP" &&
-                    sequence.endsWith("D") &&
-                    p.size >= 5 -> {
-                    position = 5
-                    phase = "IMPULSE"
-                    confidence = 64.0
-                    exhaustion = 78.0
-                }
+            fun fitFor(n: Int): Double {
+                if (p.size < n) return 0.0
+                val s = p.takeLast(n)
+                val exp = expected.take(n)
+                if (s.map { it.kind } != exp) return 0.0
+                var score = 50.0
+                fun impulse(a: Double, b: Double): Double = abs(b - a)
 
-                direction == "UP" &&
-                    sequence.endsWith("D") &&
-                    p.size >= 3 -> {
-                    position = 3
-                    phase = "IMPULSE"
-                    confidence = 72.0
-                    exhaustion = 24.0
+                if (n >= 2) {
+                    val w1 = if (direction == "UP") s[1].price - s[0].price else s[0].price - s[1].price
+                    score += if (w1 > 0.0) 8.0 else -18.0
                 }
-
-                direction == "DOWN" &&
-                    sequence.endsWith("U") &&
-                    p.size >= 5 -> {
-                    position = 5
-                    phase = "IMPULSE"
-                    confidence = 64.0
-                    exhaustion = 78.0
+                if (n >= 3) {
+                    val validW2 = if (direction == "UP") s[2].price > s[0].price else s[2].price < s[0].price
+                    score += if (validW2) 10.0 else -28.0
+                    val w1 = impulse(s[0].price, s[1].price)
+                    val retr = if (w1 > 0.0) impulse(s[1].price, s[2].price) / w1 else 9.0
+                    score += when { retr in 0.236..0.786 -> 7.0; retr > 1.0 -> -10.0; else -> 0.0 }
                 }
-
-                direction == "DOWN" &&
-                    sequence.endsWith("U") &&
-                    p.size >= 3 -> {
-                    position = 3
-                    phase = "IMPULSE"
-                    confidence = 72.0
-                    exhaustion = 24.0
+                if (n >= 4) {
+                    val extendsW1 = if (direction == "UP") s[3].price > s[1].price else s[3].price < s[1].price
+                    score += if (extendsW1) 12.0 else -25.0
+                    val w1 = impulse(s[0].price, s[1].price)
+                    val w3 = impulse(s[2].price, s[3].price)
+                    if (w1 > 0.0 && w3 >= w1 * 0.90) score += 8.0
+                    else if (w1 > 0.0 && w3 < w1 * 0.65) score -= 8.0
                 }
-
-                p.last().kind == "UP" -> {
-                    position = 4
-                    phase = "CORRECTION"
-                    confidence = 58.0
-                    exhaustion = 35.0
+                if (n >= 5) {
+                    val validW4 = if (direction == "UP") s[4].price > s[1].price else s[4].price < s[1].price
+                    val beforeW3 = if (direction == "UP") s[4].price < s[3].price else s[4].price > s[3].price
+                    score += when { validW4 && beforeW3 -> 10.0; validW4 -> 2.0; else -> -18.0 }
                 }
-
-                p.last().kind == "DOWN" -> {
-                    position = 2
-                    phase = "CORRECTION"
-                    confidence = 58.0
-                    exhaustion = 28.0
+                if (n >= 6) {
+                    val extendsW3 = if (direction == "UP") s[5].price > s[3].price else s[5].price < s[3].price
+                    score += if (extendsW3) 10.0 else -22.0
+                    val w1 = impulse(s[0].price, s[1].price)
+                    val w3 = impulse(s[2].price, s[3].price)
+                    val w5 = impulse(s[4].price, s[5].price)
+                    if (minOf(w1, w3, w5) > 0.0) score += if (w3 >= minOf(w1, w5) * 0.85) 5.0 else -12.0
                 }
+                if (n == 4) {
+                    val aoAtW3 = ao(candles, s[3].index.coerceIn(0, candles.lastIndex))
+                    if ((direction == "UP" && aoAtW3 > 0.0) || (direction == "DOWN" && aoAtW3 < 0.0)) score += 6.0
+                }
+                return score.coerceIn(0.0, 100.0)
             }
 
-            val progression =
-                if (p.size >= 4) {
-                    val a = p[p.size - 4]
-                    val b = p[p.size - 3]
-                    val c = p[p.size - 2]
-                    val d = p[p.size - 1]
-
-                    if (direction == "UP") {
-                        b.price > a.price && d.price > c.price
-                    } else {
-                        b.price < a.price && d.price < c.price
-                    }
-                } else {
-                    false
-                }
-
-            if (progression) {
-                confidence =
-                    min(92.0, confidence + 12.0)
-                if (position == 5) {
-                    exhaustion =
-                        min(95.0, exhaustion + 8.0)
-                }
+            // Active impulse leg starts at the latest confirmed corrective pivot.
+            // D/U pivot counts of 3 and 5 correspond to W3/W5 setups respectively.
+            val active = when {
+                direction == "UP" && p.last().kind == "DOWN" -> true
+                direction == "DOWN" && p.last().kind == "UP" -> true
+                else -> false
             }
+            if (active) {
+                val candidates = listOf(5 to fitFor(5), 3 to fitFor(3), 1 to fitFor(2))
+                val best = candidates.filter { it.second > 0.0 }.maxByOrNull {
+                    // Prefer a well-formed W3 over a weak W5. A W5 needs a clear
+                    // structure; otherwise the engine deliberately falls back.
+                    it.second + if (it.first == 3) 2.0 else 0.0
+                }
+                if (best != null) {
+                    position = best.first
+                    phase = "IMPULSE"
+                    confidence = best.second
+                    exhaustion = if (position == 5) 58.0 else if (position == 3) 22.0 else 18.0
+                }
+            } else {
+                position = if (p.last().kind == "UP") 4 else 2
+                phase = "CORRECTION"
+                confidence = if (position == 4) fitFor(5).coerceAtLeast(48.0) else fitFor(3).coerceAtLeast(48.0)
+                exhaustion = if (position == 4) 35.0 else 28.0
+            }
+
+            if (aoBearDiv && position == 5) exhaustion = min(95.0, exhaustion + 18.0)
+            if (aoBullDiv && position == 3) confidence = min(98.0, confidence + 8.0)
         } else if (bullish) {
             position = 1
             phase = "IMPULSE"
             confidence = 48.0
             exhaustion = 18.0
         }
-
         if (bullish && aoPositive) {
             confidence =
                 min(98.0, confidence + 6.0)
