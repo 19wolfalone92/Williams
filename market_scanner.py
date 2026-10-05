@@ -103,19 +103,19 @@ class MarketScanner:
         )
 
         self.scan_all_usdt = os.getenv("SCAN_ALL_USDT", "true").lower() == "true"
-        self.scan_max_symbols = max(0, int(os.getenv("SCAN_MAX_SYMBOLS", "0")))
+        self.scan_max_symbols = max(0, int(os.getenv("SCAN_MAX_SYMBOLS", "50")))
         self.exclude_leveraged_tokens = (
             os.getenv("EXCLUDE_LEVERAGED_TOKENS", "true").lower() == "true"
         )
         self.scan_workers = max(1, int(os.getenv("SCAN_WORKERS", "12")))
-        self.liquidity_preselect = max(0, int(os.getenv("LIQUIDITY_PRESELECT", "120")))
+        self.liquidity_preselect = max(0, int(os.getenv("LIQUIDITY_PRESELECT", "50")))
         self.scan_kline_limit = max(120, int(os.getenv("SCAN_KLINE_LIMIT", "220")))
         self.wave_scan_workers = max(1, int(os.getenv("WAVE_SCAN_WORKERS", "6")))
         self.kline_cache_seconds = max(5, int(os.getenv("KLINE_CACHE_SECONDS", "45")))
         self._kline_cache = {}
         self._spread_map = {}
         self.universe_cache_seconds = max(30, int(os.getenv("SCAN_UNIVERSE_CACHE_SECONDS", "300")))
-        self.wave_top_n = max(0, int(os.getenv("WAVE_SCAN_TOP_N", "12")))
+        self.wave_top_n = max(0, int(os.getenv("WAVE_SCAN_TOP_N", "10")))
         self.max_wave_exhaustion_for_entry = max(0.0, min(100.0, float(os.getenv("MAX_WAVE_EXHAUSTION_FOR_ENTRY", "80"))))
         self._universe_cache: List[str] = []
         self._universe_metadata: Dict[str, dict] = {}
@@ -610,8 +610,26 @@ class MarketScanner:
         # exploding REST traffic across the entire universe.
         strict = [c for c in candidates if c.signal]
         watch = [c for c in candidates if not c.signal]
-        watch.sort(key=lambda c: (c.base_score, c.setup_score), reverse=True)
+        watch.sort(
+            key=lambda c: (
+                c.base_score,
+                c.setup_score,
+                c.wise_man_count,
+                -c.spread_pct,
+                -c.atr_pct,
+            ),
+            reverse=True,
+        )
+        # Concentrate expensive Wave/MTF analysis on the best setups instead
+        # of spreading it across the whole market: fewer pairs, deeper analysis.
         wave_targets = strict + watch[: self.wave_top_n]
+        log.info(
+            "AUTO-SCAN DEEP FILTER: base_candidates=%d strict=%d watch=%d deep_wave_targets=%d",
+            len(candidates),
+            len(strict),
+            len(watch),
+            len(wave_targets),
+        )
 
         enriched: List[Candidate] = []
         blocked_symbols = set()
