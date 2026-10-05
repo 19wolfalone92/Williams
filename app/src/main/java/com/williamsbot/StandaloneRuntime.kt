@@ -989,6 +989,8 @@ private class NativeEngine(
                 .remove("position_symbol")
                 .remove("position_qty")
                 .remove("position_entry")
+                .remove("position_stop")
+                .remove("position_take")
                 .apply()
             return
         }
@@ -1139,6 +1141,8 @@ private class NativeEngine(
             .putString("position_symbol", candidate.symbol)
             .putString("position_qty", qty.toString())
             .putString("position_entry", entry.toString())
+            .putString("position_stop", stop.toString())
+            .putString("position_take", take.toString())
             .apply()
         lastOrder = JSONObject()
             .put("buy", buy)
@@ -1992,13 +1996,15 @@ private class NativeEngine(
                 if (positionSymbol == null) JSONObject.NULL else
                     JSONObject()
                         .put("symbol", positionSymbol)
-                        .put("qty", positionQty)
-                        .put("entry", positionEntry)
+                        .put("quantity", positionQty)
+                        .put("entry_price", positionEntry)
             )
-            .put("pnl", JSONObject.NULL)
-            .put("pnl_pct", JSONObject.NULL)
-            .put("take_profit_price", JSONObject.NULL)
-            .put("stop_loss_price", JSONObject.NULL)
+            .put("pnl", if (positionSymbol != null && primaryCandles.isNotEmpty())
+                (primaryCandles.last().c - positionEntry) * positionQty else JSONObject.NULL)
+            .put("pnl_pct", if (positionSymbol != null && positionEntry > 0.0 && primaryCandles.isNotEmpty())
+                primaryCandles.last().c / positionEntry - 1.0 else JSONObject.NULL)
+            .put("take_profit_price", prefs.getString("position_take", null)?.toDoubleOrNull() ?: JSONObject.NULL)
+            .put("stop_loss_price", prefs.getString("position_stop", null)?.toDoubleOrNull() ?: JSONObject.NULL)
             .put("stop_loss_pct", 0.02)
             .put("take_profit_pct", 0.04)
             .put("risk_per_trade_pct", 0.01)
@@ -2105,9 +2111,9 @@ private class NativeEngine(
                 .put(
                     "message",
                     if (scanning) {
-                        "Standalone scanner is running; TESTNET; execution disabled"
+                        "Standalone scanner is running; TESTNET; execution enabled"
                     } else {
-                        "Standalone native engine active; TESTNET; execution disabled"
+                        "Standalone native engine active; TESTNET; execution enabled"
                     }
                 )
         )
