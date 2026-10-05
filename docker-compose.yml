@@ -1,0 +1,33 @@
+services:
+  williams:
+    build: .
+    container_name: williams
+    restart: unless-stopped
+    init: true
+    env_file:
+      - .env
+    environment:
+      TZ: UTC
+      WILLIAMS_DB_PATH: /app/data/trader.sqlite3
+    volumes:
+      - williams_data:/app/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m
+    mem_limit: 1g
+    cpus: "2.0"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    ports:
+      - "127.0.0.1:8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=5)"]
+      interval: 30s
+      timeout: 8s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  williams_data:
