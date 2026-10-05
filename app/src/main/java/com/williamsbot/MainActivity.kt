@@ -55,7 +55,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SmallTopAppBar
+import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -437,8 +437,8 @@ fun WilliamsApp(context: Context) {
     Scaffold(
         containerColor = AppColors.background,
         topBar = {
-            SmallTopAppBar(
-                colors = TopAppBarDefaults.smallTopAppBarColors(
+            TopAppBar(
+                colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = AppColors.background
                 ),
                 title = {
@@ -797,38 +797,37 @@ private fun BestCandidateCard(best: Candidate?) {
                     "Нажми обновление сканера. Рынок будет оценён по ликвидности, Williams setup и MTF-wave.",
                     color = AppColors.textMuted
                 )
-                return
-            }
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column {
-                    Text(
-                        best.symbol,
-                        style = MaterialTheme.typography.headlineSmall
-                    )
-                    Text(
-                        candidateState(best),
-                        color = candidateColor(best),
-                        style = MaterialTheme.typography.labelLarge
-                    )
+            } else {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text(
+                            best.symbol,
+                            style = MaterialTheme.typography.headlineSmall
+                        )
+                        Text(
+                            candidateState(best),
+                            color = candidateColor(best),
+                            style = MaterialTheme.typography.labelLarge
+                        )
+                    }
+                    WavePill(best)
                 }
-                WavePill(best)
-            }
 
-            Text(
-                best.reason,
-                style = MaterialTheme.typography.bodyMedium
-            )
+                Text(
+                    best.reason,
+                    style = MaterialTheme.typography.bodyMedium
+                )
 
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                MiniMetric("RR", fmt(best.riskReward, 2))
-                MiniMetric("ATR", fmt(best.atrPct * 100.0, 2) + "%")
-                MiniMetric("HTF", if (best.htfConfirmed) "OK" else "WAIT")
-                MiniMetric("W", waveText(best))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    MiniMetric("RR", fmt(best.riskReward, 2))
+                    MiniMetric("ATR", fmt(best.atrPct * 100.0, 2) + "%")
+                    MiniMetric("HTF", if (best.htfConfirmed) "OK" else "WAIT")
+                    MiniMetric("W", waveText(best))
+                }
             }
         }
     }
