@@ -331,6 +331,9 @@ private class NativeEngine(
     private var lastError: String? = null
 
     @Volatile
+    private var serverTimeOffsetMs = 0L
+
+    @Volatile
     private var lastScanAt = 0L
 
     private var worker: Thread? = null
