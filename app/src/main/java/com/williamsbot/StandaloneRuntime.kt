@@ -323,7 +323,10 @@ private class StandaloneServer(private val context: Context) {
                 x.status().toString()
 
             method == "GET" && path == "/api/v1/market/klines" ->
-                x.klines(params["symbol"]).toString()
+                x.klines(
+                    requestedSymbol = params["symbol"],
+                    requestedInterval = params["interval"]
+                ).toString()
 
             method == "GET" && path == "/api/v1/scanner" ->
                 x.scanner(
@@ -1079,7 +1082,7 @@ private class NativeEngine(
             scanExecutor.submit(
                 Callable {
                     try {
-                        val candles = fetchCandles(symbol, interval, 150)
+                        val candles = fetchCandles(symbol, selectedInterval, 150)
                         analyseBase(
                             symbol = symbol,
                             candles = candles,
@@ -1139,7 +1142,7 @@ private class NativeEngine(
         runCatching { PositionsWidgetProvider.refresh(context) }
 
         runCatching {
-            primaryCandles = fetchCandles(primarySymbol, interval, 150)
+            primaryCandles = fetchCandles(primarySymbol, selectedInterval, 150)
         }
 
         if (
@@ -3128,8 +3131,8 @@ private class NativeEngine(
 
         return JSONObject()
             .put("version", "4.14.0")
-            .put("symbol", primarySymbol)
-            .put("interval", interval)
+            .put("symbol", symbol)
+            .put("interval", selectedInterval)
             .put("testnet", true)
             .put("running", running)
             .put("paused", paused)
@@ -3223,8 +3226,14 @@ private class NativeEngine(
             .put("scanner_duration_ms", lastScanDurationMs)
     }
 
-    fun klines(requestedSymbol: String? = null): JSONObject {
+    fun klines(
+        requestedSymbol: String? = null,
+        requestedInterval: String? = null
+    ): JSONObject {
         val symbol = requestedSymbol?.trim()?.uppercase(Locale.US)?.takeIf { it.isNotBlank() } ?: primarySymbol
+        val selectedInterval = requestedInterval?.trim()?.lowercase(Locale.US)
+            ?.takeIf { it in listOf("1m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "12h", "1d") }
+            ?: interval
         val sourceCandles = if (symbol == primarySymbol) {
             if (primaryCandles.isEmpty()) runCatching { primaryCandles = fetchCandles(primarySymbol, interval, 150) }
             primaryCandles
@@ -3270,7 +3279,7 @@ private class NativeEngine(
                         )
                         .put(
                             "ao",
-                            ao(primaryCandles, i)
+                            ao(sourceCandles, i)
                         )
                         .put(
                             "long_signal",
@@ -3289,11 +3298,11 @@ private class NativeEngine(
                         )
                         .put(
                             "fractal_up",
-                            isUpFractal(primaryCandles, i)
+                            isUpFractal(sourceCandles, i)
                         )
                         .put(
                             "fractal_down",
-                            isDownFractal(primaryCandles, i)
+                            isDownFractal(sourceCandles, i)
                         )
                 )
             }
