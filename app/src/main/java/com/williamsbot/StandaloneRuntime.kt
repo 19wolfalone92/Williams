@@ -412,7 +412,7 @@ private class NativeEngine(
     private val maxSlippagePct = 0.005
     private val feeBufferPerSidePct = 0.001
     @Volatile private var serverTimeOffsetMs = 0L
-    private const val BINANCE_RECV_WINDOW_MS = 60000L
+    private val BINANCE_RECV_WINDOW_MS = 60000L
     @Volatile private var lastServerTimeSyncMs = 0L
     @Volatile private var lastOrder: JSONObject? = null
     @Volatile private var reconcileRequired = false
