@@ -329,6 +329,10 @@ private class NativeEngine(
     private var primaryCandles = emptyList<CandleN>()
     private var lastScanDurationMs = 0L
     private var lastSymbolsScanned = 0
+    @Volatile private var positionSymbol: String? = null
+    @Volatile private var positionQty = 0.0
+    @Volatile private var positionEntry = 0.0
+    @Volatile private var lastOrder: JSONObject? = null
 
     private fun key(): String =
         prefs.getString("api_key", "") ?: ""
@@ -343,7 +347,11 @@ private class NativeEngine(
             .put("version", "4.13.0")
             .put("standalone", true)
             .put("websocket", false)
-            .put("execution_enabled", false)
+            .put("execution_enabled", true)
+            .put("position_symbol", positionSymbol ?: "")
+            .put("position_qty", positionQty)
+            .put("position_entry", positionEntry)
+            .put("last_order", lastOrder ?: JSONObject.NULL)
             .put(
                 "auth_configured",
                 key().isNotBlank() && secret().isNotBlank()
@@ -715,7 +723,155 @@ private class NativeEngine(
             secret().isNotBlank()
         ) {
             runCatching { signedAccount() }
+
+            val best = final
+                .filter { it.signal }
+                .maxByOrNull { it.score }
+
+            if (
+                running &&
+                !paused &&
+                positionSymbol == null &&
+                best != null &&
+                best.score >= 70.0
+            ) {
+                runCatching {
+                    executeBuyWithProtection(best)
+                }.onFailure {
+                    lastError =
+                        "ORDER: " + (it.message ?: it.javaClass.simpleName)
+                }
+            }
         }
+    }
+
+    private fun signedPost(path: String, params: String): JSONObject {
+        val query =
+            params + "&timestamp=" + System.currentTimeMillis() + "&recvWindow=5000"
+        val signature = hmac(query, secret())
+        val request = Request.Builder()
+            .url(baseUrl + path)
+            .header("X-MBX-APIKEY", key())
+            .post(
+                okhttp3.RequestBody.create(
+                    "application/x-www-form-urlencoded".toMediaType(),
+                    query + "&signature=" + signature
+                )
+            )
+            .build()
+        http.newCall(request).execute().use { response ->
+            val body = response.body?.string() ?: "{}"
+            if (!response.isSuccessful) error("Binance " + response.code + ": " + body)
+            return JSONObject(body)
+        }
+    }
+
+    private fun symbolFilters(symbol: String): Triple<Double, Double, Int> {
+        val info = JSONObject(getBody("/api/v3/exchangeInfo?symbol=" + symbol))
+        val filters = info.getJSONArray("symbols").getJSONObject(0).getJSONArray("filters")
+        var step = 0.000001
+        var minQty = 0.0
+        var priceTick = 0.000001
+        for (i in 0 until filters.length()) {
+            val f = filters.getJSONObject(i)
+            when (f.optString("filterType")) {
+                "LOT_SIZE" -> {
+                    step = f.optString("stepSize").toDoubleOrNull() ?: step
+                    minQty = f.optString("minQty").toDoubleOrNull() ?: minQty
+                }
+                "PRICE_FILTER" -> priceTick = f.optString("tickSize").toDoubleOrNull() ?: priceTick
+            }
+        }
+        val decimals = max(0, step.toString().substringAfter('.', "").trimEnd('0').length)
+        return Triple(step, priceTick, decimals)
+    }
+
+    private fun floorStep(value: Double, step: Double): Double =
+        if (step <= 0.0) value else floor(value / step) * step
+
+    private fun fmtQty(value: Double, decimals: Int): String =
+        "%." + decimals.coerceAtMost(8) + "f"
+            .format(java.util.Locale.US, value)
+
+    private fun fmtPrice(value: Double, tick: Double): String {
+        val rounded = if (tick > 0.0) floor(value / tick) * tick else value
+        val decimals = max(0, tick.toString().substringAfter('.', "").trimEnd('0').length)
+        return "%." + decimals.coerceAtMost(8) + "f"
+            .format(java.util.Locale.US, rounded)
+    }
+
+    private fun executeBuyWithProtection(candidate: BaseAnalysis) {
+        if (candidate.spreadPct > 0.0015) error("spread too wide")
+        if (candidate.atrPct <= 0.0 || candidate.atrPct > 0.08) error("ATR outside safety range")
+        if (!candidate.signal) error("signal not confirmed")
+
+        val account = signedAccount()
+        var usdtFree = 0.0
+        val balances = account.getJSONArray("balances")
+        for (i in 0 until balances.length()) {
+            val b = balances.getJSONObject(i)
+            if (b.optString("asset") == "USDT") {
+                usdtFree = b.optString("free").toDoubleOrNull() ?: 0.0
+                break
+            }
+        }
+        if (usdtFree < 25.0) error("USDT balance too low")
+
+        val riskBudget = usdtFree * 0.01
+        val stopDistance = (candidate.atrPct * 2.0).coerceIn(0.01, 0.08)
+        val notional = min(usdtFree * 0.10, riskBudget / stopDistance)
+        if (notional < 10.0) error("order notional too small")
+
+        val buy = signedPost(
+            "/api/v3/order",
+            "symbol=" + candidate.symbol +
+                "&side=BUY&type=MARKET&quoteOrderQty=" +
+                "%.2f".format(java.util.Locale.US, notional)
+        )
+
+        val fills = buy.optJSONArray("fills")
+        var qtyFilled = 0.0
+        var cost = 0.0
+        if (fills != null) {
+            for (i in 0 until fills.length()) {
+                val f = fills.getJSONObject(i)
+                val fq = f.optString("qty").toDoubleOrNull() ?: 0.0
+                val fp = f.optString("price").toDoubleOrNull() ?: 0.0
+                qtyFilled += fq
+                cost += fq * fp
+            }
+        }
+        val entry = if (qtyFilled > 0.0) cost / qtyFilled else 0.0
+        if (entry <= 0.0) error("BUY returned no fill price")
+
+        val (step, tick, decimals) = symbolFilters(candidate.symbol)
+        val qty = floorStep(qtyFilled, step)
+        if (qty <= 0.0) error("filled quantity below step")
+
+        val stop = entry * (1.0 - stopDistance)
+        val take = entry * (1.0 + stopDistance * 1.5)
+        val stopLimit = stop * 0.999
+
+        val oco = signedPost(
+            "/api/v3/order/oco",
+            "symbol=" + candidate.symbol +
+                "&side=SELL&quantity=" + fmtQty(qty, decimals) +
+                "&price=" + fmtPrice(take, tick) +
+                "&stopPrice=" + fmtPrice(stop, tick) +
+                "&stopLimitPrice=" + fmtPrice(stopLimit, tick) +
+                "&stopLimitTimeInForce=GTC"
+        )
+
+        positionSymbol = candidate.symbol
+        positionQty = qty
+        positionEntry = entry
+        lastOrder = JSONObject()
+            .put("buy", buy)
+            .put("oco", oco)
+            .put("risk_usdt", riskBudget)
+            .put("notional_usdt", notional)
+            .put("stop_price", stop)
+            .put("take_profit", take)
     }
 
     private fun analyseBase(
