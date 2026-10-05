@@ -197,7 +197,12 @@ data class Status(
     val positions: List<PositionView> = emptyList(),
     val scannerScanning: Boolean = false,
     val scannerSymbols: Int = 0,
-    val scanDurationMs: Long = 0L
+    val scanDurationMs: Long = 0L,
+    val marketWsConnected: Boolean = false,
+    val userWsConnected: Boolean = false,
+    val userStreamSyncRequired: Boolean = true,
+    val historyReady: Boolean = false,
+    val fsmState: String = "STOPPED"
 )
 
 data class Candle(
@@ -841,6 +846,10 @@ private fun DashboardScreen(
         }
 
         item {
+            ConnectionHealthCard(status)
+        }
+
+        item {
             BestCandidateCard(best)
         }
 
@@ -1174,6 +1183,50 @@ private fun ControlCard(
 }
 
 @Composable
+@Composable
+private fun ConnectionHealthCard(status: Status) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = AppColors.surface)
+    ) {
+        Column(
+            Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text("Связь Binance", style = MaterialTheme.typography.titleMedium)
+
+            HealthRow("Market WebSocket", status.marketWsConnected)
+            HealthRow(
+                "User Data Stream",
+                status.userWsConnected && !status.userStreamSyncRequired
+            )
+            HealthRow("История готова", status.historyReady)
+            Text(
+                "FSM: " + status.fsmState,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (status.fsmState.contains("RECONCILE") ||
+                    status.fsmState.contains("KILL")
+                ) AppColors.red else AppColors.textMuted
+            )
+        }
+    }
+}
+
+@Composable
+private fun HealthRow(label: String, ok: Boolean) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(label, style = MaterialTheme.typography.bodyMedium)
+        Text(
+            if (ok) "OK" else "WAIT",
+            color = if (ok) AppColors.green else AppColors.amber,
+            fontWeight = FontWeight.SemiBold
+        )
+    }
+}
+
 private fun StatusMessage(message: String, onSettings: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -2367,7 +2420,17 @@ private fun parseStatus(json: JSONObject): Status {
             json.optLong(
                 "scanner_duration_ms",
                 0L
-            )
+            ),
+        marketWsConnected =
+            json.optBoolean("market_ws_connected", false),
+        userWsConnected =
+            json.optBoolean("user_ws_connected", false),
+        userStreamSyncRequired =
+            json.optBoolean("user_stream_sync_required", true),
+        historyReady =
+            json.optBoolean("history_ready", false),
+        fsmState =
+            json.optString("fsm_state", "STOPPED")
     )
 }
 
