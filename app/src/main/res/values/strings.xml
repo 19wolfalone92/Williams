@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Williams Trader</string>
+    <string name="widget_positions_description">Открытые позиции Williams</string>
+</resources>

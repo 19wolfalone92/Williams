@@ -1,13 +1,17 @@
 package com.williamsbot
 
-import android.Manifest
 import android.content.Context
-import android.content.pm.PackageManager
-import android.os.Build
+import android.content.Intent
 import android.os.Bundle
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -88,9 +92,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -109,10 +110,6 @@ import kotlin.math.min
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        TradeNotificationHelper.ensureChannel(this)
-        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 7001)
-        }
         StandaloneRuntime.start(this)
         setContent {
             WilliamsTheme {
@@ -167,7 +164,6 @@ private fun WilliamsTheme(content: @Composable () -> Unit) {
 
 data class Status(
     val symbol: String = "BTCUSDT",
-    val positionSymbol: String? = null,
     val interval: String = "1h",
     val testnet: Boolean = true,
     val running: Boolean = false,
@@ -184,12 +180,18 @@ data class Status(
     val pnlPct: Double? = null,
     val error: String? = null,
     val binanceConfigured: Boolean = false,
-    val riskPerTrade: Double = 0.01,
+    val riskPerTrade: Double = 0.005,
     val maxDailyLoss: Double = 0.03,
     val tradesToday: Int = 0,
-    val maxTrades: Int = 5,
     val consecutiveLosses: Int = 0,
-    val maxConsecutiveLosses: Int = 3,
+    val dailyPnlUsdt: Double = 0.0,
+    val tradingMode: String = "ACTIVE",
+    val openPositions: Int = 0,
+    val maxOpenPositions: Int = 3,
+    val reservedRiskPct: Double = 0.0,
+    val maxTotalRiskPct: Double = 0.01,
+    val reconcileRequired: Boolean = false,
+    val positions: List<PositionView> = emptyList(),
     val scannerScanning: Boolean = false,
     val scannerSymbols: Int = 0,
     val scanDurationMs: Long = 0L
@@ -207,11 +209,6 @@ data class Candle(
     val longSignal: Boolean,
     val fractalUp: Boolean,
     val fractalDown: Boolean
-)
-
-data class MarketQuote(
-    val symbol: String,
-    val price: Double
 )
 
 data class Candidate(
@@ -242,31 +239,35 @@ data class Candidate(
 
 data class Trade(
     val id: String,
+    val symbol: String,
     val side: String,
     val entry: Double?,
     val exit: Double?,
     val pnl: Double?,
+    val pnlPct: Double?,
+    val rMultiple: Double?,
     val reason: String,
-    val diagnosis: String = "",
-    val mfePct: Double? = null,
-    val maePct: Double? = null,
-    val durationSeconds: Double? = null,
-    val score: Double? = null,
-    val wavePosition: Int = 0
+    val outcome: String,
+    val classification: String,
+    val wavePosition: Int,
+    val wavePhase: String,
+    val score: Double,
+    val mfeR: Double,
+    val maeR: Double
 )
 
-data class LearningSummary(
-    val total: Int = 0,
-    val wins: Int = 0,
-    val losses: Int = 0,
-    val winRate: Double = 0.0,
-    val pnl: Double = 0.0,
-    val expectancy: Double = 0.0,
-    val profitFactor: Double? = null,
-    val maxDrawdown: Double = 0.0,
-    val avgMfe: Double? = null,
-    val avgMae: Double? = null,
-    val diagnoses: Map<String, Int> = emptyMap()
+data class MarketPair(
+    val symbol: String,
+    val price: Double?
+)
+
+data class PositionView(
+    val symbol: String,
+    val qty: Double,
+    val entry: Double,
+    val stop: Double?,
+    val take: Double?,
+    val riskPct: Double
 )
 
 private class StandaloneApi {
@@ -320,62 +321,128 @@ fun WilliamsApp(context: Context) {
 
     var tab by remember { mutableIntStateOf(0) }
     var status by remember { mutableStateOf(Status()) }
+    var marketPairs by remember { mutableStateOf(emptyList<MarketPair>()) }
+    var selectedPositionSymbol by remember { mutableStateOf<String?>(null) }
     var candles by remember { mutableStateOf(emptyList<Candle>()) }
     var candidates by remember { mutableStateOf(emptyList<Candidate>()) }
-    var marketQuotes by remember { mutableStateOf(emptyList<MarketQuote>()) }
     var trades by remember { mutableStateOf(emptyList<Trade>()) }
-    var learning by remember { mutableStateOf(LearningSummary()) }
     var logs by remember { mutableStateOf(emptyList<String>()) }
     var apiKey by remember { mutableStateOf("") }
     var apiSecret by remember { mutableStateOf("") }
     var message by remember { mutableStateOf("Standalone engine запускается…") }
     var refreshing by remember { mutableStateOf(false) }
+    var backupPassword by remember { mutableStateOf("") }
+    var backupMessage by remember { mutableStateOf("") }
 
     suspend fun loadAll(scan: Boolean) {
-        withContext(Dispatchers.Main) { refreshing = scan }
-        try {
-            val root = withContext(Dispatchers.IO) {
-                if (scan) {
-                    api.get("/api/v1/scanner?refresh=true")
-                }
-                JSONObject(api.get("/api/v1/snapshot"))
-            }
-            val statusJson = root.getJSONObject("status")
-            val klineJson = root.getJSONObject("klines")
-            val scannerJson = root.getJSONObject("scanner")
-            val marketArray = root.optJSONArray("market") ?: JSONArray()
-            val tradeArray = root.getJSONArray("trades")
-            val insightJson = root.getJSONObject("insights")
-            val logArray = root.getJSONArray("logs")
+        withContext(Dispatchers.IO) {
+            try {
+                withContext(Dispatchers.Main) { refreshing = scan }
 
-            withContext(Dispatchers.Main) {
-                status = parseStatus(statusJson)
-                candles = parseCandles(klineJson.optJSONArray("candles") ?: JSONArray())
-                candidates = parseCandidates(scannerJson.optJSONArray("candidates") ?: JSONArray())
-                marketQuotes = parseMarketQuotes(marketArray)
-                trades = parseTrades(tradeArray)
-                learning = parseLearning(insightJson)
-                logs = parseLogs(logArray)
-                refreshing = false
-                message =
-                    scannerJson.optString("last_error").takeIf { it.isNotBlank() }
-                        ?: if (scan && scannerJson.optBoolean("scanning", false))
-                            "Сканирование идёт в фоне"
-                        else if (scan) "Сканирование запущено"
-                        else "Данные обновлены"
-            }
-            TradeNotificationHelper.processTradeList(context, tradeArray)
-        } catch (e: Exception) {
-            withContext(Dispatchers.Main) {
-                refreshing = false
-                message = e.message ?: "Ошибка соединения"
+                val statusJson = JSONObject(api.get("/api/v1/status"))
+                val klineJson = JSONObject(api.get("/api/v1/market/klines"))
+                val marketSymbols = listOf("BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT")
+                val marketPairsLoaded = marketSymbols.map { symbol ->
+                    val j = runCatching { JSONObject(api.get("/api/v1/market/klines?symbol=" + symbol)) }.getOrNull()
+                    val arr = j?.optJSONArray("candles")
+                    val last = arr?.let { if (it.length() > 0) it.optJSONObject(it.length() - 1) else null }
+                    MarketPair(symbol, last?.optDouble("close")?.takeUnless { it.isNaN() || it <= 0.0 })
+                }
+                var scannerJson =
+                    JSONObject(api.get("/api/v1/scanner?refresh=" + scan))
+
+                if (scan && scannerJson.optBoolean("scanning", false)) {
+                    for (i in 0 until 20) {
+                        delay(1000L)
+                        scannerJson =
+                            JSONObject(api.get("/api/v1/scanner?refresh=false"))
+                        if (!scannerJson.optBoolean("scanning", false)) {
+                            break
+                        }
+                    }
+                }
+
+                val tradeArray = JSONArray(api.get("/api/v1/trades"))
+                val logArray = JSONArray(api.get("/api/v1/logs"))
+
+                withContext(Dispatchers.Main) {
+                    status = parseStatus(statusJson)
+                    marketPairs = marketPairsLoaded
+                    if (selectedPositionSymbol == null && status.positions.isNotEmpty()) selectedPositionSymbol = status.positions.first().symbol
+                    candles = parseCandles(klineJson.optJSONArray("candles") ?: JSONArray())
+                    candidates = parseCandidates(
+                        scannerJson.optJSONArray("candidates") ?: JSONArray()
+                    )
+                    trades = parseTrades(tradeArray)
+                    logs = parseLogs(logArray)
+
+                    message =
+                        scannerJson.optString("last_error").takeIf { it.isNotBlank() }
+                            ?: if (scan) {
+                                if (scannerJson.optBoolean("scanning", false)) {
+                                    "Сканирование продолжается в фоне"
+                                } else {
+                                    "Сканирование завершено"
+                                }
+                            } else {
+                                "Данные обновлены"
+                            }
+
+                    refreshing = false
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    refreshing = false
+                    message = e.message ?: "Ошибка соединения"
+                }
             }
         }
     }
+
     fun refresh(scan: Boolean) {
         scope.launch {
             loadAll(scan)
         }
+    }
+
+    LaunchedEffect(selectedPositionSymbol) {
+        val symbol = selectedPositionSymbol ?: return@LaunchedEffect
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val json = JSONObject(api.get("/api/v1/market/klines?symbol=" + symbol))
+                val parsed = parseCandles(json.optJSONArray("candles") ?: JSONArray())
+                withContext(Dispatchers.Main) { candles = parsed }
+            }
+        }
+    }
+
+    fun startTradingService() {
+        val intent =
+            Intent(
+                context,
+                TradingForegroundService::class.java
+            ).apply {
+                action =
+                    TradingForegroundService.ACTION_START
+            }
+
+        ContextCompat.startForegroundService(
+            context,
+            intent
+        )
+    }
+
+    fun stopTradingService() {
+        val intent =
+            Intent(
+                context,
+                TradingForegroundService::class.java
+            ).apply {
+                action =
+                    TradingForegroundService.ACTION_STOP
+            }
+
+        context.startService(intent)
     }
 
     fun command(path: String) {
@@ -440,10 +507,90 @@ fun WilliamsApp(context: Context) {
         }
     }
 
+    val createBackupLauncher =
+        rememberLauncherForActivityResult(
+            ActivityResultContracts.CreateDocument("application/octet-stream")
+        ) { uri ->
+            if (uri == null) return@rememberLauncherForActivityResult
+
+            scope.launch(Dispatchers.IO) {
+                try {
+                    BackupManager.export(
+                        context = context,
+                        output = requireNotNull(context.contentResolver.openOutputStream(uri)),
+                        password = backupPassword
+                    )
+                    withContext(Dispatchers.Main) {
+                        backupMessage = "Резервная копия создана. Файл зашифрован."
+                        backupPassword = ""
+                    }
+                } catch (e: Exception) {
+                    withContext(Dispatchers.Main) {
+                        backupMessage =
+                            e.message ?: "Не удалось создать backup"
+                    }
+                }
+            }
+        }
+
+    val openBackupLauncher =
+        rememberLauncherForActivityResult(
+            ActivityResultContracts.OpenDocument()
+        ) { uri ->
+            if (uri == null) return@rememberLauncherForActivityResult
+
+            scope.launch(Dispatchers.IO) {
+                try {
+                    context.contentResolver.openInputStream(uri).use { input ->
+                        BackupManager.import(
+                            context = context,
+                            input = requireNotNull(input),
+                            password = backupPassword
+                        )
+                    }
+
+                    api.post(
+                        "/api/v1/control/recover"
+                    )
+
+                    withContext(Dispatchers.Main) {
+                        backupMessage =
+                            "Backup восстановлен. Binance state сверено. START не включён."
+                        backupPassword = ""
+                    }
+
+                    loadAll(false)
+                } catch (e: Exception) {
+                    withContext(Dispatchers.Main) {
+                        backupMessage =
+                            e.message ?: "Не удалось восстановить backup"
+                    }
+                }
+            }
+        }
+
+    fun exportBackup() {
+        try {
+            BackupManager.validatePassword(backupPassword)
+            createBackupLauncher.launch("Williams_backup.wlb")
+        } catch (e: Exception) {
+            backupMessage = e.message ?: "Проверьте пароль backup"
+        }
+    }
+
+    fun importBackup() {
+        try {
+            BackupManager.validatePassword(backupPassword)
+            openBackupLauncher.launch(arrayOf("application/octet-stream", "application/json", "*/*"))
+        } catch (e: Exception) {
+            backupMessage = e.message ?: "Проверьте пароль backup"
+        }
+    }
+
     LaunchedEffect(Unit) {
         loadAll(false)
         while (isActive) {
-            delay(5_000L)
+            delay(15_000L)
             loadAll(false)
         }
     }
@@ -533,14 +680,24 @@ fun WilliamsApp(context: Context) {
             0 -> DashboardScreen(
                 padding = padding,
                 status = status,
+                marketPairs = marketPairs,
                 candidates = candidates,
-                marketQuotes = marketQuotes,
                 message = message,
                 refreshing = refreshing,
-                onStart = { command("/api/v1/control/start") },
-                onPause = { command("/api/v1/control/pause") },
-                onResume = { command("/api/v1/control/resume") },
-                onStop = { command("/api/v1/control/stop") },
+                onStart = {
+                    startTradingService()
+                    command("/api/v1/control/start")
+                },
+                onPause = {
+                    command("/api/v1/control/pause")
+                },
+                onResume = {
+                    command("/api/v1/control/resume")
+                },
+                onStop = {
+                    command("/api/v1/control/stop")
+                    stopTradingService()
+                },
                 onScan = { refresh(true) },
                 onSettings = { tab = 4 }
             )
@@ -557,14 +714,35 @@ fun WilliamsApp(context: Context) {
             2 -> PositionScreen(
                 padding = padding,
                 status = status,
-                candles = candles
+                candles = candles,
+                selectedSymbol = selectedPositionSymbol,
+                onSelect = { selectedPositionSymbol = it },
+                onSell = { symbol ->
+                    scope.launch(Dispatchers.IO) {
+                        try {
+                            api.post(
+                                "/api/v1/control/sell?symbol=" +
+                                    symbol
+                            )
+                            withContext(Dispatchers.Main) {
+                                message =
+                                    "SELL отправлен: " + symbol
+                            }
+                            loadAll(false)
+                        } catch (e: Exception) {
+                            withContext(Dispatchers.Main) {
+                                message =
+                                    e.message ?: "SELL error"
+                            }
+                        }
+                    }
+                }
             )
 
             3 -> HistoryScreen(
                 padding = padding,
                 trades = trades,
-                logs = logs,
-                learning = learning
+                logs = logs
             )
 
             else -> SettingsScreen(
@@ -576,6 +754,11 @@ fun WilliamsApp(context: Context) {
                 onApiSecret = { apiSecret = it },
                 onSave = ::saveCredentials,
                 onClear = ::clearCredentials,
+                backupPassword = backupPassword,
+                onBackupPassword = { backupPassword = it },
+                onExportBackup = ::exportBackup,
+                onImportBackup = ::importBackup,
+                backupMessage = backupMessage,
                 message = message
             )
         }
@@ -586,8 +769,8 @@ fun WilliamsApp(context: Context) {
 private fun DashboardScreen(
     padding: PaddingValues,
     status: Status,
+    marketPairs: List<MarketPair>,
     candidates: List<Candidate>,
-    marketQuotes: List<MarketQuote>,
     message: String,
     refreshing: Boolean,
     onStart: () -> Unit,
@@ -612,7 +795,18 @@ private fun DashboardScreen(
         }
 
         item {
+            MarketPairsCard(marketPairs)
+        }
+
+        item {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                MetricCard(
+                    modifier = Modifier.weight(1f),
+                    title = "Цена",
+                    value = fmt(status.price, 2),
+                    icon = Icons.Filled.ShowChart,
+                    accent = AppColors.primary
+                )
                 MetricCard(
                     modifier = Modifier.weight(1f),
                     title = "Баланс",
@@ -621,18 +815,7 @@ private fun DashboardScreen(
                     icon = Icons.Filled.AccountBalanceWallet,
                     accent = AppColors.green
                 )
-                MetricCard(
-                    modifier = Modifier.weight(1f),
-                    title = "Позиция",
-                    value = status.positionSymbol ?: "FLAT",
-                    icon = Icons.Filled.ShowChart,
-                    accent = if (status.positionSymbol != null) AppColors.primary else AppColors.textMuted
-                )
             }
-        }
-
-        item {
-            MarketQuotesCard(marketQuotes)
         }
 
         item {
@@ -805,66 +988,6 @@ private fun ScanSummaryCard(
 }
 
 @Composable
-private fun MarketQuotesCard(quotes: List<MarketQuote>) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = AppColors.surface)
-    ) {
-        Column(
-            Modifier.padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("Рынок • USDT", style = MaterialTheme.typography.titleMedium)
-                Text(
-                    "котировки",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = AppColors.textMuted
-                )
-            }
-
-            if (quotes.isEmpty()) {
-                Text(
-                    "Ожидание котировок Binance Testnet…",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = AppColors.textMuted
-                )
-            } else {
-                quotes.chunked(3).forEach { row ->
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        row.forEach { quote ->
-                            Column(
-                                Modifier.weight(1f),
-                                verticalArrangement = Arrangement.spacedBy(2.dp)
-                            ) {
-                                Text(
-                                    quote.symbol.removeSuffix("USDT") + "/USDT",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = AppColors.textMuted
-                                )
-                                Text(
-                                    fmtMarketPrice(quote.price),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                            }
-                        }
-                        repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
 private fun BestCandidateCard(best: Candidate?) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -943,22 +1066,30 @@ private fun RiskCard(status: Status) {
                 Text("Защита", style = MaterialTheme.typography.titleMedium)
             }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                MiniMetric("Риск", fmt(status.riskPerTrade * 100, 1) + "%")
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 MiniMetric(
-                    "Сегодня",
-                    status.tradesToday.toString() + "/" + status.maxTrades
+                    "Риск",
+                    fmt(status.reservedRiskPct * 100, 2) +
+                        "/" +
+                        fmt(status.maxTotalRiskPct * 100, 0) +
+                        "%"
                 )
                 MiniMetric(
-                    "Loss streak",
-                    status.consecutiveLosses.toString() +
-                        "/" + status.maxConsecutiveLosses
+                    "Позиций",
+                    status.openPositions.toString() +
+                        "/" + status.maxOpenPositions
                 )
-                MiniMetric(
-                    "Day limit",
-                    fmt(status.maxDailyLoss * 100, 1) + "%"
-                )
+                MiniMetric("Сегодня", status.tradesToday.toString())
+                MiniMetric("Loss", status.consecutiveLosses.toString())
             }
+            Text(
+                status.tradingMode + " • PnL сегодня " + fmt(status.dailyPnlUsdt, 2) + " USDT",
+                style = MaterialTheme.typography.labelSmall,
+                color = if (status.tradingMode == "PAUSED") AppColors.red else AppColors.textMuted
+            )
         }
     }
 }
@@ -1203,10 +1334,30 @@ private fun CandidateCardModern(candidate: Candidate) {
 }
 
 @Composable
+private fun MarketPairsCard(pairs: List<MarketPair>) {
+    Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = AppColors.surface)) {
+        Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+            Text("Рынок • USDT", style = MaterialTheme.typography.labelLarge, color = AppColors.textMuted)
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                pairs.forEach { pair ->
+                    Column(Modifier.padding(top = 6.dp)) {
+                        Text(pair.symbol.removeSuffix("USDT") + "/USDT", style = MaterialTheme.typography.labelMedium)
+                        Text(pair.price?.let { fmt(it) } ?: "—", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun PositionScreen(
     padding: PaddingValues,
     status: Status,
-    candles: List<Candle>
+    candles: List<Candle>,
+    selectedSymbol: String?,
+    onSelect: (String) -> Unit,
+    onSell: (String) -> Unit
 ) {
     LazyColumn(
         modifier = Modifier
@@ -1217,67 +1368,116 @@ private fun PositionScreen(
         contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp)
     ) {
         item {
-            Text("Позиция", style = MaterialTheme.typography.headlineSmall)
+            Text(
+                "Портфель",
+                style = MaterialTheme.typography.headlineSmall
+            )
         }
 
-        item {
-            Card(
-                Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = AppColors.surface)
-            ) {
-                Column(
-                    Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+        if (status.positions.isEmpty()) {
+            item {
+                Card(
+                    Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = AppColors.surface
+                    )
                 ) {
-                    if (status.qty == null) {
-                        Text("FLAT", style = MaterialTheme.typography.headlineMedium)
+                    Column(
+                        Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
                         Text(
-                            "Позиции нет. Execution пока отключён.",
-                            color = AppColors.textMuted
-                        )
-                    } else {
-                        Text(
-                            "LONG " + (status.positionSymbol ?: status.symbol),
+                            "FLAT",
                             style = MaterialTheme.typography.headlineMedium
                         )
-                        InfoRow("Quantity", fmt(status.qty, 6))
-                        InfoRow("Entry", fmt(status.entry))
-                        InfoRow("Current", fmt(status.price))
-                        InfoRow("SL", fmt(status.sl))
-                        InfoRow("TP", fmt(status.tp))
-                        InfoRow("PnL", fmt(status.pnl, 2) + " USDT")
-                        InfoRow("PnL %", pct(status.pnlPct))
+                        Text(
+                            "Открытых позиций нет.",
+                            color = AppColors.textMuted
+                        )
+                    }
+                }
+            }
+        } else {
+            items(status.positions) { p ->
+                Card(
+                    Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = AppColors.surface
+                    )
+                ) {
+                    Column(
+                        Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement =
+                                Arrangement.SpaceBetween,
+                            verticalAlignment =
+                                Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "LONG " + p.symbol,
+                                modifier = Modifier.clickable { onSelect(p.symbol) },
+                                style =
+                                    MaterialTheme.typography.headlineSmall
+                            )
+
+                            Row(
+                                horizontalArrangement =
+                                    Arrangement.spacedBy(6.dp),
+                                verticalAlignment =
+                                    Alignment.CenterVertically
+                            ) {
+                                ModeChip(
+                                    "RISK " +
+                                        fmt(
+                                            p.riskPct * 100,
+                                            2
+                                        ) +
+                                        "%",
+                                    AppColors.amber
+                                )
+
+                                OutlinedButton(
+                                    onClick = {
+                                        onSell(p.symbol)
+                                    }
+                                ) {
+                                    Text("SELL")
+                                }
+                            }
+                        }
+                        InfoRow(
+                            "Quantity",
+                            fmt(p.qty, 6)
+                        )
+                        InfoRow(
+                            "Entry",
+                            fmt(p.entry)
+                        )
+                        InfoRow(
+                            "Current",
+                            fmt(status.price)
+                        )
+                        InfoRow(
+                            "SL",
+                            fmt(p.stop)
+                        )
+                        InfoRow(
+                            "TP",
+                            fmt(p.take)
+                        )
                     }
                 }
             }
         }
 
-        if (status.positionSymbol != null) {
+        if (selectedSymbol != null) {
+            item { Text("График позиции • " + selectedSymbol, style = MaterialTheme.typography.titleMedium) }
             item {
-                Text(
-                    status.positionSymbol + " • " + status.interval + " • Williams context",
-                    style = MaterialTheme.typography.titleMedium
-                )
-            }
-
-            item {
-                if (candles.isEmpty()) {
-                    EmptyState(
-                        icon = Icons.Filled.ShowChart,
-                        title = "Нет графика позиции",
-                        subtitle = "Данные для активной позиции ещё не получены."
-                    )
-                } else {
-                    TradingChart(candles, status)
-                }
-            }
-        } else {
-            item {
-                EmptyState(
-                    icon = Icons.Filled.ShowChart,
-                    title = "Активной позиции нет",
-                    subtitle = "График показывается только для реально открытой позиции."
-                )
+                if (candles.isEmpty()) EmptyState(icon = Icons.Filled.ShowChart, title = "Нет графика", subtitle = "Выбери позицию и обнови данные.")
+                else TradingChart(candles, status, status.positions.firstOrNull { it.symbol == selectedSymbol })
             }
         }
     }
@@ -1287,8 +1487,7 @@ private fun PositionScreen(
 private fun HistoryScreen(
     padding: PaddingValues,
     trades: List<Trade>,
-    logs: List<String>,
-    learning: LearningSummary
+    logs: List<String>
 ) {
     LazyColumn(
         modifier = Modifier
@@ -1299,31 +1498,7 @@ private fun HistoryScreen(
         contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp)
     ) {
         item {
-            Text("История", style = MaterialTheme.typography.headlineSmall)
-        }
-
-        item {
-            Card(
-                Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = AppColors.surface2)
-            ) {
-                Column(
-                    Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Text("Анализ сделок", style = MaterialTheme.typography.titleMedium)
-                    InfoRow("Win rate", "%.1f%%".format(Locale.US, learning.winRate * 100.0))
-                    InfoRow("Победы / убытки", learning.wins.toString() + " / " + learning.losses)
-                    InfoRow("PnL", fmt(learning.pnl, 2) + " USDT")
-                    InfoRow("Expectancy", fmt(learning.expectancy, 4) + " USDT")
-                    InfoRow("Profit factor", learning.profitFactor?.let { fmt(it, 2) } ?: "—")
-                    InfoRow("Max drawdown", fmt(learning.maxDrawdown, 2) + " USDT")
-                    InfoRow("Средний MFE / MAE", fmt(learning.avgMfe, 2) + "% / " + fmt(learning.avgMae, 2) + "%")
-                    learning.diagnoses.entries.sortedByDescending { it.value }.take(4).forEach {
-                        InfoRow(it.key, it.value.toString())
-                    }
-                }
-            }
+            Text("История и разбор сделок", style = MaterialTheme.typography.headlineSmall)
         }
 
         item {
@@ -1336,9 +1511,13 @@ private fun HistoryScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     val closed = trades.count { it.exit != null }
+                    val wins = trades.count { it.outcome == "WIN" }
+                    val losses = trades.count { it.outcome == "LOSS" }
                     val pnl = trades.mapNotNull { it.pnl }.sum()
                     InfoRow("Всего", trades.size.toString())
                     InfoRow("Закрытых", closed.toString())
+                    InfoRow("Win rate", if (closed > 0) "%.1f%%".format(Locale.US, wins * 100.0 / closed) else "—")
+                    InfoRow("Побед / убытков", wins.toString() + " / " + losses)
                     InfoRow("PnL", fmt(pnl, 2) + " USDT")
                 }
             }
@@ -1349,7 +1528,7 @@ private fun HistoryScreen(
                 EmptyState(
                     icon = Icons.Filled.History,
                     title = "Сделок пока нет",
-                    subtitle = "История сохраняется локально и пополняется автоматически после каждой сделки."
+                    subtitle = "После первой Testnet сделки здесь сохранятся причина входа, волна, риск, MFE/MAE и разбор результата."
                 )
             }
         }
@@ -1359,38 +1538,37 @@ private fun HistoryScreen(
                 Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = AppColors.surface)
             ) {
-                Column(Modifier.padding(14.dp)) {
-                    Text(
-                        "#" + it.id + "  " + it.side,
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                    Text(
-                        "Entry " + fmt(it.entry) +
-                            " • Exit " + fmt(it.exit),
-                        color = AppColors.textMuted
-                    )
-                    Text("PnL " + fmt(it.pnl) + " USDT")
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                     Row(
                         Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        MiniMetric("W" + it.wavePosition, "")
-                        MiniMetric("SCORE", fmt(it.score, 0))
-                        MiniMetric("MFE", fmt(it.mfePct, 2) + "%")
-                        MiniMetric("MAE", fmt(it.maePct, 2) + "%")
-                    }
-                    if (it.diagnosis.isNotBlank()) {
+                        Text(it.symbol + " • " + it.outcome, style = MaterialTheme.typography.titleMedium)
                         Text(
-                            "Диагноз: " + it.diagnosis,
-                            style = MaterialTheme.typography.labelMedium,
-                            color = if ((it.pnl ?: 0.0) >= 0.0) AppColors.green else AppColors.amber
+                            fmt(it.pnl, 2) + " USDT",
+                            color = if ((it.pnl ?: 0.0) >= 0.0) AppColors.green else AppColors.red,
+                            fontWeight = FontWeight.Bold
                         )
                     }
+                    Text("Entry " + fmt(it.entry) + " → Exit " + fmt(it.exit), color = AppColors.textMuted)
+                    Text(
+                        "Wave W" + it.wavePosition + " • " + it.wavePhase +
+                            " • Score " + fmt(it.score, 1) +
+                            " • R " + fmt(it.rMultiple, 2)
+                    )
+                    Text(
+                        "MFE " + fmt(it.mfeR, 2) + "R • MAE " + fmt(it.maeR, 2) + "R",
+                        color = AppColors.textMuted
+                    )
                     if (it.reason.isNotBlank()) {
+                        Text("Почему открыли: " + it.reason, style = MaterialTheme.typography.bodySmall)
+                    }
+                    if (it.classification.isNotBlank()) {
                         Text(
-                            it.reason,
+                            "Разбор: " + it.classification,
                             style = MaterialTheme.typography.bodySmall,
-                            color = AppColors.textMuted
+                            color = if (it.outcome == "LOSS") AppColors.amber else AppColors.green
                         )
                     }
                 }
@@ -1422,6 +1600,11 @@ private fun SettingsScreen(
     onApiSecret: (String) -> Unit,
     onSave: () -> Unit,
     onClear: () -> Unit,
+    backupPassword: String,
+    onBackupPassword: (String) -> Unit,
+    onExportBackup: () -> Unit,
+    onImportBackup: () -> Unit,
+    backupMessage: String,
     message: String
 ) {
     LazyColumn(
@@ -1463,7 +1646,8 @@ private fun SettingsScreen(
 
                     InfoRow("Режим", "BINANCE TESTNET")
                     InfoRow("Backend", "Встроенный")
-                    InfoRow("Execution", "DISABLED")
+                    InfoRow("Execution", "TESTNET AUTO")
+                    InfoRow("Max positions", "до 3 в портфеле")
                     InfoRow("Max scan", "60 пар")
                     InfoRow("MTF", "1D / 4H / 1H / 15M")
                 }
@@ -1557,10 +1741,76 @@ private fun SettingsScreen(
                     Text("Правила защиты", style = MaterialTheme.typography.titleMedium)
                     InfoRow("Risk / trade", fmt(status.riskPerTrade * 100, 1) + "%")
                     InfoRow("Daily loss", fmt(status.maxDailyLoss * 100, 1) + "%")
-                    InfoRow("Max trades", status.maxTrades.toString())
-                    InfoRow("Max loss streak", status.maxConsecutiveLosses.toString())
+                    InfoRow("Trade limit", "динамический")
+                    InfoRow("Loss guard", "3 подряд → пауза")
                     InfoRow("Scanner cadence", "90 sec")
                     InfoRow("Wave top N", "8")
+                }
+            }
+        }
+
+        item {
+            Card(
+                Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = AppColors.surface)
+            ) {
+                Column(
+                    Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Filled.Lock,
+                            contentDescription = null,
+                            tint = AppColors.violet
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text("Восстановление телефона", style = MaterialTheme.typography.titleMedium)
+                    }
+
+                    Text(
+                        "Зашифрованный backup переносит Binance Testnet credentials на другой телефон. Открытые позиции и ордера в файл не записываются: после восстановления Williams сверяется с Binance.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AppColors.textMuted
+                    )
+
+                    OutlinedTextField(
+                        value = backupPassword,
+                        onValueChange = onBackupPassword,
+                        label = { Text("Пароль backup (10+ символов)") },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = onExportBackup,
+                            enabled = backupPassword.length >= 10,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("СОЗДАТЬ")
+                        }
+
+                        OutlinedButton(
+                            onClick = onImportBackup,
+                            enabled = backupPassword.length >= 10,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("ВОССТАНОВИТЬ")
+                        }
+                    }
+
+                    if (backupMessage.isNotBlank()) {
+                        Text(
+                            backupMessage,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (
+                                backupMessage.contains("создан", true) ||
+                                backupMessage.contains("восстановлен", true)
+                            ) AppColors.green else AppColors.amber
+                        )
+                    }
                 }
             }
         }
@@ -1753,7 +2003,7 @@ private fun EmptyState(
 }
 
 @Composable
-private fun TradingChart(candles: List<Candle>, status: Status) {
+private fun TradingChart(candles: List<Candle>, status: Status, position: PositionView? = null) {
     var scale by remember(candles.size) { mutableStateOf(1f) }
     var pan by remember(candles.size) { mutableStateOf(0f) }
 
@@ -1890,9 +2140,9 @@ private fun TradingChart(candles: List<Candle>, status: Status) {
                 )
             }
 
-            level(status.entry, AppColors.primary, "ENTRY")
-            level(status.tp, AppColors.green, "TP")
-            level(status.sl, AppColors.red, "SL")
+            level(position?.entry ?: status.entry, AppColors.primary, "ENTRY")
+            level(position?.take ?: status.tp, AppColors.green, "TP")
+            level(position?.stop ?: status.sl, AppColors.red, "SL")
         }
     }
 }
@@ -1909,35 +2159,160 @@ private fun InfoRow(label: String, value: String) {
 }
 
 private fun parseStatus(json: JSONObject): Status {
-    val position = json.optJSONObject("position")
+    val legacy = json.optJSONObject("position")
+    val array = json.optJSONArray("positions")
+    val parsed =
+        mutableListOf<PositionView>()
+
+    if (array != null) {
+        for (i in 0 until array.length()) {
+            val item =
+                array.optJSONObject(i) ?: continue
+            val symbol =
+                item.optString("symbol", "").trim()
+            if (symbol.isBlank()) continue
+
+            parsed += PositionView(
+                symbol = symbol,
+                qty = item.optDouble("qty", 0.0),
+                entry = item.optDouble("entry", 0.0),
+                stop = item.optDouble("stop")
+                    .takeUnless {
+                        it.isNaN() || it == 0.0
+                    },
+                take = item.optDouble("take")
+                    .takeUnless {
+                        it.isNaN() || it == 0.0
+                    },
+                riskPct =
+                    item.optDouble("risk_pct", 0.0)
+            )
+        }
+    }
+
+    val first =
+        parsed.firstOrNull()
+
+    val legacyQty =
+        legacy?.optDouble("quantity")
+            ?.takeUnless {
+                it.isNaN() || it == 0.0
+            }
+
+    val legacyEntry =
+        legacy?.optDouble("entry_price")
+            ?.takeUnless {
+                it.isNaN() || it == 0.0
+            }
+
     return Status(
-        symbol = json.optString("symbol", "BTCUSDT"),
-        positionSymbol = position?.optString("symbol")?.takeIf { it.isNotBlank() },
-        interval = json.optString("interval", "1h"),
-        testnet = json.optBoolean("testnet", true),
-        running = json.optBoolean("running", false),
-        paused = json.optBoolean("paused", false),
-        recovered = json.optBoolean("recovered", true),
-        state = json.optString("state", "FLAT"),
-        price = json.optDouble("price").takeUnless { it.isNaN() },
-        balance = json.optDouble("quote_balance").takeUnless { it.isNaN() },
-        qty = position?.optDouble("quantity")?.takeUnless { it.isNaN() },
-        entry = position?.optDouble("entry_price")?.takeUnless { it.isNaN() },
-        tp = json.optDouble("take_profit_price").takeUnless { it.isNaN() || it == 0.0 },
-        sl = json.optDouble("stop_loss_price").takeUnless { it.isNaN() || it == 0.0 },
-        pnl = json.optDouble("pnl").takeUnless { it.isNaN() },
-        pnlPct = json.optDouble("pnl_pct").takeUnless { it.isNaN() },
-        error = json.optString("last_error").takeIf { it.isNotBlank() },
-        binanceConfigured = json.optBoolean("binance_configured"),
-        riskPerTrade = json.optDouble("risk_per_trade_pct", 0.01),
-        maxDailyLoss = json.optDouble("max_daily_loss_pct", 0.03),
-        tradesToday = json.optInt("trades_today", 0),
-        maxTrades = json.optInt("max_trades_per_day", 5),
+        symbol =
+            json.optString(
+                "symbol",
+                first?.symbol ?: "BTCUSDT"
+            ),
+        interval =
+            json.optString("interval", "1h"),
+        testnet =
+            json.optBoolean("testnet", true),
+        running =
+            json.optBoolean("running", false),
+        paused =
+            json.optBoolean("paused", false),
+        recovered =
+            json.optBoolean("recovered", true),
+        state =
+            json.optString("state", "FLAT"),
+        price =
+            json.optDouble("price")
+                .takeUnless { it.isNaN() },
+        balance =
+            json.optDouble("quote_balance")
+                .takeUnless { it.isNaN() },
+        qty =
+            first?.qty ?: legacyQty,
+        entry =
+            first?.entry ?: legacyEntry,
+        tp =
+            json.optDouble("take_profit_price")
+                .takeUnless {
+                    it.isNaN() || it == 0.0
+                },
+        sl =
+            json.optDouble("stop_loss_price")
+                .takeUnless {
+                    it.isNaN() || it == 0.0
+                },
+        pnl =
+            json.optDouble("pnl")
+                .takeUnless { it.isNaN() },
+        pnlPct =
+            json.optDouble("pnl_pct")
+                .takeUnless { it.isNaN() },
+        error =
+            json.optString("last_error")
+                .takeIf { it.isNotBlank() },
+        binanceConfigured =
+            json.optBoolean(
+                "binance_configured"
+            ),
+        riskPerTrade =
+            json.optDouble(
+                "risk_per_trade_pct",
+                0.005
+            ),
+        maxDailyLoss =
+            json.optDouble(
+                "max_daily_loss_pct",
+                0.03
+            ),
+        tradesToday =
+            json.optInt("trades_today", 0),
         consecutiveLosses = json.optInt("consecutive_losses", 0),
-        maxConsecutiveLosses = json.optInt("max_consecutive_losses", 3),
-        scannerScanning = json.optBoolean("scanner_scanning", false),
-        scannerSymbols = json.optInt("scanner_symbols", 0),
-        scanDurationMs = json.optLong("scanner_duration_ms", 0L)
+        dailyPnlUsdt = json.optDouble("daily_pnl_usdt", 0.0),
+        tradingMode = json.optString("trading_mode", "ACTIVE"),
+        openPositions =
+            json.optInt(
+                "open_positions",
+                parsed.size
+            ),
+        maxOpenPositions =
+            json.optInt(
+                "max_open_positions",
+                3
+            ),
+        reservedRiskPct =
+            json.optDouble(
+                "reserved_risk_pct",
+                0.0
+            ),
+        maxTotalRiskPct =
+            json.optDouble(
+                "max_total_risk_pct",
+                0.01
+            ),
+        reconcileRequired =
+            json.optBoolean(
+                "reconcile_required",
+                false
+            ),
+        positions =
+            parsed.toList(),
+        scannerScanning =
+            json.optBoolean(
+                "scanner_scanning",
+                false
+            ),
+        scannerSymbols =
+            json.optInt(
+                "scanner_symbols",
+                0
+            ),
+        scanDurationMs =
+            json.optLong(
+                "scanner_duration_ms",
+                0L
+            )
     )
 }
 
@@ -1958,15 +2333,6 @@ private fun parseCandles(array: JSONArray): List<Candle> =
             fractalDown = x.optBoolean("fractal_down")
         )
     }
-
-private fun parseMarketQuotes(array: JSONArray): List<MarketQuote> =
-    List(array.length()) { i ->
-        val x = array.getJSONObject(i)
-        MarketQuote(
-            symbol = x.optString("symbol", "-"),
-            price = x.optDouble("price", Double.NaN)
-        )
-    }.filter { !it.price.isNaN() && it.price > 0.0 }
 
 private fun parseCandidates(array: JSONArray): List<Candidate> =
     List(array.length()) { i ->
@@ -1998,49 +2364,27 @@ private fun parseCandidates(array: JSONArray): List<Candidate> =
         )
     }.sortedByDescending { it.score }
 
-private fun parseLearning(json: JSONObject): LearningSummary {
-    val diagnosis = mutableMapOf<String, Int>()
-    val d = json.optJSONObject("diagnoses")
-    if (d != null) {
-        for (key in d.keys()) diagnosis[key] = d.optInt(key)
-    } else {
-        val arr = json.optJSONArray("diagnoses")
-        if (arr != null) for (i in 0 until arr.length()) {
-            val x = arr.optJSONObject(i) ?: continue
-            diagnosis[x.optString("diagnosis","UNCLASSIFIED")] = x.optInt("count",0)
-        }
-    }
-    return LearningSummary(
-        total = json.optInt("total",0),
-        wins = json.optInt("wins",0),
-        losses = json.optInt("losses",0),
-        winRate = json.optDouble("win_rate",0.0),
-        pnl = json.optDouble("pnl",0.0),
-        expectancy = json.optDouble("expectancy",0.0),
-        profitFactor = json.optDouble("profit_factor").takeUnless { it.isNaN() },
-        maxDrawdown = json.optDouble("max_drawdown_quote",0.0),
-        avgMfe = json.optDouble("avg_mfe_pct").takeUnless { it.isNaN() },
-        avgMae = json.optDouble("avg_mae_pct").takeUnless { it.isNaN() },
-        diagnoses = diagnosis.toMap()
-    )
-}
-
 private fun parseTrades(array: JSONArray): List<Trade> =
     List(array.length()) { i ->
         val x = array.getJSONObject(i)
+        val snap = x.optJSONObject("entry_snapshot")
         Trade(
             id = x.optString("id"),
+            symbol = x.optString("symbol"),
             side = x.optString("side"),
             entry = x.optDouble("entry_price").takeUnless { it.isNaN() },
             exit = x.optDouble("exit_price").takeUnless { it.isNaN() },
             pnl = x.optDouble("pnl").takeUnless { it.isNaN() },
-            reason = x.optString("reason"),
-            diagnosis = x.optString("diagnosis"),
-            mfePct = x.optDouble("mfe_pct").takeUnless { it.isNaN() },
-            maePct = x.optDouble("mae_pct").takeUnless { it.isNaN() },
-            durationSeconds = x.optDouble("duration_seconds").takeUnless { it.isNaN() },
-            score = x.optDouble("score").takeUnless { it.isNaN() },
-            wavePosition = x.optInt("wave_position", 0)
+            pnlPct = x.optDouble("pnl_pct").takeUnless { it.isNaN() },
+            rMultiple = x.optDouble("r_multiple").takeUnless { it.isNaN() },
+            reason = x.optString("entry_reason"),
+            outcome = x.optString("outcome", x.optString("status")),
+            classification = x.optString("post_trade_classification"),
+            wavePosition = snap?.optInt("wave_position", 0) ?: 0,
+            wavePhase = snap?.optString("wave_phase", "") ?: "",
+            score = snap?.optDouble("score", 0.0) ?: 0.0,
+            mfeR = x.optDouble("mfe_r", 0.0),
+            maeR = x.optDouble("mae_r", 0.0)
         )
     }
 
@@ -2091,16 +2435,6 @@ private fun commandLabel(path: String): String =
         path.endsWith("/stop") -> "Двигатель остановлен"
         else -> "Команда выполнена"
     }
-
-private fun fmtMarketPrice(value: Double): String {
-    val digits = when {
-        value >= 1000.0 -> 2
-        value >= 1.0 -> 4
-        value >= 0.01 -> 6
-        else -> 8
-    }
-    return String.format(Locale.US, "%." + digits + "f", value)
-}
 
 private fun fmt(value: Double?, digits: Int = 2): String =
     if (value == null || value.isNaN()) {
