@@ -2202,6 +2202,59 @@ private class NativeEngine(
         }
     }
 
+    private fun recordCompletedTrade(
+        stored: PositionState,
+        exitPrice: Double,
+        reason: String,
+        raw: JSONObject?
+    ) {
+        val closedAt = System.currentTimeMillis()
+        val gross =
+            (exitPrice - stored.entry) * stored.qty
+        val (feeUsdt, feeKnown) =
+            auditStore.estimateFeesUsdt(
+                symbol = stored.symbol,
+                openedAt = stored.openedAt,
+                closedAt = closedAt,
+                exitPrice = exitPrice
+            )
+        val net = gross - feeUsdt
+        val risk =
+            ((stored.entry - stored.stop) / stored.entry)
+                .coerceAtLeast(0.000001)
+        val rMultiple =
+            if (stored.entry > 0.0) {
+                (net / (stored.entry * stored.qty)) / risk
+            } else 0.0
+        val outcome =
+            when {
+                net > 0.0 -> "WIN"
+                net < 0.0 -> "LOSS"
+                else -> "BREAKEVEN"
+            }
+        auditStore.recordTrade(
+            tradeId =
+                "T:" + stored.symbol + ":" +
+                    stored.openedAt + ":" +
+                    stored.entryOrderId,
+            symbol = stored.symbol,
+            entryPrice = stored.entry,
+            exitPrice = exitPrice,
+            qty = stored.qty,
+            notionalUsdt = stored.entry * stored.qty,
+            grossPnl = gross,
+            netPnl = net,
+            rMultiple = rMultiple,
+            openedAt = stored.openedAt,
+            closedAt = closedAt,
+            outcome = outcome,
+            reason = reason,
+            rawJson = raw?.toString(),
+            feeUsdt = feeUsdt,
+            feeKnown = feeKnown
+        )
+    }
+
     private fun handleUserEvent(event: JSONObject) {
         lastUserEventMs = System.currentTimeMillis()
         auditStore.recordUserEvent(event)
@@ -2785,6 +2838,12 @@ private class NativeEngine(
                     exitPrice = exitPrice,
                     reason = reason,
                     order = lastExit
+                )
+                recordCompletedTrade(
+                    stored = stored,
+                    exitPrice = exitPrice,
+                    reason = reason,
+                    raw = lastExit
                 )
                 continue
             }
@@ -3994,6 +4053,12 @@ private class NativeEngine(
                 exitPrice = exitPrice,
                 reason = "MANUAL_SELL",
                 order = sell
+            )
+            recordCompletedTrade(
+                stored = stored,
+                exitPrice = exitPrice,
+                reason = "MANUAL_SELL",
+                raw = sell
             )
             synchronized(positions) {
                 positions.remove(symbol)
