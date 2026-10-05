@@ -125,9 +125,6 @@ class MultiTimeframeWaveEngine:
     """Build a direction-neutral, nested wave context from confirmed fractals."""
 
     INTERVAL_SECONDS = {
-        "1s": 1,
-        "5s": 5,
-        "25s": 25,
         "1m": 60,
         "3m": 180,
         "5m": 300,
@@ -142,6 +139,7 @@ class MultiTimeframeWaveEngine:
         "1d": 86400,
         "3d": 259200,
         "1w": 604800,
+        "1M": 2592000,
     }
 
     DEFAULT_CHAINS = {
@@ -156,6 +154,7 @@ class MultiTimeframeWaveEngine:
         "1d": ["1w", "1d", "4h"],
         "3d": ["1w", "3d", "1d"],
         "1w": ["1w", "1d", "4h"],
+        "1M": ["1M", "1w", "1d"],
     }
 
     def __init__(
@@ -204,9 +203,9 @@ class MultiTimeframeWaveEngine:
                 wanted.append(interval)
 
         if self.include_micro:
-            for interval in ("1s", "5s", "25s"):
-                if interval not in wanted:
-                    wanted.append(interval)
+            # Binance-native micro intervals are not added here.  Wave analysis
+            # uses exchange-native intervals only; synthetic seconds are reserved
+            # for display/aggregation and never drive structural counts.
 
         # Highest timeframe first; unsupported values are retained so an invalid
         # configuration is visible in the report instead of silently disappearing.
@@ -244,7 +243,12 @@ class MultiTimeframeWaveEngine:
         interval: str,
         limit: Optional[int] = None,
     ) -> pd.DataFrame:
-        from data import fetch_klines
+        from data import fetch_klines, fetch_klines_cached_history
+
+        if os.getenv("WAVE_USE_FULL_HISTORY", "true").lower() == "true":
+            return self._drop_unfinished(
+                fetch_klines_cached_history(self.client, symbol, interval)
+            )
 
         return self._drop_unfinished(
             fetch_klines(
@@ -253,10 +257,7 @@ class MultiTimeframeWaveEngine:
                 interval,
                 limit=max(
                     1,
-                    int(
-                        limit if limit is not None
-                        else self.lookback
-                    ),
+                    int(limit if limit is not None else self.lookback),
                 ),
             )
         )
