@@ -306,18 +306,39 @@ class MultiTimeframeWaveEngine:
     # Confirmed fractal / swing layer
     # ------------------------------------------------------------------
     def _confirmed_pivots(self, ind: pd.DataFrame) -> List[Pivot]:
+        """Return confirmed adaptive structural pivots.
+
+        Williams fractals remain the confirmation mechanism, but a fractal is
+        promoted to a structural swing according to current volatility. No
+        fixed number of bars is imposed on a wave.
+        """
         if ind is None or ind.empty:
             return []
 
         left = int(self.cfg["fractal_left"])
         right = int(self.cfg["fractal_right"])
-        pivots: List[Pivot] = []
+        atr_period = max(5, int(os.getenv("WAVE_SWING_ATR_PERIOD", os.getenv("ATR_PERIOD", "14"))))
+        min_atr = max(0.05, float(os.getenv("WAVE_MIN_SWING_ATR", "0.35")))
+        min_pct = max(0.0001, float(os.getenv("WAVE_MIN_SWING_PCT", "0.0015")))
 
+        prev_close = ind["close"].shift(1)
+        tr = pd.concat(
+            [
+                ind["high"] - ind["low"],
+                (ind["high"] - prev_close).abs(),
+                (ind["low"] - prev_close).abs(),
+            ],
+            axis=1,
+        ).max(axis=1)
+        atr_series = tr.rolling(
+            atr_period,
+            min_periods=max(3, atr_period // 2),
+        ).mean()
+
+        raw: List[Pivot] = []
         for i in range(left, len(ind) - right):
             up = bool(ind["fractal_up"].iloc[i])
             down = bool(ind["fractal_down"].iloc[i])
-
-            # A bar satisfying both directions is ambiguous as a swing anchor.
             if up and down:
                 continue
             if not (up or down):
@@ -328,51 +349,53 @@ class MultiTimeframeWaveEngine:
                 continue
 
             row = ind.iloc[i]
-            ao = self._safe_float(row.get("ao"))
-            ac = self._safe_float(row.get("ac"))
+            price = self._safe_float(row.get("high" if up else "low"))
+            if price <= 0:
+                continue
 
-            if up:
-                pivots.append(Pivot(
-                    kind=DIRECTION_UP,
-                    price=self._safe_float(row.get("high")),
-                    center_index=i,
-                    confirmed_index=confirmed,
-                    ao=ao,
-                    ac=ac,
-                ))
-            else:
-                pivots.append(Pivot(
-                    kind=DIRECTION_DOWN,
-                    price=self._safe_float(row.get("low")),
-                    center_index=i,
-                    confirmed_index=confirmed,
-                    ao=ao,
-                    ac=ac,
-                ))
+            raw.append(Pivot(
+                kind=DIRECTION_UP if up else DIRECTION_DOWN,
+                price=price,
+                center_index=i,
+                confirmed_index=confirmed,
+                ao=self._safe_float(row.get("ao")),
+                ac=self._safe_float(row.get("ac")),
+            ))
 
-        pivots.sort(key=lambda p: (p.confirmed_index, p.center_index))
+        raw.sort(key=lambda p: (p.confirmed_index, p.center_index))
 
-        # Compress repeated same-side fractals to the more extreme pivot. This
-        # produces a clean alternating swing skeleton without guessing an
-        # intra-side order that the fractal layer does not provide.
         alternating: List[Pivot] = []
-        for pivot in pivots:
+        for pivot in raw:
             if not alternating:
                 alternating.append(pivot)
                 continue
 
             last = alternating[-1]
-            if pivot.kind != last.kind:
-                alternating.append(pivot)
+
+            if pivot.kind == last.kind:
+                more_extreme = (
+                    pivot.price > last.price
+                    if pivot.kind == DIRECTION_UP
+                    else pivot.price < last.price
+                )
+                if more_extreme:
+                    alternating[-1] = pivot
                 continue
 
-            more_extreme = (
-                pivot.price > last.price
-                if pivot.kind == DIRECTION_UP
-                else pivot.price < last.price
+            atr = self._safe_float(atr_series.iloc[pivot.center_index])
+            threshold = max(
+                atr * min_atr if atr > 0 else 0.0,
+                abs(last.price) * min_pct,
             )
-            if more_extreme:
-                alternating[-1] = pivot
+
+            # The threshold is volatility-relative, not time-relative. This
+            # allows short waves in fast markets and long waves in quiet markets.
+            if abs(pivot.price - last.price) >= threshold:
+                alternating.append(pivot)
+            elif abs(pivot.price - last.price) >= threshold * 0.65:
+                # Keep borderline structure rather than imposing a hard
+                # minimum wave length. A later stronger pivot can replace it.
+                alternating.append(pivot)
 
         return alternating
 
