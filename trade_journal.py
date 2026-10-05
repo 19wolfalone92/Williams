@@ -62,7 +62,7 @@ def observe(db, trade_id, entry_price, current_price, side="LONG"):
     return {"mfe_pct": mfe * 100.0, "mae_pct": mae * 100.0}
 
 
-def build_diagnosis(entry_context, pnl, pnl_pct, exit_reason):
+def build_diagnosis(entry_context, pnl, pnl_pct, exit_reason, mfe_pct=None, mae_pct=None):
     ctx = entry_context or {}
     pnl = _num(pnl, 0.0) or 0.0
     pnl_pct = _num(pnl_pct, 0.0) or 0.0
@@ -73,6 +73,9 @@ def build_diagnosis(entry_context, pnl, pnl_pct, exit_reason):
     atr = _num(ctx.get("atr_pct"), 0.0) or 0.0
     setup = str(ctx.get("setup_state") or "")
     reason = str(exit_reason or "").upper()
+    mfe = _num(mfe_pct, 0.0) or 0.0
+    mae = abs(_num(mae_pct, 0.0) or 0.0)
+    planned_target = abs((_num(ctx.get("risk_pct"), 0.0) or 0.0) * (_num(ctx.get("risk_reward"), 1.0) or 1.0))
 
     if pnl > 0:
         outcome = "WIN"
@@ -84,7 +87,9 @@ def build_diagnosis(entry_context, pnl, pnl_pct, exit_reason):
     if outcome != "LOSS":
         diagnosis = "SETUP_WORKED" if outcome == "WIN" else "NO_EDGE"
     elif "STOP" in reason:
-        if wave_exhaustion >= 70 or wave_position == 5:
+        if planned_target > 0 and mfe >= planned_target * 0.60:
+            diagnosis = "STOP_TOO_TIGHT"
+        elif wave_exhaustion >= 70 or wave_position == 5:
             diagnosis = "WAVE_EXHAUSTION"
         elif not htf:
             diagnosis = "HTF_CONFLICT"
@@ -94,6 +99,8 @@ def build_diagnosis(entry_context, pnl, pnl_pct, exit_reason):
             diagnosis = "VOLATILITY_SPIKE"
         elif setup == "WATCHING":
             diagnosis = "WEAK_SETUP"
+        elif mae >= max(planned_target * 0.75, 0.5):
+            diagnosis = "BAD_ENTRY_LOCATION"
         else:
             diagnosis = "FALSE_BREAKOUT"
     elif "OCO" in reason or "RECOVER" in reason:
@@ -110,6 +117,9 @@ def build_diagnosis(entry_context, pnl, pnl_pct, exit_reason):
         "wave_exhaustion_risk": wave_exhaustion,
         "htf_confirmed": htf,
         "setup_state": setup,
+        "mfe_pct": mfe,
+        "mae_pct": mae,
+        "planned_target_pct": planned_target,
     }
     return diagnosis, detail
 
@@ -144,7 +154,7 @@ def record_exit(db, trade, exit_price, pnl, pnl_pct, reason, exit_context=None):
     except Exception:
         duration = None
 
-    diagnosis, detail = build_diagnosis(entry_context, pnl, pnl_pct, reason)
+    diagnosis, detail = build_diagnosis(entry_context, pnl, pnl_pct, reason, extrema.get('mfe_pct'), extrema.get('mae_pct'))
     db.save_trade_journal(
         trade_id=trade_id,
         exit_context=exit_context or {},
