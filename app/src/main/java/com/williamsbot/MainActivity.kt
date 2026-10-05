@@ -43,6 +43,7 @@ import kotlin.math.min
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        StandaloneRuntime.start(this)
         setContent { WilliamsApp(this) }
     }
 }
@@ -345,9 +346,9 @@ class ReconnectingSocket(
 @Composable
 fun WilliamsApp(context: Context) {
     val store = remember { SecureStore(context) }
-    var host by remember { mutableStateOf(store.get("host", "http://localhost:8000")) }
-    var token by remember { mutableStateOf(store.get("token", "")) }
-    var confirmedToken by remember { mutableStateOf(store.get("token", "")) }
+    var host by remember { mutableStateOf(store.get("host", "http://127.0.0.1:18080")) }
+    var token by remember { mutableStateOf(store.get("token", "williams-native-local-token-4.13.0-standalone")) }
+    var confirmedToken by remember { mutableStateOf(store.get("token", "williams-native-local-token-4.13.0-standalone")) }
     var apiKey by remember { mutableStateOf("") }
     var apiSecret by remember { mutableStateOf("") }
     var testnet by remember { mutableStateOf(store.getBool("testnet", true)) }
