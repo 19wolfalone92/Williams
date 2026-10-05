@@ -3219,7 +3219,7 @@ private class NativeEngine(
 
         require(openLists.length() + 1 <= rules.maxNumOrderLists) {
             "Binance MAX_NUM_ORDER_LISTS would be exceeded"
-        )
+        }
     }
 
     private data class Protection(
