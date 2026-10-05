@@ -107,7 +107,8 @@ import java.util.concurrent.TimeUnit
 import kotlin.math.max
 import kotlin.math.min
 
-// Final 4.14 validation build marker\nclass MainActivity : ComponentActivity() {
+// Final 4.14 validation build marker
+// CI compile-log capture enabled\nclass MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         StandaloneRuntime.start(this)
