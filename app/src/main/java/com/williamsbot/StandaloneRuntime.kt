@@ -521,7 +521,7 @@ private class NativeEngine(
 
         val array = JSONArray(body)
 
-        return List(array.length()) { i ->
+        val all = List(array.length()) { i ->
             val row = array.getJSONArray(i)
             CandleN(
                 t = row.getLong(0),
@@ -531,6 +531,17 @@ private class NativeEngine(
                 c = row.getString(4).toDouble(),
                 v = row.getString(5).toDouble()
             )
+        }
+
+        val intervalMs = frameSeconds(frame) * 1000L
+        return if (
+            all.isNotEmpty() &&
+            intervalMs > 0L &&
+            all.last().t + intervalMs > System.currentTimeMillis()
+        ) {
+            all.dropLast(1)
+        } else {
+            all
         }
     }
 
@@ -1221,13 +1232,18 @@ private class NativeEngine(
         val normalized =
             (current - low) / range
 
+        val trendClose =
+            candles[
+                max(0, candles.lastIndex - 8)
+            ].c
+
         val direction =
-            if (current > previous) {
-                "UP"
-            } else if (current < previous) {
-                "DOWN"
-            } else {
-                "NEUTRAL"
+            when {
+                bullishTrendHint(candles) -> "UP"
+                bearishTrendHint(candles) -> "DOWN"
+                current > trendClose -> "UP"
+                current < trendClose -> "DOWN"
+                else -> "NEUTRAL"
             }
 
         val alligatorValues =
@@ -1372,6 +1388,20 @@ private class NativeEngine(
             aoPositive = aoPositive,
             currentLegPct = currentLegPct
         )
+    }
+
+    private fun bullishTrendHint(candles: List<CandleN>): Boolean {
+        if (candles.size < 10) return false
+        val current = candles.last().c
+        val past = candles[candles.lastIndex - 8].c
+        return current > past
+    }
+
+    private fun bearishTrendHint(candles: List<CandleN>): Boolean {
+        if (candles.size < 10) return false
+        val current = candles.last().c
+        val past = candles[candles.lastIndex - 8].c
+        return current < past
     }
 
     private fun neutralWave(
