@@ -246,13 +246,29 @@ class MultiPositionTrader:
         return None
 
     @staticmethod
+    def _filled_exit_metrics(rows):
+        qty = 0.0
+        quote = 0.0
+        last = None
+        for row in rows:
+            if (
+                str(row.get("side", "")).upper() != "SELL"
+                or str(row.get("status", "")).upper() != "FILLED"
+            ):
+                continue
+            row_qty = float(row.get("executedQty", 0) or 0)
+            row_quote = float(row.get("cummulativeQuoteQty", 0) or 0)
+            if row_qty <= 0:
+                continue
+            qty += row_qty
+            if row_quote > 0:
+                quote += row_quote
+            last = row
+        return qty, quote, last
+
+    @staticmethod
     def _filled_qty(rows):
-        return sum(
-            float(row.get("executedQty", 0) or 0)
-            for row in rows
-            if str(row.get("side", "")).upper() == "SELL"
-            and str(row.get("status", "")).upper() == "FILLED"
-        )
+        return MultiPositionTrader._filled_exit_metrics(rows)[0]
 
     @staticmethod
     def _exit_price(row):
@@ -632,7 +648,9 @@ class MultiPositionTrader:
             order for order in exit_orders
             if str(order.get("status", "")).upper() == "FILLED"
         ]
-        sold_qty = self._filled_qty(filled_exits)
+        sold_qty, sold_quote, last_exit = self._filled_exit_metrics(
+            filled_exits
+        )
 
         entry_id = str(
             trade.get("entry_order_id") or ""
@@ -660,20 +678,28 @@ class MultiPositionTrader:
         )
 
         if filled_exits and remaining_expected <= 0:
-            last_exit = max(
-                filled_exits,
-                key=lambda row: int(
-                    row.get(
-                        "time",
-                        row.get("transactTime", 0),
-                    ) or 0
-                ),
-            )
-            exit_price = self._exit_price(last_exit)
+            if last_exit is None:
+                raise RuntimeError(
+                    f"{symbol}: filled managed exit has no usable execution"
+                )
             entry_price = float(trade["entry_price"])
+            exit_price = (
+                sold_quote / sold_qty
+                if sold_quote > 0 and sold_qty > 0
+                else self._exit_price(last_exit)
+            )
+            realized_qty = min(
+                managed_original_qty,
+                sold_qty,
+            )
+            realized_quote = (
+                sold_quote
+                if sold_quote > 0
+                else exit_price * realized_qty
+            )
             pnl = (
-                (exit_price - entry_price)
-                * managed_original_qty
+                realized_quote
+                - entry_price * realized_qty
             )
             pnl_pct = (
                 exit_price / entry_price - 1.0
@@ -938,6 +964,134 @@ class MultiPositionTrader:
             "open_positions": len(self.open_trades()),
             "unresolved_symbols": unresolved,
         }
+
+    # ------------------------------------------------------------------
+    # Manual / emergency exit for one managed position
+    # ------------------------------------------------------------------
+
+    def manual_sell(self, symbol):
+        symbol = str(symbol).upper().strip()
+        trade = self.db.open_trade(symbol)
+        if trade is None:
+            self.recover()
+            return {
+                "sold": False,
+                "symbol": symbol,
+                "reason": "managed position not found; recovery checked",
+            }
+
+        try:
+            # Only cancel the bot-owned OCO list. Never cancel unrelated
+            # user orders on the same symbol.
+            list_id = str(trade.get("exit_order_list_id") or "")
+            list_client = str(
+                trade.get("exit_order_list_client_id") or ""
+            )
+            if list_id or list_client:
+                cancel = getattr(self.client, "cancel_oco", None)
+                if cancel is not None:
+                    if list_id:
+                        cancel(symbol, order_list_id=list_id)
+                    else:
+                        cancel(symbol, list_client_order_id=list_client)
+
+            account = self.client.account()
+            free_qty = self._asset_balance(
+                symbol,
+                account=account,
+            )
+            sell_qty = self._normalize_qty(
+                symbol,
+                min(float(trade["quantity"]), free_qty),
+            )
+            if sell_qty <= 0:
+                raise RuntimeError(
+                    f"{symbol}: managed quantity is no longer available"
+                )
+
+            sell = self.client.order(
+                symbol,
+                "SELL",
+                "MARKET",
+                quantity=self.client.decimal_format(sell_qty),
+            )
+            self.db.save_order(sell)
+
+            executed_qty = float(
+                sell.get("executedQty", 0) or 0
+            )
+            quote = float(
+                sell.get("cummulativeQuoteQty", 0) or 0
+            )
+            if executed_qty <= 0:
+                raise RuntimeError(
+                    f"{symbol}: manual SELL returned no fill"
+                )
+
+            exit_price = (
+                quote / executed_qty
+                if quote > 0
+                else float(sell.get("price", 0) or 0)
+            )
+            entry_price = float(trade["entry_price"])
+            pnl = (
+                exit_price - entry_price
+            ) * min(
+                executed_qty,
+                float(trade["quantity"]),
+            )
+            pnl_pct = (
+                exit_price / entry_price - 1.0
+                if entry_price else 0.0
+            )
+
+            self.db.close_trade(
+                trade["id"],
+                datetime.now(timezone.utc).isoformat(),
+                exit_price,
+                pnl,
+                pnl_pct,
+                "MANUAL_SELL",
+            )
+            self.set_state(symbol, "FLAT")
+            self.db.log_event(
+                "INFO",
+                "manual_position_closed",
+                "Managed position manually closed",
+                {
+                    "symbol": symbol,
+                    "trade_id": trade["id"],
+                    "quantity": executed_qty,
+                    "exit_price": exit_price,
+                },
+            )
+            return {
+                "sold": True,
+                "symbol": symbol,
+                "trade_id": trade["id"],
+                "quantity": executed_qty,
+                "exit_price": exit_price,
+                "pnl": pnl,
+                "state": "FLAT",
+            }
+        except Exception as exc:
+            self.set_state(symbol, "RECONCILE_REQUIRED")
+            self.db.log_event(
+                "ERROR",
+                "manual_position_sell_error",
+                str(exc),
+                {
+                    "symbol": symbol,
+                    "trade_id": trade["id"],
+                },
+            )
+            return {
+                "sold": False,
+                "symbol": symbol,
+                "trade_id": trade["id"],
+                "state": "RECONCILE_REQUIRED",
+                "error": str(exc),
+            }
 
     # ------------------------------------------------------------------
     # New entries
