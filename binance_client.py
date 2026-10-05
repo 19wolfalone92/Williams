@@ -38,7 +38,22 @@ class BinanceSpotClient:
         last_exc = None
 
         for attempt in range(max_attempts):
-            wait = max(0.0, self.rate_limit_pause_until - time.time())
+            now = time.time()
+            wait = max(0.0, self.rate_limit_pause_until - now)
+
+            # Proactive governor: slow down before Binance returns 429/418.
+            if self.request_weight_limit_1m > 0:
+                ratio = self.last_used_weight_1m / float(self.request_weight_limit_1m)
+                if ratio >= 0.98:
+                    wait = max(wait, 2.0)
+                elif ratio >= 0.90:
+                    wait = max(wait, 0.25)
+
+            if self.order_limit_1m > 0:
+                order_ratio = self.last_order_count_1m / float(self.order_limit_1m)
+                if order_ratio >= 0.95:
+                    wait = max(wait, 1.0)
+
             if wait > 0:
                 time.sleep(min(wait, 30.0))
 
