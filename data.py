@@ -1,4 +1,4 @@
-import time, pandas as pd, requests
+import os, time, pandas as pd, requests
 BASE_URL='https://testnet.binance.vision'
 
 def _frame(rows):
@@ -38,3 +38,62 @@ def fetch_klines(client_or_symbol, symbol_or_interval, interval=None, limit=200,
     return _frame(rows)
 
 def save_csv(df,path):df.reset_index().to_csv(path,index=False)
+
+
+def fetch_klines_history(client, symbol, interval, start_ms=0, end_ms=None):
+    """Download all available Spot klines in Binance's 1000-row pages."""
+    symbol = str(symbol).upper()
+    interval = str(interval).lower()
+    rows = []
+    cursor = int(start_ms or 0)
+    end_value = int(end_ms) if end_ms is not None else None
+    while True:
+        params = {"symbol": symbol, "interval": interval, "limit": 1000, "startTime": cursor}
+        if end_value is not None:
+            params["endTime"] = end_value
+        batch = client._request("GET", "/api/v3/klines", params)
+        if not batch:
+            break
+        rows.extend(batch)
+        if len(batch) < 1000:
+            break
+        next_cursor = int(batch[-1][0]) + 1
+        if next_cursor <= cursor:
+            break
+        cursor = next_cursor
+        if end_value is not None and cursor >= end_value:
+            break
+    return _frame(rows)
+
+
+def fetch_klines_cached_history(client, symbol, interval, cache_dir=None):
+    """Persistent full-history cache; subsequent calls only fetch new candles."""
+    cache_dir = cache_dir or os.getenv("WAVE_HISTORY_CACHE_DIR", "data_cache/klines")
+    os.makedirs(cache_dir, exist_ok=True)
+    path = os.path.join(
+        cache_dir,
+        f"{str(symbol).upper()}_{str(interval).lower()}.csv",
+    )
+
+    cached = pd.DataFrame()
+    if os.path.exists(path):
+        try:
+            cached = pd.read_csv(path, parse_dates=["open_time"])
+            if not cached.empty:
+                cached["open_time"] = pd.to_datetime(cached["open_time"], utc=True)
+                cached = cached.set_index("open_time")
+        except Exception:
+            cached = pd.DataFrame()
+
+    if cached.empty:
+        fresh = fetch_klines_history(client, symbol, interval, start_ms=0)
+    else:
+        start_ms = int(cached.index.max().timestamp() * 1000) + 1
+        fresh = fetch_klines_history(client, symbol, interval, start_ms=start_ms)
+
+    merged = pd.concat([cached, fresh]) if not fresh.empty else cached
+    if merged.empty:
+        return merged
+    merged = merged[~merged.index.duplicated(keep="last")].sort_index()
+    merged.reset_index().to_csv(path, index=False)
+    return merged
