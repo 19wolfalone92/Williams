@@ -235,7 +235,10 @@ def calculate_indicators(df, cfg):
     # separate triggers; they are not incorrectly ANDed together.
     min_wise = int(cfg["min_wise_men_confirmations"])
     x["long_signal"] = (
-        x["long_bullish"]
+        # Williams' first gate: no downstream Wise-Man signal is actionable
+        # until a confirmed fractal has formed outside the Teeth/balance line.
+        x["long_fractal_outside"]
+        & x["long_bullish"]
         & x["long_awake"]
         & x["long_wise_man_count"].ge(min_wise)
     )
