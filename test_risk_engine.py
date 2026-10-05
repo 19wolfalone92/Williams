@@ -192,3 +192,19 @@ def test_extreme_atr_is_blocked():
 
 
 test_extreme_atr_is_blocked()
+
+
+def test_default_risk_is_half_percent():
+    engine = RiskEngine(balance_quote=10000)
+    result = engine.analyse(
+        symbol="BTCUSDT",
+        entry_price=100000,
+        atr=500,
+        signal_strength=1.0,
+        htf_confirmed=True,
+        spread_pct=0.0002,
+    )
+    assert result.allowed is True
+    assert result.risk_quote == 50
+    assert result.risk_pct == 0.5
+    print("[PASS] default per-trade risk is 0.5%")

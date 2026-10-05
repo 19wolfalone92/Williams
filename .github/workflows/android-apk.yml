@@ -1,4 +1,5 @@
 name: Build Android APK
+# 4.14 standalone validation: widget + adaptive trade guard
 
 on:
   push:

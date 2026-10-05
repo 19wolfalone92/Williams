@@ -7,7 +7,7 @@ from db import Database
 from strategy import calculate_indicators, config_from_env
 from telegram_bot import Telegram
 from portfolio_controller import PortfolioController
-import trade_journal
+from portfolio_trader import MultiPositionTrader
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(message)s')
@@ -60,7 +60,9 @@ class Trader:
         )
         self._last_auto_scan_monotonic = 0.0
 
-        self.max_open_positions = 1
+        self.max_open_positions = max(1, int(os.getenv('MAX_OPEN_POSITIONS', '3')))
+        self.max_total_risk_pct = min(0.01, max(0.0, float(os.getenv('MAX_TOTAL_RISK_PCT', '0.01'))))
+        self.max_risk_per_trade_pct = min(0.005, max(0.0, float(os.getenv('MAX_RISK_PER_TRADE_PCT', '0.005'))))
         self.active_symbol = self.symbol
 
         self.db.state_set('active_symbol', self.symbol)
@@ -538,13 +540,7 @@ class Trader:
         if target_lid:sells=[o for o in sells if str(o.get('orderListId'))==target_lid] or sells
         sell=max(sells,key=lambda x:int(x.get('time',x.get('transactTime',0)) or 0)); qty=float(sell.get('executedQty',0) or 0); proceeds=float(sell.get('cummulativeQuoteQty',0) or 0); exit_price=proceeds/qty if qty else float(sell.get('price',0) or 0)
         entry=float(trade['entry_price']); pnl=(exit_price-entry)*min(qty,float(trade['quantity'])); pct=(exit_price/entry-1) if entry else 0
-        exit_time=datetime.fromtimestamp(int(sell.get('transactTime',sell.get('time',0)))/1000,tz=timezone.utc).isoformat()
-        self.db.close_trade(trade['id'],exit_time,exit_price,pnl,pct,'TAKE_PROFIT/STOP_LOSS (recovered)',sell.get('orderListId'))
-        try:
-            trade_journal.record_exit(self.db,{**trade,'exit_time':exit_time},exit_price,pnl,pct,'TAKE_PROFIT/STOP_LOSS (recovered)')
-        except Exception as exc:
-            log.warning('trade journal exit capture failed: %s', exc)
-        self.notify(f'RECOVERY\nPosition closed offline\nexit≈{exit_price:.8f}\nPnL≈{pnl:.8f} ({pct:.2%})')
+        self.db.close_trade(trade['id'],datetime.fromtimestamp(int(sell.get('transactTime',sell.get('time',0)))/1000,tz=timezone.utc).isoformat(),exit_price,pnl,pct,'TAKE_PROFIT/STOP_LOSS (recovered)',sell.get('orderListId')); self.notify(f'RECOVERY\nPosition closed offline\nexit≈{exit_price:.8f}\nPnL≈{pnl:.8f} ({pct:.2%})')
 
     def _spread_pct(self):
         b=self.client.book_ticker(self.symbol); bid=float(b['bidPrice']); ask=float(b['askPrice']); mid=(bid+ask)/2
@@ -681,24 +677,6 @@ class Trader:
     def _is_meaningful_position(self):return self.bot_base_balance()>=self._min_qty()
 
 
-    def _fast_reconcile_open_trade(self):
-        trade = self.db.open_trade(self.symbol)
-        if not trade:
-            return False
-        try:
-            all_orders = self.client.all_orders(self.symbol, limit=200)
-            expected = self._trade_remaining_qty(trade, all_orders)
-            if expected < self._min_qty():
-                self._recover_closed_trade(trade, all_orders)
-                self._set_state('FLAT')
-                self.db.log_event('INFO','fast_reconcile_closed','Detected completed OCO without full recovery',{'trade_id':trade['id']})
-                return True
-            if self.state() == 'EXIT_PENDING':
-                self._set_state('OPEN')
-        except Exception as exc:
-            log.warning('Fast open-trade reconciliation failed: %s', exc)
-        return False
-
     def _auto_scan_process(self):
         """
         Multi-symbol entry pipeline.
@@ -731,11 +709,9 @@ class Trader:
         self._last_auto_scan_monotonic = now_monotonic
 
         if current_state != 'FLAT':
-            if current_state in {'OPEN','EXIT_PENDING'}:
-                self._fast_reconcile_open_trade()
             log.info(
                 'AUTO-SCAN BLOCKED: state=%s symbol=%s',
-                self.state(),
+                current_state,
                 self.symbol,
             )
             return
@@ -1104,11 +1080,6 @@ class Trader:
         )
 
         trade = self.db.open_trade(self.symbol)
-        if trade:
-            try:
-                trade_journal.record_entry(self.db, trade['id'], fresh_candidate)
-            except Exception as exc:
-                log.warning('trade journal entry capture failed: %s', exc)
 
         try:
             self.place_oco(
@@ -1149,31 +1120,23 @@ class Trader:
             f'Order={order.get("orderId")}'
         )
 
-    def _observe_open_trade(self):
-        now = time.monotonic()
-        last = getattr(self, "_journal_last_observe", 0.0)
-        interval = max(5.0, float(os.getenv("JOURNAL_OBSERVE_SECONDS", "10")))
-        if now - last < interval:
-            return
-        trade = self.db.open_trade(self.symbol)
-        if not trade:
-            return
-        try:
-            price = float(self.client.ticker_price(self.symbol)["price"])
-            trade_journal.observe(
-                self.db,
-                trade["id"],
-                trade.get("entry_price"),
-                price,
-                trade.get("side", "LONG"),
-            )
-            self._journal_last_observe = now
-        except Exception as exc:
-            log.debug("trade journal observe failed: %s", exc)
-
     def process(self):
-        self._observe_open_trade()
         if getattr(self, 'auto_scan_enabled', False):
+            if self.max_open_positions > 1:
+                if not hasattr(self, '_multi_position_trader'):
+                    self._multi_position_trader = MultiPositionTrader(
+                        self.client, db=self.db, symbols=self.auto_scan_symbols
+                    )
+                    self._multi_position_trader.recover()
+                result = self._multi_position_trader.scan_and_execute()
+                if result:
+                    self.db.log_event(
+                        'INFO',
+                        'multi_position_cycle',
+                        'Multi-position scan/execution completed',
+                        {'result': result},
+                    )
+                return
             self._auto_scan_process()
             return
 

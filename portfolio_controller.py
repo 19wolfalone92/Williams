@@ -15,61 +15,37 @@ class Selection:
 
 
 class PortfolioController:
-    """
-    Безопасный слой выбора пары.
-
-    ВАЖНО:
-    - не создаёт ордера;
-    - не вызывает BUY/SELL;
-    - не меняет Trader;
-    - MAX_OPEN_POSITIONS = 1.
-    """
+    """Portfolio-level candidate selection and risk allocation."""
 
     def __init__(self, client, balance_quote: float, symbols=None, interval=None):
         self.client = client
         self.interval = interval or os.getenv("INTERVAL", "1h")
-        self.max_open_positions = 1
-
-        self.scanner = MarketScanner(
-            client=client,
-            symbols=symbols,
-            interval=self.interval,
+        self.max_open_positions = max(1, int(os.getenv("MAX_OPEN_POSITIONS", "3")))
+        self.max_total_risk_pct = min(0.01, max(0.0, float(os.getenv("MAX_TOTAL_RISK_PCT", "0.01"))))
+        self.max_risk_per_trade_pct = min(0.005, max(0.0, float(os.getenv("MAX_RISK_PER_TRADE_PCT", "0.005"))))
+        self.min_risk_allocation_pct = min(
+            self.max_risk_per_trade_pct,
+            max(0.0, float(os.getenv("MIN_RISK_ALLOCATION_PCT", "0.001"))),
         )
 
+        self.scanner = MarketScanner(client=client, symbols=symbols, interval=self.interval)
         self.risk_engine = RiskEngine(
             balance_quote=float(balance_quote),
-            risk_per_trade_pct=float(os.getenv("RISK_PER_TRADE_PCT", "0.01")),
+            risk_per_trade_pct=self.max_risk_per_trade_pct,
             max_position_fraction=float(os.getenv("POSITION_FRACTION", "0.25")),
             max_daily_loss_pct=float(os.getenv("MAX_DAILY_LOSS_PCT", "0.03")),
             min_rr=float(os.getenv("MIN_RISK_REWARD", "1.5")),
             max_atr_pct=float(os.getenv("MAX_ATR_PCT", "0.08")),
         )
 
-    def select(self, has_open_position=False) -> Optional[Selection]:
-        # Никогда не выбираем новую позицию поверх существующей.
-        if has_open_position:
-            return None
-
-        candidates = self.scanner.scan()
-
-        if not candidates:
-            return None
-
+    def _analyse_candidates(self, candidates):
         analysed = []
-
         for candidate in candidates:
-            # SETUP_READY / WATCHING только наблюдаем.
-            # Для реального входа нужен строгий сигнал.
             if not candidate.signal:
                 continue
-
             try:
-                entry_price = float(
-                    self.client.ticker_price(candidate.symbol)["price"]
-                )
-
+                entry_price = float(self.client.ticker_price(candidate.symbol)["price"])
                 atr = entry_price * candidate.atr_pct
-
                 risk = self.risk_engine.analyse(
                     symbol=candidate.symbol,
                     entry_price=entry_price,
@@ -79,77 +55,109 @@ class PortfolioController:
                     spread_pct=candidate.spread_pct,
                     max_spread_pct=self.scanner.max_spread_pct,
                 )
-
-                if not risk.allowed:
-                    continue
-
-                analysed.append(
-                    Selection(
+                if risk.allowed:
+                    analysed.append(Selection(
                         candidate=candidate,
                         risk=risk,
                         action="BUY_ALLOWED",
                         reason="STRICT_SIGNAL + risk checks passed",
-                    )
-                )
-
+                    ))
             except Exception as exc:
-                print(
-                    f"[PORTFOLIO] {candidate.symbol}: "
-                    f"risk analysis failed: {exc}"
-                )
+                print(f"[PORTFOLIO] {candidate.symbol}: risk analysis failed: {exc}")
+        return analysed
 
-        if not analysed:
-            return None
-
-        return max(
-            analysed,
-            key=lambda x: (
-                x.candidate.score,
-                x.risk.score,
-                x.risk.risk_reward,
-                -x.risk.stop_distance_pct,
-            ),
+    @staticmethod
+    def _rank(selection):
+        return (
+            selection.candidate.score,
+            selection.risk.score,
+            selection.risk.risk_reward,
+            -selection.risk.stop_distance_pct,
         )
 
-    def dry_run(self, has_open_position=False):
-        selection = self.select(has_open_position)
+    def select_portfolio(self, open_risk_quote: float = 0.0, open_positions: int = 0):
+        """Return best candidates that fit the remaining 1% portfolio risk."""
+        if open_positions >= self.max_open_positions:
+            return []
 
+        analysed = self._analyse_candidates(self.scanner.scan())
+        if not analysed:
+            return []
+
+        analysed.sort(key=self._rank, reverse=True)
+
+        balance = max(self.risk_engine.balance, 0.0)
+        used_pct = float(open_risk_quote) / balance if balance > 0 else self.max_total_risk_pct
+        remaining_pct = max(0.0, self.max_total_risk_pct - used_pct)
+        selections = []
+        slots = self.max_open_positions - int(open_positions)
+
+        for base in analysed:
+            if slots <= 0 or remaining_pct <= 0:
+                break
+
+            allocation_pct = min(self.max_risk_per_trade_pct, remaining_pct)
+            if allocation_pct < self.min_risk_allocation_pct:
+                break
+
+            r = self.risk_engine.analyse(
+                symbol=base.candidate.symbol,
+                entry_price=base.risk.entry_price,
+                atr=base.risk.entry_price * base.candidate.atr_pct,
+                signal_strength=base.candidate.signal_strength,
+                htf_confirmed=base.candidate.htf_confirmed,
+                spread_pct=base.candidate.spread_pct,
+                max_spread_pct=self.scanner.max_spread_pct,
+                risk_pct_override=allocation_pct,
+            )
+            if not r.allowed:
+                continue
+
+            selections.append(Selection(
+                candidate=base.candidate,
+                risk=r,
+                action="BUY_ALLOWED",
+                reason=f"STRICT_SIGNAL + portfolio risk allocation {allocation_pct:.2%}",
+            ))
+            remaining_pct -= allocation_pct
+            slots -= 1
+
+        return selections
+
+    def select(self, has_open_position=False) -> Optional[Selection]:
+        """Backward-compatible single-best selector."""
+        if has_open_position:
+            return None
+        selections = self.select_portfolio(open_risk_quote=0.0, open_positions=0)
+        return selections[0] if selections else None
+
+    def dry_run(self, has_open_position=False):
+        selections = self.select_portfolio(
+            open_risk_quote=0.0,
+            open_positions=1 if has_open_position else 0,
+        )
         print()
         print("=" * 72)
         print("WILLIAMS PORTFOLIO CONTROLLER — DRY RUN")
         print("NO ORDERS")
         print("=" * 72)
-
-        if has_open_position:
+        if has_open_position and self.max_open_positions <= 1:
             print("POSITION: OPEN")
             print("ACTION: BLOCKED")
-            print("REASON: MAX_OPEN_POSITIONS=1")
+            print("REASON: MAX_OPEN_POSITIONS reached")
             return None
-
-        if selection is None:
+        if not selections:
             print("SELECTION: NONE")
             print("ACTION: WAIT")
-            print("REASON: no STRICT_SIGNAL candidate passed risk checks")
+            print("REASON: no STRICT_SIGNAL candidate fits portfolio risk")
             return None
-
-        c = selection.candidate
-        r = selection.risk
-
-        print(f"SELECTED SYMBOL: {c.symbol}")
-        print(f"STATE:            {c.setup_state}")
-        print(f"SCORE:            {c.score:.2f}")
-        print(f"SETUP SCORE:      {c.setup_score:.2f}")
-        print(f"STRICT SIGNAL:    {c.signal}")
-        print(f"HTF CONFIRMED:    {c.htf_confirmed}")
-        print(f"RISK:             {r.risk_pct:.2f}%")
-        print(f"R:R:              {r.risk_reward:.2f}")
-        print(f"ATR:              {c.atr_pct:.3f}%")
-        print(f"SPREAD:           {c.spread_pct:.3f}%")
-        print(f"ACTION:           {selection.action}")
-        print(f"REASON:            {selection.reason}")
+        for i, selection in enumerate(selections, 1):
+            c = selection.candidate
+            r = selection.risk
+            print(f"{i}. {c.symbol} score={c.score:.2f} risk={r.risk_pct:.2f}% R:R={r.risk_reward:.2f} position={r.position_quote:.2f}")
         print()
-        print("ORDERS CREATED:   NO")
-        print("BUY EXECUTED:     NO")
-        print("SELL EXECUTED:    NO")
-
-        return selection
+        print(f"TOTAL NEW RISK: {sum(x.risk.risk_pct for x in selections):.2f}%")
+        print("ORDERS CREATED: NO")
+        print("BUY EXECUTED:   NO")
+        print("SELL EXECUTED:  NO")
+        return selections

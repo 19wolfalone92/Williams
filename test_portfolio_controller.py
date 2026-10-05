@@ -2,6 +2,7 @@ import os
 from dataclasses import dataclass
 
 from portfolio_controller import PortfolioController
+from risk_engine import RiskEngine
 
 
 class FakeClient:
@@ -38,21 +39,22 @@ class FakeRisk:
 def make_controller():
     controller = PortfolioController.__new__(PortfolioController)
     controller.client = FakeClient()
-    controller.max_open_positions = 1
+    controller.max_open_positions = 3
+    controller.max_total_risk_pct = 0.01
+    controller.max_risk_per_trade_pct = 0.005
+    controller.min_risk_allocation_pct = 0.001
     controller.scanner = type("Scanner", (), {
         "max_spread_pct": 0.0015,
         "scan": lambda self: []
     })()
 
-    controller.risk_engine = type("Risk", (), {
-        "analyse": lambda self, **kwargs: FakeRisk(
-            allowed=True,
-            score=90.0,
-            risk_pct=1.0,
-            risk_reward=2.0,
-            stop_distance_pct=2.0,
-        )
-    })()
+    controller.risk_engine = RiskEngine(
+        balance_quote=10000,
+        risk_per_trade_pct=0.005,
+        max_position_fraction=0.25,
+        min_rr=1.5,
+        max_atr_pct=0.08,
+    )
 
     return controller
 
@@ -70,7 +72,7 @@ def test_no_position_selects_best_strict_signal():
             breakout_distance_pct=0.1,
             risk_pct=2.0,
             risk_reward=2.0,
-            atr_pct=0.5,
+            atr_pct=0.005,
             spread_pct=0.001,
             htf_confirmed=True,
             setup_state="STRONG_SIGNAL",
@@ -85,7 +87,7 @@ def test_no_position_selects_best_strict_signal():
             breakout_distance_pct=0.2,
             risk_pct=2.0,
             risk_reward=2.0,
-            atr_pct=0.5,
+            atr_pct=0.005,
             spread_pct=0.001,
             htf_confirmed=True,
             setup_state="STRONG_SIGNAL",
@@ -100,7 +102,7 @@ def test_no_position_selects_best_strict_signal():
             breakout_distance_pct=-0.3,
             risk_pct=2.0,
             risk_reward=2.0,
-            atr_pct=0.5,
+            atr_pct=0.005,
             spread_pct=0.001,
             htf_confirmed=True,
             setup_state="SETUP_READY",
@@ -132,7 +134,7 @@ def test_open_position_blocks_entry():
             breakout_distance_pct=0.1,
             risk_pct=2.0,
             risk_reward=2.0,
-            atr_pct=0.5,
+            atr_pct=0.005,
             spread_pct=0.001,
             htf_confirmed=True,
             setup_state="STRONG_SIGNAL",
@@ -160,7 +162,7 @@ def test_setup_ready_never_enters():
             breakout_distance_pct=-0.2,
             risk_pct=2.0,
             risk_reward=2.0,
-            atr_pct=0.5,
+            atr_pct=0.005,
             spread_pct=0.001,
             htf_confirmed=True,
             setup_state="SETUP_READY",
@@ -206,3 +208,54 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+def test_portfolio_risk_caps_total_at_one_percent():
+    controller = make_controller()
+
+    candidates = []
+    for symbol, score in [("BTCUSDT", 99.0), ("ETHUSDT", 98.0), ("SOLUSDT", 97.0)]:
+        candidates.append(FakeCandidate(
+            symbol=symbol, score=score, signal=True, setup_score=100.0,
+            signal_strength=1.0, breakout_distance_pct=0.1, risk_pct=1.0,
+            risk_reward=2.0, atr_pct=0.005, spread_pct=0.001,
+            htf_confirmed=True, setup_state="STRONG_SIGNAL",
+            reason="strict signal",
+        ))
+    controller.scanner.scan = lambda: candidates
+
+    selections = controller.select_portfolio(open_risk_quote=0.0, open_positions=0)
+
+    assert len(selections) == 2
+    assert all(s.risk.risk_pct <= 0.5 for s in selections)
+    assert abs(sum(s.risk.risk_pct for s in selections) - 1.0) < 1e-9
+    assert [s.candidate.symbol for s in selections] == ["BTCUSDT", "ETHUSDT"]
+    print("[PASS] portfolio total risk <= 1%, per trade <= 0.5%")
+
+
+def test_portfolio_respects_existing_risk():
+    controller = make_controller()
+
+    candidates = [
+        FakeCandidate(
+            symbol="SOLUSDT", score=99.0, signal=True, setup_score=100.0,
+            signal_strength=1.0, breakout_distance_pct=0.1, risk_pct=1.0,
+            risk_reward=2.0, atr_pct=0.005, spread_pct=0.001,
+            htf_confirmed=True, setup_state="STRONG_SIGNAL",
+            reason="strict signal",
+        )
+    ]
+    controller.scanner.scan = lambda: candidates
+
+    selections = controller.select_portfolio(open_risk_quote=80.0, open_positions=1)
+
+    assert len(selections) == 1
+    assert abs(selections[0].risk.risk_pct - 0.2) < 1e-9
+    assert selections[0].risk.risk_quote == 20.0
+    print("[PASS] existing 0.8% risk leaves only 0.2%")
+
+
+if __name__ == "__main__":
+    main()
+    test_portfolio_risk_caps_total_at_one_percent()
+    test_portfolio_respects_existing_risk()

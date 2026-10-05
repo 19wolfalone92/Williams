@@ -30,7 +30,7 @@ class PortfolioScanner:
 
         self.risk_engine = RiskEngine(
             balance_quote=balance_quote,
-            risk_per_trade_pct=0.01,
+            risk_per_trade_pct=0.005,
             max_position_fraction=0.25,
             max_daily_loss_pct=0.03,
             min_rr=1.5,
@@ -112,3 +112,45 @@ class PortfolioScanner:
                 -x.risk.stop_distance_pct,
             ),
         )
+
+
+    def allocate(self, open_risk_quote=0.0, open_positions=0, max_open_positions=3):
+        """Return ranked candidates whose new stop risk fits the 1% portfolio budget."""
+        candidates = self.scan()
+        balance = max(float(self.risk_engine.balance), 0.0)
+        used_pct = float(open_risk_quote) / balance if balance > 0 else 0.01
+        remaining_pct = max(0.0, 0.01 - used_pct)
+        result = []
+
+        for item in candidates:
+            if open_positions + len(result) >= max_open_positions:
+                break
+            allocation_pct = min(0.005, remaining_pct)
+            if allocation_pct < 0.001:
+                break
+
+            entry = item.risk.entry_price
+            atr = entry * item.candidate.atr_pct
+            risk = self.risk_engine.analyse(
+                symbol=item.candidate.symbol,
+                entry_price=entry,
+                atr=atr,
+                signal_strength=1.0,
+                htf_confirmed=item.candidate.htf_confirmed,
+                spread_pct=item.candidate.spread_pct,
+                max_spread_pct=self.scanner.max_spread_pct,
+                risk_pct_override=allocation_pct,
+            )
+            if not risk.allowed:
+                continue
+
+            result.append(
+                PortfolioCandidate(
+                    candidate=item.candidate,
+                    risk=risk,
+                    final_score=item.final_score,
+                )
+            )
+            remaining_pct -= allocation_pct
+
+        return result

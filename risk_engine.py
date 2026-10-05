@@ -17,6 +17,10 @@ class RiskAnalysis:
     allowed: bool
     reason: str
 
+    @property
+    def risk_pct(self):
+        return getattr(self, "_risk_pct", 0.0)
+
     def to_dict(self):
         return {
             "symbol": self.symbol,
@@ -45,7 +49,7 @@ class RiskEngine:
     def __init__(
         self,
         balance_quote: float,
-        risk_per_trade_pct: float = 0.01,
+        risk_per_trade_pct: float = 0.005,
         max_position_fraction: float = 0.25,
         max_daily_loss_pct: float = 0.03,
         min_rr: float = 1.5,
@@ -73,6 +77,7 @@ class RiskEngine:
         max_spread_pct: float = 0.0015,
         stop_atr_multiplier: float = 2.0,
         target_atr_multiplier: float = 4.0,
+        risk_pct_override: float = None,
     ) -> RiskAnalysis:
 
         entry = float(entry_price)
@@ -141,7 +146,10 @@ class RiskEngine:
             )
 
         # Maximum money we are allowed to lose on this trade.
-        risk_quote = self.balance * self.risk_per_trade_pct
+        effective_risk_pct = self.risk_per_trade_pct if risk_pct_override is None else float(risk_pct_override)
+        if effective_risk_pct <= 0:
+            return self._blocked(symbol, entry, "risk allocation is zero")
+        risk_quote = self.balance * effective_risk_pct
 
         # Position size based on actual stop distance.
         risk_based_position = risk_quote / stop_pct
@@ -219,7 +227,7 @@ class RiskEngine:
 
         score = self._clamp(score, 0.0, 100.0)
 
-        return RiskAnalysis(
+        result = RiskAnalysis(
             symbol=symbol.upper(),
             entry_price=entry,
             stop_price=stop_price,
@@ -234,6 +242,8 @@ class RiskEngine:
             allowed=True,
             reason="risk checks passed",
         )
+        result._risk_pct = effective_risk_pct * 100.0
+        return result
 
     def _blocked(self, symbol, entry, reason):
         return RiskAnalysis(
