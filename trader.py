@@ -681,6 +681,24 @@ class Trader:
     def _is_meaningful_position(self):return self.bot_base_balance()>=self._min_qty()
 
 
+    def _fast_reconcile_open_trade(self):
+        trade = self.db.open_trade(self.symbol)
+        if not trade:
+            return False
+        try:
+            all_orders = self.client.all_orders(self.symbol, limit=200)
+            expected = self._trade_remaining_qty(trade, all_orders)
+            if expected < self._min_qty():
+                self._recover_closed_trade(trade, all_orders)
+                self._set_state('FLAT')
+                self.db.log_event('INFO','fast_reconcile_closed','Detected completed OCO without full recovery',{'trade_id':trade['id']})
+                return True
+            if self.state() == 'EXIT_PENDING':
+                self._set_state('OPEN')
+        except Exception as exc:
+            log.warning('Fast open-trade reconciliation failed: %s', exc)
+        return False
+
     def _auto_scan_process(self):
         """
         Multi-symbol entry pipeline.
@@ -713,9 +731,11 @@ class Trader:
         self._last_auto_scan_monotonic = now_monotonic
 
         if current_state != 'FLAT':
+            if current_state in {'OPEN','EXIT_PENDING'}:
+                self._fast_reconcile_open_trade()
             log.info(
                 'AUTO-SCAN BLOCKED: state=%s symbol=%s',
-                current_state,
+                self.state(),
                 self.symbol,
             )
             return
