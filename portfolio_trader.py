@@ -1,290 +1,1166 @@
 import os
-import time
 import uuid
 from datetime import datetime, timezone
+
 from portfolio_controller import PortfolioController
 from db import Database
 
 
-class MultiPositionTrader:
-    """Execution/recovery layer for several independent symbols.
+POSITION_STATES = {
+    "FLAT",
+    "ENTRY_PENDING",
+    "OPEN",
+    "EXIT_PENDING",
+    "RECONCILE_REQUIRED",
+}
 
-    Safety invariants:
-    - total reserved stop risk <= MAX_TOTAL_RISK_PCT (hard capped at 1%);
-    - each position risk <= MAX_RISK_PER_TRADE_PCT (hard capped at 0.5%);
-    - each symbol has an independent DB position state;
-    - every entry gets its own native OCO;
-    - DRY_RUN never sends an order.
+
+class MultiPositionTrader:
+    """Independent lifecycle manager for several Binance Spot positions.
+
+    One SQLite trade row represents one managed position.  The row remains
+    OPEN until exchange evidence proves the position was fully sold.
+
+    Lifecycle:
+        ENTRY_PENDING -> OPEN/EXIT_PENDING -> OPEN -> FLAT
+                         \-> RECONCILE_REQUIRED on ambiguity
     """
+
+    ENTRY_PREFIX = "WILLV4_ENTRY_"
+    OCO_PREFIX = "WILLV4_OCO_"
 
     def __init__(self, client, db=None, symbols=None):
         self.client = client
         self.db = db or Database()
         self.symbols = symbols or [
-            x.strip().upper() for x in os.getenv(
+            x.strip().upper()
+            for x in os.getenv(
                 "AUTO_SCAN_SYMBOLS",
-                "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,ADAUSDT,DOGEUSDT,AVAXUSDT,LINKUSDT,DOTUSDT",
-            ).split(",") if x.strip()
+                "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,ADAUSDT,"
+                "DOGEUSDT,AVAXUSDT,LINKUSDT,DOTUSDT",
+            ).split(",")
+            if x.strip()
         ]
-        self.max_open_positions = max(1, int(os.getenv("MAX_OPEN_POSITIONS", "3")))
-        self.max_total_risk_pct = min(0.01, max(0.0, float(os.getenv("MAX_TOTAL_RISK_PCT", "0.01"))))
-        self.max_risk_per_trade_pct = min(0.005, max(0.0, float(os.getenv("MAX_RISK_PER_TRADE_PCT", "0.005"))))
-        self.dry_run = os.getenv("DRY_RUN", "true").lower() == "true"
-        self.poll_seconds = max(5, int(os.getenv("POLL_SECONDS", "20")))
+        self.max_open_positions = max(
+            1,
+            int(os.getenv("MAX_OPEN_POSITIONS", "3")),
+        )
+        self.max_total_risk_pct = min(
+            0.01,
+            max(
+                0.0,
+                float(os.getenv("MAX_TOTAL_RISK_PCT", "0.01")),
+            ),
+        )
+        self.max_risk_per_trade_pct = min(
+            0.005,
+            max(
+                0.0,
+                float(os.getenv("MAX_RISK_PER_TRADE_PCT", "0.005")),
+            ),
+        )
+        self.dry_run = (
+            os.getenv("DRY_RUN", "true").lower() == "true"
+        )
+        self.poll_seconds = max(
+            5,
+            int(os.getenv("POLL_SECONDS", "20")),
+        )
+        self.balance_tolerance_pct = max(
+            0.002,
+            float(os.getenv("BALANCE_TOLERANCE_PCT", "0.005")),
+        )
         self._locks = set()
+
+    # ------------------------------------------------------------------
+    # Durable state
+    # ------------------------------------------------------------------
 
     def _state_key(self, symbol):
         return f"position_state:{symbol.upper()}"
 
+    def _pending_key(self, symbol):
+        return f"entry_client_order_id:{symbol.upper()}"
+
     def state(self, symbol):
-        return self.db.state_get(self._state_key(symbol), "FLAT")
+        state = self.db.state_get(
+            self._state_key(symbol),
+            "FLAT",
+        )
+        return state if state in POSITION_STATES else "RECONCILE_REQUIRED"
 
     def set_state(self, symbol, state):
-        if state not in {"FLAT", "ENTRY_PENDING", "OPEN", "EXIT_PENDING", "RECONCILE_REQUIRED"}:
+        if state not in POSITION_STATES:
             raise ValueError(f"invalid position state: {state}")
-        self.db.state_set(self._state_key(symbol), state)
+        self.db.state_set(
+            self._state_key(symbol),
+            state,
+        )
 
     def open_trades(self):
-        rows = self.db.conn.execute(
-            "SELECT * FROM trades WHERE exit_time IS NULL ORDER BY id ASC"
-        ).fetchall()
-        return [dict(r) for r in rows]
+        return self.db.open_trades()
 
-    def reserved_risk_quote(self):
-        total = 0.0
-        for trade in self.open_trades():
-            value = trade.get("entry_price", 0.0) * trade.get("quantity", 0.0)
-            stop_pct = float(os.getenv("STOP_LOSS_PCT", "0.02"))
-            total += value * stop_pct
-        return total
+    def open_positions(self):
+        return self.open_trades()
+
+    def unresolved_symbols(self):
+        rows = self.db.conn.execute(
+            "SELECT key,value FROM bot_state "
+            "WHERE key LIKE 'position_state:%' "
+            "ORDER BY key"
+        ).fetchall()
+        return [
+            str(row["key"]).split(":", 1)[1].upper()
+            for row in rows
+            if str(row["value"]).upper() == "RECONCILE_REQUIRED"
+        ]
+
+    # ------------------------------------------------------------------
+    # Account / filters
+    # ------------------------------------------------------------------
 
     def _balance(self):
         account = self.client.account()
-        balances = account.get("balances", [])
-        return sum(float(b.get("free", 0) or 0) + float(b.get("locked", 0) or 0)
-                   for b in balances if b.get("asset") == "USDT")
+        return sum(
+            float(b.get("free", 0) or 0)
+            + float(b.get("locked", 0) or 0)
+            for b in account.get("balances", [])
+            if b.get("asset") == "USDT"
+        )
 
     def _quote_free(self):
         account = self.client.account()
-        for b in account.get("balances", []):
-            if b.get("asset") == "USDT":
-                return float(b.get("free", 0) or 0)
-        return 0.0
+        return next(
+            (
+                float(b.get("free", 0) or 0)
+                for b in account.get("balances", [])
+                if b.get("asset") == "USDT"
+            ),
+            0.0,
+        )
+
+    def _asset_balance(self, symbol, account=None):
+        if account is None:
+            account = self.client.account()
+        info = self.client.exchange_info(symbol)
+        rows = info.get("symbols", [])
+        if not rows:
+            raise RuntimeError(f"{symbol}: symbol metadata unavailable")
+        asset = rows[0]["baseAsset"]
+        return next(
+            (
+                float(b.get("free", 0) or 0)
+                + float(b.get("locked", 0) or 0)
+                for b in account.get("balances", [])
+                if b.get("asset") == asset
+            ),
+            0.0,
+        )
 
     def _filters(self, symbol):
         info = self.client.exchange_info(symbol)
-        s = info.get("symbols", [])[0]
-        return {f["filterType"]: f for f in s.get("filters", [])}
+        rows = info.get("symbols", [])
+        if not rows:
+            raise RuntimeError(f"{symbol}: symbol metadata unavailable")
+        return {
+            f["filterType"]: f
+            for f in rows[0].get("filters", [])
+        }
 
     def _normalize_qty(self, symbol, qty):
-        f = self._filters(symbol).get("LOT_SIZE") or self._filters(symbol).get("MARKET_LOT_SIZE")
+        filters = self._filters(symbol)
+        f = (
+            filters.get("LOT_SIZE")
+            or filters.get("MARKET_LOT_SIZE")
+        )
         step = f["stepSize"] if f else "0.000001"
         min_qty = float(f.get("minQty", 0)) if f else 0.0
-        q = self.client.decimal_floor(qty, step)
-        return float(q) if float(q) >= min_qty else 0.0
+        value = self.client.decimal_floor(qty, step)
+        value = float(value)
+        return value if value >= min_qty else 0.0
 
     def _normalize_price(self, symbol, price):
-        f = self._filters(symbol).get("PRICE_FILTER")
+        filters = self._filters(symbol)
+        f = filters.get("PRICE_FILTER")
         tick = f["tickSize"] if f else "0.01"
         return float(self.client.decimal_floor(price, tick))
 
     def _min_notional(self, symbol):
-        f = self._filters(symbol)
-        n = f.get("NOTIONAL") or f.get("MIN_NOTIONAL") or {}
-        return float(n.get("minNotional", 0) or 0)
+        filters = self._filters(symbol)
+        f = filters.get("NOTIONAL") or filters.get("MIN_NOTIONAL") or {}
+        return float(f.get("minNotional", 0) or 0)
 
-    def _allocation_quote(self, balance, risk_pct, stop_pct):
-        risk_quote = balance * risk_pct
-        return min(balance * float(os.getenv("POSITION_FRACTION", "0.25")),
-                   risk_quote / max(stop_pct, 1e-9))
+    # ------------------------------------------------------------------
+    # Order-list helpers
+    # ------------------------------------------------------------------
 
-    def _create_oco(self, symbol, qty, entry, trade_id):
+    @staticmethod
+    def _list_rows(payload):
+        if isinstance(payload, list):
+            return payload
+        if not isinstance(payload, dict):
+            return []
+        for key in (
+            "orderList",
+            "orderLists",
+            "ordersLists",
+            "result",
+        ):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return value
+        return []
+
+    def _open_order_lists(self):
+        return self._list_rows(
+            self.client.open_order_lists()
+        )
+
+    def _all_order_lists(self, symbol=None):
+        method = getattr(self.client, "all_order_lists", None)
+        if method is None:
+            return []
+        return self._list_rows(
+            method(symbol=symbol, limit=100)
+        )
+
+    def _bot_oco_list(self, trade, open_lists, history_lists):
+        wanted_id = str(
+            trade.get("exit_order_list_id") or ""
+        )
+        wanted_client = str(
+            trade.get("exit_order_list_client_id") or ""
+        )
+        for row in open_lists + history_lists:
+            row_symbol = str(row.get("symbol", "")).upper()
+            if row_symbol != str(trade["symbol"]).upper():
+                continue
+            lid = str(row.get("orderListId", ""))
+            cid = str(row.get("listClientOrderId", ""))
+            if wanted_id and lid == wanted_id:
+                return row
+            if wanted_client and cid == wanted_client:
+                return row
+            if cid.startswith(self.OCO_PREFIX):
+                return row
+        return None
+
+    @staticmethod
+    def _filled_qty(rows):
+        return sum(
+            float(row.get("executedQty", 0) or 0)
+            for row in rows
+            if str(row.get("side", "")).upper() == "SELL"
+            and str(row.get("status", "")).upper() == "FILLED"
+        )
+
+    @staticmethod
+    def _exit_price(row):
+        qty = float(row.get("executedQty", 0) or 0)
+        quote = float(row.get("cummulativeQuoteQty", 0) or 0)
+        if qty > 0 and quote > 0:
+            return quote / qty
+        return float(row.get("price", 0) or 0)
+
+    @staticmethod
+    def _exit_reason(row):
+        typ = str(row.get("type", "")).upper()
+        if "TAKE_PROFIT" in typ:
+            return "TAKE_PROFIT"
+        if "STOP_LOSS" in typ:
+            return "STOP_LOSS"
+        return "BOT_OCO_EXIT"
+
+    def _bot_exit_orders(self, trade, all_orders, oco):
+        entry_id = str(trade.get("entry_order_id") or "")
+        entry_order = next(
+            (
+                o for o in all_orders
+                if str(o.get("orderId")) == entry_id
+            ),
+            None,
+        )
+        entry_time = int(
+            (
+                entry_order.get("time", entry_order.get("transactTime", 0))
+                if entry_order else 0
+            ) or 0
+        )
+
+        list_id = str(
+            trade.get("exit_order_list_id") or ""
+        )
+        if not list_id and oco:
+            list_id = str(oco.get("orderListId", ""))
+
+        result = []
+        for order in all_orders:
+            if str(order.get("symbol", "")).upper() != str(trade["symbol"]).upper():
+                continue
+            if str(order.get("side", "")).upper() != "SELL":
+                continue
+            order_time = int(
+                order.get("time", order.get("transactTime", 0)) or 0
+            )
+            if order_time < entry_time:
+                continue
+            order_list_id = str(order.get("orderListId", ""))
+            client_id = str(order.get("clientOrderId", ""))
+            if (
+                list_id
+                and order_list_id == list_id
+            ) or (
+                client_id.startswith(self.OCO_PREFIX)
+            ):
+                result.append(order)
+
+        return result
+
+    # ------------------------------------------------------------------
+    # Risk
+    # ------------------------------------------------------------------
+
+    def reserved_risk_quote(self):
+        total = 0.0
+        for trade in self.open_trades():
+            entry = float(trade.get("entry_price") or 0.0)
+            qty = float(trade.get("quantity") or 0.0)
+            stop = float(trade.get("stop_price") or 0.0)
+            if entry <= 0 or qty <= 0:
+                continue
+            if stop > 0:
+                stop_fraction = max(
+                    0.0,
+                    (entry - stop) / entry,
+                )
+            else:
+                stop_fraction = float(
+                    os.getenv("STOP_LOSS_PCT", "0.02")
+                )
+            total += entry * qty * stop_fraction
+        return total
+
+    def _allocation_quote(self, balance, risk_fraction, stop_fraction):
+        risk_quote = balance * risk_fraction
+        return min(
+            balance * float(os.getenv("POSITION_FRACTION", "0.25")),
+            risk_quote / max(stop_fraction, 1e-9),
+        )
+
+    # ------------------------------------------------------------------
+    # Protection
+    # ------------------------------------------------------------------
+
+    def _create_oco(
+        self,
+        symbol,
+        qty,
+        entry,
+        trade_id,
+        stop_fraction=None,
+        target_fraction=None,
+        risk_pct=None,
+    ):
         filters = self._filters(symbol)
         qty = self._normalize_qty(symbol, qty)
         if qty <= 0:
-            raise RuntimeError(f"{symbol}: quantity below LOT_SIZE minimum")
+            raise RuntimeError(
+                f"{symbol}: quantity below LOT_SIZE minimum"
+            )
 
-        stop_pct = float(os.getenv("STOP_LOSS_PCT", "0.02"))
-        target_pct = float(os.getenv("TAKE_PROFIT_PCT", "0.04"))
-        tp = self._normalize_price(symbol, entry * (1 + target_pct))
-        sl = self._normalize_price(symbol, entry * (1 - stop_pct))
-        tick = float((filters.get("PRICE_FILTER") or {}).get("tickSize", "0.01"))
-        sl_limit = self._normalize_price(symbol, max(sl - tick * 2, tick))
+        stop_fraction = (
+            float(stop_fraction)
+            if stop_fraction is not None
+            else float(os.getenv("STOP_LOSS_PCT", "0.02"))
+        )
+        target_fraction = (
+            float(target_fraction)
+            if target_fraction is not None
+            else float(os.getenv("TAKE_PROFIT_PCT", "0.04"))
+        )
+
+        if not (0 < stop_fraction < 1):
+            raise RuntimeError(
+                f"{symbol}: invalid stop fraction {stop_fraction}"
+            )
+        if not (0 < target_fraction < 10):
+            raise RuntimeError(
+                f"{symbol}: invalid target fraction {target_fraction}"
+            )
+
+        tp = self._normalize_price(
+            symbol,
+            entry * (1.0 + target_fraction),
+        )
+        sl = self._normalize_price(
+            symbol,
+            entry * (1.0 - stop_fraction),
+        )
+        tick = float(
+            (filters.get("PRICE_FILTER") or {}).get(
+                "tickSize",
+                "0.01",
+            )
+        )
+        sl_limit = self._normalize_price(
+            symbol,
+            max(sl - tick * 2, tick),
+        )
 
         if not (tp > entry > sl > sl_limit):
-            raise RuntimeError(f"{symbol}: invalid rounded TP/SL")
+            raise RuntimeError(
+                f"{symbol}: invalid rounded TP/SL"
+            )
 
-        cid = f"WILLV4_OCO_{uuid.uuid4().hex[:20]}"
+        client_id = f"{self.OCO_PREFIX}{uuid.uuid4().hex[:20]}"
         self.set_state(symbol, "EXIT_PENDING")
+
         result = self.client.create_oco_sell(
             symbol,
             self.client.decimal_format(qty),
             self.client.decimal_format(tp),
             self.client.decimal_format(sl),
             self.client.decimal_format(sl_limit),
-            cid,
+            client_id,
         )
+
         for leg in result.get("orderReports", []):
             self.db.save_order(leg)
-        if result.get("orderListId") is not None:
-            self.db.update_trade_oco(trade_id, result["orderListId"])
+
+        order_list_id = result.get("orderListId")
+        list_client_id = (
+            result.get("listClientOrderId")
+            or client_id
+        )
+
+        if order_list_id is not None:
+            self.db.update_trade_oco(
+                trade_id,
+                order_list_id,
+                list_client_order_id=list_client_id,
+                stop_price=sl,
+                take_profit_price=tp,
+                risk_pct=risk_pct,
+            )
+        else:
+            raise RuntimeError(
+                f"{symbol}: Binance OCO response has no orderListId"
+            )
+
         self.set_state(symbol, "OPEN")
         return result
 
-    def recover(self):
-        """Reconcile every open DB trade independently and restore missing OCO protection."""
-        for trade in self.open_trades():
-            symbol = trade["symbol"].upper()
-            try:
-                self.set_state(symbol, "OPEN")
-                open_lists = self.client.open_order_lists()
-                active_lists = open_lists.get("orderList", open_lists if isinstance(open_lists, list) else [])
-                if any(
-                    str(x.get("symbol", symbol)).upper() == symbol
-                    and str(x.get("listOrderStatus", x.get("listStatusType", ""))).upper()
-                    in {"EXEC_STARTED", "EXECUTING", "NEW"}
-                    for x in active_lists
-                ):
-                    continue
+    # ------------------------------------------------------------------
+    # Entry recovery
+    # ------------------------------------------------------------------
 
-                # If a bot-owned exit already filled, close the DB trade instead
-                # of creating a new OCO against a position that no longer exists.
-                orders = self.client.all_orders(symbol, limit=1000)
-                entry_id = str(trade.get("entry_order_id") or "")
-                entry_time = int(next(
-                    (o.get("time", o.get("transactTime", 0)) for o in orders
-                     if str(o.get("orderId")) == entry_id), 0
-                ) or 0)
-                sells = [
-                    o for o in orders
-                    if o.get("side") == "SELL"
-                    and str(o.get("status", "")).upper() == "FILLED"
-                    and int(o.get("time", o.get("transactTime", 0)) or 0) >= entry_time
-                    and str(o.get("clientOrderId", "")).startswith(("WILLV4_OCO_", "tp-", "sl-"))
-                ]
-                if sells:
-                    sell = max(sells, key=lambda x: int(x.get("time", x.get("transactTime", 0)) or 0))
-                    qty = float(sell.get("executedQty", 0) or 0)
-                    proceeds = float(sell.get("cummulativeQuoteQty", 0) or 0)
-                    exit_price = proceeds / qty if qty else float(sell.get("price", 0) or 0)
-                    entry = float(trade["entry_price"])
-                    pnl = (exit_price - entry) * min(qty, float(trade["quantity"]))
-                    pct = (exit_price / entry - 1) if entry else 0
-                    self.db.close_trade(
-                        trade["id"],
-                        datetime.fromtimestamp(
-                            int(sell.get("transactTime", sell.get("time", 0))) / 1000,
-                            tz=timezone.utc,
-                        ).isoformat(),
-                        exit_price,
-                        pnl,
-                        pct,
-                        "TAKE_PROFIT/STOP_LOSS (multi recovery)",
-                        sell.get("orderListId"),
+    def _pending_entries(self):
+        rows = self.db.conn.execute(
+            "SELECT key,value FROM bot_state "
+            "WHERE key LIKE 'entry_client_order_id:%' "
+            "ORDER BY key"
+        ).fetchall()
+        return [
+            (
+                str(row["key"]).split(":", 1)[1].upper(),
+                str(row["value"]),
+            )
+            for row in rows
+            if str(row["value"]).strip()
+        ]
+
+    def recover_pending_entries(self):
+        results = []
+        for symbol, client_id in self._pending_entries():
+            try:
+                order = self.client.get_order(
+                    symbol,
+                    orig_client_order_id=client_id,
+                )
+                self.db.save_order(order)
+
+                status = str(
+                    order.get("status", "")
+                ).upper()
+
+                if status in {"CANCELED", "EXPIRED", "REJECTED"}:
+                    self.db.state_delete(
+                        self._pending_key(symbol)
                     )
                     self.set_state(symbol, "FLAT")
-                    continue
-
-                # No active OCO and position still exists: restore protection.
-                info = self.client.exchange_info(symbol)
-                asset = info["symbols"][0]["baseAsset"]
-                account = self.client.account()
-                qty = next(
-                    (float(b.get("free", 0) or 0) + float(b.get("locked", 0) or 0)
-                     for b in account.get("balances", []) if b.get("asset") == asset),
-                    0.0,
-                )
-                if qty <= 0:
-                    self.set_state(symbol, "RECONCILE_REQUIRED")
-                    self.db.log_event(
-                        "ERROR", "multi_position_recovery_required",
-                        "Open DB trade has no exchange position and no filled bot exit",
-                        {"symbol": symbol, "trade_id": trade["id"]},
+                    results.append(
+                        {"symbol": symbol, "state": "FLAT"}
                     )
                     continue
 
-                self._create_oco(symbol, min(qty, float(trade["quantity"])),
-                                 float(trade["entry_price"]), trade["id"])
-                self.db.log_event(
-                    "INFO", "multi_position_oco_restored",
-                    "Missing OCO protection restored during recovery",
-                    {"symbol": symbol, "trade_id": trade["id"]},
+                if status != "FILLED":
+                    self.set_state(symbol, "ENTRY_PENDING")
+                    continue
+
+                qty = float(
+                    order.get("executedQty", 0) or 0
+                )
+                spent = float(
+                    order.get("cummulativeQuoteQty", 0) or 0
+                )
+                if qty <= 0 or spent <= 0:
+                    raise RuntimeError(
+                        f"{symbol}: pending BUY has invalid fill"
+                    )
+
+                entry = spent / qty
+                existing = self.db.trade_by_entry_client_order_id(
+                    client_id
+                )
+                trade = existing or self.db.open_trade(symbol)
+
+                if trade is None:
+                    trade_id = self.db.save_trade(
+                        entry_time=datetime.fromtimestamp(
+                            int(
+                                order.get(
+                                    "transactTime",
+                                    order.get("time", 0),
+                                )
+                            ) / 1000,
+                            tz=timezone.utc,
+                        ).isoformat(),
+                        symbol=symbol,
+                        side="LONG",
+                        entry_price=entry,
+                        quantity=qty,
+                        entry_order_id=str(
+                            order.get("orderId")
+                        ),
+                        entry_client_order_id=client_id,
+                        fees=0,
+                    )
+                    trade = self.db.open_trade(symbol)
+                    trade_id = int(trade["id"])
+                else:
+                    trade_id = int(trade["id"])
+
+                self.db.state_delete(
+                    self._pending_key(symbol)
+                )
+
+                # Recover the protection if it is missing.
+                self._reconcile_trade(trade_id)
+
+                results.append(
+                    {
+                        "symbol": symbol,
+                        "trade_id": trade_id,
+                        "state": self.state(symbol),
+                    }
                 )
             except Exception as exc:
-                self.set_state(symbol, "RECONCILE_REQUIRED")
-                self.db.log_event(
-                    "ERROR", "multi_position_recovery_error", str(exc),
-                    {"symbol": symbol, "trade_id": trade["id"]},
+                self.set_state(
+                    symbol,
+                    "RECONCILE_REQUIRED",
                 )
+                self.db.log_event(
+                    "ERROR",
+                    "multi_position_pending_entry_error",
+                    str(exc),
+                    {
+                        "symbol": symbol,
+                        "clientOrderId": client_id,
+                    },
+                )
+                results.append(
+                    {
+                        "symbol": symbol,
+                        "state": "RECONCILE_REQUIRED",
+                        "error": str(exc),
+                    }
+                )
+        return results
+
+    # ------------------------------------------------------------------
+    # Position reconciliation
+    # ------------------------------------------------------------------
+
+    def _reconcile_trade(self, trade_id):
+        trade = next(
+            (
+                row for row in self.open_trades()
+                if int(row["id"]) == int(trade_id)
+            ),
+            None,
+        )
+        if trade is None:
+            return {
+                "trade_id": trade_id,
+                "state": "FLAT",
+            }
+
+        symbol = str(trade["symbol"]).upper()
+
+        all_orders = self.client.all_orders(
+            symbol,
+            limit=1000,
+        )
+        for order in all_orders:
+            self.db.save_order(order)
+
+        open_lists = self._open_order_lists()
+        history_lists = self._all_order_lists(symbol=symbol)
+        oco = self._bot_oco_list(
+            trade,
+            open_lists,
+            history_lists,
+        )
+
+        if oco:
+            if not trade.get("exit_order_list_id"):
+                self.db.update_trade_oco(
+                    trade["id"],
+                    oco.get("orderListId"),
+                    list_client_order_id=oco.get(
+                        "listClientOrderId"
+                    ),
+                )
+                trade = self.db.open_trade(symbol)
+
+        exit_orders = self._bot_exit_orders(
+            trade,
+            all_orders,
+            oco,
+        )
+        filled_exits = [
+            order for order in exit_orders
+            if str(order.get("status", "")).upper() == "FILLED"
+        ]
+        sold_qty = self._filled_qty(filled_exits)
+
+        entry_id = str(
+            trade.get("entry_order_id") or ""
+        )
+        entry_order = next(
+            (
+                o for o in all_orders
+                if str(o.get("orderId")) == entry_id
+            ),
+            None,
+        )
+        bought_qty = float(
+            entry_order.get("executedQty", 0) or 0
+        ) if entry_order else float(
+            trade.get("quantity") or 0
+        )
+
+        managed_original_qty = min(
+            float(trade.get("quantity") or bought_qty),
+            bought_qty or float(trade.get("quantity") or 0),
+        )
+        remaining_expected = max(
+            0.0,
+            managed_original_qty - sold_qty,
+        )
+
+        if filled_exits and remaining_expected <= 0:
+            last_exit = max(
+                filled_exits,
+                key=lambda row: int(
+                    row.get(
+                        "time",
+                        row.get("transactTime", 0),
+                    ) or 0
+                ),
+            )
+            exit_price = self._exit_price(last_exit)
+            entry_price = float(trade["entry_price"])
+            pnl = (
+                (exit_price - entry_price)
+                * managed_original_qty
+            )
+            pnl_pct = (
+                exit_price / entry_price - 1.0
+                if entry_price else 0.0
+            )
+            self.db.close_trade(
+                trade["id"],
+                datetime.fromtimestamp(
+                    int(
+                        last_exit.get(
+                            "transactTime",
+                            last_exit.get("time", 0),
+                        )
+                    ) / 1000,
+                    tz=timezone.utc,
+                ).isoformat(),
+                exit_price,
+                pnl,
+                pnl_pct,
+                self._exit_reason(last_exit),
+                last_exit.get("orderListId"),
+            )
+            self.set_state(symbol, "FLAT")
+            self.db.log_event(
+                "INFO",
+                "position_closed",
+                f"{symbol} position fully closed by managed exit",
+                {
+                    "trade_id": trade["id"],
+                    "quantity": managed_original_qty,
+                    "sold_qty": sold_qty,
+                    "exit_price": exit_price,
+                    "reason": self._exit_reason(last_exit),
+                },
+            )
+            return {
+                "trade_id": trade["id"],
+                "symbol": symbol,
+                "state": "FLAT",
+                "closed": True,
+            }
+
+        account = self.client.account()
+        exchange_qty = self._asset_balance(
+            symbol,
+            account=account,
+        )
+
+        if exchange_qty < 0:
+            raise RuntimeError(
+                f"{symbol}: invalid negative exchange balance"
+            )
+
+        if remaining_expected < float(os.getenv("MIN_RECOVERY_QTY", "0.000001")):
+            if filled_exits:
+                last_exit = max(
+                    filled_exits,
+                    key=lambda row: int(
+                        row.get(
+                            "time",
+                            row.get("transactTime", 0),
+                        ) or 0
+                    ),
+                )
+                self.db.close_trade(
+                    trade["id"],
+                    datetime.fromtimestamp(
+                        int(
+                            last_exit.get(
+                                "transactTime",
+                                last_exit.get("time", 0),
+                            )
+                        ) / 1000,
+                        tz=timezone.utc,
+                    ).isoformat(),
+                    self._exit_price(last_exit),
+                    0.0,
+                    0.0,
+                    self._exit_reason(last_exit),
+                    last_exit.get("orderListId"),
+                )
+                self.set_state(symbol, "FLAT")
+                return {
+                    "trade_id": trade["id"],
+                    "symbol": symbol,
+                    "state": "FLAT",
+                    "closed": True,
+                }
+            raise RuntimeError(
+                f"{symbol}: open trade has no remaining quantity and no "
+                "filled managed exit evidence"
+            )
+
+        tolerance = max(
+            float(os.getenv("MIN_RECOVERY_QTY", "0.000001")),
+            remaining_expected * self.balance_tolerance_pct,
+        )
+        if abs(exchange_qty - remaining_expected) > tolerance:
+            raise RuntimeError(
+                f"{symbol}: managed quantity mismatch; "
+                f"expected={remaining_expected:.12g}, "
+                f"exchange={exchange_qty:.12g}"
+            )
+
+        # An unrelated user SELL against this managed symbol is ambiguous.
+        open_orders = self.client.open_orders(symbol)
+        unknown_sells = [
+            order for order in open_orders
+            if str(order.get("side", "")).upper() == "SELL"
+            and str(order.get("orderListId", "")) != str(
+                trade.get("exit_order_list_id") or ""
+            )
+            and not str(order.get("clientOrderId", "")).startswith(
+                self.OCO_PREFIX
+            )
+        ]
+        if unknown_sells:
+            raise RuntimeError(
+                f"{symbol}: unrecognized open SELL order conflicts "
+                "with managed position"
+            )
+
+        # If the OCO is active, position is safely OPEN.
+        active_list = False
+        for row in open_lists:
+            if str(row.get("symbol", "")).upper() != symbol:
+                continue
+            same_id = (
+                str(row.get("orderListId", ""))
+                == str(trade.get("exit_order_list_id") or "")
+            )
+            same_client = (
+                str(row.get("listClientOrderId", ""))
+                == str(trade.get("exit_order_list_client_id") or "")
+            )
+            prefix = str(
+                row.get("listClientOrderId", "")
+            ).startswith(self.OCO_PREFIX)
+            if same_id or same_client or prefix:
+                active_list = True
+                break
+
+        if active_list:
+            self.set_state(symbol, "OPEN")
+            if abs(exchange_qty - float(trade["quantity"])) > tolerance:
+                self.db.update_trade_quantity(
+                    trade["id"],
+                    min(exchange_qty, remaining_expected),
+                )
+            return {
+                "trade_id": trade["id"],
+                "symbol": symbol,
+                "state": "OPEN",
+                "protected": True,
+            }
+
+        # No managed OCO is currently open, but the position exists.
+        # Recreate protection using the originally stored price distances.
+        entry = float(trade["entry_price"])
+        stop = float(trade.get("stop_price") or 0.0)
+        take = float(trade.get("take_profit_price") or 0.0)
+
+        stop_fraction = (
+            (entry - stop) / entry
+            if entry > 0 and stop > 0
+            else float(os.getenv("STOP_LOSS_PCT", "0.02"))
+        )
+        target_fraction = (
+            (take - entry) / entry
+            if entry > 0 and take > entry
+            else float(os.getenv("TAKE_PROFIT_PCT", "0.04"))
+        )
+
+        self._create_oco(
+            symbol,
+            min(exchange_qty, remaining_expected),
+            entry,
+            trade["id"],
+            stop_fraction=stop_fraction,
+            target_fraction=target_fraction,
+            risk_pct=trade.get("risk_pct"),
+        )
+        self.db.log_event(
+            "WARNING",
+            "multi_position_oco_restored",
+            "Missing managed OCO protection restored",
+            {
+                "symbol": symbol,
+                "trade_id": trade["id"],
+                "quantity": min(exchange_qty, remaining_expected),
+            },
+        )
+        return {
+            "trade_id": trade["id"],
+            "symbol": symbol,
+            "state": "OPEN",
+            "protected": True,
+            "oco_restored": True,
+        }
+
+    def reconcile_open_positions(self):
+        """Reconcile all managed positions; block globally on ambiguity."""
+        pending = self.recover_pending_entries()
+
+        trades = list(self.open_trades())
+        results = list(pending)
+
+        if not trades:
+            return results
+
+        for trade in list(trades):
+            symbol = str(trade["symbol"]).upper()
+            try:
+                results.append(
+                    self._reconcile_trade(
+                        int(trade["id"])
+                    )
+                )
+            except Exception as exc:
+                self.set_state(
+                    symbol,
+                    "RECONCILE_REQUIRED",
+                )
+                self.db.log_event(
+                    "ERROR",
+                    "multi_position_reconcile_required",
+                    str(exc),
+                    {
+                        "symbol": symbol,
+                        "trade_id": trade["id"],
+                    },
+                )
+                results.append(
+                    {
+                        "trade_id": trade["id"],
+                        "symbol": symbol,
+                        "state": "RECONCILE_REQUIRED",
+                        "error": str(exc),
+                    }
+                )
+
+        return results
+
+    def recover(self):
+        """Startup/full recovery. No new entry is allowed until it is clean."""
+        results = self.reconcile_open_positions()
+        unresolved = self.unresolved_symbols()
+        ok = not unresolved and not self._pending_entries()
+        self.db.log_event(
+            "INFO" if ok else "ERROR",
+            "multi_position_recovery_complete",
+            "Multi-position exchange/SQLite reconciliation complete",
+            {
+                "open_positions": len(self.open_trades()),
+                "unresolved_symbols": unresolved,
+                "pending_entries": [x[0] for x in self._pending_entries()],
+            },
+        )
+        return {
+            "ok": ok,
+            "results": results,
+            "open_positions": len(self.open_trades()),
+            "unresolved_symbols": unresolved,
+        }
+
+    # ------------------------------------------------------------------
+    # New entries
+    # ------------------------------------------------------------------
+
+    def _can_enter(self, symbol):
+        if symbol in self._locks:
+            return False
+        if self.state(symbol) == "RECONCILE_REQUIRED":
+            return False
+        if self.db.open_trade(symbol):
+            return False
+        if any(self.state(s) == "RECONCILE_REQUIRED" for s in self.symbols):
+            return False
+        return True
 
     def execute(self, selections):
         if self.dry_run:
-            return [{"symbol": s.candidate.symbol, "risk_pct": s.risk.risk_pct, "dry_run": True}
-                    for s in selections]
+            return [
+                {
+                    "symbol": selection.candidate.symbol,
+                    "risk_pct": selection.risk.risk_pct,
+                    "dry_run": True,
+                }
+                for selection in selections
+            ]
 
         results = []
         for selection in selections:
             if len(self.open_trades()) >= self.max_open_positions:
                 break
+
             symbol = selection.candidate.symbol.upper()
-            if symbol in self._locks or self.db.open_trade(symbol):
-                continue
-            if self.state(symbol) == "RECONCILE_REQUIRED":
+            if not self._can_enter(symbol):
                 continue
 
             balance = self._balance()
+            if balance <= 0:
+                break
+
             open_risk = self.reserved_risk_quote()
             total_risk_quote = balance * self.max_total_risk_pct
-            remaining = max(0.0, total_risk_quote - open_risk)
-            requested = min(balance * selection.risk.risk_pct / 100.0, remaining)
-            stop_pct = float(os.getenv("STOP_LOSS_PCT", "0.02"))
-            quote = self._allocation_quote(balance, requested / max(balance, 1e-9), stop_pct)
-            quote = min(quote, self._quote_free())
+            remaining_risk_quote = max(
+                0.0,
+                total_risk_quote - open_risk,
+            )
+            requested_risk_pct = min(
+                self.max_risk_per_trade_pct,
+                max(
+                    0.0,
+                    float(selection.risk.risk_pct) / 100.0,
+                ),
+                remaining_risk_quote / max(balance, 1e-9),
+            )
+
+            stop_fraction = (
+                float(selection.risk.stop_distance_pct) / 100.0
+            )
+            target_fraction = (
+                float(selection.risk.take_profit_pct) / 100.0
+            )
+
+            if (
+                requested_risk_pct <= 0
+                or stop_fraction <= 0
+                or target_fraction <= 0
+            ):
+                continue
+
+            quote = self._allocation_quote(
+                balance,
+                requested_risk_pct,
+                stop_fraction,
+            )
+            quote = min(
+                quote,
+                self._quote_free(),
+            )
             if quote < self._min_notional(symbol):
                 continue
 
             self._locks.add(symbol)
-            cid = f"WILLV4_ENTRY_{uuid.uuid4().hex[:20]}"
-            self.set_state(symbol, "ENTRY_PENDING")
-            self.db.state_set(f"entry_client_order_id:{symbol}", cid)
+            client_id = (
+                f"{self.ENTRY_PREFIX}{uuid.uuid4().hex[:20]}"
+            )
+            self.set_state(
+                symbol,
+                "ENTRY_PENDING",
+            )
+            self.db.state_set(
+                self._pending_key(symbol),
+                client_id,
+            )
+
             try:
                 order = self.client.order(
-                    symbol, "BUY", "MARKET",
+                    symbol,
+                    "BUY",
+                    "MARKET",
                     quote_order_qty=self.client.decimal_format(quote),
-                    new_client_order_id=cid,
+                    new_client_order_id=client_id,
                 )
                 self.db.save_order(order)
-                qty = float(order.get("executedQty", 0) or 0)
-                spent = float(order.get("cummulativeQuoteQty", 0) or 0)
-                entry = spent / qty if spent and qty else float(order.get("price", 0) or 0)
-                if qty <= 0 or entry <= 0:
-                    raise RuntimeError(f"{symbol}: BUY returned invalid fill")
+
+                qty = float(
+                    order.get("executedQty", 0) or 0
+                )
+                spent = float(
+                    order.get("cummulativeQuoteQty", 0) or 0
+                )
+                if qty <= 0 or spent <= 0:
+                    raise RuntimeError(
+                        f"{symbol}: BUY returned invalid fill"
+                    )
+
+                entry = spent / qty
                 trade_id = self.db.save_trade(
                     entry_time=datetime.now(timezone.utc).isoformat(),
-                    symbol=symbol, side="LONG", entry_price=entry, quantity=qty,
-                    entry_order_id=str(order.get("orderId")), fees=0,
+                    symbol=symbol,
+                    side="LONG",
+                    entry_price=entry,
+                    quantity=qty,
+                    entry_order_id=str(order.get("orderId")),
+                    entry_client_order_id=client_id,
+                    stop_price=self._normalize_price(
+                        symbol,
+                        entry * (1.0 - stop_fraction),
+                    ),
+                    take_profit_price=self._normalize_price(
+                        symbol,
+                        entry * (1.0 + target_fraction),
+                    ),
+                    risk_pct=requested_risk_pct * 100.0,
+                    fees=0,
                 )
-                self.db.state_delete(f"entry_client_order_id:{symbol}")
-                self.set_state(symbol, "OPEN")
-                self._create_oco(symbol, qty, entry, trade_id)
-                results.append({"symbol": symbol, "trade_id": trade_id, "risk_pct": selection.risk.risk_pct})
+
+                self.db.state_delete(
+                    self._pending_key(symbol)
+                )
+
+                self._create_oco(
+                    symbol,
+                    qty,
+                    entry,
+                    trade_id,
+                    stop_fraction=stop_fraction,
+                    target_fraction=target_fraction,
+                    risk_pct=requested_risk_pct * 100.0,
+                )
+
+                self.set_state(
+                    symbol,
+                    "OPEN",
+                )
+                results.append(
+                    {
+                        "symbol": symbol,
+                        "trade_id": trade_id,
+                        "risk_pct": requested_risk_pct * 100.0,
+                        "entry_price": entry,
+                        "quantity": qty,
+                    }
+                )
             except Exception as exc:
-                self.set_state(symbol, "RECONCILE_REQUIRED")
-                self.db.log_event("ERROR", "multi_position_entry_error", str(exc),
-                                  {"symbol": symbol, "clientOrderId": cid})
-                results.append({"symbol": symbol, "error": str(exc), "reconcile_required": True})
+                # Do NOT issue an emergency SELL here. The durable entry
+                # intent remains on disk and startup/next cycle recovery
+                # will inspect the exact Binance clientOrderId.
+                self.set_state(
+                    symbol,
+                    "RECONCILE_REQUIRED",
+                )
+                self.db.log_event(
+                    "ERROR",
+                    "multi_position_entry_error",
+                    str(exc),
+                    {
+                        "symbol": symbol,
+                        "clientOrderId": client_id,
+                    },
+                )
+                results.append(
+                    {
+                        "symbol": symbol,
+                        "error": str(exc),
+                        "reconcile_required": True,
+                    }
+                )
             finally:
                 self._locks.discard(symbol)
+
         return results
 
     def scan_and_execute(self):
+        recovery = self.recover()
+        if not recovery["ok"]:
+            return {
+                "status": "BLOCKED",
+                "recovery": recovery,
+                "results": [],
+            }
+
         balance = self._balance()
+        if balance <= 0:
+            return {
+                "status": "WAIT",
+                "results": [],
+                "reason": "no USDT balance",
+            }
+
         controller = PortfolioController(
-            self.client, balance_quote=balance, symbols=self.symbols
+            self.client,
+            balance_quote=balance,
+            symbols=self.symbols,
         )
-        trades = self.open_trades()
+        open_trades = self.open_trades()
         selections = controller.select_portfolio(
             open_risk_quote=self.reserved_risk_quote(),
-            open_positions=len(trades),
+            open_positions=len(open_trades),
         )
-        return self.execute(selections)
+        return {
+            "status": "EXECUTED",
+            "recovery": recovery,
+            "results": self.execute(selections),
+            "open_positions": len(self.open_trades()),
+            "reserved_risk_quote": self.reserved_risk_quote(),
+        }
