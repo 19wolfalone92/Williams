@@ -391,12 +391,14 @@ private class NativeEngine(
     private val primarySymbol = "BTCUSDT"
     private val interval = "1h"
 
-    private val maxScanSymbols = 60
-    private val waveTopN = 8
+    private val maxScanSymbols = 50
+    private val waveTopN = 10
     private val scanExecutor = Executors.newFixedThreadPool(12)
     private val candleCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, List<CandleN>>>()
     private val fullHistoryCache = java.util.concurrent.ConcurrentHashMap<String, List<CandleN>>()
     private val scanCacheTtlMs = 12_000L
+    private val deepWatchTopN = 10
+    private val scannerUniverseLabel = "TOP_50_LIQUID_USDT"
 
     @Volatile
     private var running = false
@@ -1203,7 +1205,11 @@ private class NativeEngine(
                 final.add(it)
             }
 
-        final.sortByDescending { it.score }
+        final.sortWith(compareByDescending<BaseAnalysis> { it.signal }
+            .thenByDescending { it.score }
+            .thenByDescending { it.wave.confidence }
+            .thenBy { it.wave.exhaustionRisk }
+            .thenBy { it.spreadPct })
 
         val output = JSONArray()
         final.take(20).forEach { candidate ->
@@ -3222,6 +3228,8 @@ private class NativeEngine(
             .put("last_scan_at", lastScanAt)
             .put("last_scan_duration_ms", lastScanDurationMs)
             .put("symbols_scanned", lastSymbolsScanned)
+            .put("scan_universe", scannerUniverseLabel)
+            .put("deep_wave_targets", waveTopN)
             .put("candidates", candidates)
             .put(
                 "best_candidate",
@@ -3508,6 +3516,9 @@ private class NativeEngine(
             .put("standalone", true)
             .put("execution_enabled", !reconcileRequired)
             .put("max_scan_symbols", maxScanSymbols)
+            .put("liquidity_preselect", maxScanSymbols)
+            .put("deep_wave_targets", waveTopN)
+            .put("scanner_strategy", "liquidity -> base -> deep MTF/Waves -> risk -> score")
             .put("wave_top_n", waveTopN)
             .put("trade_journal", true)
             .put("trade_journal_max_rows", 500)
