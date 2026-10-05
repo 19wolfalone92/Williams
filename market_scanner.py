@@ -133,6 +133,7 @@ class MarketScanner:
         self.wave_engine = MultiTimeframeWaveEngine(
             self.client,
             base_interval=self.interval,
+            include_micro=True,
         )
 
     def _load_symbols(self):
