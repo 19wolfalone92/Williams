@@ -3034,15 +3034,15 @@ private class NativeEngine(
         // The higher timeframe supplies the market context; a lower timeframe
         // supplies the actual entry trigger. A child Wave 3 is therefore
         // allowed inside a parent Wave 3 OR a parent Wave 5.
-        val mtfFrames = listOf("1s", "5s", "15s", "30s", "1m", "5m", "15m", "30m", "1h", "2h", "4h", "5h", "6h", "8h", "10h", "12h", "15h", "20h", "25h", "1d")
+        val mtfFrames = analysisFrames
         for (frame in mtfFrames) {
             runCatching { fetchCandles(symbol, frame, 300) }
                 .getOrNull()?.takeIf { it.size >= 40 }
                 ?.let { frames.add(waveInfo(it, frame)) }
         }
 
-        // Expensive full-history wave reconstruction is done only for the
-        // strongest candidates and cached for the lifetime of the runtime.
+        // Full-history reconstruction is retained for the base degree;
+        // realtime streams provide the current candle for every degree.
         val history = runCatching { fetchFullHistory(symbol, "1h") }.getOrNull()
         if (!history.isNullOrEmpty()) {
             frames.add(waveInfo(history, "1hHISTORY"))
@@ -3506,7 +3506,7 @@ private class NativeEngine(
         val previous = candles[candles.lastIndex - 1].c
 
         val series = candles.takeLast(
-            min(70, candles.size)
+            min(140, candles.size)
         )
 
         val low =
