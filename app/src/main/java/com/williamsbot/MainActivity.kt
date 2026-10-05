@@ -113,11 +113,6 @@ import kotlin.math.min
 // Final 4.14 validation build marker
 // CI compile-log capture enabled
 class MainActivity : ComponentActivity() {
-    private val notificationPermissionLauncher =
-        registerForActivityResult(
-            ActivityResultContracts.RequestPermission()
-        ) { }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if (Build.VERSION.SDK_INT >= 33 &&
@@ -126,8 +121,9 @@ class MainActivity : ComponentActivity() {
                 Manifest.permission.POST_NOTIFICATIONS
             ) != android.content.pm.PackageManager.PERMISSION_GRANTED
         ) {
-            notificationPermissionLauncher.launch(
-                Manifest.permission.POST_NOTIFICATIONS
+            requestPermissions(
+                arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                13001
             )
         }
         StandaloneRuntime.start(this)
