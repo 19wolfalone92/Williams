@@ -617,9 +617,13 @@ private class NativeEngine(
                                 .put("stop", it.stop)
                                 .put("take", it.take)
                                 .put("risk_pct", it.riskPct)
+                                .put("oco_list_id", it.ocoListId)
+                                .put("oco_list_client_id", it.ocoListClientId)
+                                .put("entry_order_id", it.entryOrderId)
+                                .put("entry_client_order_id", it.entryClientOrderId)
+                                .put("opened_at", it.openedAt)
                         )
                     }
-                }
             )
             .put("last_order", lastOrder ?: JSONObject.NULL)
             .put(
