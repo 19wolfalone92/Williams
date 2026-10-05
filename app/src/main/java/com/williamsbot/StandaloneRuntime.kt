@@ -84,6 +84,8 @@ private data class WaveInfo(
     val path: String,
     val alligatorBullish: Boolean,
     val aoPositive: Boolean,
+    val aoBearishDivergence: Boolean = false,
+    val aoBullishDivergence: Boolean = false,
     val currentLegPct: Double,
     val entryFrame: String = "",
     val entryWave: Int = 0,
@@ -2756,6 +2758,31 @@ private class NativeEngine(
         return fast - slow
     }
 
+    private fun aoBearishDivergence(candles: List<CandleN>): Boolean {
+        if (candles.size < 45) return false
+        val end = candles.lastIndex
+        val start = max(2, end - 35)
+        val peaks = (start + 1 until end).filter {
+            candles[it].h > candles[it - 1].h && candles[it].h >= candles[it + 1].h
+        }
+        if (peaks.size < 2) return false
+        val recent = peaks.last()
+        val previous = peaks[peaks.size - 2]
+        return candles[recent].h > candles[previous].h && ao(candles, recent) < ao(candles, previous)
+    }
+
+    private fun aoBullishDivergence(candles: List<CandleN>): Boolean {
+        if (candles.size < 45) return false
+        val end = candles.lastIndex
+        val start = max(2, end - 35)
+        val troughs = (start + 1 until end).filter {
+            candles[it].l < candles[it - 1].l && candles[it].l <= candles[it + 1].l
+        }
+        if (troughs.size < 2) return false
+        val recent = troughs.last()
+        val previous = troughs[troughs.size - 2]
+        return candles[recent].l < candles[previous].l && ao(candles, recent) > ao(candles, previous)
+    }
     private fun latestConfirmedUpFractal(
         candles: List<CandleN>,
         currentIndex: Int
@@ -2901,6 +2928,8 @@ private class NativeEngine(
 
         val aoPositive =
             ao(candles, candles.lastIndex) > 0.0
+        val aoBearDiv = aoBearishDivergence(candles)
+        val aoBullDiv = aoBullishDivergence(candles)
 
         var position = 0
         var phase = "UNKNOWN"
@@ -3028,6 +3057,8 @@ private class NativeEngine(
             path = path,
             alligatorBullish = bullish,
             aoPositive = aoPositive,
+            aoBearishDivergence = aoBearDiv,
+            aoBullishDivergence = aoBullDiv,
             currentLegPct = currentLegPct
         )
     }
@@ -3059,6 +3090,8 @@ private class NativeEngine(
             path = frame + ":?",
             alligatorBullish = false,
             aoPositive = false,
+            aoBearishDivergence = false,
+            aoBullishDivergence = false,
             currentLegPct = 0.0
         )
 
