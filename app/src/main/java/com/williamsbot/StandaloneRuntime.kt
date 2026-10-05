@@ -2776,13 +2776,13 @@ private class NativeEngine(
         if (child.position !in 1..5 || child.direction == "NEUTRAL") return false
         val childSeconds = frameSeconds(child.path.substringBefore(":"))
         val parent = frames
-            .filter { it.path != child.path && frameSeconds(it.path.substringBefore(":")) > childSeconds && it.direction == child.direction }
+            .filter { it.path != child.path && frameSeconds(it.path.substringBefore(":")) > childSeconds && it.position in listOf(2, 4) }
             .sortedBy { frameSeconds(it.path.substringBefore(":")) }
             .firstOrNull()
         // Parent W2/W4 is a correction against its parent's impulse direction.
         // Its A/C legs may be five-wave impulses, but they must not be treated
         // as a continuation entry in the opposite direction.
-        return parent != null && parent.position in 2..4 && parent.direction != child.direction
+        return parent != null && parent.direction != child.direction
     }
 
     private fun enrichWithMtf(baseCandidate: BaseAnalysis): BaseAnalysis {
