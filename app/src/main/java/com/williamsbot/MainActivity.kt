@@ -326,6 +326,7 @@ fun WilliamsApp(context: Context) {
     var marketPairs by remember { mutableStateOf(emptyList<MarketPair>()) }
     var selectedPositionSymbol by remember { mutableStateOf<String?>(null) }
     var candles by remember { mutableStateOf(emptyList<Candle>()) }
+    var selectedChartInterval by remember { mutableStateOf("1h") }
     var candidates by remember { mutableStateOf(emptyList<Candidate>()) }
     var trades by remember { mutableStateOf(emptyList<Trade>()) }
     var logs by remember { mutableStateOf(emptyList<String>()) }
@@ -342,7 +343,7 @@ fun WilliamsApp(context: Context) {
                 withContext(Dispatchers.Main) { refreshing = scan }
 
                 val statusJson = JSONObject(api.get("/api/v1/status"))
-                val klineJson = JSONObject(api.get("/api/v1/market/klines"))
+                val klineJson = JSONObject(api.get("/api/v1/market/klines?interval=" + selectedChartInterval))
                 val marketSymbols = listOf("BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT")
                 val marketPairsLoaded = marketSymbols.map { symbol ->
                     val j = runCatching { JSONObject(api.get("/api/v1/market/klines?symbol=" + symbol)) }.getOrNull()
@@ -1479,7 +1480,13 @@ private fun PositionScreen(
             item { Text("График позиции • " + selectedSymbol, style = MaterialTheme.typography.titleMedium) }
             item {
                 if (candles.isEmpty()) EmptyState(icon = Icons.Filled.ShowChart, title = "Нет графика", subtitle = "Выбери позицию и обнови данные.")
-                else TradingChart(candles, status, status.positions.firstOrNull { it.symbol == selectedSymbol })
+                else TradingChart(
+                    candles,
+                    status,
+                    status.positions.firstOrNull { it.symbol == selectedSymbol },
+                    selectedChartInterval,
+                    onIntervalChange = { selectedChartInterval = it; refresh(false) }
+                )
             }
         }
     }
@@ -2005,7 +2012,13 @@ private fun EmptyState(
 }
 
 @Composable
-private fun TradingChart(candles: List<Candle>, status: Status, position: PositionView? = null) {
+private fun TradingChart(
+    candles: List<Candle>,
+    status: Status,
+    position: PositionView? = null,
+    interval: String = "1h",
+    onIntervalChange: (String) -> Unit = {}
+) {
     var scale by remember(candles.size) { mutableStateOf(1f) }
     var pan by remember(candles.size) { mutableStateOf(0f) }
 
@@ -2025,6 +2038,22 @@ private fun TradingChart(candles: List<Candle>, status: Status, position: Positi
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = AppColors.surface)
     ) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("ТФ " + interval, style = MaterialTheme.typography.labelLarge)
+                listOf("1m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "12h", "1d").forEach { tf ->
+                    FilterChip(
+                        selected = interval == tf,
+                        onClick = { onIntervalChange(tf) },
+                        label = { Text(tf) }
+                    )
+                }
+            }
+        }
         Canvas(
             modifier = Modifier
                 .fillMaxWidth()
