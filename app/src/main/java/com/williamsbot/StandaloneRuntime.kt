@@ -5,6 +5,9 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
+import okhttp3.Response
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
@@ -329,6 +332,9 @@ private class StandaloneServer(private val context: Context) {
             method == "GET" && path == "/api/v1/status" ->
                 x.status().toString()
 
+            method == "GET" && path == "/api/v1/market/indicators" ->
+                x.indicators(params["symbol"], params["interval"]).toString()
+
             method == "GET" && path == "/api/v1/market/klines" ->
                 x.klines(
                     requestedSymbol = params["symbol"],
@@ -396,14 +402,23 @@ private class NativeEngine(
     private val primarySymbol = "BTCUSDT"
     private val interval = "1h"
 
-    private val maxScanSymbols = 50
+    // Deep-analysis universe: five core USDT pairs only.
+    private val coreSymbols = listOf("BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT")
+    private val analysisFrames = listOf("1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w", "1M")
+    private val maxScanSymbols = 5
     private val waveTopN = 10
     private val scanExecutor = Executors.newFixedThreadPool(12)
     private val candleCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, List<CandleN>>>()
+    private val liveCandleCache = java.util.concurrent.ConcurrentHashMap<String, MutableList<CandleN>>()
+    private val indicatorSnapshots = java.util.concurrent.ConcurrentHashMap<String, JSONObject>()
+    private var marketSocket: WebSocket? = null
+    @Volatile private var marketSocketConnected = false
+    @Volatile private var marketSocketLastEventMs = 0L
+    @Volatile private var historyWarmupRunning = false
     private val fullHistoryCache = java.util.concurrent.ConcurrentHashMap<String, List<CandleN>>()
     private val scanCacheTtlMs = 12_000L
     private val deepWatchTopN = 10
-    private val scannerUniverseLabel = "TOP_50_LIQUID_USDT"
+    private val scannerUniverseLabel = "CORE_5_BTC_ETH_BNB_SOL_XRP"
 
     @Volatile
     private var running = false
@@ -594,7 +609,11 @@ private class NativeEngine(
             .put("service", "williams-native")
             .put("version", "4.15.0")
             .put("standalone", true)
-            .put("websocket", false)
+            .put("websocket", marketSocketConnected)
+            .put("market_stream_last_event_ms", marketSocketLastEventMs)
+            .put("history_warmup_running", historyWarmupRunning)
+            .put("core_symbols", JSONArray(coreSymbols))
+            .put("analysis_timeframes", JSONArray(analysisFrames))
             .put(
                 "execution_enabled",
                 !reconcileRequired
@@ -708,6 +727,8 @@ private class NativeEngine(
 
         running = true
         paused = false
+        startMarketDataStream()
+        warmCoreHistoryAsync()
 
         worker = Thread {
             while (running) {
@@ -740,6 +761,9 @@ private class NativeEngine(
     fun stop(): JSONObject {
         running = false
         paused = false
+        marketSocket?.close(1000, "Williams stopped")
+        marketSocket = null
+        marketSocketConnected = false
         prefs.edit()
             .putBoolean("auto_run", false)
             .apply()
@@ -961,11 +985,146 @@ private class NativeEngine(
         }
     }
 
+    private fun wsStreamUrl(): String =
+        "wss://stream.testnet.binance.vision/stream?streams=" +
+            coreSymbols.flatMap { symbol ->
+                analysisFrames.map { frame ->
+                    symbol.lowercase(Locale.US) + "@kline_" + frame
+                }
+            }.joinToString("/")
+
+    private fun startMarketDataStream() {
+        if (marketSocket != null) return
+        val request = Request.Builder().url(wsStreamUrl()).build()
+        marketSocket = http.newWebSocket(request, object : WebSocketListener() {
+            override fun onOpen(webSocket: WebSocket, response: Response) {
+                marketSocketConnected = true
+                lastError = null
+            }
+
+            override fun onMessage(webSocket: WebSocket, text: String) {
+                marketSocketLastEventMs = System.currentTimeMillis()
+                runCatching { consumeKlineStream(JSONObject(text)) }
+                    .onFailure { lastError = "WS kline: " + (it.message ?: it.javaClass.simpleName) }
+            }
+
+            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                marketSocketConnected = false
+                webSocket.close(code, reason)
+            }
+
+            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                marketSocketConnected = false
+                marketSocket = null
+                if (running) Thread { Thread.sleep(1500); if (running) startMarketDataStream() }.start()
+            }
+
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                marketSocketConnected = false
+                marketSocket = null
+                lastError = "WS market: " + (t.message ?: t.javaClass.simpleName)
+                if (running) Thread { Thread.sleep(2500); if (running) startMarketDataStream() }.start()
+            }
+        })
+    }
+
+    private fun consumeKlineStream(envelope: JSONObject) {
+        val data = envelope.optJSONObject("data") ?: return
+        if (data.optString("e") != "kline") return
+        val k = data.optJSONObject("k") ?: return
+        val symbol = k.optString("s").uppercase(Locale.US)
+        val frame = k.optString("i")
+        if (symbol !in coreSymbols || frame !in analysisFrames) return
+
+        val candle = CandleN(
+            k.optLong("t"),
+            k.optString("o").toDoubleOrNull() ?: return,
+            k.optString("h").toDoubleOrNull() ?: return,
+            k.optString("l").toDoubleOrNull() ?: return,
+            k.optString("c").toDoubleOrNull() ?: return,
+            k.optString("v").toDoubleOrNull() ?: return
+        )
+        val key = symbol + ":" + frame
+        val list = liveCandleCache.computeIfAbsent(key) { mutableListOf() }
+        synchronized(list) {
+            if (list.isNotEmpty() && list.last().t == candle.t) {
+                list[list.lastIndex] = candle
+            } else {
+                list.add(candle)
+                if (list.size > 600) list.removeAt(0)
+            }
+            val snapshot = buildIndicatorSnapshot(list.toList(), symbol, frame)
+            indicatorSnapshots[key] = snapshot
+            candleCache[key] = System.currentTimeMillis() to list.toList()
+        }
+    }
+
+    private fun buildIndicatorSnapshot(candles: List<CandleN>, symbol: String, frame: String): JSONObject {
+        if (candles.size < 40) return JSONObject().put("symbol", symbol).put("interval", frame).put("ready", false)
+        val prices = candles.map { it.c }
+        val jaw = smma(prices, 13)
+        val teeth = smma(prices, 8)
+        val lips = smma(prices, 5)
+        val i = candles.lastIndex
+        val aoNow = ao(candles, i)
+        val aoPrev = ao(candles, i - 1)
+        val acNow = aoNow - (0 until 5).map { ao(candles, i - it) }.average()
+        val upFractal = latestConfirmedUpFractal(candles, i)
+        val downFractal = if (i >= 4 && isDownFractal(candles, i - 2)) i - 2 else null
+        return JSONObject()
+            .put("symbol", symbol).put("interval", frame).put("ready", true)
+            .put("time", candles[i].t).put("price", candles[i].c)
+            .put("jaw", jaw[i]).put("teeth", teeth[i]).put("lips", lips[i])
+            .put("alligator_bullish", lips[i] > teeth[i] && teeth[i] > jaw[i])
+            .put("ao", aoNow).put("ao_previous", aoPrev)
+            .put("ao_cross_up", aoPrev <= 0.0 && aoNow > 0.0)
+            .put("ac", acNow).put("ac_positive", acNow > 0.0)
+            .put("fractal_up_index", upFractal ?: JSONObject.NULL)
+            .put("fractal_down_index", downFractal ?: JSONObject.NULL)
+            .put("ao_bullish_divergence", aoBullishDivergence(candles))
+            .put("ao_bearish_divergence", aoBearishDivergence(candles))
+            .put("wave", waveInfo(candles, frame).path)
+    }
+
+    private fun warmCoreHistoryAsync() {
+        if (historyWarmupRunning) return
+        historyWarmupRunning = true
+        Thread {
+            try {
+                for (symbol in coreSymbols) {
+                    for (frame in analysisFrames) {
+                        if (!running) return@Thread
+                        // Keep the full historical source available to the wave engine.
+                        // The live RAM cache remains bounded to avoid Android OOM.
+                        runCatching {
+                            val history = fetchFullHistory(symbol, frame)
+                            val recent = history.takeLast(600)
+                            val key = symbol + ":" + frame
+                            liveCandleCache[key] = recent.toMutableList()
+                            candleCache[key] = System.currentTimeMillis() to recent
+                            if (recent.size >= 40) {
+                                indicatorSnapshots[key] = buildIndicatorSnapshot(recent, symbol, frame)
+                            }
+                        }
+                    }
+                }
+            } finally {
+                historyWarmupRunning = false
+            }
+        }.apply { isDaemon = true }.start()
+    }
+
     private fun fetchCandles(
         symbol: String,
         frame: String,
         limit: Int = 150
     ): List<CandleN> {
+        val liveKey = symbol.uppercase() + ":" + frame
+        liveCandleCache[liveKey]?.let { live ->
+            synchronized(live) {
+                if (live.size >= min(40, limit)) return live.takeLast(limit)
+            }
+        }
         val cacheKey = symbol.uppercase() + ":" + frame + ":" + limit
         val cached = candleCache[cacheKey]
         val now = System.currentTimeMillis()
@@ -1144,16 +1303,11 @@ private class NativeEngine(
             }
         }
 
-        val symbols = tradingUsdt
-            .sortedByDescending { volumes[it] ?: 0.0 }
-            .take(maxScanSymbols)
-            .toMutableList()
-
-        if (!symbols.contains(primarySymbol)) {
-            symbols.add(0, primarySymbol)
+        val symbols = coreSymbols.filter { tradingUsdt.contains(it) }.toMutableList()
+        require(symbols.size == coreSymbols.size) {
+            "Core Binance universe incomplete: expected BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT"
         }
-
-        return Triple(symbols.distinct(), volumes, spreads)
+        return Triple(symbols, volumes, spreads)
     }
 
     private fun requestScan() {
@@ -3740,6 +3894,17 @@ private class NativeEngine(
             .put("scanner_duration_ms", lastScanDurationMs)
     }
 
+    fun indicators(requestedSymbol: String? = null, requestedInterval: String? = null): JSONObject {
+        val symbol = requestedSymbol?.uppercase(Locale.US) ?: primarySymbol
+        val frame = requestedInterval ?: interval
+        return indicatorSnapshots[symbol + ":" + frame]
+            ?: buildIndicatorSnapshot(
+                fetchCandles(symbol, frame, 150),
+                symbol,
+                frame
+            )
+    }
+
     fun klines(
         requestedSymbol: String? = null,
         requestedInterval: String? = null
@@ -3859,7 +4024,9 @@ private class NativeEngine(
             .put("take_profit_pct", 0.04)
             .put("poll_seconds", 15)
             .put("scan_mode", "adaptive_parallel_cached")
-            .put("wave_timeframes", "1m,3m,5m,15m,30m,1h,2h,4h,6h,8h,12h,1d,3d,1w,1M")
+            .put("wave_timeframes", analysisFrames.joinToString(","))
+            .put("realtime_multi_timeframe_stream", marketSocketConnected)
+            .put("core_symbols", coreSymbols.joinToString(","))
             .put("full_history_wave_analysis", true)
             .put("full_history_base_timeframe", "1h")
             .put("risk_per_trade_pct", maxRiskPerTradePct)
@@ -3876,7 +4043,7 @@ private class NativeEngine(
             .put("strategy_name", "Williams Profitunity Conservative")
             .put("standalone", true)
             .put("execution_enabled", !reconcileRequired)
-            .put("max_scan_symbols", maxScanSymbols)
+            .put("max_scan_symbols", maxScanSymbols)\n            .put("scanner_universe", scannerUniverseLabel)
             .put("liquidity_preselect", maxScanSymbols)
             .put("deep_wave_targets", waveTopN)
             .put("scanner_strategy", "liquidity -> base -> deep MTF/Waves -> risk -> score")
