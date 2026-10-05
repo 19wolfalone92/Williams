@@ -98,6 +98,16 @@ jobs:
 
           echo "Debug signing material: PRESENT"
 
+      - name: Run Android unit tests
+        run: |
+          set -euo pipefail
+          gradle --no-daemon :app:testDebugUnitTest --stacktrace
+
+      - name: Run Android lint
+        run: |
+          set -euo pipefail
+          gradle --no-daemon :app:lintDebug --stacktrace
+
       - name: Build debug APK
         env:
           WILLIAMS_DEBUG_KEYSTORE_PASSWORD: ${{ secrets.WILLIAMS_DEBUG_KEYSTORE_PASSWORD }}

@@ -160,8 +160,12 @@ private class StandaloneServer(private val context: Context) {
     private val client = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(45, TimeUnit.SECONDS)
-        .retryOnConnectionFailure(true)
+        .retryOnConnectionFailure(false)
+        .pingInterval(30, TimeUnit.SECONDS)
         .build()
+
+    private val historyStore = MarketHistoryStore(context)
+    private val rateGuard = BinanceRateGuard()
 
     private var socket: ServerSocket? = null
     private var engine: NativeEngine? = null
@@ -381,6 +385,18 @@ private class StandaloneServer(private val context: Context) {
                 x.recover().toString()
 
             method == "POST" &&
+                path == "/api/v1/control/kill" ->
+                x.kill().toString()
+
+            method == "POST" &&
+                path == "/api/v1/control/kill/reset" ->
+                x.resetKillSwitch().toString()
+
+            method == "GET" &&
+                path == "/api/v1/history/status" ->
+                x.historyStatus().toString()
+
+            method == "POST" &&
                 path == "/api/v1/control/sell" ->
                 x.sell(
                     params["symbol"]
@@ -415,7 +431,7 @@ private class NativeEngine(
     @Volatile private var marketSocketConnected = false
     @Volatile private var marketSocketLastEventMs = 0L
     @Volatile private var historyWarmupRunning = false
-    private val fullHistoryCache = java.util.concurrent.ConcurrentHashMap<String, List<CandleN>>()
+
     private val scanCacheTtlMs = 12_000L
     private val deepWatchTopN = 10
     private val scannerUniverseLabel = "CORE_5_BTC_ETH_BNB_SOL_XRP"
@@ -452,8 +468,32 @@ private class NativeEngine(
     @Volatile private var lastServerTimeSyncMs = 0L
     @Volatile private var lastOrder: JSONObject? = null
     @Volatile private var reconcileRequired = false
+    @Volatile private var killLatched = false
+    @Volatile private var userStreamConnected = false
+    @Volatile private var lastUserEventMs = 0L
     private val positions = mutableMapOf<String, PositionState>()
     private val pendingEntries = mutableMapOf<String, PendingEntry>()
+
+    private val userStream = BinanceUserDataStream(
+        http = client,
+        endpoint = "wss://ws-api.testnet.binance.vision/ws-api/v3",
+        apiKeyProvider = { key() },
+        apiSecretProvider = { secret() },
+        timestampProvider = { signedTimestamp() },
+        onConnection = { connected, error ->
+            userStreamConnected = connected
+            if (connected) {
+                if (lastError?.startsWith("user ws:") == true) {
+                    lastError = null
+                }
+            } else if (!error.equals("stopped")) {
+                lastError = "user ws: " + (error ?: "disconnected")
+            }
+        },
+        onEvent = { event ->
+            handleUserEvent(event)
+        }
+    )
 
     init {
         loadPersistedState()
@@ -479,6 +519,7 @@ private class NativeEngine(
 
     private fun stateName(): String =
         when {
+            killLatched -> "KILL_SWITCH_LATCHED"
             reconcileRequired -> "RECONCILE_REQUIRED"
             pendingEntries.isNotEmpty() -> "ENTRY_PENDING"
             positions.isEmpty() -> "FLAT"
@@ -585,6 +626,8 @@ private class NativeEngine(
 
         reconcileRequired =
             prefs.getBoolean("reconcile_required", false)
+        killLatched =
+            prefs.getBoolean("kill_latched", false)
     }
 
     private fun setReconcileRequired(reason: String) {
@@ -611,7 +654,11 @@ private class NativeEngine(
             .put("standalone", true)
             .put("websocket", marketSocketConnected)
             .put("market_stream_last_event_ms", marketSocketLastEventMs)
+            .put("user_stream_connected", userStreamConnected)
+            .put("user_stream_last_event_ms", lastUserEventMs)
             .put("history_warmup_running", historyWarmupRunning)
+            .put("history", historyStore.status(coreSymbols, analysisFrames))
+            .put("rate_limits", rateGuard.snapshot())
             .put("core_symbols", JSONArray(coreSymbols))
             .put("analysis_timeframes", JSONArray(analysisFrames))
             .put(
@@ -655,6 +702,12 @@ private class NativeEngine(
     fun configure(j: JSONObject): JSONObject {
         val newKey = j.optString("api_key").trim()
         val newSecret = j.optString("api_secret").trim()
+
+        if (running) {
+            error(
+                "Stop the bot before changing Binance credentials."
+            )
+        }
 
         if (
             positions.isNotEmpty() &&
@@ -712,6 +765,14 @@ private class NativeEngine(
     }
 
     fun start(): JSONObject {
+        if (killLatched) {
+            error("KILL_SWITCH_LATCHED: recover and reset kill switch before START")
+        }
+        require(
+            key().isNotBlank() && secret().isNotBlank()
+        ) {
+            "Configure Binance Testnet credentials first"
+        }
         if (running) {
             return JSONObject()
                 .put("started", false)
@@ -729,6 +790,7 @@ private class NativeEngine(
         running = true
         paused = false
         startMarketDataStream()
+        userStream.start()
         warmCoreHistoryAsync()
 
         worker = Thread {
@@ -765,6 +827,8 @@ private class NativeEngine(
         marketSocket?.close(1000, "Williams stopped")
         marketSocket = null
         marketSocketConnected = false
+        userStream.stop()
+        userStreamConnected = false
         prefs.edit()
             .putBoolean("auto_run", false)
             .apply()
@@ -772,6 +836,101 @@ private class NativeEngine(
         worker = null
 
         return JSONObject().put("stopped", true)
+    }
+
+    @Synchronized
+    fun kill(): JSONObject {
+        killLatched = true
+        prefs.edit()
+            .putBoolean("kill_latched", true)
+            .putBoolean("auto_run", false)
+            .apply()
+
+        running = false
+        paused = true
+        worker?.interrupt()
+        worker = null
+        marketSocket?.close(1000, "Williams kill switch")
+        marketSocket = null
+        marketSocketConnected = false
+        userStream.stop()
+        userStreamConnected = false
+
+        val pending = synchronized(pendingEntries) {
+            pendingEntries.values.toList()
+        }
+        for (intent in pending) {
+            runCatching {
+                signedDelete(
+                    "/api/v3/order",
+                    "symbol=" + intent.symbol +
+                        "&origClientOrderId=" + intent.clientOrderId
+                )
+            }
+        }
+
+        runCatching { recoverPendingEntries() }
+
+        val symbols = positionList().map { it.symbol }
+        val errors = mutableListOf<String>()
+        for (symbol in symbols) {
+            val result = runCatching { sell(symbol) }
+            if (result.isFailure) {
+                errors += symbol + ": " +
+                    (result.exceptionOrNull()?.message ?: "kill sell failed")
+            }
+        }
+
+        val recoveryOk = runCatching {
+            reconcilePositionsWithExchange()
+        }.isSuccess
+
+        val failedSymbols = errors.map { it.substringBefore(":") }.toSet()
+        val forcedState =
+            if (errors.isEmpty() && recoveryOk) {
+                stateName()
+            } else {
+                reconcileRequired = true
+                prefs.edit()
+                    .putBoolean("reconcile_required", true)
+                    .apply()
+                "RECONCILE_REQUIRED"
+            }
+
+        lastError =
+            if (errors.isEmpty() && recoveryOk) {
+                "KILL_SWITCH executed; trading remains latched OFF"
+            } else {
+                "KILL_SWITCH completed with reconciliation warnings"
+            }
+
+        return JSONObject()
+            .put("killed", true)
+            .put("latched", true)
+            .put("state", forcedState)
+            .put(
+                "closed_symbols",
+                JSONArray(symbols.filter { it !in failedSymbols })
+            )
+            .put("errors", JSONArray(errors))
+    }
+
+    fun resetKillSwitch(): JSONObject {
+        require(!running) {
+            "Stop the bot before resetting the kill switch."
+        }
+        recover()
+        require(!reconcileRequired) {
+            "Reconciliation is still required."
+        }
+        killLatched = false
+        prefs.edit()
+            .putBoolean("kill_latched", false)
+            .apply()
+        lastError = null
+        return JSONObject()
+            .put("reset", true)
+            .put("state", stateName())
     }
 
     fun pause(): JSONObject {
@@ -864,12 +1023,14 @@ private class NativeEngine(
     }
 
     private fun getBody(path: String): String {
+        rateGuard.beforeRequest()
         val request = Request.Builder()
             .url(baseUrl + path)
             .get()
             .build()
 
         http.newCall(request).execute().use { response ->
+            rateGuard.observe(response.headers, response.code)
             val body = response.body?.string() ?: "{}"
             if (!response.isSuccessful) {
                 error("Binance HTTP " + response.code + ": " + body)
@@ -915,7 +1076,9 @@ private class NativeEngine(
                     .get()
                     .build()
             }
+            rateGuard.beforeRequest()
             http.newCall(request).execute().use { response ->
+                rateGuard.observe(response.headers, response.code)
                 lastBody = response.body?.string() ?: "{}"
                 if (response.isSuccessful) return JSONObject(lastBody)
                 if (attempt == 0 && lastBody.contains("-1021")) {
@@ -957,7 +1120,9 @@ private class NativeEngine(
                 .get()
                 .build()
 
+            rateGuard.beforeRequest()
             http.newCall(request).execute().use { response ->
+                rateGuard.observe(response.headers, response.code)
                 lastBody = response.body?.string() ?: "{}"
                 if (response.isSuccessful) return lastBody
                 if (attempt == 0 && lastBody.contains("-1021")) {
@@ -1001,6 +1166,18 @@ private class NativeEngine(
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 marketSocketConnected = true
                 lastError = null
+                Thread {
+                    try {
+                        Thread.sleep(23L * 60L * 60L * 1000L)
+                        if (running && marketSocket === webSocket) {
+                            webSocket.close(1000, "planned_24h_reconnect")
+                        }
+                    } catch (_: InterruptedException) {
+                    }
+                }.apply {
+                    isDaemon = true
+                    start()
+                }
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
@@ -1057,6 +1234,24 @@ private class NativeEngine(
             val snapshot = buildIndicatorSnapshot(list.toList(), symbol, frame)
             indicatorSnapshots[key] = snapshot
             candleCache[key] = System.currentTimeMillis() to list.toList()
+
+            if (k.optBoolean("x", false)) {
+                historyStore.upsertBatch(
+                    symbol,
+                    frame,
+                    listOf(
+                        MarketHistoryStore.Candle(
+                            openTime = candle.t,
+                            closeTime = k.optLong("T"),
+                            open = candle.o,
+                            high = candle.h,
+                            low = candle.l,
+                            close = candle.c,
+                            volume = candle.v
+                        )
+                    ),
+                )
+            }
         }
     }
 
@@ -1111,11 +1306,21 @@ private class NativeEngine(
                         // Keep the full historical source available to the wave engine.
                         // The live RAM cache remains bounded to avoid Android OOM.
                         runCatching {
-                            val history = fetchFullHistory(symbol, frame)
-                            val recent = history.takeLast(600)
+                            fetchFullHistory(symbol, frame)
+                            val recent = historyStore.loadRecent(symbol, frame, 600)
+                            val recentCandleN = recent.map {
+                                CandleN(
+                                    it.openTime,
+                                    it.open,
+                                    it.high,
+                                    it.low,
+                                    it.close,
+                                    it.volume
+                                )
+                            }
                             val key = symbol + ":" + frame
-                            liveCandleCache[key] = recent.toMutableList()
-                            candleCache[key] = System.currentTimeMillis() to recent
+                            liveCandleCache[key] = recentCandleN.toMutableList()
+                            candleCache[key] = System.currentTimeMillis() to recentCandleN
                             if (recent.size >= 40) {
                                 indicatorSnapshots[key] = buildIndicatorSnapshot(recent, symbol, frame)
                             }
@@ -1140,6 +1345,26 @@ private class NativeEngine(
             }
         }
         val cacheKey = symbol.uppercase() + ":" + frame + ":" + limit
+        val persistent = historyStore.loadRecent(
+            symbol.uppercase(),
+            frame,
+            limit
+        )
+        if (persistent.size >= min(40, limit)) {
+            val result = persistent.map {
+                CandleN(
+                    it.openTime,
+                    it.open,
+                    it.high,
+                    it.low,
+                    it.close,
+                    it.volume
+                )
+            }
+            candleCache[cacheKey] = System.currentTimeMillis() to result
+            return result
+        }
+
         val cached = candleCache[cacheKey]
         val now = System.currentTimeMillis()
         if (cached != null && now - cached.first < scanCacheTtlMs) return cached.second
@@ -1234,38 +1459,136 @@ private class NativeEngine(
     }
 
     private fun fetchFullHistory(symbol: String, frame: String = "1h"): List<CandleN> {
-        val cacheKey = symbol.uppercase() + ":" + frame
-        fullHistoryCache[cacheKey]?.let { return it }
-        val out = ArrayList<CandleN>()
-        var endTime = System.currentTimeMillis()
-        var guard = 0
-        while (guard++ < 2000) {
+        val normalizedSymbol = symbol.uppercase()
+
+        if (!historyStore.isComplete(normalizedSymbol, frame)) {
+            var endTime = System.currentTimeMillis()
+            var page = 0
+            try {
+                while (page++ < 10000) {
+                    val body = getBody(
+                        "/api/v3/klines?symbol=" + normalizedSymbol +
+                            "&interval=" + frame +
+                            "&limit=1000&endTime=" + endTime
+                    )
+                    val array = JSONArray(body)
+                    if (array.length() == 0) break
+
+                    val batch = ArrayList<MarketHistoryStore.Candle>(
+                        array.length()
+                    )
+                    var oldest = Long.MAX_VALUE
+
+                    for (i in 0 until array.length()) {
+                        val row = array.getJSONArray(i)
+                        val openTime = row.getLong(0)
+                        val closeTime = row.getLong(6)
+                        oldest = min(oldest, openTime)
+
+                        if (closeTime >= System.currentTimeMillis()) {
+                            continue
+                        }
+
+                        batch += MarketHistoryStore.Candle(
+                            openTime = openTime,
+                            closeTime = closeTime,
+                            open = row.getString(1).toDouble(),
+                            high = row.getString(2).toDouble(),
+                            low = row.getString(3).toDouble(),
+                            close = row.getString(4).toDouble(),
+                            volume = row.getString(5).toDouble()
+                        )
+                    }
+
+                    if (batch.isNotEmpty()) {
+                        historyStore.upsertBatch(
+                            normalizedSymbol,
+                            frame,
+                            batch
+                        )
+                    }
+
+                    if (
+                        oldest == Long.MAX_VALUE ||
+                        oldest <= 0L ||
+                        array.length() < 1000
+                    ) {
+                        break
+                    }
+
+                    endTime = oldest - 1L
+                }
+
+                historyStore.markComplete(
+                    normalizedSymbol,
+                    frame
+                )
+            } catch (x: Exception) {
+                historyStore.setError(
+                    normalizedSymbol,
+                    frame,
+                    x.message ?: x.javaClass.simpleName
+                )
+                throw x
+            }
+        } else {
+            // After the initial full download, only refresh the recent tail.
+            val newest = historyStore.newest(
+                normalizedSymbol,
+                frame
+            )
             val body = getBody(
-                "/api/v3/klines?symbol=" + symbol.uppercase() +
-                    "&interval=" + frame + "&limit=1000&endTime=" + endTime
+                "/api/v3/klines?symbol=" + normalizedSymbol +
+                    "&interval=" + frame +
+                    "&limit=3&startTime=" +
+                    newest.coerceAtLeast(0L)
             )
             val array = JSONArray(body)
-            if (array.length() == 0) break
-            val batch = ArrayList<CandleN>(array.length())
+            val batch = ArrayList<MarketHistoryStore.Candle>(array.length())
+
             for (i in 0 until array.length()) {
                 val row = array.getJSONArray(i)
-                batch.add(CandleN(row.getLong(0), row.getString(1).toDouble(), row.getString(2).toDouble(),
-                    row.getString(3).toDouble(), row.getString(4).toDouble(), row.getString(5).toDouble()))
+                val closeTime = row.getLong(6)
+                if (closeTime >= System.currentTimeMillis()) continue
+                batch += MarketHistoryStore.Candle(
+                    openTime = row.getLong(0),
+                    closeTime = closeTime,
+                    open = row.getString(1).toDouble(),
+                    high = row.getString(2).toDouble(),
+                    low = row.getString(3).toDouble(),
+                    close = row.getString(4).toDouble(),
+                    volume = row.getString(5).toDouble()
+                )
             }
-            if (batch.isEmpty()) break
-            batch.sortBy { it.t }
-            out.addAll(0, batch)
-            val oldest = batch.first().t
-            if (oldest <= 0L || batch.size < 1000) break
-            endTime = oldest - 1L
+
+            historyStore.upsertBatch(
+                normalizedSymbol,
+                frame,
+                batch,
+                complete = true
+            )
         }
-        val result = out.distinctBy { it.t }.sortedBy { it.t }
-        fullHistoryCache[cacheKey] = result
-        return result
+
+        // Only a bounded working set enters RAM.
+        return historyStore.loadRecent(
+            normalizedSymbol,
+            frame,
+            5000
+        ).map {
+            CandleN(
+                it.openTime,
+                it.open,
+                it.high,
+                it.low,
+                it.close,
+                it.volume
+            )
+        }
     }
 
     private fun loadUniverse(): Triple<List<String>, Map<String, Double>, Map<String, Double>> {
         val info = JSONObject(getBody("/api/v3/exchangeInfo"))
+        rateGuard.updateFromExchangeInfo(info)
         val infoRows = info.getJSONArray("symbols")
 
         val tradingUsdt = HashSet<String>()
@@ -1675,6 +1998,80 @@ private class NativeEngine(
         }
     }
 
+    private fun handleUserEvent(event: JSONObject) {
+        lastUserEventMs = System.currentTimeMillis()
+        when (event.optString("e")) {
+            "executionReport" -> {
+                lastOrder = JSONObject()
+                    .put("symbol", event.optString("s"))
+                    .put("side", event.optString("S"))
+                    .put("type", event.optString("o"))
+                    .put("orderId", event.optString("i"))
+                    .put("orderListId", event.optString("g"))
+                    .put("clientOrderId", event.optString("c"))
+                    .put("executionType", event.optString("x"))
+                    .put("status", event.optString("X"))
+                    .put("price", event.optString("p"))
+                    .put("stopPrice", event.optString("P"))
+                    .put("origQty", event.optString("q"))
+                    .put("lastQty", event.optString("l"))
+                    .put("executedQty", event.optString("z"))
+                    .put("quoteQty", event.optString("Z"))
+                    .put("eventTime", event.optLong("E"))
+                    .put("transactionTime", event.optLong("T"))
+
+                val terminal =
+                    event.optString("X").uppercase(Locale.US) in
+                        setOf("FILLED", "CANCELED", "REJECTED", "EXPIRED")
+                val trade =
+                    event.optString("x").uppercase(Locale.US) == "TRADE"
+
+                if (terminal || trade) {
+                    Thread {
+                        try {
+                            Thread.sleep(150L)
+                            synchronized(this) {
+                                recoverPendingEntries()
+                                reconcilePositionsWithExchange()
+                            }
+                        } catch (x: Exception) {
+                            if (!killLatched) {
+                                lastError =
+                                    "user event reconciliation: " +
+                                        (x.message ?: x.javaClass.simpleName)
+                            }
+                        }
+                    }.apply {
+                        isDaemon = true
+                        start()
+                    }
+                }
+            }
+
+            "listStatus" -> {
+                lastOrder = event
+                Thread {
+                    try {
+                        Thread.sleep(100L)
+                        synchronized(this) {
+                            reconcilePositionsWithExchange()
+                        }
+                    } catch (_: Exception) {
+                    }
+                }.apply {
+                    isDaemon = true
+                    start()
+                }
+            }
+
+            "eventStreamTerminated" -> {
+                userStreamConnected = false
+                lastError =
+                    "user ws: Binance stream terminated; reconnecting"
+            }
+        }
+    }
+
     private fun reconcilePosition() {
         reconcilePositionsWithExchange()
     }
@@ -1848,6 +2245,7 @@ private class NativeEngine(
         )
     }
 
+    @Synchronized
     private fun reconcilePositionsWithExchange() {
         if (positions.isEmpty()) {
             savePersistedState()
@@ -2353,6 +2751,15 @@ private class NativeEngine(
         }
         if (reconcileRequired) {
             error("RECONCILE_REQUIRED")
+        }
+        if (killLatched) {
+            error("KILL_SWITCH_LATCHED")
+        }
+        if (!marketSocketConnected) {
+            error("MARKET_WS_NOT_READY")
+        }
+        if (!userStreamConnected) {
+            error("USER_DATA_STREAM_NOT_READY")
         }
         if (
             reservedRiskPct() >=
@@ -4087,11 +4494,20 @@ private class NativeEngine(
             .put("consecutive_losses", dailyGuard.optInt("consecutive_losses", 0))
             .put("trading_mode", dailyGuard.optString("mode", "ACTIVE"))
             .put("server_time", System.currentTimeMillis())
+            .put("market_ws_connected", marketSocketConnected)
+            .put("user_ws_connected", userStreamConnected)
+            .put("user_stream_last_event_ms", lastUserEventMs)
+            .put("kill_switch_latched", killLatched)
+            .put("rate_limits", rateGuard.snapshot())
+            .put("history", historyStore.status(coreSymbols, analysisFrames))
             .put("scanner_scanning", scanning)
             .put("scanner_symbols", lastSymbolsScanned)
             .put("scanner_last_scan_at", lastScanAt)
             .put("scanner_duration_ms", lastScanDurationMs)
     }
+
+    fun historyStatus(): JSONObject =
+        historyStore.status(coreSymbols, analysisFrames)
 
     fun indicators(requestedSymbol: String? = null, requestedInterval: String? = null): JSONObject {
         val symbol = requestedSymbol?.uppercase(Locale.US) ?: primarySymbol

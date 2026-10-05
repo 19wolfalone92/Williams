@@ -3,7 +3,12 @@ from decimal import Decimal, ROUND_DOWN
 from urllib.parse import urlencode
 import requests
 
-class BinanceAPIError(RuntimeError): pass
+class BinanceAPIError(RuntimeError):
+    def __init__(self, message, *, unknown_execution=False, status_code=None, payload=None):
+        super().__init__(message)
+        self.unknown_execution = bool(unknown_execution)
+        self.status_code = status_code
+        self.payload = payload
 
 class BinanceSpotClient:
     def __init__(self, api_key, api_secret, testnet=True, recv_window=5000, timeout=20):
@@ -12,16 +17,19 @@ class BinanceSpotClient:
         self.recv_window=int(recv_window); self.timeout=timeout
         self.session=requests.Session(); self.session.headers.update({'X-MBX-APIKEY': self.api_key})
         self.time_offset_ms=0
+        self.last_used_weight_1m=0
+        self.last_order_count_1m=0
+        self.request_weight_limit_1m=6000
+        self.order_limit_1m=1200
+        self.rate_limit_pause_until=0.0
     def _request(self, method, path, params=None, signed=False):
         """
         Execute a Binance REST request.
 
-        GET requests are safe to retry on transient network failures.
-        POST/DELETE requests are intentionally NOT retried because repeating
-        an order/cancel request can create dangerous duplicate side effects.
-
-        Signed requests rebuild timestamp/signature on every attempt so a
-        retry cannot reuse an expired timestamp.
+        GETs are safe to retry on transient network/rate-limit failures.
+        POST/DELETE are never blindly retried: a timeout/5xx can mean the
+        matching-engine operation succeeded and therefore has UNKNOWN status.
+        Callers must reconcile by order/clientOrderId before taking another action.
         """
         method = method.upper()
         max_attempts = 3 if method == "GET" else 1
@@ -30,6 +38,10 @@ class BinanceSpotClient:
         last_exc = None
 
         for attempt in range(max_attempts):
+            wait = max(0.0, self.rate_limit_pause_until - time.time())
+            if wait > 0:
+                time.sleep(min(wait, 30.0))
+
             p = dict(params or {})
 
             if signed:
@@ -51,13 +63,54 @@ class BinanceSpotClient:
                 )
             except (requests.Timeout, requests.ConnectionError) as exc:
                 last_exc = exc
-
                 if attempt + 1 >= max_attempts:
-                    raise
-
+                    raise BinanceAPIError(
+                        f'Binance transport error: {exc}',
+                        unknown_execution=method in {"POST", "DELETE"},
+                    ) from exc
                 time.sleep(delays[attempt])
-
                 continue
+
+            used = r.headers.get('X-MBX-USED-WEIGHT-1M')
+            orders = r.headers.get('X-MBX-ORDER-COUNT-1M')
+            if used is not None:
+                try:
+                    self.last_used_weight_1m = int(used)
+                except ValueError:
+                    pass
+            if orders is not None:
+                try:
+                    self.last_order_count_1m = int(orders)
+                except ValueError:
+                    pass
+
+            if r.status_code in (418, 429):
+                retry_after = r.headers.get('Retry-After')
+                try:
+                    retry_seconds = max(1.0, float(retry_after))
+                except (TypeError, ValueError):
+                    retry_seconds = float(delays[min(attempt, len(delays)-1)])
+                self.rate_limit_pause_until = max(
+                    self.rate_limit_pause_until,
+                    time.time() + retry_seconds,
+                )
+                if method == "GET" and attempt + 1 < max_attempts:
+                    continue
+
+            if r.status_code >= 500:
+                if method == "GET" and attempt + 1 < max_attempts:
+                    time.sleep(delays[attempt])
+                    continue
+                try:
+                    payload = r.json()
+                except ValueError:
+                    payload = {'code': r.status_code, 'msg': r.text}
+                raise BinanceAPIError(
+                    f'Binance {r.status_code}: {payload}',
+                    unknown_execution=method in {"POST", "DELETE"},
+                    status_code=r.status_code,
+                    payload=payload,
+                )
 
             try:
                 payload = r.json()
@@ -69,17 +122,23 @@ class BinanceSpotClient:
                 and payload.get('code', 0) < 0
             ):
                 raise BinanceAPIError(
-                    f'Binance {r.status_code}: {payload}'
+                    f'Binance {r.status_code}: {payload}',
+                    status_code=r.status_code,
+                    payload=payload,
                 )
 
             return payload
 
         if last_exc is not None:
-            raise last_exc
+            raise BinanceAPIError(
+                f'Binance request failed: {last_exc}',
+                unknown_execution=method in {"POST", "DELETE"},
+            ) from last_exc
 
         raise BinanceAPIError(
             f'Binance request failed: {method} {path}'
         )
+
     def sync_time(self):
         server=self._request('GET','/api/v3/time'); self.time_offset_ms=int(server['serverTime'])-int(time.time()*1000); return server
     def ping(self): return self._request('GET','/api/v3/ping')

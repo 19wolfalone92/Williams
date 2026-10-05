@@ -43,7 +43,7 @@ object TradeJournal {
             .put("planned_rr", if (entry > stop) (take-entry)/(entry-stop) else 0.0)
             .put("entry_snapshot", candidate)
             .put("entry_reason", candidate.optString("reason"))
-            .put("strategy_version", "4.16.0")
+            .put("strategy_version", "4.17.0")
             .put("mfe_pct", 0.0)
             .put("mae_pct", 0.0)
             .put("mfe_r", 0.0)

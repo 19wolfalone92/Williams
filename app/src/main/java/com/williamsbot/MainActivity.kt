@@ -705,6 +705,10 @@ fun WilliamsApp(context: Context) {
                     command("/api/v1/control/stop")
                     stopTradingService()
                 },
+                onKill = {
+                    command("/api/v1/control/kill")
+                    stopTradingService()
+                },
                 onScan = { refresh(true) },
                 onSettings = { tab = 4 }
             )
@@ -786,6 +790,7 @@ private fun DashboardScreen(
     onPause: () -> Unit,
     onResume: () -> Unit,
     onStop: () -> Unit,
+    onKill: () -> Unit,
     onScan: () -> Unit,
     onSettings: () -> Unit
 ) {
@@ -849,7 +854,8 @@ private fun DashboardScreen(
                 onStart = onStart,
                 onPause = onPause,
                 onResume = onResume,
-                onStop = onStop
+                onStop = onStop,
+                onKill = onKill
             )
         }
 
@@ -1109,7 +1115,8 @@ private fun ControlCard(
     onStart: () -> Unit,
     onPause: () -> Unit,
     onResume: () -> Unit,
-    onStop: () -> Unit
+    onStop: () -> Unit,
+    onKill: () -> Unit
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -1149,9 +1156,18 @@ private fun ControlCard(
             }
 
             Text(
-                "TESTNET execution включён: при подтверждённом сигнале бот может открыть BUY и сразу поставить защитный OCO SELL (TP/SL).",
+                "TESTNET execution включён. BUY допускается только при готовых market/user WebSocket и после прохождения risk/filter checks.",
                 style = MaterialTheme.typography.bodySmall,
                 color = AppColors.amber
+            )
+
+            ActionButton(
+                modifier = Modifier.fillMaxWidth(),
+                text = "KILL SWITCH — STOP + CLOSE",
+                icon = Icons.Filled.Warning,
+                enabled = status.running || status.openPositions > 0,
+                accent = AppColors.red,
+                onClick = onKill
             )
         }
     }

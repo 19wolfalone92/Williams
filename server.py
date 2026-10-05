@@ -15,7 +15,7 @@ from market_scanner import MarketScanner
 
 load_dotenv()
 API_TOKEN = os.getenv('MOBILE_API_TOKEN', '').strip()
-VERSION = '4.16.0'
+VERSION = '4.17.0'
 
 app = FastAPI(title='Williams Binance Bot API', version=VERSION)
 hub = WebSocketHub()
