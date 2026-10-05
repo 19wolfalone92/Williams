@@ -343,6 +343,161 @@ private class NativeEngine(
     private fun secret(): String =
         prefs.getString("api_secret", "") ?: ""
 
+    private fun tradeHistory(): JSONArray {
+        return runCatching {
+            JSONArray(prefs.getString("trade_history", "[]") ?: "[]")
+        }.getOrDefault(JSONArray())
+    }
+
+    private fun saveTradeHistory(history: JSONArray) {
+        prefs.edit().putString("trade_history", history.toString()).apply()
+    }
+
+    private fun addTrade(record: JSONObject) {
+        val old = tradeHistory()
+        val out = JSONArray().put(record)
+        for (i in 0 until old.length()) {
+            val item = old.optJSONObject(i) ?: continue
+            out.put(item)
+        }
+        while (out.length() > 500) out.remove(out.length() - 1)
+        saveTradeHistory(out)
+    }
+
+    private fun recordEntry(candidate: BaseAnalysis, buy: JSONObject, qty: Double, entry: Double, stop: Double, take: Double, notional: Double) {
+        val wave = candidate.wave
+        addTrade(
+            JSONObject()
+                .put("id", buy.optLong("orderId", System.currentTimeMillis()))
+                .put("entry_time", System.currentTimeMillis())
+                .put("exit_time", JSONObject.NULL)
+                .put("symbol", candidate.symbol)
+                .put("side", "LONG")
+                .put("entry_price", entry)
+                .put("quantity", qty)
+                .put("score", candidate.score)
+                .put("setup_score", candidate.score)
+                .put("risk_pct", candidate.riskPct)
+                .put("risk_reward", candidate.riskReward)
+                .put("atr_pct", candidate.atrPct)
+                .put("spread_pct", candidate.spreadPct)
+                .put("htf_confirmed", candidate.htfCandidate)
+                .put("wave_position", wave.position)
+                .put("wave_phase", wave.phase)
+                .put("wave_confidence", wave.confidence)
+                .put("wave_exhaustion_risk", wave.exhaustionRisk)
+                .put("nested_w3_parent_w5", wave.path.contains("W5") && wave.path.contains("W3"))
+                .put("wave_path", wave.path)
+                .put("reason", candidate.reason)
+                .put("planned_stop", stop)
+                .put("planned_take_profit", take)
+                .put("notional_usdt", notional)
+                .put("best_price", entry)
+                .put("worst_price", entry)
+                .put("mfe_pct", 0.0)
+                .put("mae_pct", 0.0)
+        )
+        TradeNotificationHelper.notify(
+            context,
+            "Williams: сделка открыта",
+            candidate.symbol + " LONG • entry " + "%.8f".format(Locale.US, entry) +
+                " • Score " + "%.1f".format(Locale.US, candidate.score) +
+                " • W" + wave.position,
+            30000 + buy.optInt("orderId", 0)
+        )
+    }
+
+    private fun observeOpenTrade(price: Double) {
+        if (price <= 0.0) return
+        val history = tradeHistory()
+        if (history.length() == 0) return
+        val open = (0 until history.length())
+            .mapNotNull { history.optJSONObject(it) }
+            .firstOrNull {
+                val exit = it.opt("exit_time")
+                exit == null || exit == JSONObject.NULL || it.optString("exit_time").isBlank()
+            } ?: return
+
+        val entry = open.optDouble("entry_price", 0.0)
+        if (entry <= 0.0) return
+        val best = max(open.optDouble("best_price", entry), price)
+        val worst = min(open.optDouble("worst_price", entry), price)
+        open.put("best_price", best)
+        open.put("worst_price", worst)
+        open.put("mfe_pct", ((best - entry) / entry) * 100.0)
+        open.put("mae_pct", ((worst - entry) / entry) * 100.0)
+        saveTradeHistory(history)
+    }
+
+    private fun recordExit(exitPrice: Double, reason: String, order: JSONObject?) {
+        val history = tradeHistory()
+        if (history.length() == 0) return
+        val index = (0 until history.length()).firstOrNull {
+            val x = history.optJSONObject(it)
+            x != null && (x.opt("exit_time") == null || x.opt("exit_time") == JSONObject.NULL) &&
+                x.optString("symbol") == positionSymbol
+        } ?: return
+        val trade = history.getJSONObject(index)
+        val entry = trade.optDouble("entry_price", 0.0)
+        val qty = trade.optDouble("quantity", positionQty)
+        val pnl = (exitPrice - entry) * qty
+        val pnlPct = if (entry > 0) (exitPrice / entry - 1.0) * 100.0 else 0.0
+        val diagnosis = when {
+            pnl >= 0.0 && trade.optInt("wave_position", 0) == 3 -> "WAVE_3_SETUP_WORKED"
+            pnl >= 0.0 -> "SETUP_WORKED"
+            trade.optDouble("wave_exhaustion_risk", 0.0) >= 70.0 ||
+                trade.optInt("wave_position", 0) == 5 -> "WAVE_EXHAUSTION"
+            !trade.optBoolean("htf_confirmed", false) -> "HTF_CONFLICT"
+            pnl < 0.0 -> "FALSE_BREAKOUT_OR_REGIME_SHIFT"
+            else -> "UNKNOWN"
+        }
+        trade.put("exit_time", System.currentTimeMillis())
+            .put("exit_price", exitPrice)
+            .put("pnl", pnl)
+            .put("pnl_pct", pnlPct)
+            .put("reason", reason)
+            .put("diagnosis", diagnosis)
+            .put("order_type", order?.optString("type", ""))
+            .put("duration_seconds", (System.currentTimeMillis() - trade.optLong("entry_time", System.currentTimeMillis())) / 1000.0)
+        saveTradeHistory(history)
+
+        val result = if (pnl >= 0.0) "прибыль" else "убыток"
+        TradeNotificationHelper.notify(
+            context,
+            "Williams: сделка закрыта",
+            trade.optString("symbol") + " • " + result + " " +
+                "%.4f".format(Locale.US, pnl) + " USDT • " + diagnosis,
+            40000 + trade.optInt("id", 0)
+        )
+    }
+
+    fun insights(): JSONObject {
+        val history = tradeHistory()
+        var wins = 0
+        var losses = 0
+        var totalPnl = 0.0
+        val diagnoses = mutableMapOf<String, Int>()
+        for (i in 0 until history.length()) {
+            val t = history.optJSONObject(i) ?: continue
+            if (t.opt("exit_time") == null || t.opt("exit_time") == JSONObject.NULL) continue
+            val pnl = t.optDouble("pnl", 0.0)
+            totalPnl += pnl
+            if (pnl > 0) wins++ else if (pnl < 0) losses++
+            val d = t.optString("diagnosis", "UNCLASSIFIED")
+            diagnoses[d] = (diagnoses[d] ?: 0) + 1
+        }
+        val total = wins + losses
+        val dJson = JSONObject()
+        diagnoses.forEach { (k,v) -> dJson.put(k,v) }
+        return JSONObject()
+            .put("total", total)
+            .put("wins", wins)
+            .put("losses", losses)
+            .put("win_rate", if (total > 0) wins.toDouble()/total else 0.0)
+            .put("pnl", totalPnl)
+            .put("diagnoses", dJson)
+    }
+
     fun health(): JSONObject =
         JSONObject()
             .put("ok", true)
