@@ -102,7 +102,11 @@ private data class PositionState(
     var stop: Double,
     var take: Double,
     var riskPct: Double,
-    var ocoListClientId: String = ""
+    var ocoListClientId: String = "",
+    var ocoListId: String = "",
+    var entryOrderId: String = "",
+    var entryClientOrderId: String = "",
+    var openedAt: Long = 0L
 )
 
 private data class PendingEntry(
@@ -477,6 +481,10 @@ private class NativeEngine(
                     .put("take", it.take)
                     .put("risk_pct", it.riskPct)
                     .put("oco_list_client_id", it.ocoListClientId)
+                    .put("oco_list_id", it.ocoListId)
+                    .put("entry_order_id", it.entryOrderId)
+                    .put("entry_client_order_id", it.entryClientOrderId)
+                    .put("opened_at", it.openedAt)
             )
         }
 
@@ -519,7 +527,13 @@ private class NativeEngine(
                         riskPct = item.optDouble("risk_pct", 0.0),
                         ocoListClientId = item.optString(
                             "oco_list_client_id"
-                        )
+                        ),
+                        ocoListId = item.optString("oco_list_id"),
+                        entryOrderId = item.optString("entry_order_id"),
+                        entryClientOrderId = item.optString(
+                            "entry_client_order_id"
+                        ),
+                        openedAt = item.optLong("opened_at", 0L)
                     )
                 }
             }
@@ -1346,7 +1360,18 @@ private class NativeEngine(
                                 take = protection.take,
                                 riskPct = protection.riskPct,
                                 ocoListClientId =
-                                    protection.ocoClientId
+                                    protection.ocoClientId,
+                                ocoListId = protection.ocoListId,
+                                entryOrderId = order.optString(
+                                    "orderId"
+                                ),
+                                entryClientOrderId =
+                                    intent.clientOrderId,
+                                openedAt =
+                                    order.optLong(
+                                        "transactTime",
+                                        System.currentTimeMillis()
+                                    )
                             )
                     }
 
@@ -1499,7 +1524,16 @@ private class NativeEngine(
                         take = protection.take,
                         riskPct = protection.riskPct,
                         ocoListClientId =
-                            protection.ocoClientId
+                            protection.ocoClientId,
+                        ocoListId = protection.ocoListId,
+                        entryOrderId = buy.optString(
+                            "orderId"
+                        ),
+                        entryClientOrderId = clientOrderId,
+                        openedAt = buy.optLong(
+                            "transactTime",
+                            System.currentTimeMillis()
+                        )
                     )
             }
 
@@ -1689,7 +1723,8 @@ private class NativeEngine(
         val stop: Double,
         val take: Double,
         val riskPct: Double,
-        val ocoClientId: String
+        val ocoClientId: String,
+        val ocoListId: String
     )
 
     private fun executeBuyWithProtection(
@@ -2157,6 +2192,14 @@ private class NativeEngine(
             ((entry - stop) / entry)
                 .coerceIn(0.0, 1.0)
 
+        val actualOcoClientId =
+            oco.optString("listClientOrderId")
+                .ifBlank { ocoClientId }
+        val actualOcoListId =
+            oco.optString("orderListId").ifBlank {
+                error("Binance OCO response has no orderListId")
+            }
+
         return Protection(
             qty = normalizedQty,
             stop = stop,
@@ -2164,12 +2207,8 @@ private class NativeEngine(
             riskPct =
                 actualStopDistance +
                     feeBufferPerSidePct * 2.0,
-            ocoClientId =
-                oco.optString(
-                    "listClientOrderId"
-                ).ifBlank {
-                    ocoClientId
-                }
+            ocoClientId = actualOcoClientId,
+            ocoListId = actualOcoListId
         )
     }
 
