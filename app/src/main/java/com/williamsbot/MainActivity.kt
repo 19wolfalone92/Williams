@@ -1193,7 +1193,7 @@ private fun PositionScreen(
                 EmptyState(
                     icon = Icons.Filled.ShowChart,
                     title = "Нет графика",
-                    subtitle = "Подключи Testnet и обнови данные."
+                    subtitle = "Подключи Binance Testnet и обнови данные."
                 )
             } else {
                 TradingChart(candles, status)
@@ -1264,7 +1264,7 @@ private fun HistoryScreen(
                 EmptyState(
                     icon = Icons.Filled.History,
                     title = "Сделок пока нет",
-                    subtitle = "Это ожидаемо: execution в standalone 4.13 пока отключён."
+                    subtitle = "История сохраняется локально и пополняется автоматически после каждой сделки."
                 )
             }
         }
@@ -1285,6 +1285,22 @@ private fun HistoryScreen(
                         color = AppColors.textMuted
                     )
                     Text("PnL " + fmt(it.pnl) + " USDT")
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        MiniMetric("W" + it.wavePosition, "")
+                        MiniMetric("SCORE", fmt(it.score, 0))
+                        MiniMetric("MFE", fmt(it.mfePct, 2) + "%")
+                        MiniMetric("MAE", fmt(it.maePct, 2) + "%")
+                    }
+                    if (it.diagnosis.isNotBlank()) {
+                        Text(
+                            "Диагноз: " + it.diagnosis,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if ((it.pnl ?: 0.0) >= 0.0) AppColors.green else AppColors.amber
+                        )
+                    }
                     if (it.reason.isNotBlank()) {
                         Text(
                             it.reason,
