@@ -2879,13 +2879,15 @@ private class NativeEngine(
 
         val entry = entryCandidates.firstOrNull()
 
-        // Find the nearest larger-degree wave that contains the entry wave.
+        // Find the actual nearest larger wave regardless of direction. A W3
+        // inside a parent W2/W4 is part of the correction tree (A/C or B),
+        // not a continuation entry, so direction alone must not select a
+        // distant bullish parent and accidentally bless it.
         val parent = if (entry != null) {
             frames
                 .filter {
                     val seconds = frameSeconds(it.path.substringBefore(":"))
                     seconds > frameSeconds(entry.path.substringBefore(":")) &&
-                        it.direction == "UP" &&
                         it.position in 1..5
                 }
                 .sortedBy { frameSeconds(it.path.substringBefore(":")) }
@@ -2921,8 +2923,10 @@ private class NativeEngine(
                 .firstOrNull()
         }
 
+        val entryInsideCorrection = parent?.position in listOf(2, 4)
         val entrySignal =
             junior != null &&
+                !entryInsideCorrection &&
                 junior.confidence >= 55.0 &&
                 junior.alligatorBullish &&
                 junior.aoPositive &&
