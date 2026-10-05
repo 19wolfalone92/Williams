@@ -5,6 +5,7 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.MediaType
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
@@ -22,6 +23,7 @@ import javax.crypto.spec.SecretKeySpec
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.floor
 
 object StandaloneRuntime {
     private var server: StandaloneServer? = null
@@ -646,6 +648,10 @@ private class NativeEngine(
     }
 
     private fun performScan() {
+        if (key().isNotBlank() && secret().isNotBlank()) {
+            runCatching { reconcilePosition() }
+        }
+
         val universe = loadUniverse()
         scanSymbols = universe.first.toMutableList()
 
@@ -745,6 +751,38 @@ private class NativeEngine(
         }
     }
 
+    private fun reconcilePosition() {
+        val symbol = positionSymbol ?: return
+        val asset = symbol.removeSuffix("USDT")
+        val account = signedAccount()
+        val balances = account.getJSONArray("balances")
+        var free = 0.0
+        for (i in 0 until balances.length()) {
+            val b = balances.getJSONObject(i)
+            if (b.optString("asset") == asset) {
+                free = b.optString("free").toDoubleOrNull() ?: 0.0
+                break
+            }
+        }
+
+        if (free <= 0.0) {
+            positionSymbol = null
+            positionQty = 0.0
+            positionEntry = 0.0
+            prefs.edit()
+                .remove("position_symbol")
+                .remove("position_qty")
+                .remove("position_entry")
+                .apply()
+            return
+        }
+
+        positionQty = free
+        prefs.edit()
+            .putString("position_qty", free.toString())
+            .apply()
+    }
+
     private fun signedPost(path: String, params: String): JSONObject {
         val query =
             params + "&timestamp=" + System.currentTimeMillis() + "&recvWindow=5000"
@@ -754,7 +792,7 @@ private class NativeEngine(
             .header("X-MBX-APIKEY", key())
             .post(
                 okhttp3.RequestBody.create(
-                    "application/x-www-form-urlencoded".toMediaType(),
+                    MediaType.parse("application/x-www-form-urlencoded"),
                     query + "&signature=" + signature
                 )
             )
@@ -865,6 +903,11 @@ private class NativeEngine(
         positionSymbol = candidate.symbol
         positionQty = qty
         positionEntry = entry
+        prefs.edit()
+            .putString("position_symbol", candidate.symbol)
+            .putString("position_qty", qty.toString())
+            .putString("position_entry", entry.toString())
+            .apply()
         lastOrder = JSONObject()
             .put("buy", buy)
             .put("oco", oco)
