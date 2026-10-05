@@ -223,6 +223,26 @@ class Database:
             "WHERE t.exit_time IS NOT NULL GROUP BY COALESCE(diagnosis,'UNCLASSIFIED') "
             "ORDER BY count DESC"
         ).fetchall()
+        rows = self.recent_trade_journal(500)
+        closed = [x for x in rows if x.get('exit_time')]
+        def group(field):
+            buckets = {}
+            for item in closed:
+                ctx = item.get('entry_context') or {}
+                key = str(ctx.get(field) if ctx.get(field) is not None else item.get(field) or 'UNKNOWN')
+                b = buckets.setdefault(key, {'count':0,'wins':0,'losses':0,'pnl':0.0})
+                pnl = float(item.get('pnl') or 0.0)
+                b['count'] += 1
+                b['pnl'] += pnl
+                if pnl > 0: b['wins'] += 1
+                elif pnl < 0: b['losses'] += 1
+            for b in buckets.values():
+                b['win_rate'] = b['wins'] / max(1, b['count'])
+            return sorted(buckets.items(), key=lambda kv: (kv[1]['pnl'], kv[1]['count']), reverse=True)
+
+        gross_profit = sum(max(0.0, float(x.get('pnl') or 0.0)) for x in closed)
+        gross_loss = sum(min(0.0, float(x.get('pnl') or 0.0)) for x in closed)
+
         return {
             'total': int(totals['total'] or 0),
             'wins': int(totals['wins'] or 0),
@@ -231,7 +251,12 @@ class Database:
             'pnl': float(totals['pnl'] or 0),
             'avg_win': float(totals['avg_win'] or 0),
             'avg_loss': float(totals['avg_loss'] or 0),
+            'expectancy': float(totals['pnl'] or 0) / max(1, int(totals['total'] or 0)),
+            'profit_factor': (gross_profit / abs(gross_loss)) if gross_loss < 0 else None,
             'diagnoses': [dict(x) for x in diagnoses],
+            'by_wave': group('wave_position'),
+            'by_symbol': group('symbol'),
+            'by_signal_family': group('signal_family'),
         }
 
     def recent_orders(self, symbol, limit=100):
