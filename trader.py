@@ -76,7 +76,24 @@ class Trader:
         if not self.client.testnet and os.getenv('ALLOW_LIVE','false').lower()!='true': raise RuntimeError('LIVE trading is disabled. Set TESTNET=true or explicitly ALLOW_LIVE=true.')
         if not self.client.api_key or not self.client.api_secret: raise RuntimeError('BINANCE_API_KEY and BINANCE_API_SECRET are required.')
         self.client.sync_time(); info=self.client.exchange_info(self.symbol); s=info['symbols'][0]; self.filters={f['filterType']:f for f in s['filters']}; self.base_asset=s['baseAsset']; self.quote_asset=s['quoteAsset']
-        self.db.log_event('INFO','startup','Trader initialized',{'symbol':self.symbol,'interval':self.interval,'testnet':self.client.testnet}); self.ensure_foreign_base_balance_baseline(); self.recover_state()
+        self.db.log_event('INFO','startup','Trader initialized',{'symbol':self.symbol,'interval':self.interval,'testnet':self.client.testnet})
+        if self.max_open_positions > 1:
+            self._multi_position_trader = MultiPositionTrader(
+                self.client,
+                db=self.db,
+                symbols=self.auto_scan_symbols,
+            )
+            recovery = self._multi_position_trader.recover()
+            if not recovery.get('ok'):
+                self.db.log_event(
+                    'ERROR',
+                    'multi_position_startup_blocked',
+                    'Multi-position recovery requires reconciliation before trading',
+                    recovery,
+                )
+        else:
+            self.ensure_foreign_base_balance_baseline()
+            self.recover_state()
         self.notify(f'Williams STARTED\n{self.symbol} {self.interval}\nTESTNET={self.client.testnet}\nSTATE={self.state()}')
 
     def switch_symbol(self, symbol):
