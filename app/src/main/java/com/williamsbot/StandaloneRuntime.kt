@@ -139,7 +139,7 @@ private class StandaloneServer(private val context: Context) {
 
     private fun e(): NativeEngine {
         if (engine == null) {
-            engine = NativeEngine(prefs, client)
+            engine = NativeEngine(context, prefs, client)
         }
         return engine!!
     }
@@ -299,6 +299,7 @@ private class StandaloneServer(private val context: Context) {
 }
 
 private class NativeEngine(
+    private val context: Context,
     private val prefs: android.content.SharedPreferences,
     private val http: OkHttpClient
 ) {
@@ -306,9 +307,9 @@ private class NativeEngine(
     private val primarySymbol = "BTCUSDT"
     private val interval = "1h"
 
-    private val maxScanSymbols = 60
-    private val waveTopN = 8
-    private val scanExecutor = Executors.newFixedThreadPool(6)
+    private val maxScanSymbols = 120
+    private val waveTopN = 12
+    private val scanExecutor = Executors.newFixedThreadPool(12)
 
     @Volatile
     private var running = false
@@ -416,7 +417,7 @@ private class NativeEngine(
                 }
 
                 try {
-                    Thread.sleep(90_000L)
+                    Thread.sleep(20_000L)
                 } catch (_: InterruptedException) {
                     break
                 }
@@ -428,7 +429,7 @@ private class NativeEngine(
 
         return JSONObject()
             .put("started", true)
-            .put("interval_seconds", 90)
+            .put("interval_seconds", 20)
     }
 
     fun stop(): JSONObject {
@@ -699,9 +700,15 @@ private class NativeEngine(
                 .take(waveTopN)
                 .filter { it.candles.size >= 140 }
 
-        val final = waveTargets.map { baseCandidate ->
-            enrichWithMtf(baseCandidate)
-        }.toMutableList()
+        val waveFutures = waveTargets.map { baseCandidate ->
+            scanExecutor.submit(Callable {
+                runCatching { enrichWithMtf(baseCandidate) }.getOrNull()
+            })
+        }
+        val final = mutableListOf<BaseAnalysis>()
+        waveFutures.forEach { future ->
+            runCatching { future.get() }.getOrNull()?.let { final.add(it) }
+        }
 
         rankedBase
             .drop(waveTargets.size)
