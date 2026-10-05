@@ -102,7 +102,17 @@ data class Candidate(
     val spreadPct: Double,
     val htfConfirmed: Boolean,
     val setupState: String,
-    val reason: String
+    val reason: String,
+    val wiseManCount: Int,
+    val signalFamily: String,
+    val waveScore: Double,
+    val wavePosition: Int,
+    val wavePhase: String,
+    val waveConfidence: Double,
+    val waveExhaustionRisk: Double,
+    val nestedW3: Boolean,
+    val nestedW3ParentW5: Boolean,
+    val wavePath: String
 )
 
 data class Trade(
@@ -427,7 +437,17 @@ fun WilliamsApp(context: Context) {
                 spreadPct = x.optDouble("spread_pct", 0.0),
                 htfConfirmed = x.optBoolean("htf_confirmed"),
                 setupState = x.optString("setup_state", "WATCHING"),
-                reason = x.optString("reason", "")
+                reason = x.optString("reason", ""),
+                wiseManCount = x.optInt("wise_man_count", 0),
+                signalFamily = x.optString("signal_family", "NONE"),
+                waveScore = x.optDouble("wave_score", 50.0),
+                wavePosition = x.optInt("wave_position", 0),
+                wavePhase = x.optString("wave_phase", "UNKNOWN"),
+                waveConfidence = x.optDouble("wave_confidence", 0.0),
+                waveExhaustionRisk = x.optDouble("wave_exhaustion_risk", 0.0),
+                nestedW3 = x.optBoolean("nested_w3"),
+                nestedW3ParentW5 = x.optBoolean("nested_w3_parent_w5"),
+                wavePath = x.optString("wave_path", "")
             )
         }.sortedByDescending { it.score }
 
@@ -1201,9 +1221,34 @@ fun CandidateCard(candidate: Candidate) {
                 Metric("Risk", "${fmt(candidate.riskPct)}%")
             }
 
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Metric("Wise Men", "${candidate.wiseManCount}/3")
+                Metric("Wave", if (candidate.wavePosition > 0) "W${candidate.wavePosition}" else "?")
+                Metric("Wave Score", fmt(candidate.waveScore))
+                Metric("Exhaust", "${fmt(candidate.waveExhaustionRisk)}%")
+            }
+
+            if (candidate.wavePath.isNotBlank()) {
+                Text(
+                    "MTF: ${candidate.wavePath}",
+                    style = MaterialTheme.typography.labelMedium
+                )
+            }
+
+            if (candidate.nestedW3ParentW5) {
+                Text(
+                    "NESTED W3 INSIDE PARENT W5 - W5 CONTEXT IS NOT A VETO",
+                    color = MaterialTheme.colorScheme.tertiary,
+                    style = MaterialTheme.typography.labelMedium
+                )
+            }
+
             if (candidate.signal) {
                 Text(
-                    "STRICT LONG SIGNAL: 7/7",
+                    "STRICT LONG · Wise Men ${candidate.wiseManCount}/3 · ${candidate.signalFamily}",
                     color = MaterialTheme.colorScheme.tertiary,
                     style = MaterialTheme.typography.labelLarge
                 )

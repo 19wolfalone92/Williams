@@ -1,0 +1,42 @@
+WILLIAMS TRADER 4.12.0 — VALIDATION REPORT
+
+Source: current user-provided Williams_current.tar.gz
+Working copy: /mnt/data/williams_work
+
+IMPLEMENTED
+- Multi-timeframe Wave Engine based on confirmed Williams fractal/swing structure.
+- Default 1h chain: 1d -> 4h -> 1h -> 15m.
+- Nested W3 detection, including W3 inside parent W5.
+- Parent W5 is context/risk only and is not an automatic veto of child W3.
+- Wave Score bounded adjustment: +/-10 points around legacy score.
+- Wave exhaustion risk and AO divergence context.
+- Full Binance Spot/USDT universe discovery by exchangeInfo.
+- Leveraged-token filtering by default: UP/DOWN/BULL/BEAR.
+- Parallel base scan with configurable workers and cached exchange metadata.
+- Automatic Trader scan throttled to 90 seconds by default.
+- REST/Android scanner cache TTL respected.
+- Direct market_buy() live-trading guard independent of setup().
+- PortfolioScanner ATR unit bug fixed.
+- Android scanner displays wave position, Wave Score, confidence, exhaustion and nested-wave context.
+- Backend Python CI workflow with offline unit tests and compile checks.
+
+REGRESSION / SAFETY CHECKS
+- 38 offline pytest tests passed.
+- Production Python modules compiled successfully.
+- New Wave Engine integration tests passed.
+- Patch application was tested on a fresh copy of the uploaded source; 38 tests passed after applying the patch.
+- No Binance order was created during validation.
+- No live exchange test was performed.
+
+ANDROID BUILD LIMITATION
+The current container does not have the Android SDK/Gradle distribution needed for a real APK build. The project is prepared for the existing GitHub Actions Android workflow, but an APK build is not claimed here.
+
+DELIVERABLES
+- Williams_4.12.0_FULL_SAFE.tar.gz
+- Williams_4.12.0_Wave_MTF_PATCH.zip
+
+SECURITY
+The deliverables exclude .env, data/, .git, .signing/, local.properties and runtime logs.
+
+SHA-256
+Exact SHA-256 hashes are provided alongside the delivered artifacts; the embedded report intentionally does not contain the hash of its own archive.

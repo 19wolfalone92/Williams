@@ -117,7 +117,7 @@ python run_backtest.py --symbol BTCUSDT --interval 1h --start 2024-01-01 --end 2
 
 Открыть корень проекта в Android Studio и собрать `app`.
 
-Версия приложения: **4.10.0**, versionCode **10**.
+Версия приложения: **4.12.0**, versionCode формируется GitHub Actions.
 
 Среда, в которой подготовлен этот архив, не содержит Android SDK/Gradle distribution, поэтому APK здесь не заявляется как собранный. Исходники Gradle-проекта подготовлены для сборки Android Studio.
 
@@ -149,3 +149,8 @@ The backend persists encrypted Binance credentials and bot state on the VPS. Doc
 ## Автоматическая сборка APK через GitHub Actions
 
 См. `APK_BUILD_AUTO_RU.md`. После push в `main` GitHub Actions автоматически собирает устанавливаемый `app-debug.apk` и публикует его в Artifacts.
+
+
+## Williams 4.12 strategy alignment
+
+The strategy layer now keeps separate Williams First/Second/Third Wise-Man signals, the Super AO three-bar condition, the fractal/Teeth gate, Market Facilitation diagnostics, and multi-timeframe wave context. An active Wave-5 exhaustion gate is applied conservatively on the execution timeframe; a nested lower-timeframe Wave 3 inside a higher-timeframe Wave 5 is not vetoed automatically. See `WILLIAMS_BOOK_ALIGNMENT_RU.md`.

@@ -43,18 +43,21 @@ class Trader:
         raw_symbols = os.getenv(
             'AUTO_SCAN_SYMBOLS',
             'BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,ADAUSDT,DOGEUSDT,AVAXUSDT,LINKUSDT,DOTUSDT'
+        ).strip()
+
+        if raw_symbols.upper() in {'ALL', 'AUTO', '*'}:
+            self.auto_scan_symbols = []
+        else:
+            self.auto_scan_symbols = [
+                x.strip().upper()
+                for x in raw_symbols.split(',')
+                if x.strip()
+            ]
+
+        self.auto_scan_min_interval_seconds = max(
+            0, int(os.getenv('AUTO_SCAN_MIN_INTERVAL_SECONDS', '90'))
         )
-
-        self.auto_scan_symbols = [
-            x.strip().upper()
-            for x in raw_symbols.split(',')
-            if x.strip()
-        ]
-
-        if not self.auto_scan_symbols:
-            raise RuntimeError(
-                'AUTO_SCAN_SYMBOLS must contain at least one symbol'
-            )
+        self._last_auto_scan_monotonic = 0.0
 
         self.max_open_positions = 1
         self.active_symbol = self.symbol
@@ -584,8 +587,27 @@ class Trader:
                 'No live order execution is permitted.'
             )
 
-        # Persist the currently selected symbol only after the immutable
-        # execution safety gate above has passed.
+        # Defense in depth: these execution invariants are repeated here
+        # because market_buy() must remain safe even if a future caller skips
+        # setup() or changes the surrounding control flow.
+        if (
+            not self.client.testnet
+            and os.getenv('ALLOW_LIVE', 'false').lower() != 'true'
+        ):
+            raise RuntimeError(
+                'BUY blocked: LIVE trading requires ALLOW_LIVE=true.'
+            )
+        if self.max_open_positions != 1:
+            raise RuntimeError(
+                'BUY blocked: MAX_OPEN_POSITIONS must remain exactly 1.'
+            )
+        if self.db.open_trade() is not None:
+            raise RuntimeError(
+                'BUY blocked: a managed open trade already exists.'
+            )
+
+        # Persist the currently selected symbol only after all immutable
+        # execution safety gates above have passed.
         self.db.state_set('active_symbol', self.symbol)
 
         # HARD ENTRY GUARD:
@@ -671,6 +693,17 @@ class Trader:
         # and after ambiguous exchange operations. Do not run expensive
         # REST reconciliation on every normal scanner cycle.
         current_state = self.state()
+
+        # Full-universe MTF scanning is intentionally throttled; the manual
+        # scanner endpoint can still request a fresh diagnostic scan.
+        now_monotonic = time.monotonic()
+        if (
+            self._last_auto_scan_monotonic
+            and now_monotonic - self._last_auto_scan_monotonic
+            < self.auto_scan_min_interval_seconds
+        ):
+            return
+        self._last_auto_scan_monotonic = now_monotonic
 
         if current_state != 'FLAT':
             log.info(

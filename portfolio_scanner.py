@@ -42,7 +42,9 @@ class PortfolioScanner:
             self.client.ticker_price(candidate.symbol)["price"]
         )
 
-        atr = entry_price * (candidate.atr_pct / 100.0)
+        # MarketScanner.atr_pct is already a fraction (ATR / price), not a
+        # percentage in whole-number units.
+        atr = entry_price * candidate.atr_pct
 
         risk = self.risk_engine.analyse(
             symbol=candidate.symbol,
