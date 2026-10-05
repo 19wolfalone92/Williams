@@ -144,7 +144,8 @@ private data class SymbolRules(
     val avgPriceMins: Int,
     val maxNumOrders: Int,
     val maxNumAlgoOrders: Int,
-    val maxNumOrderLists: Int
+    val maxNumOrderLists: Int,
+    val maxPosition: Double
 )
 
 private data class BaseAnalysis(
@@ -3000,6 +3001,7 @@ private class NativeEngine(
         var maxNumOrders = Int.MAX_VALUE
         var maxNumAlgoOrders = Int.MAX_VALUE
         var maxNumOrderLists = Int.MAX_VALUE
+        var maxPosition = Double.POSITIVE_INFINITY
 
         for (i in 0 until filters.length()) {
             val f = filters.getJSONObject(i)
@@ -3057,6 +3059,11 @@ private class NativeEngine(
                 "MAX_NUM_ORDER_LISTS" -> {
                     maxNumOrderLists = f.optInt("maxNumOrderLists", maxNumOrderLists)
                 }
+                "MAX_POSITION" -> {
+                    maxPosition =
+                        f.optString("maxPosition").toDoubleOrNull()
+                            ?: maxPosition
+                }
             }
         }
 
@@ -3105,7 +3112,8 @@ private class NativeEngine(
             avgPriceMins = avgPriceMins,
             maxNumOrders = maxNumOrders,
             maxNumAlgoOrders = maxNumAlgoOrders,
-            maxNumOrderLists = maxNumOrderLists
+            maxNumOrderLists = maxNumOrderLists,
+            maxPosition = maxPosition
         )
     }
 
@@ -3390,6 +3398,39 @@ private class NativeEngine(
                 )
         }
         savePersistedState()
+
+        val baseAsset = candidate.symbol.removeSuffix("USDT")
+        val currentBaseQty = run {
+            var amount = 0.0
+            for (i in 0 until balances.length()) {
+                val row = balances.getJSONObject(i)
+                if (row.optString("asset") == baseAsset) {
+                    amount =
+                        (row.optString("free").toDoubleOrNull() ?: 0.0) +
+                        (row.optString("locked").toDoubleOrNull() ?: 0.0)
+                    break
+                }
+            }
+            amount
+        }
+
+        if (rules.maxPosition.isFinite()) {
+            val referencePrice = runCatching {
+                JSONObject(
+                    getBody("/api/v3/ticker/price?symbol=" + candidate.symbol)
+                ).optString("price").toDoubleOrNull()
+            }.getOrNull() ?: 0.0
+
+            if (referencePrice > 0.0) {
+                val estimatedQty = notional / referencePrice
+                require(
+                    currentBaseQty + estimatedQty <=
+                        rules.maxPosition + rules.step
+                ) {
+                    "Binance MAX_POSITION would be exceeded"
+                }
+            }
+        }
 
         val buyParams =
             if (rules.quoteOrderQtyMarketAllowed) {
