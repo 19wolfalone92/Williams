@@ -109,7 +109,16 @@ jobs:
           set -e
           exit "$rc"
 
-      - name: Upload debug build log\n        if: always()\n        uses: actions/upload-artifact@v7\n        with:\n          name: williams-debug-build-log-${{ github.run_number }}\n          path: build-debug.log\n          if-no-files-found: ignore\n          retention-days: 3\n\n      - name: Build release APK
+      - name: Upload debug build log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: williams-debug-build-log-${{ github.run_number }}
+          path: build-debug.log
+          if-no-files-found: ignore
+          retention-days: 3
+
+      - name: Build release APK
         run: |
           gradle --no-daemon :app:assembleRelease --stacktrace
 
