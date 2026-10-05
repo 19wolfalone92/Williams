@@ -1422,8 +1422,8 @@ fun androidx.compose.foundation.lazy.LazyListScope.settingsScreen(
                     modifier = Modifier.fillMaxWidth()
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(testnet, onTestnet)
-                    Text("Binance Testnet")
+                    Checkbox(checked = true, onCheckedChange = null)
+                    Text("Binance Testnet (standalone)")
                 }
                 Button(
                     onClick = onConfigure,
