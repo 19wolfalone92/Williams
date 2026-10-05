@@ -1525,15 +1525,7 @@ private class NativeEngine(
                         riskPct = protection.riskPct,
                         ocoListClientId =
                             protection.ocoClientId,
-                        ocoListId = protection.ocoListId,
-                        entryOrderId = buy.optString(
-                            "orderId"
-                        ),
-                        entryClientOrderId = clientOrderId,
-                        openedAt = buy.optLong(
-                            "transactTime",
-                            System.currentTimeMillis()
-                        )
+                        ocoListId = protection.ocoListId
                     )
             }
 
@@ -2010,7 +2002,16 @@ private class NativeEngine(
                         take = protection.take,
                         riskPct = protection.riskPct,
                         ocoListClientId =
-                            protection.ocoClientId
+                            protection.ocoClientId,
+                        ocoListId = protection.ocoListId,
+                        entryOrderId = buy.optString(
+                            "orderId"
+                        ),
+                        entryClientOrderId = clientOrderId,
+                        openedAt = buy.optLong(
+                            "transactTime",
+                            System.currentTimeMillis()
+                        )
                     )
             }
 
