@@ -2505,12 +2505,32 @@ private class NativeEngine(
         val rules = symbolFilters(symbol)
 
         return try {
-            // Cancel this symbol's protective orders first. If cancellation
-            // fails, do not send a market SELL into an unknown OCO state.
-            signedDelete(
-                "/api/v3/openOrders",
-                "symbol=" + symbol
-            )
+            // Cancel only the bot-owned OCO. Never cancel unrelated
+            // orders that happen to belong to the same symbol.
+            if (stored.ocoListId.isNotBlank()) {
+                signedDelete(
+                    "/api/v3/orderList",
+                    "symbol=" + symbol +
+                        "&orderListId=" + stored.ocoListId
+                )
+            } else if (stored.ocoListClientId.isNotBlank()) {
+                signedDelete(
+                    "/api/v3/orderList",
+                    "symbol=" + symbol +
+                        "&listClientOrderId=" +
+                        stored.ocoListClientId
+                )
+            } else {
+                setReconcileRequired(
+                    "Manual SELL refused: missing managed OCO identifier for " +
+                        symbol
+                )
+                return JSONObject()
+                    .put("sold", false)
+                    .put("symbol", symbol)
+                    .put("state", "RECONCILE_REQUIRED")
+                    .put("reason", "managed OCO identifier missing")
+            }
 
             val account = signedAccount()
             val balances =
