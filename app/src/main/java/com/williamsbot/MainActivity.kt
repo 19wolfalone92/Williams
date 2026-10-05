@@ -236,7 +236,10 @@ data class Candidate(
     val waveExhaustionRisk: Double,
     val nestedW3: Boolean,
     val nestedW3ParentW5: Boolean,
-    val wavePath: String
+    val wavePath: String,
+    val wavePrimaryCount: String,
+    val waveAlternativeCount: String,
+    val waveAbcPhase: String
 )
 
 data class Trade(
@@ -2391,7 +2394,10 @@ private fun parseCandidates(array: JSONArray): List<Candidate> =
             waveExhaustionRisk = x.optDouble("wave_exhaustion_risk", 0.0),
             nestedW3 = x.optBoolean("nested_w3"),
             nestedW3ParentW5 = x.optBoolean("nested_w3_parent_w5"),
-            wavePath = x.optString("wave_path", "")
+            wavePath = x.optString("wave_path", ""),
+            wavePrimaryCount = x.optString("wave_primary_count", ""),
+            waveAlternativeCount = x.optString("wave_alternative_count", ""),
+            waveAbcPhase = x.optString("wave_abc_phase", "")
         )
     }.sortedByDescending { it.score }
 
