@@ -890,15 +890,31 @@ private class NativeEngine(
         val take = entry * (1.0 + stopDistance * 1.5)
         val stopLimit = stop * 0.999
 
-        val oco = signedPost(
-            "/api/v3/order/oco",
-            "symbol=" + candidate.symbol +
-                "&side=SELL&quantity=" + fmtQty(qty, decimals) +
-                "&price=" + fmtPrice(take, tick) +
-                "&stopPrice=" + fmtPrice(stop, tick) +
-                "&stopLimitPrice=" + fmtPrice(stopLimit, tick) +
-                "&stopLimitTimeInForce=GTC"
-        )
+        val oco = try {
+            signedPost(
+                "/api/v3/order/oco",
+                "symbol=" + candidate.symbol +
+                    "&side=SELL&quantity=" + fmtQty(qty, decimals) +
+                    "&price=" + fmtPrice(take, tick) +
+                    "&stopPrice=" + fmtPrice(stop, tick) +
+                    "&stopLimitPrice=" + fmtPrice(stopLimit, tick) +
+                    "&stopLimitTimeInForce=GTC"
+            )
+        } catch (ocoError: Exception) {
+            // Never leave an unprotected Testnet position after a failed OCO.
+            runCatching {
+                signedPost(
+                    "/api/v3/order",
+                    "symbol=" + candidate.symbol +
+                        "&side=SELL&type=MARKET&quantity=" +
+                        fmtQty(qty, decimals)
+                )
+            }
+            throw IllegalStateException(
+                "OCO failed; emergency SELL attempted: " +
+                    (ocoError.message ?: "unknown error")
+            )
+        }
 
         positionSymbol = candidate.symbol
         positionQty = qty
