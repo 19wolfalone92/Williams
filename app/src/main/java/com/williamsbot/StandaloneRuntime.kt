@@ -381,8 +381,11 @@ private class NativeEngine(
     private val interval = "1h"
 
     private val maxScanSymbols = 60
-    private val waveTopN = 8
-    private val scanExecutor = Executors.newFixedThreadPool(6)
+    private val waveTopN = 12
+    private val scanExecutor = Executors.newFixedThreadPool(12)
+    private val candleCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, List<CandleN>>>()
+    private val fullHistoryCache = java.util.concurrent.ConcurrentHashMap<String, List<CandleN>>()
+    private val scanCacheTtlMs = 12_000L
 
     @Volatile
     private var running = false
@@ -561,7 +564,7 @@ private class NativeEngine(
         JSONObject()
             .put("ok", true)
             .put("service", "williams-native")
-            .put("version", "4.14.0")
+            .put("version", "4.15.0")
             .put("standalone", true)
             .put("websocket", false)
             .put(
@@ -687,7 +690,7 @@ private class NativeEngine(
                 }
 
                 try {
-                    Thread.sleep(90_000L)
+                    Thread.sleep(15_000L)
                 } catch (_: InterruptedException) {
                     break
                 }
@@ -699,7 +702,7 @@ private class NativeEngine(
 
         return JSONObject()
             .put("started", true)
-            .put("interval_seconds", 90)
+            .put("interval_seconds", 15)
     }
 
     fun stop(): JSONObject {
@@ -818,31 +821,50 @@ private class NativeEngine(
         }
     }
 
-    private fun signedAccount(): JSONObject {
-        val timestamp = signedTimestamp().toString()
-        val params =
-            "timestamp=" + timestamp + "&recvWindow=" + BINANCE_RECV_WINDOW_MS
-        val signature = hmac(params, secret())
+    private fun signedAccount(): JSONObject =
+        signedRequest(
+            method = "GET",
+            path = "/api/v3/account",
+            params = ""
+        )
 
-        val request = Request.Builder()
-            .url(
-                baseUrl +
-                    "/api/v3/account?" +
-                    params +
-                    "&signature=" +
-                    signature
-            )
-            .header("X-MBX-APIKEY", key())
-            .get()
-            .build()
-
-        http.newCall(request).execute().use { response ->
-            val body = response.body?.string() ?: "{}"
-            if (!response.isSuccessful) {
-                error("Binance " + response.code + ": " + body)
+    private fun signedRequest(
+        method: String,
+        path: String,
+        params: String
+    ): JSONObject {
+        var lastBody = "{}"
+        repeat(2) { attempt ->
+            val query = if (params.isBlank()) {
+                "timestamp=" + signedTimestamp() +
+                    "&recvWindow=" + BINANCE_RECV_WINDOW_MS
+            } else {
+                params + "&timestamp=" + signedTimestamp() +
+                    "&recvWindow=" + BINANCE_RECV_WINDOW_MS
             }
-            return JSONObject(body)
+            val signature = hmac(query, secret())
+            val requestBuilder = Request.Builder()
+                .url(baseUrl + path + "?" + query + "&signature=" + signature)
+                .header("X-MBX-APIKEY", key())
+            val request = when (method) {
+                "POST" -> requestBuilder.post(
+                    (query + "&signature=" + signature)
+                        .toRequestBody("application/x-www-form-urlencoded".toMediaType())
+                ).build()
+                "DELETE" -> requestBuilder.delete().build()
+                else -> requestBuilder.get().build()
+            }
+            http.newCall(request).execute().use { response ->
+                lastBody = response.body?.string() ?: "{}"
+                if (response.isSuccessful) return JSONObject(lastBody)
+                if (attempt == 0 && lastBody.contains("-1021")) {
+                    runCatching { syncServerTime() }
+                    return@use
+                }
+                error("Binance " + response.code + ": " + lastBody)
+            }
         }
+        error("Binance timestamp retry failed: " + lastBody)
     }
 
     private fun hmac(value: String, secretValue: String): String {
@@ -866,40 +888,58 @@ private class NativeEngine(
         frame: String,
         limit: Int = 150
     ): List<CandleN> {
-        val encodedSymbol = symbol.uppercase()
+        val cacheKey = symbol.uppercase() + ":" + frame + ":" + limit
+        val cached = candleCache[cacheKey]
+        val now = System.currentTimeMillis()
+        if (cached != null && now - cached.first < scanCacheTtlMs) return cached.second
+
         val body = getBody(
-            "/api/v3/klines?symbol=" +
-                encodedSymbol +
-                "&interval=" +
-                frame +
-                "&limit=" +
-                limit
+            "/api/v3/klines?symbol=" + symbol.uppercase() +
+                "&interval=" + frame + "&limit=" + limit
         )
-
         val array = JSONArray(body)
-
         val all = List(array.length()) { i ->
             val row = array.getJSONArray(i)
-            CandleN(
-                t = row.getLong(0),
-                o = row.getString(1).toDouble(),
-                h = row.getString(2).toDouble(),
-                l = row.getString(3).toDouble(),
-                c = row.getString(4).toDouble(),
-                v = row.getString(5).toDouble()
-            )
+            CandleN(row.getLong(0), row.getString(1).toDouble(), row.getString(2).toDouble(),
+                row.getString(3).toDouble(), row.getString(4).toDouble(), row.getString(5).toDouble())
         }
-
         val intervalMs = frameSeconds(frame) * 1000L
-        return if (
-            all.isNotEmpty() &&
-            intervalMs > 0L &&
-            all.last().t + intervalMs > System.currentTimeMillis()
-        ) {
+        val result = if (all.isNotEmpty() && intervalMs > 0L && all.last().t + intervalMs > now) {
             all.dropLast(1)
-        } else {
-            all
+        } else all
+        candleCache[cacheKey] = now to result
+        return result
+    }
+
+    private fun fetchFullHistory(symbol: String, frame: String = "1h"): List<CandleN> {
+        val cacheKey = symbol.uppercase() + ":" + frame
+        fullHistoryCache[cacheKey]?.let { return it }
+        val out = ArrayList<CandleN>()
+        var endTime = System.currentTimeMillis()
+        var guard = 0
+        while (guard++ < 2000) {
+            val body = getBody(
+                "/api/v3/klines?symbol=" + symbol.uppercase() +
+                    "&interval=" + frame + "&limit=1000&endTime=" + endTime
+            )
+            val array = JSONArray(body)
+            if (array.length() == 0) break
+            val batch = ArrayList<CandleN>(array.length())
+            for (i in 0 until array.length()) {
+                val row = array.getJSONArray(i)
+                batch.add(CandleN(row.getLong(0), row.getString(1).toDouble(), row.getString(2).toDouble(),
+                    row.getString(3).toDouble(), row.getString(4).toDouble(), row.getString(5).toDouble()))
+            }
+            if (batch.isEmpty()) break
+            batch.sortBy { it.t }
+            out.addAll(0, batch)
+            val oldest = batch.first().t
+            if (oldest <= 0L || batch.size < 1000) break
+            endTime = oldest - 1L
         }
+        val result = out.distinctBy { it.t }.sortedBy { it.t }
+        fullHistoryCache[cacheKey] = result
+        return result
     }
 
     private fun loadUniverse(): Triple<List<String>, Map<String, Double>, Map<String, Double>> {
@@ -1431,75 +1471,12 @@ private class NativeEngine(
     private fun signedGet(
         path: String,
         params: String
-    ): JSONObject {
-        val query =
-            if (params.isBlank()) {
-                "timestamp=" +
-                    signedTimestamp() +
-                    "&recvWindow=" + BINANCE_RECV_WINDOW_MS
-            } else {
-                params +
-                    "&timestamp=" +
-                    signedTimestamp() +
-                    "&recvWindow=" + BINANCE_RECV_WINDOW_MS
-            }
+    ): JSONObject = signedRequest("GET", path, params)
 
-        val signature = hmac(query, secret())
-        val separator =
-            if (path.contains("?")) "&" else "?"
-
-        val request =
-            Request.Builder()
-                .url(
-                    baseUrl +
-                        path +
-                        separator +
-                        query +
-                        "&signature=" +
-                        signature
-                )
-                .header(
-                    "X-MBX-APIKEY",
-                    key()
-                )
-                .get()
-                .build()
-
-        http.newCall(request)
-            .execute()
-            .use { response ->
-                val body =
-                    response.body?.string()
-                        ?: "{}"
-                if (!response.isSuccessful) {
-                    error(
-                        "Binance " +
-                            response.code +
-                            ": " +
-                            body
-                    )
-                }
-                return JSONObject(body)
-            }
-    }
-
-    private fun signedPost(path: String, params: String): JSONObject {
-        val query =
-            params + "&timestamp=" + signedTimestamp() + "&recvWindow=" + BINANCE_RECV_WINDOW_MS
-        val signature = hmac(query, secret())
-        val request = Request.Builder()
-            .url(baseUrl + path)
-            .header("X-MBX-APIKEY", key())
-            .post(
-                (query + "&signature=" + signature).toRequestBody("application/x-www-form-urlencoded".toMediaType())
-            )
-            .build()
-        http.newCall(request).execute().use { response ->
-            val body = response.body?.string() ?: "{}"
-            if (!response.isSuccessful) error("Binance " + response.code + ": " + body)
-            return JSONObject(body)
-        }
-    }
+    private fun signedPost(
+        path: String,
+        params: String
+    ): JSONObject = signedRequest("POST", path, params)
 
     private fun symbolFilters(symbol: String): SymbolRules {
         val info =
@@ -2229,51 +2206,7 @@ private class NativeEngine(
     private fun signedDelete(
         path: String,
         params: String
-    ): JSONObject {
-        val query =
-            params +
-                "&timestamp=" +
-                signedTimestamp() +
-                "&recvWindow=" + BINANCE_RECV_WINDOW_MS
-
-        val signature = hmac(query, secret())
-        val separator =
-            if (path.contains("?")) "&" else "?"
-
-        val request =
-            Request.Builder()
-                .url(
-                    baseUrl +
-                        path +
-                        separator +
-                        query +
-                        "&signature=" +
-                        signature
-                )
-                .header(
-                    "X-MBX-APIKEY",
-                    key()
-                )
-                .delete()
-                .build()
-
-        http.newCall(request)
-            .execute()
-            .use { response ->
-                val body =
-                    response.body?.string()
-                        ?: "{}"
-                if (!response.isSuccessful) {
-                    error(
-                        "Binance " +
-                            response.code +
-                            ": " +
-                            body
-                    )
-                }
-                return JSONObject(body)
-            }
-    }
+    ): JSONObject = signedRequest("DELETE", path, params)
 
     private fun analyseBase(
         symbol: String,
@@ -2411,142 +2344,72 @@ private class NativeEngine(
 
     private fun enrichWithMtf(baseCandidate: BaseAnalysis): BaseAnalysis {
         val symbol = baseCandidate.symbol
-
-        val htf = runCatching {
-            fetchCandles(symbol, "4h", 160)
-        }.getOrNull()
-
-        val daily = runCatching {
-            fetchCandles(symbol, "1d", 160)
-        }.getOrNull()
-
-        val lower = runCatching {
-            fetchCandles(symbol, "15m", 160)
-        }.getOrNull()
-
         val frames = mutableListOf<WaveInfo>()
         frames.add(baseCandidate.wave)
 
-        if (!htf.isNullOrEmpty()) {
-            frames.add(waveInfo(htf, "4h"))
+        val mtfFrames = listOf("5m", "15m", "1h", "4h", "1d")
+        for (frame in mtfFrames) {
+            runCatching { fetchCandles(symbol, frame, 300) }
+                .getOrNull()?.takeIf { it.size >= 40 }
+                ?.let { frames.add(waveInfo(it, frame)) }
         }
 
-        if (!daily.isNullOrEmpty()) {
-            frames.add(waveInfo(daily, "1d"))
-        }
-
-        if (!lower.isNullOrEmpty()) {
-            frames.add(waveInfo(lower, "15m"))
+        // Expensive full-history wave reconstruction is done only for the
+        // strongest candidates and cached for the lifetime of the runtime.
+        val history = runCatching { fetchFullHistory(symbol, "1h") }.getOrNull()
+        if (!history.isNullOrEmpty()) {
+            frames.add(waveInfo(history, "1hHISTORY"))
         }
 
         val setup = baseCandidate.wave
-
         var bonus = 0.0
         var exhaustion = setup.exhaustionRisk
         var htfConfirmed = false
 
-        htf?.let {
-            val info = waveInfo(it, "4h")
-            htfConfirmed =
-                info.alligatorBullish &&
-                    info.aoPositive &&
-                    info.direction == "UP"
-
+        frames.filter { it.path.startsWith("4h:") }.firstOrNull()?.let {
+            htfConfirmed = it.alligatorBullish && it.aoPositive && it.direction == "UP"
             if (htfConfirmed) bonus += 8.0
         }
+        if (frames.any { it.path.startsWith("1d:") && it.direction == "UP" }) bonus += 4.0
+        if (setup.position == 3) { bonus += 6.0; exhaustion = min(exhaustion, 30.0) }
 
-        val dayInfo = daily?.let { waveInfo(it, "1d") }
-        if (dayInfo?.direction == "UP") {
-            bonus += 4.0
-        }
-
-        if (setup.position == 3) {
-            bonus += 6.0
-            exhaustion = min(exhaustion, 30.0)
-        }
-
-        val parentW5 = frames.filter {
-            it.position == 5 &&
-                it.direction == "UP"
-        }
-
-        val childW3 = frames.filter {
-            it.position == 3 &&
-                it.direction == "UP"
-        }
-
-        val nestedW3ParentW5 =
-            parentW5.any { parent ->
-                childW3.any { child ->
-                    frameSeconds(child.path.substringBefore(":")) <
-                        frameSeconds(parent.path.substringBefore(":"))
-                }
+        val parentW5 = frames.filter { it.position == 5 && it.direction == "UP" }
+        val childW3 = frames.filter { it.position == 3 && it.direction == "UP" }
+        val nestedW3ParentW5 = parentW5.any { parent ->
+            childW3.any { child ->
+                frameSeconds(child.path.substringBefore(":")) < frameSeconds(parent.path.substringBefore(":"))
             }
+        }
 
         if (nestedW3ParentW5) {
             bonus += 10.0
-            exhaustion =
-                min(
-                    exhaustion,
-                    max(10.0, setup.exhaustionRisk - 10.0)
-                )
+            exhaustion = min(exhaustion, max(10.0, setup.exhaustionRisk - 10.0))
         } else if (setup.position == 5) {
             bonus -= 12.0
             exhaustion = max(exhaustion, 65.0)
         }
 
-        var score =
-            (baseCandidate.score + bonus)
-                .coerceIn(0.0, 100.0)
-
-        val finalSignal =
-            baseCandidate.signal &&
-                htfConfirmed &&
-                (
-                    baseCandidate.wave.position != 5 ||
-                        nestedW3ParentW5
-                )
-
-        if (!finalSignal && baseCandidate.signal) {
-            score = min(score, 84.0)
-        }
+        var score = (baseCandidate.score + bonus).coerceIn(0.0, 100.0)
+        val finalSignal = baseCandidate.signal && htfConfirmed &&
+            (baseCandidate.wave.position != 5 || nestedW3ParentW5)
+        if (!finalSignal && baseCandidate.signal) score = min(score, 84.0)
 
         val path = frames
-            .sortedByDescending {
-                frameSeconds(it.path.substringBefore(":"))
-            }
-            .joinToString(" > ") {
-                it.path.substringBefore(":") + ":" +
-                    if (it.position > 0) {
-                        "W" + it.position
-                    } else {
-                        "?"
-                    }
-            }
+            .sortedByDescending { frameSeconds(it.path.substringBefore(":")) }
+            .joinToString(" > ") { it.path.substringBefore(":") + ":" + if (it.position > 0) "W" + it.position else "?" }
 
-        val reason =
-            when {
-                nestedW3ParentW5 ->
-                    "MTF: parent W5 contains active W3 below; W5 is not a veto"
-                setup.position == 5 ->
-                    "MTF: W5/exhaustion context lowers confidence"
-                finalSignal ->
-                    "MTF confirmed: 4h aligned + 1h Williams breakout"
-                else ->
-                    baseCandidate.reason
-            }
-
+        val reason = when {
+            nestedW3ParentW5 -> "MTF: parent W5 contains active W3 below; W5 is not a veto"
+            setup.position == 5 -> "MTF: W5/exhaustion context lowers confidence"
+            finalSignal -> "MTF confirmed: multi-timeframe Williams + Alligator/AO"
+            else -> baseCandidate.reason
+        }
         return baseCandidate.copy(
             score = score,
             signal = finalSignal,
             htfCandidate = htfConfirmed,
             wave = setup.copy(
-                confidence =
-                    min(
-                        100.0,
-                        setup.confidence +
-                            if (htfConfirmed) 10.0 else 0.0
-                    ),
+                confidence = min(100.0, setup.confidence + if (htfConfirmed) 10.0 else 0.0),
                 exhaustionRisk = exhaustion,
                 path = path
             ),
@@ -3014,14 +2877,30 @@ private class NativeEngine(
         return atrAbs(candles) / price
     }
 
-    private fun frameSeconds(frame: String): Long =
-        when (frame) {
-            "15m" -> 900L
-            "1h" -> 3600L
-            "4h" -> 14400L
-            "1d" -> 86400L
-            else -> 0L
-        }
+    private fun frameSeconds(frame: String): Long = when (frame) {
+        "1s" -> 1L
+        "5s" -> 5L
+        "15s" -> 15L
+        "30s" -> 30L
+        "1m" -> 60L
+        "5m" -> 300L
+        "15m" -> 900L
+        "30m" -> 1800L
+        "1h" -> 3600L
+        "2h" -> 7200L
+        "4h" -> 14400L
+        "5h" -> 18000L
+        "6h" -> 21600L
+        "8h" -> 28800L
+        "10h" -> 36000L
+        "12h" -> 43200L
+        "15h" -> 54000L
+        "20h" -> 72000L
+        "25h" -> 90000L
+        "1d" -> 86400L
+        else -> 0L
+    }
+
 
     private fun dailyTradeGuard(): JSONObject {
         val start = Calendar.getInstance().apply {
@@ -3339,6 +3218,10 @@ private class NativeEngine(
             .put("stop_loss_pct", 0.02)
             .put("take_profit_pct", 0.04)
             .put("poll_seconds", 15)
+            .put("scan_mode", "adaptive_parallel_cached")
+            .put("wave_timeframes", "1s,5s,15s,30s,1m,5m,15m,30m,1h,2h,4h,5h,6h,8h,10h,12h,15h,20h,25h")
+            .put("full_history_wave_analysis", true)
+            .put("full_history_base_timeframe", "1h")
             .put("risk_per_trade_pct", maxRiskPerTradePct)
             .put("max_daily_loss_pct", 0.03)
             .put("max_trades_per_day", 5)
