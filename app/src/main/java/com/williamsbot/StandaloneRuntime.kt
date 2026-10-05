@@ -431,6 +431,7 @@ private class NativeEngine(
     @Volatile private var marketSocketConnected = false
     @Volatile private var marketSocketLastEventMs = 0L
     @Volatile private var historyWarmupRunning = false
+    @Volatile private var historyReady = false
 
     private val scanCacheTtlMs = 12_000L
     private val deepWatchTopN = 10
@@ -657,6 +658,7 @@ private class NativeEngine(
             .put("user_stream_connected", userStreamConnected)
             .put("user_stream_last_event_ms", lastUserEventMs)
             .put("history_warmup_running", historyWarmupRunning)
+            .put("history_ready", historyReady)
             .put("history", historyStore.status(coreSymbols, analysisFrames))
             .put("rate_limits", rateGuard.snapshot())
             .put("core_symbols", JSONArray(coreSymbols))
@@ -797,7 +799,13 @@ private class NativeEngine(
             while (running) {
                 if (!paused) {
                     try {
-                        requestScan()
+                        if (!historyReady) {
+                            if (!historyWarmupRunning) {
+                                warmCoreHistoryAsync()
+                            }
+                        } else {
+                            requestScan()
+                        }
                     } catch (x: Exception) {
                         lastError =
                             x.javaClass.simpleName + ": " +
@@ -1298,6 +1306,7 @@ private class NativeEngine(
     private fun warmCoreHistoryAsync() {
         if (historyWarmupRunning) return
         historyWarmupRunning = true
+        historyReady = false
         Thread {
             try {
                 for (symbol in coreSymbols) {
@@ -1327,6 +1336,18 @@ private class NativeEngine(
                         }
                     }
                 }
+
+                historyReady =
+                    coreSymbols.all { symbol ->
+                        analysisFrames.all { frame ->
+                            historyStore.isComplete(symbol, frame)
+                        }
+                    }
+            } catch (x: Exception) {
+                historyReady = false
+                lastError =
+                    "history warmup: " +
+                        (x.message ?: x.javaClass.simpleName)
             } finally {
                 historyWarmupRunning = false
             }
@@ -4509,6 +4530,7 @@ private class NativeEngine(
             .put("market_ws_connected", marketSocketConnected)
             .put("user_ws_connected", userStreamConnected)
             .put("user_stream_last_event_ms", lastUserEventMs)
+            .put("history_ready", historyReady)
             .put("kill_switch_latched", killLatched)
             .put("rate_limits", rateGuard.snapshot())
             .put("history", historyStore.status(coreSymbols, analysisFrames))
