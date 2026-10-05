@@ -229,7 +229,11 @@ class Database:
             buckets = {}
             for item in closed:
                 ctx = item.get('entry_context') or {}
-                key = str(ctx.get(field) if ctx.get(field) is not None else item.get(field) or 'UNKNOWN')
+                raw = ctx.get(field) if ctx.get(field) is not None else item.get(field)
+                if field == 'score_bucket':
+                    score = float(ctx.get('score') or 0.0)
+                    raw = f"{int(score // 10) * 10}-{int(score // 10) * 10 + 9}"
+                key = str(raw if raw is not None else 'UNKNOWN')
                 b = buckets.setdefault(key, {'count':0,'wins':0,'losses':0,'pnl':0.0})
                 pnl = float(item.get('pnl') or 0.0)
                 b['count'] += 1
@@ -242,6 +246,21 @@ class Database:
 
         gross_profit = sum(max(0.0, float(x.get('pnl') or 0.0)) for x in closed)
         gross_loss = sum(min(0.0, float(x.get('pnl') or 0.0)) for x in closed)
+        running = peak = max_dd = 0.0
+        best_trade = worst_trade = None
+        durations = []
+        mfes = []
+        maes = []
+        for item in reversed(closed):
+            pnl = float(item.get('pnl') or 0.0)
+            running += pnl
+            peak = max(peak, running)
+            max_dd = max(max_dd, peak - running)
+            best_trade = pnl if best_trade is None else max(best_trade, pnl)
+            worst_trade = pnl if worst_trade is None else min(worst_trade, pnl)
+            if item.get('duration_seconds') is not None: durations.append(float(item['duration_seconds']))
+            if item.get('mfe_pct') is not None: mfes.append(float(item['mfe_pct']))
+            if item.get('mae_pct') is not None: maes.append(float(item['mae_pct']))
 
         return {
             'total': int(totals['total'] or 0),
@@ -253,10 +272,17 @@ class Database:
             'avg_loss': float(totals['avg_loss'] or 0),
             'expectancy': float(totals['pnl'] or 0) / max(1, int(totals['total'] or 0)),
             'profit_factor': (gross_profit / abs(gross_loss)) if gross_loss < 0 else None,
+            'max_drawdown_quote': round(max_dd, 8),
+            'best_trade_quote': best_trade,
+            'worst_trade_quote': worst_trade,
+            'avg_duration_seconds': (sum(durations) / len(durations)) if durations else None,
+            'avg_mfe_pct': (sum(mfes) / len(mfes)) if mfes else None,
+            'avg_mae_pct': (sum(maes) / len(maes)) if maes else None,
             'diagnoses': [dict(x) for x in diagnoses],
             'by_wave': group('wave_position'),
             'by_symbol': group('symbol'),
             'by_signal_family': group('signal_family'),
+            'by_score_bucket': group('score_bucket'),
         }
 
     def recent_orders(self, symbol, limit=100):
