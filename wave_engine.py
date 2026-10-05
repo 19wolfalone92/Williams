@@ -202,10 +202,13 @@ class MultiTimeframeWaveEngine:
             if interval not in wanted:
                 wanted.append(interval)
 
-        if self.include_micro:
-            # Binance-native micro intervals are not added here.  Wave analysis
-            # uses exchange-native intervals only; synthetic seconds are reserved
-            # for display/aggregation and never drive structural counts.
+        # For full historical wave analysis, use Binance-native intervals across
+        # the complete hierarchy. A custom WAVE_TF_CHAIN can still narrow this
+        # for tests or low-resource deployments.
+        if not raw and os.getenv("WAVE_FULL_TF_ALL", "true").lower() == "true":
+            wanted = list(self.INTERVAL_SECONDS.keys())
+
+        # Synthetic seconds are never used for structural wave counting.
 
         # Highest timeframe first; unsupported values are retained so an invalid
         # configuration is visible in the report instead of silently disappearing.
