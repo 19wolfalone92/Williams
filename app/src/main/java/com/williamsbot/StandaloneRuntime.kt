@@ -906,22 +906,93 @@ private class NativeEngine(
         val now = System.currentTimeMillis()
         if (cached != null && now - cached.first < scanCacheTtlMs) return cached.second
 
+        // Binance REST has a limited set of native intervals. Build the
+        // execution timeframes (including seconds) synthetically from the
+        // smallest reliable market data available instead of sending invalid
+        // intervals such as 5s/2h/25h to Binance.
+        val nativeFrames = setOf("1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d")
+        val sourceFrame = when {
+            frame in nativeFrames -> frame
+            frame.endsWith("s") -> "1m"
+            frame.endsWith("h") -> "1h"
+            else -> "1m"
+        }
+
+        val sourceLimit = if (frame == sourceFrame) limit
+        else (limit * (frameSeconds(frame).coerceAtLeast(60L) /
+            frameSeconds(sourceFrame).coerceAtLeast(60L)).toInt() + 20).coerceAtMost(1000)
+
         val body = getBody(
             "/api/v3/klines?symbol=" + symbol.uppercase() +
-                "&interval=" + frame + "&limit=" + limit
+                "&interval=" + sourceFrame + "&limit=" + sourceLimit
         )
         val array = JSONArray(body)
-        val all = List(array.length()) { i ->
+        val source = List(array.length()) { i ->
             val row = array.getJSONArray(i)
-            CandleN(row.getLong(0), row.getString(1).toDouble(), row.getString(2).toDouble(),
-                row.getString(3).toDouble(), row.getString(4).toDouble(), row.getString(5).toDouble())
+            CandleN(
+                row.getLong(0),
+                row.getString(1).toDouble(),
+                row.getString(2).toDouble(),
+                row.getString(3).toDouble(),
+                row.getString(4).toDouble(),
+                row.getString(5).toDouble()
+            )
         }
-        val intervalMs = frameSeconds(frame) * 1000L
-        val result = if (all.isNotEmpty() && intervalMs > 0L && all.last().t + intervalMs > now) {
-            all.dropLast(1)
-        } else all
+
+        val result = if (frame == sourceFrame) {
+            source
+        } else {
+            aggregateCandles(source, frameSeconds(frame) * 1000L, limit)
+        }
+
         candleCache[cacheKey] = now to result
         return result
+    }
+
+    private fun aggregateCandles(
+        source: List<CandleN>,
+        bucketMs: Long,
+        limit: Int
+    ): List<CandleN> {
+        if (source.isEmpty() || bucketMs <= 0L) return emptyList()
+
+        val out = ArrayList<CandleN>()
+        var bucketStart = -1L
+        var open = 0.0
+        var high = 0.0
+        var low = 0.0
+        var close = 0.0
+        var volume = 0.0
+
+        fun flush() {
+            if (bucketStart >= 0L) {
+                out.add(CandleN(bucketStart, open, high, low, close, volume))
+            }
+        }
+
+        for (c in source) {
+            val b = (c.t / bucketMs) * bucketMs
+            if (b != bucketStart) {
+                flush()
+                bucketStart = b
+                open = c.o
+                high = c.h
+                low = c.l
+                close = c.c
+                volume = c.v
+            } else {
+                high = max(high, c.h)
+                low = min(low, c.l)
+                close = c.c
+                volume += c.v
+            }
+        }
+        flush()
+
+        val now = System.currentTimeMillis()
+        return out
+            .filter { it.t + bucketMs <= now }
+            .takeLast(limit)
     }
 
     private fun fetchFullHistory(symbol: String, frame: String = "1h"): List<CandleN> {
