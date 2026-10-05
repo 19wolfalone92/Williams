@@ -644,6 +644,7 @@ private class NativeEngine(
                                 .put("opened_at", it.openedAt)
                         )
                     }
+                }
             )
             .put("last_order", lastOrder ?: JSONObject.NULL)
             .put(
@@ -1507,65 +1508,166 @@ private class NativeEngine(
 
     private fun manageWilliamsStops() {
         for (stored in positionList()) {
-            val candles = runCatching { fetchCandles(stored.symbol, "1h", 120) }.getOrElse { continue }
+            val rawCandles =
+                runCatching {
+                    fetchCandles(stored.symbol, "1h", 140)
+                }.getOrElse { continue }
+
+            // Binance klines include the currently forming candle. Williams'
+            // close-based decisions must be made on a completed bar.
+            val candles =
+                if (rawCandles.size >= 2) {
+                    rawCandles.dropLast(1)
+                } else {
+                    emptyList()
+                }
+
             if (candles.size < 40) continue
+
             val prices = candles.map { it.c }
-            val teeth = smma(prices, 8).last()
-            val last = candles.last()
+            val teeth =
+                smma(prices, 8).last()
+            val lastClosed =
+                candles.last()
+
+            // Stop-close-only style: a confirmed close through the Teeth is a
+            // trend-exit event. Do not manufacture an impossible stop above
+            // current price; close the managed position instead.
+            if (lastClosed.c < teeth) {
+                runCatching {
+                    sell(stored.symbol)
+                }.onFailure { x ->
+                    setReconcileRequired(
+                        "Williams Teeth close exit failed for " +
+                            stored.symbol + ": " +
+                            (x.message ?: x.javaClass.simpleName)
+                    )
+                }
+                continue
+            }
+
             var consecutiveGreen = 0
-            var fifthLow = Double.POSITIVE_INFINITY
-            for (i in candles.lastIndex downTo max(4, candles.lastIndex - 7)) {
+            var trailingLow = Double.POSITIVE_INFINITY
+            for (
+                i in candles.lastIndex downTo
+                    max(5, candles.lastIndex - 9)
+            ) {
                 val aoNow = ao(candles, i)
                 val aoPrev = ao(candles, i - 1)
-                val acNow = aoNow - (max(0, i - 4)..i).map { ao(candles, it) }.average()
-                val acPrev = aoPrev - (max(0, i - 5)..i - 1).map { ao(candles, it) }.average()
-                if (!(aoNow > aoPrev && acNow > acPrev)) break
+                val acWindowStart = max(0, i - 4)
+                val acNow =
+                    aoNow -
+                        (acWindowStart..i)
+                            .map { ao(candles, it) }
+                            .average()
+                val acPrevWindowStart = max(0, i - 5)
+                val acPrev =
+                    aoPrev -
+                        (acPrevWindowStart until i)
+                            .map { ao(candles, it) }
+                            .average()
+
+                val green =
+                    aoNow > aoPrev &&
+                        acNow > acPrev
+
+                if (!green) break
+
                 consecutiveGreen++
-                fifthLow = min(fifthLow, candles[i].l)
+                trailingLow = min(trailingLow, candles[i].l)
                 if (consecutiveGreen >= 5) break
             }
 
-            val tick = runCatching { symbolFilters(stored.symbol).tick }.getOrDefault(0.0)
-            val candidateStop = when {
-                consecutiveGreen >= 5 && tick > 0.0 ->
-                    max(stored.stop, min(fifthLow, last.l) - tick)
-                last.c < teeth && last.c > stored.entry && tick > 0.0 ->
-                    max(stored.stop, teeth - tick)
-                else -> stored.stop
+            val tick =
+                runCatching {
+                    symbolFilters(stored.symbol).tick
+                }.getOrDefault(0.0)
+
+            if (tick <= 0.0) continue
+
+            var desiredStop = stored.stop
+
+            if (consecutiveGreen >= 5 &&
+                trailingLow.isFinite()
+            ) {
+                desiredStop =
+                    max(
+                        desiredStop,
+                        trailingLow - tick
+                    )
             }
 
-            if (candidateStop <= stored.stop + tick || candidateStop >= last.c) continue
+            // A stop can be tightened toward the current Teeth only while it
+            // remains below the market and improves protection.
+            if (teeth > stored.stop &&
+                teeth < lastClosed.c
+            ) {
+                desiredStop =
+                    max(
+                        desiredStop,
+                        teeth - tick
+                    )
+            }
+
+            if (desiredStop <= stored.stop + tick ||
+                desiredStop >= lastClosed.c
+            ) {
+                continue
+            }
 
             try {
                 if (stored.ocoListId.isNotBlank()) {
-                    signedDelete("/api/v3/orderList", "symbol=" + stored.symbol + "&orderListId=" + stored.ocoListId)
+                    signedDelete(
+                        "/api/v3/orderList",
+                        "symbol=" + stored.symbol +
+                            "&orderListId=" + stored.ocoListId
+                    )
                 } else if (stored.ocoListClientId.isNotBlank()) {
-                    signedDelete("/api/v3/orderList", "symbol=" + stored.symbol + "&listClientOrderId=" + stored.ocoListClientId)
+                    signedDelete(
+                        "/api/v3/orderList",
+                        "symbol=" + stored.symbol +
+                            "&listClientOrderId=" +
+                            stored.ocoListClientId
+                    )
                 } else {
-                    continue
+                    setReconcileRequired(
+                        "Williams trailing update: managed OCO identifier missing for " +
+                            stored.symbol
+                    )
+                    return
                 }
 
-                val distance = ((stored.entry - candidateStop) / stored.entry).coerceIn(0.001, 0.08)
-                val protection = createProtection(
-                    symbol = stored.symbol,
-                    qty = stored.qty,
-                    entry = stored.entry,
-                    stopDistance = distance
-                )
+                val distance =
+                    ((stored.entry - desiredStop) /
+                        stored.entry)
+                        .coerceIn(0.001, 0.08)
+
+                val protection =
+                    createProtection(
+                        symbol = stored.symbol,
+                        qty = stored.qty,
+                        entry = stored.entry,
+                        stopDistance = distance
+                    )
 
                 synchronized(positions) {
-                    positions[stored.symbol] = stored.copy(
-                        stop = protection.stop,
-                        take = protection.take,
-                        riskPct = protection.riskPct,
-                        ocoListClientId = protection.ocoClientId,
-                        ocoListId = protection.ocoListId
-                    )
+                    positions[stored.symbol] =
+                        stored.copy(
+                            stop = protection.stop,
+                            take = protection.take,
+                            riskPct = protection.riskPct,
+                            ocoListClientId =
+                                protection.ocoClientId,
+                            ocoListId =
+                                protection.ocoListId
+                        )
                 }
                 savePersistedState()
             } catch (x: Exception) {
                 setReconcileRequired(
-                    "Williams trailing stop update failed for " + stored.symbol + ": " +
+                    "Williams trailing stop update failed for " +
+                        stored.symbol +
+                        ": " +
                         (x.message ?: x.javaClass.simpleName)
                 )
                 return
@@ -2927,6 +3029,13 @@ private class NativeEngine(
         val fractalIndex = latestConfirmedUpFractal(candles, i)
         val fractalHigh =
             fractalIndex?.let { candles[it].h }
+        val teethSeries = smma(closes, 8)
+        val fractalTeeth =
+            fractalIndex?.let { teethSeries.getOrNull(it) }
+        val externalFractal =
+            fractalHigh != null &&
+                fractalTeeth != null &&
+                fractalHigh > fractalTeeth
         val breakoutDistance =
             if (fractalHigh != null && fractalHigh > 0.0) {
                 (closes[i] - fractalHigh) / fractalHigh
@@ -2935,8 +3044,8 @@ private class NativeEngine(
             }
 
         val breakout =
-            fractalHigh != null &&
-                closes[i] > fractalHigh &&
+            externalFractal &&
+                closes[i] > fractalHigh!! &&
                 breakoutDistance <= 0.05
 
         val trendScore = if (bullish) 35.0 else 0.0
@@ -3154,23 +3263,12 @@ private class NativeEngine(
         // wave, junior = precise entry wave. Senior/middle do not need their
         // own entry signal; only the junior setup triggers the order.
         val junior = entry
-        val middle = junior?.let { j ->
-            frames
-                .filter {
-                    val s = frameSeconds(it.path.substringBefore(":"))
-                    s > frameSeconds(j.path.substringBefore(":")) &&
-                        it.direction == "UP" &&
-                        it.position in 1..5
-                }
-                .sortedBy { frameSeconds(it.path.substringBefore(":")) }
-                .firstOrNull()
-        }
+        val middle = parent
         val senior = middle?.let { m ->
             frames
                 .filter {
                     val s = frameSeconds(it.path.substringBefore(":"))
                     s > frameSeconds(m.path.substringBefore(":")) &&
-                        it.direction == "UP" &&
                         it.position in 1..5
                 }
                 .sortedBy { frameSeconds(it.path.substringBefore(":")) }
@@ -3181,6 +3279,7 @@ private class NativeEngine(
         val entrySignal =
             junior != null &&
                 !entryInsideCorrection &&
+                middle?.position !in listOf(2, 4) &&
                 junior.confidence >= 55.0 &&
                 junior.alligatorBullish &&
                 junior.aoPositive &&
@@ -3423,7 +3522,7 @@ private class NativeEngine(
         if (lastConfirmedCenter < 2) return null
 
         val start =
-            max(2, lastConfirmedCenter - 6)
+            max(2, lastConfirmedCenter - 40)
 
         for (i in lastConfirmedCenter downTo start) {
             if (isUpFractal(candles, i)) {
@@ -3898,7 +3997,7 @@ private class NativeEngine(
         val dailyGuard = dailyTradeGuard()
 
         return JSONObject()
-            .put("version", "4.16.0")
+            .put("version", "4.17.0")
             .put("symbol", primarySymbol)
             .put("interval", interval)
             .put("testnet", true)
@@ -4088,8 +4187,8 @@ private class NativeEngine(
         }
 
         return JSONObject()
-            .put("symbol", primarySymbol)
-            .put("interval", interval)
+            .put("symbol", symbol)
+            .put("interval", selectedInterval)
             .put("candles", output)
     }
 
@@ -4116,7 +4215,7 @@ private class NativeEngine(
 
     fun settings(): JSONObject =
         JSONObject()
-            .put("version", "4.16.0")
+            .put("version", "4.17.0")
             .put("symbol", primarySymbol)
             .put("interval", interval)
             .put("position_fraction", 0.95)
@@ -4143,11 +4242,13 @@ private class NativeEngine(
             .put("strategy_name", "Williams Profitunity Conservative")
             .put("standalone", true)
             .put("execution_enabled", !reconcileRequired)
-            .put("max_scan_symbols", maxScanSymbols)\n            .put("scanner_universe", scannerUniverseLabel)
+            .put("max_scan_symbols", maxScanSymbols)
+            .put("scanner_universe", scannerUniverseLabel)
             .put("liquidity_preselect", maxScanSymbols)
             .put("deep_wave_targets", waveTopN)
             .put("scanner_strategy", "liquidity -> base -> deep MTF/Waves -> risk -> score")
             .put("wave_top_n", waveTopN)
             .put("trade_journal", true)
             .put("trade_journal_max_rows", 500)
+}
 }
