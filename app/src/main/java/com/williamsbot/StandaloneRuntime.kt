@@ -1570,10 +1570,10 @@ private class NativeEngine(
                     )
                     // Do not let an older queued calculation overwrite a newer
                     // realtime candle snapshot.
-                    val current = liveCandleCache[key]
-                    val currentTime = synchronized(current ?: mutableListOf()) {
-                        current?.lastOrNull()?.t ?: 0L
-                    }
+                    val currentTime = liveCandleCache[key]
+                        ?.lastOrNull()
+                        ?.t
+                        ?: 0L
                     if (snapshotCandles.lastOrNull()?.t ?: 0L >= currentTime) {
                         indicatorSnapshots[key] = snapshot
                     }
