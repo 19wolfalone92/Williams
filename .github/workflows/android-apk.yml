@@ -1,9 +1,4 @@
 name: Build Android APK
-# 4.21 quant shadow layer integration + final APK validation
-# Credential-status compatibility fix validation
-# APK rebuild requested after current Spot Testnet execution-core verification
-# CI refresh: validate current main tree after Binance JSON-shape, risk-budget, and multi-position fixes
-# Final validation retrigger: fresh APK for current Williams trading core
 
 on:
   push:
@@ -94,6 +89,9 @@ jobs:
         run: |
           set -euo pipefail
           for f in feature_store.py ai_shadow.py cpcv_backtester.py stress_suite.py mock_exchange.py quant_models.py shap_explain.py derivatives_features.py shadow_execution.py quant_ml_pipeline.py; do test -f "$f"; done
+      - name: Run required Android lint
+        run: gradle --no-daemon :app:lintDebug --stacktrace
+
       - name: Run Android unit tests
         run: |
           set +e
@@ -198,35 +196,3 @@ jobs:
             echo '- Installable debug APK: `app-debug.apk`'
             echo '- Release APK: `app-release-unsigned.apk`'
           } >> "$GITHUB_STEP_SUMMARY"
-
-  lint-advisory:
-    name: Android lint (advisory)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 12
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-        with:
-          fetch-depth: 1
-      - name: Set up JDK 17
-        uses: actions/setup-java@v6
-        with:
-          distribution: temurin
-          java-version: '17'
-          cache: gradle
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
-      - name: Install Android SDK packages
-        run: |
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager "${ANDROID_PLATFORM}" "${ANDROID_BUILD_TOOLS}"
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v5
-        with:
-          gradle-version: ${{ env.GRADLE_VERSION }}
-          validate-wrappers: false
-      - name: Run lint with hard shell timeout
-        continue-on-error: true
-        run: |
-          set -o pipefail
-          timeout 600s gradle --no-daemon :app:lintDebug --stacktrace
