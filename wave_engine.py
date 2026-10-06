@@ -86,6 +86,11 @@ class WaveSnapshot:
     alternative_count: str = ""
     abc_phase: str = ""
     exhaustion_components: Dict[str, float] = field(default_factory=dict)
+    invalidation_price: float = 0.0
+    terminal_fractal: bool = False
+    magic_bullets_count: int = 0
+    scenario_primary: str = ""
+    scenario_alternative: str = ""
     reason: str = ""
     data_bars: int = 0
     data_ok: bool = True
@@ -119,6 +124,9 @@ class MultiTimeframeWaveReport:
     entry_parent_position: int = 0
     entry_allowed: bool = False
     entry_block_reason: str = ""
+    entry_score: float = 0.0
+    operative_interval: str = ""
+    operative_parent_interval: str = ""
 
     def to_dict(self) -> dict:
         payload = asdict(self)
@@ -1057,6 +1065,14 @@ class MultiTimeframeWaveEngine:
         components = self._exhaustion_components(position, divergence, target_zone, squatting_bar, momentum_fading, current_leg_atr)
         primary_count = wave_label if wave_label not in ("?", "") else phase
         alternative_count = self._alternative_count(position, abc_phase, exhaustion)
+        invalidation_price = self._invalidation_price(pivots, direction, position)
+        terminal_fractal = bool(structure.get("post_impulse") and pivots and pivots[-1].kind == direction)
+        magic_bullets_count = self._magic_bullets_count(
+            target_zone, divergence, terminal_fractal, squatting_bar, momentum_fading
+        )
+        scenario_primary, scenario_alternative = self._scenario_labels(
+            position, phase, direction, exhaustion, abc_phase
+        )
 
         reason = f"{phase_reason} {structure_reason}"
         if abc_phase:
@@ -1098,7 +1114,7 @@ class MultiTimeframeWaveEngine:
             magic_bullets={
                 "target_zone": bool(target_zone),
                 "divergence": divergence != "NONE",
-                "fractal_context": bool(pivots),
+                "terminal_fractal": terminal_fractal,
                 "squatting_bar": squatting_bar,
                 "momentum_fading": momentum_fading,
             },
@@ -1106,6 +1122,11 @@ class MultiTimeframeWaveEngine:
             alternative_count=alternative_count,
             abc_phase=abc_phase,
             exhaustion_components=components,
+            invalidation_price=round(invalidation_price, 12),
+            terminal_fractal=terminal_fractal,
+            magic_bullets_count=magic_bullets_count,
+            scenario_primary=scenario_primary,
+            scenario_alternative=scenario_alternative,
             alligator_state=alligator_state,
             alligator_bullish=bool(last.get("bullish_alligator", False)),
             alligator_bearish=bool(last.get("bearish_alligator", False)),
@@ -1124,6 +1145,43 @@ class MultiTimeframeWaveEngine:
             data_bars=len(clean),
             data_ok=True,
         )
+
+    @staticmethod
+    def _invalidation_price(pivots: Sequence[Pivot], direction: str, position: int) -> float:
+        """Return the last confirmed structural invalidation for an active impulse."""
+        if not pivots or position not in (1, 3, 5):
+            return 0.0
+        pivot = pivots[-1]
+        if direction == DIRECTION_UP and pivot.kind == DIRECTION_DOWN:
+            return float(pivot.price)
+        if direction == DIRECTION_DOWN and pivot.kind == DIRECTION_UP:
+            return float(pivot.price)
+        return 0.0
+
+    @staticmethod
+    def _scenario_labels(position: int, phase: str, direction: str, exhaustion: float, abc_phase: str) -> Tuple[str, str]:
+        if phase == WAVE_STATE_CORRECTION or abc_phase == "ABC_DEVELOPING":
+            primary = "ABC_CORRECTION"
+        elif position in (1, 3, 5):
+            primary = f"IMPULSE_W{position}_{direction}"
+        else:
+            primary = "TRANSITION"
+        if position == 5 and exhaustion >= 55.0:
+            alternative = "W3_CONTINUATION"
+        elif position == 3 and exhaustion >= 45.0:
+            alternative = "W5_EXHAUSTION"
+        elif position in (2, 4):
+            alternative = "CORRECTION_CONTINUES"
+        else:
+            alternative = "NONE"
+        return primary, alternative
+
+    @staticmethod
+    def _magic_bullets_count(target_zone: bool, divergence: str, terminal_fractal: bool, squatting_bar: bool, momentum_fading: bool) -> int:
+        return int(sum(bool(x) for x in (
+            target_zone, divergence != "NONE", terminal_fractal,
+            squatting_bar, momentum_fading,
+        )))
 
     # ------------------------------------------------------------------
     # MTF hierarchy
@@ -1392,6 +1450,14 @@ class MultiTimeframeWaveEngine:
 
         primary_count = setup.primary_count if setup is not None else ""
         alternative_count = setup.alternative_count if setup is not None else ""
+        entry_score = float(wave_score)
+        if nested_parent_w5 and setup is not None and setup.position == 3:
+            entry_score += 8.0
+        if setup is not None and setup.position == 5:
+            entry_score -= min(25.0, float(setup.exhaustion_risk) * 0.25)
+        entry_score = max(0.0, min(100.0, entry_score))
+        operative_interval = entry_interval
+        operative_parent_interval = entry_parent_interval
         return MultiTimeframeWaveReport(
             frames=dict(snapshots),
             overall_direction=overall,
@@ -1416,6 +1482,9 @@ class MultiTimeframeWaveEngine:
             entry_parent_position=entry_parent_position,
             entry_allowed=entry_allowed,
             entry_block_reason=entry_block_reason,
+            entry_score=round(entry_score, 2),
+            operative_interval=operative_interval,
+            operative_parent_interval=operative_parent_interval,
         )
 
     def analyse(

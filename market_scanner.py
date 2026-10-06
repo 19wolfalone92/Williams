@@ -59,6 +59,15 @@ class Candidate:
     wave_primary_count: str = ""
     wave_alternative_count: str = ""
     wave_abc_phase: str = ""
+    wave_entry_score: float = 0.0
+    wave_invalidation_price: float = 0.0
+    wave_target_zone_low: float = 0.0
+    wave_target_zone_high: float = 0.0
+    wave_magic_bullets_count: int = 0
+    wave_terminal_fractal: bool = False
+    wave_scenario_primary: str = ""
+    wave_scenario_alternative: str = ""
+    wave_operative_interval: str = ""
 
     def __post_init__(self):
         # Existing tests/integrations may construct Candidate(score=...) before
@@ -525,6 +534,15 @@ class MarketScanner:
             wave_primary_count=report.primary_count,
             wave_alternative_count=report.alternative_count,
             wave_abc_phase=(setup.abc_phase if setup else ""),
+            wave_entry_score=round(float(report.entry_score), 2),
+            wave_invalidation_price=round(float(setup.invalidation_price if setup else 0.0), 12),
+            wave_target_zone_low=round(float(setup.target_zone_low if setup else 0.0), 12),
+            wave_target_zone_high=round(float(setup.target_zone_high if setup else 0.0), 12),
+            wave_magic_bullets_count=int(setup.magic_bullets_count if setup else 0),
+            wave_terminal_fractal=bool(setup.terminal_fractal if setup else False),
+            wave_scenario_primary=(setup.scenario_primary if setup else ""),
+            wave_scenario_alternative=(setup.scenario_alternative if setup else ""),
+            wave_operative_interval=report.operative_interval,
         )
 
     @staticmethod

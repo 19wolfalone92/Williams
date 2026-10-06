@@ -801,6 +801,54 @@ def market_klines(limit: int = 120):
     }
 
 
+@app.get('/api/v1/market/snapshot', dependencies=[Depends(auth)])
+def market_snapshot(symbol: Optional[str] = None, depth: int = 20, trades: int = 20):
+    """Return one coherent read-only Binance market-data snapshot."""
+    t = state.ensure_trader()
+    selected = (symbol or t.symbol).upper().strip()
+    depth_limit = max(5, min(int(depth), 100))
+    trade_limit = max(1, min(int(trades), 100))
+
+    ticker = t.client.ticker_price(selected)
+    book = t.client.book_ticker(selected)
+    day = t.client.ticker_24hr(selected)
+    book_depth = t.client.depth(selected, limit=depth_limit)
+    exchange = t.client.exchange_info(selected)
+    recent = t.client.agg_trades(selected, limit=trade_limit)
+
+    bids = book_depth.get('bids', []) if isinstance(book_depth, dict) else []
+    asks = book_depth.get('asks', []) if isinstance(book_depth, dict) else []
+    bid_qty = sum(float(row[1]) for row in bids if len(row) >= 2)
+    ask_qty = sum(float(row[1]) for row in asks if len(row) >= 2)
+    total_qty = bid_qty + ask_qty
+    imbalance = ((bid_qty - ask_qty) / total_qty) if total_qty > 0 else 0.0
+
+    symbol_info = next((x for x in exchange.get('symbols', []) if x.get('symbol') == selected), {})
+    filters = {x.get('filterType'): x for x in symbol_info.get('filters', [])}
+
+    return {
+        'symbol': selected,
+        'server_time_ms': int(time.time() * 1000),
+        'price': ticker.get('price'),
+        'book': {
+            'bid': book.get('bidPrice'),
+            'ask': book.get('askPrice'),
+            'bid_qty': book.get('bidQty'),
+            'ask_qty': book.get('askQty'),
+        },
+        'depth': {
+            'last_update_id': book_depth.get('lastUpdateId') if isinstance(book_depth, dict) else None,
+            'levels': depth_limit,
+            'bid_qty': bid_qty,
+            'ask_qty': ask_qty,
+            'imbalance': imbalance,
+        },
+        'ticker_24h': day,
+        'filters': filters,
+        'recent_agg_trades': recent,
+    }
+
+
 @app.post('/api/v1/control/start', dependencies=[Depends(auth)])
 def start():
     return {'started': state.start()}
