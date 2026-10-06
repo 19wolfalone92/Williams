@@ -453,21 +453,34 @@ fun WilliamsApp(context: Context) {
                     JSONObject(api.get("/api/v1/scanner?refresh=" + scan))
 
                 if (scan && scannerJson.optBoolean("scanning", false)) {
-                    for (i in 0 until 20) {
+                    // A full liquidity + MTF/Wave pass can legitimately take longer
+                    // than the old 20-second UI window. Keep polling until the
+                    // scanner reaches a terminal state, while execution remains
+                    // independently governed by the runtime FSM.
+                    for (i in 0 until 90) {
                         delay(1000L)
                         scannerJson =
                             JSONObject(api.get("/api/v1/scanner?refresh=false"))
-                        if (!scannerJson.optBoolean("scanning", false)) {
+                        val state = scannerJson.optString("scanner_state", "NOT_RUN")
+                        if (!scannerJson.optBoolean("scanning", false) ||
+                            state == "READY" ||
+                            state == "ERROR"
+                        ) {
                             break
                         }
                     }
                 }
 
+                // /status and /scanner are separate snapshots. Refresh status
+                // after the scan so the cockpit cannot display stale
+                // NOT_RUN/0 values while candidates are already available.
+                val freshStatusJson = JSONObject(api.get("/api/v1/status"))
+
                 val tradeArray = JSONArray(api.get("/api/v1/trades"))
                 val logArray = JSONArray(api.get("/api/v1/logs"))
 
                 withContext(Dispatchers.Main) {
-                    status = parseStatus(statusJson)
+                    status = parseStatus(freshStatusJson)
                     marketPairs = marketPairsLoaded
                     if (selectedPositionSymbol == null && status.positions.isNotEmpty()) selectedPositionSymbol = status.positions.first().symbol
                     candles = parseCandles(klineJson.optJSONArray("candles") ?: JSONArray())
