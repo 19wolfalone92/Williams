@@ -102,8 +102,8 @@ class ShadowDecisionEngine:
             direction=direction,
             confidence=confidence,
             suggested_size_fraction=min(0.01, max(0.0, 0.005 * confidence)),
-            invalidation=0.0,
-            target=0.0,
+            invalidation=float(vector.invalidation),
+            target=float(vector.target),
             reason=reason,
             feature_attribution=attribution,
         )
