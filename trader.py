@@ -562,7 +562,7 @@ class Trader:
         if baseline is None:
             entry_intent=self.db.state_get('entry_client_order_id')
 
-            unresolved_bot_buy=False
+            remaining_bot_buys=[]
             for buy in all_orders:
                 if (
                     buy.get('side') == 'BUY'
@@ -572,12 +572,48 @@ class Trader:
                     bought=float(buy.get('executedQty',0) or 0)
                     sold=self._filled_sell_qty_after(buy,all_orders)
                     remaining=max(0.0,bought-sold)
-
                     if remaining >= self._min_qty():
-                        unresolved_bot_buy=True
-                        break
+                        remaining_bot_buys.append((buy, remaining))
 
-            if open_trade is None and not entry_intent and not unresolved_bot_buy:
+            # A fresh DB may legitimately be missing the local trade row while
+            # Binance still has a completed Williams BUY. Infer the foreign
+            # baseline only from explicit bot-owned exchange evidence. Never
+            # infer a position from the account balance alone.
+            if open_trade is None and not entry_intent and len(remaining_bot_buys) <= 1:
+                bot_expected = remaining_bot_buys[0][1] if remaining_bot_buys else 0.0
+                if bot_expected > position_qty + self._min_qty():
+                    self._set_state('RECONCILE_REQUIRED')
+                    self.recovered=True
+                    self.db.log_event(
+                        'ERROR',
+                        'recovery_bot_balance_exceeds_account',
+                        'Known Williams position exceeds actual exchange balance',
+                        {
+                            'symbol':self.symbol,
+                            'bot_expected':bot_expected,
+                            'total_balance':float(position_qty)
+                        }
+                    )
+                    return
+
+                inferred_baseline = max(
+                    0.0,
+                    float(position_qty) - float(bot_expected),
+                )
+                self.db.state_set(baseline_key, inferred_baseline)
+                baseline = inferred_baseline
+                self.db.log_event(
+                    'INFO',
+                    'foreign_balance_baselined_from_bot_evidence',
+                    'Inferred foreign base-asset baseline from explicit Williams exchange orders',
+                    {
+                        'symbol':self.symbol,
+                        'total_balance':float(position_qty),
+                        'bot_expected':float(bot_expected),
+                        'foreign_baseline':float(inferred_baseline)
+                    }
+                )
+            elif open_trade is None and not entry_intent and len(remaining_bot_buys) == 0:
                 self.ensure_foreign_base_balance_baseline(position_qty)
                 baseline=self.db.state_get(baseline_key)
             else:
@@ -592,7 +628,7 @@ class Trader:
                         'total_balance':float(position_qty),
                         'open_trade':bool(open_trade),
                         'entry_intent':bool(entry_intent),
-                        'unresolved_bot_buy':bool(unresolved_bot_buy)
+                        'unresolved_bot_buy':bool(remaining_bot_buys)
                     }
                 )
                 return
