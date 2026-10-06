@@ -71,7 +71,12 @@ def test_cpcv_purge_and_embargo_and_score():
     assert len(splits) == 15
     for split in splits:
         assert set(split.train).isdisjoint(split.test)
-        assert max(split.train, default=-1) < min(split.test, default=10**9) or True
+        test_set = set(split.test)
+        for idx in split.train:
+            assert not any(
+                abs(idx - test_idx) <= 4
+                for test_idx in test_set
+            )
     result = run_cpcv(list(range(120)), lambda train, test: len(test) / max(1, len(train)))
     assert result.folds == 15
 
