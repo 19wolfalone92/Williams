@@ -30,12 +30,14 @@ class BinanceUserDataStream(
     @Volatile private var worker: Thread? = null
     @Volatile private var connected = false
     private val stopping = AtomicBoolean(false)
+    @Volatile private var lastPongMs = 0L
 
     fun isConnected(): Boolean = connected
 
     fun start() {
         if (worker?.isAlive == true) return
         stopping.set(false)
+        lastPongMs = System.currentTimeMillis()
         worker = Thread({ loop() }, "williams-user-data-ws").apply {
             isDaemon = true
             start()
@@ -47,6 +49,7 @@ class BinanceUserDataStream(
         connected = false
         socket?.close(1000, "Williams stopped")
         socket = null
+        lastPongMs = 0L
         worker?.interrupt()
         worker = null
         onConnection(false, "stopped")
@@ -66,6 +69,7 @@ class BinanceUserDataStream(
             }
 
             try {
+                lastPongMs = System.currentTimeMillis()
                 val request = Request.Builder()
                     .url(endpoint)
                     .header("X-MBX-APIKEY", apiKey)
@@ -79,6 +83,13 @@ class BinanceUserDataStream(
                             response: Response
                         ) {
                             sendSubscription(webSocket, apiKey, secret)
+                        }
+
+                        override fun onPong(
+                            webSocket: WebSocket,
+                            bytes: okio.ByteString
+                        ) {
+                            lastPongMs = System.currentTimeMillis()
                         }
 
                         override fun onMessage(
@@ -166,8 +177,20 @@ class BinanceUserDataStream(
 
                 // Binance WebSocket connections have a maximum lifetime;
                 // reconnect proactively before the 24h boundary.
-                closed.await(23L * 60L * 60L, TimeUnit.MILLISECONDS)
-                socket?.close(1000, "planned_24h_reconnect")
+                val deadlineMs = System.currentTimeMillis() + 23L * 60L * 60L * 1000L
+                while (!stopping.get() && System.currentTimeMillis() < deadlineMs) {
+                    if (connected && System.currentTimeMillis() - lastPongMs > 90_000L) {
+                        connected = false
+                        onConnection(false, "pong_stale")
+                        socket?.close(1001, "stale_pong")
+                        closed.countDown()
+                        break
+                    }
+                    if (closed.await(5L, TimeUnit.SECONDS)) break
+                }
+                if (!stopping.get()) {
+                    socket?.close(1000, "planned_24h_reconnect")
+                }
             } catch (t: Throwable) {
                 connected = false
                 onConnection(
@@ -177,6 +200,7 @@ class BinanceUserDataStream(
             } finally {
                 socket = null
                 connected = false
+                lastPongMs = 0L
             }
 
             if (stopping.get()) break
