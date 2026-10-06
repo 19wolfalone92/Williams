@@ -9,6 +9,8 @@ import pandas as pd
 from data import fetch_klines
 from strategy import calculate_indicators, config_from_env
 from wave_engine import DIRECTION_NEUTRAL, MultiTimeframeWaveEngine
+from feature_store import FeatureStore, build_market_feature_vector
+from ai_shadow import ShadowDecisionEngine, journal_shadow_decision
 
 
 log = logging.getLogger("williams-scanner")
@@ -68,6 +70,18 @@ class Candidate:
     wave_scenario_primary: str = ""
     wave_scenario_alternative: str = ""
     wave_operative_interval: str = ""
+    # Quant layer is advisory: it can rank candidates but never creates a signal.
+    quant_rank_adjustment: float = 0.0
+    quant_score: float = 0.0
+    regime: str = "UNKNOWN"
+    regime_score: float = 0.0
+    obi: float = 0.0
+    trade_flow_imbalance: float = 0.0
+    dollar_bar_rate: float = 0.0
+    volume_bar_rate: float = 0.0
+    quant_features: dict = field(default_factory=dict)
+    xai_factors: dict = field(default_factory=dict)
+    shadow_intent: dict = field(default_factory=dict)
 
     def __post_init__(self):
         # Existing tests/integrations may construct Candidate(score=...) before
@@ -147,6 +161,13 @@ class MarketScanner:
             base_interval=self.interval,
             include_micro=True,
         )
+        self.quant_enabled = os.getenv("FEATURE_STORE_ENABLED", "true").lower() == "true"
+        self.quant_ranking_enabled = os.getenv(
+            "QUANT_RANKING_ENABLED",
+            "true" if os.getenv("DRY_RUN", "true").lower() == "true" else "false",
+        ).lower() == "true"
+        self.feature_store = FeatureStore() if self.quant_enabled else None
+        self.shadow_engine = ShadowDecisionEngine()
 
     def _load_symbols(self):
         raw = os.getenv("SCAN_SYMBOLS", "").strip()
@@ -492,8 +513,44 @@ class MarketScanner:
             -10.0,
             10.0,
         )
+
+        # Quant layer: one immutable feature vector combines OHLCV-derived bars,
+        # L2, trade flow, Williams indicators and MTF Wave context.
+        quant_adjustment = 0.0
+        vector = None
+        shadow = None
+        try:
+            ind = calculate_indicators(closed, config_from_env())
+            book = self.client.depth(candidate.symbol, limit=20) if hasattr(self.client, "depth") else None
+            trades = self.client.agg_trades(candidate.symbol, limit=50) if hasattr(self.client, "agg_trades") else None
+            vector = build_market_feature_vector(
+                candidate.symbol,
+                self.interval,
+                ind,
+                wave_report=report,
+                order_book=book,
+                trades=trades,
+            )
+            if self.quant_ranking_enabled:
+                if vector.regime == "TRENDING_EXPANSION":
+                    quant_adjustment += 2.0 * float(vector.regime_score)
+                elif vector.regime == "HIGH_NOISE_WASH":
+                    quant_adjustment -= 2.0 * float(vector.regime_score)
+                quant_adjustment += self._clamp(vector.obi * 1.5, -1.5, 1.5)
+
+            shadow = self.shadow_engine.evaluate(
+                vector,
+                williams_signal=bool(candidate.signal),
+                htf_confirmed=bool(report.htf_confirmed),
+            )
+            if self.feature_store is not None:
+                self.feature_store.save_feature(vector)
+                journal_shadow_decision(self.feature_store, shadow, vector)
+        except Exception as exc:
+            log.warning("Quant enrichment unavailable for %s: %s", candidate.symbol, exc)
+
         final_score = self._clamp(
-            float(candidate.base_score) + wave_adjustment,
+            float(candidate.base_score) + wave_adjustment + quant_adjustment,
             0.0,
             100.0,
         )
@@ -502,9 +559,14 @@ class MarketScanner:
         reason = candidate.reason
         if report.reason:
             reason += f"; wave: {report.reason}"
-
         if report.wave_path:
             reason += f"; path={report.wave_path}"
+        if vector is not None:
+            reason += f"; regime={vector.regime}"
+            if vector.wave_nested_w3_parent_w5:
+                reason += "; nested-W3-inside-W5"
+        if shadow is not None:
+            reason += f"; shadow={shadow.direction}:{shadow.confidence:.2f}"
 
         return replace(
             candidate,
@@ -512,6 +574,8 @@ class MarketScanner:
             htf_confirmed=htf_confirmed,
             reason=reason,
             base_score=round(float(candidate.base_score), 2),
+            quant_rank_adjustment=round(float(quant_adjustment), 4),
+            quant_score=round(self._clamp(float(final_score), 0.0, 100.0), 2),
             wave_entry_allowed=bool(
                 (not candidate.signal)
                 or bool(report.entry_allowed)
@@ -545,6 +609,17 @@ class MarketScanner:
             wave_scenario_primary=(setup.scenario_primary if setup else ""),
             wave_scenario_alternative=(setup.scenario_alternative if setup else ""),
             wave_operative_interval=report.operative_interval,
+            regime=(vector.regime if vector is not None else "UNKNOWN"),
+            regime_score=(round(float(vector.regime_score), 4) if vector is not None else 0.0),
+            obi=(round(float(vector.obi), 6) if vector is not None else 0.0),
+            trade_flow_imbalance=(round(float(vector.trade_flow_imbalance), 6) if vector is not None else 0.0),
+            dollar_bar_rate=(round(float(vector.dollar_bar_rate), 6) if vector is not None else 0.0),
+            volume_bar_rate=(round(float(vector.volume_bar_rate), 6) if vector is not None else 0.0),
+            quant_features=(vector.to_dict() if vector is not None else {}),
+            xai_factors=(
+                dict(shadow.feature_attribution) if shadow is not None else {}
+            ),
+            shadow_intent=(shadow.to_dict() if shadow is not None else {}),
         )
 
     @staticmethod
@@ -554,6 +629,7 @@ class MarketScanner:
             1 if candidate.signal else 0,
             candidate.score,
             candidate.wave_score,
+            candidate.quant_score if candidate.quant_score else candidate.score,
             candidate.wave_confidence,
             -candidate.wave_exhaustion_risk,
             candidate.wise_man_count,
