@@ -696,6 +696,24 @@ class MultiPositionTrader:
                     symbol, qty, trade_id, "STOP_LOSS_REACHED_BEFORE_OCO"
                 )
 
+        # Binance validates SELL OCO levels against the current last-traded
+        # price, so verify that price too immediately before creating the list.
+        if hasattr(self.client, "ticker_price"):
+            last_price = float(self.client.ticker_price(symbol).get("price", 0) or 0)
+            if last_price > 0:
+                if last_price >= tp:
+                    return self._emergency_market_sell(
+                        symbol, qty, trade_id, "TAKE_PROFIT_REACHED_BEFORE_OCO_LAST_PRICE"
+                    )
+                if last_price <= sl:
+                    return self._emergency_market_sell(
+                        symbol, qty, trade_id, "STOP_LOSS_REACHED_BEFORE_OCO_LAST_PRICE"
+                    )
+                if not (tp > last_price > sl):
+                    raise RuntimeError(
+                        f"{symbol}: current last price {last_price:.12g} violates OCO price ordering"
+                    )
+
         if not (tp > entry > sl > sl_limit):
             raise RuntimeError(
                 f"{symbol}: invalid rounded TP/SL"
