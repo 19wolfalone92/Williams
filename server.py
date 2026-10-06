@@ -757,6 +757,13 @@ def status():
         ).isoformat(),
         'market_context': mtf_service.symbol_snapshot(t.symbol),
         'market_context_status': mtf_service.snapshot_status(),
+        'scanner_scanning': bool(_scanner_snapshot()['scanning']),
+        'scanner_symbols': int(_scanner_snapshot()['symbols_scanned']),
+        'scanner_duration_ms': int(_scanner_snapshot()['duration_ms']),
+        'market_ws_connected': bool(hub.market_connected),
+        'user_ws_connected': bool(hub.user_connected),
+        'user_stream_sync_required': bool(hub.user_sync_required),
+        'history_ready': bool(mtf_service.snapshot_status().get('contexts', 0) >= len(t.config.symbols) * len(t.config.structural_timeframes)),
     }
 
 
