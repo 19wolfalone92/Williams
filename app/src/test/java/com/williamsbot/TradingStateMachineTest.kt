@@ -22,6 +22,7 @@ class TradingStateMachineTest {
     fun protectedPosition_canAdmitAnotherEntry_andReturnProtected() {
         val fsm = TradingStateMachine(TradingState.PROTECTED)
         assertTrue(fsm.transition(TradingState.ENTRY_PENDING, "second entry"))
+        assertTrue(fsm.transition(TradingState.OPEN_UNPROTECTED, "second entry filled"))
         assertTrue(fsm.transition(TradingState.PROTECTED, "second entry protected"))
         assertTrue(fsm.executionAllowed())
     }
