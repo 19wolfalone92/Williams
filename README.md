@@ -1,5 +1,7 @@
 # Williams Binance Bot + Android Dashboard 4.21.0
 
+<!-- CI verification branch for current main -->
+
 Полноценная Testnet-first версия торгового бота по Williams (Alligator + AO + Fractals) с Android Dashboard, SQLite recovery, Binance WebSocket и защитными risk-фильтрами.
 
 ## Что сделано в 4.10.0
