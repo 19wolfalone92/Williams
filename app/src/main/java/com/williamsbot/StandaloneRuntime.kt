@@ -782,7 +782,7 @@ private class NativeEngine(
         JSONObject()
             .put("ok", true)
             .put("service", "williams-native")
-            .put("version", "4.17.0")
+            .put("version", "4.20.1")
             .put("standalone", true)
             .put("websocket", marketSocketConnected)
             .put("market_stream_last_event_ms", marketSocketLastEventMs)
