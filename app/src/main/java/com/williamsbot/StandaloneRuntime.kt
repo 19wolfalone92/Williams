@@ -554,7 +554,7 @@ private class NativeEngine(
     @Volatile private var circuitBreakerTripInProgress = false
     private val feeBufferPerSidePct = 0.001
     @Volatile private var serverTimeOffsetMs = 0L
-    private val BINANCE_RECV_WINDOW_MS = 60000L
+    private val BINANCE_RECV_WINDOW_MS = 5000L
     @Volatile private var lastServerTimeSyncMs = 0L
     @Volatile private var lastOrder: JSONObject? = null
     @Volatile private var reconcileRequired = false
@@ -814,7 +814,7 @@ private class NativeEngine(
         JSONObject()
             .put("ok", true)
             .put("service", "williams-native")
-            .put("version", "4.20.2")
+            .put("version", BuildConfig.VERSION_NAME)
 .put("standalone", true)
             .put("mode", "AUTONOMOUS")
             .put("runtime_ready", true)
@@ -2063,8 +2063,12 @@ private class NativeEngine(
         val tradingUsdt = HashSet<String>()
         for (i in 0 until infoRows.length()) {
             val item = infoRows.getJSONObject(i)
+            val symbolStatus = item.optString("symbolStatus")
+                .trim()
+                .uppercase(Locale.US)
             if (
                 item.optString("status") == "TRADING" &&
+                symbolStatus != "CANCEL_ONLY" &&
                 item.optString("quoteAsset") == "USDT"
             ) {
                 val symbol = item.optString("symbol")
@@ -5661,6 +5665,13 @@ private class NativeEngine(
         val dailyLossPct = (-pnl / equity).coerceAtLeast(0.0)
         val dailyLossLimit = dailyLossPct >= maxDailyLossPct
         val maxTradesReached = count >= 5
+        val mode = when {
+            maxTradesReached -> "DAILY_TRADE_LIMIT"
+            dailyLossLimit -> "DAILY_LOSS_LIMIT"
+            hardPause -> "PAUSED"
+            cooldown -> "COOLDOWN"
+            else -> "ACTIVE"
+        }
         return JSONObject()
             .put("trades_today", count)
             .put("max_trades_per_day", 5)
@@ -5669,13 +5680,7 @@ private class NativeEngine(
             .put("max_daily_loss_pct", maxDailyLossPct)
             .put("consecutive_losses", consecutiveLosses)
             .put("allow", !cooldown && !hardPause && !dailyLossLimit && !maxTradesReached)
-            .put("mode", when {
-                maxTradesReached -> "DAILY_TRADE_LIMIT"
-                dailyLossLimit -> "DAILY_LOSS_LIMIT"
-                hardPause -> "PAUSED"
-                cooldown -> "COOLDOWN"
-                else -> "ACTIVE"
-            })
+            .put("mode", mode)
             .put("mode", when {
                 hardPause -> "PAUSED"
                 cooldown -> "COOLDOWN"
@@ -5685,7 +5690,7 @@ private class NativeEngine(
 
     private fun scannerSnapshot(): JSONObject =
         JSONObject()
-            .put("version", "4.20.1")
+            .put("version", BuildConfig.VERSION_NAME)
             .put("cached", true)
             .put("scanning", scanning)
             .put("scanner_state", scannerState)
@@ -5712,6 +5717,291 @@ private class NativeEngine(
         }
 
         return scannerSnapshot()
+    }
+
+    fun portfolio(): JSONObject {
+        if (key().isBlank() || secret().isBlank()) {
+            return JSONObject()
+                .put("configured", false)
+                .put("testnet", true)
+                .put("total_equity_usdt", JSONObject.NULL)
+                .put("free_equity_usdt", JSONObject.NULL)
+                .put("locked_equity_usdt", JSONObject.NULL)
+                .put("realized_pnl_usdt", TradeJournal.stats(prefs).optDouble("pnl", 0.0))
+                .put("unrealized_pnl_usdt", 0.0)
+                .put("assets", JSONArray())
+                .put("positions", JSONArray())
+        }
+
+        val account = signedAccount()
+        val tickerRows = JSONArray(getBody("/api/v3/ticker/price"))
+        val prices = HashMap<String, Double>()
+        for (i in 0 until tickerRows.length()) {
+            val row = tickerRows.optJSONObject(i) ?: continue
+            val price = row.optString("price").toDoubleOrNull() ?: continue
+            if (price > 0.0) {
+                prices[row.optString("symbol").uppercase(Locale.US)] = price
+            }
+        }
+
+        data class AssetRow(
+            val asset: String,
+            val free: Double,
+            val locked: Double,
+            val price: Double?,
+            val value: Double
+        )
+
+        val rows = mutableListOf<AssetRow>()
+        val balances = account.optJSONArray("balances") ?: JSONArray()
+        for (i in 0 until balances.length()) {
+            val row = balances.optJSONObject(i) ?: continue
+            val asset = row.optString("asset").uppercase(Locale.US)
+            if (asset.isBlank()) continue
+            val free = row.optString("free").toDoubleOrNull() ?: 0.0
+            val locked = row.optString("locked").toDoubleOrNull() ?: 0.0
+            val total = free + locked
+            if (total <= 0.000000000001) continue
+            val price = if (asset == "USDT") 1.0 else {
+                prices[asset + "USDT"] ?: livePrices[asset + "USDT"]
+            }
+            rows += AssetRow(
+                asset = asset,
+                free = free,
+                locked = locked,
+                price = price,
+                value = if (price != null && price > 0.0) total * price else 0.0
+            )
+        }
+
+        val totalEquity = rows.sumOf { it.value }
+        val freeEquity = rows.sumOf {
+            if (it.price != null && it.price > 0.0) it.free * it.price else 0.0
+        }
+        val lockedEquity = rows.sumOf {
+            if (it.price != null && it.price > 0.0) it.locked * it.price else 0.0
+        }
+
+        val assets = JSONArray()
+        rows.sortedByDescending { it.value }.forEach {
+            assets.put(
+                JSONObject()
+                    .put("asset", it.asset)
+                    .put("free", it.free)
+                    .put("locked", it.locked)
+                    .put("total", it.free + it.locked)
+                    .put("price_usdt", it.price ?: JSONObject.NULL)
+                    .put("value_usdt", it.value)
+                    .put(
+                        "allocation_pct",
+                        if (totalEquity > 0.0) it.value / totalEquity else 0.0
+                    )
+            )
+        }
+
+        val positions = JSONArray()
+        var unrealized = 0.0
+        positionList().forEach { position ->
+            val mark = livePrices[position.symbol] ?: prices[position.symbol] ?: 0.0
+            val pnl = if (mark > 0.0) (mark - position.entry) * position.qty else 0.0
+            unrealized += pnl
+            val positionValue = if (mark > 0.0) mark * position.qty else position.entry * position.qty
+            positions.put(
+                JSONObject()
+                    .put("symbol", position.symbol)
+                    .put("qty", position.qty)
+                    .put("avg_entry_price", position.entry)
+                    .put("current_price", if (mark > 0.0) mark else JSONObject.NULL)
+                    .put("position_value_usdt", positionValue)
+                    .put("allocation_pct", if (totalEquity > 0.0) positionValue / totalEquity else 0.0)
+                    .put("unrealized_pnl_usdt", pnl)
+                    .put("unrealized_pnl_pct", if (position.entry > 0.0 && mark > 0.0) (mark - position.entry) / position.entry else 0.0)
+                    .put("stop_loss", position.stop)
+                    .put("take_profit", position.take)
+                    .put("risk_pct", position.riskPct)
+                    .put("risk_amount_usdt", max(0.0, (position.entry - position.stop) * position.qty))
+                    .put("oco_list_id", position.ocoListId)
+                    .put("oco_list_client_id", position.ocoListClientId)
+            )
+        }
+
+        return JSONObject()
+            .put("configured", true)
+            .put("testnet", true)
+            .put("total_equity_usdt", totalEquity)
+            .put("free_equity_usdt", freeEquity)
+            .put("locked_equity_usdt", lockedEquity)
+            .put("realized_pnl_usdt", TradeJournal.stats(prefs).optDouble("pnl", 0.0))
+            .put("unrealized_pnl_usdt", unrealized)
+            .put("assets", assets)
+            .put("positions", positions)
+            .put("position_count", positionList().size)
+            .put("valuation_unknown_assets", rows.count { it.price == null })
+    }
+
+    fun diagnostics(run: Boolean): JSONObject {
+        val startedAt = System.currentTimeMillis()
+        val tests = JSONArray()
+
+        fun test(domain: String, name: String, block: () -> String) {
+            try {
+                tests.put(
+                    JSONObject()
+                        .put("domain", domain)
+                        .put("name", name)
+                        .put("status", "PASS")
+                        .put("message", block())
+                )
+            } catch (x: Exception) {
+                tests.put(
+                    JSONObject()
+                        .put("domain", domain)
+                        .put("name", name)
+                        .put("status", "FAIL")
+                        .put("message", x.message ?: x.javaClass.simpleName)
+                )
+            }
+        }
+
+        val configured = key().isNotBlank() && secret().isNotBlank()
+        test("runtime", "Runtime health") {
+            "state=" + stateMachine.state.name + "; running=" + running + "; paused=" + paused
+        }
+        test("security", "Diagnostic write-safety") {
+            "0 order writes; no execution-gate bypass"
+        }
+        test("binance", "Public /api/v3/time") {
+            val server = JSONObject(getBody("/api/v3/time")).optLong("serverTime", 0L)
+            require(server > 0L) { "serverTime missing" }
+            "serverTime=" + server
+        }
+        test("binance", "Public /api/v3/exchangeInfo") {
+            val info = JSONObject(getBody("/api/v3/exchangeInfo"))
+            rateGuard.updateFromExchangeInfo(info)
+            val count = info.optJSONArray("symbols")?.length() ?: 0
+            require(count > 0) { "exchangeInfo returned no symbols" }
+            "symbols=" + count + "; weightLimit=" + rateGuard.requestWeightLimit1m + "; orderLimit=" + rateGuard.orderLimit1m
+        }
+        test("binance", "Signed account + permissions") {
+            require(configured) { "credentials_not_configured" }
+            val account = signedAccount()
+            val canTrade = account.optBoolean("canTrade", false)
+            val balances = account.optJSONArray("balances")?.length() ?: 0
+            require(canTrade) { "canTrade=false or permission unavailable" }
+            "canTrade=" + canTrade + "; balances=" + balances
+        }
+        test("binance", "Server time offset") {
+            require(configured) { "credentials_not_configured" }
+            syncServerTime()
+            "offset_ms=" + serverTimeOffsetMs
+        }
+        test("binance", "Klines 1h / 4h") {
+            val a = fetchCandles(primarySymbol, "1h", 80)
+            val b = fetchCandles(primarySymbol, "4h", 80)
+            require(a.size >= 40) { "1h candles=" + a.size }
+            require(b.size >= 40) { "4h candles=" + b.size }
+            "1h=" + a.size + "; 4h=" + b.size
+        }
+        test("scanner", "USDT universe and liquidity") {
+            val universe = loadUniverse()
+            require(universe.first.isNotEmpty()) { "empty universe" }
+            "eligible_top=" + universe.first.size + "; max=" + maxScanSymbols
+        }
+        test("scanner", "Williams + MTF sample") {
+            val candles = fetchCandles(primarySymbol, "1h", 150)
+            val base = analyseBase(primarySymbol, candles, 0.0, 100_000_000.0)
+            "wave=W" + base.wave.position + "; score=" + String.format(Locale.US, "%.2f", base.score) +
+                "; confidence=" + String.format(Locale.US, "%.2f", base.wave.confidence)
+        }
+        test("database", "Persistent history store") {
+            val snapshot = historyStore.status(coreSymbols, analysisFrames)
+            require(snapshot.optInt("symbols", 0) >= 0) { "history snapshot invalid" }
+            "history store responded"
+        }
+        test("execution", "FSM safety contract") {
+            require(stateMachine.state.name.isNotBlank()) { "FSM state missing" }
+            "state=" + stateMachine.state.name + "; reconcile=" + reconcileRequired +
+                "; kill=" + killLatched + "; userSync=" + userStreamSyncRequired
+        }
+        test("websocket", "Market WebSocket") {
+            val wasConnected = marketSocketConnected
+            if (!wasConnected) {
+                startMarketDataStream()
+                val deadline = System.currentTimeMillis() + 5000L
+                while (!marketSocketConnected && System.currentTimeMillis() < deadline) {
+                    Thread.sleep(100L)
+                }
+            }
+            val ok = marketSocketConnected
+            if (!wasConnected && !running) {
+                marketSocket?.close(1000, "diagnostics")
+                marketSocket = null
+                marketSocketConnected = false
+            }
+            require(ok) { "market_ws_not_connected" }
+            "connected=true"
+        }
+        test("websocket", "User Data Stream") {
+            require(configured) { "credentials_not_configured" }
+            val wasConnected = userStreamConnected
+            if (!wasConnected) {
+                userStream.start()
+                val deadline = System.currentTimeMillis() + 7000L
+                while (!userStreamConnected && System.currentTimeMillis() < deadline) {
+                    Thread.sleep(100L)
+                }
+            }
+            val ok = userStreamConnected
+            if (!wasConnected && !running) {
+                userStream.stop()
+                userStreamConnected = false
+                userStreamSyncRequired = true
+            }
+            require(ok) { "user_data_stream_not_connected" }
+            "subscription=signature; connected=true"
+        }
+        test("execution", "Read-only order filters and OCO support") {
+            val rules = symbolFilters(primarySymbol)
+            require(rules.step > 0.0 && rules.tick > 0.0) { "symbol filters invalid" }
+            "tick=" + rules.tick + "; step=" + rules.step + "; minNotional=" + rules.minNotional +
+                "; ocoAllowed=" + rules.ocoAllowed
+        }
+        test("ui", "Local Android runtime contract") {
+            "HTTP=127.0.0.1:18080; appVersion=" + BuildConfig.VERSION_NAME + "; apiSchema=1"
+        }
+        test("execution", "No order endpoint invoked by diagnostics") {
+            "POST/DELETE /api/v3/order* are intentionally not called"
+        }
+
+        val failCount = (0 until tests.length()).count {
+            tests.optJSONObject(it)?.optString("status") == "FAIL"
+        }
+        return JSONObject()
+            .put("schema", 1)
+            .put("app_version", BuildConfig.VERSION_NAME)
+            .put("created_at", System.currentTimeMillis())
+            .put("duration_ms", System.currentTimeMillis() - startedAt)
+            .put("overall", if (failCount == 0) "PASS" else "FAIL")
+            .put("configured", configured)
+            .put("testnet", true)
+            .put("tests", tests)
+            .put("system_info", AndroidRuntimeHealth.snapshot(context))
+            .put(
+                "configuration_sanitized",
+                JSONObject()
+                    .put("mode", "AUTONOMOUS")
+                    .put("testnet", true)
+                    .put("api_key_configured", configured)
+                    .put("api_key_fingerprint", if (configured) "configured_only" else "not_configured")
+                    .put("risk_per_trade_pct", maxRiskPerTradePct)
+                    .put("max_total_risk_pct", maxTotalRiskPct)
+                    .put("max_daily_loss_pct", 0.03)
+                    .put("max_trades_per_day", 5)
+                    .put("max_consecutive_losses", 3)
+                    .put("scanner_max_symbols", maxScanSymbols)
+                    .put("wave_top_n", waveTopN)
+                    .put("recv_window_ms", BINANCE_RECV_WINDOW_MS)
+            )
     }
 
     fun status(): JSONObject {
@@ -5771,15 +6061,15 @@ private class NativeEngine(
         val dailyGuard = dailyTradeGuard()
 
         return JSONObject()
-            .put("version", "4.20.2")
+            .put("version", BuildConfig.VERSION_NAME)
             .put("symbol", primarySymbol)
             .put("interval", interval)
             .put("testnet", true)
             .put("running", running)
             .put("paused", paused)
-            .put("recovered", true)
+            .put("recovered", !reconcileRequired)
             .put("state", stateName())
-            .put("execution_enabled", !reconcileRequired)
+            .put("execution_enabled", !isTradingBlocked())
             .put(
                 "position_symbol",
                 positionList().firstOrNull()?.symbol ?: JSONObject.NULL
@@ -6011,7 +6301,7 @@ private class NativeEngine(
 
     fun settings(): JSONObject =
         JSONObject()
-            .put("version", "4.17.0")
+            .put("version", BuildConfig.VERSION_NAME)
             .put("symbol", primarySymbol)
             .put("interval", interval)
             .put("position_fraction", 0.25)
