@@ -259,6 +259,7 @@ class Trader:
         old_filters = self.filters
         old_base_asset = self.base_asset
         old_quote_asset = self.quote_asset
+        old_symbol_rules = self.symbol_rules
         old_recovered = self.recovered
 
         try:
@@ -271,6 +272,7 @@ class Trader:
                 self.filters = filters
                 self.base_asset = base_asset
                 self.quote_asset = quote_asset
+                self.symbol_rules = SymbolRules.from_exchange_info(info, new_symbol)
                 self.recovered = False
 
                 self.db.state_set('active_symbol', new_symbol)
@@ -295,6 +297,7 @@ class Trader:
             self.filters = old_filters
             self.base_asset = old_base_asset
             self.quote_asset = old_quote_asset
+            self.symbol_rules = old_symbol_rules
             self.recovered = old_recovered
             raise
 
@@ -680,7 +683,7 @@ class Trader:
             raise RuntimeError('BUY blocked: MAX_OPEN_POSITIONS must remain exactly 1.')
         if self.db.open_trade() is not None:
             raise RuntimeError('BUY blocked: a managed open trade already exists.')
-        if self.preflight_report is None or not self.preflight_report.get('ready'):
+        if (not self.client.testnet) and (self.preflight_report is None or not self.preflight_report.get('ready')):
             raise RuntimeError('BUY blocked: P0 LIVE SAFETY GATE has not passed.')
         if self.symbol_rules is None:
             raise RuntimeError('BUY blocked: symbol rules are not loaded.')
