@@ -129,7 +129,8 @@ class MainActivity : ComponentActivity() {
         // Production architecture: Android is a client/control surface.
         // StandaloneRuntime remains available only as an explicit debug diagnostic.
         if (BuildConfig.DEBUG && intent.getBooleanExtra("ENABLE_STANDALONE_DIAGNOSTIC", false)) {
-            if (BuildConfig.DEBUG && intent.getBooleanExtra("ENABLE_STANDALONE_DIAGNOSTIC", false)) {
+            val debuggable = (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+        if (debuggable && intent.getBooleanExtra("ENABLE_STANDALONE_DIAGNOSTIC", false)) {
             StandaloneRuntime.start(this)
         }
         }
