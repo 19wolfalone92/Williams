@@ -553,10 +553,11 @@ private class NativeEngine(
     private var primaryCandles = emptyList<CandleN>()
     @Volatile private var lastScanDurationMs = 0L
     @Volatile private var lastSymbolsScanned = 0
+    private val maxOpenPositions = 1
     private val maxTotalRiskPct = 0.01
     private val maxRiskPerTradePct = 0.005
     private val maxSpreadPct = 0.0015
-    private val maxSlippagePct = 0.005
+    private val maxSlippagePct = 0.0015
     private val equityCircuitBreaker = EquityCircuitBreaker(maxDrawdownPct = 0.03)
     @Volatile private var lastEquityCheckMs = 0L
     @Volatile private var circuitBreakerTripInProgress = false
@@ -859,7 +860,7 @@ private class NativeEngine(
                 floor(maxTotalRiskPct / maxRiskPerTradePct).toInt()
             )
             .put("position_capacity_mode", "RISK_BUDGET")
-            .put("risk_based_position_capacity", floor(maxTotalRiskPct / maxRiskPerTradePct).toInt())
+            .put("risk_based_position_capacity", maxOpenPositions)
             .put("reserved_risk_pct", reservedRiskPct())
             .put("circuit_breaker_tripped", equityCircuitBreaker.isTripped())
             .put("managed_equity", estimateManagedEquity())
@@ -2324,9 +2325,14 @@ private class NativeEngine(
         val rankedBase =
             preliminary.sortedByDescending { it.score }
 
+        // Every strict Williams signal receives the expensive MTF/Wave pass.
+        // Only watch-only candidates are capped to Wave Top-N for latency.
         val waveTargets =
-            rankedBase
-                .take(waveTopN)
+            (
+                rankedBase.filter { it.signal } +
+                    rankedBase.filter { !it.signal }.take(waveTopN)
+                )
+                .distinctBy { it.symbol }
                 .filter { it.candles.size >= 140 }
 
         val final = waveTargets.map { baseCandidate ->
@@ -2334,7 +2340,7 @@ private class NativeEngine(
         }.toMutableList()
 
         rankedBase
-            .drop(waveTargets.size)
+            .filter { candidate -> waveTargets.none { it.symbol == candidate.symbol } }
             .take(20)
             .forEach {
                 final.add(it)
@@ -2382,16 +2388,17 @@ private class NativeEngine(
                     .filter {
                         it.signal &&
                             it.score >= 70.0 &&
-                            !positions.containsKey(it.symbol) &&
+                            positionList().isEmpty() &&
                             synchronized(pendingEntries) {
-                                !pendingEntries.containsKey(it.symbol)
+                                pendingEntries.isEmpty()
                             }
                     }
                     .sortedByDescending { it.score }
-                    .forEach { candidate ->
-                        if (reservedRiskPct() >= maxTotalRiskPct - 0.000001) return@forEach
-                        submitOrderIntent(candidate)
-                        if (reconcileRequired) return@forEach
+                    .firstOrNull()
+                    ?.let { candidate ->
+                        if (reservedRiskPct() < maxTotalRiskPct - 0.000001) {
+                            submitOrderIntent(candidate)
+                        }
                     }
             }
         }
@@ -4011,8 +4018,16 @@ private class NativeEngine(
         if (positions.containsKey(candidate.symbol)) {
             return
         }
-        // Williams portfolio contract: multiple managed positions are allowed.
-        // Admission is bounded by the aggregate portfolio risk budget below.
+        // Williams conservative production contract: exactly one managed
+        // position at a time. The scanner resumes only after it is flat.
+        if (positionList().size >= maxOpenPositions) {
+            error("MAX_OPEN_POSITIONS=$maxOpenPositions")
+        }
+        synchronized(pendingEntries) {
+            if (pendingEntries.isNotEmpty()) {
+                error("ENTRY_PENDING")
+            }
+        }
         if (reconcileRequired) {
             error("RECONCILE_REQUIRED")
         }
@@ -5147,8 +5162,18 @@ private class NativeEngine(
 
         // Entry is no longer tied to the 1h candle's breakout. We enter on the
         // lower-TF Wave 3 after higher-TF context confirms the direction.
+        val waveSafeForEntry =
+            nestedW3ParentW5 ||
+                (
+                    setup.position != 5 &&
+                        setup.exhaustionRisk <= 80.0 &&
+                        !setup.aoBearishDivergence
+                )
+
         val finalSignal =
             entrySignal &&
+                htfConfirmed &&
+                waveSafeForEntry &&
                 baseCandidate.atrPct <= 0.08 &&
                 baseCandidate.spreadPct <= 0.0015 &&
                 baseCandidate.riskReward >= 1.5
