@@ -58,6 +58,8 @@ class MarketFeatureVector:
     wave_nested_w3: bool = False
     wave_nested_w3_parent_w5: bool = False
     wave_alignment_score: float = 0.0
+    invalidation: float = 0.0
+    target: float = 0.0
 
     regime: str = "UNKNOWN"
     regime_score: float = 0.0
@@ -485,6 +487,19 @@ def _wave_fields(wave_report: Any) -> dict[str, Any]:
     setup = frames.get(setup_tf, {}) if setup_tf else {}
     position = int(setup.get("position", data.get("entry_position", 0)) or 0)
     confidence = float(setup.get("confidence", 0.0) or 0.0)
+    invalidation = 0.0
+    target = 0.0
+    if isinstance(setup, dict):
+        try:
+            invalidation = float(setup.get("invalidation_price", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            invalidation = 0.0
+        try:
+            low = float(setup.get("target_zone_low", 0.0) or 0.0)
+            high = float(setup.get("target_zone_high", 0.0) or 0.0)
+            target = (low + high) / 2.0 if low > 0 and high > 0 else max(low, high, 0.0)
+        except (TypeError, ValueError):
+            target = 0.0
     return {
         "wave_score": float(data.get("wave_score", 50.0) or 50.0),
         "wave_position": position,
@@ -495,7 +510,8 @@ def _wave_fields(wave_report: Any) -> dict[str, Any]:
         "wave_nested_w3": bool(data.get("nested_w3", False)),
         "wave_nested_w3_parent_w5": bool(data.get("nested_w3_parent_w5", False)),
         "wave_alignment_score": float(data.get("alignment_score", 0.0) or 0.0),
-        "wave_context": data,
+        "invalidation": invalidation,
+        "target": target,
     }
 
 
@@ -568,7 +584,6 @@ def build_market_feature_vector(
         "features_version": 1,
         "wave_context_present": bool(wf),
     }
-    extra.update({"wave_context": wf.get("wave_context", {})})
 
     return MarketFeatureVector(
         schema_version=1,
@@ -602,6 +617,8 @@ def build_market_feature_vector(
         wave_nested_w3=wf.get("wave_nested_w3", False),
         wave_nested_w3_parent_w5=wf.get("wave_nested_w3_parent_w5", False),
         wave_alignment_score=wf.get("wave_alignment_score", 0.0),
+        invalidation=wf.get("invalidation", 0.0),
+        target=wf.get("target", 0.0),
         regime=regime,
         regime_score=regime_score,
         extra=extra,
