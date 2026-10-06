@@ -1232,7 +1232,7 @@ private fun PortfolioCard(
                     color = AppColors.textMuted
                 )
             } else {
-                portfolio.assets.take(8).forEach { asset ->
+                portfolio.assets.forEach { asset ->
                     Row(
                         Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
