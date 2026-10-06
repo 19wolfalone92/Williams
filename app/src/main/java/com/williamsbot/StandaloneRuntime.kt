@@ -255,9 +255,7 @@ private class StandaloneServer(private val context: Context) {
                 if (key().isNotBlank() && secret().isNotBlank()) {
                     runCatching { e().recover() }
                 }
-                if (prefs.getBoolean("auto_run", false) &&
-                    !e().isTradingBlocked()
-                ) {
+                if (prefs.getBoolean("auto_run", false)) {
                     runCatching { e().start() }
                 }
             } catch (_: Throwable) {
