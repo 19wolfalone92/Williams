@@ -6458,9 +6458,23 @@ private class NativeEngine(
                 }
             )
             .put("open_positions", positionList().size)
-            .put("position_capacity_mode", "FIXED_COUNT_AND_RISK")
-            .put("risk_based_position_capacity", maxOpenPositions)
-            .put("max_open_positions", maxOpenPositions)
+            .put("position_capacity_mode", "RISK_BUDGET")
+            .put(
+                "risk_based_position_capacity",
+                if (maxOpenPositions > 0) {
+                    maxOpenPositions
+                } else {
+                    floor(maxTotalRiskPct / maxRiskPerTradePct).toInt()
+                }
+            )
+            .put(
+                "max_open_positions",
+                if (maxOpenPositions > 0) {
+                    maxOpenPositions
+                } else {
+                    floor(maxTotalRiskPct / maxRiskPerTradePct).toInt()
+                }
+            )
             .put("reserved_risk_pct", reservedRiskPct())
             .put("max_total_risk_pct", maxTotalRiskPct)
             .put("max_risk_per_trade_pct", maxRiskPerTradePct)
@@ -6508,7 +6522,7 @@ private class NativeEngine(
             .put("scanner_last_success", if (scannerState == "READY") lastScanAt else 0L)
             .put("p0_gate_passed", p0GatePassed())
             .put("p0_gate_reason", p0GateReason())
-            .put("max_open_positions_locked", true)
+            .put("max_open_positions_locked", false)
             .put("unresolved_symbols", unresolvedPositionSymbols())
             .put("pending_entry_symbols", pendingEntrySymbols())
     }
