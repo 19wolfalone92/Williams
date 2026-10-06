@@ -44,6 +44,13 @@ class FakeClient:
             }]
         }
 
+    def book_ticker(self, symbol=None):
+        return {
+            "symbol": symbol or "BTCUSDT",
+            "bidPrice": "100.0",
+            "askPrice": "100.0",
+        }
+
     def depth(self, symbol, limit=100):
         return {
             "asks": [["100.0", "1000.0"]],
