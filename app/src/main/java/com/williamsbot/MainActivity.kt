@@ -317,10 +317,10 @@ private class StandaloneApi(context: Context) {
         .build()
 
     val backendUrl: String
-        get() = prefs.getString("backend_url", "http://127.0.0.1:18080")!!.trimEnd('/')
+        get() = prefs.getString("backend_url", "")!!.trimEnd('/')
 
     val mobileToken: String
-        get() = prefs.getString("mobile_token", "standalone")!!.trim()
+        get() = prefs.getString("mobile_token", "")!!.trim()
 
     fun saveConnection(url: String, token: String) {
         val normalized = url.trim().trimEnd('/')
@@ -399,6 +399,12 @@ fun WilliamsApp(context: Context) {
     suspend fun loadAll(scan: Boolean) {
         withContext(Dispatchers.IO) {
             try {
+                require(api.backendUrl.isNotBlank()) {
+                    "Укажите Backend URL в Config. 127.0.0.1 — это сам телефон, а не VPS."
+                }
+                require(api.mobileToken.length >= 32) {
+                    "Укажите Mobile API Token (минимум 32 символа)."
+                }
                 withContext(Dispatchers.Main) { refreshing = scan }
 
                 val statusJson = JSONObject(api.get("/api/v1/status"))
@@ -508,6 +514,12 @@ fun WilliamsApp(context: Context) {
             try {
                 require(apiKey.isNotBlank()) { "Введите API Key" }
                 require(apiSecret.isNotBlank()) { "Введите API Secret" }
+                require(api.backendUrl.isNotBlank()) {
+                    "Сначала сохраните Backend URL в разделе Config."
+                }
+                require(api.mobileToken.length >= 32) {
+                    "Сначала сохраните Mobile API Token (минимум 32 символа)."
+                }
 
                 val body = JSONObject()
                     .put("api_key", apiKey.trim())
