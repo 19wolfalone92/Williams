@@ -368,6 +368,9 @@ class WebSocketHub:
                 )
 
             finally:
+                if reconnect_timer is not None:
+                    reconnect_timer.cancel()
+                    reconnect_timer = None
                 self.user_connected=False
 
                 if self._user_ws is app:
