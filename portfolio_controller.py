@@ -121,12 +121,9 @@ class PortfolioController:
         return selections
 
     def select(self, has_open_position=False) -> Optional[Selection]:
-        """Backward-compatible single-best selector."""
-        if has_open_position:
-            return None
+        """Backward-compatible best selector using portfolio risk, not count."""
         selections = self.select_portfolio(open_risk_quote=0.0, open_positions=0)
         return selections[0] if selections else None
-
     def dry_run(self, has_open_position=False):
         selections = self.select_portfolio(
             open_risk_quote=0.0,
