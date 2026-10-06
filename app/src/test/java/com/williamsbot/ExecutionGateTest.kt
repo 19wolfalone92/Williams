@@ -10,6 +10,17 @@ import java.util.concurrent.atomic.AtomicInteger
 
 class ExecutionGateTest {
     @Test
+    fun differentSymbols_canReserveConcurrently() {
+        val gate = ExecutionGate()
+        assertTrue(gate.tryReserve("BTCUSDT"))
+        assertTrue(gate.tryReserve("ETHUSDT"))
+        assertEquals(2, gate.reservedCount())
+        gate.release("BTCUSDT")
+        gate.release("ETHUSDT")
+        assertEquals(0, gate.reservedCount())
+    }
+
+    @Test
     fun concurrentDuplicateIntents_onlyOneReserves() {
         val gate = ExecutionGate()
         val pool = Executors.newFixedThreadPool(2)
