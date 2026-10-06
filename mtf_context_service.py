@@ -159,6 +159,29 @@ class MultiTimeframeContextService:
         decision = "LONG" if long_ok else "SHORT" if short_ok else "NO_TRADE"
         if hypothesis_summary is not None and hypothesis_summary.decision in {"UNCERTAIN", "NO_TRADE"}:
             decision = "NO_TRADE"
+        operative_interval = interval
+        operative_parent_interval = ""
+        try:
+            with self.lock:
+                cached_frames = {
+                    tf: data.tail(self.config.wave_lookback).copy()
+                    for (sym, tf), data in self.frames.items()
+                    if sym == symbol and not data.empty
+                }
+            if len(cached_frames) >= 2:
+                mtf_report = MultiTimeframeWaveEngine(
+                    self.client,
+                    base_interval=interval,
+                    intervals=tuple(sorted(cached_frames.keys(), key=lambda x: MultiTimeframeWaveEngine.INTERVAL_SECONDS.get(x, 0))),
+                    lookback=self.config.wave_lookback,
+                    min_bars=self.config.wave_min_bars,
+                    include_micro=False,
+                ).analyse(symbol, cache=cached_frames, include_micro=False)
+                operative_interval = mtf_report.operative_interval or interval
+                operative_parent_interval = mtf_report.operative_parent_interval or ""
+        except Exception as exc:
+            log.debug("operative MTF selection %s failed: %s", symbol, exc)
+
         candle_open_ms = int(pd.Timestamp(frame.index[-1]).timestamp() * 1000)
         context = TFMarketContext(
             symbol=symbol,
@@ -190,6 +213,8 @@ class MultiTimeframeContextService:
             short_probability=float(getattr(hypothesis_summary, 'short_probability', 0.0) if hypothesis_summary else (1.0 if short_ok else 0.0)),
             no_trade_probability=float(getattr(hypothesis_summary, 'no_trade_probability', 1.0) if hypothesis_summary else 1.0),
             calibration_status=str(getattr(hypothesis_summary, 'calibration_status', 'UNCALIBRATED') if hypothesis_summary else 'UNCALIBRATED'),
+            operative_interval=operative_interval,
+            operative_parent_interval=operative_parent_interval,
             hypotheses=tuple(hypotheses),
             data_bars=len(closed),
         )
