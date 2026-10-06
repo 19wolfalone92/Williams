@@ -8,6 +8,8 @@ from strategy import calculate_indicators, config_from_env
 from telegram_bot import Telegram
 from portfolio_controller import PortfolioController
 from portfolio_trader import MultiPositionTrader
+from binance_rules import OrderMath, SymbolRules, D
+from preflight_gate import PreflightCheckService
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(message)s')
@@ -33,6 +35,8 @@ class Trader:
         ); self.tg=Telegram(os.getenv('TELEGRAM_BOT_TOKEN',''),os.getenv('TELEGRAM_CHAT_ID',''))
         self.client=BinanceSpotClient(api_key if api_key is not None else os.getenv('BINANCE_API_KEY',''), api_secret if api_secret is not None else os.getenv('BINANCE_API_SECRET',''), testnet=(os.getenv('TESTNET','true').lower()=='true') if testnet is None else testnet)
         self.filters={}; self.base_asset=self.quote_asset=None; self.recovered=False
+        self.symbol_rules = None
+        self.preflight_report = None
         self.auto_scan_enabled = os.getenv(
             'AUTO_SCAN_ENABLED', 'true'
         ).lower() == 'true'
@@ -60,7 +64,7 @@ class Trader:
         )
         self._last_auto_scan_monotonic = 0.0
 
-        self.max_open_positions = max(1, int(os.getenv('MAX_OPEN_POSITIONS', '3')))
+        self.max_open_positions = max(1, int(os.getenv('MAX_OPEN_POSITIONS', '1')))
         self.max_total_risk_pct = min(0.01, max(0.0, float(os.getenv('MAX_TOTAL_RISK_PCT', '0.01'))))
         self.max_risk_per_trade_pct = min(0.005, max(0.0, float(os.getenv('MAX_RISK_PER_TRADE_PCT', '0.005'))))
         self.active_symbol = self.symbol
@@ -73,28 +77,90 @@ class Trader:
         except Exception as e:log.error('Telegram error: %s',e)
 
     def setup(self):
-        if not self.client.testnet and os.getenv('ALLOW_LIVE','false').lower()!='true': raise RuntimeError('LIVE trading is disabled. Set TESTNET=true or explicitly ALLOW_LIVE=true.')
-        if not self.client.api_key or not self.client.api_secret: raise RuntimeError('BINANCE_API_KEY and BINANCE_API_SECRET are required.')
-        self.client.sync_time(); info=self.client.exchange_info(self.symbol); s=info['symbols'][0]; self.filters={f['filterType']:f for f in s['filters']}; self.base_asset=s['baseAsset']; self.quote_asset=s['quoteAsset']
-        self.db.log_event('INFO','startup','Trader initialized',{'symbol':self.symbol,'interval':self.interval,'testnet':self.client.testnet})
-        if self.max_open_positions > 1:
-            self._multi_position_trader = MultiPositionTrader(
+        if not self.client.testnet and os.getenv('ALLOW_LIVE','false').lower()!='true':
+            raise RuntimeError(
+                'LIVE trading is disabled. Set TESTNET=true or explicitly ALLOW_LIVE=true.'
+            )
+        if not self.client.api_key or not self.client.api_secret:
+            raise RuntimeError('BINANCE_API_KEY and BINANCE_API_SECRET are required.')
+
+        # Load the selected symbol rules before any recovery/execution work.
+        self.client.sync_time()
+        info = self.client.exchange_info(self.symbol)
+        rows = info.get('symbols', [])
+        if not rows:
+            raise RuntimeError(f'Symbol {self.symbol} not found in Binance exchange info')
+        s = rows[0]
+        self.filters = {f['filterType']: f for f in s.get('filters', [])}
+        self.base_asset = s.get('baseAsset')
+        self.quote_asset = s.get('quoteAsset')
+        self.symbol_rules = SymbolRules.from_exchange_info(info, self.symbol)
+
+        # P0: blocking Spot safety gate.  ALLOW_LIVE is never sufficient by itself.
+        gate = PreflightCheckService(
+            self.client,
+            symbols=self.auto_scan_symbols or [self.symbol],
+            max_open_positions=self.max_open_positions,
+        )
+        report = gate.verify_all()
+
+        # Known Williams orders are not treated as foreign. Reconcile them first,
+        # then rerun the gate. Unknown orders always remain a hard block.
+        if not report['ready'] and report.get('requires_reconciliation'):
+            recovery_trader = MultiPositionTrader(
                 self.client,
                 db=self.db,
-                symbols=self.auto_scan_symbols,
+                symbols=self.auto_scan_symbols or [self.symbol],
             )
-            recovery = self._multi_position_trader.recover()
+            recovery = recovery_trader.recover()
             if not recovery.get('ok'):
-                self.db.log_event(
-                    'ERROR',
-                    'multi_position_startup_blocked',
-                    'Multi-position recovery requires reconciliation before trading',
-                    recovery,
+                raise RuntimeError(
+                    'LIVE SAFETY GATE BLOCKED: reconciliation failed: '
+                    + str(recovery)
                 )
-        else:
-            self.ensure_foreign_base_balance_baseline()
-            self.recover_state()
-        self.notify(f'Williams STARTED\n{self.symbol} {self.interval}\nTESTNET={self.client.testnet}\nSTATE={self.state()}')
+            report = gate.verify_all(allow_reconciled_orders=True)
+
+        self.preflight_report = report
+        if not report['ready']:
+            raise RuntimeError(
+                'LIVE SAFETY GATE BLOCKED: ' + str(report)
+            )
+
+        self.db.log_event(
+            'INFO',
+            'preflight_pass',
+            'P0 Spot safety gate passed',
+            report,
+        )
+
+        self.db.log_event(
+            'INFO',
+            'startup',
+            'Trader initialized',
+            {
+                'symbol': self.symbol,
+                'interval': self.interval,
+                'testnet': self.client.testnet,
+            },
+        )
+
+        self.ensure_foreign_base_balance_baseline()
+        self.recover_state()
+
+        # Recovery is a second barrier: an inconsistent local/exchange state
+        # must never be followed by scanner activation.
+        if self.state() == 'RECONCILE_REQUIRED':
+            raise RuntimeError(
+                'LIVE SAFETY GATE BLOCKED: local state requires reconciliation'
+            )
+
+        self.notify(
+            f'Williams STARTED\n'
+            f'{self.symbol} {self.interval}\n'
+            f'TESTNET={self.client.testnet}\n'
+            f'SAFETY_GATE=PASS\n'
+            f'STATE={self.state()}'
+        )
 
     def switch_symbol(self, symbol):
         """
@@ -245,10 +311,16 @@ class Trader:
         if state not in STATES: raise ValueError(f'Unknown state {state}')
         self.db.state_set('position_state',state)
 
-    def normalize_qty(self,qty):
-        f=self.filters.get('LOT_SIZE') or self.filters.get('MARKET_LOT_SIZE'); step=f['stepSize'] if f else '0.000001'; min_qty=float(f['minQty']) if f else 0; q=self.client.decimal_floor(qty,step); return float(q) if float(q)>=min_qty else 0.0
-    def normalize_price(self,price):
-        f=self.filters.get('PRICE_FILTER'); tick=f['tickSize'] if f else '0.01'; return float(self.client.decimal_floor(price,tick))
+    def normalize_qty(self, qty):
+        if self.symbol_rules is None:
+            raise RuntimeError('Symbol rules are not loaded')
+        value = OrderMath.normalize_quantity(D(qty), self.symbol_rules)
+        return float(value) if OrderMath.validate_quantity(value, self.symbol_rules) else 0.0
+
+    def normalize_price(self, price):
+        if self.symbol_rules is None:
+            raise RuntimeError('Symbol rules are not loaded')
+        return float(OrderMath.normalize_price(D(price), self.symbol_rules))
     def _ensure_symbol_assets(self):
         if self.base_asset and self.quote_asset:
             return
@@ -597,98 +669,177 @@ class Trader:
         risk_quote=balance*self.risk_per_trade_pct/max(self.stop_pct,1e-9)
         return max(0.0,min(cap,risk_quote))
 
-    def market_buy(self,quote):
-        # HARD SAFETY:
-        # DRY_RUN must block BEFORE any DB mutation, entry intent,
-        # state transition, or exchange order request.
+    def market_buy(self, quote):
         if self.dry_run:
             raise RuntimeError(
-                'BUY blocked: DRY_RUN=true. '
-                'No live order execution is permitted.'
+                'BUY blocked: DRY_RUN=true. No live order execution is permitted.'
             )
-
-        # Defense in depth: these execution invariants are repeated here
-        # because market_buy() must remain safe even if a future caller skips
-        # setup() or changes the surrounding control flow.
-        if (
-            not self.client.testnet
-            and os.getenv('ALLOW_LIVE', 'false').lower() != 'true'
-        ):
-            raise RuntimeError(
-                'BUY blocked: LIVE trading requires ALLOW_LIVE=true.'
-            )
+        if not self.client.testnet and os.getenv('ALLOW_LIVE', 'false').lower() != 'true':
+            raise RuntimeError('BUY blocked: LIVE trading requires ALLOW_LIVE=true.')
         if self.max_open_positions != 1:
-            raise RuntimeError(
-                'BUY blocked: MAX_OPEN_POSITIONS must remain exactly 1.'
-            )
+            raise RuntimeError('BUY blocked: MAX_OPEN_POSITIONS must remain exactly 1.')
         if self.db.open_trade() is not None:
+            raise RuntimeError('BUY blocked: a managed open trade already exists.')
+        if self.preflight_report is None or not self.preflight_report.get('ready'):
+            raise RuntimeError('BUY blocked: P0 LIVE SAFETY GATE has not passed.')
+        if self.symbol_rules is None:
+            raise RuntimeError('BUY blocked: symbol rules are not loaded.')
+
+        quote_d = D(quote)
+        min_notional = self.symbol_rules.effective_min_notional(
+            D(os.getenv('MIN_NOTIONAL_BUFFER_PCT', '10'))
+        )
+        if quote_d <= 0 or quote_d < min_notional:
             raise RuntimeError(
-                'BUY blocked: a managed open trade already exists.'
+                f'Insufficient quote balance: quote={quote_d}, '
+                f'minNotionalWithBuffer={min_notional}'
             )
 
-        # Persist the currently selected symbol only after all immutable
-        # execution safety gates above have passed.
         self.db.state_set('active_symbol', self.symbol)
-
-        # HARD ENTRY GUARD:
-        # A BUY may only start from a completely reconciled FLAT state.
-        current_state = self.state()
-        if current_state != 'FLAT':
+        if self.state() != 'FLAT':
             raise RuntimeError(
-                f'BUY blocked: invalid state={current_state}. '
-                'Only FLAT may start a new entry.'
+                f'BUY blocked: invalid state={self.state()}. Only FLAT may start a new entry.'
             )
 
-        if quote<=0 or quote<self._min_notional():
-            raise RuntimeError(
-                f'Insufficient quote balance: quote={quote}, '
-                f'minNotional={self._min_notional()}'
-            )
-
-        cid=f'WILLV4_ENTRY_{uuid.uuid4().hex[:20]}'
-        self.db.state_set('entry_client_order_id',cid)
+        cid = f'WILLV4_ENTRY_{uuid.uuid4().hex[:20]}'
+        self.db.state_set('entry_client_order_id', cid)
         self._set_state('ENTRY_PENDING')
 
         try:
-            order=self.client.order(
+            order = self.client.order(
                 self.symbol,
                 'BUY',
                 'MARKET',
-                quote_order_qty=self.client.decimal_format(quote),
-                new_client_order_id=cid
+                quote_order_qty=self.client.decimal_format(quote_d),
+                new_client_order_id=cid,
             )
             self.db.save_order(order)
-        except Exception:
-            # Recovery can find a filled order by the durable client id.
-            self.db.log_event(
-                'ERROR',
-                'entry_request_failed',
-                'BUY request failed; recovery will reconcile by clientOrderId',
-                {'clientOrderId':cid}
+
+            # Double verification: exchange response + REST order state.
+            order_id = order.get('orderId')
+            confirmed = self.client.get_order(
+                self.symbol,
+                order_id=order_id,
+                orig_client_order_id=cid if order_id is None else None,
             )
+            status = str(confirmed.get('status', '')).upper()
+            if status != 'FILLED':
+                self._set_state('RECONCILE_REQUIRED')
+                raise RuntimeError(
+                    f'BUY not fully filled: status={status or "UNKNOWN"}'
+                )
+            order = confirmed
+
+            qty_d = D(order.get('executedQty', '0'))
+            spent_d = D(order.get('cummulativeQuoteQty', '0'))
+            avg_d = spent_d / qty_d if qty_d > 0 else D('0')
+
+            if qty_d <= 0 or qty_d < self.symbol_rules.min_qty:
+                self._set_state('RECONCILE_REQUIRED')
+                raise RuntimeError('BUY returned insufficient executed quantity')
+
+            # Confirm the actual free base balance before any OCO is attempted.
+            account = self.client.account()
+            free_base = next(
+                (
+                    D(balance.get('free', '0'))
+                    for balance in account.get('balances', [])
+                    if balance.get('asset') == self.base_asset
+                ),
+                D('0'),
+            )
+            oco_qty = OrderMath.oco_quantity(qty_d, free_base, self.symbol_rules)
+            if not OrderMath.validate_quantity(oco_qty, self.symbol_rules):
+                self._set_state('RECONCILE_REQUIRED')
+                raise RuntimeError(
+                    f'BUY filled but usable base balance is below LOT_SIZE: '
+                    f'executedQty={qty_d} free={free_base} ocoQty={oco_qty}'
+                )
+
+            self.db.state_delete('entry_client_order_id')
+            return order, float(oco_qty), float(avg_d)
+
+        except Exception:
+            if self.state() != 'RECONCILE_REQUIRED':
+                self.db.log_event(
+                    'ERROR',
+                    'entry_request_failed',
+                    'BUY request failed; recovery will reconcile by clientOrderId',
+                    {'clientOrderId': cid},
+                )
             raise
 
-        qty=float(order.get('executedQty',0))
-        spent=float(order.get('cummulativeQuoteQty',0))
-        avg=spent/qty if qty else 0
+    def place_oco(self, qty, entry_price, trade_id=None):
+        if self.symbol_rules is None:
+            raise RuntimeError('Symbol rules are not loaded')
 
-        if qty<self._min_qty():
-            raise RuntimeError('BUY returned insufficient executed quantity')
+        try:
+            account = self.client.account()
+            free_base = next(
+                (
+                    D(balance.get('free', '0'))
+                    for balance in account.get('balances', [])
+                    if balance.get('asset') == self.base_asset
+                ),
+                D('0'),
+            )
+            actual_qty = OrderMath.oco_quantity(
+                D(qty),
+                free_base,
+                self.symbol_rules,
+            )
+            if not OrderMath.validate_quantity(actual_qty, self.symbol_rules):
+                raise RuntimeError(
+                    f'OCO blocked: usable base balance below LOT_SIZE '
+                    f'(requested={qty}, free={free_base}, normalized={actual_qty})'
+                )
 
-        self.db.state_delete('entry_client_order_id')
-        return order,qty,avg
+            entry_d = D(entry_price)
+            tp_d = OrderMath.normalize_price(
+                entry_d * (D('1') + D(str(self.target_pct))),
+                self.symbol_rules,
+            )
+            sl_d = OrderMath.safe_stop_price(
+                entry_d * (D('1') - D(str(self.stop_pct))),
+                self.symbol_rules,
+            )
+            tick = self.symbol_rules.tick_size
+            sl_limit_d = OrderMath.safe_stop_price(
+                max(sl_d - tick * D('2'), tick),
+                self.symbol_rules,
+            )
 
-    def place_oco(self,qty,entry_price,trade_id=None):
-        qty=self.normalize_qty(qty)
-        if qty<=0:raise RuntimeError('Position quantity became zero after LOT_SIZE rounding')
-        tp=self.normalize_price(entry_price*(1+self.target_pct)); sl=self.normalize_price(entry_price*(1-self.stop_pct)); tick=float((self.filters.get('PRICE_FILTER') or {}).get('tickSize','0.01')); sl_limit=self.normalize_price(max(sl-tick*2,tick))
-        if not(tp>entry_price and sl<entry_price and sl_limit<sl):raise RuntimeError(f'Invalid TP/SL after tick rounding: entry={entry_price}, tp={tp}, sl={sl}, sl_limit={sl_limit}')
-        cid=f'WILLV4_OCO_{uuid.uuid4().hex[:20]}'; self._set_state('EXIT_PENDING')
-        result=self.client.create_oco_sell(self.symbol,self.client.decimal_format(qty),self.client.decimal_format(tp),self.client.decimal_format(sl),self.client.decimal_format(sl_limit),cid)
-        self.db.log_event('INFO','oco_created','Native TP/SL OCO created',result)
-        for leg in result.get('orderReports',[]):self.db.save_order(leg)
-        if trade_id is not None and result.get('orderListId') is not None:self.db.update_trade_oco(trade_id,result['orderListId'])
-        return result,tp,sl
+            if not (tp_d > entry_d and sl_d < entry_d and sl_limit_d < sl_d):
+                raise RuntimeError(
+                    f'Invalid TP/SL after tick rounding: entry={entry_d}, '
+                    f'tp={tp_d}, sl={sl_d}, sl_limit={sl_limit_d}'
+                )
+
+            buffer_pct = D(os.getenv('MIN_NOTIONAL_BUFFER_PCT', '10'))
+            if not OrderMath.validate_notional(actual_qty, tp_d, self.symbol_rules, buffer_pct):
+                raise RuntimeError('OCO TP notional is below protected minimum')
+            if not OrderMath.validate_notional(actual_qty, sl_d, self.symbol_rules, buffer_pct):
+                raise RuntimeError('OCO SL notional is below protected minimum')
+
+            cid = f'WILLV4_OCO_{uuid.uuid4().hex[:20]}'
+            self._set_state('EXIT_PENDING')
+            result = self.client.create_oco_sell(
+                self.symbol,
+                self.client.decimal_format(actual_qty),
+                self.client.decimal_format(tp_d),
+                self.client.decimal_format(sl_d),
+                self.client.decimal_format(sl_limit_d),
+                cid,
+            )
+            self.db.log_event('INFO', 'oco_created', 'Native TP/SL OCO created', result)
+            for leg in result.get('orderReports', []):
+                self.db.save_order(leg)
+            if trade_id is not None and result.get('orderListId') is not None:
+                self.db.update_trade_oco(trade_id, result['orderListId'])
+            return result, float(tp_d), float(sl_d)
+        except Exception:
+            self._set_state('RECONCILE_REQUIRED')
+            raise
 
     def has_open_position(self):return self.db.open_trade(self.symbol) is not None and self._is_meaningful_position()
     def _is_meaningful_position(self):return self.bot_base_balance()>=self._min_qty()
