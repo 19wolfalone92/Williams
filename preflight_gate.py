@@ -194,14 +194,13 @@ class PreflightCheckService:
         if not self._check_orders(report, allow_known_orders=allow_reconciled_orders):
             return report.as_dict()
 
-        if self.max_open_positions != 1:
-            report.fail(
-                "max_open_positions",
-                "automatic scanner requires exactly one position",
-                configured=self.max_open_positions,
-            )
-            return report.as_dict()
-
-        report.passed("max_open_positions", configured=self.max_open_positions)
+        # Position count is intentionally NOT a safety gate. The portfolio
+        # risk budget determines how many independent positions may exist.
+        report.passed(
+            "position_capacity",
+            mode="RISK_BUDGET",
+            max_total_risk_pct=os.getenv("MAX_TOTAL_RISK_PCT", "0.01"),
+            max_risk_per_trade_pct=os.getenv("MAX_RISK_PER_TRADE_PCT", "0.005"),
+        )
         report.ready = True
         return report.as_dict()
