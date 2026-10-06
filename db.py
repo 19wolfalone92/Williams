@@ -6,7 +6,7 @@ from contextlib import contextmanager
 
 
 class Database:
-    SCHEMA_VERSION = 4
+    SCHEMA_VERSION = 5
 
     def __init__(self, path=None):
         path = path or os.getenv('WILLIAMS_DB_PATH') or 'data/trader.sqlite3'
@@ -103,6 +103,43 @@ class Database:
             duration_seconds REAL,
             diagnosis TEXT,
             diagnosis_detail_json TEXT
+        );
+        CREATE TABLE IF NOT EXISTS market_context(
+            symbol TEXT NOT NULL,
+            interval TEXT NOT NULL,
+            version INTEGER NOT NULL,
+            candle_close_time_ms INTEGER NOT NULL,
+            context_json TEXT NOT NULL,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY(symbol, interval)
+        );
+        CREATE TABLE IF NOT EXISTS wave_state(
+            symbol TEXT NOT NULL,
+            side TEXT NOT NULL,
+            phase TEXT NOT NULL,
+            state_json TEXT NOT NULL,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY(symbol, side)
+        );
+        CREATE TABLE IF NOT EXISTS execution_intents(
+            intent_id TEXT PRIMARY KEY,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            symbol TEXT NOT NULL,
+            side TEXT NOT NULL,
+            order_type TEXT NOT NULL,
+            purpose TEXT NOT NULL,
+            required_context_versions_json TEXT NOT NULL,
+            hypothesis_id TEXT,
+            invalidation_level REAL,
+            status TEXT NOT NULL,
+            reason TEXT
+        );
+        CREATE TABLE IF NOT EXISTS execution_events(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            intent_id TEXT,
+            event TEXT NOT NULL,
+            payload_json TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_trade_journal_diagnosis
             ON trade_journal(diagnosis);
