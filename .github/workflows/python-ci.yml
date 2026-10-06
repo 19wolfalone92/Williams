@@ -25,7 +25,7 @@ jobs:
 
       - name: Compile production Python
         run: |
-          python -m py_compile             strategy.py data.py risk_engine.py db.py binance_client.py binance_rules.py preflight_gate.py             market_scanner.py wave_engine.py portfolio_scanner.py             portfolio_controller.py trader.py server.py ws_hub.py trading_config.py market_context.py execution_barrier.py wise_men.py l2_slippage.py equity_breaker.py mtf_context_service.py hypothesis_engine.py execution_accumulator.py             feature_store.py ai_shadow.py cpcv_backtester.py stress_suite.py mock_exchange.py quant_models.py shap_explain.py derivatives_features.py shadow_execution.py
+          python -m py_compile             strategy.py data.py risk_engine.py db.py binance_client.py binance_rules.py preflight_gate.py             market_scanner.py wave_engine.py portfolio_scanner.py             portfolio_controller.py trader.py server.py ws_hub.py trading_config.py market_context.py execution_barrier.py wise_men.py l2_slippage.py equity_breaker.py mtf_context_service.py hypothesis_engine.py execution_accumulator.py             feature_store.py ai_shadow.py cpcv_backtester.py stress_suite.py mock_exchange.py quant_models.py shap_explain.py derivatives_features.py shadow_execution.py quant_ml_pipeline.py
 
       - name: Run full static safety audit
         run: python full_safety_audit.py
