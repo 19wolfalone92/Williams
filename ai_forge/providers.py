@@ -28,8 +28,8 @@ class OpenAIProvider(Provider):
         data = _post_json(f"{self.cfg.base_url}/v1/responses", {"Authorization": f"Bearer {self.cfg.api_key}"}, {
             "model": self.cfg.model, "store": False,
             "input": [
-                {"role":"system","content":[{"type":"input_text","text":SYSTEM_PROMPT}]},
-                {"role":"user","content":[{"type":"input_text","text":build_user_prompt(task,context)}]}
+                {"role":"system","content":SYSTEM_PROMPT},
+                {"role":"user","content":build_user_prompt(task,context)}
             ]}, self.timeout)
         if isinstance(data.get("output_text"), str) and data["output_text"].strip():
             return data["output_text"]
@@ -56,7 +56,7 @@ class GeminiProvider(Provider):
             "systemInstruction":{"parts":[{"text":SYSTEM_PROMPT}]},
             "contents":[{"role":"user","parts":[{"text":build_user_prompt(task,context)}]}],
             "generationConfig":{"temperature":0.1,"maxOutputTokens":1200,"responseMimeType":"application/json"}
-        }, self.timeout, {"key":self.cfg.api_key})
+        }, self.timeout, headers={"x-goog-api-key": self.cfg.api_key, "x-goog-api-client": "williams-ai-forge/0.1.0"})
         parts=data.get("candidates",[{}])[0].get("content",{}).get("parts",[])
         text="\n".join(p.get("text","") for p in parts if isinstance(p,dict) and isinstance(p.get("text"),str))
         if not text: raise ProviderError("no text in response")
@@ -66,7 +66,7 @@ def create_providers(configs, timeout):
     out=[]
     for cfg in configs:
         if not cfg.configured: continue
-        if cfg.name=="GPT": out.append(OpenAIProvider(cfg,timeout))
+        if cfg.name in {"GPT","Grok"}: out.append(OpenAIProvider(cfg,timeout))
         elif cfg.name=="Gemini": out.append(GeminiProvider(cfg,timeout))
         else: out.append(ChatCompletionsProvider(cfg,timeout))
     return out
