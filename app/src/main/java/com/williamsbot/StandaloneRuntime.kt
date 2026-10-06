@@ -576,7 +576,7 @@ private class NativeEngine(
         positionList().forEach { if (it.entryOrderId.isNotBlank()) orderIds.add(it.entryOrderId) }
         synchronized(pendingEntries) {
             pendingEntries.values.forEach { if (it.clientOrderId.isNotBlank()) {
-                auditStore.executionEvents(it.clientOrderId).forEach { event ->
+                auditStore.executionEventsForClientOrderId(it.clientOrderId).forEach { event ->
                     val id = event.optString("i")
                     if (id.isNotBlank()) orderIds.add(id)
                 }
