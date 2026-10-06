@@ -2286,7 +2286,7 @@ private class NativeEngine(
                     if (
                         !result.success &&
                         !reconcileRequired &&
-                        positions[result.symbol] == null &&
+                        positionList().none { it.symbol == result.symbol } &&
                         synchronized(pendingEntries) {
                             !pendingEntries.containsKey(result.symbol)
                         } &&
