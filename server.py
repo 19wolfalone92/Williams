@@ -1026,12 +1026,30 @@ def portfolio():
     positions = []
     for trade in open_rows:
         try:
-            positions.append(_position_payload(t, trade))
+            raw = _position_payload(t, trade)
+            current = float(raw.get('current_price') or 0.0)
+            qty = float(raw.get('quantity') or 0.0)
+            position_value = current * qty if current > 0 and qty > 0 else 0.0
+            positions.append({
+                **raw,
+                'avg_entry_price': raw.get('entry_price'),
+                'stop_loss': raw.get('stop_price'),
+                'take_profit': raw.get('take_profit_price'),
+                'position_value_usdt': position_value,
+                'allocation_pct': (
+                    position_value / total_equity_usdt * 100.0
+                    if total_equity_usdt > 0 else 0.0
+                ),
+                'unrealized_pnl_usdt': float(raw.get('unrealized_pnl') or 0.0),
+                'unrealized_pnl_pct': float(raw.get('unrealized_pnl_pct') or 0.0),
+                'oco_list_id': raw.get('exit_order_list_id'),
+                'oco_list_client_id': raw.get('exit_order_list_client_id'),
+            })
         except Exception as exc:
             state.last_error = f'portfolio-position: {exc}'
 
     unrealized_pnl_usdt = sum(
-        float(p.get('unrealized_pnl') or 0.0) for p in positions
+        float(p.get('unrealized_pnl_usdt') or 0.0) for p in positions
     )
 
     realized_pnl_usdt = 0.0
