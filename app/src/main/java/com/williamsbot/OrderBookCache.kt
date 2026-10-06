@@ -152,7 +152,7 @@ class OrderBookCache(
     ): Pair<Double, Double>? {
         if (quoteNotional <= 0.0) return null
         val book = books[symbol.uppercase()] ?: return null
-        if (book.lastUpdateId < 0L) return null
+        if (!book.valid || book.lastUpdateId < 0L) return null
         if (System.currentTimeMillis() - book.updatedAtMs > maxAgeMs) return null
 
         val asks = book.asks.entries
@@ -187,9 +187,9 @@ class OrderBookCache(
             put("symbols", JSONArray().apply {
                 books.keys.sorted().forEach { put(it) }
             })
-            put("ready", books.values.count { it.lastUpdateId >= 0L })
+            put("ready", books.values.count { it.valid && it.lastUpdateId >= 0L })
             put("fresh", books.values.count {
-                it.lastUpdateId >= 0L && now - it.updatedAtMs <= 1500L
+                it.valid && it.lastUpdateId >= 0L && now - it.updatedAtMs <= 1500L
             })
             put("max_age_ms", 1500)
             put("books", JSONObject().apply {
