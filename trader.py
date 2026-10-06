@@ -89,7 +89,85 @@ class Trader:
         try:self.tg.send(text)
         except Exception as e:log.error('Telegram error: %s',e)
 
+    def _setup_multi_position_mode(self):
+        """Initialize autonomous Spot portfolio mode without legacy single-position state gates."""
+        if not self.client.testnet and os.getenv('ALLOW_LIVE','false').lower() != 'true':
+            raise RuntimeError(
+                'LIVE trading is disabled. Set TESTNET=true or explicitly ALLOW_LIVE=true.'
+            )
+        if not self.client.api_key or not self.client.api_secret:
+            raise RuntimeError('BINANCE_API_KEY and BINANCE_API_SECRET are required.')
+
+        self.client.sync_time()
+
+        # Dynamic AUTO/ALL mode is validated against the current configured
+        # seed symbol; the full Spot/USDT universe is validated by MarketScanner.
+        gate = PreflightCheckService(
+            self.client,
+            symbols=self.auto_scan_symbols or [self.symbol],
+            max_open_positions=0,
+        )
+        report = gate.verify_all()
+
+        if not report['ready'] and report.get('requires_reconciliation'):
+            recovery = MultiPositionTrader(
+                self.client,
+                db=self.db,
+                symbols=self.auto_scan_symbols,
+            ).recover()
+            if not recovery.get('ok'):
+                raise RuntimeError(
+                    'LIVE SAFETY GATE BLOCKED: reconciliation failed: '
+                    + str(recovery)
+                )
+            report = gate.verify_all(allow_reconciled_orders=True)
+
+        self.preflight_report = report
+        if not report['ready']:
+            raise RuntimeError('LIVE SAFETY GATE BLOCKED: ' + str(report))
+
+        self._multi_position_trader = MultiPositionTrader(
+            self.client,
+            db=self.db,
+            symbols=self.auto_scan_symbols,
+        )
+        recovery = self._multi_position_trader.recover()
+        if not recovery.get('ok'):
+            raise RuntimeError(
+                'LIVE SAFETY GATE BLOCKED: canonical reconciliation failed: '
+                + str(recovery)
+            )
+
+        self.recovered = True
+        positions = self._multi_position_trader.open_positions()
+        self.db.log_event(
+            'INFO',
+            'startup_multi_position',
+            'Autonomous Spot multi-position runtime initialized',
+            {
+                'testnet': self.client.testnet,
+                'max_open_positions': self.max_open_positions,
+                'max_total_risk_pct': self.max_total_risk_pct,
+                'max_risk_per_trade_pct': self.max_risk_per_trade_pct,
+                'open_positions': len(positions),
+                'universe_mode': 'DYNAMIC_USDT_SPOT' if not self.auto_scan_symbols else 'CONFIGURED',
+            },
+        )
+        self.notify(
+            f'Williams STARTED\\n'
+            f'AUTO-SCAN MULTI-POSITION\\n'
+            f'TESTNET={self.client.testnet}\\n'
+            f'MAX_TOTAL_RISK={self.max_total_risk_pct:.2%}\\n'
+            f'MAX_PER_TRADE={self.max_risk_per_trade_pct:.2%}\\n'
+            f'OPEN_POSITIONS={len(positions)}\\n'
+            f'SAFETY_GATE=PASS'
+        )
+
     def setup(self):
+        if self.auto_scan_enabled:
+            self._setup_multi_position_mode()
+            return
+
         if not self.client.testnet and os.getenv('ALLOW_LIVE','false').lower()!='true':
             raise RuntimeError(
                 'LIVE trading is disabled. Set TESTNET=true or explicitly ALLOW_LIVE=true.'
