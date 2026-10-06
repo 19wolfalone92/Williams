@@ -20,6 +20,7 @@ import java.net.Socket
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 import java.util.Locale
+import java.util.ArrayDeque
 import java.util.Calendar
 import java.util.concurrent.Callable
 import java.util.concurrent.Executors
@@ -148,6 +149,12 @@ private data class SymbolRules(
     val maxPosition: Double
 )
 
+private data class TradeFlowSample(
+    val timeMs: Long,
+    val quoteVolume: Double,
+    val aggressiveBuy: Boolean
+)
+
 private data class BaseAnalysis(
     val symbol: String,
     val candles: List<CandleN>,
@@ -160,6 +167,8 @@ private data class BaseAnalysis(
     val riskReward: Double,
     val spreadPct: Double,
     val breakoutDistancePct: Double,
+    val obi: Double? = null,
+    val tradeFlowImbalance: Double? = null,
     val reason: String
 )
 
@@ -448,7 +457,8 @@ private class NativeEngine(
             auditStore.recordState(from, to, reason)
         }
     )
-
+    private val tradingEventLoop = TradingEventLoop()
+    
     private val primarySymbol = "BTCUSDT"
     private val interval = "1h"
 
@@ -462,6 +472,7 @@ private class NativeEngine(
     private val liveCandleCache = java.util.concurrent.ConcurrentHashMap<String, MutableList<CandleN>>()
     private val indicatorSnapshots = java.util.concurrent.ConcurrentHashMap<String, JSONObject>()
     private val livePrices = java.util.concurrent.ConcurrentHashMap<String, Double>()
+    private val tradeFlow = java.util.concurrent.ConcurrentHashMap<String, ArrayDeque<TradeFlowSample>>()
     private val lastUserEventTimeByType = java.util.concurrent.ConcurrentHashMap<String, Long>()
     private var marketSocket: WebSocket? = null
     private val orderBookCache = OrderBookCache()
@@ -760,6 +771,7 @@ private class NativeEngine(
             .put("history_warmup_running", historyWarmupRunning)
             .put("history_ready", historyReady)
             .put("l2", orderBookCache.status())
+            .put("android_runtime", AndroidRuntimeHealth.snapshot(context))
             .put("history", historyStore.status(coreSymbols, analysisFrames))
             .put("rate_limits", rateGuard.snapshot())
             .put("core_symbols", JSONArray(coreSymbols))
@@ -1348,7 +1360,8 @@ private class NativeEngine(
                     symbol.lowercase(Locale.US) + "@kline_" + frame
                 } + listOf(
                     symbol.lowercase(Locale.US) + "@bookTicker",
-                    symbol.lowercase(Locale.US) + "@depth@100ms"
+                    symbol.lowercase(Locale.US) + "@depth@100ms",
+                    symbol.lowercase(Locale.US) + "@aggTrade"
                 )
             }.joinToString("/")
 
@@ -1418,6 +1431,7 @@ private class NativeEngine(
         val data = envelope.optJSONObject("data") ?: return
         when (data.optString("e")) {
             "depthUpdate" -> consumeDepthUpdate(data)
+            "aggTrade" -> consumeAggTrade(data)
             "kline" -> consumeKlineStream(envelope)
             "bookTicker" -> {
                 val symbol = data.optString("s").uppercase(Locale.US)
@@ -1442,6 +1456,50 @@ private class NativeEngine(
             getBody("/api/v3/depth?symbol=" + symbol + "&limit=100")
         )
         orderBookCache.seed(symbol, book)
+    }
+
+    private fun consumeAggTrade(data: JSONObject) {
+        val symbol = data.optString("s").uppercase(Locale.US)
+        if (symbol !in coreSymbols) return
+        val price = data.optString("p").toDoubleOrNull() ?: return
+        val qty = data.optString("q").toDoubleOrNull() ?: return
+        val time = data.optLong("T", System.currentTimeMillis())
+        val quote = price * qty
+        if (quote <= 0.0) return
+        val queue = tradeFlow.computeIfAbsent(symbol) { ArrayDeque() }
+        synchronized(queue) {
+            queue.addLast(
+                TradeFlowSample(
+                    timeMs = time,
+                    quoteVolume = quote,
+                    // Binance m=true means the buyer was the maker, so the
+                    // aggressive side was the seller.
+                    aggressiveBuy = !data.optBoolean("m", false)
+                )
+            )
+            val cutoff = time - 5000L
+            while (queue.isNotEmpty() && queue.peekFirst().timeMs < cutoff) {
+                queue.removeFirst()
+            }
+            while (queue.size > 2000) queue.removeFirst()
+        }
+    }
+
+    private fun tradeFlowImbalance(symbol: String): Double? {
+        val queue = tradeFlow[symbol.uppercase()] ?: return null
+        val now = System.currentTimeMillis()
+        var buy = 0.0
+        var sell = 0.0
+        synchronized(queue) {
+            while (queue.isNotEmpty() && queue.peekFirst().timeMs < now - 5000L) {
+                queue.removeFirst()
+            }
+            queue.forEach {
+                if (it.aggressiveBuy) buy += it.quoteVolume else sell += it.quoteVolume
+            }
+        }
+        val total = buy + sell
+        return if (total > 0.0) (buy - sell) / total else null
     }
 
     private fun consumeDepthUpdate(data: JSONObject) {
@@ -2359,6 +2417,10 @@ private class NativeEngine(
     }
 
     private fun handleUserEvent(event: JSONObject) {
+        tradingEventLoop.post { handleUserEventSerialized(event) }
+    }
+
+    private fun handleUserEventSerialized(event: JSONObject) {
         lastUserEventMs = System.currentTimeMillis()
         auditStore.recordUserEvent(event)
         executionAccumulator.accept(event)
@@ -3892,6 +3954,8 @@ private class NativeEngine(
                     .put("nested_w3_parent_w5", candidate.wave.nestedW3ParentW5)
                     .put("wave_alligator_bullish", candidate.wave.alligatorBullish)
                     .put("wave_ao_positive", candidate.wave.aoPositive)
+                    .put("obi", candidate.obi)
+                    .put("trade_flow_imbalance", candidate.tradeFlowImbalance)
             TradeJournal.recordEntry(
                 prefs = prefs,
                 symbol = candidate.symbol,
@@ -4388,6 +4452,8 @@ private class NativeEngine(
                 riskReward = 0.0,
                 spreadPct = spread,
                 breakoutDistancePct = 0.0,
+                obi = null,
+                tradeFlowImbalance = null,
                 reason = "Недостаточно свечей"
             )
         }
@@ -4461,7 +4527,7 @@ private class NativeEngine(
                 atrScore +
                 volumeScore
 
-        val strictSignal =
+        var strictSignal =
             bullish &&
                 aoPositive &&
                 breakout &&
@@ -4474,6 +4540,16 @@ private class NativeEngine(
         }
         if (preliminaryWave.aoBearishDivergence) {
             score -= 12.0
+        }
+
+        val obi = orderBookCache.imbalance(symbol)
+        val flowImbalance = tradeFlowImbalance(symbol)
+        if (obi != null) {
+            score += (obi * 5.0).coerceIn(-5.0, 5.0)
+            if (strictSignal && obi <= -0.80) strictSignal = false
+        }
+        if (flowImbalance != null) {
+            score += (flowImbalance * 4.0).coerceIn(-4.0, 4.0)
         }
 
         score = score.coerceIn(0.0, 100.0)
@@ -4508,6 +4584,8 @@ private class NativeEngine(
             riskReward = rrValue,
             spreadPct = spread,
             breakoutDistancePct = breakoutDistance,
+            obi = obi,
+            tradeFlowImbalance = flowImbalance,
             reason = reason
         )
     }
@@ -4723,6 +4801,8 @@ private class NativeEngine(
             score = score,
             signal = finalSignal,
             htfCandidate = htfConfirmed,
+            obi = baseCandidate.obi,
+            tradeFlowImbalance = baseCandidate.tradeFlowImbalance,
             wave = setup.copy(
                 confidence = min(
                     100.0,
@@ -4782,6 +4862,8 @@ private class NativeEngine(
             .put("ao_bullish_divergence", wave.aoBullishDivergence)
             .put("atr_pct", candidate.atrPct)
             .put("spread_pct", candidate.spreadPct)
+            .put("obi", candidate.obi)
+            .put("trade_flow_imbalance", candidate.tradeFlowImbalance)
             .put("htf_confirmed", candidate.htfCandidate)
             .put("setup_state", setupState)
             .put("reason", candidate.reason)
