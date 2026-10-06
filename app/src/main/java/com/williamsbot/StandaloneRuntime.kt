@@ -185,7 +185,6 @@ private class StandaloneServer(private val context: Context) {
     private val historyStore = MarketHistoryStore(context)
     private val rateGuard = BinanceRateGuard()
     private val auditStore = TradingAuditStore(context)
-    private val executionAccumulator = ExecutionAccumulator()
     private val stateMachine = TradingStateMachine(
         onTransition = { from, to, reason ->
             auditStore.recordState(from, to, reason)
@@ -443,6 +442,7 @@ private class NativeEngine(
     private val historyStore = MarketHistoryStore(context)
     private val rateGuard = BinanceRateGuard()
     private val auditStore = TradingAuditStore(context)
+    private val executionAccumulator = ExecutionAccumulator()
     private val stateMachine = TradingStateMachine(
         onTransition = { from, to, reason ->
             auditStore.recordState(from, to, reason)
