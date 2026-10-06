@@ -224,7 +224,7 @@ data class Status(
     val dailyPnlUsdt: Double = 0.0,
     val tradingMode: String = "ACTIVE",
     val openPositions: Int = 0,
-    val maxOpenPositions: Int = 1,
+    val maxOpenPositions: Int = 2,
     val reservedRiskPct: Double = 0.0,
     val maxTotalRiskPct: Double = 0.01,
     val reconcileRequired: Boolean = false,
@@ -244,7 +244,7 @@ data class Status(
     val executionKillLatched: Boolean = false,
     val p0GatePassed: Boolean = false,
     val p0GateReason: String = "NOT_READY",
-    val maxOpenPositionsLocked: Boolean = true,
+    val maxOpenPositionsLocked: Boolean = false,
     val unresolvedSymbols: List<String> = emptyList(),
     val pendingEntrySymbols: List<String> = emptyList()
 )
@@ -880,7 +880,7 @@ private fun SystemHealthBar(status: Status) {
             StatusDot("WSS", if (status.marketWsConnected && !status.userStreamSyncRequired) AppColors.green else AppColors.amber)
             StatusDot("EXEC", if (status.executionEnabled && !status.reconcileRequired) AppColors.green else AppColors.red)
             Spacer(Modifier.weight(1f))
-            Text("1 POS MAX • LOCKED", color = AppColors.textMuted, style = MaterialTheme.typography.labelSmall)
+            Text("RISK BUDGET • ${status.maxOpenPositions} POS", color = AppColors.textMuted, style = MaterialTheme.typography.labelSmall)
         }
     }
 }
@@ -2680,7 +2680,7 @@ private fun parseStatus(json: JSONObject): Status {
             executionContract?.optBoolean("kill_switch_latched", false) ?: false,
         p0GatePassed = json.optBoolean("p0_gate_passed", executionContract?.optBoolean("execution_enabled", false) ?: false),
         p0GateReason = json.optString("p0_gate_reason", if (executionContract?.optBoolean("reconciliation_required", true) == true) "RECONCILE_REQUIRED" else "NOT_READY"),
-        maxOpenPositionsLocked = json.optBoolean("max_open_positions_locked", true)
+        maxOpenPositionsLocked = json.optBoolean("max_open_positions_locked", false)
     )
 }
 
