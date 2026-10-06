@@ -2624,7 +2624,7 @@ private fun parseStatus(json: JSONObject): Status {
         maxOpenPositions =
             json.optInt(
                 "max_open_positions",
-                3
+                 2
             ),
         reservedRiskPct =
             json.optDouble(
