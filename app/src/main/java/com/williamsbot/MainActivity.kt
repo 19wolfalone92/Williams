@@ -2379,7 +2379,13 @@ private fun SettingsScreen(
                         Text("Сохранить подключение")
                     }
 
-                    InfoRow("Execution authority", "Backend")
+                    InfoRow(
+                        "Execution authority",
+                        if (backendUrl == "http://127.0.0.1:18080" ||
+                            backendUrl == "http://localhost:18080"
+                        ) "Phone Native Trading Core"
+                        else "Remote Backend"
+                    )
                     InfoRow("Scanner universe", "Top 50 liquid USDT • 5 core WSS")
                     InfoRow("MTF", "1D / 4H / 1H / 15M")
                 }
