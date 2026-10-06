@@ -112,7 +112,7 @@ class MarketScanner:
         )
 
         self.scan_all_usdt = True  # dynamically discover liquid Spot/USDT pairs
-        self.scan_max_symbols = max(1, int(os.getenv("SCAN_MAX_SYMBOLS", "50")))
+        self.scan_max_symbols = max(0, int(os.getenv("SCAN_MAX_SYMBOLS", "50")))
         self.exclude_leveraged_tokens = (
             os.getenv("EXCLUDE_LEVERAGED_TOKENS", "true").lower() == "true"
         )
