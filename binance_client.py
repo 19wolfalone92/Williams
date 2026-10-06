@@ -36,6 +36,7 @@ class BinanceSpotClient:
         delays = (0.5, 1.0, 2.0)
 
         last_exc = None
+        time_resync_attempted = False
 
         for attempt in range(max_attempts):
             now = time.time()
@@ -43,14 +44,14 @@ class BinanceSpotClient:
 
             # Proactive governor: slow down before Binance returns 429/418.
             if self.request_weight_limit_1m > 0:
-                ratio = self.last_used_weight_1m / float(self.request_weight_limit_1m)
+                ratio = Decimal(str(self.last_used_weight_1m)) / Decimal(str(self.request_weight_limit_1m))
                 if ratio >= 0.98:
                     wait = max(wait, 2.0)
                 elif ratio >= 0.90:
                     wait = max(wait, 0.25)
 
             if self.order_limit_1m > 0:
-                order_ratio = self.last_order_count_1m / float(self.order_limit_1m)
+                order_ratio = Decimal(str(self.last_order_count_1m)) / Decimal(str(self.order_limit_1m))
                 if order_ratio >= 0.95:
                     wait = max(wait, 1.0)
 
@@ -132,6 +133,18 @@ class BinanceSpotClient:
             except ValueError:
                 payload = {'code': r.status_code, 'msg': r.text}
 
+            # -1021 means Binance rejected the request because of timestamp.
+            # The matching engine did not accept it, so one time-sync retry is safe.
+            if (
+                signed
+                and not time_resync_attempted
+                and isinstance(payload, dict)
+                and payload.get('code') == -1021
+            ):
+                time_resync_attempted = True
+                self.sync_time()
+                continue
+
             if r.status_code >= 400 or (
                 isinstance(payload, dict)
                 and payload.get('code', 0) < 0
@@ -208,6 +221,65 @@ class BinanceSpotClient:
             'Spot Testnet does not support /sapi/v1/userListenToken; '
             'use userDataStream.subscribe.signature'
         )
+    def order_safe(self, symbol, side, type_, *, quantity=None, quote_order_qty=None,
+                   price=None, stop_price=None, time_in_force=None,
+                   new_client_order_id=None):
+        """Place one order and reconcile ambiguous transport failures first.
+
+        The wrapper requires a clientOrderId. POST/5xx/timeout is never blindly
+        retried because Binance may already have accepted the order.
+        """
+        if not new_client_order_id:
+            raise ValueError("order_safe requires new_client_order_id")
+
+        try:
+            result = self.order(
+                symbol, side, type_,
+                quantity=quantity,
+                quote_order_qty=quote_order_qty,
+                price=price,
+                stop_price=stop_price,
+                time_in_force=time_in_force,
+                new_client_order_id=new_client_order_id,
+            )
+        except BinanceAPIError as exc:
+            if not exc.unknown_execution:
+                raise
+            try:
+                existing = self.get_order(
+                    symbol,
+                    orig_client_order_id=new_client_order_id,
+                )
+            except BinanceAPIError as reconcile_exc:
+                raise BinanceAPIError(
+                    f"Order execution is UNKNOWN for {symbol}; "
+                    f"clientOrderId={new_client_order_id}. "
+                    "Reconciliation is required before retry.",
+                    unknown_execution=True,
+                    status_code=exc.status_code,
+                    payload=exc.payload,
+                ) from reconcile_exc
+
+            status = str(existing.get("status", "")).upper()
+            if status in {
+                "NEW", "PARTIALLY_FILLED", "FILLED",
+                "PENDING_CANCEL", "PENDING_NEW",
+            }:
+                return existing
+            raise BinanceAPIError(
+                f"Existing Binance order is terminal after ambiguous submission: "
+                f"{status or 'UNKNOWN'}",
+                payload=existing,
+            ) from exc
+
+        status = str(result.get("status", "")).upper()
+        if status in {"REJECTED", "EXPIRED", "CANCELED"}:
+            raise BinanceAPIError(
+                f"Binance order returned terminal failure: {status}",
+                payload=result,
+            )
+        return result
+
     def order(self,symbol,side,type_,quantity=None,quote_order_qty=None,price=None,stop_price=None,time_in_force=None,new_client_order_id=None):
         p={'symbol':symbol,'side':side,'type':type_,'newOrderRespType':'FULL'}
         if quantity is not None:p['quantity']=quantity
