@@ -45,10 +45,15 @@ class PortfolioController:
             try:
                 entry_price = float(self.client.ticker_price(candidate.symbol)["price"])
                 atr = entry_price * candidate.atr_pct
+                info = self.client.exchange_info(candidate.symbol)
+                filters = {f["filterType"]: f for f in info.get("symbols", [{}])[0].get("filters", [])}
+                notional_filter = filters.get("NOTIONAL") or filters.get("MIN_NOTIONAL") or {}
+                min_notional = float(notional_filter.get("minNotional", 0) or 0)
                 risk = self.risk_engine.analyse(
                     symbol=candidate.symbol,
                     entry_price=entry_price,
                     atr=atr,
+                    min_notional=min_notional,
                     signal_strength=candidate.signal_strength,
                     htf_confirmed=candidate.htf_confirmed,
                     spread_pct=candidate.spread_pct,
