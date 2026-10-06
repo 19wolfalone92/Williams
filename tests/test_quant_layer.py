@@ -53,7 +53,14 @@ def test_feature_bars_store_and_shadow():
         },
     }
     vector = build_market_feature_vector(
-        "BTCUSDT", "1h", candles, wave_report=wave, order_book=book, trades=trades
+        "BTCUSDT",
+        "1h",
+        candles,
+        wave_report=wave,
+        order_book=book,
+        trades=trades,
+        derivatives={"funding_rate": 0.001, "open_interest": 1000, "long_short_ratio": 1.2},
+        previous_derivatives={"funding_rate": 0.0005, "open_interest": 900},
     )
     assert vector.schema_version == 1
     assert -1.0 <= vector.obi <= 1.0
@@ -66,6 +73,8 @@ def test_feature_bars_store_and_shadow():
     assert vector.target == 107.5
     assert vector.wave_tf_agreement == 1.0
     assert vector.extra["bar_source"] == "trade_stream"
+    assert vector.funding_rate_delta == 0.0005
+    assert vector.open_interest_delta > 0
     with tempfile.NamedTemporaryFile(suffix=".sqlite3") as f:
         store = FeatureStore(f.name)
         store.save_feature(vector)
@@ -73,6 +82,8 @@ def test_feature_bars_store_and_shadow():
         intent = ShadowDecisionEngine().evaluate(vector, williams_signal=True, htf_confirmed=True)
         store.save_shadow(intent.to_dict())
         assert store.recent_shadow(1)[0]["action"] in {"LONG", "HOLD"}
+        store.save_shadow_execution({"symbol": "BTCUSDT", "timestamp_ms": 1, "executed": False})
+        assert store.recent_shadow_executions(1)[0]["symbol"] == "BTCUSDT"
 
 
 def test_regime_baseline_is_deterministic():
