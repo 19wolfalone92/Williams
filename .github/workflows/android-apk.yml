@@ -227,7 +227,6 @@ jobs:
           gradle-version: ${{ env.GRADLE_VERSION }}
           validate-wrappers: false
       - name: Run lint with hard shell timeout
-        continue-on-error: true
         run: |
           set -o pipefail
           timeout 600s gradle --no-daemon :app:lintDebug --stacktrace
