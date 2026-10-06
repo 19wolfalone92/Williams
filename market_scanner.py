@@ -168,6 +168,7 @@ class MarketScanner:
         ).lower() == "true"
         self.feature_store = FeatureStore() if self.quant_enabled else None
         self.shadow_engine = ShadowDecisionEngine()
+        self.ai_shadow_enabled = os.getenv("AI_SHADOW_ENABLED", "true").lower() == "true"
 
     def _load_symbols(self):
         raw = os.getenv("SCAN_SYMBOLS", "").strip()
@@ -538,14 +539,17 @@ class MarketScanner:
                     quant_adjustment -= 2.0 * float(vector.regime_score)
                 quant_adjustment += self._clamp(vector.obi * 1.5, -1.5, 1.5)
 
-            shadow = self.shadow_engine.evaluate(
-                vector,
-                williams_signal=bool(candidate.signal),
-                htf_confirmed=bool(report.htf_confirmed),
-            )
+            shadow = None
+            if self.ai_shadow_enabled:
+                shadow = self.shadow_engine.evaluate(
+                    vector,
+                    williams_signal=bool(candidate.signal),
+                    htf_confirmed=bool(report.htf_confirmed),
+                )
             if self.feature_store is not None:
                 self.feature_store.save_feature(vector)
-                journal_shadow_decision(self.feature_store, shadow, vector)
+                if shadow is not None:
+                    journal_shadow_decision(self.feature_store, shadow, vector)
         except Exception as exc:
             log.warning("Quant enrichment unavailable for %s: %s", candidate.symbol, exc)
 
