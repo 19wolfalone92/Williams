@@ -50,8 +50,8 @@ class OrderBookCacheTest {
             "ETHUSDT",
             JSONObject()
                 .put("lastUpdateId", 50)
-                .put("bids", levels("99", "1"))
-                .put("asks", levels("101", "1"))
+                .put("bids", levels("99" to "1"))
+                .put("asks", levels("101" to "1"))
         )
 
         assertEquals(
