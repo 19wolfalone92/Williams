@@ -243,10 +243,29 @@ private class StandaloneServer(private val context: Context) {
     }
 
     fun autostart() {
-        if (
-            prefs.getBoolean("auto_run", false)
-        ) {
+        if (prefs.getBoolean("auto_run", false)) {
             e().start()
+        }
+    }
+
+    fun bootstrap(context: Context) {
+        start(context)
+        Thread({
+            try {
+                if (key().isNotBlank() && secret().isNotBlank()) {
+                    runCatching { e().recover() }
+                }
+                if (prefs.getBoolean("auto_run", false) &&
+                    !e().isTradingBlocked()
+                ) {
+                    runCatching { e().start() }
+                }
+            } catch (_: Throwable) {
+                // Concrete runtime errors remain visible through /status.
+            }
+        }, "williams-autonomous-bootstrap").apply {
+            isDaemon = true
+            start()
         }
     }
 
@@ -783,7 +802,9 @@ private class NativeEngine(
             .put("ok", true)
             .put("service", "williams-native")
             .put("version", "4.20.1")
-            .put("standalone", true)
+.put("standalone", true)
+            .put("mode", "AUTONOMOUS")
+            .put("runtime_ready", true)
             .put("websocket", marketSocketConnected)
             .put("market_stream_last_event_ms", marketSocketLastEventMs)
             .put("user_stream_connected", userStreamConnected)
@@ -1022,6 +1043,9 @@ private class NativeEngine(
             .put("started", true)
             .put("interval_seconds", 15)
     }
+
+    fun isTradingBlocked(): Boolean =
+        reconcileRequired || killLatched || userStreamSyncRequired
 
     fun stop(): JSONObject {
         running = false
