@@ -11,6 +11,7 @@ from strategy import calculate_indicators, config_from_env
 from wave_engine import DIRECTION_NEUTRAL, MultiTimeframeWaveEngine
 from feature_store import FeatureStore, build_market_feature_vector
 from ai_shadow import ShadowDecisionEngine, journal_shadow_decision
+from shadow_execution import ShadowExecutionSimulator
 
 
 log = logging.getLogger("williams-scanner")
@@ -169,6 +170,11 @@ class MarketScanner:
         self.feature_store = FeatureStore() if self.quant_enabled else None
         self.shadow_engine = ShadowDecisionEngine()
         self.ai_shadow_enabled = os.getenv("AI_SHADOW_ENABLED", "true").lower() == "true"
+        self.shadow_execution_enabled = os.getenv("SHADOW_EXECUTION_ENABLED", "true").lower() == "true"
+        self.shadow_execution = ShadowExecutionSimulator(
+            fee_pct=float(os.getenv("SHADOW_FEE_PCT", "0.001")),
+            tick_pct=float(os.getenv("SHADOW_TICK_PCT", "0.0001")),
+        )
 
     def _load_symbols(self):
         raw = os.getenv("SCAN_SYMBOLS", "").strip()
@@ -550,6 +556,14 @@ class MarketScanner:
                 self.feature_store.save_feature(vector)
                 if shadow is not None:
                     journal_shadow_decision(self.feature_store, shadow, vector)
+                    if self.shadow_execution_enabled:
+                        expected_reward = max(0.0, float(candidate.risk_reward) * max(float(candidate.risk_pct), 0.0) / 100.0)
+                        fill = self.shadow_execution.simulate(
+                            shadow,
+                            reference_price=vector.price,
+                            expected_reward_pct=expected_reward,
+                        )
+                        self.feature_store.save_shadow_execution(fill.to_dict())
         except Exception as exc:
             log.warning("Quant enrichment unavailable for %s: %s", candidate.symbol, exc)
 
