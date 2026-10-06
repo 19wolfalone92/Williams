@@ -1485,9 +1485,9 @@ private class NativeEngine(
                     .get()
                     .build()
             }
-            rateGuard.beforeRequest()
+            rateGuard.beforeRequest(isOrder = false)
             http.newCall(request).execute().use { response ->
-                rateGuard.observe(response.headers, response.code)
+                rateGuard.observe(response.headers, response.code, isOrder = false)
                 lastBody = response.body?.string() ?: "{}"
                 auditStore.recordRestCall(
                     method,
@@ -1554,9 +1554,9 @@ private class NativeEngine(
                 .get()
                 .build()
 
-            rateGuard.beforeRequest()
+            rateGuard.beforeRequest(isOrder = method != "GET")
             http.newCall(request).execute().use { response ->
-                rateGuard.observe(response.headers, response.code)
+                rateGuard.observe(response.headers, response.code, isOrder = method != "GET")
                 lastBody = response.body?.string() ?: "{}"
                 auditStore.recordRestCall(
                     "GET",
