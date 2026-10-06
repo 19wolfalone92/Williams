@@ -35,7 +35,7 @@ def load_settings() -> Settings:
         raise RuntimeError("AI_FORGE_API_TOKEN must be configured")
     providers = (
         ProviderConfig("GPT", _env("OPENAI_MODEL","gpt-5.6"), _env("OPENAI_API_KEY"), "https://api.openai.com"),
-        ProviderConfig("Gemini", _env("gemini-2.5-pro","gemini-2.5-pro"), _env("GEMINI_API_KEY"), "https://generativelanguage.googleapis.com"),
+        ProviderConfig("Gemini", _env("GEMINI_MODEL","gemini-2.5-pro"), _env("GEMINI_API_KEY"), "https://generativelanguage.googleapis.com"),
         ProviderConfig("DeepSeek", _env("DEEPSEEK_MODEL","deepseek-chat"), _env("DEEPSEEK_API_KEY"), "https://api.deepseek.com"),
         ProviderConfig("Grok", _env("XAI_MODEL","grok-4.7"), _env("XAI_API_KEY"), "https://api.x.ai"),
         ProviderConfig("Mistral", _env("MISTRAL_MODEL","mistral-large-latest"), _env("MISTRAL_API_KEY"), "https://api.mistral.ai"),
