@@ -12,7 +12,7 @@ class ExecutionGate {
     @Synchronized
     fun tryReserve(symbol: String): Boolean {
         val normalized = symbol.uppercase()
-        if (normalized.isBlank() || reservedSymbols.isNotEmpty()) return false
+        if (normalized.isBlank()) return false
         return reservedSymbols.add(normalized)
     }
 
