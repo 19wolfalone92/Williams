@@ -15,7 +15,8 @@ class ExecutionGateIntegrationTest {
         val fsm = TradingStateMachine(TradingState.READY_FLAT)
         val accepted = AtomicInteger(0)
         val results = AtomicInteger(0)
-        val done = CountDownLatch(3)
+        val acceptedDone = CountDownLatch(2)
+        val resultDone = CountDownLatch(1)
 
         repeat(2) {
             Thread {
@@ -32,24 +33,24 @@ class ExecutionGateIntegrationTest {
                         )
                         accepted.incrementAndGet()
                     }
-                    done.countDown()
+                    acceptedDone.countDown()
                 }
             }.start()
         }
 
+        assertTrue(acceptedDone.await(2, TimeUnit.SECONDS))
+
         loop.post {
-            loop.post {
-                gate.release("BTCUSDT")
-                fsm.transition(
-                    TradingState.READY_FLAT,
-                    "test ExecutionResult"
-                )
-                results.incrementAndGet()
-                done.countDown()
-            }
+            gate.release("BTCUSDT")
+            fsm.transition(
+                TradingState.READY_FLAT,
+                "test ExecutionResult"
+            )
+            results.incrementAndGet()
+            resultDone.countDown()
         }
 
-        assertTrue(done.await(2, TimeUnit.SECONDS))
+        assertTrue(resultDone.await(2, TimeUnit.SECONDS))
         assertEquals(1, accepted.get())
         assertEquals(1, results.get())
         assertEquals(TradingState.READY_FLAT, fsm.state)
