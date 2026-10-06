@@ -263,14 +263,36 @@ class MultiPositionTrader:
     # Account / filters
     # ------------------------------------------------------------------
 
-    def _balance(self):
-        account = self.client.account()
-        return sum(
+    def _portfolio_equity_quote(self, account=None):
+        """Return bot-managed portfolio equity in USDT.
+
+        USDT alone is not sufficient once multiple Spot positions exist:
+        capital moved from USDT into BTC/ETH/etc. remains part of portfolio
+        equity. Foreign assets are deliberately excluded from the risk base.
+        """
+        account = account or self.client.account()
+        equity = sum(
             float(b.get("free", 0) or 0)
             + float(b.get("locked", 0) or 0)
             for b in account.get("balances", [])
-            if b.get("asset") == "USDT"
+            if str(b.get("asset", "")).upper() == "USDT"
         )
+        for trade in self.open_trades():
+            symbol = str(trade["symbol"]).upper()
+            qty = float(trade.get("quantity", 0) or 0)
+            if qty <= 0:
+                continue
+            try:
+                mark = float(self.client.ticker_price(symbol)["price"])
+            except Exception:
+                # A missing mark must never create extra risk capacity.
+                continue
+            if mark > 0:
+                equity += qty * mark
+        return max(0.0, equity)
+
+    def _balance(self):
+        return self._portfolio_equity_quote()
 
     def _quote_free(self):
         account = self.client.account()
@@ -1286,17 +1308,15 @@ class MultiPositionTrader:
         """Block new entries on daily loss, trade count, streak or cooldown."""
         from datetime import datetime, timezone
         account = self.client.account()
-        balances = {
-            str(b.get("asset", "")).upper(): float(b.get("free", 0) or 0) + float(b.get("locked", 0) or 0)
-            for b in account.get("balances", [])
-        }
-        equity = balances.get("USDT", 0.0)
+        equity = self._portfolio_equity_quote(account)
         unrealized = 0.0
         for trade in self.open_trades():
             symbol = str(trade["symbol"]).upper()
-            mark = float(self.client.ticker_price(symbol)["price"])
+            try:
+                mark = float(self.client.ticker_price(symbol)["price"])
+            except Exception:
+                continue
             qty = float(trade.get("quantity", 0) or 0)
-            equity += balances.get(symbol.replace("USDT", ""), 0.0) * mark
             unrealized += (mark - float(trade.get("entry_price", 0) or 0)) * qty
 
         realized = float(self.db.conn.execute(
