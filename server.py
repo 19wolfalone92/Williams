@@ -709,6 +709,11 @@ def status():
         for item in positions
     )
 
+    execution_state, unresolved_symbols, pending_symbols = _canonical_execution_state(
+        multi,
+        positions=positions,
+    )
+
     selected_position = None
     if positions:
         selected_position = positions[0]
@@ -720,15 +725,7 @@ def status():
         'testnet': t.client.testnet,
         'running': state.running,
         'paused': state.paused,
-        'state': (
-            'RECONCILE_REQUIRED'
-            if multi.unresolved_symbols()
-            else (
-                'OPEN'
-                if positions
-                else 'FLAT'
-            )
-        ),
+        'state': execution_state,
         'recovered': t.recovered,
         'last_error': state.last_error,
         'binance_configured': bool(
@@ -778,12 +775,14 @@ def status():
         'p0_gate_passed': bool(t.preflight_report and t.preflight_report.get('ready')),
         'p0_gate_reason': ('PASS' if t.preflight_report and t.preflight_report.get('ready') else 'NOT_READY'),
         'max_open_positions_locked': True,
-        'reconcile_required': bool(multi.unresolved_symbols() or multi._pending_entries()),
+        'reconcile_required': bool(unresolved_symbols or pending_symbols),
+        'unresolved_symbols': unresolved_symbols,
+        'pending_entry_symbols': pending_symbols,
         'execution_state_contract': {
             'version': 1,
-            'state': ('RECONCILE_REQUIRED' if (multi.unresolved_symbols() or multi._pending_entries()) else ('OPEN' if positions else 'READY_FLAT')),
-            'execution_enabled': not bool(multi.unresolved_symbols() or multi._pending_entries()),
-            'reconciliation_required': bool(multi.unresolved_symbols() or multi._pending_entries()),
+            'state': execution_state,
+            'execution_enabled': not bool(unresolved_symbols or pending_symbols),
+            'reconciliation_required': bool(unresolved_symbols or pending_symbols),
             'kill_switch_latched': False,
         },
     }
