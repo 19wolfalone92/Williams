@@ -527,10 +527,7 @@ def health():
         'max_total_risk_pct': multi.max_total_risk_pct,
         'max_risk_per_trade_pct': multi.max_risk_per_trade_pct,
         'open_positions': len(multi.open_positions()),
-        'execution_enabled': not bool(
-            multi.unresolved_symbols()
-            or multi._pending_entries()
-        ),
+        'execution_enabled': not unresolved,
         'testnet': t.client.testnet,
     }
 
