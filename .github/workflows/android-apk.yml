@@ -1,5 +1,5 @@
 name: Build Android APK
-# 4.21 quant shadow layer integration + cockpit validation
+# 4.21 quant shadow layer integration + final APK validation
 
 on:
   push:
@@ -98,6 +98,12 @@ jobs:
 
           echo "Debug signing material: PRESENT"
 
+      - name: Validate quant Python sources
+        run: |
+          set -euo pipefail
+          python3 -m py_compile             feature_store.py ai_shadow.py cpcv_backtester.py             stress_suite.py mock_exchange.py quant_models.py             shap_explain.py derivatives_features.py shadow_execution.py             quant_ml_pipeline.py
+          echo "Quant Python syntax: PASS"
+
       - name: Quant integration marker
         run: |
           set -euo pipefail
@@ -106,6 +112,11 @@ jobs:
           test -f cpcv_backtester.py
           test -f stress_suite.py
           test -f mock_exchange.py
+          test -f quant_models.py
+          test -f shap_explain.py
+          test -f derivatives_features.py
+          test -f shadow_execution.py
+          test -f quant_ml_pipeline.py
           echo "Quant shadow layer sources present; Android remains a cockpit/runtime build."
 
       - name: Run Android unit tests
