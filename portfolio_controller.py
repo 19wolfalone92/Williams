@@ -101,10 +101,15 @@ class PortfolioController:
             if allocation_pct < self.min_risk_allocation_pct:
                 break
 
+            info = self.client.exchange_info(base.candidate.symbol)
+            filters = {f["filterType"]: f for f in info.get("symbols", [{}])[0].get("filters", [])}
+            nf = filters.get("NOTIONAL") or filters.get("MIN_NOTIONAL") or {}
+            min_notional = float(nf.get("minNotional", 0) or 0)
             r = self.risk_engine.analyse(
                 symbol=base.candidate.symbol,
                 entry_price=base.risk.entry_price,
                 atr=base.risk.entry_price * base.candidate.atr_pct,
+                min_notional=min_notional,
                 signal_strength=base.candidate.signal_strength,
                 htf_confirmed=base.candidate.htf_confirmed,
                 spread_pct=base.candidate.spread_pct,
