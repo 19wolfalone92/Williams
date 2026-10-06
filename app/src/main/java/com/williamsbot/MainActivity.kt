@@ -12,6 +12,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.ComponentActivity
 import androidx.core.content.ContextCompat
+import androidx.security.crypto.EncryptedSharedPreferences
+import androidx.security.crypto.MasterKey
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
@@ -368,20 +370,54 @@ data class PositionView(
 )
 
 private class StandaloneApi(context: Context) {
-    private val prefs = context.getSharedPreferences("williams_backend", Context.MODE_PRIVATE)
+    private val securePrefs = EncryptedSharedPreferences.create(
+        context,
+        "williams_backend_secure",
+        MasterKey.Builder(context)
+            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+            .build(),
+        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+    )
+
+    init {
+        val legacy = context.getSharedPreferences(
+            "williams_backend",
+            Context.MODE_PRIVATE
+        )
+        if (
+            securePrefs.getString("backend_url", null) == null &&
+            legacy.getString("backend_url", null) != null
+        ) {
+            securePrefs.edit()
+                .putString(
+                    "backend_url",
+                    legacy.getString("backend_url", "http://127.0.0.1:18080")
+                )
+                .putString(
+                    "mobile_token",
+                    legacy.getString("mobile_token", "")
+                )
+                .apply()
+            legacy.edit()
+                .remove("mobile_token")
+                .apply()
+        }
+    }
+
     private val client = OkHttpClient.Builder()
         .connectTimeout(8, TimeUnit.SECONDS)
         .readTimeout(45, TimeUnit.SECONDS)
         .build()
 
     val backendUrl: String
-        get() = prefs.getString("backend_url", "http://127.0.0.1:18080")
+        get() = securePrefs.getString("backend_url", "http://127.0.0.1:18080")
             ?.trimEnd('/')
             .takeUnless { it.isNullOrBlank() }
             ?: "http://127.0.0.1:18080"
 
     val mobileToken: String
-        get() = prefs.getString("mobile_token", "")?.trim() ?: ""
+        get() = securePrefs.getString("mobile_token", "")?.trim() ?: ""
 
     fun saveConnection(url: String, token: String) {
         val normalized = url.trim().trimEnd('/')
@@ -395,7 +431,7 @@ private class StandaloneApi(context: Context) {
         if (!localhostHttp && token.trim().length < 32) {
             error("Для удалённого Backend нужен Mobile API Token (минимум 32 символа).")
         }
-        prefs.edit()
+        securePrefs.edit()
             .putString("backend_url", normalized)
             .putString("mobile_token", token.trim())
             .apply()
