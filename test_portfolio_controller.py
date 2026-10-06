@@ -121,7 +121,7 @@ def test_no_position_selects_best_strict_signal():
     print("[PASS] free account selects best STRICT_SIGNAL")
 
 
-def test_open_position_blocks_entry():
+def test_open_position_does_not_block_entry_when_risk_budget_allows():
     controller = make_controller()
 
     controller.scanner.scan = lambda: [
@@ -144,7 +144,7 @@ def test_open_position_blocks_entry():
 
     result = controller.select(has_open_position=True)
 
-    assert result is None
+    assert result is not None
 
     print("[PASS] open position blocks new entry")
 
