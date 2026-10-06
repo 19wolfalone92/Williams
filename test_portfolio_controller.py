@@ -51,7 +51,7 @@ class FakeRisk:
 def make_controller():
     controller = PortfolioController.__new__(PortfolioController)
     controller.client = FakeClient()
-    controller.max_open_positions = 3
+    controller.max_open_positions = 1
     controller.max_total_risk_pct = 0.01
     controller.max_risk_per_trade_pct = 0.005
     controller.min_risk_allocation_pct = 0.001
@@ -133,7 +133,7 @@ def test_no_position_selects_best_strict_signal():
     print("[PASS] free account selects best STRICT_SIGNAL")
 
 
-def test_open_position_does_not_block_entry_when_risk_budget_allows():
+def test_open_position_blocks_entry_even_when_risk_budget_allows():
     controller = make_controller()
 
     controller.scanner.scan = lambda: [
@@ -156,9 +156,9 @@ def test_open_position_does_not_block_entry_when_risk_budget_allows():
 
     result = controller.select(has_open_position=True)
 
-    assert result is not None
+    assert result is None
 
-    print("[PASS] open position does not block entry when risk budget allows")
+    print("[PASS] existing open position blocks a new entry")
 
 
 def test_setup_ready_never_enters():
@@ -238,11 +238,11 @@ def test_portfolio_risk_caps_total_at_one_percent():
 
     selections = controller.select_portfolio(open_risk_quote=0.0, open_positions=0)
 
-    assert len(selections) == 2
+    assert len(selections) == 1
     assert all(s.risk.risk_pct <= 0.5 for s in selections)
-    assert abs(sum(s.risk.risk_pct for s in selections) - 1.0) < 1e-9
-    assert [s.candidate.symbol for s in selections] == ["BTCUSDT", "ETHUSDT"]
-    print("[PASS] portfolio total risk <= 1%, per trade <= 0.5%")
+    assert abs(sum(s.risk.risk_pct for s in selections) - 0.5) < 1e-9
+    assert [s.candidate.symbol for s in selections] == ["BTCUSDT"]
+    print("[PASS] one-position cap + portfolio risk <= 1%, per trade <= 0.5%")
 
 
 def test_portfolio_respects_existing_risk():
@@ -261,10 +261,8 @@ def test_portfolio_respects_existing_risk():
 
     selections = controller.select_portfolio(open_risk_quote=80.0, open_positions=1)
 
-    assert len(selections) == 1
-    assert abs(selections[0].risk.risk_pct - 0.2) < 1e-9
-    assert selections[0].risk.risk_quote == 20.0
-    print("[PASS] existing 0.8% risk leaves only 0.2%")
+    assert selections == []
+    print("[PASS] existing open position consumes the one available position slot")
 
 
 if __name__ == "__main__":
