@@ -347,7 +347,8 @@ data class PortfolioSummary(
     val lockedEquityUsdt: Double? = null,
     val realizedPnlUsdt: Double = 0.0,
     val unrealizedPnlUsdt: Double = 0.0,
-    val assets: List<PortfolioAsset> = emptyList()
+    val assets: List<PortfolioAsset> = emptyList(),
+    val positions: List<PositionView> = emptyList()
 )
 
 data class PositionView(
@@ -546,7 +547,18 @@ fun WilliamsApp(context: Context) {
 
                 runCatching {
                     val p = JSONObject(api.get("/api/v1/portfolio"))
-                    withContext(Dispatchers.Main) { portfolio = parsePortfolio(p) }
+                    val parsedPortfolio = parsePortfolio(p)
+                    withContext(Dispatchers.Main) {
+                        portfolio = parsedPortfolio
+                        if (parsedPortfolio.positions.isNotEmpty()) {
+                            val telemetry = parsedPortfolio.positions.associateBy { it.symbol }
+                            status = status.copy(
+                                positions = status.positions.map { base ->
+                                    telemetry[base.symbol] ?: base
+                                }
+                            )
+                        }
+                    }
                 }.onFailure {
                     failures += "portfolio: " + (it.message ?: it.javaClass.simpleName)
                 }
@@ -830,8 +842,9 @@ fun WilliamsApp(context: Context) {
         }
 
     fun exportDiagnostics() {
-        requireNotNull(DiagnosticsArchive.latest(context)) {
-            "Сначала запустите диагностику"
+        if (DiagnosticsArchive.latest(context) == null) {
+            diagnosticsMessage = "Сначала запустите диагностику."
+            return
         }
         exportDiagnosticsLauncher.launch("Williams_Diagnostics.zip")
     }
@@ -2868,6 +2881,30 @@ private fun parsePortfolio(json: JSONObject): PortfolioSummary {
             allocationPct = item.optDouble("allocation_pct", 0.0)
         )
     }
+    val positions = mutableListOf<PositionView>()
+    val positionArray = json.optJSONArray("positions") ?: JSONArray()
+    for (i in 0 until positionArray.length()) {
+        val item = positionArray.optJSONObject(i) ?: continue
+        positions += PositionView(
+            symbol = item.optString("symbol"),
+            qty = item.optDouble("qty", 0.0),
+            entry = item.optDouble("avg_entry_price", 0.0),
+            stop = item.optDouble("stop_loss")
+                .takeUnless { it.isNaN() || it == 0.0 },
+            take = item.optDouble("take_profit")
+                .takeUnless { it.isNaN() || it == 0.0 },
+            riskPct = item.optDouble("risk_pct", 0.0),
+            currentPrice = item.optDouble("current_price")
+                .takeUnless { it.isNaN() || it == 0.0 },
+            positionValueUsdt = item.optDouble("position_value_usdt", 0.0),
+            allocationPct = item.optDouble("allocation_pct", 0.0),
+            pnlUsdt = item.optDouble("unrealized_pnl_usdt", 0.0),
+            pnlPct = item.optDouble("unrealized_pnl_pct", 0.0),
+            ocoListId = item.optString("oco_list_id"),
+            ocoListClientId = item.optString("oco_list_client_id")
+        )
+    }
+
     return PortfolioSummary(
         configured = json.optBoolean("configured", false),
         totalEquityUsdt = json.optDouble("total_equity_usdt")
@@ -2878,7 +2915,8 @@ private fun parsePortfolio(json: JSONObject): PortfolioSummary {
             .takeUnless { it.isNaN() || json.isNull("locked_equity_usdt") },
         realizedPnlUsdt = json.optDouble("realized_pnl_usdt", 0.0),
         unrealizedPnlUsdt = json.optDouble("unrealized_pnl_usdt", 0.0),
-        assets = assets
+        assets = assets,
+        positions = positions
     )
 }
 
