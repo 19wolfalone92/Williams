@@ -12,6 +12,7 @@ os.environ["WILLIAMS_DB_PATH"] = _test_db_path
 assert_test_db_safe()
 
 from trader import Trader
+from binance_rules import SymbolRules
 
 class FakeClient:
     testnet=True
@@ -25,6 +26,8 @@ class FakeClient:
     def order(self,symbol,side,otype,**kw):
         print("[FAKE] BUY",symbol,side,otype,kw)
         return {"orderId":"1001","status":"FILLED","executedQty":"0.01","cummulativeQuoteQty":"100.0"}
+    def get_order(self, symbol, order_id=None, orig_client_order_id=None):
+        return {"orderId": order_id or "1001", "status": "FILLED", "executedQty": "0.01", "cummulativeQuoteQty": "100.0"}
     def create_oco_sell(self,*a,**kw):
         print("[FAKE] OCO -> FAILURE")
         raise RuntimeError("SIMULATED OCO FAILURE")
@@ -58,6 +61,7 @@ t.client=FakeClient()
 t.symbol="BTCUSDT"
 t.active_symbol="BTCUSDT"
 t.filters={"LOT_SIZE":{"minQty":"0.00001","stepSize":"0.00001"},"PRICE_FILTER":{"tickSize":"0.01"},"NOTIONAL":{"minNotional":"5"}}
+t.symbol_rules=SymbolRules.from_exchange_info(t.client.exchange_info("BTCUSDT"), "BTCUSDT")
 t.foreign_base_balance=0
 t.db.state_set("position_state","FLAT")
 
@@ -82,8 +86,8 @@ try:
 except Exception as e:
     print("[EXPECTED]",e)
 
-assert t.state()=="EXIT_PENDING"
-print("[PASS] state = EXIT_PENDING")
+assert t.state()=="RECONCILE_REQUIRED"
+print("[PASS] state = RECONCILE_REQUIRED")
 
 print("4) RESTART")
 t2=Trader(testnet=True)
@@ -93,6 +97,7 @@ t2.client=t.client
 t2.symbol="BTCUSDT"
 t2.active_symbol="BTCUSDT"
 t2.filters=t.filters
+t2.symbol_rules=t.symbol_rules
 # Baseline is persisted in the test SQLite DB,
 # so a new Trader instance can recover it after restart.
 t2.recover_state()
