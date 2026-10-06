@@ -20,9 +20,9 @@ def expected_fill_from_depth(levels, required_quote, side: str):
         spent += take_quote
         filled_qty += take_qty
         remaining -= take_quote
-        if remaining <= 1e-12:
+        if remaining <= Decimal("0.000000000001"):
             break
-    if remaining > 1e-9 or filled_qty <= 0:
+    if remaining > Decimal("0.000000001") or filled_qty <= 0:
         raise ValueError("insufficient depth for requested market order")
     avg_price = spent / filled_qty
     return avg_price, filled_qty
@@ -43,7 +43,7 @@ class L2SlippageGuard:
             Decimal(str(quote_qty)),
             "BUY",
         )
-        slippage = max(0.0, avg / ask - 1.0)
+        slippage = max(Decimal("0"), avg / ask - Decimal("1"))
         if slippage > Decimal(str(self.max_slippage_pct)):
             raise ValueError(
                 f"L2 slippage {slippage:.4%} exceeds {self.max_slippage_pct:.4%}"
