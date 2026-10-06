@@ -1602,22 +1602,22 @@ class Trader:
 
     def process(self):
         if getattr(self, 'auto_scan_enabled', False):
-            if self.max_open_positions > 1:
-                if not hasattr(self, '_multi_position_trader'):
-                    self._multi_position_trader = MultiPositionTrader(
-                        self.client, db=self.db, symbols=self.auto_scan_symbols
-                    )
-                    self._multi_position_trader.recover()
-                result = self._multi_position_trader.scan_and_execute()
-                if result:
-                    self.db.log_event(
-                        'INFO',
-                        'multi_position_cycle',
-                        'Multi-position scan/execution completed',
-                        {'result': result},
-                    )
-                return
-            self._auto_scan_process()
+            # Auto-scan always uses the portfolio trader. Position count is
+            # determined by the remaining portfolio risk budget, not a fixed
+            # MAX_OPEN_POSITIONS ceiling.
+            if not hasattr(self, '_multi_position_trader'):
+                self._multi_position_trader = MultiPositionTrader(
+                    self.client, db=self.db, symbols=self.auto_scan_symbols
+                )
+                self._multi_position_trader.recover()
+            result = self._multi_position_trader.scan_and_execute()
+            if result:
+                self.db.log_event(
+                    'INFO',
+                    'multi_position_cycle',
+                    'Multi-position scan/execution completed',
+                    {'result': result},
+                )
             return
 
         # Legacy single-symbol mode remains available by setting
