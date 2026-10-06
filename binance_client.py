@@ -181,6 +181,7 @@ class BinanceSpotClient:
     def ping(self): return self._request('GET','/api/v3/ping')
     def exchange_info(self,symbol=None): return self._request('GET','/api/v3/exchangeInfo',{'symbol':symbol} if symbol else {})
     def ticker_price(self,symbol): return self._request('GET','/api/v3/ticker/price',{'symbol':symbol})
+    def ticker_prices(self): return self._require_json_array(self._request('GET','/api/v3/ticker/price',{}), '/ticker/price')
     def ticker_24hr(self,symbol=None): return self._request('GET','/api/v3/ticker/24hr',{'symbol':symbol} if symbol else {})
     def book_ticker(self,symbol=None): return self._request('GET','/api/v3/ticker/bookTicker',{'symbol':symbol} if symbol else {})
     def depth(self,symbol,limit=100): return self._request('GET','/api/v3/depth',{'symbol':symbol,'limit':limit})
