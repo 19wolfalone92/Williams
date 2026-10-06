@@ -154,7 +154,7 @@ class MultiPositionTrader:
                 if (
                     str(sell.get("side", "")).upper() != "SELL"
                     or str(sell.get("status", "")).upper() != "FILLED"
-                    or not str(sell.get("clientOrderId", "")).startswith(self.OCO_PREFIX)
+                    or not str(sell.get("clientOrderId", "")).startswith((self.OCO_PREFIX, self.EMERGENCY_PREFIX))
                 ):
                     continue
                 sell_time = int(
