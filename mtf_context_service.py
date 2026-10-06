@@ -43,6 +43,8 @@ class MultiTimeframeContextService:
         self.last_event_at = None
         self.last_closed_open_ms: dict[tuple[str, str], int] = {}
         self.watchdog_seconds = max(30, int(os.getenv('MTF_WATCHDOG_SECONDS', '90')))
+        self.reconnect_attempt = 0
+        self.last_reconnect_delay = 1.0
 
     def configure_credentials(self, key: str, secret: str, testnet: bool = True) -> None:
         with self.lock:
