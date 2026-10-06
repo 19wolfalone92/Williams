@@ -197,6 +197,8 @@ class ControlState:
         t = self.ensure_trader()
         try:
             t.setup()
+            # A successful explicit START is the controlled re-arm after KILL.
+            t.db.state_set('kill_switch_latched', 'false')
             with self.lock:
                 self.running = True
                 self.last_error = None
@@ -270,6 +272,8 @@ class ControlState:
             thread = self.thread
 
         t = self.ensure_trader()
+        # Persist the emergency latch before attempting any close operation.
+        t.db.state_set('kill_switch_latched', 'true')
         multi = self.ensure_multi()
         errors = []
         closed = []
@@ -533,12 +537,16 @@ def health():
     unresolved = bool(unresolved_symbols or pending_symbols)
     p0_ready = bool(t.preflight_report and t.preflight_report.get('ready'))
     open_positions = multi.open_positions()
+    kill_switch_latched = str(
+        t.db.state_get('kill_switch_latched', 'false')
+    ).lower() == 'true'
     execution_enabled = (
         p0_ready
         and not unresolved
         and not open_positions
         and state.running
         and not state.paused
+        and not kill_switch_latched
     )
     return {
         'ok': True,
@@ -549,7 +557,7 @@ def health():
             'state': execution_state,
             'execution_enabled': execution_enabled,
             'reconciliation_required': unresolved,
-            'kill_switch_latched': False,
+            'kill_switch_latched': kill_switch_latched,
         },
         'unresolved_symbols': unresolved_symbols,
         'pending_entry_symbols': pending_symbols,
@@ -757,12 +765,16 @@ def status():
         positions=positions,
     )
     p0_ready = bool(t.preflight_report and t.preflight_report.get('ready'))
+    kill_switch_latched = str(
+        t.db.state_get('kill_switch_latched', 'false')
+    ).lower() == 'true'
     execution_enabled = (
         p0_ready
         and not bool(unresolved_symbols or pending_symbols)
         and not positions
         and state.running
         and not state.paused
+        and not kill_switch_latched
     )
 
     selected_position = None
@@ -835,7 +847,7 @@ def status():
             'state': execution_state,
             'execution_enabled': execution_enabled,
             'reconciliation_required': bool(unresolved_symbols or pending_symbols),
-            'kill_switch_latched': False,
+            'kill_switch_latched': kill_switch_latched,
         },
     }
 
