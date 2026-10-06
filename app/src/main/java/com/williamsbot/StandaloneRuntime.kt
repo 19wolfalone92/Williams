@@ -1316,11 +1316,12 @@ private class NativeEngine(
     ): JSONObject {
         var lastBody = "{}"
         repeat(2) { attempt ->
-            val query = if (params.isBlank()) {
+            val rawQuery = if (params.isBlank()) {
                 "timestamp=" + signedTimestamp() + "&recvWindow=" + BINANCE_RECV_WINDOW_MS
             } else {
                 params + "&timestamp=" + signedTimestamp() + "&recvWindow=" + BINANCE_RECV_WINDOW_MS
             }
+            val query = encodeSignedParams(rawQuery)
             val signature = hmac(query, secret())
             val request = when (method) {
                 "POST" -> Request.Builder()
@@ -1355,6 +1356,23 @@ private class NativeEngine(
                     runCatching { syncServerTime() }
                     return@use
                 }
+
+                val ambiguous =
+                    response.code >= 500 || lastBody.contains("-1007")
+                if (ambiguous) {
+                    if (method == "GET" && attempt == 0) {
+                        try { Thread.sleep(250L) } catch (_: InterruptedException) {}
+                        return@use
+                    }
+                    setReconcileRequired(
+                        "Binance " + method + " status UNKNOWN; REST reconciliation required"
+                    )
+                    error(
+                        "Binance " + response.code +
+                            " / -1007: execution status UNKNOWN; reconciliation required"
+                    )
+                }
+
                 error("Binance " + response.code + ": " + lastBody)
             }
         }
@@ -1367,7 +1385,7 @@ private class NativeEngine(
     ): String {
         var lastBody = "{}"
         repeat(2) { attempt ->
-            val query = if (params.isBlank()) {
+            val rawQuery = if (params.isBlank()) {
                 "timestamp=" + signedTimestamp() +
                     "&recvWindow=" + BINANCE_RECV_WINDOW_MS
             } else {
@@ -1375,6 +1393,7 @@ private class NativeEngine(
                     "&timestamp=" + signedTimestamp() +
                     "&recvWindow=" + BINANCE_RECV_WINDOW_MS
             }
+            val query = encodeSignedParams(rawQuery)
             val signature = hmac(query, secret())
             val request = Request.Builder()
                 .url(
@@ -1411,6 +1430,24 @@ private class NativeEngine(
         }
         error("Binance signed GET failed: " + lastBody)
     }
+
+    private fun encodeSignedParams(raw: String): String =
+        raw.split("&")
+            .filter { it.isNotBlank() }
+            .joinToString("&") { part ->
+                val index = part.indexOf('=')
+                val key = if (index >= 0) part.substring(0, index) else part
+                val value = if (index >= 0) part.substring(index + 1) else ""
+                percentEncode(key) + "=" + percentEncode(value)
+            }
+
+    private fun percentEncode(value: String): String =
+        java.net.URLEncoder.encode(
+            value,
+            StandardCharsets.UTF_8.toString()
+        )
+            .replace("+", "%20")
+            .replace("%7E", "~")
 
     private fun hmac(value: String, secretValue: String): String {
         val mac = Mac.getInstance("HmacSHA256")
