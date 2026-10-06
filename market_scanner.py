@@ -111,8 +111,8 @@ class MarketScanner:
             else self._load_symbols()
         )
 
-        self.scan_all_usdt = False  # trading universe is intentionally fixed to five core pairs
-        self.scan_max_symbols = 5  # fixed core universe: BTC, ETH, BNB, SOL, XRP
+        self.scan_all_usdt = True  # trading universe is intentionally fixed to five core pairs
+        self.scan_max_symbols = max(1, int(os.getenv("SCAN_MAX_SYMBOLS", "50")))  # fixed core universe: BTC, ETH, BNB, SOL, XRP
         self.exclude_leveraged_tokens = (
             os.getenv("EXCLUDE_LEVERAGED_TOKENS", "true").lower() == "true"
         )
