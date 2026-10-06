@@ -1,5 +1,6 @@
 name: Build Android APK
 # 4.21 quant shadow layer integration + final APK validation
+# Credential-status compatibility fix validation
 # CI refresh: validate the current main tree after backend reconciliation fixes
 
 on:
