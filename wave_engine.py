@@ -221,7 +221,7 @@ class MultiTimeframeWaveEngine:
         # For full historical wave analysis, use Binance-native intervals across
         # the complete hierarchy. A custom WAVE_TF_CHAIN can still narrow this
         # for tests or low-resource deployments.
-        if not raw and os.getenv("WAVE_FULL_TF_ALL", "true").lower() == "true":
+        if not raw and os.getenv("WAVE_FULL_TF_ALL", "false").lower() == "true":
             wanted = list(self.INTERVAL_SECONDS.keys())
 
         # Synthetic seconds are never used for structural wave counting.
@@ -264,7 +264,7 @@ class MultiTimeframeWaveEngine:
     ) -> pd.DataFrame:
         from data import fetch_klines, fetch_klines_cached_history
 
-        if os.getenv("WAVE_USE_FULL_HISTORY", "true").lower() == "true":
+        if os.getenv("WAVE_USE_FULL_HISTORY", "false").lower() == "true":
             return self._drop_unfinished(
                 fetch_klines_cached_history(self.client, symbol, interval)
             )
