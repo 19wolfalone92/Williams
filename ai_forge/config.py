@@ -16,6 +16,7 @@ class ProviderConfig:
 class Settings:
     api_token: str
     mock_mode: bool
+    free_mode: bool
     request_timeout_seconds: float
     min_agents: int
     min_consensus: float
@@ -40,8 +41,9 @@ def load_settings() -> Settings:
         ProviderConfig("Grok", _env("XAI_MODEL","grok-4.7"), _env("XAI_API_KEY"), "https://api.x.ai"),
         ProviderConfig("Mistral", _env("MISTRAL_MODEL","mistral-large-latest"), _env("MISTRAL_API_KEY"), "https://api.mistral.ai"),
     )
+    free = _env("AI_FORGE_FREE_MODE","true").lower() == "true"
     return Settings(
-        api_token=token, mock_mode=mock,
+        api_token=token, mock_mode=mock, free_mode=free,
         request_timeout_seconds=float(_env("AI_FORGE_TIMEOUT_SECONDS","25")),
         min_agents=max(1,int(_env("AI_FORGE_MIN_AGENTS","3"))),
         min_consensus=min(1.0,max(0.5,float(_env("AI_FORGE_MIN_CONSENSUS","0.60")))),
