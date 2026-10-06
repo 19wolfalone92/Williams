@@ -493,7 +493,7 @@ class MultiPositionTrader:
                 list_id
                 and order_list_id == list_id
             ) or (
-                client_id.startswith(self.OCO_PREFIX)
+                client_id.startswith((self.OCO_PREFIX, self.EMERGENCY_PREFIX))
             ):
                 result.append(order)
 
