@@ -17,6 +17,7 @@ import java.io.InputStreamReader
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.util.UUID
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 import java.util.Locale
@@ -54,6 +55,12 @@ object StandaloneRuntime {
     fun bootstrap(context: Context) {
         start(context)
         server?.bootstrap()
+    }
+
+    fun localApiToken(context: Context): String {
+        start(context)
+        return server?.localApiToken()
+            ?: error("Williams local runtime is unavailable")
     }
 
     fun configureCredentials(
@@ -304,6 +311,16 @@ private class StandaloneServer(private val context: Context) {
     ): JSONObject =
         e().configureCredentials(apiKey, apiSecret)
 
+    fun localApiToken(): String =
+        prefs.getString("local_api_token", null)?.takeIf { it.isNotBlank() }
+            ?: UUID.randomUUID().toString().replace("-", "") +
+                UUID.randomUUID().toString().replace("-", "")
+                    .also { token ->
+                        prefs.edit()
+                            .putString("local_api_token", token)
+                            .commit()
+                    }
+
     private fun e(): NativeEngine {
         if (engine == null) {
             engine = NativeEngine(context, prefs, client)
@@ -329,17 +346,39 @@ private class StandaloneServer(private val context: Context) {
                 val target = parts[1]
 
                 var length = 0
+                var authorization = ""
                 while (true) {
                     val line = reader.readLine() ?: return
                     if (line.isEmpty()) break
 
                     val header = line.split(":", limit = 2)
-                    if (
-                        header.size == 2 &&
-                        header[0].equals("Content-Length", ignoreCase = true)
-                    ) {
-                        length = header[1].trim().toIntOrNull() ?: 0
+                    if (header.size == 2) {
+                        when {
+                            header[0].equals("Content-Length", ignoreCase = true) ->
+                                length = header[1].trim().toIntOrNull() ?: 0
+                            header[0].equals("Authorization", ignoreCase = true) ->
+                                authorization = header[1].trim()
+                        }
                     }
+                }
+
+                if (authorization != "Bearer " + localApiToken()) {
+                    val bytes = JSONObject()
+                        .put("error", "Unauthorized local Williams runtime request")
+                        .toString()
+                        .toByteArray(StandardCharsets.UTF_8)
+                    val output = s.getOutputStream()
+                    output.write(
+                        (
+                            "HTTP/1.1 401 Unauthorized\r\n" +
+                                "Content-Type: application/json; charset=utf-8\r\n" +
+                                "Content-Length: " + bytes.size + "\r\n" +
+                                "Connection: close\r\n\r\n"
+                            ).toByteArray(StandardCharsets.UTF_8)
+                    )
+                    output.write(bytes)
+                    output.flush()
+                    return
                 }
 
                 val chars = CharArray(length)
