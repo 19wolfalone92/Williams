@@ -31,7 +31,7 @@ class PortfolioScanner:
 
         self.risk_engine = RiskEngine(
             balance_quote=balance_quote,
-            risk_per_trade_pct=min(0.005, max(0.0, float(os.getenv("MAX_RISK_PER_TRADE_PCT", "0.005"))),
+            risk_per_trade_pct=min(0.005, max(0.0, float(os.getenv("MAX_RISK_PER_TRADE_PCT", "0.005")))),
             max_position_fraction=0.25,
             max_daily_loss_pct=0.03,
             min_rr=1.5,
