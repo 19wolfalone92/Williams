@@ -114,7 +114,7 @@ class PortfolioScanner:
         )
 
 
-    def allocate(self, open_risk_quote=0.0, open_positions=0, max_open_positions=3):
+    def allocate(self, open_risk_quote=0.0, open_positions=0, max_open_positions=1):
         """Return ranked candidates whose new stop risk fits the 1% portfolio budget."""
         candidates = self.scan()
         balance = max(float(self.risk_engine.balance), 0.0)
