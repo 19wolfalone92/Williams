@@ -55,6 +55,16 @@ object StandaloneRuntime {
         server?.bootstrap()
     }
 
+    fun configureCredentials(
+        context: Context,
+        apiKey: String,
+        apiSecret: String
+    ): JSONObject {
+        start(context)
+        return server?.configureCredentials(apiKey, apiSecret)
+            ?: error("Williams local runtime is unavailable")
+    }
+
     fun startTrading() {
         server?.startTrading()
     }
@@ -318,8 +328,13 @@ private class StandaloneServer(private val context: Context) {
                 }
 
                 val chars = CharArray(length)
-                if (length > 0) {
-                    reader.read(chars)
+                var offset = 0
+                while (offset < length) {
+                    val read = reader.read(chars, offset, length - offset)
+                    if (read < 0) {
+                        error("Unexpected end of HTTP request body")
+                    }
+                    offset += read
                 }
 
                 val body = route(method, target, String(chars))
@@ -972,6 +987,17 @@ private class NativeEngine(
             .put("configured", false)
             .put("cleared", true)
     }
+
+    fun configureCredentials(
+        apiKey: String,
+        apiSecret: String
+    ): JSONObject =
+        configure(
+            JSONObject()
+                .put("api_key", apiKey)
+                .put("api_secret", apiSecret)
+                .put("testnet", true)
+        )
 
     fun start(): JSONObject {
         if (killLatched) {
