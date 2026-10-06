@@ -529,7 +529,8 @@ class MultiPositionTrader:
         client_id = f"{self.OCO_PREFIX}{uuid.uuid4().hex[:20]}"
         self.set_state(symbol, "EXIT_PENDING")
 
-        result = self.client.create_oco_sell_safe(
+        create_oco = getattr(self.client, "create_oco_sell_safe", None) or self.client.create_oco_sell
+        result = create_oco(
             symbol,
             self.client.decimal_format(qty),
             self.client.decimal_format(tp),
