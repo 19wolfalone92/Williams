@@ -187,15 +187,58 @@ class BinanceSpotClient:
             params['orderId'] = int(order_id)
         return self._request('GET', '/api/v3/myTrades', params, signed=True)
 
-    def all_orders(self,symbol,limit=1000): return self._request('GET','/api/v3/allOrders',{'symbol':symbol,'limit':limit},signed=True)
+    @staticmethod
+    def _require_json_object(payload, endpoint):
+        if isinstance(payload, dict):
+            return payload
+        raise BinanceAPIError(
+            f"Binance {endpoint} returned {type(payload).__name__}; expected object",
+            payload=payload,
+        )
+
+    @staticmethod
+    def _require_json_array(payload, endpoint):
+        if isinstance(payload, list):
+            return payload
+        raise BinanceAPIError(
+            f"Binance {endpoint} returned {type(payload).__name__}; expected array",
+            payload=payload,
+        )
+
+    def all_orders(self,symbol,limit=1000):
+        return self._require_json_array(
+            self._request('GET','/api/v3/allOrders',
+                          {'symbol':symbol,'limit':limit},signed=True),
+            '/allOrders',
+        )
+
     def order_list(self,symbol,order_list_id=None,list_client_order_id=None):
         p={'symbol':symbol}
         if order_list_id is not None: p['orderListId']=order_list_id
         if list_client_order_id is not None: p['origClientOrderId']=list_client_order_id
-        return self._request('GET','/api/v3/orderList',p,signed=True)
-    def open_order_lists(self,symbol=None): return self._request('GET','/api/v3/openOrderList',{},signed=True)
-    def all_order_lists(self,symbol=None,limit=100): return self._request('GET','/api/v3/allOrderList',{'limit':limit},signed=True)
-    def open_orders(self,symbol=None): return self._request('GET','/api/v3/openOrders',{'symbol':symbol} if symbol else {},signed=True)
+        return self._require_json_object(
+            self._request('GET','/api/v3/orderList',p,signed=True),
+            '/orderList',
+        )
+    def open_order_lists(self,symbol=None):
+        return self._require_json_array(
+            self._request('GET','/api/v3/openOrderList',{},signed=True),
+            '/openOrderList',
+        )
+
+    def all_order_lists(self,symbol=None,limit=100):
+        return self._require_json_array(
+            self._request('GET','/api/v3/allOrderList',
+                          {'limit':limit},signed=True),
+            '/allOrderList',
+        )
+
+    def open_orders(self,symbol=None):
+        return self._require_json_array(
+            self._request('GET','/api/v3/openOrders',
+                          {'symbol':symbol} if symbol else {},signed=True),
+            '/openOrders',
+        )
     def websocket_signature_params(self, recv_window=None):
         params = {
             "apiKey": self.api_key,
