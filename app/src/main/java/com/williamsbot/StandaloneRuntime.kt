@@ -494,7 +494,7 @@ private class NativeEngine(
     // Deep-analysis universe: five core USDT pairs only.
     private val coreSymbols = listOf("BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT")
     private val analysisFrames = listOf("1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w", "1M")
-    private val maxScanSymbols = 5
+    private val maxScanSymbols = 50
     private val waveTopN = 10
     private val scanExecutor = Executors.newFixedThreadPool(12)
     // Market WebSocket callbacks must stay lightweight. Indicator/Williams
@@ -516,7 +516,7 @@ private class NativeEngine(
 
     private val scanCacheTtlMs = 12_000L
     private val deepWatchTopN = 10
-    private val scannerUniverseLabel = "CORE_5_BTC_ETH_BNB_SOL_XRP"
+    private val scannerUniverseLabel = "USDT_LIQUIDITY_TOP_50"
 
     @Volatile
     private var running = false
@@ -539,7 +539,6 @@ private class NativeEngine(
     private var primaryCandles = emptyList<CandleN>()
     private var lastScanDurationMs = 0L
     private var lastSymbolsScanned = 0
-    private val maxOpenPositions = 1
     private val maxTotalRiskPct = 0.01
     private val maxRiskPerTradePct = 0.005
     private val maxSpreadPct = 0.0015
@@ -644,14 +643,22 @@ private class NativeEngine(
     private fun positionList(): List<PositionState> =
         synchronized(positions) { positions.values.toList() }
 
-    private fun reservedRiskPct(): Double =
-        positionList().sumOf {
-            if (it.riskPct > 0.0) it.riskPct
-            else if (it.entry > 0.0) {
-                ((it.entry - it.stop) / it.entry)
+    private fun reservedRiskPct(): Double {
+        val equity = estimateManagedEquity().coerceAtLeast(1.0)
+        val positionRisk = positionList().sumOf { position ->
+            val distance = if (position.entry > 0.0) {
+                ((position.entry - position.stop) / position.entry)
                     .coerceAtLeast(0.0)
             } else 0.0
+            (position.qty * position.entry * (distance + feeBufferPerSidePct * 2.0)) / equity
         }
+        val pendingRisk = synchronized(pendingEntries) {
+            pendingEntries.values.sumOf { pending ->
+                (pending.notional * (pending.stopDistance + feeBufferPerSidePct * 2.0)) / equity
+            }
+        }
+        return positionRisk + pendingRisk
+    }
 
     private fun stateName(): String =
         when (stateMachine.state) {
@@ -825,7 +832,8 @@ private class NativeEngine(
             )
             .put("state", stateName())
             .put("open_positions", positionList().size)
-            .put("max_open_positions", maxOpenPositions)
+            .put("position_capacity_mode", "RISK_BUDGET")
+            .put("risk_based_position_capacity", floor(maxTotalRiskPct / maxRiskPerTradePct).toInt())
             .put("reserved_risk_pct", reservedRiskPct())
             .put("circuit_breaker_tripped", equityCircuitBreaker.isTripped())
             .put("managed_equity", estimateManagedEquity())
@@ -1187,12 +1195,19 @@ private class NativeEngine(
         }
 
         return try {
-            clearReconcileRequired()
             recoverPendingEntries()
             reconcilePositionsWithExchange()
+            auditManagedOpenOrders()
+            reconcileRequired = false
+            prefs.edit().putBoolean("reconcile_required", false).apply()
+            stateMachine.force(
+                if (positionList().isEmpty()) TradingState.READY_FLAT
+                else TradingState.PROTECTED,
+                "authoritative Binance reconciliation complete"
+            )
 
             JSONObject()
-                .put("recovered", !reconcileRequired)
+                .put("recovered", true)
                 .put("state", stateName())
                 .put(
                     "execution_enabled",
@@ -2080,9 +2095,14 @@ private class NativeEngine(
             }
         }
 
-        val symbols = coreSymbols.filter { tradingUsdt.contains(it) }.toMutableList()
-        require(symbols.size == coreSymbols.size) {
-            "Core Binance universe incomplete: expected BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT"
+        val symbols = tradingUsdt
+            .asSequence()
+            .filter { spreads[it] != null && (volumes[it] ?: 0.0) > 0.0 }
+            .sortedByDescending { volumes[it] ?: 0.0 }
+            .take(maxScanSymbols)
+            .toList()
+        require(symbols.isNotEmpty()) {
+            "Binance returned no liquid USDT symbols"
         }
         return Triple(symbols, volumes, spreads)
     }
@@ -2234,22 +2254,21 @@ private class NativeEngine(
                 !paused &&
                 !reconcileRequired &&
                 guard.optBoolean("allow", true) &&
-                positionList().size < maxOpenPositions
+                reservedRiskPct() < maxTotalRiskPct - 0.000001
             ) {
-                val slots =
-                    maxOpenPositions -
-                        positionList().size
-
                 final
                     .asSequence()
                     .filter {
                         it.signal &&
                             it.score >= 70.0 &&
-                            !positions.containsKey(it.symbol)
+                            !positions.containsKey(it.symbol) &&
+                            synchronized(pendingEntries) {
+                                !pendingEntries.containsKey(it.symbol)
+                            }
                     }
                     .sortedByDescending { it.score }
-                    .take(slots)
                     .forEach { candidate ->
+                        if (reservedRiskPct() >= maxTotalRiskPct - 0.000001) return@forEach
                         submitOrderIntent(candidate)
                         if (reconcileRequired) return@forEach
                     }
@@ -2269,8 +2288,10 @@ private class NativeEngine(
                     !paused &&
                     !reconcileRequired &&
                     !killLatched &&
-                    stateMachine.state == TradingState.READY_FLAT &&
-                    positionList().isEmpty() &&
+                    stateMachine.state in setOf(
+                        TradingState.READY_FLAT,
+                        TradingState.PROTECTED
+                    ) &&
                     candidate.signal &&
                     candidate.score >= 70.0 &&
                     executionGate.tryReserve(candidate.symbol)
@@ -2987,6 +3008,7 @@ private class NativeEngine(
     }
 
     private fun reconcilePositionsWithExchange() {
+        auditManagedOpenOrders()
         if (positions.isEmpty()) {
             savePersistedState()
             return
@@ -3770,9 +3792,6 @@ private class NativeEngine(
     ) {
         if (positions.containsKey(candidate.symbol)) {
             return
-        }
-        if (positionList().size >= maxOpenPositions) {
-            error("Maximum open positions reached")
         }
         if (reconcileRequired) {
             error("RECONCILE_REQUIRED")
@@ -5877,7 +5896,7 @@ private class NativeEngine(
             .put("full_history_base_timeframe", "1h")
             .put("risk_per_trade_pct", maxRiskPerTradePct)
             .put("max_daily_loss_pct", 0.03)
-            .put("max_trades_per_day", 0)
+            .put("max_trades_per_day", 5)
             .put("max_consecutive_losses", 3)
             .put("cooldown_minutes", 30)
             .put("min_risk_reward", 1.5)
