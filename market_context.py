@@ -4,7 +4,7 @@ from __future__ import annotations
 import math
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from types import MappingProxyType
 from typing import Mapping, Optional
 
@@ -79,6 +79,9 @@ class TFMarketContext:
     hypotheses: tuple[WaveHypothesis, ...] = field(default_factory=tuple)
     data_bars: int = 0
     live_only: bool = False
+
+    def to_dict(self) -> dict:
+        return asdict(self)
 
 
 @dataclass(frozen=True)
