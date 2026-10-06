@@ -1,0 +1,318 @@
+"""Realtime 5-symbol x 4-timeframe closed-candle context service."""
+from __future__ import annotations
+
+import json
+import logging
+import os
+import threading
+import time
+
+import pandas as pd
+import websocket
+
+from binance_client import BinanceSpotClient
+from data import fetch_klines
+from market_context import ContextCache, TFMarketContext, WaveHypothesis
+from strategy import calculate_indicators, config_from_env
+from trading_config import TradingConfig
+from wave_engine import WaveEngine
+
+log = logging.getLogger("williams-mtf")
+
+
+class MultiTimeframeContextService:
+    def __init__(self, context_cache: ContextCache | None = None):
+        self.config = TradingConfig.from_env()
+        self.cache = context_cache or ContextCache()
+        self.client = BinanceSpotClient(
+            os.getenv("BINANCE_API_KEY", ""),
+            os.getenv("BINANCE_API_SECRET", ""),
+            os.getenv("TESTNET", "true").lower() == "true",
+        )
+        self.frames: dict[tuple[str, str], pd.DataFrame] = {}
+        self.lock = threading.RLock()
+        self.stop_event = threading.Event()
+        self.thread: threading.Thread | None = None
+        self.bootstrap_thread: threading.Thread | None = None
+        self.ws = None
+        self.running = False
+        self.last_error = None
+        self.last_event_at = None
+
+    def configure_credentials(self, key: str, secret: str, testnet: bool = True) -> None:
+        with self.lock:
+            self.client = BinanceSpotClient(key.strip(), secret.strip(), bool(testnet))
+            self.config = TradingConfig.from_env()
+            self.last_error = None
+
+    def _bootstrap_one(self, symbol: str, interval: str) -> None:
+        df = fetch_klines(
+            self.client, symbol, interval, limit=max(220, self.config.wave_lookback)
+        )
+        if df is None or df.empty:
+            return
+        if "close_time" in df.columns:
+            try:
+                close_time = pd.to_datetime(df["close_time"], utc=True)
+                now = pd.Timestamp.now(tz="UTC")
+                if pd.notna(close_time.iloc[-1]) and close_time.iloc[-1] > now:
+                    df = df.iloc[:-1].copy()
+            except Exception:
+                pass
+        self.frames[(symbol, interval)] = df.tail(300).copy()
+        self._publish(symbol, interval, self.frames[(symbol, interval)])
+
+    @staticmethod
+    def _atr(df: pd.DataFrame, period: int) -> float:
+        if len(df) < period + 1:
+            return 0.0
+        prev = df["close"].shift(1)
+        tr = pd.concat(
+            [
+                df["high"] - df["low"],
+                (df["high"] - prev).abs(),
+                (df["low"] - prev).abs(),
+            ],
+            axis=1,
+        ).max(axis=1)
+        value = tr.rolling(period).mean().iloc[-1]
+        return float(value) if pd.notna(value) else 0.0
+
+    def _publish(self, symbol: str, interval: str, frame: pd.DataFrame) -> None:
+        if len(frame) < min(100, self.config.wave_min_bars):
+            return
+        closed = frame.tail(self.config.wave_lookback).copy()
+        ind = calculate_indicators(closed, config_from_env())
+        last = ind.iloc[-1]
+        prev = ind.iloc[-2] if len(ind) > 1 else last
+        atr = self._atr(closed, self.config.atr_period)
+        price = float(last["close"])
+        jaw = float(last.get("jaw_shifted", last.get("jaw", 0.0)) or 0.0)
+        teeth = float(last.get("teeth_shifted", last.get("teeth", 0.0)) or 0.0)
+        lips = float(last.get("lips_shifted", last.get("lips", 0.0)) or 0.0)
+        prev_jaw = float(prev.get("jaw_shifted", prev.get("jaw", jaw)) or jaw)
+        prev_price = float(prev.get("close", price))
+        price_move_atr = (price - prev_price) / atr if atr > 0 else 0.0
+        jaw_move_atr = (jaw - prev_jaw) / atr if atr > 0 else 0.0
+        direction_sign = 1.0 if price >= jaw else -1.0
+        angulation = direction_sign * (price_move_atr - jaw_move_atr)
+        distance = abs(price - jaw) / atr if atr > 0 else 0.0
+        bullish = bool(last.get("bullish_alligator", False))
+        bearish = bool(last.get("bearish_alligator", False))
+        wave_label = "?"
+        wave_phase = "UNKNOWN"
+        wave_score = 0.0
+        exhaustion = 0.0
+        invalidation = float(last.get("last_down_level", 0.0) or 0.0) if bullish else float(last.get("last_up_level", 0.0) or 0.0)
+        wave_conf = 0.0
+        hypotheses: list[WaveHypothesis] = []
+
+        try:
+            report = WaveEngine(
+                self.client,
+                base_interval=interval,
+                intervals=(interval,),
+                lookback=self.config.wave_lookback,
+                min_bars=self.config.wave_min_bars,
+                include_micro=False,
+            ).analyse(symbol, cache={interval: closed}, include_micro=False)
+            wsnap = report.frames.get(interval)
+            if wsnap is not None:
+                wave_label = wsnap.wave_label
+                wave_phase = wsnap.phase
+                wave_score = float(wsnap.wave_score if hasattr(wsnap, "wave_score") else wsnap.impulse_score or wsnap.confidence)
+                exhaustion = float(wsnap.exhaustion_risk or 0.0)
+                wave_conf = float(wsnap.confidence or 0.0)
+                if wsnap.invalidation_price:
+                    invalidation = float(wsnap.invalidation_price)
+                p = wave_conf / 100.0 if wave_conf > 1.0 else wave_conf
+                p = min(0.99, max(0.01, p))
+                hypotheses.append(
+                    WaveHypothesis(
+                        hypothesis_id=f"{symbol}:{interval}:primary:{wave_label}",
+                        label=wave_label,
+                        direction="LONG" if bullish else "SHORT" if bearish else "NEUTRAL",
+                        probability=p,
+                        secondary_probability=max(0.0, min(1.0, 1.0 - p)),
+                        invalidation_level=invalidation,
+                        confidence=p,
+                        exhaustion_risk=exhaustion,
+                    )
+                )
+        except Exception as exc:
+            log.debug("wave enrichment %s %s failed: %s", symbol, interval, exc)
+
+        long_ok = bullish and bool(last.get("alligator_awake", False)) and self.config.allow_long
+        short_ok = bearish and bool(last.get("alligator_awake", False)) and self.config.allow_short
+        if self.config.no_trade_when_uncertain and hypotheses:
+            h = max(hypotheses, key=lambda item: item.probability)
+            strong = (
+                h.probability >= self.config.probability_threshold
+                and h.margin >= self.config.probability_margin_threshold
+                and h.entropy <= self.config.entropy_threshold
+            )
+            long_ok = long_ok and strong
+            short_ok = short_ok and strong
+
+        decision = "LONG" if long_ok else "SHORT" if short_ok else "NO_TRADE"
+        candle_open_ms = int(pd.Timestamp(frame.index[-1]).timestamp() * 1000)
+        context = TFMarketContext(
+            symbol=symbol,
+            interval=interval,
+            version=0,
+            candle_open_time_ms=candle_open_ms,
+            candle_close_time_ms=candle_open_ms,
+            price=price,
+            atr=atr,
+            jaw=jaw,
+            teeth=teeth,
+            lips=lips,
+            jaw_slope_atr=jaw_move_atr,
+            price_slope_atr=price_move_atr,
+            angulation=angulation,
+            jaw_distance_atr=distance,
+            alligator_state="BULLISH" if bullish else "BEARISH" if bearish else "SLEEP",
+            wave_label=wave_label,
+            wave_phase=wave_phase,
+            wave_score=wave_score,
+            exhaustion_risk=exhaustion,
+            wave_confidence=wave_conf,
+            invalidation_long=invalidation if bullish else 0.0,
+            invalidation_short=invalidation if bearish else 0.0,
+            allow_long=long_ok,
+            allow_short=short_ok,
+            decision=decision,
+            hypotheses=tuple(hypotheses),
+            data_bars=len(closed),
+        )
+        self.cache.publish(context)
+
+    def bootstrap(self) -> None:
+        for symbol in self.config.symbols:
+            for interval in self.config.structural_timeframes:
+                if self.stop_event.is_set():
+                    return
+                try:
+                    self._bootstrap_one(symbol, interval)
+                except Exception as exc:
+                    self.last_error = f"{symbol}/{interval}: {type(exc).__name__}: {exc}"
+                    log.warning("MTF bootstrap failed: %s", self.last_error)
+
+    def _url(self) -> str:
+        base = "wss://stream.testnet.binance.vision" if self.client.testnet else "wss://stream.binance.com:9443"
+        streams = "/".join(
+            f"{symbol.lower()}@kline_{interval}"
+            for symbol in self.config.symbols
+            for interval in self.config.structural_timeframes
+        )
+        return f"{base}/stream?streams={streams}"
+
+    def _on_message(self, ws, raw: str) -> None:
+        try:
+            payload = json.loads(raw)
+            data = payload.get("data", payload)
+            if str(data.get("e", "")).lower() != "kline":
+                return
+            k = data["k"]
+            if not bool(k.get("x", False)):
+                self.last_event_at = int(time.time() * 1000)
+                return
+
+            symbol = str(k["s"]).upper()
+            interval = str(k["i"]).lower()
+            row = {
+                "open": float(k["o"]),
+                "high": float(k["h"]),
+                "low": float(k["l"]),
+                "close": float(k["c"]),
+                "volume": float(k["v"]),
+            }
+            open_time = pd.to_datetime(int(k["t"]), unit="ms", utc=True)
+            with self.lock:
+                frame = self.frames.get((symbol, interval))
+                if frame is None or frame.empty:
+                    frame = pd.DataFrame([row], index=[open_time])
+                elif frame.index[-1] == open_time:
+                    frame = frame.copy()
+                    for key, value in row.items():
+                        frame.at[open_time, key] = value
+                else:
+                    frame = pd.concat([frame, pd.DataFrame([row], index=[open_time])])
+                self.frames[(symbol, interval)] = frame.tail(300)
+                self._publish(symbol, interval, self.frames[(symbol, interval)])
+                self.last_event_at = int(time.time() * 1000)
+        except Exception as exc:
+            self.last_error = f"message: {type(exc).__name__}: {exc}"
+
+    def _run(self) -> None:
+        delay = 1.0
+        while not self.stop_event.is_set():
+            try:
+                self.ws = websocket.WebSocketApp(
+                    self._url(),
+                    on_message=self._on_message,
+                    on_error=lambda ws, err: setattr(self, "last_error", str(err)),
+                    on_close=lambda ws, code, reason: None,
+                )
+                self.ws.run_forever(ping_interval=20, ping_timeout=10)
+            except Exception as exc:
+                self.last_error = f"ws: {type(exc).__name__}: {exc}"
+            if self.stop_event.is_set():
+                break
+            time.sleep(delay)
+            delay = min(30.0, delay * 2.0)
+
+    def start(self) -> None:
+        with self.lock:
+            if self.running:
+                return
+            self.stop_event.clear()
+            self.running = True
+            self.bootstrap_thread = threading.Thread(target=self.bootstrap, daemon=True, name="williams-mtf-bootstrap")
+            self.bootstrap_thread.start()
+            self.thread = threading.Thread(target=self._run, daemon=True, name="williams-mtf-ws")
+            self.thread.start()
+
+    def stop(self) -> None:
+        self.stop_event.set()
+        if self.ws is not None:
+            try:
+                self.ws.close()
+            except Exception:
+                pass
+        self.running = False
+
+    def snapshot_status(self) -> dict:
+        snap = self.cache.snapshot()
+        populated = sum(len(frames) for frames in snap.by_symbol.values())
+        return {
+            "generation": snap.generation,
+            "symbols": len(snap.by_symbol),
+            "timeframes": len(set(tf for frames in snap.by_symbol.values() for tf in frames)),
+            "contexts": populated,
+            "ws_running": self.running,
+            "last_event_at": self.last_event_at,
+            "last_error": self.last_error,
+        }
+
+    def symbol_snapshot(self, symbol: str) -> dict:
+        frames = self.cache.snapshot().by_symbol.get(symbol.upper(), {})
+        return {
+            tf: {
+                "version": ctx.version,
+                "candle_close_time_ms": ctx.candle_close_time_ms,
+                "price": ctx.price,
+                "wave": ctx.wave_label,
+                "phase": ctx.wave_phase,
+                "confidence": ctx.wave_confidence,
+                "exhaustion": ctx.exhaustion_risk,
+                "decision": ctx.decision,
+                "allow_long": ctx.allow_long,
+                "allow_short": ctx.allow_short,
+                "angulation": ctx.angulation,
+                "jaw_distance_atr": ctx.jaw_distance_atr,
+                "invalidation_long": ctx.invalidation_long,
+                "invalidation_short": ctx.invalidation_short,
+            }
+            for tf, ctx in frames.items()
+        }
