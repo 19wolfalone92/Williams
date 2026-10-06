@@ -17,7 +17,7 @@ from mtf_context_service import MultiTimeframeContextService
 
 load_dotenv()
 API_TOKEN = os.getenv('MOBILE_API_TOKEN', '').strip()
-VERSION = '4.18.0'
+VERSION = '4.19.0'
 
 app = FastAPI(title='Williams Binance Bot API', version=VERSION)
 hub = WebSocketHub()
@@ -337,6 +337,12 @@ SCANNER_CACHE_SECONDS = max(
     10,
     int(os.getenv("SCANNER_CACHE_SECONDS", "30")),
 )
+SCANNER_AUTO_REFRESH_SECONDS = max(
+    30,
+    int(os.getenv("SCANNER_AUTO_REFRESH_SECONDS", "60")),
+)
+scanner_watchdog_stop = threading.Event()
+scanner_watchdog_thread = None
 
 
 def _scanner_snapshot():
@@ -408,6 +414,18 @@ def _scanner_worker():
             scanner_cache["scanning"] = False
 
 
+def _scanner_watchdog():
+    while not scanner_watchdog_stop.wait(SCANNER_AUTO_REFRESH_SECONDS):
+        try:
+            if not state.running or state.paused:
+                continue
+            if not _scanner_cache_fresh():
+                _start_scanner_background()
+        except Exception as exc:
+            with scanner_lock:
+                scanner_cache["last_error"] = f"watchdog: {type(exc).__name__}: {exc}"
+
+
 def _start_scanner_background():
     with scanner_lock:
         if scanner_cache["scanning"]:
@@ -424,6 +442,14 @@ def _start_scanner_background():
 
 @app.on_event('startup')
 def startup():
+    global scanner_watchdog_thread
+    scanner_watchdog_stop.clear()
+    scanner_watchdog_thread = threading.Thread(
+        target=_scanner_watchdog,
+        daemon=True,
+        name="williams-scanner-watchdog",
+    )
+    scanner_watchdog_thread.start()
     hub.configure_credentials(
         state.api_key,
         state.api_secret,
@@ -443,6 +469,7 @@ def startup():
 
 @app.on_event('shutdown')
 def shutdown():
+    scanner_watchdog_stop.set()
     mtf_service.stop()
     hub.stop()
     state.stop()
