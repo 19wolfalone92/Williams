@@ -1062,6 +1062,100 @@ private fun SystemHealthBar(status: Status) {
 }
 
 @Composable
+private fun PortfolioCard(
+    portfolio: PortfolioSummary,
+    status: Status
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = AppColors.surface)
+    ) {
+        Column(
+            Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(9.dp)
+        ) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Портфель", style = MaterialTheme.typography.titleMedium)
+                ModeChip(
+                    if (portfolio.configured) "LIVE VIEW • TESTNET" else "ОЖИДАЕТ КЛЮЧИ",
+                    if (portfolio.configured) AppColors.green else AppColors.amber
+                )
+            }
+
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                MiniMetric(
+                    "EQUITY",
+                    fmt(portfolio.totalEquityUsdt, 2)
+                )
+                MiniMetric(
+                    "FREE",
+                    fmt(portfolio.freeEquityUsdt, 2)
+                )
+                MiniMetric(
+                    "LOCKED",
+                    fmt(portfolio.lockedEquityUsdt, 2)
+                )
+            }
+
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                MiniMetric(
+                    "REALIZED",
+                    fmt(portfolio.realizedPnlUsdt, 2)
+                )
+                MiniMetric(
+                    "OPEN PnL",
+                    fmt(portfolio.unrealizedPnlUsdt, 2)
+                )
+                MiniMetric(
+                    "RISK",
+                    fmt(status.reservedRiskPct * 100.0, 2) + "%"
+                )
+            }
+
+            if (portfolio.assets.isEmpty()) {
+                Text(
+                    "Нет ненулевых активов или баланс ещё не получен.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AppColors.textMuted
+                )
+            } else {
+                portfolio.assets.take(8).forEach { asset ->
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            asset.asset,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            fmt(asset.total, 6) + " • " +
+                                if (asset.priceUsdt != null) {
+                                    fmt(asset.valueUsdt, 2) + " USDT"
+                                } else {
+                                    "цена неизвестна"
+                                },
+                            color = AppColors.textMuted,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun ReconcileBarrierScreen(
     padding: PaddingValues,
     status: Status,
