@@ -230,6 +230,8 @@ data class Status(
     val reconcileRequired: Boolean = false,
     val positions: List<PositionView> = emptyList(),
     val scannerScanning: Boolean = false,
+    val scannerState: String = "NOT_RUN",
+    val scannerError: String? = null,
     val scannerSymbols: Int = 0,
     val scanDurationMs: Long = 0L,
     val marketWsConnected: Boolean = false,
@@ -666,7 +668,7 @@ fun WilliamsApp(context: Context) {
     }
 
     LaunchedEffect(Unit) {
-        loadAll(false)
+        loadAll(true)
         while (isActive) {
             delay(15_000L)
             loadAll(false)
@@ -1152,12 +1154,14 @@ private fun ScanSummaryCard(
             Column(modifier = Modifier.weight(1f)) {
                 Text("Market Scanner", style = MaterialTheme.typography.titleMedium)
                 Text(
-                    if (status.scannerScanning)
-                        "Сканирование " + status.scannerSymbols + " пар…"
-                    else
-                        status.scannerSymbols.toString() +
-                            " ликвидных USDT-пар • " +
-                            formatMs(status.scanDurationMs),
+                    when (status.scannerState) {
+                        "RUNNING" -> "Сканирование рынка…"
+                        "READY" -> status.scannerSymbols.toString() +
+                            " ликвидных USDT-пар • " + formatMs(status.scanDurationMs)
+                        "ERROR" -> "Ошибка сканера: " +
+                            (status.scannerError ?: "неизвестная ошибка")
+                        else -> "Сканирование ещё не запускалось"
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = AppColors.textMuted
                 )
@@ -1170,7 +1174,7 @@ private fun ScanSummaryCard(
                 )
             } else {
                 IconButton(onClick = onScan) {
-                    Icon(Icons.Filled.Refresh, contentDescription = "Обновить")
+                    Icon(Icons.Filled.Refresh, contentDescription = "Запустить полное сканирование")
                 }
             }
         }
