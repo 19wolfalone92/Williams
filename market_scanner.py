@@ -160,7 +160,9 @@ class MarketScanner:
         self.wave_engine = MultiTimeframeWaveEngine(
             self.client,
             base_interval=self.interval,
-            include_micro=True,
+            include_micro=(
+                os.getenv("WAVE_MICRO_ENABLED", "false").lower() == "true"
+            ),
         )
         self.quant_enabled = os.getenv("FEATURE_STORE_ENABLED", "true").lower() == "true"
         self.quant_ranking_enabled = os.getenv(
@@ -333,7 +335,7 @@ class MarketScanner:
             return False
 
         ind = calculate_indicators(
-            htf.iloc[:-1].copy(),
+            htf,
             config_from_env(),
         )
         last = ind.iloc[-1]
