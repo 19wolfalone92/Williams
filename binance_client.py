@@ -191,6 +191,26 @@ class BinanceSpotClient:
             f'Binance request failed: {method} {path}'
         )
 
+    def _update_rate_limits_from_exchange_info(self, payload):
+        if not isinstance(payload, dict):
+            return
+        for row in payload.get("rateLimits", []) or []:
+            if not isinstance(row, dict):
+                continue
+            kind = str(row.get("rateLimitType", "")).upper()
+            interval = str(row.get("interval", "")).upper()
+            interval_num = int(row.get("intervalNum", 0) or 0)
+            limit = int(row.get("limit", 0) or 0)
+            if limit <= 0:
+                continue
+            if kind == "REQUEST_WEIGHT" and interval == "MINUTE" and interval_num == 1:
+                self.request_weight_limit_1m = limit
+            elif kind == "ORDERS":
+                if interval == "SECOND" and interval_num == 10:
+                    self.order_limit_10s = limit
+                elif interval == "MINUTE" and interval_num == 1:
+                    self.order_limit_1m = limit
+
     def sync_time(self):
         server=self._request('GET','/api/v3/time'); self.time_offset_ms=int(server['serverTime'])-int(time.time()*1000); return server
     def ping(self): return self._request('GET','/api/v3/ping')
@@ -223,6 +243,8 @@ class BinanceSpotClient:
     @staticmethod
     def _require_json_array(payload, endpoint):
         if isinstance(payload, list):
+            if method == "GET" and path == "/api/v3/exchangeInfo":
+                self._update_rate_limits_from_exchange_info(payload)
             return payload
         raise BinanceAPIError(
             f"Binance {endpoint} returned {type(payload).__name__}; expected array",
