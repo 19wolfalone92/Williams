@@ -209,7 +209,7 @@ data class Status(
     val dailyPnlUsdt: Double = 0.0,
     val tradingMode: String = "ACTIVE",
     val openPositions: Int = 0,
-    val maxOpenPositions: Int = 3,
+    val maxOpenPositions: Int = 1,
     val reservedRiskPct: Double = 0.0,
     val maxTotalRiskPct: Double = 0.01,
     val reconcileRequired: Boolean = false,
@@ -226,7 +226,10 @@ data class Status(
     val executionState: String = "STOPPED",
     val executionEnabled: Boolean = false,
     val executionContractReconcileRequired: Boolean = true,
-    val executionKillLatched: Boolean = false
+    val executionKillLatched: Boolean = false,
+    val p0GatePassed: Boolean = false,
+    val p0GateReason: String = "NOT_READY",
+    val maxOpenPositionsLocked: Boolean = true
 )
 
 data class Candle(
@@ -662,7 +665,7 @@ fun WilliamsApp(context: Context) {
         }
     }
 
-    val titles = listOf("Обзор", "Сканер", "Позиция", "История", "Настройки")
+    val titles = listOf("Overview", "Wave Map", "Positions", "Incidents", "Config")
     val icons = listOf(
         Icons.Filled.Dashboard,
         Icons.Filled.Radar,
@@ -698,11 +701,11 @@ fun WilliamsApp(context: Context) {
                         Spacer(Modifier.width(10.dp))
                         Column {
                             Text(
-                                "WILLIAMS TRADER",
+                                "WILLIAMS COCKPIT",
                                 style = MaterialTheme.typography.titleMedium
                             )
                             Text(
-                                "Native • без VPS • без Termux",
+                                "Backend authority • Android display/control only",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = AppColors.textMuted
                             )
@@ -710,6 +713,9 @@ fun WilliamsApp(context: Context) {
                     }
                 },
                 actions = {
+                    StatusDot("P0", if (status.p0GatePassed) AppColors.green else AppColors.red)
+                    StatusDot("WSS", if (status.marketWsConnected && !status.userStreamSyncRequired) AppColors.green else AppColors.amber)
+                    StatusDot("BINANCE", if (status.binanceConfigured) AppColors.green else AppColors.amber)
                     ModeChip("TESTNET", AppColors.green)
                     IconButton(onClick = { refresh(true) }) {
                         Icon(
@@ -743,7 +749,9 @@ fun WilliamsApp(context: Context) {
             }
         }
     ) { padding ->
-        when (tab) {
+        if (status.reconcileRequired || status.executionContractReconcileRequired || status.state == "RECONCILE_REQUIRED") {
+            ReconcileBarrierScreen(padding, status, onRecover = { command("/api/v1/control/recover") })
+        } else when (tab) {
             0 -> DashboardScreen(
                 padding = padding,
                 status = status,
@@ -756,7 +764,7 @@ fun WilliamsApp(context: Context) {
                     command("/api/v1/control/start")
                 },
                 onPause = {
-                    command("/api/v1/control/pause")
+                    command("/api/v1/control/panic")
                 },
                 onResume = {
                     command("/api/v1/control/resume")
@@ -844,6 +852,56 @@ fun WilliamsApp(context: Context) {
 }
 
 @Composable
+private fun SystemHealthBar(status: Status) {
+    Card(
+        Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = AppColors.surface)
+    ) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            StatusDot("P0", if (status.p0GatePassed) AppColors.green else AppColors.red)
+            StatusDot("VPS", if (status.recovered) AppColors.green else AppColors.amber)
+            StatusDot("BINANCE", if (status.binanceConfigured) AppColors.green else AppColors.amber)
+            StatusDot("WSS", if (status.marketWsConnected && !status.userStreamSyncRequired) AppColors.green else AppColors.amber)
+            StatusDot("EXEC", if (status.executionEnabled && !status.reconcileRequired) AppColors.green else AppColors.red)
+            Spacer(Modifier.weight(1f))
+            Text("1 POS MAX • LOCKED", color = AppColors.textMuted, style = MaterialTheme.typography.labelSmall)
+        }
+    }
+}
+
+@Composable
+private fun ReconcileBarrierScreen(
+    padding: PaddingValues,
+    status: Status,
+    onRecover: () -> Unit
+) {
+    Column(
+        Modifier.fillMaxSize().padding(padding).padding(18.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        Text("RECONCILE_REQUIRED", style = MaterialTheme.typography.headlineMedium, color = AppColors.red, fontWeight = FontWeight.Bold)
+        Text("Торговый цикл заблокирован. Android не принимает торговое решение и не снимает этот барьер локально.", color = AppColors.textMuted)
+        Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = AppColors.surface)) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                InfoRow("Execution State", status.state)
+                InfoRow("P0 Gate", if (status.p0GatePassed) "PASS" else status.p0GateReason)
+                InfoRow("WSS", if (status.marketWsConnected) "CONNECTED" else "OFFLINE")
+                InfoRow("Binance", if (status.binanceConfigured) "CONFIGURED" else "NOT CONFIGURED")
+                InfoRow("Positions", status.openPositions.toString() + " / 1")
+                status.error?.takeIf { it.isNotBlank() }?.let { Text(it, color = AppColors.red) }
+            }
+        }
+        Button(onClick = onRecover, modifier = Modifier.fillMaxWidth()) {
+            Text("RECONCILE / RECOVER")
+        }
+    }
+}
+
+@Composable
 private fun DashboardScreen(
     padding: PaddingValues,
     status: Status,
@@ -862,6 +920,10 @@ private fun DashboardScreen(
     val best = candidates.firstOrNull()
 
     LazyColumn(
+        item {
+            SystemHealthBar(status)
+        }
+
         modifier = Modifier
             .fillMaxSize()
             .padding(padding)
@@ -1842,7 +1904,7 @@ private fun SettingsScreen(
                             tint = AppColors.primary
                         )
                         Spacer(Modifier.width(8.dp))
-                        Text("Binance Testnet", style = MaterialTheme.typography.titleMedium)
+                        Text("Binance Testnet • secret never returned", style = MaterialTheme.typography.titleMedium)
                     }
 
                     OutlinedTextField(
@@ -1891,7 +1953,7 @@ private fun SettingsScreen(
 
                     Text(
                         if (status.binanceConfigured)
-                            "Статус: Binance подключён."
+                            "Статус: Binance подключён. Secret не возвращается в приложение."
                         else
                             "Статус: API ключи ещё не заданы.",
                         color = if (status.binanceConfigured)
@@ -2527,7 +2589,10 @@ private fun parseStatus(json: JSONObject): Status {
         executionContractReconcileRequired =
             executionContract?.optBoolean("reconciliation_required", true) ?: true,
         executionKillLatched =
-            executionContract?.optBoolean("kill_switch_latched", false) ?: false
+            executionContract?.optBoolean("kill_switch_latched", false) ?: false,
+        p0GatePassed = json.optBoolean("p0_gate_passed", executionContract?.optBoolean("execution_enabled", false) ?: false),
+        p0GateReason = json.optString("p0_gate_reason", if (executionContract?.optBoolean("reconciliation_required", true) == true) "RECONCILE_REQUIRED" else "NOT_READY"),
+        maxOpenPositionsLocked = json.optBoolean("max_open_positions_locked", true)
     )
 }
 
@@ -2649,6 +2714,8 @@ private fun commandLabel(path: String): String =
     when {
         path.endsWith("/start") -> "Двигатель запущен"
         path.endsWith("/pause") -> "Пауза включена"
+        path.endsWith("/panic") -> "PANIC STOP: новые входы остановлены"
+        path.endsWith("/kill") -> "EMERGENCY EXIT: торговля остановлена, позиция закрыта"
         path.endsWith("/resume") -> "Сканирование возобновлено"
         path.endsWith("/stop") -> "Двигатель остановлен"
         else -> "Команда выполнена"
