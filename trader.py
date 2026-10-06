@@ -690,7 +690,7 @@ class Trader:
         realtime context service normally keeps the cache current via WebSocket.
         """
         symbol = (symbol or self.symbol).upper()
-        from wave_engine import WaveEngine
+        from wave_engine import MultiTimeframeWaveEngine
         contexts = []
         for interval in self.config.structural_timeframes:
             df = fetch_klines(
@@ -719,7 +719,7 @@ class Trader:
             distance = abs(price - jaw) / atr if atr > 0 else 0.0
             bullish = bool(last.get('bullish_alligator', False))
             bearish = bool(last.get('bearish_alligator', False))
-            report = WaveEngine(
+            report = MultiTimeframeWaveEngine(
                 self.client,
                 base_interval=interval,
                 intervals=(interval,),
