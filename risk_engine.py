@@ -4,6 +4,7 @@ from dataclasses import dataclass
 @dataclass
 class RiskAnalysis:
     symbol: str
+    side: str
     entry_price: float
     stop_price: float
     take_profit_price: float
@@ -24,6 +25,7 @@ class RiskAnalysis:
     def to_dict(self):
         return {
             "symbol": self.symbol,
+            "side": self.side,
             "entry_price": self.entry_price,
             "stop_price": self.stop_price,
             "take_profit_price": self.take_profit_price,
@@ -78,77 +80,61 @@ class RiskEngine:
         stop_atr_multiplier: float = 2.0,
         target_atr_multiplier: float = 4.0,
         risk_pct_override: float = None,
+        side: str = "LONG",
+        invalidation_price: float = 0.0,
     ) -> RiskAnalysis:
 
         entry = float(entry_price)
         atr = float(atr)
+        side = str(side or "LONG").upper()
+
+        if side not in {"LONG", "SHORT"}:
+            return self._blocked(symbol, side, entry, "unsupported side")
 
         if entry <= 0:
-            return self._blocked(
-                symbol,
-                entry,
-                "invalid entry price",
-            )
+            return self._blocked(symbol, side, entry, "invalid entry price")
 
         if atr <= 0:
-            return self._blocked(
-                symbol,
-                entry,
-                "invalid ATR",
-            )
+            return self._blocked(symbol, side, entry, "invalid ATR")
 
         atr_pct = atr / entry
 
         if atr_pct > self.max_atr_pct:
-            return self._blocked(
-                symbol,
-                entry,
-                "ATR exceeds maximum allowed volatility",
-            )
+            return self._blocked(symbol, side, entry, "ATR exceeds maximum allowed volatility")
 
         if spread_pct > max_spread_pct:
-            return self._blocked(
-                symbol,
-                entry,
-                "spread exceeds maximum allowed",
-            )
+            return self._blocked(symbol, side, entry, "spread exceeds maximum allowed")
 
-        stop_distance = atr * stop_atr_multiplier
+        fallback_stop_distance = atr * stop_atr_multiplier
         target_distance = atr * target_atr_multiplier
 
-        if stop_distance <= 0:
-            return self._blocked(
-                symbol,
-                entry,
-                "invalid stop distance",
-            )
+        if fallback_stop_distance <= 0:
+            return self._blocked(symbol, side, entry, "invalid stop distance")
 
-        stop_price = entry - stop_distance
-        take_profit_price = entry + target_distance
+        structural_stop = float(invalidation_price or 0.0)
+        if side == "LONG":
+            stop_price = structural_stop if 0.0 < structural_stop < entry else entry - fallback_stop_distance
+            take_profit_price = entry + target_distance
+        else:
+            stop_price = structural_stop if structural_stop > entry else entry + fallback_stop_distance
+            take_profit_price = entry - target_distance
 
-        if stop_price <= 0:
-            return self._blocked(
-                symbol,
-                entry,
-                "calculated stop price is invalid",
-            )
+        if stop_price <= 0 or take_profit_price <= 0:
+            return self._blocked(symbol, side, entry, "calculated stop price is invalid")
 
+        stop_distance = abs(entry - stop_price)
         stop_pct = stop_distance / entry
-        target_pct = target_distance / entry
+        target_pct = abs(take_profit_price - entry) / entry
 
-        rr = target_distance / stop_distance
+        rr = abs(take_profit_price - entry) / stop_distance
 
         if rr < self.min_rr:
-            return self._blocked(
-                symbol,
-                entry,
-                f"R:R {rr:.3f} below minimum {self.min_rr:.3f}",
-            )
+            return self._blocked(symbol, side, entry, f"R:R {rr:.3f} below minimum {self.min_rr:.3f}")
 
         # Maximum money we are allowed to lose on this trade.
         effective_risk_pct = self.risk_per_trade_pct if risk_pct_override is None else float(risk_pct_override)
         if effective_risk_pct <= 0:
-            return self._blocked(symbol, entry, "risk allocation is zero")
+            return self._blocked(symbol, side, entry, "risk allocation is zero")
         risk_quote = self.balance * effective_risk_pct
 
         # Position size based on actual stop distance.
@@ -163,11 +149,7 @@ class RiskEngine:
         )
 
         if position_quote <= 0:
-            return self._blocked(
-                symbol,
-                entry,
-                "calculated position size is zero",
-            )
+            return self._blocked(symbol, side, entry, "calculated position size is zero")
 
         position_fraction = position_quote / self.balance
 
@@ -229,6 +211,7 @@ class RiskEngine:
 
         result = RiskAnalysis(
             symbol=symbol.upper(),
+            side=side,
             entry_price=entry,
             stop_price=stop_price,
             take_profit_price=take_profit_price,
@@ -245,9 +228,10 @@ class RiskEngine:
         result._risk_pct = effective_risk_pct * 100.0
         return result
 
-    def _blocked(self, symbol, entry, reason):
+    def _blocked(self, symbol, side, entry, reason):
         return RiskAnalysis(
             symbol=symbol.upper(),
+            side=str(side).upper(),
             entry_price=float(entry),
             stop_price=0.0,
             take_profit_price=0.0,
