@@ -95,7 +95,7 @@ object DiagnosticsArchive {
                 .append(test.optString("message"))
                 .append('\n')
         }
-        if (out.length() == 0) out.append("No test records for this domain.\n")
+        if (out.length == 0) out.append("No test records for this domain.\n")
         return out.toString()
     }
 
