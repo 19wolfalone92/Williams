@@ -129,7 +129,9 @@ class MainActivity : ComponentActivity() {
         // Production architecture: Android is a client/control surface.
         // StandaloneRuntime remains available only as an explicit debug diagnostic.
         if (BuildConfig.DEBUG && intent.getBooleanExtra("ENABLE_STANDALONE_DIAGNOSTIC", false)) {
+            if (BuildConfig.DEBUG && intent.getBooleanExtra("ENABLE_STANDALONE_DIAGNOSTIC", false)) {
             StandaloneRuntime.start(this)
+        }
         }
         setContent {
             WilliamsTheme {
@@ -303,13 +305,33 @@ data class PositionView(
     val riskPct: Double
 )
 
-private class StandaloneApi {
-    private val base = "http://127.0.0.1:18080"
-    private val token = "standalone"
+private class StandaloneApi(context: Context) {
+    private val prefs = context.getSharedPreferences("williams_backend", Context.MODE_PRIVATE)
     private val client = OkHttpClient.Builder()
         .connectTimeout(8, TimeUnit.SECONDS)
         .readTimeout(45, TimeUnit.SECONDS)
         .build()
+
+    val backendUrl: String
+        get() = prefs.getString("backend_url", "http://127.0.0.1:18080")!!.trimEnd('/')
+
+    val mobileToken: String
+        get() = prefs.getString("mobile_token", "standalone")!!.trim()
+
+    fun saveConnection(url: String, token: String) {
+        val normalized = url.trim().trimEnd('/')
+        require(normalized.isNotBlank()) { "Backend URL не задан" }
+        if (!normalized.startsWith("http://127.0.0.1") &&
+            !normalized.startsWith("https://") &&
+            !normalized.startsWith("http://10.") &&
+            !normalized.startsWith("http://192.168.")) {
+            error("Backend URL должен использовать HTTPS")
+        }
+        prefs.edit()
+            .putString("backend_url", normalized)
+            .putString("mobile_token", token.trim())
+            .apply()
+    }
 
     fun get(path: String): String = request("GET", path, null)
     fun post(path: String, body: String? = null): String = request("POST", path, body)
@@ -321,8 +343,8 @@ private class StandaloneApi {
         body: String?
     ): String {
         val builder = Request.Builder()
-            .url(base + path)
-            .header("Authorization", "Bearer " + token)
+            .url(backendUrl + path)
+            .header("Authorization", "Bearer " + mobileToken)
 
         val requestBody =
             body?.toRequestBody("application/json".toMediaType())
@@ -349,7 +371,7 @@ private class StandaloneApi {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun WilliamsApp(context: Context) {
-    val api = remember { StandaloneApi() }
+    val api = remember { StandaloneApi(context) }
     val scope = rememberCoroutineScope()
 
     var tab by remember { mutableIntStateOf(0) }
@@ -363,7 +385,9 @@ fun WilliamsApp(context: Context) {
     var logs by remember { mutableStateOf(emptyList<String>()) }
     var apiKey by remember { mutableStateOf("") }
     var apiSecret by remember { mutableStateOf("") }
-    var message by remember { mutableStateOf("Standalone engine запускается…") }
+    var backendUrl by remember { mutableStateOf(api.backendUrl) }
+    var mobileToken by remember { mutableStateOf(api.mobileToken) }
+    var message by remember { mutableStateOf("Подключение к Williams Backend…") }
     var refreshing by remember { mutableStateOf(false) }
     var backupPassword by remember { mutableStateOf("") }
     var backupMessage by remember { mutableStateOf("") }
@@ -492,6 +516,15 @@ fun WilliamsApp(context: Context) {
                     message = e.message ?: "Ошибка команды"
                 }
             }
+        }
+    }
+
+    fun saveBackendConnection() {
+        try {
+            api.saveConnection(backendUrl, mobileToken)
+            message = "Backend URL и Mobile API token сохранены"
+        } catch (e: Exception) {
+            message = e.message ?: "Не удалось сохранить Backend"
         }
     }
 
@@ -788,6 +821,11 @@ fun WilliamsApp(context: Context) {
             else -> SettingsScreen(
                 padding = padding,
                 status = status,
+                backendUrl = backendUrl,
+                mobileToken = mobileToken,
+                onBackendUrl = { backendUrl = it },
+                onMobileToken = { mobileToken = it },
+                onSaveBackend = ::saveBackendConnection,
                 apiKey = apiKey,
                 apiSecret = apiSecret,
                 onApiKey = { apiKey = it },
@@ -1702,6 +1740,11 @@ private fun HistoryScreen(
 private fun SettingsScreen(
     padding: PaddingValues,
     status: Status,
+    backendUrl: String,
+    mobileToken: String,
+    onBackendUrl: (String) -> Unit,
+    onMobileToken: (String) -> Unit,
+    onSaveBackend: () -> Unit,
     apiKey: String,
     apiSecret: String,
     onApiKey: (String) -> Unit,
@@ -1738,25 +1781,46 @@ private fun SettingsScreen(
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
-                            Icons.Filled.Lock,
+                            Icons.Filled.Wifi,
                             contentDescription = null,
                             tint = AppColors.green
                         )
                         Spacer(Modifier.width(8.dp))
-                        Text("Standalone", style = MaterialTheme.typography.titleMedium)
+                        Text("Williams Backend", style = MaterialTheme.typography.titleMedium)
                     }
 
                     Text(
-                        "Движок работает прямо внутри APK. VPS, Termux, Mobile API token и QR pairing здесь не нужны.",
+                        "Android — клиент и пульт управления. Исполнение и связь с Binance остаются на backend.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = AppColors.textMuted
                     )
 
-                    InfoRow("Режим", "BINANCE TESTNET")
-                    InfoRow("Backend", "Встроенный")
-                    InfoRow("Execution", "TESTNET AUTO")
-                    InfoRow("Max positions", "до 3 в портфеле")
-                    InfoRow("Max scan", "60 пар")
+                    OutlinedTextField(
+                        value = backendUrl,
+                        onValueChange = onBackendUrl,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Backend URL") },
+                        singleLine = true
+                    )
+
+                    OutlinedTextField(
+                        value = mobileToken,
+                        onValueChange = onMobileToken,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Mobile API token") },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation()
+                    )
+
+                    Button(
+                        onClick = onSaveBackend,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Сохранить подключение")
+                    }
+
+                    InfoRow("Execution authority", "Backend")
+                    InfoRow("Universe", "BTC / ETH / BNB / SOL / XRP")
                     InfoRow("MTF", "1D / 4H / 1H / 15M")
                 }
             }
