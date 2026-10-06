@@ -848,7 +848,9 @@ private class NativeEngine(
             .put("analysis_timeframes", JSONArray(analysisFrames))
             .put(
                 "execution_enabled",
-                !reconcileRequired
+                !reconcileRequired &&
+                    !killLatched &&
+                    !userStreamSyncRequired
             )
             .put("state", stateName())
             .put("open_positions", positionList().size)
@@ -5732,11 +5734,6 @@ private class NativeEngine(
             .put("consecutive_losses", consecutiveLosses)
             .put("allow", !cooldown && !hardPause && !dailyLossLimit && !maxTradesReached)
             .put("mode", mode)
-            .put("mode", when {
-                hardPause -> "PAUSED"
-                cooldown -> "COOLDOWN"
-                else -> "ACTIVE"
-            })
     }
 
     private fun scannerSnapshot(): JSONObject =
@@ -6382,6 +6379,7 @@ private class NativeEngine(
             .put("max_scan_symbols", maxScanSymbols)
             .put("scanner_universe", scannerUniverseLabel)
             .put("liquidity_preselect", maxScanSymbols)
+            .put("scanner_cadence_seconds", 90)
             .put("deep_wave_targets", waveTopN)
             .put("scanner_strategy", "liquidity -> base -> deep MTF/Waves -> risk -> score")
             .put("wave_top_n", waveTopN)
