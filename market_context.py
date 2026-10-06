@@ -70,6 +70,12 @@ class TFMarketContext:
     allow_long: bool = False
     allow_short: bool = False
     decision: str = "NO_TRADE"
+    long_probability: float = 0.0
+    short_probability: float = 0.0
+    no_trade_probability: float = 1.0
+    calibration_status: str = "UNCALIBRATED"
+    operative_interval: str = ""
+    operative_parent_interval: str = ""
     hypotheses: tuple[WaveHypothesis, ...] = field(default_factory=tuple)
     data_bars: int = 0
     live_only: bool = False
