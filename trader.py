@@ -340,10 +340,25 @@ class Trader:
             'filters': self.filters,
         }
 
-    def state(self): return self.db.state_get('position_state','FLAT')
-    def _set_state(self,state):
-        if state not in STATES: raise ValueError(f'Unknown state {state}')
-        self.db.state_set('position_state',state)
+    def state(self):
+        legacy = self.db.state_get('position_state')
+        if legacy is not None:
+            return legacy
+        return self.db.state_get(
+            f'position_state:{self.symbol}',
+            'FLAT',
+        )
+
+    def _set_state(self, state):
+        if state not in STATES:
+            raise ValueError(f'Unknown state {state}')
+        self.db.state_set('position_state', state)
+        # Mirror every legacy lifecycle transition into the canonical
+        # per-symbol state used by server/Cockpit recovery.
+        self.db.state_set(
+            f'position_state:{self.symbol}',
+            state,
+        )
 
     def normalize_qty(self, qty):
         if self.symbol_rules is None:
@@ -498,7 +513,7 @@ class Trader:
             # A confirmed BUY that is too small to represent a valid
             # Williams position must never silently become FLAT.
             if qty < self._min_qty():
-                self.db.state_delete('entry_client_order_id')
+                self.db.state_delete('entry_client_order_id'); self.db.state_delete(f'entry_client_order_id:{self.symbol}')
                 self._set_state('RECONCILE_REQUIRED')
                 self.db.log_event(
                     'ERROR',
@@ -950,6 +965,10 @@ class Trader:
         # process dies after Binance accepts the order but before the HTTP
         # response is processed, recovery can still identify the order.
         self.db.state_set('entry_client_order_id', cid)
+        self.db.state_set(
+            f'entry_client_order_id:{self.symbol}',
+            cid,
+        )
         self._set_state('ENTRY_PENDING')
 
         def _pre_submit(_snapshot):
