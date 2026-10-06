@@ -381,6 +381,25 @@ private class StandaloneApi(context: Context) {
     )
 
     init {
+        // Purge credentials written by pre-4.22 local-runtime builds.
+        // Production Android is now a backend-only cockpit.
+        runCatching {
+            val native = EncryptedSharedPreferences.create(
+                context,
+                "williams_native_secure",
+                MasterKey.Builder(context)
+                    .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                    .build(),
+                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+            )
+            native.edit()
+                .remove("api_key")
+                .remove("api_secret")
+                .remove("auto_run")
+                .apply()
+        }
+
         val legacy = context.getSharedPreferences(
             "williams_backend",
             Context.MODE_PRIVATE
