@@ -1,4 +1,4 @@
-# Williams Binance Bot + Android Dashboard 4.17.0
+# Williams Binance Bot + Android Dashboard 4.20.0
 
 Полноценная Testnet-first версия торгового бота по Williams (Alligator + AO + Fractals) с Android Dashboard, SQLite recovery, Binance WebSocket и защитными risk-фильтрами.
 
@@ -50,7 +50,7 @@
 
 REST остаётся обязательным reconciliation-слоем: WebSocket не используется как единственный источник истины для финансового состояния.
 
-### Android 4.14
+### Android 4.20
 - Standalone native Testnet engine — без VPS и без Termux для работы приложения;
 - одновременно до 3 независимых позиций с общим risk budget;
 - отдельный SELL для каждой открытой позиции;
@@ -125,7 +125,7 @@ python run_backtest.py --symbol BTCUSDT --interval 1h --start 2024-01-01 --end 2
 
 Открыть корень проекта в Android Studio и собрать `app`.
 
-Версия приложения: **4.12.0**, versionCode формируется GitHub Actions.
+Версия приложения: **4.20.0**, versionCode формируется GitHub Actions.
 
 Среда, в которой подготовлен этот архив, не содержит Android SDK/Gradle distribution, поэтому APK здесь не заявляется как собранный. Исходники Gradle-проекта подготовлены для сборки Android Studio.
 
