@@ -109,6 +109,7 @@ class MultiTimeframeWaveReport:
     nested_w3: bool = False
     nested_w3_parent_w5: bool = False
     nested_w3_count: int = 0
+    nested_w3_parent_positions: List[int] = field(default_factory=list)
     nested_countertrend_impulse: bool = False
     nested_countertrend_count: int = 0
     wave_path: str = ""
@@ -1259,6 +1260,7 @@ class MultiTimeframeWaveEngine:
                 nested_w3=False,
                 nested_w3_parent_w5=False,
                 nested_w3_count=0,
+                nested_w3_parent_positions=[],
                 nested_countertrend_impulse=False,
                 nested_countertrend_count=0,
                 wave_path="",
@@ -1283,24 +1285,11 @@ class MultiTimeframeWaveEngine:
         nested_w3 = False
         nested_parent_w5 = False
         nested_count = 0
+        nested_parent_positions = set()
         nested_countertrend_impulse = False
         nested_countertrend_count = 0
 
-        for parent, child in zip(ordered, ordered[1:]):
-            relation = self._nested_relationship(parent, child)
-            child_w3 = child.position == 3 and child.confidence >= 45.0
-            if relation == "ALIGNED_IMPULSE" and child_w3:
-                nested_w3 = True
-                nested_count += 1
-                if parent.position == 5:
-                    nested_parent_w5 = True
-            elif relation == "CORRECTION_IMPULSE" and child.confidence >= 40.0:
-                # A/B/C correction: A and C may each be five-wave impulses
-                # in the opposite direction to the parent impulse.
-                nested_countertrend_impulse = True
-                nested_countertrend_count += 1
-
-        exhaustion = exhaustion_sum / max(total, 1e-12)
+        # W3 may be nested inside any higher-degree impulse W1/W3/W5, not only the adjacent timeframe.\n        for parent_index, parent in enumerate(ordered):\n            for child in ordered[parent_index + 1:]:\n                relation = self._nested_relationship(parent, child)\n                child_w3 = child.position == 3 and child.confidence >= 45.0\n                if relation == "ALIGNED_IMPULSE" and child_w3:\n                    nested_w3 = True\n                    nested_count += 1\n                    nested_parent_positions.add(int(parent.position))\n                    if parent.position == 5:\n                        nested_parent_w5 = True\n                elif relation == "CORRECTION_IMPULSE" and child.confidence >= 40.0:\n                    nested_countertrend_impulse = True\n                    nested_countertrend_count += 1\n\n        exhaustion = exhaustion_sum / max(total, 1e-12)
         impulse = impulse_sum / max(total, 1e-12)
         structure = confidence_sum / max(total, 1e-12)
         child_quality = setup.confidence if setup is not None else 0.0
@@ -1472,6 +1461,7 @@ class MultiTimeframeWaveEngine:
             nested_w3=nested_w3,
             nested_w3_parent_w5=nested_parent_w5,
             nested_w3_count=nested_count,
+            nested_w3_parent_positions=sorted(nested_parent_positions),
             nested_countertrend_impulse=nested_countertrend_impulse,
             nested_countertrend_count=nested_countertrend_count,
             wave_path=path,
