@@ -477,35 +477,6 @@ fun WilliamsApp(context: Context) {
         }
     }
 
-    fun startTradingService() {
-        val intent =
-            Intent(
-                context,
-                TradingForegroundService::class.java
-            ).apply {
-                action =
-                    TradingForegroundService.ACTION_START
-            }
-
-        ContextCompat.startForegroundService(
-            context,
-            intent
-        )
-    }
-
-    fun stopTradingService() {
-        val intent =
-            Intent(
-                context,
-                TradingForegroundService::class.java
-            ).apply {
-                action =
-                    TradingForegroundService.ACTION_STOP
-            }
-
-        context.startService(intent)
-    }
-
     fun command(path: String) {
         scope.launch(Dispatchers.IO) {
             try {
