@@ -1354,14 +1354,18 @@ private class NativeEngine(
 
     private fun startMarketDataStream() {
         if (marketSocket != null) return
-        // Seed each local L2 book before consuming diff-depth updates. If a
-        // sequence gap is detected later, the affected symbol is re-snapshotted.
-        warmOrderBookSnapshots()
         val request = Request.Builder().url(wsStreamUrl()).build()
         marketSocket = http.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 marketSocketConnected = true
                 lastError = null
+                Thread {
+                    warmOrderBookSnapshots()
+                }.apply {
+                    isDaemon = true
+                    name = "williams-l2-bootstrap"
+                    start()
+                }
                 Thread {
                     try {
                         Thread.sleep(23L * 60L * 60L * 1000L)
@@ -3140,6 +3144,35 @@ private class NativeEngine(
         path: String,
         params: String
     ): JSONObject = signedRequest("POST", path, params)
+
+    /**
+     * Binance cancel-replace is not truly transactional. STOP_ON_FAILURE
+     * prevents the replacement attempt when cancellation itself fails;
+     * callers must still reconcile when the response is ambiguous.
+     */
+    private fun signedCancelReplace(
+        symbol: String,
+        cancelOrderId: Long,
+        side: String,
+        type: String,
+        quantity: String? = null,
+        price: String? = null,
+        timeInForce: String? = null,
+        newClientOrderId: String? = null
+    ): JSONObject {
+        val params = StringBuilder()
+            .append("symbol=").append(symbol)
+            .append("&cancelReplaceMode=STOP_ON_FAILURE")
+            .append("&cancelOrderId=").append(cancelOrderId)
+            .append("&side=").append(side)
+            .append("&type=").append(type)
+            .append("&newOrderRespType=FULL")
+        if (!quantity.isNullOrBlank()) params.append("&quantity=").append(quantity)
+        if (!price.isNullOrBlank()) params.append("&price=").append(price)
+        if (!timeInForce.isNullOrBlank()) params.append("&timeInForce=").append(timeInForce)
+        if (!newClientOrderId.isNullOrBlank()) params.append("&newClientOrderId=").append(newClientOrderId)
+        return signedPost("/api/v3/order/cancelReplace", params.toString())
+    }
 
     private fun symbolFilters(symbol: String): SymbolRules {
         val info = JSONObject(
