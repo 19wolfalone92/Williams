@@ -71,3 +71,14 @@ def test_symbol_limit_is_applied_after_validation(monkeypatch):
     monkeypatch.setenv("SCAN_MAX_SYMBOLS", "1")
     scanner = MarketScanner(FakeClient(), symbols=None)
     assert scanner._resolve_symbols() == ["BTCUSDT"]
+
+
+def test_autonomous_scan_does_not_truncate_discovered_universe_to_five():
+    scanner = object.__new__(MarketScanner)
+    scanner.explicit_symbols = False
+    scanner.scan_all_usdt = True
+    scanner._discover_usdt_symbols = lambda: [
+        "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "ADAUSDT"
+    ]
+    resolved = scanner._resolve_symbols()
+    assert len(resolved) == 6
