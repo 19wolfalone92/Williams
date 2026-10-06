@@ -125,9 +125,14 @@ class MainActivity : ComponentActivity() {
                 13001
             )
         }
-        // Primary mode: fully autonomous on-device Williams runtime.
-        // A remote backend remains optional and can be configured explicitly.
-        StandaloneRuntime.bootstrap(this)
+        // Keep the local runtime alive when the phone is used as the autonomous
+        // Testnet engine. The VPS backend remains the preferred 24/7 authority.
+        val serviceIntent = android.content.Intent(this, WilliamsForegroundService::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            ContextCompat.startForegroundService(this, serviceIntent)
+        } else {
+            startService(serviceIntent)
+        }
         setContent {
             WilliamsTheme {
                 WilliamsApp(this)
