@@ -1584,21 +1584,27 @@ private class NativeEngine(
             }
 
             if (k.optBoolean("x", false)) {
-                historyStore.upsertBatch(
-                    symbol,
-                    frame,
-                    listOf(
-                        MarketHistoryStore.Candle(
-                            openTime = candle.t,
-                            closeTime = k.optLong("T"),
-                            open = candle.o,
-                            high = candle.h,
-                            low = candle.l,
-                            close = candle.c,
-                            volume = candle.v
-                        )
-                    ),
+                val closedCandle = MarketHistoryStore.Candle(
+                    openTime = candle.t,
+                    closeTime = k.optLong("T"),
+                    open = candle.o,
+                    high = candle.h,
+                    low = candle.l,
+                    close = candle.c,
+                    volume = candle.v
                 )
+                indicatorExecutor.execute {
+                    runCatching {
+                        historyStore.upsertBatch(
+                            symbol,
+                            frame,
+                            listOf(closedCandle)
+                        )
+                    }.onFailure {
+                        lastError = "history update: " +
+                            (it.message ?: it.javaClass.simpleName)
+                    }
+                }
             }
         }
     }
