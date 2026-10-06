@@ -382,6 +382,12 @@ class MultiTimeframeContextService:
             "contexts": populated,
             "ws_running": self.running,
             "last_event_at": self.last_event_at,
+            "event_age_seconds": (
+                round((int(time.time() * 1000) - int(self.last_event_at)) / 1000.0, 2)
+                if self.last_event_at else None
+            ),
+            "watchdog_seconds": self.watchdog_seconds,
+            "healthy": bool(self.running and self.last_error is None),
             "last_error": self.last_error,
         }
 
@@ -399,6 +405,12 @@ class MultiTimeframeContextService:
                 "decision": ctx.decision,
                 "allow_long": ctx.allow_long,
                 "allow_short": ctx.allow_short,
+                "long_probability": ctx.long_probability,
+                "short_probability": ctx.short_probability,
+                "no_trade_probability": ctx.no_trade_probability,
+                "calibration_status": ctx.calibration_status,
+                "operative_interval": ctx.operative_interval,
+                "operative_parent_interval": ctx.operative_parent_interval,
                 "angulation": ctx.angulation,
                 "jaw_distance_atr": ctx.jaw_distance_atr,
                 "invalidation_long": ctx.invalidation_long,
