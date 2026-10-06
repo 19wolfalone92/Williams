@@ -2,6 +2,7 @@ import os, tempfile
 from decimal import Decimal, ROUND_DOWN
 from datetime import datetime, timezone
 from trader import Trader
+from binance_rules import SymbolRules
 from db import Database
 
 class FakeClient:
@@ -21,7 +22,7 @@ class FakeClient:
     def decimal_format(self,value):return f'{float(value):.8f}'
 
 def new_trader(path,c):
-    t=Trader.__new__(Trader);t.symbol='BTCUSDT';t.interval='1h';t.position_fraction=.25;t.stop_pct=.02;t.target_pct=.04;t.poll_seconds=1;t.risk_per_trade_pct=.01;t.max_daily_loss_pct=.03;t.max_trades_day=5;t.max_consecutive_losses=3;t.cooldown_minutes=30;t.min_risk_reward=1.5;t.atr_period=14;t.max_atr_pct=.08;t.max_spread_pct=.0015;t.require_htf_confirmation=False;t.htf_interval='4h';t.db=Database(path);t.client=c;t.db.state_set('active_symbol','BTCUSDT');t.db.state_set('foreign_base_balance:BTCUSDT',0.0);t.filters={'LOT_SIZE':{'minQty':'0.001','stepSize':'0.001'},'PRICE_FILTER':{'tickSize':'0.01'},'MIN_NOTIONAL':{'minNotional':'10'}};t.base_asset='BTC';t.quote_asset='USDT';t.recovered=False;t.notify=lambda m:None;return t
+    t=Trader.__new__(Trader);t.symbol='BTCUSDT';t.interval='1h';t.position_fraction=.25;t.stop_pct=.02;t.target_pct=.04;t.poll_seconds=1;t.risk_per_trade_pct=.01;t.max_daily_loss_pct=.03;t.max_trades_day=5;t.max_consecutive_losses=3;t.cooldown_minutes=30;t.min_risk_reward=1.5;t.atr_period=14;t.max_atr_pct=.08;t.max_spread_pct=.0015;t.require_htf_confirmation=False;t.htf_interval='4h';t.db=Database(path);t.client=c;t.db.state_set('active_symbol','BTCUSDT');t.db.state_set('foreign_base_balance:BTCUSDT',0.0);t.filters={'LOT_SIZE':{'minQty':'0.001','stepSize':'0.001'},'PRICE_FILTER':{'tickSize':'0.01'},'MIN_NOTIONAL':{'minNotional':'10'}};t.symbol_rules=SymbolRules(symbol='BTCUSDT',base_asset='BTC',quote_asset='USDT',min_qty=Decimal('0.001'),max_qty=Decimal('1000'),step_size=Decimal('0.001'),min_price=Decimal('0.01'),max_price=Decimal('1000000'),tick_size=Decimal('0.01'),min_notional=Decimal('10'));t.base_asset='BTC';t.quote_asset='USDT';t.recovered=False;t.notify=lambda m:None;return t
 
 def seed(t,c):
     buy={'symbol':'BTCUSDT','side':'BUY','type':'MARKET','orderId':1,'clientOrderId':'WILLV4_ENTRY_seed','status':'FILLED','price':'100','origQty':'1','executedQty':'1','cummulativeQuoteQty':'100','transactTime':1000,'time':1000};c.orders.append(buy);c.base_free=1;c.quote-=100;t.db.save_order(buy);t.db.save_trade(entry_time=datetime.fromtimestamp(1,tz=timezone.utc).isoformat(),symbol='BTCUSDT',side='LONG',entry_price=100,quantity=1,entry_order_id='1',fees=0)
