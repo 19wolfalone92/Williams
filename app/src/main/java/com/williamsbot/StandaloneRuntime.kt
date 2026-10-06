@@ -6492,7 +6492,6 @@ private class NativeEngine(
             .put("stop_loss_pct", 0.02)
             .put("take_profit_pct", 0.04)
             .put("risk_per_trade_pct", maxRiskPerTradePct)
-            .put("max_open_positions", maxOpenPositions)
             .put("max_daily_loss_pct", 0.03)
             .put("trades_today", dailyGuard.optInt("trades_today", 0))
             .put("daily_pnl_usdt", dailyGuard.optDouble("daily_pnl_usdt", 0.0))
