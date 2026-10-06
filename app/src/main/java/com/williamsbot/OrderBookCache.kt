@@ -145,7 +145,7 @@ class OrderBookCache(
             val qty = row.optString(1).toDoubleOrNull() ?: continue
             if (price > 0.0 && qty > 0.0) target[price] = qty
         }
-        trimMap(target, maxLevels)
+        trimMap(target, maxLevels, keepHighest = false)
     }
 
     private fun applyLevels(
@@ -163,19 +163,18 @@ class OrderBookCache(
     }
 
     private fun trim(book: Book) {
-        trimMap(book.bids, maxLevels)
-        trimMap(book.asks, maxLevels)
+        trimMap(book.bids, maxLevels, keepHighest = true)
+        trimMap(book.asks, maxLevels, keepHighest = false)
     }
 
     private fun trimMap(
         map: MutableMap<Double, Double>,
-        limit: Int
+        limit: Int,
+        keepHighest: Boolean
     ) {
         if (map.size <= limit) return
-        val keep = map.keys.sorted().let { sorted ->
-            if (map === books.values.firstOrNull()?.bids) sorted.takeLast(limit).toSet()
-            else sorted.take(limit).toSet()
-        }
+        val sorted = map.keys.sorted()
+        val keep = if (keepHighest) sorted.takeLast(limit).toSet() else sorted.take(limit).toSet()
         map.keys.toList()
             .filter { it !in keep }
             .forEach { map.remove(it) }
