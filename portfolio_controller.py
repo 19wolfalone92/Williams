@@ -20,7 +20,6 @@ class PortfolioController:
     def __init__(self, client, balance_quote: float, symbols=None, interval=None):
         self.client = client
         self.interval = interval or os.getenv("INTERVAL", "1h")
-        self.max_open_positions = max(1, int(os.getenv("MAX_OPEN_POSITIONS", "3")))
         self.max_total_risk_pct = min(0.01, max(0.0, float(os.getenv("MAX_TOTAL_RISK_PCT", "0.01"))))
         self.max_risk_per_trade_pct = min(0.005, max(0.0, float(os.getenv("MAX_RISK_PER_TRADE_PCT", "0.005"))))
         self.min_risk_allocation_pct = min(
@@ -78,9 +77,6 @@ class PortfolioController:
 
     def select_portfolio(self, open_risk_quote: float = 0.0, open_positions: int = 0):
         """Return best candidates that fit the remaining 1% portfolio risk."""
-        if open_positions >= self.max_open_positions:
-            return []
-
         analysed = self._analyse_candidates(self.scanner.scan())
         if not analysed:
             return []
@@ -91,10 +87,9 @@ class PortfolioController:
         used_pct = float(open_risk_quote) / balance if balance > 0 else self.max_total_risk_pct
         remaining_pct = max(0.0, self.max_total_risk_pct - used_pct)
         selections = []
-        slots = self.max_open_positions - int(open_positions)
 
         for base in analysed:
-            if slots <= 0 or remaining_pct <= 0:
+            if remaining_pct <= 0:
                 break
 
             allocation_pct = min(self.max_risk_per_trade_pct, remaining_pct)
@@ -122,7 +117,6 @@ class PortfolioController:
                 reason=f"STRICT_SIGNAL + portfolio risk allocation {allocation_pct:.2%}",
             ))
             remaining_pct -= allocation_pct
-            slots -= 1
 
         return selections
 
@@ -143,11 +137,6 @@ class PortfolioController:
         print("WILLIAMS PORTFOLIO CONTROLLER — DRY RUN")
         print("NO ORDERS")
         print("=" * 72)
-        if has_open_position and self.max_open_positions <= 1:
-            print("POSITION: OPEN")
-            print("ACTION: BLOCKED")
-            print("REASON: MAX_OPEN_POSITIONS reached")
-            return None
         if not selections:
             print("SELECTION: NONE")
             print("ACTION: WAIT")
