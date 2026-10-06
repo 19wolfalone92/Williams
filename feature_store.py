@@ -121,16 +121,29 @@ class FeatureStore:
         passed INTEGER NOT NULL,
         payload_json TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS shadow_executions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp_ms INTEGER NOT NULL,
+        symbol TEXT NOT NULL,
+        payload_json TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_shadow_execution_symbol_time
+      ON shadow_executions(symbol, timestamp_ms DESC);
     """
 
     def __init__(self, path: str | None = None):
         self.path = path or os.getenv("FEATURE_STORE_PATH", "data/features.sqlite3")
-        parent = os.path.dirname(os.path.abspath(self.path))
+        parent = (
+            os.path.dirname(os.path.abspath(self.path))
+            if self.path != ":memory:"
+            else ""
+        )
         if parent:
             os.makedirs(parent, exist_ok=True)
         self._lock = threading.RLock()
         self._conn = sqlite3.connect(
-            self.path,
+            ":memory:" if self.path == ":memory:" else self.path,
             check_same_thread=False,
             timeout=10.0,
         )
