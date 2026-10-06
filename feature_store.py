@@ -220,13 +220,6 @@ class FeatureStore:
         data = dict(payload)
         with self._lock:
             self._conn.execute(
-                "CREATE TABLE IF NOT EXISTS shadow_executions ("
-                "id INTEGER PRIMARY KEY AUTOINCREMENT,"
-                "timestamp_ms INTEGER NOT NULL,"
-                "symbol TEXT NOT NULL,"
-                "payload_json TEXT NOT NULL)"
-            )
-            self._conn.execute(
                 "INSERT INTO shadow_executions (timestamp_ms,symbol,payload_json) VALUES (?,?,?)",
                 (
                     int(data.get("timestamp_ms", int(time.time() * 1000))),
@@ -239,13 +232,6 @@ class FeatureStore:
     def recent_shadow_executions(self, limit: int = 50) -> list[dict[str, Any]]:
         limit = max(1, min(int(limit), 500))
         with self._lock:
-            self._conn.execute(
-                "CREATE TABLE IF NOT EXISTS shadow_executions ("
-                "id INTEGER PRIMARY KEY AUTOINCREMENT,"
-                "timestamp_ms INTEGER NOT NULL,"
-                "symbol TEXT NOT NULL,"
-                "payload_json TEXT NOT NULL)"
-            )
             rows = self._conn.execute(
                 "SELECT payload_json FROM shadow_executions ORDER BY timestamp_ms DESC, id DESC LIMIT ?",
                 (limit,),
