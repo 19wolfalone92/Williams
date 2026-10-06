@@ -196,6 +196,36 @@ class Database:
         if not self._transaction_active:
             self.conn.commit()
 
+    def save_execution_intent(self, intent, status, reason=''):
+        self.conn.execute(
+            '''INSERT OR REPLACE INTO execution_intents(
+                intent_id,symbol,side,order_type,purpose,
+                required_context_versions_json,hypothesis_id,invalidation_level,status,reason
+            ) VALUES(?,?,?,?,?,?,?,?,?,?)''',
+            (
+                intent.intent_id,
+                intent.symbol,
+                intent.side,
+                intent.order_type,
+                intent.purpose,
+                json.dumps(dict(intent.required_context_versions), sort_keys=True),
+                intent.hypothesis_id,
+                float(intent.invalidation_level or 0.0),
+                status,
+                reason,
+            ),
+        )
+        if not self._transaction_active:
+            self.conn.commit()
+
+    def save_execution_event(self, intent_id, event, payload=None):
+        self.conn.execute(
+            'INSERT INTO execution_events(intent_id,event,payload_json) VALUES(?,?,?)',
+            (intent_id, event, json.dumps(payload, default=str) if payload is not None else None),
+        )
+        if not self._transaction_active:
+            self.conn.commit()
+
     def log_event(self, level, event, message, raw=None):
         self.conn.execute(
             'INSERT INTO events(level,event,message,raw_json) VALUES(?,?,?,?)',
