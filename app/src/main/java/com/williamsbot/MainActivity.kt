@@ -3182,9 +3182,30 @@ private fun parseStatus(json: JSONObject): Status {
             executionContract?.optBoolean("reconciliation_required", true) ?: true,
         executionKillLatched =
             executionContract?.optBoolean("kill_switch_latched", false) ?: false,
-        p0GatePassed = json.optBoolean("p0_gate_passed", executionContract?.optBoolean("execution_enabled", false) ?: false),
-        p0GateReason = json.optString("p0_gate_reason", if (executionContract?.optBoolean("reconciliation_required", true) == true) "RECONCILE_REQUIRED" else "NOT_READY"),
-        maxOpenPositionsLocked = json.optBoolean("max_open_positions_locked", false)
+        p0GatePassed = json.optBoolean(
+            "p0_gate_passed",
+            executionContract?.optBoolean("execution_enabled", false) ?: false
+        ),
+        p0GateReason = json.optString(
+            "p0_gate_reason",
+            if (executionContract?.optBoolean("reconciliation_required", true) == true) {
+                "RECONCILE_REQUIRED"
+            } else {
+                "NOT_READY"
+            }
+        ),
+        maxOpenPositionsLocked = json.optBoolean(
+            "max_open_positions_locked",
+            false
+        ),
+        unresolvedSymbols = json.optJSONArray("unresolved_symbols")?.let { array ->
+            List(array.length()) { i -> array.optString(i) }
+                .filter { it.isNotBlank() }
+        } ?: emptyList(),
+        pendingEntrySymbols = json.optJSONArray("pending_entry_symbols")?.let { array ->
+            List(array.length()) { i -> array.optString(i) }
+                .filter { it.isNotBlank() }
+        } ?: emptyList()
     )
 }
 
