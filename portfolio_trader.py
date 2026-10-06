@@ -44,8 +44,8 @@ class MultiPositionTrader:
                 else [x.strip().upper() for x in raw_symbols.split(",") if x.strip()]
             )
         self.max_open_positions = max(
-            1,
-            int(os.getenv("MAX_OPEN_POSITIONS", "1")),
+            0,
+            int(os.getenv("MAX_OPEN_POSITIONS", "0")),
         )
         self.max_total_risk_pct = min(
             0.01,
@@ -1340,7 +1340,7 @@ class MultiPositionTrader:
             return False
         if self.db.open_trade(symbol):
             return False
-        if len(self.open_trades()) >= self.max_open_positions:
+        if self.max_open_positions > 0 and len(self.open_trades()) >= self.max_open_positions:
             return False
         if self._pending_entries():
             return False
@@ -1549,7 +1549,7 @@ class MultiPositionTrader:
                 "results": [],
                 "reason": "ENTRY_PENDING: durable entry intent requires recovery",
             }
-        if len(open_trades) >= self.max_open_positions:
+        if self.max_open_positions > 0 and len(open_trades) >= self.max_open_positions:
             return {
                 "status": "POSITION_LIMIT",
                 "results": [],
