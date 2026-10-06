@@ -43,6 +43,26 @@ class MockExchange:
             data["lastUpdateId"] += 10
         return data
 
+    def depth_update(self, symbol):
+        """Return one Binance-like depthUpdate event with controllable U/u gap."""
+        book = self.books[symbol]
+        base = int(book["lastUpdateId"])
+        first = base + 1
+        final = first
+        if self.sequence_gap_next:
+            self.sequence_gap_next = False
+            first += 5
+            final += 5
+        book["lastUpdateId"] = final
+        return {
+            "e": "depthUpdate",
+            "s": symbol,
+            "U": first,
+            "u": final,
+            "b": copy.deepcopy(book["bids"]),
+            "a": copy.deepcopy(book["asks"]),
+        }
+
     def ticker_24hr(self, symbol=None):
         rows = []
         for s in self.prices:
