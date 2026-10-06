@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from typing import Optional
+import os
 
 from market_scanner import MarketScanner, Candidate
 from risk_engine import RiskEngine, RiskAnalysis
@@ -30,7 +31,7 @@ class PortfolioScanner:
 
         self.risk_engine = RiskEngine(
             balance_quote=balance_quote,
-            risk_per_trade_pct=0.005,
+            risk_per_trade_pct=min(0.005, max(0.0, float(os.getenv("MAX_RISK_PER_TRADE_PCT", "0.005"))),
             max_position_fraction=0.25,
             max_daily_loss_pct=0.03,
             min_rr=1.5,
@@ -114,19 +115,31 @@ class PortfolioScanner:
         )
 
 
-    def allocate(self, open_risk_quote=0.0, open_positions=0, max_open_positions=1):
-        """Return ranked candidates whose new stop risk fits the 1% portfolio budget."""
+    def allocate(self, open_risk_quote=0.0, open_positions=0, max_open_positions=None):
+        """Allocate candidates from the remaining portfolio risk budget.
+        
+        Position count is telemetry/backward compatibility only. Capacity is
+        controlled by MAX_TOTAL_RISK_PCT and MAX_RISK_PER_TRADE_PCT.
+        """
         candidates = self.scan()
         balance = max(float(self.risk_engine.balance), 0.0)
-        used_pct = float(open_risk_quote) / balance if balance > 0 else 0.01
-        remaining_pct = max(0.0, 0.01 - used_pct)
+        max_total_risk_pct = min(
+            0.01,
+            max(0.0, float(os.getenv("MAX_TOTAL_RISK_PCT", "0.01"))),
+        )
+        max_risk_per_trade_pct = min(
+            0.005,
+            max(0.0, float(os.getenv("MAX_RISK_PER_TRADE_PCT", "0.005"))),
+        )
+        used_pct = float(open_risk_quote) / balance if balance > 0 else max_total_risk_pct
+        remaining_pct = max(0.0, max_total_risk_pct - used_pct)
         result = []
 
         for item in candidates:
-            if open_positions + len(result) >= max_open_positions:
+            if remaining_pct <= 0:
                 break
-            allocation_pct = min(0.005, remaining_pct)
-            if allocation_pct < 0.001:
+            allocation_pct = min(max_risk_per_trade_pct, remaining_pct)
+            if allocation_pct <= 0:
                 break
 
             entry = item.risk.entry_price
