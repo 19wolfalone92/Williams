@@ -24,8 +24,6 @@ class EquityCircuitBreakerTest {
             ).tripped
         )
     }
-}
-
 
     @Test
     fun resetsAtUtcDayBoundary() {
@@ -37,3 +35,6 @@ class EquityCircuitBreakerTest {
         assertFalse(b.observe(950.0, nextUtcDay).tripped)
         assertTrue(b.observe(921.5, nextUtcDay + 1_000L).tripped)
     }
+
+
+}
