@@ -832,13 +832,22 @@ class Trader:
             required_context_versions=required_versions,
             purpose='ENTRY',
             permission_interval=self.interval,
+            client_order_id=cid,
             quote_order_quantity=self.client.decimal_format(quote_d),
         )
         cid = f'WILLV4_ENTRY_{uuid.uuid4().hex[:20]}'
 
+        # Durable reservation is written BEFORE the Binance POST. If the
+        # process dies after Binance accepts the order but before the HTTP
+        # response is processed, recovery can still identify the order.
+        self.db.state_set('entry_client_order_id', cid)
+        self._set_state('ENTRY_PENDING')
+
         def _pre_submit(_snapshot):
-            if self.state() != 'FLAT':
+            if self.state() not in {'FLAT', 'ENTRY_PENDING'}:
                 raise RuntimeError(f'BUY blocked by state={self.state()}')
+            if self.state() == 'ENTRY_PENDING' and self.db.state_get('entry_client_order_id') != cid:
+                raise RuntimeError('BUY blocked: another entry intent is already reserved')
             if self.db.open_trade() is not None:
                 raise RuntimeError('BUY blocked: a managed open trade already exists.')
             equity_ok, equity_reason = self.equity_breaker.check(self.db, self.available_quote(), self.symbol)
@@ -859,9 +868,9 @@ class Trader:
                 pre_submit_checks=_pre_submit,
             )
             if not result.accepted:
+                self.db.state_delete('entry_client_order_id')
+                self._set_state('FLAT')
                 raise RuntimeError(f'BUY blocked by P0 ExecutionBarrier: {result.reason}')
-            self.db.state_set('entry_client_order_id', cid)
-            self._set_state('ENTRY_PENDING')
             order = result.response
             self.db.save_order(order)
 
