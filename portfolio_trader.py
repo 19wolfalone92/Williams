@@ -42,6 +42,10 @@ class MultiPositionTrader:
                 if raw_symbols.upper() in {"ALL", "AUTO", "*"}
                 else [x.strip().upper() for x in raw_symbols.split(",") if x.strip()]
             )
+        self.max_open_positions = max(
+            1,
+            int(os.getenv("MAX_OPEN_POSITIONS", "1")),
+        )
         self.max_total_risk_pct = min(
             0.01,
             max(
@@ -1329,11 +1333,15 @@ class MultiPositionTrader:
     def _can_enter(self, symbol):
         if symbol in self._locks:
             return False
+        if self.unresolved_symbols():
+            return False
         if self.state(symbol) == "RECONCILE_REQUIRED":
             return False
         if self.db.open_trade(symbol):
             return False
-        if any(self.state(s) == "RECONCILE_REQUIRED" for s in self.symbols):
+        if len(self.open_trades()) >= self.max_open_positions:
+            return False
+        if self._pending_entries():
             return False
         return True
 
@@ -1532,12 +1540,27 @@ class MultiPositionTrader:
                 "reason": "no USDT balance",
             }
 
+        open_trades = self.open_trades()
+        pending_entries = self._pending_entries()
+        if pending_entries:
+            return {
+                "status": "BLOCKED",
+                "results": [],
+                "reason": "ENTRY_PENDING: durable entry intent requires recovery",
+            }
+        if len(open_trades) >= self.max_open_positions:
+            return {
+                "status": "POSITION_LIMIT",
+                "results": [],
+                "reason": f"MAX_OPEN_POSITIONS={self.max_open_positions}",
+                "open_positions": len(open_trades),
+            }
+
         controller = PortfolioController(
             self.client,
             balance_quote=balance,
             symbols=self.symbols,
         )
-        open_trades = self.open_trades()
         selections = controller.select_portfolio(
             open_risk_quote=self.reserved_risk_quote(),
             open_positions=len(open_trades),
