@@ -945,6 +945,17 @@ private fun DashboardScreen(
         }
 
         item {
+            ControlCard(
+                status = status,
+                onStart = onStart,
+                onPause = onPause,
+                onResume = onResume,
+                onStop = onStop,
+                onKill = onKill
+            )
+        }
+
+        item {
             HeroCard(status = status, best = best)
         }
 
@@ -990,17 +1001,6 @@ private fun DashboardScreen(
 
         item {
             RiskCard(status)
-        }
-
-        item {
-            ControlCard(
-                status = status,
-                onStart = onStart,
-                onPause = onPause,
-                onResume = onResume,
-                onStop = onStop,
-                onKill = onKill
-            )
         }
 
         item {
