@@ -36,14 +36,13 @@ class MultiPositionTrader:
             x.strip().upper()
             for x in os.getenv(
                 "AUTO_SCAN_SYMBOLS",
-                "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,ADAUSDT,"
-                "DOGEUSDT,AVAXUSDT,LINKUSDT,DOTUSDT",
+                "BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,XRPUSDT",
             ).split(",")
             if x.strip()
         ]
         self.max_open_positions = max(
             1,
-            int(os.getenv("MAX_OPEN_POSITIONS", "3")),
+            int(os.getenv("MAX_OPEN_POSITIONS", "1")),
         )
         self.max_total_risk_pct = min(
             0.01,
