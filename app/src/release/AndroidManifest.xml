@@ -1,5 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <!-- Local Williams backend uses http://localhost:8000.
          network_security_config restricts cleartext to localhost only. -->
-    <application android:usesCleartextTraffic="true" />
+    <!-- Release builds use HTTPS/WSS only. -->
+    <application android:usesCleartextTraffic="false" />
 </manifest>
