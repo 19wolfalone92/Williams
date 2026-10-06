@@ -2966,9 +2966,7 @@ private class NativeEngine(
 
     @Synchronized
     private fun auditManagedOpenOrders() {
-        val openOrders = JSONArray(
-            signedRawGet("/api/v3/openOrders", "")
-        )
+        val openOrders = signedOpenOrdersArray()
         val openLists = signedOpenOrderLists().optJSONArray("orderList") ?: JSONArray()
 
         val expectedSymbols =
@@ -3097,13 +3095,7 @@ private class NativeEngine(
                 )
             }
 
-            val allOrders = JSONArray(
-                signedRawGet(
-                    "/api/v3/allOrders",
-                    "symbol=" + stored.symbol +
-                        "&limit=1000"
-                )
-            )
+            val allOrders = signedAllOrdersArray(stored.symbol)
 
             val exitFills = mutableListOf<JSONObject>()
             var soldQty = 0.0
@@ -3434,6 +3426,33 @@ private class NativeEngine(
             JSONObject(body)
         }.getOrElse {
             JSONObject().put("orders", JSONArray(body))
+        }
+    }
+
+    private fun signedOpenOrdersArray(symbol: String? = null): JSONArray {
+        val response = signedOpenOrders(symbol)
+        return response.optJSONArray("orders")
+            ?: if (response.has("symbol")) {
+                JSONArray().put(response)
+            } else {
+                throw IllegalStateException(
+                    "Binance /openOrders returned an unexpected JSON object"
+                )
+            }
+    }
+
+    private fun signedAllOrdersArray(symbol: String): JSONArray {
+        val body = signedRawGet(
+            "/api/v3/allOrders",
+            "symbol=" + symbol + "&limit=1000"
+        )
+        return runCatching {
+            JSONArray(body)
+        }.getOrElse {
+            throw IllegalStateException(
+                "Binance /allOrders returned a non-array JSON response",
+                it
+            )
         }
     }
 
