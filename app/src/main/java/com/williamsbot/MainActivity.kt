@@ -2652,6 +2652,14 @@ private fun parseStatus(json: JSONObject): Status {
                 "scanner_scanning",
                 false
             ),
+        scannerState =
+            json.optString(
+                "scanner_state",
+                "NOT_RUN"
+            ),
+        scannerError =
+            json.optString("scanner_error")
+                .takeIf { it.isNotBlank() },
         scannerSymbols =
             json.optInt(
                 "scanner_symbols",
