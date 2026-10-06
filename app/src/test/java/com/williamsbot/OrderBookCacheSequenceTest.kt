@@ -3,6 +3,7 @@ package com.williamsbot
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -30,6 +31,9 @@ class OrderBookCacheSequenceTest {
         val cache = OrderBookCache()
         assertTrue(cache.seed("BTCUSDT", snapshot(100)))
         assertFalse(cache.apply("BTCUSDT", 105, 106, levels("100.0", "3.0"), levels("101.0", "3.0")))
-        assertTrue(cache.status().getJSONObject("books").getJSONObject("BTCUSDT").getLong("last_update_id") == 100L)
+        val book = cache.status().getJSONObject("books").getJSONObject("BTCUSDT")
+        assertFalse(book.getBoolean("valid"))
+        assertEquals(-1L, book.getLong("last_update_id"))
+        assertEquals(0, cache.status().getInt("fresh"))
     }
 }
