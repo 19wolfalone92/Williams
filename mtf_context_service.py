@@ -193,9 +193,10 @@ class MultiTimeframeContextService:
             hypotheses=tuple(hypotheses),
             data_bars=len(closed),
         )
-        self.cache.publish(context)
+        published = self.cache.publish(context)
+        persisted_context = published.context(symbol, interval) or context
         try:
-            self.db.save_market_context(context)
+            self.db.save_market_context(persisted_context)
             self.db.save_wave_state(
                 symbol,
                 'LONG',
@@ -210,7 +211,7 @@ class MultiTimeframeContextService:
                     'no_trade_probability': getattr(hypothesis_summary, 'no_trade_probability', 1.0) if hypothesis_summary else 1.0,
                     'calibration_status': getattr(hypothesis_summary, 'calibration_status', 'UNCALIBRATED') if hypothesis_summary else 'UNCALIBRATED',
                     'interval': interval,
-                    'version': context.version,
+                    'version': persisted_context.version,
                 },
             )
         except Exception as exc:
