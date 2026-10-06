@@ -172,7 +172,10 @@ class OrderBookCache(
         limit: Int
     ) {
         if (map.size <= limit) return
-        val keep = map.keys.sorted().take(limit).toSet()
+        val keep = map.keys.sorted().let { sorted ->
+            if (map === books.values.firstOrNull()?.bids) sorted.takeLast(limit).toSet()
+            else sorted.take(limit).toSet()
+        }
         map.keys.toList()
             .filter { it !in keep }
             .forEach { map.remove(it) }
