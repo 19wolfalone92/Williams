@@ -539,6 +539,7 @@ private class NativeEngine(
     private var lastError: String? = null
 
     @Volatile
+    @Volatile
     private var scannerState = "NOT_RUN"
 
     @Volatile
@@ -548,11 +549,11 @@ private class NativeEngine(
     private var lastScanAt = 0L
 
     private var worker: Thread? = null
-    private var scanSymbols = mutableListOf<String>()
-    private var candidates = JSONArray()
+    @Volatile private var scanSymbols: List<String> = emptyList()
+    @Volatile private var candidates = JSONArray()
     private var primaryCandles = emptyList<CandleN>()
-    private var lastScanDurationMs = 0L
-    private var lastSymbolsScanned = 0
+    @Volatile private var lastScanDurationMs = 0L
+    @Volatile private var lastSymbolsScanned = 0
     private val maxTotalRiskPct = 0.01
     private val maxRiskPerTradePct = 0.005
     private val maxSpreadPct = 0.0015
@@ -866,6 +867,11 @@ private class NativeEngine(
             .put("max_total_risk_pct", maxTotalRiskPct)
             .put("max_risk_per_trade_pct", maxRiskPerTradePct)
             .put("reconcile_required", reconcileRequired)
+            .put("p0_gate_passed", p0GatePassed())
+            .put("p0_gate_reason", p0GateReason())
+            .put("max_open_positions_locked", true)
+            .put("unresolved_symbols", unresolvedPositionSymbols())
+            .put("pending_entry_symbols", pendingEntrySymbols())
             .put("execution_state_contract", JSONObject()
                 .put("version", 1)
                 .put("state", stateMachine.state.name)
@@ -1058,6 +1064,12 @@ private class NativeEngine(
                                 )
                             }
                             checkAutomaticCircuitBreaker()
+                        }
+
+                        // The market radar is independent from execution safety.
+                        // Recovery, kill-switch and user-stream synchronization may
+                        // block orders, but they must not freeze scanner telemetry.
+                        if (running) {
                             requestScan()
                         }
                     } catch (x: Exception) {
@@ -1087,6 +1099,46 @@ private class NativeEngine(
 
     fun isTradingBlocked(): Boolean =
         reconcileRequired || killLatched || userStreamSyncRequired
+
+    private fun p0GateReason(): String =
+        when {
+            key().isBlank() || secret().isBlank() -> "BINANCE_NOT_CONFIGURED"
+            !running -> "RUNTIME_NOT_RUNNING"
+            reconcileRequired -> "RECONCILE_REQUIRED"
+            killLatched -> "KILL_SWITCH_LATCHED"
+            paused -> "TRADING_PAUSED"
+            equityCircuitBreaker.isTripped() -> "CIRCUIT_BREAKER_TRIPPED"
+            !marketSocketConnected -> "MARKET_WS_OFFLINE"
+            !userStreamConnected -> "USER_WS_OFFLINE"
+            userStreamSyncRequired -> "USER_STREAM_SYNC_REQUIRED"
+            !stateMachine.executionAllowed() -> "FSM_NOT_EXECUTABLE"
+            else -> "PASS"
+        }
+
+    private fun p0GatePassed(): Boolean =
+        p0GateReason() == "PASS"
+
+    private fun unresolvedPositionSymbols(): JSONArray =
+        JSONArray().apply {
+            positionList()
+                .filter {
+                    it.qty <= 0.0 ||
+                        it.entry <= 0.0 ||
+                        it.stop <= 0.0 ||
+                        it.take <= 0.0 ||
+                        (it.ocoListId.isBlank() && it.ocoListClientId.isBlank())
+                }
+                .forEach { put(it.symbol) }
+        }
+
+    private fun pendingEntrySymbols(): JSONArray =
+        JSONArray().apply {
+            synchronized(pendingEntries) {
+                pendingEntries.keys
+                    .sorted()
+                    .forEach { put(it) }
+            }
+        }
 
     fun stop(): JSONObject {
         running = false
@@ -2232,7 +2284,7 @@ private class NativeEngine(
         }
 
         val universe = loadUniverse()
-        scanSymbols = universe.first.toMutableList()
+        scanSymbols = universe.first.toList()
 
         val volumes = universe.second
         val spreads = universe.third
@@ -5754,8 +5806,11 @@ private class NativeEngine(
             .put("last_scan_at", lastScanAt)
             .put("last_scan_duration_ms", lastScanDurationMs)
             .put("symbols_scanned", lastSymbolsScanned)
+            .put("scanner_symbols", lastSymbolsScanned)
             .put("scan_universe", scannerUniverseLabel)
             .put("deep_wave_targets", waveTopN)
+            .put("history_ready", historyReady)
+            .put("history_warmup_running", historyWarmupRunning)
             .put("candidates", candidates)
             .put(
                 "best_candidate",
@@ -6229,6 +6284,11 @@ private class NativeEngine(
             .put("scanner_universe_size", scanSymbols.size)
             .put("scanner_candidates", candidates.length())
             .put("scanner_last_success", if (scannerState == "READY") lastScanAt else 0L)
+            .put("p0_gate_passed", p0GatePassed())
+            .put("p0_gate_reason", p0GateReason())
+            .put("max_open_positions_locked", true)
+            .put("unresolved_symbols", unresolvedPositionSymbols())
+            .put("pending_entry_symbols", pendingEntrySymbols())
     }
 
     fun historyStatus(): JSONObject =
