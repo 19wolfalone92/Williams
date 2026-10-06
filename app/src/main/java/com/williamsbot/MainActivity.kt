@@ -425,6 +425,10 @@ private class StandaloneApi(context: Context) {
     val mobileToken: String
         get() = securePrefs.getString("mobile_token", "")?.trim() ?: ""
 
+    private val localApiToken: String by lazy {
+        StandaloneRuntime.localApiToken(context)
+    }
+
     fun isLocalStandalone(): Boolean {
         val normalized = backendUrl.trimEnd('/')
         return normalized == "http://127.0.0.1:18080" ||
@@ -460,7 +464,9 @@ private class StandaloneApi(context: Context) {
     ): String {
         val builder = Request.Builder()
             .url(backendUrl + path)
-        if (mobileToken.isNotBlank()) {
+        if (isLocalStandalone()) {
+            builder.header("Authorization", "Bearer " + localApiToken)
+        } else if (mobileToken.isNotBlank()) {
             builder.header("Authorization", "Bearer " + mobileToken)
         }
 
