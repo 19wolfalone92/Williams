@@ -173,7 +173,7 @@ jobs:
 
           echo
           echo "=== RELEASE APK ==="
-          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging \
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging \
             app/build/outputs/apk/release/app-release-unsigned.apk \
             | grep -E "package:|sdkVersion:|targetSdkVersion:"
 
