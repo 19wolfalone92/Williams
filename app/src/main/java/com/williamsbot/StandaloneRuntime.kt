@@ -832,8 +832,11 @@ private class NativeEngine(
             )
             .put("state", stateName())
             .put("open_positions", positionList().size)
-            .put("max_open_positions", 1)
-            .put("position_capacity_mode", "SINGLE_POSITION")
+            .put(
+                "max_open_positions",
+                floor(maxTotalRiskPct / maxRiskPerTradePct).toInt()
+            )
+            .put("position_capacity_mode", "RISK_BUDGET")
             .put("risk_based_position_capacity", floor(maxTotalRiskPct / maxRiskPerTradePct).toInt())
             .put("reserved_risk_pct", reservedRiskPct())
             .put("circuit_breaker_tripped", equityCircuitBreaker.isTripped())
@@ -3865,11 +3868,8 @@ private class NativeEngine(
         if (positions.containsKey(candidate.symbol)) {
             return
         }
-        // Williams default safety contract: never hold more than one managed
-        // position at a time. This remains independent of the risk budget.
-        if (positionList().isNotEmpty()) {
-            error("MAX_OPEN_POSITIONS reached")
-        }
+        // Williams portfolio contract: multiple managed positions are allowed.
+        // Admission is bounded by the aggregate portfolio risk budget below.
         if (reconcileRequired) {
             error("RECONCILE_REQUIRED")
         }
