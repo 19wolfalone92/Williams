@@ -25,7 +25,7 @@ jobs:
 
       - name: Compile production Python
         run: |
-          python -m py_compile             strategy.py data.py risk_engine.py db.py binance_client.py             market_scanner.py wave_engine.py portfolio_scanner.py             portfolio_controller.py trader.py server.py ws_hub.py
+          python -m py_compile             strategy.py data.py risk_engine.py db.py binance_client.py binance_rules.py preflight_gate.py             market_scanner.py wave_engine.py portfolio_scanner.py             portfolio_controller.py trader.py server.py ws_hub.py
 
       - name: Run full static safety audit
         run: python full_safety_audit.py
@@ -55,3 +55,4 @@ jobs:
           test_chaos_hardening.py
           test_wave_safety_fields.py
           test_binance_market_data.py
+          test_preflight_gate.py
