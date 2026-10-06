@@ -111,8 +111,8 @@ class MarketScanner:
             else self._load_symbols()
         )
 
-        self.scan_all_usdt = True  # trading universe is intentionally fixed to five core pairs
-        self.scan_max_symbols = max(1, int(os.getenv("SCAN_MAX_SYMBOLS", "50")))  # fixed core universe: BTC, ETH, BNB, SOL, XRP
+        self.scan_all_usdt = True  # dynamically discover liquid Spot/USDT pairs
+        self.scan_max_symbols = max(1, int(os.getenv("SCAN_MAX_SYMBOLS", "50")))
         self.exclude_leveraged_tokens = (
             os.getenv("EXCLUDE_LEVERAGED_TOKENS", "true").lower() == "true"
         )
@@ -150,14 +150,13 @@ class MarketScanner:
 
     def _load_symbols(self):
         raw = os.getenv("SCAN_SYMBOLS", "").strip()
-        # Keep the execution universe deliberately small and stable. The bot
-        # performs deep multi-timeframe analysis on every core pair instead of
-        # shallow analysis of dozens of assets.
-        core = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"]
+        # An explicit AUTO/ALL/* selection means dynamic Spot/USDT discovery.
+        # Otherwise an explicit list remains supported for deterministic tests.
+        if raw.upper() in {"ALL", "AUTO", "*"}:
+            return []
         if raw:
-            requested = [str(x).upper().strip() for x in raw.split(",") if str(x).strip()]
-            return [x for x in core if x in requested] or core
-        return core
+            return [str(x).upper().strip() for x in raw.split(",") if str(x).strip()]
+        return []
     def _atr(df, period):
         prev = df["close"].shift(1)
         tr = pd.concat(
