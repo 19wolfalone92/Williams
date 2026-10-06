@@ -680,10 +680,17 @@ class Trader:
             if not bool(hi.get('bullish_alligator',False)) or float(hi.get('ao',0) or 0)<=0:return False,'higher-timeframe trend not confirmed'
         return True,'ok'
 
-    def _position_quote(self,entry_price):
-        balance=self.available_quote(); cap=balance*self.position_fraction
-        risk_quote=balance*self.risk_per_trade_pct/max(self.stop_pct,1e-9)
-        return max(0.0,min(cap,risk_quote))
+    def _position_quote(self, entry_price, invalidation_price=0.0):
+        """Size from structural invalidation when valid, else configured fallback stop."""
+        balance = self.available_quote()
+        cap = balance * self.position_fraction
+        entry = float(entry_price)
+        invalidation = float(invalidation_price or 0.0)
+        stop_distance_pct = self.stop_pct
+        if 0.0 < invalidation < entry:
+            stop_distance_pct = (entry - invalidation) / max(entry, 1e-12)
+        risk_quote = balance * self.risk_per_trade_pct / max(stop_distance_pct, 1e-9)
+        return max(0.0, min(cap, risk_quote))
 
     def refresh_execution_context(self, symbol=None):
         """Build a fresh immutable MTF context immediately before execution.
@@ -1404,7 +1411,8 @@ class Trader:
             return
 
         quote = self._position_quote(
-            float(last['close'])
+            float(last['close']),
+            float(getattr(fresh_candidate, 'wave_invalidation_price', 0.0) or 0.0),
         )
 
         if quote <= 0:
