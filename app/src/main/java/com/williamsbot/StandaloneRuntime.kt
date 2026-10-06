@@ -5584,7 +5584,7 @@ private class NativeEngine(
 
     private fun scannerSnapshot(): JSONObject =
         JSONObject()
-            .put("version", "4.17.0")
+            .put("version", "4.20.1")
             .put("cached", true)
             .put("scanning", scanning)
             .put("last_error", lastError ?: JSONObject.NULL)
@@ -5906,7 +5906,7 @@ private class NativeEngine(
             .put("version", "4.17.0")
             .put("symbol", primarySymbol)
             .put("interval", interval)
-            .put("position_fraction", 0.95)
+            .put("position_fraction", 0.25)
             .put("stop_loss_pct", 0.02)
             .put("take_profit_pct", 0.04)
             .put("poll_seconds", 15)
