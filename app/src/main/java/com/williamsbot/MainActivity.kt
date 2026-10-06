@@ -102,6 +102,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.MediaType.Companion.toMediaType
@@ -113,7 +114,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.math.max
 import kotlin.math.min
 
-// Williams 4.20.2 production cockpit
+// Williams 4.21.0 production cockpit
 // CI compile-log capture enabled
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -329,13 +330,40 @@ data class MarketPair(
     val price: Double?
 )
 
+data class PortfolioAsset(
+    val asset: String,
+    val free: Double,
+    val locked: Double,
+    val total: Double,
+    val priceUsdt: Double?,
+    val valueUsdt: Double,
+    val allocationPct: Double
+)
+
+data class PortfolioSummary(
+    val configured: Boolean = false,
+    val totalEquityUsdt: Double? = null,
+    val freeEquityUsdt: Double? = null,
+    val lockedEquityUsdt: Double? = null,
+    val realizedPnlUsdt: Double = 0.0,
+    val unrealizedPnlUsdt: Double = 0.0,
+    val assets: List<PortfolioAsset> = emptyList()
+)
+
 data class PositionView(
     val symbol: String,
     val qty: Double,
     val entry: Double,
     val stop: Double?,
     val take: Double?,
-    val riskPct: Double
+    val riskPct: Double,
+    val currentPrice: Double? = null,
+    val positionValueUsdt: Double = 0.0,
+    val allocationPct: Double = 0.0,
+    val pnlUsdt: Double = 0.0,
+    val pnlPct: Double = 0.0,
+    val ocoListId: String = "",
+    val ocoListClientId: String = ""
 )
 
 private class StandaloneApi(context: Context) {
@@ -417,6 +445,7 @@ fun WilliamsApp(context: Context) {
 
     var tab by remember { mutableIntStateOf(0) }
     var status by remember { mutableStateOf(Status()) }
+    var portfolio by remember { mutableStateOf(PortfolioSummary()) }
     var marketPairs by remember { mutableStateOf(emptyList<MarketPair>()) }
     var selectedPositionSymbol by remember { mutableStateOf<String?>(null) }
     var candles by remember { mutableStateOf(emptyList<Candle>()) }
@@ -432,84 +461,144 @@ fun WilliamsApp(context: Context) {
     var refreshing by remember { mutableStateOf(false) }
     var backupPassword by remember { mutableStateOf("") }
     var backupMessage by remember { mutableStateOf("") }
+    var diagnosticsMessage by remember { mutableStateOf("") }
+    val loadMutex = remember { Mutex() }
 
     suspend fun loadAll(scan: Boolean) {
-        withContext(Dispatchers.IO) {
-            try {
-                // Autonomous mode uses the on-device runtime at 127.0.0.1:18080.
-                // A remote URL/token is only needed when the user explicitly configures one.
-                withContext(Dispatchers.Main) { refreshing = scan }
+        if (!loadMutex.tryLock()) return
+        try {
+            withContext(Dispatchers.Main) { refreshing = scan }
+            withContext(Dispatchers.IO) {
+                val failures = mutableListOf<String>()
+                var scannerJson = JSONObject()
 
-                val statusJson = JSONObject(api.get("/api/v1/status"))
-                val klineJson = JSONObject(api.get("/api/v1/market/klines?interval=" + selectedChartInterval))
-                val marketSymbols = listOf("BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT")
-                val marketPairsLoaded = marketSymbols.map { symbol ->
-                    val j = runCatching { JSONObject(api.get("/api/v1/market/klines?symbol=" + symbol)) }.getOrNull()
-                    val arr = j?.optJSONArray("candles")
-                    val last = arr?.let { if (it.length() > 0) it.optJSONObject(it.length() - 1) else null }
-                    MarketPair(symbol, last?.optDouble("close")?.takeUnless { it.isNaN() || it <= 0.0 })
+                runCatching {
+                    val json = JSONObject(api.get("/api/v1/status"))
+                    withContext(Dispatchers.Main) { status = parseStatus(json) }
+                }.onFailure {
+                    failures += "status: " + (it.message ?: it.javaClass.simpleName)
                 }
-                var scannerJson =
-                    JSONObject(api.get("/api/v1/scanner?refresh=" + scan))
 
-                if (scan && scannerJson.optBoolean("scanning", false)) {
-                    // A full liquidity + MTF/Wave pass can legitimately take longer
-                    // than the old 20-second UI window. Keep polling until the
-                    // scanner reaches a terminal state, while execution remains
-                    // independently governed by the runtime FSM.
-                    for (i in 0 until 90) {
-                        delay(1000L)
-                        scannerJson =
-                            JSONObject(api.get("/api/v1/scanner?refresh=false"))
-                        val state = scannerJson.optString("scanner_state", "NOT_RUN")
-                        if (!scannerJson.optBoolean("scanning", false) ||
-                            state == "READY" ||
-                            state == "ERROR"
-                        ) {
-                            break
+                runCatching {
+                    val json = JSONObject(
+                        api.get(
+                            "/api/v1/market/klines?interval=" +
+                                selectedChartInterval
+                        )
+                    )
+                    withContext(Dispatchers.Main) {
+                        candles = parseCandles(
+                            json.optJSONArray("candles") ?: JSONArray()
+                        )
+                    }
+                }.onFailure {
+                    failures += "market: " + (it.message ?: it.javaClass.simpleName)
+                }
+
+                runCatching {
+                    val symbols = listOf(
+                        "BTCUSDT",
+                        "ETHUSDT",
+                        "BNBUSDT",
+                        "SOLUSDT",
+                        "XRPUSDT"
+                    )
+                    val loaded = symbols.map { symbol ->
+                        val j = runCatching {
+                            JSONObject(api.get("/api/v1/market/klines?symbol=" + symbol))
+                        }.getOrNull()
+                        val arr = j?.optJSONArray("candles")
+                        val last = arr?.let {
+                            if (it.length() > 0) it.optJSONObject(it.length() - 1) else null
+                        }
+                        MarketPair(
+                            symbol,
+                            last?.optDouble("close")
+                                ?.takeUnless { it.isNaN() || it <= 0.0 }
+                        )
+                    }
+                    withContext(Dispatchers.Main) { marketPairs = loaded }
+                }.onFailure {
+                    failures += "market-pairs: " + (it.message ?: it.javaClass.simpleName)
+                }
+
+                runCatching {
+                    scannerJson = JSONObject(api.get("/api/v1/scanner?refresh=" + scan))
+                    if (scan && scannerJson.optBoolean("scanning", false)) {
+                        for (i in 0 until 90) {
+                            delay(1000L)
+                            scannerJson = JSONObject(api.get("/api/v1/scanner?refresh=false"))
+                            val state = scannerJson.optString("scanner_state", "NOT_RUN")
+                            if (!scannerJson.optBoolean("scanning", false) ||
+                                state == "READY" ||
+                                state == "ERROR"
+                            ) break
                         }
                     }
+                    withContext(Dispatchers.Main) {
+                        candidates = parseCandidates(
+                            scannerJson.optJSONArray("candidates") ?: JSONArray()
+                        )
+                    }
+                }.onFailure {
+                    failures += "scanner: " + (it.message ?: it.javaClass.simpleName)
                 }
 
-                // /status and /scanner are separate snapshots. Refresh status
-                // after the scan so the cockpit cannot display stale
-                // NOT_RUN/0 values while candidates are already available.
-                val freshStatusJson = JSONObject(api.get("/api/v1/status"))
-
-                val tradeArray = JSONArray(api.get("/api/v1/trades"))
-                val logArray = JSONArray(api.get("/api/v1/logs"))
-
-                withContext(Dispatchers.Main) {
-                    status = parseStatus(freshStatusJson)
-                    marketPairs = marketPairsLoaded
-                    if (selectedPositionSymbol == null && status.positions.isNotEmpty()) selectedPositionSymbol = status.positions.first().symbol
-                    candles = parseCandles(klineJson.optJSONArray("candles") ?: JSONArray())
-                    candidates = parseCandidates(
-                        scannerJson.optJSONArray("candidates") ?: JSONArray()
-                    )
-                    trades = parseTrades(tradeArray)
-                    logs = parseLogs(logArray)
-
-                    message =
-                        scannerJson.optString("last_error").takeIf { it.isNotBlank() }
-                            ?: if (scan) {
-                                if (scannerJson.optBoolean("scanning", false)) {
-                                    "Сканирование продолжается в фоне"
-                                } else {
-                                    "Сканирование завершено"
-                                }
-                            } else {
-                                "Данные обновлены"
-                            }
-
-                    refreshing = false
+                runCatching {
+                    val p = JSONObject(api.get("/api/v1/portfolio"))
+                    withContext(Dispatchers.Main) { portfolio = parsePortfolio(p) }
+                }.onFailure {
+                    failures += "portfolio: " + (it.message ?: it.javaClass.simpleName)
                 }
-            } catch (e: Exception) {
+
+                runCatching {
+                    val json = JSONObject(api.get("/api/v1/status"))
+                    withContext(Dispatchers.Main) {
+                        status = parseStatus(json)
+                        if (selectedPositionSymbol == null &&
+                            status.positions.isNotEmpty()
+                        ) {
+                            selectedPositionSymbol = status.positions.first().symbol
+                        }
+                    }
+                }.onFailure {
+                    failures += "status-refresh: " + (it.message ?: it.javaClass.simpleName)
+                }
+
+                runCatching {
+                    val rows = JSONArray(api.get("/api/v1/trades"))
+                    withContext(Dispatchers.Main) { trades = parseTrades(rows) }
+                }.onFailure {
+                    failures += "trades: " + (it.message ?: it.javaClass.simpleName)
+                }
+
+                runCatching {
+                    val rows = JSONArray(api.get("/api/v1/logs"))
+                    withContext(Dispatchers.Main) { logs = parseLogs(rows) }
+                }.onFailure {
+                    failures += "logs: " + (it.message ?: it.javaClass.simpleName)
+                }
+
                 withContext(Dispatchers.Main) {
+                    val scannerError =
+                        scannerJson.optString("scanner_error").takeIf { it.isNotBlank() }
+                    message = when {
+                        failures.isNotEmpty() ->
+                            "Частичная ошибка: " + failures.joinToString(" • ")
+                        scannerError != null ->
+                            "Сканер: " + scannerError
+                        scan && scannerJson.optBoolean("scanning", false) ->
+                            "Сканирование продолжается в фоне"
+                        scan ->
+                            "Сканирование завершено"
+                        else ->
+                            "Данные обновлены"
+                    }
                     refreshing = false
-                    message = e.message ?: "Ошибка соединения"
                 }
             }
+        } finally {
+            loadMutex.unlock()
         }
     }
 
@@ -567,11 +656,28 @@ fun WilliamsApp(context: Context) {
                     .toString()
 
                 api.post("/api/v1/config/binance", body)
+                val verified = JSONObject(api.get("/api/v1/status"))
+                val configured = verified.optBoolean(
+                    "binance_configured",
+                    verified.optBoolean("auth_configured", false)
+                )
+                var diagText: String? = null
+                runCatching {
+                    val report = api.get("/api/v1/diagnostics?run=true")
+                    DiagnosticsArchive.writeLatest(context, report)
+                    diagText = "Диагностика сохранена на телефоне."
+                }
 
                 withContext(Dispatchers.Main) {
                     apiKey = ""
                     apiSecret = ""
-                    message = "Binance Testnet подключён и ключи сохранены зашифрованно"
+                    status = parseStatus(verified)
+                    diagnosticsMessage = diagText ?: ""
+                    message = if (configured) {
+                        "Binance Testnet подключён и подтверждён статусом /api/v1/status"
+                    } else {
+                        "Ключи сохранены, но Binance ещё не подтвердил конфигурацию"
+                    }
                 }
                 loadAll(false)
             } catch (e: Exception) {
@@ -678,6 +784,56 @@ fun WilliamsApp(context: Context) {
         } catch (e: Exception) {
             backupMessage = e.message ?: "Проверьте пароль backup"
         }
+    }
+
+    fun runDiagnostics() {
+        scope.launch(Dispatchers.IO) {
+            try {
+                val report = api.get("/api/v1/diagnostics?run=true")
+                DiagnosticsArchive.writeLatest(context, report)
+                withContext(Dispatchers.Main) {
+                    diagnosticsMessage = "Диагностика выполнена и сохранена на телефоне."
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    diagnosticsMessage =
+                        e.message ?: "Не удалось выполнить диагностику"
+                }
+            }
+        }
+    }
+
+    val exportDiagnosticsLauncher =
+        rememberLauncherForActivityResult(
+            ActivityResultContracts.CreateDocument("application/zip")
+        ) { uri ->
+            if (uri == null) return@rememberLauncherForActivityResult
+            scope.launch(Dispatchers.IO) {
+                try {
+                    val source = requireNotNull(DiagnosticsArchive.latest(context)) {
+                        "Диагностика ещё не создана"
+                    }
+                    context.contentResolver.openOutputStream(uri).use { output ->
+                        requireNotNull(output)
+                        source.inputStream().use { input -> input.copyTo(output) }
+                    }
+                    withContext(Dispatchers.Main) {
+                        diagnosticsMessage = "Диагностический архив экспортирован."
+                    }
+                } catch (e: Exception) {
+                    withContext(Dispatchers.Main) {
+                        diagnosticsMessage =
+                            e.message ?: "Не удалось экспортировать диагностику"
+                    }
+                }
+            }
+        }
+
+    fun exportDiagnostics() {
+        requireNotNull(DiagnosticsArchive.latest(context)) {
+            "Сначала запустите диагностику"
+        }
+        exportDiagnosticsLauncher.launch("Williams_Diagnostics.zip")
     }
 
     LaunchedEffect(Unit) {
