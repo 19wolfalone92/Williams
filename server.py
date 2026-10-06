@@ -491,15 +491,23 @@ def db():
     return state.ensure_trader().db
 
 
+def _canonical_execution_state(multi, positions=None):
+    """Single backend execution-state contract used by health, status and recovery."""
+    unresolved_symbols = list(multi.unresolved_symbols())
+    pending_symbols = [symbol for symbol, _ in multi._pending_entries()]
+    if unresolved_symbols or pending_symbols:
+        return 'RECONCILE_REQUIRED', unresolved_symbols, pending_symbols
+    if positions is None:
+        positions = multi.open_positions()
+    return ('OPEN' if positions else 'READY_FLAT'), unresolved_symbols, pending_symbols
+
+
 @app.get('/api/v1/health')
 def health():
     t = state.ensure_trader()
     multi = state.ensure_multi()
-    unresolved = bool(multi.unresolved_symbols() or multi._pending_entries())
-    execution_state = (
-        'RECONCILE_REQUIRED' if unresolved
-        else ('OPEN' if multi.open_positions() else 'READY_FLAT')
-    )
+    execution_state, unresolved_symbols, pending_symbols = _canonical_execution_state(multi)
+    unresolved = bool(unresolved_symbols or pending_symbols)
     return {
         'ok': True,
         'service': 'williams-binance-bot',
@@ -511,6 +519,8 @@ def health():
             'reconciliation_required': unresolved,
             'kill_switch_latched': False,
         },
+        'unresolved_symbols': unresolved_symbols,
+        'pending_entry_symbols': pending_symbols,
         'websocket': True,
         'auth_configured': len(API_TOKEN) >= 32,
         'max_open_positions': multi.max_open_positions,
@@ -958,25 +968,22 @@ def manual_sell(symbol: str):
 @app.post('/api/v1/control/recover', dependencies=[Depends(auth)])
 def recover():
     t = state.ensure_trader()
-    if t.max_open_positions > 1:
-        result = state.ensure_multi().recover()
-        return {
-            'recovered': bool(result['ok']),
-            'state': (
-                'RECONCILE_REQUIRED'
-                if not result['ok']
-                else (
-                    'OPEN'
-                    if result['open_positions']
-                    else 'FLAT'
-                )
-            ),
-            'details': result,
-        }
-    t.recover_state()
+    multi = state.ensure_multi()
+
+    # Recovery must use the same canonical state machine as status/health.
+    # Never route the button through the legacy single-symbol recovery only.
+    result = multi.recover()
+    t.recovered = bool(result.get('ok'))
+    execution_state, unresolved_symbols, pending_symbols = _canonical_execution_state(
+        multi,
+        positions=multi.open_positions(),
+    )
     return {
-        'recovered': t.recovered,
-        'state': t.state(),
+        'recovered': bool(result.get('ok')),
+        'state': execution_state,
+        'unresolved_symbols': unresolved_symbols,
+        'pending_entry_symbols': pending_symbols,
+        'details': result,
     }
 
 
