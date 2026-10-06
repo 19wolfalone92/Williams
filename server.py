@@ -14,6 +14,7 @@ from credentials_store import CredentialStore
 from market_scanner import MarketScanner
 from market_context import ContextCache
 from mtf_context_service import MultiTimeframeContextService
+from feature_store import FeatureStore
 
 load_dotenv()
 API_TOKEN = os.getenv('MOBILE_API_TOKEN', '').strip()
@@ -23,6 +24,7 @@ app = FastAPI(title='Williams Binance Bot API', version=VERSION)
 hub = WebSocketHub()
 context_cache = ContextCache()
 mtf_service = MultiTimeframeContextService(context_cache)
+quant_store = FeatureStore()
 
 
 class MetricsRegistry:
@@ -1202,6 +1204,36 @@ def scanner_diagnostics():
     )
     return snap
 
+
+
+@app.get('/api/v1/quant/health', dependencies=[Depends(auth)])
+def quant_health():
+    """Read-only health/status of the Williams quantitative shadow layer."""
+    enabled = os.getenv("FEATURE_STORE_ENABLED", "true").lower() == "true"
+    latest = quant_store.recent(limit=1)
+    shadows = quant_store.recent_shadow(limit=1)
+    return {
+        "enabled": enabled,
+        "schema_version": 1,
+        "feature_store_path": quant_store.path,
+        "latest_feature_timestamp_ms": latest[0].get("timestamp_ms") if latest else None,
+        "latest_shadow": shadows[0] if shadows else None,
+        "production_execution": "UNCHANGED",
+        "ai_order_submission": False,
+    }
+
+
+@app.get('/api/v1/quant/features', dependencies=[Depends(auth)])
+def quant_features(symbol: Optional[str] = None, limit: int = 20):
+    return quant_store.recent(
+        symbol=symbol,
+        limit=max(1, min(limit, 200)),
+    )
+
+
+@app.get('/api/v1/quant/shadow', dependencies=[Depends(auth)])
+def quant_shadow(limit: int = 50):
+    return quant_store.recent_shadow(max(1, min(limit, 200)))
 
 @app.get('/api/v1/settings', dependencies=[Depends(auth)])
 def settings():
