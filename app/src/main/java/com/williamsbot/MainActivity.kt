@@ -1235,16 +1235,27 @@ private fun PortfolioCard(
                             asset.asset,
                             fontWeight = FontWeight.SemiBold
                         )
-                        Text(
-                            fmt(asset.total, 6) + " • " +
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text(
+                                fmt(asset.total, 6) + " " + asset.asset,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                "free " + fmt(asset.free, 6) +
+                                    " • locked " + fmt(asset.locked, 6),
+                                color = AppColors.textMuted,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            Text(
                                 if (asset.priceUsdt != null) {
                                     fmt(asset.valueUsdt, 2) + " USDT"
                                 } else {
                                     "цена неизвестна"
                                 },
-                            color = AppColors.textMuted,
-                            style = MaterialTheme.typography.bodySmall
-                        )
+                                color = AppColors.textMuted,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
                     }
                 }
             }
