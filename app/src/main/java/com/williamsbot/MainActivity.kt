@@ -1822,8 +1822,17 @@ private fun ScannerScreen(
                 Column {
                     Text("Market Scanner", style = MaterialTheme.typography.headlineSmall)
                     Text(
-                        status.scannerSymbols.toString() +
-                            " пар • top " + min(20, candidates.size).toString(),
+                        when (status.scannerState) {
+                            "RUNNING" ->
+                                "Сканирование выполняется…"
+                            "ERROR" ->
+                                "Ошибка сканера"
+                            "READY" ->
+                                status.scannerSymbols.toString() +
+                                    " пар • top " + min(20, candidates.size)
+                            else ->
+                                "Сканирование ещё не запускалось"
+                        },
                         color = AppColors.textMuted
                     )
                 }
@@ -1850,8 +1859,13 @@ private fun ScannerScreen(
             item {
                 EmptyState(
                     icon = Icons.Filled.Radar,
-                    title = "Сканер пуст",
-                    subtitle = "Первое сканирование сортирует пары по ликвидности, Williams setup и волновому контексту."
+                    title = when (status.scannerState) {
+                        "ERROR" -> "Сканер сообщил ошибку"
+                        "RUNNING" -> "Сканер работает"
+                        else -> "Сканирование ещё не запускалось"
+                    },
+                    subtitle = status.scannerError?.takeIf { it.isNotBlank() }
+                        ?: "Нажми «СКАН», чтобы запустить реальное сканирование ликвидных USDT-пар."
                 )
             }
         }
