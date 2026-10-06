@@ -574,14 +574,6 @@ private class NativeEngine(
     private fun restoreExecutionAccumulators() {
         val orderIds = mutableSetOf<String>()
         positionList().forEach { if (it.entryOrderId.isNotBlank()) orderIds.add(it.entryOrderId) }
-        synchronized(pendingEntries) {
-            pendingEntries.values.forEach { if (it.clientOrderId.isNotBlank()) {
-                auditStore.executionEventsForClientOrderId(it.clientOrderId).forEach { event ->
-                    val id = event.optString("i")
-                    if (id.isNotBlank()) orderIds.add(id)
-                }
-            } }
-        }
         orderIds.forEach { orderId ->
             executionAccumulator.restore(
                 orderId,
