@@ -15,7 +15,7 @@ from data import fetch_klines
 from market_context import ContextCache, TFMarketContext, WaveHypothesis
 from strategy import calculate_indicators, config_from_env
 from trading_config import TradingConfig
-from wave_engine import WaveEngine
+from wave_engine import MultiTimeframeWaveEngine
 
 log = logging.getLogger("williams-mtf")
 
@@ -108,7 +108,7 @@ class MultiTimeframeContextService:
         hypotheses: list[WaveHypothesis] = []
 
         try:
-            report = WaveEngine(
+            report = MultiTimeframeWaveEngine(
                 self.client,
                 base_interval=interval,
                 intervals=(interval,),
