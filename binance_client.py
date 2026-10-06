@@ -18,8 +18,10 @@ class BinanceSpotClient:
         self.session=requests.Session(); self.session.headers.update({'X-MBX-APIKEY': self.api_key})
         self.time_offset_ms=0
         self.last_used_weight_1m=0
+        self.last_order_count_10s=0
         self.last_order_count_1m=0
         self.request_weight_limit_1m=6000
+        self.order_limit_10s=50
         self.order_limit_1m=1200
         self.rate_limit_pause_until=0.0
     def _request(self, method, path, params=None, signed=False):
@@ -55,6 +57,13 @@ class BinanceSpotClient:
                 if ratio >= 0.98:
                     wait = max(wait, 2.0)
                 elif ratio >= 0.90:
+                    wait = max(wait, 0.25)
+
+            if self.order_limit_10s > 0:
+                order_ratio_10s = Decimal(str(self.last_order_count_10s)) / Decimal(str(self.order_limit_10s))
+                if order_ratio_10s >= 0.96:
+                    wait = max(wait, 1.0)
+                elif order_ratio_10s >= 0.90:
                     wait = max(wait, 0.25)
 
             if self.order_limit_1m > 0:
@@ -101,6 +110,12 @@ class BinanceSpotClient:
             if used is not None:
                 try:
                     self.last_used_weight_1m = int(used)
+                except ValueError:
+                    pass
+            orders_10s = r.headers.get('X-MBX-ORDER-COUNT-10S')
+            if orders_10s is not None:
+                try:
+                    self.last_order_count_10s = int(orders_10s)
                 except ValueError:
                     pass
             if orders is not None:
