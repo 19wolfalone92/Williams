@@ -21,7 +21,7 @@ class WebSocketHub:
         self.user_sync_required=True
         self.user_last_event_at=None
         self._last_user_event_by_type={}
-        self.user_stream_reconnects=0
+        self.user_stream_reconnects=0; self.user_connection_started_at=None
     def configure_credentials(self,key,secret,testnet=True):
         with self.lock:
             self.api_key=key.strip()
@@ -81,6 +81,7 @@ class WebSocketHub:
                 'user_sync_required':self.user_sync_required,
                 'user_last_event_at':self.user_last_event_at,
                 'user_stream_reconnects':self.user_stream_reconnects,
+                'user_connection_started_at':self.user_connection_started_at,
                 'market_reconnects':self.market_reconnects,
                 'market_last_message_at':self.market_last_message_at,
                 'market_last_error':self.market_last_error,
@@ -278,8 +279,23 @@ class WebSocketHub:
                 self.user_subscription_id=None
                 self.user_sync_required=True
 
+                reconnect_timer = None
+
                 def opened(ws):
+                    nonlocal reconnect_timer
                     self._user_ws=ws
+                    self.user_connection_started_at=datetime.now(timezone.utc).isoformat()
+
+                    def proactive_reconnect():
+                        if not self.stop_event.is_set():
+                            try:
+                                ws.close()
+                            except Exception:
+                                pass
+
+                    reconnect_timer = threading.Timer(23 * 60 * 60, proactive_reconnect)
+                    reconnect_timer.daemon = True
+                    reconnect_timer.start()
 
                     request={
                         'id':f'williams-user-{int(time.time()*1000)}',
@@ -304,6 +320,10 @@ class WebSocketHub:
                     )
 
                 def on_close(ws,code,msg):
+                    nonlocal reconnect_timer
+                    if reconnect_timer is not None:
+                        reconnect_timer.cancel()
+                        reconnect_timer = None
                     self.user_connected=False
                     self.user_subscription_id=None
                     self.user_sync_required=True
@@ -346,6 +366,9 @@ class WebSocketHub:
                 )
 
             finally:
+                if reconnect_timer is not None:
+                    reconnect_timer.cancel()
+                    reconnect_timer = None
                 self.user_connected=False
 
                 if self._user_ws is app:
