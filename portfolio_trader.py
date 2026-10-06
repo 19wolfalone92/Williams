@@ -524,7 +524,7 @@ class MultiPositionTrader:
         client_id = f"{self.OCO_PREFIX}{uuid.uuid4().hex[:20]}"
         self.set_state(symbol, "EXIT_PENDING")
 
-        result = self.client.create_oco_sell(
+        result = self.client.create_oco_sell_safe(
             symbol,
             self.client.decimal_format(qty),
             self.client.decimal_format(tp),
@@ -1109,11 +1109,12 @@ class MultiPositionTrader:
                     f"{symbol}: managed quantity is no longer available"
                 )
 
-            sell = self.client.order(
+            sell = self.client.order_safe(
                 symbol,
                 "SELL",
                 "MARKET",
                 quantity=self.client.decimal_format(sell_qty),
+                new_client_order_id=f"{self.ENTRY_PREFIX}MANUAL_SELL_{uuid.uuid4().hex[:16]}",
             )
             self.db.save_order(sell)
 
@@ -1284,7 +1285,7 @@ class MultiPositionTrader:
             )
 
             try:
-                order = self.client.order(
+                order = self.client.order_safe(
                     symbol,
                     "BUY",
                     "MARKET",
