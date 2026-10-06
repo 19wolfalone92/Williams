@@ -21,6 +21,7 @@ class OrderIntent:
     quantity: str = ""
     quote_order_quantity: str = ""
     purpose: str = "ENTRY"
+    permission_interval: str = ""
     created_at_ms: int = 0
     max_age_ms: int = 15_000
 
@@ -98,17 +99,18 @@ class ExecutionBarrier:
         if not direction:
             return f"unsupported side {intent.side}"
 
-        relevant = [
-            snapshot.context(intent.symbol, tf)
-            for tf in intent.required_context_versions
-        ]
-        # Strategy permissions are enforced only for ENTRY intents. EXIT/protective
-        # orders must remain executable even when the market context changes side.
+        # All declared TFs are version dependencies, but the permission
+        # decision belongs to one operative/entry timeframe. Higher TFs provide
+        # structural context and must not be required to emit a duplicate trigger.
         if intent.purpose.upper() == "ENTRY":
-            if direction == "long" and not all(ctx and ctx.allow_long for ctx in relevant):
-                return "context does not allow LONG"
-            if direction == "short" and not all(ctx and ctx.allow_short for ctx in relevant):
-                return "context does not allow SHORT"
+            permission_tf = (intent.permission_interval or "").lower()
+            permission_ctx = snapshot.context(intent.symbol, permission_tf) if permission_tf else None
+            if permission_ctx is None:
+                return f"missing permission context {intent.symbol} {permission_tf}"
+            if direction == "long" and not permission_ctx.allow_long:
+                return f"context {permission_tf} does not allow LONG"
+            if direction == "short" and not permission_ctx.allow_short:
+                return f"context {permission_tf} does not allow SHORT"
 
         if self.db is not None and hasattr(self.db, "state_get"):
             state = str(self.db.state_get("position_state", "FLAT"))
