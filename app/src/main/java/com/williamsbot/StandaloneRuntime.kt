@@ -958,7 +958,10 @@ private class NativeEngine(
         prefs.edit()
             .putString("api_key", newKey)
             .putString("api_secret", newSecret)
-            .apply()
+            .commit()
+            .also { ok ->
+                check(ok) { "Не удалось записать Binance credentials в защищённое хранилище" }
+            }
 
         return JSONObject()
             .put("configured", true)
@@ -1004,6 +1007,9 @@ private class NativeEngine(
                 .put("api_secret", apiSecret)
                 .put("testnet", true)
         )
+
+    fun credentialsConfigured(): Boolean =
+        key().isNotBlank() && secret().isNotBlank()
 
     fun start(): JSONObject {
         if (killLatched) {
