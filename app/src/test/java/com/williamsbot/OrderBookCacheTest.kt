@@ -37,7 +37,7 @@ class OrderBookCacheTest {
             )
         )
 
-        val estimate = cache.estimateBuy("BTCUSDT", 202.0)
+        val estimate = cache.estimateBuy("BTCUSDT", 101.0)
         assertNotNull(estimate)
         assertEquals(101.0, estimate!!.first, 0.000001)
         assertEquals(0.0, estimate.second, 0.000001)
