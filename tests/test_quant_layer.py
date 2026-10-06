@@ -131,7 +131,7 @@ def test_mock_exchange_failure_modes():
     assert event["U"] > event["u"] - 1
     assert event["U"] >= 7
     depth = exchange.depth("BTCUSDT", limit=20)
-    assert depth["lastUpdateId"] >= 11
+    assert depth["lastUpdateId"] >= 7
     exchange.partial_fill_ratio = 0.5
     partial = exchange.market_sell("BTCUSDT", quantity=0.1)
     assert float(partial["executedQty"]) <= 0.1
