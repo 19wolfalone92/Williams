@@ -292,8 +292,8 @@ class TradingAuditStore(context: Context) :
         writableDatabase.query(
             "executions",
             arrayOf("raw_json"),
-            "json_extract(raw_json, '$.c')=?",
-            arrayOf(clientOrderId),
+            "raw_json LIKE ?",
+            arrayOf("%\\\"c\\\":\\\"$clientOrderId\\\"%"),
             null,
             null,
             "transaction_time ASC, event_time ASC"
