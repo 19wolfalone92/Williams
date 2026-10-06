@@ -116,7 +116,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.math.max
 import kotlin.math.min
 
-// Williams 4.21.0 production cockpit
+// Williams 4.22.0 production cockpit + Luna AI client
 // CI compile-log capture enabled
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -922,13 +922,14 @@ fun WilliamsApp(context: Context) {
         }
     }
 
-    val titles = listOf("Overview", "Wave Map", "Positions", "Incidents", "Config")
+    val titles = listOf("Overview", "Wave Map", "Positions", "Incidents", "Config", "Luna")
     val icons = listOf(
         Icons.Filled.Dashboard,
         Icons.Filled.Radar,
         Icons.Filled.ShowChart,
         Icons.Filled.History,
-        Icons.Filled.Settings
+        Icons.Filled.Settings,
+        Icons.Filled.Visibility
     )
 
     Scaffold(
@@ -1087,6 +1088,10 @@ fun WilliamsApp(context: Context) {
                 padding = padding,
                 trades = trades,
                 logs = logs
+            )
+
+            5 -> LunaScreen(
+                padding = padding
             )
 
             else -> SettingsScreen(
