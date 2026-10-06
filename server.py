@@ -1212,12 +1212,14 @@ def quant_health():
     enabled = os.getenv("FEATURE_STORE_ENABLED", "true").lower() == "true"
     latest = quant_store.recent(limit=1)
     shadows = quant_store.recent_shadow(limit=1)
+    shadow_exec = quant_store.recent_shadow_executions(limit=1)
     return {
         "enabled": enabled,
         "schema_version": 1,
         "feature_store_path": quant_store.path,
         "latest_feature_timestamp_ms": latest[0].get("timestamp_ms") if latest else None,
         "latest_shadow": shadows[0] if shadows else None,
+        "latest_shadow_execution": shadow_exec[0] if shadow_exec else None,
         "production_execution": "UNCHANGED",
         "ai_order_submission": False,
     }
