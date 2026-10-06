@@ -940,6 +940,7 @@ fun WilliamsApp(context: Context) {
             0 -> DashboardScreen(
                 padding = padding,
                 status = status,
+                portfolio = portfolio,
                 marketPairs = marketPairs,
                 candidates = candidates,
                 message = message,
@@ -976,6 +977,7 @@ fun WilliamsApp(context: Context) {
             2 -> PositionScreen(
                 padding = padding,
                 status = status,
+                portfolio = portfolio,
                 candles = candles,
                 selectedSymbol = selectedPositionSymbol,
                 interval = selectedChartInterval,
@@ -1028,6 +1030,9 @@ fun WilliamsApp(context: Context) {
                 onExportBackup = ::exportBackup,
                 onImportBackup = ::importBackup,
                 backupMessage = backupMessage,
+                onRunDiagnostics = ::runDiagnostics,
+                onExportDiagnostics = ::exportDiagnostics,
+                diagnosticsMessage = diagnosticsMessage,
                 message = message
             )
         }
@@ -2103,6 +2108,9 @@ private fun SettingsScreen(
     onExportBackup: () -> Unit,
     onImportBackup: () -> Unit,
     backupMessage: String,
+    onRunDiagnostics: () -> Unit,
+    onExportDiagnostics: () -> Unit,
+    diagnosticsMessage: String,
     message: String
 ) {
     LazyColumn(
@@ -2328,6 +2336,57 @@ private fun SettingsScreen(
                                 backupMessage.contains("создан", true) ||
                                 backupMessage.contains("восстановлен", true)
                             ) AppColors.green else AppColors.amber
+                        )
+                    }
+                }
+            }
+        }
+
+        item {
+            Card(
+                Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = AppColors.surface)
+            ) {
+                Column(
+                    Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(9.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Filled.CheckCircle,
+                            contentDescription = null,
+                            tint = AppColors.violet
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "Самодиагностика",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                    }
+                    Text(
+                        "После ввода ключей Williams автоматически проверяет Binance REST/WSS, MTF/Wave, сканер, FSM, БД и торговые фильтры. Торговые заявки диагностика не отправляет.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AppColors.textMuted
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = onRunDiagnostics,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("ПРОВЕРИТЬ")
+                        }
+                        OutlinedButton(
+                            onClick = onExportDiagnostics,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("ЭКСПОРТ")
+                        }
+                    }
+                    if (diagnosticsMessage.isNotBlank()) {
+                        Text(
+                            diagnosticsMessage,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = AppColors.green
                         )
                     }
                 }
