@@ -922,14 +922,13 @@ fun WilliamsApp(context: Context) {
         }
     }
 
-    val titles = listOf("Overview", "Wave Map", "Positions", "Incidents", "Config", "Luna")
+    val titles = listOf("Overview", "Wave Map", "Positions", "Incidents", "Config")
     val icons = listOf(
         Icons.Filled.Dashboard,
         Icons.Filled.Radar,
         Icons.Filled.ShowChart,
         Icons.Filled.History,
-        Icons.Filled.Settings,
-        Icons.Filled.Visibility
+        Icons.Filled.Settings
     )
 
     Scaffold(
@@ -1088,10 +1087,6 @@ fun WilliamsApp(context: Context) {
                 padding = padding,
                 trades = trades,
                 logs = logs
-            )
-
-            5 -> LunaScreen(
-                padding = padding
             )
 
             else -> SettingsScreen(
