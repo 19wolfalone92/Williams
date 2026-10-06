@@ -50,6 +50,7 @@ class FakeClient:
             }]
         }
 
+os.environ["MAX_OPEN_POSITIONS"] = "1"
 t=Trader(testnet=True)
 # TEST ONLY: FakeClient simulation, no real exchange.
 t.dry_run=False
