@@ -9,6 +9,18 @@ class FakeClient:
     def ticker_price(self, symbol):
         return {"price": "100.0"}
 
+    def exchange_info(self, symbol):
+        return {
+            "symbols": [{
+                "symbol": symbol,
+                "filters": [
+                    {"filterType": "PRICE_FILTER", "tickSize": "0.01"},
+                    {"filterType": "LOT_SIZE", "minQty": "0.000001", "stepSize": "0.000001"},
+                    {"filterType": "MIN_NOTIONAL", "minNotional": "5"},
+                ],
+            }]
+        }
+
 
 @dataclass
 class FakeCandidate:
@@ -146,7 +158,7 @@ def test_open_position_does_not_block_entry_when_risk_budget_allows():
 
     assert result is not None
 
-    print("[PASS] open position blocks new entry")
+    print("[PASS] open position does not block entry when risk budget allows")
 
 
 def test_setup_ready_never_enters():
