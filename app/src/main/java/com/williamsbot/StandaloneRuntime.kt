@@ -289,6 +289,12 @@ private class StandaloneServer(private val context: Context) {
         e().stop()
     }
 
+    fun configureCredentials(
+        apiKey: String,
+        apiSecret: String
+    ): JSONObject =
+        e().configureCredentials(apiKey, apiSecret)
+
     private fun e(): NativeEngine {
         if (engine == null) {
             engine = NativeEngine(context, prefs, client)
