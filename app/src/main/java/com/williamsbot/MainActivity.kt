@@ -127,7 +127,7 @@ class MainActivity : ComponentActivity() {
         }
         // Primary mode: fully autonomous on-device Williams runtime.
         // A remote backend remains optional and can be configured explicitly.
-        StandaloneRuntime.start(this)
+        StandaloneRuntime.bootstrap(this)
         setContent {
             WilliamsTheme {
                 WilliamsApp(this)
@@ -682,7 +682,7 @@ fun WilliamsApp(context: Context) {
                                 style = MaterialTheme.typography.titleMedium
                             )
                             Text(
-                                "Backend authority • Android display/control only",
+                                "AUTONOMOUS • Android runs Williams locally",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = AppColors.textMuted
                             )
@@ -734,13 +734,7 @@ fun WilliamsApp(context: Context) {
         // Reconciliation is a trading safety barrier, not a UI/navigation barrier.
         // The user must be able to inspect Wave Map, Positions, Incidents and Config
         // while execution remains blocked until backend recovery proves the state clean.
-        if (reconciliationBlocked && tab == 0) {
-            ReconcileBarrierScreen(
-                padding,
-                status,
-                onRecover = { command("/api/v1/control/recover") }
-            )
-        } else when (tab) {
+        when (tab) {
             0 -> DashboardScreen(
                 padding = padding,
                 status = status,
@@ -764,7 +758,8 @@ fun WilliamsApp(context: Context) {
                     command("/api/v1/control/kill")
                 },
                 onScan = { refresh(true) },
-                onSettings = { tab = 4 }
+                onSettings = { tab = 4 },
+                 onRecoverDashboard = { command("/api/v1/control/recover") }
             )
 
             1 -> ScannerScreen(
@@ -849,7 +844,7 @@ private fun SystemHealthBar(status: Status) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             StatusDot("P0", if (status.p0GatePassed) AppColors.green else AppColors.red)
-            StatusDot("VPS", if (status.recovered) AppColors.green else AppColors.amber)
+            StatusDot("RUNTIME", AppColors.green)
             StatusDot("BINANCE", if (status.binanceConfigured) AppColors.green else AppColors.amber)
             StatusDot("WSS", if (status.marketWsConnected && !status.userStreamSyncRequired) AppColors.green else AppColors.amber)
             StatusDot("EXEC", if (status.executionEnabled && !status.reconcileRequired) AppColors.green else AppColors.red)
@@ -907,7 +902,8 @@ private fun DashboardScreen(
     onStop: () -> Unit,
     onKill: () -> Unit,
     onScan: () -> Unit,
-    onSettings: () -> Unit
+    onSettings: () -> Unit,
+    onRecoverDashboard: () -> Unit
 ) {
     val best = candidates.firstOrNull()
 
@@ -921,6 +917,31 @@ private fun DashboardScreen(
     ) {
         item {
             SystemHealthBar(status)
+        }
+
+        if (status.reconcileRequired ||
+            status.executionContractReconcileRequired ||
+            status.state == "RECONCILE_REQUIRED") {
+            item {
+                Card(
+                    Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = AppColors.surface)
+                ) {
+                    Column(
+                        Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text("TRADING BLOCKED • RECOVER REQUIRED", color = AppColors.red, fontWeight = FontWeight.Bold)
+                        Text(status.error ?: "Exchange state is not reconciled.", color = AppColors.textMuted)
+                        OutlinedButton(
+                            onClick = onRecoverDashboard,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("RECONCILE / RECOVER")
+                        }
+                    }
+                }
+            }
         }
 
         item {
@@ -1256,7 +1277,10 @@ private fun ControlCard(
                     modifier = Modifier.weight(1f),
                     text = "START",
                     icon = Icons.Filled.PlayArrow,
-                    enabled = status.binanceConfigured && !status.running,
+                    enabled = status.binanceConfigured &&
+                        !status.running &&
+                        !status.reconcileRequired &&
+                        !status.executionContractReconcileRequired,
                     accent = AppColors.green,
                     onClick = onStart
                 )
@@ -1279,7 +1303,14 @@ private fun ControlCard(
             }
 
             Text(
-                "TESTNET execution включён. BUY допускается только при готовых market/user WebSocket и после прохождения risk/filter checks.",
+                if (status.running)
+                    "AUTONOMOUS ENGINE RUNNING • BUY requires market/user WSS + P0 + risk/filter checks."
+                 else if (status.reconcileRequired)
+                    "TRADING BLOCKED • press RECONCILE / RECOVER."
+                 else if (!status.binanceConfigured)
+                    "Configure Binance Testnet API Key + Secret first."
+                 else
+                    "READY TO START • Williams will scan the market and make trading decisions autonomously.",
                 style = MaterialTheme.typography.bodySmall,
                 color = AppColors.amber
             )
