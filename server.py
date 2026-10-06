@@ -737,6 +737,20 @@ def status():
         float(item['unrealized_pnl'] or 0.0)
         for item in positions
     )
+    reserved_risk_quote = multi.reserved_risk_quote()
+    account_equity_quote = max(
+        0.0,
+        float(balance or 0.0),
+    ) + sum(
+        max(0.0, float(item.get('current_price') or 0.0))
+        * max(0.0, float(item.get('quantity') or 0.0))
+        for item in positions
+    )
+    reserved_risk_pct = (
+        reserved_risk_quote / account_equity_quote
+        if account_equity_quote > 0.0
+        else 0.0
+    )
 
     execution_state, unresolved_symbols, pending_symbols = _canonical_execution_state(
         multi,
@@ -778,7 +792,8 @@ def status():
         'positions': positions,
         'open_positions': len(positions),
         'max_open_positions': multi.max_open_positions,
-        'reserved_risk_quote': multi.reserved_risk_quote(),
+        'reserved_risk_quote': reserved_risk_quote,
+        'reserved_risk_pct': reserved_risk_pct,
         'max_total_risk_pct': multi.max_total_risk_pct,
         'max_risk_per_trade_pct': multi.max_risk_per_trade_pct,
         'unrealized_pnl_quote': total_pnl,
