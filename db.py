@@ -132,7 +132,8 @@ class Database:
             hypothesis_id TEXT,
             invalidation_level REAL,
             status TEXT NOT NULL,
-            reason TEXT
+            reason TEXT,
+            client_order_id TEXT
         );
         CREATE TABLE IF NOT EXISTS execution_events(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -200,8 +201,8 @@ class Database:
         self.conn.execute(
             '''INSERT OR REPLACE INTO execution_intents(
                 intent_id,symbol,side,order_type,purpose,
-                required_context_versions_json,hypothesis_id,invalidation_level,status,reason
-            ) VALUES(?,?,?,?,?,?,?,?,?,?)''',
+                required_context_versions_json,hypothesis_id,invalidation_level,status,reason,client_order_id
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?)''',
             (
                 intent.intent_id,
                 intent.symbol,
@@ -213,6 +214,7 @@ class Database:
                 float(intent.invalidation_level or 0.0),
                 status,
                 reason,
+                getattr(intent, 'client_order_id', ''),
             ),
         )
         if not self._transaction_active:
