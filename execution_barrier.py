@@ -20,6 +20,7 @@ class OrderIntent:
     invalidation_level: float = 0.0
     quantity: str = ""
     quote_order_quantity: str = ""
+    client_order_id: str = ""
     purpose: str = "ENTRY"
     permission_interval: str = ""
     created_at_ms: int = 0
@@ -159,6 +160,7 @@ class ExecutionBarrier:
                     "required_context_versions": dict(intent.required_context_versions),
                     "hypothesis_id": intent.hypothesis_id,
                     "purpose": intent.purpose,
+                    "client_order_id": intent.client_order_id,
                 },
             )
             try:
