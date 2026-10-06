@@ -179,6 +179,9 @@ class BinanceSpotClient:
                     payload=payload,
                 )
 
+            if method == "GET" and path == "/api/v3/exchangeInfo":
+                self._update_rate_limits_from_exchange_info(payload)
+
             return payload
 
         if last_exc is not None:
@@ -243,8 +246,6 @@ class BinanceSpotClient:
     @staticmethod
     def _require_json_array(payload, endpoint):
         if isinstance(payload, list):
-            if method == "GET" and path == "/api/v3/exchangeInfo":
-                self._update_rate_limits_from_exchange_info(payload)
             return payload
         raise BinanceAPIError(
             f"Binance {endpoint} returned {type(payload).__name__}; expected array",
