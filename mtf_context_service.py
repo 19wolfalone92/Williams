@@ -39,6 +39,7 @@ class MultiTimeframeContextService:
         self.running = False
         self.last_error = None
         self.last_event_at = None
+        self.last_closed_open_ms: dict[tuple[str, str], int] = {}
 
     def configure_credentials(self, key: str, secret: str, testnet: bool = True) -> None:
         with self.lock:
@@ -60,8 +61,14 @@ class MultiTimeframeContextService:
                     df = df.iloc[:-1].copy()
             except Exception:
                 pass
-        self.frames[(symbol, interval)] = df.tail(300).copy()
-        self._publish(symbol, interval, self.frames[(symbol, interval)])
+        frame = df.tail(300).copy()
+        with self.lock:
+            self.frames[(symbol, interval)] = frame
+            try:
+                self.last_closed_open_ms[(symbol, interval)] = int(frame.index[-1].timestamp() * 1000)
+            except Exception:
+                pass
+        self._publish(symbol, interval, frame)
 
     @staticmethod
     def _atr(df: pd.DataFrame, period: int) -> float:
@@ -231,11 +238,43 @@ class MultiTimeframeContextService:
                         frame.at[open_time, key] = value
                 else:
                     frame = pd.concat([frame, pd.DataFrame([row], index=[open_time])])
-                self.frames[(symbol, interval)] = frame.tail(300)
-                self._publish(symbol, interval, self.frames[(symbol, interval)])
+                frame = frame.tail(300)
+                self.frames[(symbol, interval)] = frame
+                self.last_closed_open_ms[(symbol, interval)] = int(open_time.timestamp() * 1000)
                 self.last_event_at = int(time.time() * 1000)
+            self._publish(symbol, interval, frame)
         except Exception as exc:
             self.last_error = f"message: {type(exc).__name__}: {exc}"
+
+    def recover_recent(self) -> None:
+        """REST gap recovery for the recent tail after WS interruption."""
+        for symbol in self.config.symbols:
+            for interval in self.config.structural_timeframes:
+                if self.stop_event.is_set():
+                    return
+                try:
+                    df = fetch_klines(
+                        self.client,
+                        symbol,
+                        interval,
+                        limit=min(20, max(3, self.config.wave_min_bars // 10)),
+                    )
+                    if df is None or df.empty:
+                        continue
+                    if "close_time" in df.columns:
+                        now = pd.Timestamp.now(tz="UTC")
+                        df = df[pd.to_datetime(df["close_time"], utc=True) <= now].copy()
+                    if df.empty:
+                        continue
+                    with self.lock:
+                        old = self.frames.get((symbol, interval), pd.DataFrame())
+                        merged = pd.concat([old, df])
+                        merged = merged[~merged.index.duplicated(keep="last")].sort_index().tail(300)
+                        self.frames[(symbol, interval)] = merged
+                        self.last_closed_open_ms[(symbol, interval)] = int(merged.index[-1].timestamp() * 1000)
+                    self._publish(symbol, interval, merged)
+                except Exception as exc:
+                    self.last_error = f"REST gap recovery {symbol}/{interval}: {type(exc).__name__}: {exc}"
 
     def _run(self) -> None:
         delay = 1.0
@@ -243,6 +282,11 @@ class MultiTimeframeContextService:
             try:
                 self.ws = websocket.WebSocketApp(
                     self._url(),
+                    on_open=lambda ws: threading.Thread(
+                        target=self.recover_recent,
+                        daemon=True,
+                        name="williams-mtf-recovery",
+                    ).start(),
                     on_message=self._on_message,
                     on_error=lambda ws, err: setattr(self, "last_error", str(err)),
                     on_close=lambda ws, code, reason: None,
