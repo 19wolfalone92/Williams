@@ -456,6 +456,7 @@ def startup():
         state.testnet,
     )
     mtf_service.configure_credentials(state.api_key, state.api_secret, state.testnet)
+    mtf_service.db = state.ensure_trader().db
     hub.start()
     if os.getenv('MTF_CONTEXT_ENABLED', 'true').lower() == 'true':
         mtf_service.start()
