@@ -4892,14 +4892,12 @@ private class NativeEngine(
 
         val fractalIndex = latestConfirmedUpFractal(closed, i)
         val fractalHigh = fractalIndex?.let { closed[it].h }
-        val fractalTeeth = fractalIndex?.let { idx ->
-            val shiftedIndex = idx - 5
-            teethSeries.getOrNull(shiftedIndex)
-        }
+        // Profitunity's Balance-Line gate compares the confirmed fractal
+        // level to the CURRENT displaced Teeth value.
         val fractalOutside =
             fractalHigh != null &&
-                fractalTeeth != null &&
-                fractalHigh > fractalTeeth
+                teeth > 0.0 &&
+                fractalHigh > teeth
 
         val previousFractalIndex = latestConfirmedUpFractal(closed, i - 1)
         val previousFractalHigh =
@@ -4958,12 +4956,11 @@ private class NativeEngine(
             }
         }
         val prevFractalForAo = latestConfirmedUpFractal(closed, i - 1)
-        val prevFractalTeethForAo =
-            prevFractalForAo?.let { teethSeries.getOrNull(it - 5) }
         val prevFractalOutside =
             prevFractalForAo != null &&
-                prevFractalTeethForAo != null &&
-                closed[prevFractalForAo].h > prevFractalTeethForAo
+                teethSeries.getOrNull(i - 1 - 5)?.let {
+                    closed[prevFractalForAo].h > it
+                } == true
         val superAo = greenStreak >= 3 && prevFractalOutside
 
         // Third Wise Man: confirmed fractal breakout.
