@@ -1064,10 +1064,26 @@ private fun SystemHealthBar(status: Status) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             StatusDot("P0", if (status.p0GatePassed) AppColors.green else AppColors.red)
-            StatusDot("RUNTIME", AppColors.green)
-            StatusDot("BINANCE", if (status.binanceConfigured) AppColors.green else AppColors.amber)
-            StatusDot("WSS", if (status.marketWsConnected && !status.userStreamSyncRequired) AppColors.green else AppColors.amber)
-            StatusDot("EXEC", if (status.executionEnabled && !status.reconcileRequired) AppColors.green else AppColors.red)
+            StatusDot(
+                "RUNTIME",
+                if (status.binanceConfigured || status.running) AppColors.green else AppColors.amber
+            )
+            StatusDot(
+                "BINANCE",
+                if (status.binanceConfigured) AppColors.green else AppColors.amber
+            )
+            StatusDot(
+                "WSS",
+                if (status.marketWsConnected && !status.userStreamSyncRequired) AppColors.green else AppColors.amber
+            )
+            StatusDot(
+                "EXEC",
+                when {
+                    status.reconcileRequired || status.executionKillLatched -> AppColors.red
+                    status.running && status.executionEnabled -> AppColors.green
+                    else -> AppColors.amber
+                }
+            )
             Spacer(Modifier.weight(1f))
             Text("RISK BUDGET • ${status.maxOpenPositions} POS", color = AppColors.textMuted, style = MaterialTheme.typography.labelSmall)
         }
@@ -1293,7 +1309,7 @@ private fun DashboardScreen(
                 )
                 MetricCard(
                     modifier = Modifier.weight(1f),
-                    title = "Баланс",
+                    title = "USDT free",
                     value = fmt(status.balance, 2),
                     suffix = " USDT",
                     icon = Icons.Filled.AccountBalanceWallet,
@@ -2282,7 +2298,7 @@ private fun SettingsScreen(
                     }
 
                     InfoRow("Execution authority", "Backend")
-                    InfoRow("Universe", "BTC / ETH / BNB / SOL / XRP")
+                    InfoRow("Scanner universe", "Top 50 liquid USDT • 5 core WSS")
                     InfoRow("MTF", "1D / 4H / 1H / 15M")
                 }
             }
