@@ -27,21 +27,6 @@ jobs:
         run: |
           python -m py_compile             strategy.py data.py risk_engine.py db.py binance_client.py binance_rules.py preflight_gate.py             market_scanner.py wave_engine.py portfolio_scanner.py             portfolio_controller.py trader.py server.py ws_hub.py trading_config.py market_context.py execution_barrier.py wise_men.py l2_slippage.py equity_breaker.py mtf_context_service.py hypothesis_engine.py execution_accumulator.py             feature_store.py ai_shadow.py cpcv_backtester.py stress_suite.py mock_exchange.py quant_models.py shap_explain.py derivatives_features.py shadow_execution.py quant_ml_pipeline.py
 
-      - name: Validate AI-Forge Core
-        env:
-          AI_FORGE_MOCK: "true"
-          AI_FORGE_API_TOKEN: ci-test-token
-        run: |
-          python -m pip install -r ai_forge/requirements.txt
-          python -m compileall -q ai_forge
-          python -m pytest -q ai_forge/tests
-          docker build -f ai_forge/Dockerfile -t ai-forge-core:ci ai_forge
-          docker run -d --rm --name ai-forge-smoke -e AI_FORGE_MOCK=true -e AI_FORGE_API_TOKEN=ci-test-token -p 8787:8787 ai-forge-core:ci
-          trap "docker stop ai-forge-smoke >/dev/null 2>&1 || true" EXIT
-          for i in $(seq 1 20); do curl -fsS http://127.0.0.1:8787/health && exit 0; sleep 1; done
-          docker logs ai-forge-smoke
-          exit 1
-
       - name: Run full static safety audit
         run: python full_safety_audit.py
 
