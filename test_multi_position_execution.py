@@ -146,6 +146,7 @@ def test_multi_position_execution_creates_independent_trades(tmp_path, monkeypat
     monkeypatch.setenv("MAX_TOTAL_RISK_PCT", "0.01")
     monkeypatch.setenv("MAX_RISK_PER_TRADE_PCT", "0.005")
     monkeypatch.setenv("MAX_L2_SLIPPAGE_PCT", "0.0015")
+    monkeypatch.setenv("DRY_RUN", "false")
     monkeypatch.setenv("MIN_NOTIONAL_BUFFER_PCT", "0")
 
     client = FakeClient()
