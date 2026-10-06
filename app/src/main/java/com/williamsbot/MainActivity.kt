@@ -751,8 +751,20 @@ fun WilliamsApp(context: Context) {
             }
         }
     ) { padding ->
-        if (status.reconcileRequired || status.executionContractReconcileRequired || status.state == "RECONCILE_REQUIRED") {
-            ReconcileBarrierScreen(padding, status, onRecover = { command("/api/v1/control/recover") })
+        val reconciliationBlocked =
+            status.reconcileRequired ||
+                status.executionContractReconcileRequired ||
+                status.state == "RECONCILE_REQUIRED"
+
+        // Reconciliation is a trading safety barrier, not a UI/navigation barrier.
+        // The user must be able to inspect Wave Map, Positions, Incidents and Config
+        // while execution remains blocked until backend recovery proves the state clean.
+        if (reconciliationBlocked && tab == 0) {
+            ReconcileBarrierScreen(
+                padding,
+                status,
+                onRecover = { command("/api/v1/control/recover") }
+            )
         } else when (tab) {
             0 -> DashboardScreen(
                 padding = padding,
