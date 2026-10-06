@@ -33,14 +33,15 @@ class MultiPositionTrader:
     def __init__(self, client, db=None, symbols=None):
         self.client = client
         self.db = db or Database()
-        self.symbols = symbols or [
-            x.strip().upper()
-            for x in os.getenv(
-                "AUTO_SCAN_SYMBOLS",
-                "BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,XRPUSDT",
-            ).split(",")
-            if x.strip()
-        ]
+        if symbols is not None:
+            self.symbols = [str(x).strip().upper() for x in symbols if str(x).strip()]
+        else:
+            raw_symbols = os.getenv("AUTO_SCAN_SYMBOLS", "ALL").strip()
+            self.symbols = (
+                []
+                if raw_symbols.upper() in {"ALL", "AUTO", "*"}
+                else [x.strip().upper() for x in raw_symbols.split(",") if x.strip()]
+            )
         self.max_total_risk_pct = min(
             0.01,
             max(
