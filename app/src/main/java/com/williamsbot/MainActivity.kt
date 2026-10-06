@@ -2594,9 +2594,12 @@ private fun parseStatus(json: JSONObject): Status {
         error =
             json.optString("last_error")
                 .takeIf { it.isNotBlank() },
+        // Native StandaloneRuntime exposes the same state as auth_configured;
+        // keep compatibility with backend status payloads that use binance_configured.
         binanceConfigured =
             json.optBoolean(
-                "binance_configured"
+                "binance_configured",
+                json.optBoolean("auth_configured", false)
             ),
         riskPerTrade =
             json.optDouble(
