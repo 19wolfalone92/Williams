@@ -65,6 +65,9 @@ object StandaloneRuntime {
             ?: error("Williams local runtime is unavailable")
     }
 
+    fun credentialsConfigured(): Boolean =
+        server?.credentialsConfigured() ?: false
+
     fun startTrading() {
         server?.startTrading()
     }
@@ -284,6 +287,9 @@ private class StandaloneServer(private val context: Context) {
     fun startTrading() {
         e().start()
     }
+
+    fun credentialsConfigured(): Boolean =
+        e().credentialsConfigured()
 
     fun stopTrading() {
         e().stop()
