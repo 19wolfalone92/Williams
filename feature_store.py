@@ -19,6 +19,8 @@ from typing import Any, Iterable, Mapping, Sequence
 import numpy as np
 import pandas as pd
 
+from derivatives_features import build_derivatives_features
+
 
 @dataclass(frozen=True)
 class MarketFeatureVector:
@@ -65,6 +67,14 @@ class MarketFeatureVector:
     wave_tf_agreement: float = 0.0
     invalidation: float = 0.0
     target: float = 0.0
+
+    funding_rate: float = 0.0
+    funding_rate_delta: float = 0.0
+    open_interest: float = 0.0
+    open_interest_delta: float = 0.0
+    long_short_ratio: float = 0.0
+    liquidation_notional: float = 0.0
+    liquidation_cluster_proximity: float = 0.0
 
     regime: str = "UNKNOWN"
     regime_score: float = 0.0
@@ -205,6 +215,42 @@ class FeatureStore:
                 (limit,),
             ).fetchall()
         return [json.loads(r["payload_json"]) for r in rows]
+
+    def save_shadow_execution(self, payload: Mapping[str, Any]) -> None:
+        data = dict(payload)
+        with self._lock:
+            self._conn.execute(
+                "CREATE TABLE IF NOT EXISTS shadow_executions ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                "timestamp_ms INTEGER NOT NULL,"
+                "symbol TEXT NOT NULL,"
+                "payload_json TEXT NOT NULL)"
+            )
+            self._conn.execute(
+                "INSERT INTO shadow_executions (timestamp_ms,symbol,payload_json) VALUES (?,?,?)",
+                (
+                    int(data.get("timestamp_ms", int(time.time() * 1000))),
+                    str(data.get("symbol", "")).upper(),
+                    json.dumps(data, default=str, sort_keys=True),
+                ),
+            )
+            self._conn.commit()
+
+    def recent_shadow_executions(self, limit: int = 50) -> list[dict[str, Any]]:
+        limit = max(1, min(int(limit), 500))
+        with self._lock:
+            self._conn.execute(
+                "CREATE TABLE IF NOT EXISTS shadow_executions ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                "timestamp_ms INTEGER NOT NULL,"
+                "symbol TEXT NOT NULL,"
+                "payload_json TEXT NOT NULL)"
+            )
+            rows = self._conn.execute(
+                "SELECT payload_json FROM shadow_executions ORDER BY timestamp_ms DESC, id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [json.loads(row["payload_json"]) for row in rows]
 
     def save_stress(self, payload: Mapping[str, Any]) -> None:
         data = dict(payload)
@@ -558,6 +604,8 @@ def build_market_feature_vector(
     wave_report: Any = None,
     order_book: Mapping[str, Any] | None = None,
     trades: Sequence[Mapping[str, Any]] | None = None,
+    derivatives: Mapping[str, Any] | None = None,
+    previous_derivatives: Mapping[str, Any] | None = None,
     source: str = "ohlcv+market",
 ) -> MarketFeatureVector:
     if candles is None or candles.empty:
@@ -624,6 +672,8 @@ def build_market_feature_vector(
     if "alligator_spread_pct" in df.columns:
         alligator_spread = _safe_float(df["alligator_spread_pct"].iloc[-1])
 
+    derivative_set = build_derivatives_features(derivatives, previous_derivatives)
+
     regime, regime_score = RegimeBaseline().classify(
         atr_pct=atr_pct,
         alligator_spread_pct=alligator_spread,
@@ -641,6 +691,7 @@ def build_market_feature_vector(
         "trade_samples": len(trades or []),
         "features_version": 1,
         "wave_context_present": bool(wf),
+        "derivatives_source_present": bool(derivatives),
     }
 
     return MarketFeatureVector(
@@ -680,6 +731,13 @@ def build_market_feature_vector(
         wave_parent_exhaustion_risk=wf.get("wave_parent_exhaustion_risk", 0.0),
         wave_nested_w3_probability=wf.get("wave_nested_w3_probability", 0.0),
         wave_tf_agreement=wf.get("wave_tf_agreement", 0.0),
+        funding_rate=derivative_set.funding_rate,
+        funding_rate_delta=derivative_set.funding_rate_delta,
+        open_interest=derivative_set.open_interest,
+        open_interest_delta=derivative_set.open_interest_delta,
+        long_short_ratio=derivative_set.long_short_ratio,
+        liquidation_notional=derivative_set.liquidation_notional,
+        liquidation_cluster_proximity=derivative_set.liquidation_cluster_proximity,
         invalidation=wf.get("invalidation", 0.0),
         target=wf.get("target", 0.0),
         regime=regime,
