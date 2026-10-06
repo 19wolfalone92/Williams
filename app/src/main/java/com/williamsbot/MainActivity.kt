@@ -116,7 +116,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.math.max
 import kotlin.math.min
 
-// Williams 4.22.0 production cockpit + Luna AI client
+// Williams 4.22.1 Trading Core production cockpit
 // CI compile-log capture enabled
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
