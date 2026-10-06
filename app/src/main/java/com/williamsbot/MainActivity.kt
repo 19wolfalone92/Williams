@@ -743,7 +743,6 @@ fun WilliamsApp(context: Context) {
                 message = message,
                 refreshing = refreshing,
                 onStart = {
-                    startTradingService()
                     command("/api/v1/control/start")
                 },
                 onPause = {
@@ -754,7 +753,6 @@ fun WilliamsApp(context: Context) {
                 },
                 onStop = {
                     command("/api/v1/control/stop")
-                    stopTradingService()
                 },
                 onKill = {
                     command("/api/v1/control/kill")
