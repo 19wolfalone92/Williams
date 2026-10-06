@@ -185,6 +185,7 @@ class MultiTimeframeWaveEngine:
         self.client = client
         self.base_interval = (base_interval or os.getenv("INTERVAL", "1h")).lower()
         self.context_interval = os.getenv("HTF_INTERVAL", "4h").lower()
+        self.execution_interval = os.getenv("EXECUTION_TIMEFRAME", "5m").lower()
         self.lookback = int(
             lookback if lookback is not None else os.getenv("WAVE_LOOKBACK", str(LOOKBACK_DEFAULT))
         )
@@ -214,7 +215,11 @@ class MultiTimeframeWaveEngine:
                 ["1d", self.context_interval, self.base_interval],
             ))
 
-        for interval in (self.context_interval, self.base_interval):
+        for interval in (
+            self.context_interval,
+            self.base_interval,
+            self.execution_interval,
+        ):
             if interval not in wanted:
                 wanted.append(interval)
 
