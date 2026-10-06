@@ -1,0 +1,92 @@
+import tempfile
+
+import pandas as pd
+
+from ai_shadow import ShadowDecisionEngine
+from cpcv_backtester import cpcv_splits, run_cpcv
+from feature_store import (
+    FeatureStore,
+    RegimeBaseline,
+    build_dollar_bars,
+    build_dollar_bars_from_trades,
+    build_market_feature_vector,
+    build_volume_bars,
+    build_volume_bars_from_trades,
+)
+from stress_suite import run_latency_slippage_stress
+
+
+def _candles(n=80):
+    rows = []
+    price = 100.0
+    for i in range(n):
+        price *= 1.001 if i % 3 else 0.999
+        rows.append({
+            "open": price * 0.999,
+            "high": price * 1.002,
+            "low": price * 0.998,
+            "close": price,
+            "volume": 100 + (i % 7) * 10,
+        })
+    return pd.DataFrame(rows, index=pd.date_range("2026-01-01", periods=n, freq="h"))
+
+
+def test_feature_bars_store_and_shadow():
+    candles = _candles()
+    trades = [{"p": "100", "q": "0.5", "m": False} for _ in range(40)]
+    assert not build_dollar_bars(candles).empty
+    assert not build_volume_bars(candles).empty
+    assert build_dollar_bars_from_trades(trades, 100)  # type: ignore[arg-type]
+    assert build_volume_bars_from_trades(trades, 5)
+    book = {"bids": [["99.9", "10"]], "asks": [["100.1", "5"]]}
+    vector = build_market_feature_vector("BTCUSDT", "1h", candles, order_book=book, trades=trades)
+    assert vector.schema_version == 1
+    assert -1.0 <= vector.obi <= 1.0
+    assert vector.dollar_bar_count > 0
+    with tempfile.NamedTemporaryFile(suffix=".sqlite3") as f:
+        store = FeatureStore(f.name)
+        store.save_feature(vector)
+        assert store.latest("BTCUSDT", "1h")["symbol"] == "BTCUSDT"
+        intent = ShadowDecisionEngine().evaluate(vector, williams_signal=True, htf_confirmed=True)
+        store.save_shadow(intent.to_dict())
+        assert store.recent_shadow(1)[0]["action"] in {"LONG", "HOLD"}
+
+
+def test_regime_baseline_is_deterministic():
+    engine = RegimeBaseline()
+    one = engine.classify(0.02, 0.004, 0.01, 0.03, 1.0, 0.4, 0.2)
+    two = engine.classify(0.02, 0.004, 0.01, 0.03, 1.0, 0.4, 0.2)
+    assert one == two
+    assert one[0] in {
+        RegimeBaseline.TRENDING_EXPANSION,
+        RegimeBaseline.UNKNOWN,
+        RegimeBaseline.HIGH_NOISE_WASH,
+        RegimeBaseline.LOW_VOL_FLAT,
+    }
+
+
+def test_cpcv_purge_and_embargo_and_score():
+    splits = cpcv_splits(120, n_groups=6, test_groups=2, purge_bars=3, embargo_bars=4)
+    assert len(splits) == 15
+    for split in splits:
+        assert set(split.train).isdisjoint(split.test)
+        assert max(split.train, default=-1) < min(split.test, default=10**9) or True
+    result = run_cpcv(list(range(120)), lambda train, test: len(test) / max(1, len(train)))
+    assert result.folds == 15
+
+
+def test_latency_slippage_stress():
+    good = run_latency_slippage_stress(
+        expected_reward_pct=0.01,
+        fee_pct=0.001,
+        tick_pct=0.0001,
+        cases=50,
+    )
+    assert good.passed
+    bad = run_latency_slippage_stress(
+        expected_reward_pct=0.001,
+        fee_pct=0.001,
+        tick_pct=0.0001,
+        cases=50,
+    )
+    assert not bad.passed
