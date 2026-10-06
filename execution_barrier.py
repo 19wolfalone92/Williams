@@ -20,6 +20,7 @@ class OrderIntent:
     invalidation_level: float = 0.0
     quantity: str = ""
     quote_order_quantity: str = ""
+    purpose: str = "ENTRY"
     created_at_ms: int = 0
     max_age_ms: int = 15_000
 
@@ -94,10 +95,13 @@ class ExecutionBarrier:
             snapshot.context(intent.symbol, tf)
             for tf in intent.required_context_versions
         ]
-        if direction == "long" and not all(ctx and ctx.allow_long for ctx in relevant):
-            return "context does not allow LONG"
-        if direction == "short" and not all(ctx and ctx.allow_short for ctx in relevant):
-            return "context does not allow SHORT"
+        # Strategy permissions are enforced only for ENTRY intents. EXIT/protective
+        # orders must remain executable even when the market context changes side.
+        if intent.purpose.upper() == "ENTRY":
+            if direction == "long" and not all(ctx and ctx.allow_long for ctx in relevant):
+                return "context does not allow LONG"
+            if direction == "short" and not all(ctx and ctx.allow_short for ctx in relevant):
+                return "context does not allow SHORT"
 
         if self.db is not None and hasattr(self.db, "state_get"):
             state = str(self.db.state_get("position_state", "FLAT"))
@@ -138,6 +142,7 @@ class ExecutionBarrier:
                     "side": intent.side,
                     "required_context_versions": dict(intent.required_context_versions),
                     "hypothesis_id": intent.hypothesis_id,
+                    "purpose": intent.purpose,
                 },
             )
             try:
