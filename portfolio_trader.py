@@ -533,6 +533,97 @@ class MultiPositionTrader:
     # Protection
     # ------------------------------------------------------------------
 
+    def _emergency_market_sell(self, symbol, qty, trade_id, reason):
+        """Close a just-filled/unprotected Spot position if protection is already breached."""
+        if self.dry_run:
+            raise RuntimeError(
+                f"{symbol}: emergency exit required ({reason}) but DRY_RUN=true"
+            )
+
+        symbol = str(symbol).upper()
+        account = self.client.account()
+        free_qty = self._asset_balance(symbol, account=account)
+        sell_qty = self._normalize_qty(symbol, min(float(qty), free_qty))
+        if sell_qty <= 0:
+            raise RuntimeError(
+                f"{symbol}: emergency exit quantity below Binance LOT_SIZE"
+            )
+
+        client_id = f"{self.ENTRY_PREFIX}EMERGENCY_{uuid.uuid4().hex[:16]}"
+        sell = self.client.order_safe(
+            symbol,
+            "SELL",
+            "MARKET",
+            quantity=self.client.decimal_format(sell_qty),
+            new_client_order_id=client_id,
+        )
+        self.db.save_order(sell)
+
+        order_id = sell.get("orderId")
+        confirmed = self.client.get_order(
+            symbol,
+            order_id=order_id,
+            orig_client_order_id=client_id if order_id is None else None,
+        )
+        if str(confirmed.get("status", "")).upper() != "FILLED":
+            raise RuntimeError(
+                f"{symbol}: emergency SELL is not fully filled"
+            )
+
+        execution = accumulate_order(confirmed)
+        executed_qty = float(execution.executed_qty)
+        exit_quote = float(execution.quote_qty)
+        exit_price = (
+            float(execution.avg_price)
+            if execution.avg_price
+            else (exit_quote / executed_qty if executed_qty > 0 and exit_quote > 0 else 0.0)
+        )
+        if executed_qty <= 0 or exit_price <= 0:
+            raise RuntimeError(f"{symbol}: emergency SELL returned invalid fill")
+
+        trade = next(
+            (
+                row for row in self.open_trades()
+                if int(row["id"]) == int(trade_id)
+            ),
+            None,
+        )
+        if trade is not None:
+            entry_price = float(trade.get("entry_price") or 0.0)
+            managed_qty = min(executed_qty, float(trade.get("quantity") or executed_qty))
+            pnl = (exit_price - entry_price) * managed_qty
+            pnl_pct = (exit_price / entry_price - 1.0) if entry_price > 0 else 0.0
+            self.db.close_trade(
+                trade_id,
+                datetime.now(timezone.utc).isoformat(),
+                exit_price,
+                pnl,
+                pnl_pct,
+                reason,
+            )
+
+        self.set_state(symbol, "FLAT")
+        self.db.log_event(
+            "WARNING",
+            "emergency_market_exit",
+            "Unprotected managed position closed at market",
+            {
+                "symbol": symbol,
+                "trade_id": trade_id,
+                "quantity": executed_qty,
+                "exit_price": exit_price,
+                "reason": reason,
+            },
+        )
+        return {
+            "emergency_exit": True,
+            "symbol": symbol,
+            "trade_id": trade_id,
+            "quantity": executed_qty,
+            "exit_price": exit_price,
+            "reason": reason,
+        }
+
     def _create_oco(
         self,
         symbol,
@@ -588,6 +679,20 @@ class MultiPositionTrader:
             symbol,
             max(sl - tick * 2, tick),
         )
+
+        # Re-check executable market state after the BUY fill. If price has
+        # already crossed TP/SL, do not submit an invalid/stale OCO. Close the
+        # unprotected position immediately and persist the exit.
+        book = self.client.book_ticker(symbol)
+        bid = float(book.get("bidPrice", 0) or 0)
+        if bid > 0 and bid >= tp:
+            return self._emergency_market_sell(
+                symbol, qty, trade_id, "TAKE_PROFIT_REACHED_BEFORE_OCO"
+            )
+        if bid > 0 and bid <= sl:
+            return self._emergency_market_sell(
+                symbol, qty, trade_id, "STOP_LOSS_REACHED_BEFORE_OCO"
+            )
 
         if not (tp > entry > sl > sl_limit):
             raise RuntimeError(
