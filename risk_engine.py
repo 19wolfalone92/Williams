@@ -150,6 +150,8 @@ class RiskEngine:
 
         if position_quote <= 0:
             return self._blocked(symbol, side, entry, "calculated position size is zero")
+        if min_notional > 0 and position_quote < float(min_notional):
+            return self._blocked(symbol, side, entry, f"position notional {position_quote:.8f} below Binance minimum {float(min_notional):.8f}")
 
         position_fraction = position_quote / self.balance
 
