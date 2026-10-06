@@ -1199,7 +1199,11 @@ private class NativeEngine(
             reconcilePositionsWithExchange()
             auditManagedOpenOrders()
             reconcileRequired = false
-            prefs.edit().putBoolean("reconcile_required", false).apply()
+            prefs.edit()
+                .putBoolean("reconcile_required", false)
+                .remove("execution_gate_symbol")
+                .apply()
+            lastError = null
             stateMachine.force(
                 if (positionList().isEmpty()) TradingState.READY_FLAT
                 else TradingState.PROTECTED,
@@ -2978,6 +2982,27 @@ private class NativeEngine(
             pendingEntries.keys.toSet() +
                 positionList().map { it.symbol }
 
+        // Recover only orders that Williams itself created. A stale Williams
+        // order with no local position used to permanently block a clean
+        // Testnet restart. BUY intents are safe to cancel when no durable
+        // pending entry exists. SELL/OCO protection is cancellable only when
+        // the exchange confirms that the corresponding base asset is absent.
+        val account = signedAccount()
+        val balances = account.optJSONArray("balances") ?: JSONArray()
+
+        fun baseBalance(symbol: String): Double {
+            val asset = symbol.removeSuffix("USDT")
+            for (i in 0 until balances.length()) {
+                val row = balances.optJSONObject(i) ?: continue
+                if (row.optString("asset").uppercase(Locale.US) == asset) {
+                    val free = row.optString("free").toDoubleOrNull() ?: 0.0
+                    val locked = row.optString("locked").toDoubleOrNull() ?: 0.0
+                    return free + locked
+                }
+            }
+            return 0.0
+        }
+
         for (i in 0 until openOrders.length()) {
             val order = openOrders.optJSONObject(i) ?: continue
             val clientId = order.optString("clientOrderId")
@@ -2987,9 +3012,31 @@ private class NativeEngine(
 
             val symbol =
                 order.optString("symbol").uppercase(Locale.US)
-            if (symbol !in expectedSymbols) {
+            if (symbol in expectedSymbols) continue
+
+            val side = order.optString("side").uppercase(Locale.US)
+            if (side == "BUY") {
+                // No durable pending entry owns this BUY anymore. Cancel only
+                // the explicitly Williams-owned orphan order.
+                signedDelete(
+                    "/api/v3/order",
+                    "symbol=" + symbol +
+                        "&orderId=" + order.optString("orderId")
+                )
+                continue
+            }
+
+            // An orphan SELL is safe to cancel only when the exchange has no
+            // corresponding base asset. Otherwise the safety barrier remains.
+            if (baseBalance(symbol) <= 0.000001) {
+                signedDelete(
+                    "/api/v3/order",
+                    "symbol=" + symbol +
+                        "&orderId=" + order.optString("orderId")
+                )
+            } else {
                 throw IllegalStateException(
-                    "Unmanaged Williams open order after restart: " +
+                    "Unmanaged Williams SELL with exchange balance: " +
                         symbol + " clientOrderId=" + clientId
                 )
             }
@@ -3002,9 +3049,29 @@ private class NativeEngine(
 
             val symbol =
                 list.optString("symbol").uppercase(Locale.US)
-            if (positionList().none { it.symbol == symbol }) {
+            if (positionList().any { it.symbol == symbol }) continue
+
+            // An orphan Williams OCO with no base asset cannot protect a real
+            // position. Cancel only that Williams-owned list. If the asset
+            // exists, keep RECONCILE_REQUIRED instead of guessing.
+            if (baseBalance(symbol) <= 0.000001) {
+                val listId = list.optString("orderListId")
+                if (listId.isNotBlank()) {
+                    signedDelete(
+                        "/api/v3/orderList",
+                        "symbol=" + symbol +
+                            "&orderListId=" + listId
+                    )
+                } else {
+                    signedDelete(
+                        "/api/v3/orderList",
+                        "symbol=" + symbol +
+                            "&listClientOrderId=" + listClientId
+                    )
+                }
+            } else {
                 throw IllegalStateException(
-                    "Unmanaged Williams OCO after restart: " +
+                    "Unmanaged Williams OCO with exchange balance: " +
                         symbol + " listClientOrderId=" + listClientId
                 )
             }
