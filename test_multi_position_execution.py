@@ -94,6 +94,16 @@ class FakeClient:
         self.orders[order_id] = row
         return row
 
+    @staticmethod
+    def decimal_floor(value, step):
+        from decimal import Decimal, ROUND_DOWN
+        return (Decimal(str(value)) / Decimal(str(step))).to_integral_value(rounding=ROUND_DOWN) * Decimal(str(step))
+
+    @staticmethod
+    def decimal_format(value):
+        from decimal import Decimal
+        return format(Decimal(str(value)).normalize(), "f")
+
     def create_oco_sell_safe(self, symbol, quantity, take_profit_price, stop_price, stop_limit_price, list_client_order_id):
         self.oco_calls += 1
         self.oco_counter += 1
