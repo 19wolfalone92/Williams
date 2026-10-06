@@ -40,10 +40,6 @@ class MultiPositionTrader:
             ).split(",")
             if x.strip()
         ]
-        self.max_open_positions = max(
-            1,
-            int(os.getenv("MAX_OPEN_POSITIONS", "1")),
-        )
         self.max_total_risk_pct = min(
             0.01,
             max(
@@ -1225,9 +1221,6 @@ class MultiPositionTrader:
 
         results = []
         for selection in selections:
-            if len(self.open_trades()) >= self.max_open_positions:
-                break
-
             symbol = selection.candidate.symbol.upper()
             if not self._can_enter(symbol):
                 continue
