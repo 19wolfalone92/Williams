@@ -259,7 +259,7 @@ class Trader:
         old_filters = self.filters
         old_base_asset = self.base_asset
         old_quote_asset = self.quote_asset
-        old_symbol_rules = self.symbol_rules
+        old_symbol_rules = getattr(self, 'symbol_rules', None)
         old_recovered = self.recovered
 
         try:
@@ -747,7 +747,7 @@ class Trader:
                 (
                     D(balance.get('free', '0'))
                     for balance in account.get('balances', [])
-                    if balance.get('asset') == self.base_asset
+                    if balance.get('asset') == (self.base_asset or self.symbol_rules.base_asset)
                 ),
                 D('0'),
             )
