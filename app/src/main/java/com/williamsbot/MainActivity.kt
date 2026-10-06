@@ -159,7 +159,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private object AppColors {
+object AppColors {
     val background = Color(0xFF070B12)
     val surface = Color(0xFF0F1622)
     val surface2 = Color(0xFF151F2E)
