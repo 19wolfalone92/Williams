@@ -765,6 +765,9 @@ def status():
         'user_ws_connected': bool(hub.user_connected),
         'user_stream_sync_required': bool(hub.user_sync_required),
         'history_ready': bool(mtf_service.snapshot_status().get('contexts', 0) >= len(t.config.symbols) * len(t.config.structural_timeframes)),
+        'p0_gate_passed': bool(t.preflight_report and t.preflight_report.get('ready')),
+        'p0_gate_reason': ('PASS' if t.preflight_report and t.preflight_report.get('ready') else 'NOT_READY'),
+        'max_open_positions_locked': True,
     }
 
 
@@ -914,6 +917,20 @@ def pause():
 @app.post('/api/v1/control/resume', dependencies=[Depends(auth)])
 def resume():
     return {'resumed': state.resume()}
+
+@app.post('/api/v1/control/panic', dependencies=[Depends(auth)])
+def panic():
+    """PANIC STOP: block new entries without closing an existing position."""
+    result = state.pause()
+    try:
+        state.ensure_trader().db.log_event(
+            'ERROR', 'panic_stop',
+            'PANIC STOP activated: new entries paused; current position left intact.',
+            {'action': 'PANIC_STOP'},
+        )
+    except Exception:
+        pass
+    return {'panic_stopped': bool(result), 'trading_stopped': True, 'positions_closed': False}
 
 
 @app.post('/api/v1/control/kill', dependencies=[Depends(auth)])
