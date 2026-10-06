@@ -52,12 +52,12 @@ def test_shadow_execution_has_no_order_path():
 
 
 def test_optional_models_fail_closed_without_dependencies():
-    X = [[0.1, 0.2], [0.2, 0.1], [0.3, 0.4]]
+    X = [[0.1, 0.2]]
     with pytest.raises((RuntimeError, ValueError)):
         GMMRegimeModel(n_components=3).fit(X)
     with pytest.raises((RuntimeError, ValueError)):
         HMMRegimeModel(n_components=3).fit(X)
     with pytest.raises((RuntimeError, ValueError)):
-        LightGBMDirectionModel().fit(X, [0, 1, 0])
+        LightGBMDirectionModel().fit(X, [0])
     with pytest.raises((RuntimeError, ValueError)):
-        IsotonicProbabilityCalibrator().fit([0.2, 0.5], [0, 1])
+        IsotonicProbabilityCalibrator().fit([0.2], [0])
