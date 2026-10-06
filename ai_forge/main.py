@@ -6,12 +6,14 @@ from fastapi.responses import JSONResponse
 from .config import load_settings
 from .council import Council
 from .mock import mock_decisions
-from .models import CouncilDecision,CouncilRequest
+from .luna import LunaService
+from .models import CouncilDecision,CouncilRequest,LunaRequest,LunaResponse
 from .providers import create_providers
 
 settings=load_settings()
 providers=create_providers(settings.providers,settings.request_timeout_seconds)
 council=Council(settings.min_agents,settings.min_consensus)
+luna=LunaService(providers,settings.free_mode,settings.request_timeout_seconds)
 app=FastAPI(title="AI-Forge Council Core",version="0.1.0",docs_url="/docs" if settings.mock_mode else None)
 _rate={}
 
@@ -39,19 +41,27 @@ def require_auth(authorization:str|None=Header(default=None)): return _auth(auth
 
 @app.get("/health")
 def health():
-    return {"ok":True,"service":"ai-forge-core","version":app.version,"mock_mode":settings.mock_mode,"configured_agents":len(providers) if not settings.mock_mode else 5}
+    return {"ok":True,"service":"ai-forge-core","version":app.version,"mock_mode":settings.mock_mode,"free_mode":settings.free_mode,"mode":"MOCK" if settings.mock_mode else ("FREE" if settings.free_mode else "PROVIDER"),"configured_agents":len(providers) if not settings.mock_mode else 5}
 
 @app.get("/v1/status",dependencies=[Depends(require_auth)])
 def status():
     configured={p.cfg.name:True for p in providers}
     if settings.mock_mode: configured={k:True for k in ("GPT","Gemini","DeepSeek","Grok","Mistral")}
-    return {"service":"ai-forge-core","version":app.version,"configured_agents":configured,"min_required_agents":settings.min_agents,"min_consensus":settings.min_consensus}
+    return {"service":"ai-forge-core","version":app.version,"configured_agents":configured,"min_required_agents":settings.min_agents,"min_consensus":settings.min_consensus,"free_mode":settings.free_mode,"luna_mode":"FREE" if settings.free_mode else "PROVIDER"}
 
 @app.post("/v1/council",response_model=CouncilDecision,dependencies=[Depends(require_auth)])
 def run_council(payload:CouncilRequest):
     if settings.mock_mode: return council.verify(mock_decisions(payload.task),5,payload.require_all)
     if not providers: raise HTTPException(503,"no AI providers configured")
     return council.verify([p.decide(payload.task,payload.context) for p in providers],len(providers),payload.require_all)
+
+@app.post("/v1/luna",response_model=LunaResponse,dependencies=[Depends(require_auth)])
+def run_luna(payload:LunaRequest):
+    try:
+        answer, mode, provider, model = luna.respond(payload.history, payload.message, payload.context)
+        return LunaResponse(answer=answer, mode=mode, provider=provider, model=model)
+    except RuntimeError as exc:
+        raise HTTPException(503,str(exc)) from exc
 
 @app.exception_handler(Exception)
 async def unhandled_error(request:Request,exc:Exception):
