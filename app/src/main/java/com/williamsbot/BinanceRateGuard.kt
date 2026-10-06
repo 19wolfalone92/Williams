@@ -102,10 +102,6 @@ class BinanceRateGuard {
         val limits = info.optJSONArray("rateLimits") ?: return
         for (i in 0 until limits.length()) {
             val row = limits.optJSONObject(i) ?: continue
-            if (
-                row.optString("interval") != "MINUTE" ||
-                row.optInt("intervalNum", 0) != 1
-            ) continue
             when (row.optString("rateLimitType")) {
                 "REQUEST_WEIGHT" -> {
                     if (
