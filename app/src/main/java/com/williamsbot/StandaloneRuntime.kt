@@ -1028,11 +1028,16 @@ private class NativeEngine(
             while (running) {
                 if (!paused) {
                     try {
-                        if (!historyReady) {
-                            if (!historyWarmupRunning) {
-                                warmCoreHistoryAsync()
-                            }
-                        } else if (
+                        // Historical MTF/Wave warmup is deliberately non-blocking.
+                        // The scanner can use bounded recent candles immediately;
+                        // fetchCandles() falls back to Binance REST when a history
+                        // slot is not warm yet. Full history continues in the
+                        // background for deeper Wave/MTF analysis.
+                        if (!historyReady && !historyWarmupRunning) {
+                            warmCoreHistoryAsync()
+                        }
+
+                        if (
                             marketSocketConnected &&
                             userStreamConnected &&
                             !userStreamSyncRequired &&
@@ -1076,6 +1081,8 @@ private class NativeEngine(
         return JSONObject()
             .put("started", true)
             .put("interval_seconds", 90)
+            .put("scanner_startup_mode", "NON_BLOCKING_HISTORY")
+            .put("history_warmup_background", true)
     }
 
     fun isTradingBlocked(): Boolean =
