@@ -64,6 +64,13 @@ class ExecutionBarrier:
         self.context_cache = context_cache
         self.db = db
 
+    def _persist(self, intent: OrderIntent, status: str, reason: str = "") -> None:
+        if self.db is not None and hasattr(self.db, "save_execution_intent"):
+            try:
+                self.db.save_execution_intent(intent, status, reason)
+            except Exception:
+                pass
+
     def _record(self, level: str, event: str, intent: OrderIntent, message: str, raw=None) -> None:
         if self.db is not None and hasattr(self.db, "log_event"):
             try:
@@ -117,6 +124,12 @@ class ExecutionBarrier:
         pre_submit_checks: Callable[[MarketStateSnapshot], None] | None = None,
     ) -> ExecutionResult:
         with self.context_cache.execution_lock:
+            self._persist(intent, "PENDING")
+            if self.db is not None and hasattr(self.db, "save_execution_event"):
+                try:
+                    self.db.save_execution_event(intent.intent_id, "ADMISSION_STARTED", dict(intent.required_context_versions))
+                except Exception:
+                    pass
             snapshot = self.context_cache.snapshot()
             reason = self._validate(intent, snapshot)
             if reason:
@@ -128,6 +141,7 @@ class ExecutionBarrier:
                     pre_submit_checks(snapshot)
                 except Exception as exc:
                     reason = f"pre_submit_check_failed: {type(exc).__name__}: {exc}"
+                    self._persist(intent, "BLOCKED", reason)
                     self._record("WARNING", "execution_blocked", intent, reason)
                     return ExecutionResult(intent.intent_id, False, reason=reason)
 
@@ -148,6 +162,7 @@ class ExecutionBarrier:
             try:
                 response = submit()
             except Exception as exc:
+                self._persist(intent, "AMBIGUOUS", f"{type(exc).__name__}: {exc}")
                 self._record(
                     "ERROR",
                     "execution_ambiguous",
@@ -157,6 +172,12 @@ class ExecutionBarrier:
                 )
                 raise
 
+            self._persist(intent, "SUBMITTED")
+            if self.db is not None and hasattr(self.db, "save_execution_event"):
+                try:
+                    self.db.save_execution_event(intent.intent_id, "BINANCE_SUBMITTED", {"symbol": intent.symbol, "side": intent.side})
+                except Exception:
+                    pass
             self._record("INFO", "execution_submitted", intent, "Binance accepted request", {
                 "intent_id": intent.intent_id,
             })
