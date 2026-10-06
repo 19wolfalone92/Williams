@@ -725,6 +725,9 @@ fun WilliamsApp(context: Context) {
                         apiKey.trim(),
                         apiSecret.trim()
                     )
+                    check(StandaloneRuntime.credentialsConfigured()) {
+                        "Ключи не появились в защищённом хранилище Williams"
+                    }
                 } else {
                     // Remote/VPS mode keeps the credential write behind the
                     // authenticated HTTP API.
