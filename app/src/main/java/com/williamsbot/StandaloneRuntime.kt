@@ -464,6 +464,7 @@ private class NativeEngine(
     private val livePrices = java.util.concurrent.ConcurrentHashMap<String, Double>()
     private val lastUserEventTimeByType = java.util.concurrent.ConcurrentHashMap<String, Long>()
     private var marketSocket: WebSocket? = null
+    private val orderBookCache = OrderBookCache()
     @Volatile private var marketSocketConnected = false
     @Volatile private var marketSocketLastEventMs = 0L
     @Volatile private var historyWarmupRunning = false
@@ -494,7 +495,7 @@ private class NativeEngine(
     private var primaryCandles = emptyList<CandleN>()
     private var lastScanDurationMs = 0L
     private var lastSymbolsScanned = 0
-    private val maxOpenPositions = 3
+    private val maxOpenPositions = 1
     private val maxTotalRiskPct = 0.01
     private val maxRiskPerTradePct = 0.005
     private val maxSpreadPct = 0.0015
@@ -758,6 +759,7 @@ private class NativeEngine(
             .put("fsm_state", stateMachine.state.name)
             .put("history_warmup_running", historyWarmupRunning)
             .put("history_ready", historyReady)
+            .put("l2", orderBookCache.status())
             .put("history", historyStore.status(coreSymbols, analysisFrames))
             .put("rate_limits", rateGuard.snapshot())
             .put("core_symbols", JSONArray(coreSymbols))
@@ -1345,12 +1347,16 @@ private class NativeEngine(
                 analysisFrames.map { frame ->
                     symbol.lowercase(Locale.US) + "@kline_" + frame
                 } + listOf(
-                    symbol.lowercase(Locale.US) + "@bookTicker"
+                    symbol.lowercase(Locale.US) + "@bookTicker",
+                    symbol.lowercase(Locale.US) + "@depth@100ms"
                 )
             }.joinToString("/")
 
     private fun startMarketDataStream() {
         if (marketSocket != null) return
+        // Seed each local L2 book before consuming diff-depth updates. If a
+        // sequence gap is detected later, the affected symbol is re-snapshotted.
+        warmOrderBookSnapshots()
         val request = Request.Builder().url(wsStreamUrl()).build()
         marketSocket = http.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
@@ -1407,6 +1413,7 @@ private class NativeEngine(
     private fun consumeMarketStream(envelope: JSONObject) {
         val data = envelope.optJSONObject("data") ?: return
         when (data.optString("e")) {
+            "depthUpdate" -> consumeDepthUpdate(data)
             "kline" -> consumeKlineStream(envelope)
             "bookTicker" -> {
                 val symbol = data.optString("s").uppercase(Locale.US)
@@ -1415,6 +1422,45 @@ private class NativeEngine(
                 val ask = data.optString("a").toDoubleOrNull() ?: return
                 if (bid <= 0.0 || ask < bid) return
                 livePrices[symbol] = (bid + ask) / 2.0
+            }
+        }
+    }
+
+    private fun warmOrderBookSnapshots() {
+        for (symbol in coreSymbols) {
+            runCatching { syncOrderBookSnapshot(symbol) }
+                .onFailure { lastError = "L2 snapshot $symbol: " + (it.message ?: it.javaClass.simpleName) }
+        }
+    }
+
+    private fun syncOrderBookSnapshot(symbol: String) {
+        val book = JSONObject(
+            getBody("/api/v3/depth?symbol=" + symbol + "&limit=100")
+        )
+        orderBookCache.seed(symbol, book)
+    }
+
+    private fun consumeDepthUpdate(data: JSONObject) {
+        val symbol = data.optString("s").uppercase(Locale.US)
+        if (symbol !in coreSymbols) return
+        val first = data.optLong("U", -1L)
+        val last = data.optLong("u", -1L)
+        if (first < 0L || last < 0L) return
+        val ok = orderBookCache.apply(
+            symbol = symbol,
+            firstUpdateId = first,
+            finalUpdateId = last,
+            bids = data.optJSONArray("b") ?: JSONArray(),
+            asks = data.optJSONArray("a") ?: JSONArray()
+        )
+        if (!ok) {
+            Thread {
+                runCatching { syncOrderBookSnapshot(symbol) }
+                    .onFailure { lastError = "L2 resync $symbol: " + (it.message ?: it.javaClass.simpleName) }
+            }.apply {
+                isDaemon = true
+                name = "williams-l2-resync-$symbol"
+                start()
             }
         }
     }
@@ -3379,6 +3425,11 @@ private class NativeEngine(
         quoteNotional: Double
     ): Pair<Double, Double> {
         require(quoteNotional > 0.0)
+
+        // Prefer the continuously maintained local L2 book. A REST snapshot
+        // remains a safety fallback if the stream is not synchronized yet.
+        orderBookCache.estimateBuy(symbol, quoteNotional)?.let { return it }
+
         val book = JSONObject(
             getBody("/api/v3/depth?symbol=" + symbol + "&limit=100")
         )
