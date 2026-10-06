@@ -41,6 +41,35 @@ def _csv(env: Mapping[str, str], key: str, default: Sequence[str]) -> tuple[str,
     return values or tuple(default)
 
 
+def _tf_chain(execution: str, env: Mapping[str, str]) -> tuple[str, ...]:
+    """Return a normalized structural hierarchy appropriate to any execution TF."""
+    explicit = str(env.get("STRUCTURAL_TIMEFRAMES", "")).strip()
+    if explicit:
+        values = tuple(dict.fromkeys(
+            x.strip().lower() for x in explicit.split(",") if x.strip()
+        ))
+        if values:
+            return values
+
+    chains = {
+        "1m": ("4h", "1h", "15m", "5m", "1m"),
+        "3m": ("1d", "4h", "1h", "15m", "5m", "3m"),
+        "5m": ("1d", "4h", "1h", "15m", "5m"),
+        "15m": ("1d", "4h", "1h", "15m"),
+        "30m": ("1d", "4h", "1h", "30m", "15m"),
+        "1h": ("1d", "4h", "1h", "15m"),
+        "2h": ("1w", "1d", "4h", "2h", "1h"),
+        "4h": ("1w", "1d", "4h", "1h"),
+        "6h": ("1w", "1d", "6h", "4h"),
+        "12h": ("1w", "1d", "12h", "4h"),
+        "1d": ("1w", "1d", "4h"),
+        "3d": ("1w", "3d", "1d"),
+        "1w": ("1M", "1w", "1d"),
+        "1M": ("1M", "1w", "1d"),
+    }
+    return chains.get(str(execution).lower(), ("1d", "4h", "1h", str(execution).lower()))
+
+
 @dataclass(frozen=True)
 class TradingConfig:
     symbols: tuple[str, ...] = DEFAULT_SYMBOLS
@@ -86,10 +115,12 @@ class TradingConfig:
         risk = max(0.0, min(0.01, _float(source, "RISK_PER_TRADE_PCT", 0.005)))
         total_risk = max(0.0, min(0.02, _float(source, "MAX_TOTAL_RISK_PCT", 0.01)))
 
+        execution_timeframe = str(source.get("EXECUTION_TIMEFRAME", "5m")).lower()
+
         return cls(
             symbols=symbols,
-            structural_timeframes=("1d", "4h", "1h", "15m"),
-            execution_timeframe=str(source.get("EXECUTION_TIMEFRAME", "5m")).lower(),
+            structural_timeframes=_tf_chain(execution_timeframe, source),
+            execution_timeframe=execution_timeframe,
             allow_long=_bool(source, "ALLOW_LONG", True),
             allow_short=_bool(source, "ALLOW_SHORT", False),
             require_htf_confirmation=_bool(source, "REQUIRE_HTF_CONFIRMATION", True),
