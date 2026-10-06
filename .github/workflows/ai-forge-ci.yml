@@ -31,8 +31,7 @@ jobs:
       - name: Compile
         run: python -m compileall -q ai_forge
       - name: Test
-        working-directory: ai_forge
-        run: pytest -q
+        run: python -m pytest -q ai_forge/tests
   container:
     name: Build AI-Forge container
     runs-on: ubuntu-24.04
