@@ -158,10 +158,42 @@ class MultiPositionTrader:
         return False
 
     def _repair_stale_reconcile_states(self):
-        """Clear only stale barriers after exchange/SQLite evidence proves no active activity."""
+        """Clear a persisted recovery barrier only after clean exchange evidence.
+
+        The previous implementation iterated only over self.symbols.  In
+        AUTO/ALL scan mode that list is intentionally empty, so a stale
+        position_state:<symbol>=RECONCILE_REQUIRED left in SQLite could never
+        be examined.  That made a clean Testnet restart remain blocked forever.
+
+        Build the recovery set from configured symbols *and* persisted
+        per-symbol barriers, pending entries, and active_symbol.  A barrier is
+        still preserved whenever Binance shows any open order or a confirmed
+        Williams BUY with remaining quantity.
+        """
         repaired = []
-        for symbol in self.symbols:
-            symbol = str(symbol).upper()
+
+        symbols = {
+            str(symbol).upper()
+            for symbol in (self.symbols or [])
+            if str(symbol).strip()
+        }
+
+        active_symbol = self.db.state_get("active_symbol")
+        if active_symbol:
+            symbols.add(str(active_symbol).upper())
+
+        rows = self.db.conn.execute(
+            "SELECT key FROM bot_state WHERE key LIKE 'position_state:%'"
+        ).fetchall()
+        for row in rows:
+            key = str(row["key"])
+            if ":" in key:
+                symbols.add(key.split(":", 1)[1].upper())
+
+        for symbol, _ in self._pending_entries():
+            symbols.add(symbol)
+
+        for symbol in sorted(symbols):
             if self.state(symbol) != "RECONCILE_REQUIRED":
                 continue
             if self.db.open_trade(symbol) is not None:
@@ -194,6 +226,9 @@ class MultiPositionTrader:
                     {"symbol": symbol},
                 )
 
+        # The legacy single-symbol barrier must not survive a clean canonical
+        # recovery.  _sync_legacy_state() below will write the authoritative
+        # FLAT/OPEN state after all per-symbol checks have completed.
         return repaired
 
     def open_trades(self):
