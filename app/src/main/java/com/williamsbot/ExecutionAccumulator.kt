@@ -38,32 +38,48 @@ class ExecutionAccumulator {
     @Synchronized
     fun accept(event: JSONObject, exitPriceForUnknownFee: BigDecimal? = null): Snapshot? {
         val orderId = event.optString("i").ifBlank { return null }
-        val symbol = event.optString("s")
-        val executionType = event.optString("x").uppercase()
-        if (executionType != "TRADE") return snapshot(orderId)
+        if (event.optString("x").uppercase() != "TRADE") return snapshot(orderId)
+        return acceptFill(
+            orderId = orderId,
+            symbol = event.optString("s"),
+            tradeId = event.optString("t", "-1"),
+            eventTime = event.optLong("E", 0L),
+            qty = decimal(event.optString("l")),
+            price = decimal(event.optString("L")),
+            commission = decimal(event.optString("n")),
+            commissionAsset = event.optString("N"),
+            exitPriceForUnknownFee = exitPriceForUnknownFee
+        )
+    }
 
-        val tradeId = event.optString("t", "-1")
-        val eventTime = event.optLong("E", 0L)
-        val key = "$orderId:$tradeId:$eventTime"
+    @Synchronized
+    fun acceptFill(
+        orderId: String,
+        symbol: String,
+        tradeId: String,
+        eventTime: Long,
+        qty: BigDecimal,
+        price: BigDecimal,
+        commission: BigDecimal = BigDecimal.ZERO,
+        commissionAsset: String = "",
+        exitPriceForUnknownFee: BigDecimal? = null
+    ): Snapshot? {
+        if (orderId.isBlank()) return null
         val state = orders.getOrPut(orderId) { Mutable(symbol = symbol) }
+        val key = "$orderId:$tradeId:$eventTime"
         if (!state.seen.add(key)) return snapshot(orderId)
 
-        val qty = decimal(event.optString("l"))
-        val price = decimal(event.optString("L"))
         state.qty = state.qty.add(qty)
         state.quote = state.quote.add(qty.multiply(price))
         state.fills += 1
 
-        val commission = decimal(event.optString("n"))
-        val asset = event.optString("N")
         if (commission > BigDecimal.ZERO) {
             when {
-                asset == "USDT" -> state.feeUsdt = state.feeUsdt.add(commission)
-                asset == symbol.removeSuffix("USDT") ->
-                    state.feeUsdt = state.feeUsdt.add(
-                        commission.multiply(price)
-                    )
-                asset.isBlank() -> Unit
+                commissionAsset == "USDT" ->
+                    state.feeUsdt = state.feeUsdt.add(commission)
+                commissionAsset == symbol.removeSuffix("USDT") ->
+                    state.feeUsdt = state.feeUsdt.add(commission.multiply(price))
+                commissionAsset.isBlank() -> Unit
                 else -> {
                     state.feeKnown = false
                     if (exitPriceForUnknownFee != null) {
