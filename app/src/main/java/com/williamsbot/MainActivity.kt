@@ -206,7 +206,7 @@ data class Status(
     val testnet: Boolean = true,
     val running: Boolean = false,
     val paused: Boolean = false,
-    val recovered: Boolean = true,
+    val recovered: Boolean = false,
     val state: String = "FLAT",
     val price: Double? = null,
     val balance: Double? = null,
@@ -1094,6 +1094,7 @@ private fun ReconcileBarrierScreen(
 private fun DashboardScreen(
     padding: PaddingValues,
     status: Status,
+    portfolio: PortfolioSummary,
     marketPairs: List<MarketPair>,
     candidates: List<Candidate>,
     message: String,
@@ -1163,6 +1164,10 @@ private fun DashboardScreen(
 
         item {
             MarketPairsCard(marketPairs)
+        }
+
+        item {
+            PortfolioCard(portfolio, status)
         }
 
         item {
@@ -1812,6 +1817,7 @@ private fun MarketPairsCard(pairs: List<MarketPair>) {
 private fun PositionScreen(
     padding: PaddingValues,
     status: Status,
+    portfolio: PortfolioSummary,
     candles: List<Candle>,
     selectedSymbol: String?,
     interval: String,
@@ -1828,8 +1834,12 @@ private fun PositionScreen(
         contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp)
     ) {
         item {
+            PortfolioCard(portfolio, status)
+        }
+
+        item {
             Text(
-                "Портфель",
+                "Позиции",
                 style = MaterialTheme.typography.headlineSmall
             )
         }
@@ -1918,7 +1928,20 @@ private fun PositionScreen(
                         )
                         InfoRow(
                             "Current",
-                            fmt(status.price)
+                            fmt(p.currentPrice ?: status.price)
+                        )
+                        InfoRow(
+                            "Position value",
+                            fmt(p.positionValueUsdt, 2) + " USDT"
+                        )
+                        InfoRow(
+                            "Allocation",
+                            fmt(p.allocationPct * 100.0, 2) + "%"
+                        )
+                        InfoRow(
+                            "PnL",
+                            fmt(p.pnlUsdt, 2) + " USDT (" +
+                                fmt(p.pnlPct * 100.0, 2) + "%)"
                         )
                         InfoRow(
                             "SL",
@@ -1927,6 +1950,10 @@ private fun PositionScreen(
                         InfoRow(
                             "TP",
                             fmt(p.take)
+                        )
+                        InfoRow(
+                            "OCO",
+                            if (p.ocoListId.isNotBlank()) "ACTIVE" else "MISSING"
                         )
                     }
                 }
@@ -2672,6 +2699,36 @@ private fun InfoRow(label: String, value: String) {
     }
 }
 
+private fun parsePortfolio(json: JSONObject): PortfolioSummary {
+    val assets = mutableListOf<PortfolioAsset>()
+    val array = json.optJSONArray("assets") ?: JSONArray()
+    for (i in 0 until array.length()) {
+        val item = array.optJSONObject(i) ?: continue
+        assets += PortfolioAsset(
+            asset = item.optString("asset"),
+            free = item.optDouble("free", 0.0),
+            locked = item.optDouble("locked", 0.0),
+            total = item.optDouble("total", 0.0),
+            priceUsdt = item.optDouble("price_usdt")
+                .takeUnless { it.isNaN() || it == 0.0 },
+            valueUsdt = item.optDouble("value_usdt", 0.0),
+            allocationPct = item.optDouble("allocation_pct", 0.0)
+        )
+    }
+    return PortfolioSummary(
+        configured = json.optBoolean("configured", false),
+        totalEquityUsdt = json.optDouble("total_equity_usdt")
+            .takeUnless { it.isNaN() || json.isNull("total_equity_usdt") },
+        freeEquityUsdt = json.optDouble("free_equity_usdt")
+            .takeUnless { it.isNaN() || json.isNull("free_equity_usdt") },
+        lockedEquityUsdt = json.optDouble("locked_equity_usdt")
+            .takeUnless { it.isNaN() || json.isNull("locked_equity_usdt") },
+        realizedPnlUsdt = json.optDouble("realized_pnl_usdt", 0.0),
+        unrealizedPnlUsdt = json.optDouble("unrealized_pnl_usdt", 0.0),
+        assets = assets
+    )
+}
+
 private fun parseStatus(json: JSONObject): Status {
     val legacy = json.optJSONObject("position")
     val array = json.optJSONArray("positions")
@@ -2689,17 +2746,20 @@ private fun parseStatus(json: JSONObject): Status {
             parsed += PositionView(
                 symbol = symbol,
                 qty = item.optDouble("qty", 0.0),
-                entry = item.optDouble("entry", 0.0),
-                stop = item.optDouble("stop")
-                    .takeUnless {
-                        it.isNaN() || it == 0.0
-                    },
-                take = item.optDouble("take")
-                    .takeUnless {
-                        it.isNaN() || it == 0.0
-                    },
-                riskPct =
-                    item.optDouble("risk_pct", 0.0)
+                entry = item.optDouble("avg_entry_price", item.optDouble("entry", 0.0)),
+                stop = item.optDouble("stop_loss", item.optDouble("stop"))
+                    .takeUnless { it.isNaN() || it == 0.0 },
+                take = item.optDouble("take_profit", item.optDouble("take"))
+                    .takeUnless { it.isNaN() || it == 0.0 },
+                riskPct = item.optDouble("risk_pct", 0.0),
+                currentPrice = item.optDouble("current_price")
+                    .takeUnless { it.isNaN() || it == 0.0 },
+                positionValueUsdt = item.optDouble("position_value_usdt", 0.0),
+                allocationPct = item.optDouble("allocation_pct", 0.0),
+                pnlUsdt = item.optDouble("unrealized_pnl_usdt", 0.0),
+                pnlPct = item.optDouble("unrealized_pnl_pct", 0.0),
+                ocoListId = item.optString("oco_list_id"),
+                ocoListClientId = item.optString("oco_list_client_id")
             )
         }
     }
