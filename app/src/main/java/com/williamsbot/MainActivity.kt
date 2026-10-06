@@ -126,7 +126,11 @@ class MainActivity : ComponentActivity() {
                 13001
             )
         }
-        StandaloneRuntime.start(this)
+        // Production architecture: Android is a client/control surface.
+        // StandaloneRuntime remains available only as an explicit debug diagnostic.
+        if (BuildConfig.DEBUG && intent.getBooleanExtra("ENABLE_STANDALONE_DIAGNOSTIC", false)) {
+            StandaloneRuntime.start(this)
+        }
         setContent {
             WilliamsTheme {
                 WilliamsApp(this)
