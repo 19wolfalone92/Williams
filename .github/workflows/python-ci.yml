@@ -47,3 +47,5 @@ jobs:
           test_williams_book_alignment.py
           test_book_wave_safety.py test_trade_journal.py
           test_multi_position_lifecycle.py
+          recovery_test.py
+          recovery_oco_failure_test.py
