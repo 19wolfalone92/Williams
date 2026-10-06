@@ -32,6 +32,7 @@ class OrderBookCache(
     private data class Book(
         var lastUpdateId: Long = -1L,
         var updatedAtMs: Long = 0L,
+        var valid: Boolean = false,
         val bids: MutableMap<Double, Double> = mutableMapOf(),
         val asks: MutableMap<Double, Double> = mutableMapOf(),
         val pending: MutableList<Event> = mutableListOf()
@@ -47,18 +48,20 @@ class OrderBookCache(
 
         book.lastUpdateId = snapshot.optLong("lastUpdateId", -1L)
         book.updatedAtMs = System.currentTimeMillis()
+        book.valid = book.lastUpdateId >= 0L
         book.bids.clear()
         book.asks.clear()
         loadLevels(book.bids, snapshot.optJSONArray("bids"), keepHighest = true)
         loadLevels(book.asks, snapshot.optJSONArray("asks"), keepHighest = false)
 
-        var ready = book.lastUpdateId >= 0L
+        var ready = book.valid
         book.pending.clear()
 
         for (event in pending) {
             if (event.last <= book.lastUpdateId) continue
             if (event.first > book.lastUpdateId + 1L) {
                 ready = false
+                book.valid = false
                 break
             }
             applyLevels(book.bids, event.bids)
@@ -68,7 +71,19 @@ class OrderBookCache(
             trim(book)
         }
 
-        return ready
+        book.valid = ready && book.lastUpdateId >= 0L
+        if (!book.valid) book.lastUpdateId = -1L
+        return book.valid
+    }
+
+    @Synchronized
+    fun invalidate(symbol: String) {
+        val book = books.getOrPut(symbol.uppercase()) { Book() }
+        book.valid = false
+        book.lastUpdateId = -1L
+        book.updatedAtMs = 0L
+        book.bids.clear()
+        book.asks.clear()
     }
 
     @Synchronized
@@ -83,19 +98,27 @@ class OrderBookCache(
         val key = symbol.uppercase()
         val book = books.getOrPut(key) { Book() }
 
-        if (book.lastUpdateId < 0L) {
+        if (!book.valid || book.lastUpdateId < 0L) {
             if (book.pending.size >= 200) book.pending.removeAt(0)
             book.pending += Event(firstUpdateId, finalUpdateId, bids, asks)
             return true
         }
 
         if (finalUpdateId <= book.lastUpdateId) return true
-        if (firstUpdateId > book.lastUpdateId + 1L) return false
+        if (firstUpdateId > book.lastUpdateId + 1L) {
+            book.valid = false
+            book.lastUpdateId = -1L
+            book.updatedAtMs = 0L
+            book.bids.clear()
+            book.asks.clear()
+            return false
+        }
 
         applyLevels(book.bids, bids)
         applyLevels(book.asks, asks)
         book.lastUpdateId = finalUpdateId
         book.updatedAtMs = System.currentTimeMillis()
+        book.valid = true
         trim(book)
         return true
     }
@@ -103,7 +126,7 @@ class OrderBookCache(
     @Synchronized
     fun imbalance(symbol: String, levels: Int = 20, maxAgeMs: Long = 1500L): Double? {
         val book = books[symbol.uppercase()] ?: return null
-        if (book.lastUpdateId < 0L) return null
+        if (!book.valid || book.lastUpdateId < 0L) return null
         if (System.currentTimeMillis() - book.updatedAtMs > maxAgeMs) return null
         val n = levels.coerceAtLeast(1)
         val bid = book.bids.entries.sortedByDescending { it.key }.take(n)
@@ -117,7 +140,7 @@ class OrderBookCache(
     @Synchronized
     fun isFresh(symbol: String, maxAgeMs: Long = 1500L): Boolean {
         val book = books[symbol.uppercase()] ?: return false
-        return book.lastUpdateId >= 0L &&
+        return book.valid && book.lastUpdateId >= 0L &&
             System.currentTimeMillis() - book.updatedAtMs <= maxAgeMs
     }
 
@@ -175,6 +198,7 @@ class OrderBookCache(
                         symbol,
                         JSONObject()
                             .put("last_update_id", book.lastUpdateId)
+                            .put("valid", book.valid)
                             .put("age_ms", now - book.updatedAtMs)
                             .put("pending_events", book.pending.size)
                             .put("bid_levels", book.bids.size)
