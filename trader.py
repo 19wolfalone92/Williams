@@ -1,4 +1,5 @@
 import logging, os, time, uuid
+import pandas as pd
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from binance_client import BinanceAPIError, BinanceSpotClient
@@ -839,7 +840,7 @@ class Trader:
                 raise RuntimeError(f'BUY blocked by state={self.state()}')
             if self.db.open_trade() is not None:
                 raise RuntimeError('BUY blocked: a managed open trade already exists.')
-            equity_ok, equity_reason = self.equity_breaker.check(self.db, self.available_quote())
+            equity_ok, equity_reason = self.equity_breaker.check(self.db, self.available_quote(), self.symbol)
             if not equity_ok:
                 raise RuntimeError(equity_reason)
             self.l2_guard.check_buy_quote(self.client, self.symbol, float(quote_d))
@@ -917,6 +918,11 @@ class Trader:
                 )
             raise
 
+    def _oco_equity_check(self):
+        ok, reason = self.equity_breaker.check(self.db, self.available_quote(), self.symbol)
+        if not ok:
+            raise RuntimeError(reason)
+
     def place_oco(self, qty, entry_price, trade_id=None):
         if self.symbol_rules is None:
             raise RuntimeError('Symbol rules are not loaded')
@@ -992,7 +998,7 @@ class Trader:
                     self.client.decimal_format(sl_limit_d),
                     cid,
                 ),
-                pre_submit_checks=lambda _snapshot: self.equity_breaker.check(self.db, self.available_quote()) and None,
+                pre_submit_checks=lambda _snapshot: self._oco_equity_check(),
             )
             if not result.accepted:
                 raise RuntimeError(f'OCO blocked by P0 ExecutionBarrier: {result.reason}')
