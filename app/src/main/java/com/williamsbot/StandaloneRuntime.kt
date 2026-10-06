@@ -495,7 +495,7 @@ private class NativeEngine(
     private val coreSymbols = listOf("BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT")
     private val analysisFrames = listOf("1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w", "1M")
     private val maxScanSymbols = 50
-    private val waveTopN = 10
+    private val waveTopN = 8
     private val scanExecutor = Executors.newFixedThreadPool(12)
     // Market WebSocket callbacks must stay lightweight. Indicator/Williams
     // calculations are deliberately moved off the OkHttp WebSocket callback
@@ -515,7 +515,7 @@ private class NativeEngine(
     @Volatile private var historyReady = false
 
     private val scanCacheTtlMs = 12_000L
-    private val deepWatchTopN = 10
+    private val deepWatchTopN = 8
     private val scannerUniverseLabel = "USDT_LIQUIDITY_TOP_50"
 
     @Volatile
@@ -814,7 +814,7 @@ private class NativeEngine(
         JSONObject()
             .put("ok", true)
             .put("service", "williams-native")
-            .put("version", "4.20.1")
+            .put("version", "4.20.2")
 .put("standalone", true)
             .put("mode", "AUTONOMOUS")
             .put("runtime_ready", true)
@@ -1047,7 +1047,7 @@ private class NativeEngine(
                 }
 
                 try {
-                    Thread.sleep(15_000L)
+                    Thread.sleep(90_000L)
                 } catch (_: InterruptedException) {
                     break
                 }
@@ -1059,7 +1059,7 @@ private class NativeEngine(
 
         return JSONObject()
             .put("started", true)
-            .put("interval_seconds", 15)
+            .put("interval_seconds", 90)
     }
 
     fun isTradingBlocked(): Boolean =
@@ -5771,7 +5771,7 @@ private class NativeEngine(
         val dailyGuard = dailyTradeGuard()
 
         return JSONObject()
-            .put("version", "4.17.0")
+            .put("version", "4.20.2")
             .put("symbol", primarySymbol)
             .put("interval", interval)
             .put("testnet", true)
@@ -5881,6 +5881,9 @@ private class NativeEngine(
             .put("scanner_symbols", lastSymbolsScanned)
             .put("scanner_last_scan_at", lastScanAt)
             .put("scanner_duration_ms", lastScanDurationMs)
+            .put("scanner_universe_size", scanSymbols.size)
+            .put("scanner_candidates", candidates.length())
+            .put("scanner_last_success", if (scannerState == "READY") lastScanAt else 0L)
     }
 
     fun historyStatus(): JSONObject =
@@ -6014,7 +6017,7 @@ private class NativeEngine(
             .put("position_fraction", 0.25)
             .put("stop_loss_pct", 0.02)
             .put("take_profit_pct", 0.04)
-            .put("poll_seconds", 15)
+            .put("poll_seconds", 90)
             .put("scan_mode", "adaptive_parallel_cached")
             .put("wave_timeframes", analysisFrames.joinToString(","))
             .put("realtime_multi_timeframe_stream", marketSocketConnected)
