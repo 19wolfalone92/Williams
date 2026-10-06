@@ -1594,9 +1594,8 @@ class Trader:
 
     def process(self):
         if getattr(self, 'auto_scan_enabled', False):
-            # Auto-scan always uses the portfolio trader. Position count is
-            # determined by the remaining portfolio risk budget, not a fixed
-            # MAX_OPEN_POSITIONS ceiling.
+            # Auto-scan uses the portfolio trader. Exactly one managed position
+            # may be open; after it closes, the scanner may select the next best signal.
             if not hasattr(self, '_multi_position_trader'):
                 self._multi_position_trader = MultiPositionTrader(
                     self.client, db=self.db, symbols=self.auto_scan_symbols
