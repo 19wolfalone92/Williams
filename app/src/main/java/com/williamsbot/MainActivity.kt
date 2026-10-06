@@ -325,11 +325,11 @@ private class StandaloneApi(context: Context) {
     fun saveConnection(url: String, token: String) {
         val normalized = url.trim().trimEnd('/')
         require(normalized.isNotBlank()) { "Backend URL не задан" }
-        if (!normalized.startsWith("http://127.0.0.1") &&
-            !normalized.startsWith("https://") &&
-            !normalized.startsWith("http://10.") &&
-            !normalized.startsWith("http://192.168.")) {
-            error("Backend URL должен использовать HTTPS")
+        val localhostHttp =
+            normalized.startsWith("http://127.0.0.1") ||
+                normalized.startsWith("http://localhost")
+        if (!normalized.startsWith("https://") && !localhostHttp) {
+            error("Backend URL должен использовать HTTPS; HTTP разрешён только для localhost")
         }
         prefs.edit()
             .putString("backend_url", normalized)
