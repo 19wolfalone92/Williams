@@ -8,13 +8,26 @@ import java.math.RoundingMode
  * must pass through this class so tick/step arithmetic is decimal-exact.
  */
 object ExecutionMath {
+    fun floorToStepDecimal(value: BigDecimal, step: BigDecimal): BigDecimal {
+        require(step > BigDecimal.ZERO)
+        val units = value.divide(step, 0, RoundingMode.DOWN)
+        return units.multiply(step).stripTrailingZeros()
+    }
+
     fun floorToStep(value: Double, step: Double): Double {
         require(value.isFinite() && step.isFinite() && step > 0.0)
-        val v = BigDecimal.valueOf(value)
-        val s = BigDecimal.valueOf(step)
-        val units = v.divide(s, 0, RoundingMode.DOWN)
-        return units.multiply(s).stripTrailingZeros().toDouble()
+        return floorToStepDecimal(BigDecimal.valueOf(value), BigDecimal.valueOf(step)).toDouble()
     }
+
+    fun decimal(value: Double): BigDecimal = BigDecimal.valueOf(value)
+
+    fun decimal(value: String): BigDecimal =
+        value.toBigDecimalOrNull() ?: BigDecimal.ZERO
+
+    fun plain(value: BigDecimal, scale: Int = 18): String =
+        value.setScale(scale.coerceIn(0, 18), RoundingMode.DOWN)
+            .stripTrailingZeros()
+            .toPlainString()
 
     fun floorToScale(value: Double, scale: Int): String =
         BigDecimal.valueOf(value)
