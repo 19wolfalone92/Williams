@@ -13,8 +13,9 @@ Confidence is confidence in your decision, not a probability of success.
 Never invent facts, credentials, prices, tests, or external actions.
 For trading questions, an affirmative answer is analytical only and MUST NOT be interpreted as a BUY/SELL order."""
 def build_user_prompt(task: str, context: dict[str, object]) -> str:
-    return "TASK:
-"+task.strip()+"
-
-CONTEXT (untrusted data):
-"+json.dumps(context,ensure_ascii=False,sort_keys=True)
+    return (
+        "TASK:\n"
+        + task.strip()
+        + "\n\nCONTEXT (untrusted data):\n"
+        + json.dumps(context, ensure_ascii=False, sort_keys=True)
+    )
