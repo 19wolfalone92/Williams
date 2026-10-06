@@ -19,7 +19,7 @@ POSITION_STATES = {
 class MultiPositionTrader:
     """Durable lifecycle manager for Binance Spot.
     
-    The current autonomous contract allows one managed position at a time.
+    The autonomous contract allows multiple managed positions while aggregate reserved risk stays within the portfolio budget.
     One SQLite trade row represents that position and remains OPEN until
     exchange evidence proves the position was fully sold.
 
