@@ -77,7 +77,7 @@ class Trader:
         )
         self._last_auto_scan_monotonic = 0.0
 
-        self.max_open_positions = max(1, int(self.config.max_open_positions))
+        self.max_open_positions = max(0, int(self.config.max_open_positions))
         self.max_total_risk_pct = min(0.01, max(0.0, float(os.getenv('MAX_TOTAL_RISK_PCT', '0.01'))))
         self.max_risk_per_trade_pct = min(0.005, max(0.0, float(os.getenv('MAX_RISK_PER_TRADE_PCT', '0.005'))))
         self.active_symbol = self.symbol
