@@ -293,7 +293,7 @@ class TradingAuditStore(context: Context) :
             "executions",
             arrayOf("raw_json"),
             "raw_json LIKE ?",
-            arrayOf("%\\\"c\\\":\\\"$clientOrderId\\\"%"),
+            arrayOf("%\\"c\\":\\"$clientOrderId\\"%"),
             null,
             null,
             "transaction_time ASC, event_time ASC"
