@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 from portfolio_controller import PortfolioController
 from db import Database
+from equity_breaker import EquityCircuitBreaker
 
 
 POSITION_STATES = {
@@ -66,6 +67,10 @@ class MultiPositionTrader:
             float(os.getenv("BALANCE_TOLERANCE_PCT", "0.005")),
         )
         self._locks = set()
+        self.equity_breaker = EquityCircuitBreaker(float(os.getenv("MAX_DAILY_LOSS_PCT", "0.03")))
+        self.max_trades_per_day = max(0, int(os.getenv("MAX_TRADES_PER_DAY", "5")))
+        self.max_consecutive_losses = max(0, int(os.getenv("MAX_CONSECUTIVE_LOSSES", "3")))
+        self.cooldown_minutes = max(0, int(os.getenv("COOLDOWN_MINUTES", "30")))
 
     # ------------------------------------------------------------------
     # Durable state
@@ -1195,6 +1200,60 @@ class MultiPositionTrader:
             }
 
     # ------------------------------------------------------------------
+    # Portfolio-wide daily risk gate
+    # ------------------------------------------------------------------
+
+    def _daily_entry_guard(self):
+        """Block new entries on daily loss, trade count, streak or cooldown."""
+        from datetime import datetime, timezone
+        account = self.client.account()
+        balances = {
+            str(b.get("asset", "")).upper(): float(b.get("free", 0) or 0) + float(b.get("locked", 0) or 0)
+            for b in account.get("balances", [])
+        }
+        equity = balances.get("USDT", 0.0)
+        unrealized = 0.0
+        for trade in self.open_trades():
+            symbol = str(trade["symbol"]).upper()
+            mark = float(self.client.ticker_price(symbol)["price"])
+            qty = float(trade.get("quantity", 0) or 0)
+            equity += balances.get(symbol.replace("USDT", ""), 0.0) * mark
+            unrealized += (mark - float(trade.get("entry_price", 0) or 0)) * qty
+
+        realized = float(self.db.conn.execute(
+            "SELECT COALESCE(SUM(pnl),0) FROM trades WHERE exit_time IS NOT NULL AND exit_time >= date('now')"
+        ).fetchone()[0] or 0.0)
+        fees = float(self.db.conn.execute(
+            "SELECT COALESCE(SUM(fees),0) FROM trades WHERE exit_time IS NOT NULL AND exit_time >= date('now')"
+        ).fetchone()[0] or 0.0)
+        trades_today = int(self.db.conn.execute(
+            "SELECT COUNT(*) FROM trades WHERE entry_time >= date('now')"
+        ).fetchone()[0])
+        recent = self.db.conn.execute(
+            "SELECT pnl, exit_time FROM trades WHERE exit_time IS NOT NULL ORDER BY id DESC LIMIT 20"
+        ).fetchall()
+
+        if self.max_trades_per_day and trades_today >= self.max_trades_per_day:
+            return False, f"MAX_TRADES_PER_DAY reached: {trades_today}"
+        losses = 0
+        for row in recent:
+            if float(row["pnl"] or 0) < 0:
+                losses += 1
+            else:
+                break
+        if self.max_consecutive_losses and losses >= self.max_consecutive_losses:
+            return False, f"MAX_CONSECUTIVE_LOSSES reached: {losses}"
+        if self.cooldown_minutes and recent and recent[0]["exit_time"]:
+            try:
+                ts = datetime.fromisoformat(str(recent[0]["exit_time"]).replace("Z", "+00:00"))
+                elapsed = (datetime.now(timezone.utc) - ts).total_seconds()
+                if elapsed < self.cooldown_minutes * 60:
+                    return False, f"COOLDOWN active: {self.cooldown_minutes * 60 - elapsed:.0f}s remaining"
+            except ValueError:
+                pass
+        ok, reason = self.equity_breaker.check(self.db, equity, None, unrealized, fees)
+        return ok, reason
+    # ------------------------------------------------------------------
     # New entries
     # ------------------------------------------------------------------
 
@@ -1390,6 +1449,11 @@ class MultiPositionTrader:
                 "recovery": recovery,
                 "results": [],
             }
+
+        allowed, risk_reason = self._daily_entry_guard()
+        if not allowed:
+            self.db.log_event("WARNING", "daily_entry_blocked", risk_reason)
+            return {"status": "RISK_BLOCKED", "results": [], "reason": risk_reason}
 
         balance = self._balance()
         if balance <= 0:
