@@ -124,7 +124,7 @@ class PreflightCheckService:
         report.passed("exchange_filters", symbols=symbols)
         return True
 
-    def _check_orders(self, report):
+    def _check_orders(self, report, *, allow_known_orders=False):
         orders = self.client.open_orders()
         lists = self.client.open_order_lists()
         known, unknown = self.classify_open_orders(orders, lists)
@@ -139,12 +139,15 @@ class PreflightCheckService:
             return False
         if known:
             report.requires_reconciliation = True
+            if allow_known_orders:
+                report.passed("open_orders", known_williams_orders=len(known), reconciled=True)
+                return True
             report.fail("open_orders", "known Williams orders require reconciliation", count=len(known))
             return False
         report.passed("open_orders")
         return True
 
-    def verify_all(self):
+    def verify_all(self, *, allow_reconciled_orders=False):
         report = PreflightReport(
             environment="TESTNET" if self.client.testnet else "LIVE"
         )
@@ -188,7 +191,7 @@ class PreflightCheckService:
             return report.as_dict()
         if not self._check_symbols(report):
             return report.as_dict()
-        if not self._check_orders(report):
+        if not self._check_orders(report, allow_known_orders=allow_reconciled_orders):
             return report.as_dict()
 
         if self.max_open_positions != 1:
