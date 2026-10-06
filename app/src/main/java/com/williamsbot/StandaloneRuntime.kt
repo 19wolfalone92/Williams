@@ -311,15 +311,23 @@ private class StandaloneServer(private val context: Context) {
     ): JSONObject =
         e().configureCredentials(apiKey, apiSecret)
 
-    fun localApiToken(): String =
-        prefs.getString("local_api_token", null)?.takeIf { it.isNotBlank() }
-            ?: UUID.randomUUID().toString().replace("-", "") +
+    fun localApiToken(): String {
+        prefs.getString("local_api_token", null)
+            ?.takeIf { it.isNotBlank() }
+            ?.let { return it }
+
+        val generated =
+            UUID.randomUUID().toString().replace("-", "") +
                 UUID.randomUUID().toString().replace("-", "")
-                    .also { token ->
-                        prefs.edit()
-                            .putString("local_api_token", token)
-                            .commit()
-                    }
+        check(
+            prefs.edit()
+                .putString("local_api_token", generated)
+                .commit()
+        ) {
+            "Unable to persist Williams local API token"
+        }
+        return generated
+    }
 
     private fun e(): NativeEngine {
         if (engine == null) {
