@@ -42,7 +42,7 @@ class PreflightCheckService:
     OCO_PREFIX = "WILLV4_OCO_"
     EMERGENCY_PREFIX = "WILLV4_EMERGENCY_"
 
-    def __init__(self, client, *, symbols=None, max_open_positions=1, max_offset_ms=None):
+    def __init__(self, client, *, symbols=None, max_open_positions=0, max_offset_ms=None):
         self.client = client
         self.symbols = [str(x).upper() for x in (symbols or []) if str(x).strip()]
         self.max_open_positions = int(max_open_positions)
