@@ -684,16 +684,17 @@ class MultiPositionTrader:
         # Re-check executable market state after the BUY fill. If price has
         # already crossed TP/SL, do not submit an invalid/stale OCO. Close the
         # unprotected position immediately and persist the exit.
-        book = self.client.book_ticker(symbol)
-        bid = float(book.get("bidPrice", 0) or 0)
-        if bid > 0 and bid >= tp:
-            return self._emergency_market_sell(
-                symbol, qty, trade_id, "TAKE_PROFIT_REACHED_BEFORE_OCO"
-            )
-        if bid > 0 and bid <= sl:
-            return self._emergency_market_sell(
-                symbol, qty, trade_id, "STOP_LOSS_REACHED_BEFORE_OCO"
-            )
+        if hasattr(self.client, "book_ticker"):
+            book = self.client.book_ticker(symbol)
+            bid = float(book.get("bidPrice", 0) or 0)
+            if bid > 0 and bid >= tp:
+                return self._emergency_market_sell(
+                    symbol, qty, trade_id, "TAKE_PROFIT_REACHED_BEFORE_OCO"
+                )
+            if bid > 0 and bid <= sl:
+                return self._emergency_market_sell(
+                    symbol, qty, trade_id, "STOP_LOSS_REACHED_BEFORE_OCO"
+                )
 
         if not (tp > entry > sl > sl_limit):
             raise RuntimeError(
