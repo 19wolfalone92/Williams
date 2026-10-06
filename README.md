@@ -126,7 +126,7 @@ python run_backtest.py --symbol BTCUSDT --interval 1h --start 2024-01-01 --end 2
 
 Открыть корень проекта в Android Studio и собрать `app`.
 
-Версия приложения: **4.20.0**, versionCode формируется GitHub Actions.
+Версия приложения: **4.20.1**, versionCode формируется GitHub Actions.
 
 Среда, в которой подготовлен этот архив, не содержит Android SDK/Gradle distribution, поэтому APK здесь не заявляется как собранный. Исходники Gradle-проекта подготовлены для сборки Android Studio.
 
@@ -167,7 +167,7 @@ The strategy layer now keeps separate Williams First/Second/Third Wise-Man signa
 
 ## 4.17 deep market model
 
-- Trading universe is fixed to five core Spot USDT pairs: BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT.
+- The scanner discovers valid Binance Spot/USDT pairs dynamically, then applies exchange-status, liquidity and risk filters. The five pairs are only the default structural set for realtime MTF context.
 - Standalone Android maintains realtime Binance Testnet kline streams for all supported native timeframes from 1m through 1M.
 - Indicators are recalculated per pair/timeframe from the live candle cache: Alligator, AO, AC, fractals and divergence context.
 - Historical data is treated as a persistent research layer; the in-memory layer is bounded to prevent Android OOM while the wave engine uses the full historical store where available.
