@@ -1,4 +1,4 @@
-# Williams Binance Bot + Android Dashboard 4.21.0
+# Williams Binance Bot + Android Dashboard 4.22.1
 
 Полноценная Testnet-first версия торгового бота по Williams (Alligator + AO + Fractals) с Android Dashboard, SQLite recovery, Binance WebSocket и защитными risk-фильтрами.
 
@@ -30,7 +30,7 @@
 По умолчанию:
 - риск на сделку: максимум 0,5%;
 - совокупный открытый риск: максимум 1%;
-- одновременно допускается ровно 1 управляемая позиция; после полного закрытия бот возвращается к сканированию;
+- одновременно допускается несколько управляемых позиций при соблюдении совокупного risk-budget;
 - максимум дневного убытка: 3%;
 - максимум 5 сделок в день;
 - максимум 3 последовательных убытка;
@@ -181,7 +181,7 @@ The strategy layer now keeps separate Williams First/Second/Third Wise-Man signa
 - Initial protection uses market structure/Alligator Teeth with ATR as a volatility guard. Profit protection follows the Williams five-green-zone/Teeth trailing model rather than a fixed 1.5R take-profit.
 
 
-## 4.21 quantitative shadow layer
+## 4.22 quantitative shadow layer
 
 The quant layer is integrated ahead of ML admission and remains non-executing:
 - unified `MarketFeatureVector` combines OHLCV, Dollar/Volume Bars, L2 order-book imbalance, trade-flow, Williams indicators and MTF Wave context;
@@ -201,10 +201,3 @@ Research backtest now also reports CPCV signal-return stability and adverse late
 HMM/GMM regime models, LightGBM direction, isotonic probability calibration, SHAP explanation and the unified ShadowMLPipeline are implemented as optional research modules. They fail closed when optional dependencies are unavailable and do not have access to Binance credentials or order submission. Funding/OI/liquidation features are normalized through derivatives_features.py and enter the same MarketFeatureVector when an external derivatives provider supplies them.
 
 
-## AI-Forge Council Core
-
-The repository now contains a separate server-side AI Council under `ai_forge/`. It queries GPT, Gemini, DeepSeek, Grok and Mistral independently, then applies a quorum + weighted-consensus verifier. Provider API keys remain server-side and are never returned to the Android client.
-
-Safety boundary: AI-Forge produces analytical decisions only. It does not submit Binance orders and does not receive Binance credentials. For trading analysis, `PROCEED` is not a BUY/SELL command.
-
-See `AI_FORGE_README_RU.md`. GitHub Actions validates Python compilation/tests and performs a Docker smoke test in mock mode. A permanent public Core URL still requires a continuously running host; GitHub repository and Actions are not a permanent HTTP runtime.
