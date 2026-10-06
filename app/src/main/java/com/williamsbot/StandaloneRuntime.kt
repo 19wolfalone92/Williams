@@ -2973,14 +2973,7 @@ private class NativeEngine(
         val openOrders = JSONArray(
             signedRawGet("/api/v3/openOrders", "")
         )
-        val openLists =
-            signedGet("/api/v3/openOrderList", "")
-                .let {
-                    it.optJSONArray("orderList")
-                        ?: it.optJSONArray("ordersLists")
-                        ?: it.optJSONArray("orderLists")
-                        ?: JSONArray()
-                }
+        val openLists = signedOpenOrderLists()
 
         val expectedSymbols =
             pendingEntries.keys.toSet() +
@@ -3091,13 +3084,7 @@ private class NativeEngine(
 
         val account = signedAccount()
         val balances = account.getJSONArray("balances")
-        val openLists =
-            runCatching {
-                signedGet(
-                    "/api/v3/openOrderList",
-                    ""
-                )
-            }.getOrNull()
+        val openLists = signedOpenOrderLists()
 
         val updated = mutableListOf<PositionState>()
         val minRecoveryQty = 0.000001
@@ -3436,6 +3423,20 @@ private class NativeEngine(
         path: String,
         params: String
     ): JSONObject = signedRequest("GET", path, params)
+
+    /**
+     * Binance /openOrderList returns a JSON array at the root when there are
+     * no open order lists. Keep the internal representation as an object so
+     * the existing reconciliation helpers can safely inspect the array.
+     */
+    private fun signedOpenOrderLists(): JSONObject {
+        val body = signedRawGet("/api/v3/openOrderList", "")
+        return runCatching {
+            JSONObject(body)
+        }.getOrElse {
+            JSONObject().put("orderList", JSONArray(body))
+        }
+    }
 
     private fun signedPost(
         path: String,
