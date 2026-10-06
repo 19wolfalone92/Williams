@@ -57,7 +57,7 @@ object BackupManager {
         val payload = JSONObject()
             .put("schema", 1)
             .put("magic", MAGIC)
-            .put("app_version", "4.20.1")
+            .put("app_version", BuildConfig.VERSION_NAME)
             .put("testnet", true)
             .put("api_key", p.getString("api_key", "") ?: "")
             .put("api_secret", p.getString("api_secret", "") ?: "")

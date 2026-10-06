@@ -12,6 +12,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.ComponentActivity
 import androidx.core.content.ContextCompat
+import androidx.security.crypto.EncryptedSharedPreferences
+import androidx.security.crypto.MasterKey
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
@@ -102,6 +104,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.MediaType.Companion.toMediaType
@@ -113,7 +116,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.math.max
 import kotlin.math.min
 
-// Williams 4.20.2 production cockpit
+// Williams 4.21.0 production cockpit
 // CI compile-log capture enabled
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -205,7 +208,7 @@ data class Status(
     val testnet: Boolean = true,
     val running: Boolean = false,
     val paused: Boolean = false,
-    val recovered: Boolean = true,
+    val recovered: Boolean = false,
     val state: String = "FLAT",
     val price: Double? = null,
     val balance: Double? = null,
@@ -329,30 +332,98 @@ data class MarketPair(
     val price: Double?
 )
 
+data class PortfolioAsset(
+    val asset: String,
+    val free: Double,
+    val locked: Double,
+    val total: Double,
+    val priceUsdt: Double?,
+    val valueUsdt: Double,
+    val allocationPct: Double
+)
+
+data class PortfolioSummary(
+    val configured: Boolean = false,
+    val totalEquityUsdt: Double? = null,
+    val freeEquityUsdt: Double? = null,
+    val lockedEquityUsdt: Double? = null,
+    val realizedPnlUsdt: Double = 0.0,
+    val unrealizedPnlUsdt: Double = 0.0,
+    val assets: List<PortfolioAsset> = emptyList(),
+    val positions: List<PositionView> = emptyList()
+)
+
 data class PositionView(
     val symbol: String,
     val qty: Double,
     val entry: Double,
     val stop: Double?,
     val take: Double?,
-    val riskPct: Double
+    val riskPct: Double,
+    val currentPrice: Double? = null,
+    val positionValueUsdt: Double = 0.0,
+    val allocationPct: Double = 0.0,
+    val pnlUsdt: Double = 0.0,
+    val pnlPct: Double = 0.0,
+    val ocoListId: String = "",
+    val ocoListClientId: String = ""
 )
 
 private class StandaloneApi(context: Context) {
-    private val prefs = context.getSharedPreferences("williams_backend", Context.MODE_PRIVATE)
+    private val securePrefs = EncryptedSharedPreferences.create(
+        context,
+        "williams_backend_secure",
+        MasterKey.Builder(context)
+            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+            .build(),
+        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+    )
+
+    init {
+        val legacy = context.getSharedPreferences(
+            "williams_backend",
+            Context.MODE_PRIVATE
+        )
+        if (
+            securePrefs.getString("backend_url", null) == null &&
+            legacy.getString("backend_url", null) != null
+        ) {
+            securePrefs.edit()
+                .putString(
+                    "backend_url",
+                    legacy.getString("backend_url", "http://127.0.0.1:18080")
+                )
+                .putString(
+                    "mobile_token",
+                    legacy.getString("mobile_token", "")
+                )
+                .apply()
+            legacy.edit()
+                .remove("mobile_token")
+                .apply()
+        } else {
+            // Remove any legacy token left behind after a previous migration.
+            context.getSharedPreferences(
+                "williams_backend",
+                Context.MODE_PRIVATE
+            ).edit().remove("mobile_token").apply()
+        }
+    }
+
     private val client = OkHttpClient.Builder()
         .connectTimeout(8, TimeUnit.SECONDS)
         .readTimeout(45, TimeUnit.SECONDS)
         .build()
 
     val backendUrl: String
-        get() = prefs.getString("backend_url", "http://127.0.0.1:18080")
+        get() = securePrefs.getString("backend_url", "http://127.0.0.1:18080")
             ?.trimEnd('/')
             .takeUnless { it.isNullOrBlank() }
             ?: "http://127.0.0.1:18080"
 
     val mobileToken: String
-        get() = prefs.getString("mobile_token", "")?.trim() ?: ""
+        get() = securePrefs.getString("mobile_token", "")?.trim() ?: ""
 
     fun saveConnection(url: String, token: String) {
         val normalized = url.trim().trimEnd('/')
@@ -366,7 +437,7 @@ private class StandaloneApi(context: Context) {
         if (!localhostHttp && token.trim().length < 32) {
             error("Для удалённого Backend нужен Mobile API Token (минимум 32 символа).")
         }
-        prefs.edit()
+        securePrefs.edit()
             .putString("backend_url", normalized)
             .putString("mobile_token", token.trim())
             .apply()
@@ -417,6 +488,7 @@ fun WilliamsApp(context: Context) {
 
     var tab by remember { mutableIntStateOf(0) }
     var status by remember { mutableStateOf(Status()) }
+    var portfolio by remember { mutableStateOf(PortfolioSummary()) }
     var marketPairs by remember { mutableStateOf(emptyList<MarketPair>()) }
     var selectedPositionSymbol by remember { mutableStateOf<String?>(null) }
     var candles by remember { mutableStateOf(emptyList<Candle>()) }
@@ -432,84 +504,155 @@ fun WilliamsApp(context: Context) {
     var refreshing by remember { mutableStateOf(false) }
     var backupPassword by remember { mutableStateOf("") }
     var backupMessage by remember { mutableStateOf("") }
+    var diagnosticsMessage by remember { mutableStateOf("") }
+    val loadMutex = remember { Mutex() }
 
     suspend fun loadAll(scan: Boolean) {
-        withContext(Dispatchers.IO) {
-            try {
-                // Autonomous mode uses the on-device runtime at 127.0.0.1:18080.
-                // A remote URL/token is only needed when the user explicitly configures one.
-                withContext(Dispatchers.Main) { refreshing = scan }
+        if (!loadMutex.tryLock()) return
+        try {
+            withContext(Dispatchers.Main) { refreshing = scan }
+            withContext(Dispatchers.IO) {
+                val failures = mutableListOf<String>()
+                var scannerJson = JSONObject()
 
-                val statusJson = JSONObject(api.get("/api/v1/status"))
-                val klineJson = JSONObject(api.get("/api/v1/market/klines?interval=" + selectedChartInterval))
-                val marketSymbols = listOf("BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT")
-                val marketPairsLoaded = marketSymbols.map { symbol ->
-                    val j = runCatching { JSONObject(api.get("/api/v1/market/klines?symbol=" + symbol)) }.getOrNull()
-                    val arr = j?.optJSONArray("candles")
-                    val last = arr?.let { if (it.length() > 0) it.optJSONObject(it.length() - 1) else null }
-                    MarketPair(symbol, last?.optDouble("close")?.takeUnless { it.isNaN() || it <= 0.0 })
+                runCatching {
+                    val json = JSONObject(api.get("/api/v1/status"))
+                    withContext(Dispatchers.Main) { status = parseStatus(json) }
+                }.onFailure {
+                    failures += "status: " + (it.message ?: it.javaClass.simpleName)
                 }
-                var scannerJson =
-                    JSONObject(api.get("/api/v1/scanner?refresh=" + scan))
 
-                if (scan && scannerJson.optBoolean("scanning", false)) {
-                    // A full liquidity + MTF/Wave pass can legitimately take longer
-                    // than the old 20-second UI window. Keep polling until the
-                    // scanner reaches a terminal state, while execution remains
-                    // independently governed by the runtime FSM.
-                    for (i in 0 until 90) {
-                        delay(1000L)
-                        scannerJson =
-                            JSONObject(api.get("/api/v1/scanner?refresh=false"))
-                        val state = scannerJson.optString("scanner_state", "NOT_RUN")
-                        if (!scannerJson.optBoolean("scanning", false) ||
-                            state == "READY" ||
-                            state == "ERROR"
-                        ) {
-                            break
+                runCatching {
+                    val json = JSONObject(
+                        api.get(
+                            "/api/v1/market/klines?interval=" +
+                                selectedChartInterval
+                        )
+                    )
+                    withContext(Dispatchers.Main) {
+                        candles = parseCandles(
+                            json.optJSONArray("candles") ?: JSONArray()
+                        )
+                    }
+                }.onFailure {
+                    failures += "market: " + (it.message ?: it.javaClass.simpleName)
+                }
+
+                runCatching {
+                    val symbols = listOf(
+                        "BTCUSDT",
+                        "ETHUSDT",
+                        "BNBUSDT",
+                        "SOLUSDT",
+                        "XRPUSDT"
+                    )
+                    val loaded = symbols.map { symbol ->
+                        val j = runCatching {
+                            JSONObject(api.get("/api/v1/market/klines?symbol=" + symbol))
+                        }.getOrNull()
+                        val arr = j?.optJSONArray("candles")
+                        val last = arr?.let {
+                            if (it.length() > 0) it.optJSONObject(it.length() - 1) else null
+                        }
+                        MarketPair(
+                            symbol,
+                            last?.optDouble("close")
+                                ?.takeUnless { it.isNaN() || it <= 0.0 }
+                        )
+                    }
+                    withContext(Dispatchers.Main) { marketPairs = loaded }
+                }.onFailure {
+                    failures += "market-pairs: " + (it.message ?: it.javaClass.simpleName)
+                }
+
+                runCatching {
+                    scannerJson = JSONObject(api.get("/api/v1/scanner?refresh=" + scan))
+                    if (scan && scannerJson.optBoolean("scanning", false)) {
+                        for (i in 0 until 90) {
+                            delay(1000L)
+                            scannerJson = JSONObject(api.get("/api/v1/scanner?refresh=false"))
+                            val state = scannerJson.optString("scanner_state", "NOT_RUN")
+                            if (!scannerJson.optBoolean("scanning", false) ||
+                                state == "READY" ||
+                                state == "ERROR"
+                            ) break
                         }
                     }
+                    withContext(Dispatchers.Main) {
+                        candidates = parseCandidates(
+                            scannerJson.optJSONArray("candidates") ?: JSONArray()
+                        )
+                    }
+                }.onFailure {
+                    failures += "scanner: " + (it.message ?: it.javaClass.simpleName)
                 }
 
-                // /status and /scanner are separate snapshots. Refresh status
-                // after the scan so the cockpit cannot display stale
-                // NOT_RUN/0 values while candidates are already available.
-                val freshStatusJson = JSONObject(api.get("/api/v1/status"))
-
-                val tradeArray = JSONArray(api.get("/api/v1/trades"))
-                val logArray = JSONArray(api.get("/api/v1/logs"))
-
-                withContext(Dispatchers.Main) {
-                    status = parseStatus(freshStatusJson)
-                    marketPairs = marketPairsLoaded
-                    if (selectedPositionSymbol == null && status.positions.isNotEmpty()) selectedPositionSymbol = status.positions.first().symbol
-                    candles = parseCandles(klineJson.optJSONArray("candles") ?: JSONArray())
-                    candidates = parseCandidates(
-                        scannerJson.optJSONArray("candidates") ?: JSONArray()
-                    )
-                    trades = parseTrades(tradeArray)
-                    logs = parseLogs(logArray)
-
-                    message =
-                        scannerJson.optString("last_error").takeIf { it.isNotBlank() }
-                            ?: if (scan) {
-                                if (scannerJson.optBoolean("scanning", false)) {
-                                    "Сканирование продолжается в фоне"
-                                } else {
-                                    "Сканирование завершено"
+                runCatching {
+                    val p = JSONObject(api.get("/api/v1/portfolio"))
+                    val parsedPortfolio = parsePortfolio(p)
+                    withContext(Dispatchers.Main) {
+                        portfolio = parsedPortfolio
+                        if (parsedPortfolio.positions.isNotEmpty()) {
+                            val telemetry = parsedPortfolio.positions.associateBy { it.symbol }
+                            status = status.copy(
+                                positions = status.positions.map { base ->
+                                    telemetry[base.symbol] ?: base
                                 }
-                            } else {
-                                "Данные обновлены"
-                            }
-
-                    refreshing = false
+                            )
+                        }
+                    }
+                }.onFailure {
+                    failures += "portfolio: " + (it.message ?: it.javaClass.simpleName)
                 }
-            } catch (e: Exception) {
+
+                runCatching {
+                    val json = JSONObject(api.get("/api/v1/status"))
+                    withContext(Dispatchers.Main) {
+                        status = parseStatus(json)
+                        if (selectedPositionSymbol == null &&
+                            status.positions.isNotEmpty()
+                        ) {
+                            selectedPositionSymbol = status.positions.first().symbol
+                        }
+                    }
+                }.onFailure {
+                    failures += "status-refresh: " + (it.message ?: it.javaClass.simpleName)
+                }
+
+                runCatching {
+                    val rows = JSONArray(api.get("/api/v1/trades"))
+                    withContext(Dispatchers.Main) { trades = parseTrades(rows) }
+                }.onFailure {
+                    failures += "trades: " + (it.message ?: it.javaClass.simpleName)
+                }
+
+                runCatching {
+                    val rows = JSONArray(api.get("/api/v1/logs"))
+                    withContext(Dispatchers.Main) { logs = parseLogs(rows) }
+                }.onFailure {
+                    failures += "logs: " + (it.message ?: it.javaClass.simpleName)
+                }
+
                 withContext(Dispatchers.Main) {
+                    val scannerError =
+                        scannerJson.optString("scanner_error").takeIf { it.isNotBlank() }
+                    message = when {
+                        failures.isNotEmpty() ->
+                            "Частичная ошибка: " + failures.joinToString(" • ")
+                        scannerError != null ->
+                            "Сканер: " + scannerError
+                        scan && scannerJson.optBoolean("scanning", false) ->
+                            "Сканирование продолжается в фоне"
+                        scan ->
+                            "Сканирование завершено"
+                        else ->
+                            "Данные обновлены"
+                    }
                     refreshing = false
-                    message = e.message ?: "Ошибка соединения"
                 }
             }
+        } finally {
+            loadMutex.unlock()
         }
     }
 
@@ -567,11 +710,28 @@ fun WilliamsApp(context: Context) {
                     .toString()
 
                 api.post("/api/v1/config/binance", body)
+                val verified = JSONObject(api.get("/api/v1/status"))
+                val configured = verified.optBoolean(
+                    "binance_configured",
+                    verified.optBoolean("auth_configured", false)
+                )
+                var diagText: String? = null
+                runCatching {
+                    val report = api.get("/api/v1/diagnostics?run=true")
+                    DiagnosticsArchive.writeLatest(context, report)
+                    diagText = "Диагностика сохранена на телефоне."
+                }
 
                 withContext(Dispatchers.Main) {
                     apiKey = ""
                     apiSecret = ""
-                    message = "Binance Testnet подключён и ключи сохранены зашифрованно"
+                    status = parseStatus(verified)
+                    diagnosticsMessage = diagText ?: ""
+                    message = if (configured) {
+                        "Binance Testnet подключён и подтверждён статусом /api/v1/status"
+                    } else {
+                        "Ключи сохранены, но Binance ещё не подтвердил конфигурацию"
+                    }
                 }
                 loadAll(false)
             } catch (e: Exception) {
@@ -680,6 +840,57 @@ fun WilliamsApp(context: Context) {
         }
     }
 
+    fun runDiagnostics() {
+        scope.launch(Dispatchers.IO) {
+            try {
+                val report = api.get("/api/v1/diagnostics?run=true")
+                DiagnosticsArchive.writeLatest(context, report)
+                withContext(Dispatchers.Main) {
+                    diagnosticsMessage = "Диагностика выполнена и сохранена на телефоне."
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    diagnosticsMessage =
+                        e.message ?: "Не удалось выполнить диагностику"
+                }
+            }
+        }
+    }
+
+    val exportDiagnosticsLauncher =
+        rememberLauncherForActivityResult(
+            ActivityResultContracts.CreateDocument("application/zip")
+        ) { uri ->
+            if (uri == null) return@rememberLauncherForActivityResult
+            scope.launch(Dispatchers.IO) {
+                try {
+                    val source = requireNotNull(DiagnosticsArchive.latest(context)) {
+                        "Диагностика ещё не создана"
+                    }
+                    context.contentResolver.openOutputStream(uri).use { output ->
+                        requireNotNull(output)
+                        source.inputStream().use { input -> input.copyTo(output) }
+                    }
+                    withContext(Dispatchers.Main) {
+                        diagnosticsMessage = "Диагностический архив экспортирован."
+                    }
+                } catch (e: Exception) {
+                    withContext(Dispatchers.Main) {
+                        diagnosticsMessage =
+                            e.message ?: "Не удалось экспортировать диагностику"
+                    }
+                }
+            }
+        }
+
+    fun exportDiagnostics() {
+        if (DiagnosticsArchive.latest(context) == null) {
+            diagnosticsMessage = "Сначала запустите диагностику."
+            return
+        }
+        exportDiagnosticsLauncher.launch("Williams_Diagnostics.zip")
+    }
+
     LaunchedEffect(Unit) {
         loadAll(true)
         while (isActive) {
@@ -784,6 +995,7 @@ fun WilliamsApp(context: Context) {
             0 -> DashboardScreen(
                 padding = padding,
                 status = status,
+                portfolio = portfolio,
                 marketPairs = marketPairs,
                 candidates = candidates,
                 message = message,
@@ -820,6 +1032,7 @@ fun WilliamsApp(context: Context) {
             2 -> PositionScreen(
                 padding = padding,
                 status = status,
+                portfolio = portfolio,
                 candles = candles,
                 selectedSymbol = selectedPositionSymbol,
                 interval = selectedChartInterval,
@@ -872,6 +1085,9 @@ fun WilliamsApp(context: Context) {
                 onExportBackup = ::exportBackup,
                 onImportBackup = ::importBackup,
                 backupMessage = backupMessage,
+                onRunDiagnostics = ::runDiagnostics,
+                onExportDiagnostics = ::exportDiagnostics,
+                diagnosticsMessage = diagnosticsMessage,
                 message = message
             )
         }
@@ -890,12 +1106,122 @@ private fun SystemHealthBar(status: Status) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             StatusDot("P0", if (status.p0GatePassed) AppColors.green else AppColors.red)
-            StatusDot("RUNTIME", AppColors.green)
-            StatusDot("BINANCE", if (status.binanceConfigured) AppColors.green else AppColors.amber)
-            StatusDot("WSS", if (status.marketWsConnected && !status.userStreamSyncRequired) AppColors.green else AppColors.amber)
-            StatusDot("EXEC", if (status.executionEnabled && !status.reconcileRequired) AppColors.green else AppColors.red)
+            StatusDot(
+                "RUNTIME",
+                if (status.binanceConfigured || status.running) AppColors.green else AppColors.amber
+            )
+            StatusDot(
+                "BINANCE",
+                if (status.binanceConfigured) AppColors.green else AppColors.amber
+            )
+            StatusDot(
+                "WSS",
+                if (status.marketWsConnected && !status.userStreamSyncRequired) AppColors.green else AppColors.amber
+            )
+            StatusDot(
+                "EXEC",
+                when {
+                    status.reconcileRequired || status.executionKillLatched -> AppColors.red
+                    status.running && status.executionEnabled -> AppColors.green
+                    else -> AppColors.amber
+                }
+            )
             Spacer(Modifier.weight(1f))
             Text("RISK BUDGET • ${status.maxOpenPositions} POS", color = AppColors.textMuted, style = MaterialTheme.typography.labelSmall)
+        }
+    }
+}
+
+@Composable
+private fun PortfolioCard(
+    portfolio: PortfolioSummary,
+    status: Status
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = AppColors.surface)
+    ) {
+        Column(
+            Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(9.dp)
+        ) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Портфель", style = MaterialTheme.typography.titleMedium)
+                ModeChip(
+                    if (portfolio.configured) "LIVE VIEW • TESTNET" else "ОЖИДАЕТ КЛЮЧИ",
+                    if (portfolio.configured) AppColors.green else AppColors.amber
+                )
+            }
+
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                MiniMetric(
+                    "EQUITY",
+                    fmt(portfolio.totalEquityUsdt, 2)
+                )
+                MiniMetric(
+                    "FREE",
+                    fmt(portfolio.freeEquityUsdt, 2)
+                )
+                MiniMetric(
+                    "LOCKED",
+                    fmt(portfolio.lockedEquityUsdt, 2)
+                )
+            }
+
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                MiniMetric(
+                    "REALIZED",
+                    fmt(portfolio.realizedPnlUsdt, 2)
+                )
+                MiniMetric(
+                    "OPEN PnL",
+                    fmt(portfolio.unrealizedPnlUsdt, 2)
+                )
+                MiniMetric(
+                    "RISK",
+                    fmt(status.reservedRiskPct * 100.0, 2) + "%"
+                )
+            }
+
+            if (portfolio.assets.isEmpty()) {
+                Text(
+                    "Нет ненулевых активов или баланс ещё не получен.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AppColors.textMuted
+                )
+            } else {
+                portfolio.assets.take(8).forEach { asset ->
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            asset.asset,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            fmt(asset.total, 6) + " • " +
+                                if (asset.priceUsdt != null) {
+                                    fmt(asset.valueUsdt, 2) + " USDT"
+                                } else {
+                                    "цена неизвестна"
+                                },
+                            color = AppColors.textMuted,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -938,6 +1264,7 @@ private fun ReconcileBarrierScreen(
 private fun DashboardScreen(
     padding: PaddingValues,
     status: Status,
+    portfolio: PortfolioSummary,
     marketPairs: List<MarketPair>,
     candidates: List<Candidate>,
     message: String,
@@ -1010,6 +1337,10 @@ private fun DashboardScreen(
         }
 
         item {
+            PortfolioCard(portfolio, status)
+        }
+
+        item {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 MetricCard(
                     modifier = Modifier.weight(1f),
@@ -1020,7 +1351,7 @@ private fun DashboardScreen(
                 )
                 MetricCard(
                     modifier = Modifier.weight(1f),
-                    title = "Баланс",
+                    title = "USDT free",
                     value = fmt(status.balance, 2),
                     suffix = " USDT",
                     icon = Icons.Filled.AccountBalanceWallet,
@@ -1491,8 +1822,17 @@ private fun ScannerScreen(
                 Column {
                     Text("Market Scanner", style = MaterialTheme.typography.headlineSmall)
                     Text(
-                        status.scannerSymbols.toString() +
-                            " пар • top " + min(20, candidates.size).toString(),
+                        when (status.scannerState) {
+                            "RUNNING" ->
+                                "Сканирование выполняется…"
+                            "ERROR" ->
+                                "Ошибка сканера"
+                            "READY" ->
+                                status.scannerSymbols.toString() +
+                                    " пар • top " + min(20, candidates.size)
+                            else ->
+                                "Сканирование ещё не запускалось"
+                        },
                         color = AppColors.textMuted
                     )
                 }
@@ -1519,8 +1859,13 @@ private fun ScannerScreen(
             item {
                 EmptyState(
                     icon = Icons.Filled.Radar,
-                    title = "Сканер пуст",
-                    subtitle = "Первое сканирование сортирует пары по ликвидности, Williams setup и волновому контексту."
+                    title = when (status.scannerState) {
+                        "ERROR" -> "Сканер сообщил ошибку"
+                        "RUNNING" -> "Сканер работает"
+                        else -> "Сканирование ещё не запускалось"
+                    },
+                    subtitle = status.scannerError?.takeIf { it.isNotBlank() }
+                        ?: "Нажми «СКАН», чтобы запустить реальное сканирование ликвидных USDT-пар."
                 )
             }
         }
@@ -1656,6 +2001,7 @@ private fun MarketPairsCard(pairs: List<MarketPair>) {
 private fun PositionScreen(
     padding: PaddingValues,
     status: Status,
+    portfolio: PortfolioSummary,
     candles: List<Candle>,
     selectedSymbol: String?,
     interval: String,
@@ -1672,8 +2018,12 @@ private fun PositionScreen(
         contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp)
     ) {
         item {
+            PortfolioCard(portfolio, status)
+        }
+
+        item {
             Text(
-                "Портфель",
+                "Позиции",
                 style = MaterialTheme.typography.headlineSmall
             )
         }
@@ -1762,7 +2112,20 @@ private fun PositionScreen(
                         )
                         InfoRow(
                             "Current",
-                            fmt(status.price)
+                            fmt(p.currentPrice ?: status.price)
+                        )
+                        InfoRow(
+                            "Position value",
+                            fmt(p.positionValueUsdt, 2) + " USDT"
+                        )
+                        InfoRow(
+                            "Allocation",
+                            fmt(p.allocationPct * 100.0, 2) + "%"
+                        )
+                        InfoRow(
+                            "PnL",
+                            fmt(p.pnlUsdt, 2) + " USDT (" +
+                                fmt(p.pnlPct * 100.0, 2) + "%)"
                         )
                         InfoRow(
                             "SL",
@@ -1771,6 +2134,10 @@ private fun PositionScreen(
                         InfoRow(
                             "TP",
                             fmt(p.take)
+                        )
+                        InfoRow(
+                            "OCO",
+                            if (p.ocoListId.isNotBlank()) "ACTIVE" else "MISSING"
                         )
                     }
                 }
@@ -1920,6 +2287,9 @@ private fun SettingsScreen(
     onExportBackup: () -> Unit,
     onImportBackup: () -> Unit,
     backupMessage: String,
+    onRunDiagnostics: () -> Unit,
+    onExportDiagnostics: () -> Unit,
+    diagnosticsMessage: String,
     message: String
 ) {
     LazyColumn(
@@ -1984,7 +2354,7 @@ private fun SettingsScreen(
                     }
 
                     InfoRow("Execution authority", "Backend")
-                    InfoRow("Universe", "BTC / ETH / BNB / SOL / XRP")
+                    InfoRow("Scanner universe", "Top 50 liquid USDT • 5 core WSS")
                     InfoRow("MTF", "1D / 4H / 1H / 15M")
                 }
             }
@@ -2145,6 +2515,57 @@ private fun SettingsScreen(
                                 backupMessage.contains("создан", true) ||
                                 backupMessage.contains("восстановлен", true)
                             ) AppColors.green else AppColors.amber
+                        )
+                    }
+                }
+            }
+        }
+
+        item {
+            Card(
+                Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = AppColors.surface)
+            ) {
+                Column(
+                    Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(9.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Filled.CheckCircle,
+                            contentDescription = null,
+                            tint = AppColors.violet
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "Самодиагностика",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                    }
+                    Text(
+                        "После ввода ключей Williams автоматически проверяет Binance REST/WSS, MTF/Wave, сканер, FSM, БД и торговые фильтры. Торговые заявки диагностика не отправляет.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AppColors.textMuted
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = onRunDiagnostics,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("ПРОВЕРИТЬ")
+                        }
+                        OutlinedButton(
+                            onClick = onExportDiagnostics,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("ЭКСПОРТ")
+                        }
+                    }
+                    if (diagnosticsMessage.isNotBlank()) {
+                        Text(
+                            diagnosticsMessage,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = AppColors.green
                         )
                     }
                 }
@@ -2516,6 +2937,61 @@ private fun InfoRow(label: String, value: String) {
     }
 }
 
+private fun parsePortfolio(json: JSONObject): PortfolioSummary {
+    val assets = mutableListOf<PortfolioAsset>()
+    val array = json.optJSONArray("assets") ?: JSONArray()
+    for (i in 0 until array.length()) {
+        val item = array.optJSONObject(i) ?: continue
+        assets += PortfolioAsset(
+            asset = item.optString("asset"),
+            free = item.optDouble("free", 0.0),
+            locked = item.optDouble("locked", 0.0),
+            total = item.optDouble("total", 0.0),
+            priceUsdt = item.optDouble("price_usdt")
+                .takeUnless { it.isNaN() || it == 0.0 },
+            valueUsdt = item.optDouble("value_usdt", 0.0),
+            allocationPct = item.optDouble("allocation_pct", 0.0)
+        )
+    }
+    val positions = mutableListOf<PositionView>()
+    val positionArray = json.optJSONArray("positions") ?: JSONArray()
+    for (i in 0 until positionArray.length()) {
+        val item = positionArray.optJSONObject(i) ?: continue
+        positions += PositionView(
+            symbol = item.optString("symbol"),
+            qty = item.optDouble("qty", 0.0),
+            entry = item.optDouble("avg_entry_price", 0.0),
+            stop = item.optDouble("stop_loss")
+                .takeUnless { it.isNaN() || it == 0.0 },
+            take = item.optDouble("take_profit")
+                .takeUnless { it.isNaN() || it == 0.0 },
+            riskPct = item.optDouble("risk_pct", 0.0),
+            currentPrice = item.optDouble("current_price")
+                .takeUnless { it.isNaN() || it == 0.0 },
+            positionValueUsdt = item.optDouble("position_value_usdt", 0.0),
+            allocationPct = item.optDouble("allocation_pct", 0.0),
+            pnlUsdt = item.optDouble("unrealized_pnl_usdt", 0.0),
+            pnlPct = item.optDouble("unrealized_pnl_pct", 0.0),
+            ocoListId = item.optString("oco_list_id"),
+            ocoListClientId = item.optString("oco_list_client_id")
+        )
+    }
+
+    return PortfolioSummary(
+        configured = json.optBoolean("configured", false),
+        totalEquityUsdt = json.optDouble("total_equity_usdt")
+            .takeUnless { it.isNaN() || json.isNull("total_equity_usdt") },
+        freeEquityUsdt = json.optDouble("free_equity_usdt")
+            .takeUnless { it.isNaN() || json.isNull("free_equity_usdt") },
+        lockedEquityUsdt = json.optDouble("locked_equity_usdt")
+            .takeUnless { it.isNaN() || json.isNull("locked_equity_usdt") },
+        realizedPnlUsdt = json.optDouble("realized_pnl_usdt", 0.0),
+        unrealizedPnlUsdt = json.optDouble("unrealized_pnl_usdt", 0.0),
+        assets = assets,
+        positions = positions
+    )
+}
+
 private fun parseStatus(json: JSONObject): Status {
     val legacy = json.optJSONObject("position")
     val array = json.optJSONArray("positions")
@@ -2533,17 +3009,20 @@ private fun parseStatus(json: JSONObject): Status {
             parsed += PositionView(
                 symbol = symbol,
                 qty = item.optDouble("qty", 0.0),
-                entry = item.optDouble("entry", 0.0),
-                stop = item.optDouble("stop")
-                    .takeUnless {
-                        it.isNaN() || it == 0.0
-                    },
-                take = item.optDouble("take")
-                    .takeUnless {
-                        it.isNaN() || it == 0.0
-                    },
-                riskPct =
-                    item.optDouble("risk_pct", 0.0)
+                entry = item.optDouble("avg_entry_price", item.optDouble("entry", 0.0)),
+                stop = item.optDouble("stop_loss", item.optDouble("stop"))
+                    .takeUnless { it.isNaN() || it == 0.0 },
+                take = item.optDouble("take_profit", item.optDouble("take"))
+                    .takeUnless { it.isNaN() || it == 0.0 },
+                riskPct = item.optDouble("risk_pct", 0.0),
+                currentPrice = item.optDouble("current_price")
+                    .takeUnless { it.isNaN() || it == 0.0 },
+                positionValueUsdt = item.optDouble("position_value_usdt", 0.0),
+                allocationPct = item.optDouble("allocation_pct", 0.0),
+                pnlUsdt = item.optDouble("unrealized_pnl_usdt", 0.0),
+                pnlPct = item.optDouble("unrealized_pnl_pct", 0.0),
+                ocoListId = item.optString("oco_list_id"),
+                ocoListClientId = item.optString("oco_list_client_id")
             )
         }
     }
