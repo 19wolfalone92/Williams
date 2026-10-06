@@ -96,9 +96,7 @@ fun LunaScreen(padding: PaddingValues) {
                 withContext(Dispatchers.Main) {
                     messages = messages + LunaChatMessage(
                         "assistant",
-                        reply.answer + "
-
-[" + reply.mode + " • " + reply.provider + "]"
+                        reply.answer + "\n\n[" + reply.mode + " • " + reply.provider + "]"
                     )
                     coreMode = reply.mode
                     connectionText =
