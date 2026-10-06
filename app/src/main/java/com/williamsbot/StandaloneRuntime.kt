@@ -468,6 +468,10 @@ private class NativeEngine(
     private val maxScanSymbols = 5
     private val waveTopN = 10
     private val scanExecutor = Executors.newFixedThreadPool(12)
+    // Market WebSocket callbacks must stay lightweight. Indicator/Williams
+    // calculations are deliberately moved off the OkHttp WebSocket callback
+    // thread so a burst of kline events cannot delay depth/aggTrade handling.
+    private val indicatorExecutor = Executors.newFixedThreadPool(2)
     private val candleCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, List<CandleN>>>()
     private val liveCandleCache = java.util.concurrent.ConcurrentHashMap<String, MutableList<CandleN>>()
     private val indicatorSnapshots = java.util.concurrent.ConcurrentHashMap<String, JSONObject>()
@@ -1552,9 +1556,32 @@ private class NativeEngine(
                 list.add(candle)
                 if (list.size > 600) list.removeAt(0)
             }
-            val snapshot = buildIndicatorSnapshot(list.toList(), symbol, frame)
-            indicatorSnapshots[key] = snapshot
-            candleCache[key] = System.currentTimeMillis() to list.toList()
+            val snapshotCandles = list.toList()
+            candleCache[key] = System.currentTimeMillis() to snapshotCandles
+
+            // Only cache maintenance happens on the WebSocket callback thread.
+            // The heavier Williams/indicator calculation runs independently.
+            indicatorExecutor.execute {
+                runCatching {
+                    val snapshot = buildIndicatorSnapshot(
+                        snapshotCandles,
+                        symbol,
+                        frame
+                    )
+                    // Do not let an older queued calculation overwrite a newer
+                    // realtime candle snapshot.
+                    val current = liveCandleCache[key]
+                    val currentTime = synchronized(current ?: mutableListOf()) {
+                        current?.lastOrNull()?.t ?: 0L
+                    }
+                    if (snapshotCandles.lastOrNull()?.t ?: 0L >= currentTime) {
+                        indicatorSnapshots[key] = snapshot
+                    }
+                }.onFailure {
+                    lastError = "indicator analysis: " +
+                        (it.message ?: it.javaClass.simpleName)
+                }
+            }
 
             if (k.optBoolean("x", false)) {
                 historyStore.upsertBatch(
