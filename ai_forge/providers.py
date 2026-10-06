@@ -52,11 +52,11 @@ class ChatCompletionsProvider(Provider):
 
 class GeminiProvider(Provider):
     def _request(self, task, context):
-        data = _post_json(f"{self.cfg.base_url}/v1beta/models/{self.cfg.model}:generateContent", {}, {
+        data = _post_json(f"{self.cfg.base_url}/v1beta/models/{self.cfg.model}:generateContent", {"x-goog-api-key": self.cfg.api_key, "x-goog-api-client": "williams-ai-forge/0.1.0"}, {
             "systemInstruction":{"parts":[{"text":SYSTEM_PROMPT}]},
             "contents":[{"role":"user","parts":[{"text":build_user_prompt(task,context)}]}],
             "generationConfig":{"temperature":0.1,"maxOutputTokens":1200,"responseMimeType":"application/json"}
-        }, self.timeout, headers={"x-goog-api-key": self.cfg.api_key, "x-goog-api-client": "williams-ai-forge/0.1.0"})
+        }, self.timeout)
         parts=data.get("candidates",[{}])[0].get("content",{}).get("parts",[])
         text="\n".join(p.get("text","") for p in parts if isinstance(p,dict) and isinstance(p.get("text"),str))
         if not text: raise ProviderError("no text in response")
