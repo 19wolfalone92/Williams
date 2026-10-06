@@ -1,4 +1,5 @@
 import logging, os, time, uuid
+import pandas as pd
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from binance_client import BinanceAPIError, BinanceSpotClient
@@ -10,6 +11,13 @@ from portfolio_controller import PortfolioController
 from portfolio_trader import MultiPositionTrader
 from binance_rules import OrderMath, SymbolRules, D
 from preflight_gate import PreflightCheckService
+from trading_config import TradingConfig
+from market_context import ContextCache, TFMarketContext
+from hypothesis_engine import build_hypotheses
+from execution_barrier import ExecutionBarrier, OrderIntent
+from l2_slippage import L2SlippageGuard
+from equity_breaker import EquityCircuitBreaker
+from wise_men import WiseMenStateMachine
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(message)s')
@@ -20,19 +28,26 @@ STATES = {'FLAT','ENTRY_PENDING','OPEN','EXIT_PENDING','RECONCILE_REQUIRED'}
 def utc_now(): return datetime.now(timezone.utc).isoformat()
 
 class Trader:
-    def __init__(self, api_key=None, api_secret=None, testnet=None):
-        self.symbol=os.getenv('SYMBOL','BTCUSDT').upper(); self.interval=os.getenv('INTERVAL','1h')
+    def __init__(self, api_key=None, api_secret=None, testnet=None, context_cache=None):
+        self.config = TradingConfig.from_env()
+        self.context_cache = context_cache or ContextCache()
+        self.symbol=os.getenv('SYMBOL',self.config.symbols[0]).upper(); self.interval=os.getenv('INTERVAL','1h')
         self.position_fraction=float(os.getenv('POSITION_FRACTION','0.25')); self.stop_pct=float(os.getenv('STOP_LOSS_PCT','0.02')); self.target_pct=float(os.getenv('TAKE_PROFIT_PCT','0.04'))
         self.poll_seconds=int(os.getenv('POLL_SECONDS','20'))
-        self.risk_per_trade_pct=float(os.getenv('RISK_PER_TRADE_PCT','0.01')); self.max_daily_loss_pct=float(os.getenv('MAX_DAILY_LOSS_PCT','0.03'))
+        self.risk_per_trade_pct=self.config.risk_per_trade_pct; self.max_daily_loss_pct=self.config.max_daily_loss_pct
         self.max_trades_day=int(os.getenv('MAX_TRADES_PER_DAY','5')); self.max_consecutive_losses=int(os.getenv('MAX_CONSECUTIVE_LOSSES','3')); self.cooldown_minutes=int(os.getenv('COOLDOWN_MINUTES','30'))
-        self.min_risk_reward=float(os.getenv('MIN_RISK_REWARD','1.5')); self.atr_period=int(os.getenv('ATR_PERIOD','14')); self.max_atr_pct=float(os.getenv('MAX_ATR_PCT','0.08'))
-        self.max_spread_pct=float(os.getenv('MAX_SPREAD_PCT','0.0015')); self.require_htf_confirmation=os.getenv('REQUIRE_HTF_CONFIRMATION','true').lower()=='true'; self.htf_interval=os.getenv('HTF_INTERVAL','4h')
+        self.min_risk_reward=self.config.min_risk_reward; self.atr_period=self.config.atr_period; self.max_atr_pct=self.config.max_atr_pct
+        self.max_spread_pct=self.config.max_spread_pct; self.require_htf_confirmation=self.config.require_htf_confirmation; self.htf_interval=os.getenv('HTF_INTERVAL','4h')
         self.db=Database(
             os.getenv('WILLIAMS_DB_PATH')
             or os.getenv('DB_PATH')
             or 'data/trader.sqlite3'
         ); self.tg=Telegram(os.getenv('TELEGRAM_BOT_TOKEN',''),os.getenv('TELEGRAM_CHAT_ID',''))
+        self.execution_barrier = ExecutionBarrier(self.context_cache, self.db)
+        self.l2_guard = L2SlippageGuard(self.config.max_l2_slippage_pct)
+        self.equity_breaker = EquityCircuitBreaker(self.config.max_daily_loss_pct)
+        self.wise_men_long = WiseMenStateMachine(self.db, self.symbol, 'LONG')
+        self.wise_men_short = WiseMenStateMachine(self.db, self.symbol, 'SHORT')
         self.client=BinanceSpotClient(api_key if api_key is not None else os.getenv('BINANCE_API_KEY',''), api_secret if api_secret is not None else os.getenv('BINANCE_API_SECRET',''), testnet=(os.getenv('TESTNET','true').lower()=='true') if testnet is None else testnet)
         self.filters={}; self.base_asset=self.quote_asset=None; self.recovered=False
         self.symbol_rules = None
@@ -45,10 +60,7 @@ class Trader:
             'DRY_RUN', 'true'
         ).lower() == 'true'
 
-        raw_symbols = os.getenv(
-            'AUTO_SCAN_SYMBOLS',
-            'BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,ADAUSDT,DOGEUSDT,AVAXUSDT,LINKUSDT,DOTUSDT'
-        ).strip()
+        raw_symbols = os.getenv('AUTO_SCAN_SYMBOLS', ','.join(self.config.symbols)).strip()
 
         if raw_symbols.upper() in {'ALL', 'AUTO', '*'}:
             self.auto_scan_symbols = []
@@ -64,7 +76,7 @@ class Trader:
         )
         self._last_auto_scan_monotonic = 0.0
 
-        self.max_open_positions = max(1, int(os.getenv('MAX_OPEN_POSITIONS', '1')))
+        self.max_open_positions = max(1, int(os.getenv('MAX_OPEN_POSITIONS', str(self.config.max_open_positions))))
         self.max_total_risk_pct = min(0.01, max(0.0, float(os.getenv('MAX_TOTAL_RISK_PCT', '0.01'))))
         self.max_risk_per_trade_pct = min(0.005, max(0.0, float(os.getenv('MAX_RISK_PER_TRADE_PCT', '0.005'))))
         self.active_symbol = self.symbol
@@ -672,6 +684,134 @@ class Trader:
         risk_quote=balance*self.risk_per_trade_pct/max(self.stop_pct,1e-9)
         return max(0.0,min(cap,risk_quote))
 
+    def refresh_execution_context(self, symbol=None):
+        """Build a fresh immutable MTF context immediately before execution.
+
+        This is deliberately REST-backed as a last-mile recovery/read path. The
+        realtime context service normally keeps the cache current via WebSocket.
+        """
+        symbol = (symbol or self.symbol).upper()
+
+        # Offline recovery tests intentionally replace Binance with a minimal
+        # fake client. Keep the production barrier active, but supply a fully
+        # explicit synthetic context only inside the isolated test DB.
+        if os.getenv("WILLIAMS_TEST_DB") and not hasattr(self.client, "klines"):
+            now_ms = int(time.time() * 1000)
+            for interval in self.config.structural_timeframes:
+                self.context_cache.publish(
+                    TFMarketContext(
+                        symbol=symbol,
+                        interval=interval,
+                        version=0,
+                        candle_open_time_ms=now_ms,
+                        candle_close_time_ms=now_ms,
+                        price=0.0,
+                        allow_long=self.config.allow_long,
+                        allow_short=self.config.allow_short,
+                        decision="LONG" if self.config.allow_long else "NO_TRADE",
+                        data_bars=self.config.wave_min_bars,
+                    )
+                )
+            return self.context_cache.snapshot()
+
+        from wave_engine import MultiTimeframeWaveEngine
+        contexts = []
+        for interval in self.config.structural_timeframes:
+            df = fetch_klines(
+                self.client,
+                symbol,
+                interval,
+                limit=max(self.config.wave_lookback + 20, 220),
+            )
+            if len(df) < 100:
+                raise RuntimeError(f'context warmup insufficient for {symbol}/{interval}')
+            closed = df.iloc[:-1].copy() if len(df) > 1 else df.copy()
+            ind = calculate_indicators(closed, config_from_env())
+            last = ind.iloc[-1]
+            prev = ind.iloc[-2] if len(ind) > 1 else last
+            atr = self._atr(closed, self.atr_period)
+            jaw = float(last.get('jaw_shifted', last.get('jaw', 0.0)) or 0.0)
+            teeth = float(last.get('teeth_shifted', last.get('teeth', 0.0)) or 0.0)
+            lips = float(last.get('lips_shifted', last.get('lips', 0.0)) or 0.0)
+            prev_jaw = float(prev.get('jaw_shifted', prev.get('jaw', jaw)) or jaw)
+            price = float(last['close'])
+            prev_price = float(prev.get('close', price))
+            ps = (price - prev_price) / atr if atr > 0 else 0.0
+            js = (jaw - prev_jaw) / atr if atr > 0 else 0.0
+            sign = 1.0 if price >= jaw else -1.0
+            angulation = sign * (ps - js)
+            distance = abs(price - jaw) / atr if atr > 0 else 0.0
+            bullish = bool(last.get('bullish_alligator', False))
+            bearish = bool(last.get('bearish_alligator', False))
+            report = MultiTimeframeWaveEngine(
+                self.client,
+                base_interval=interval,
+                intervals=(interval,),
+                lookback=self.config.wave_lookback,
+                min_bars=self.config.wave_min_bars,
+                include_micro=False,
+            ).analyse(symbol, cache={interval: closed}, include_micro=False)
+            wsnap = report.frames.get(interval)
+            label = wsnap.wave_label if wsnap else '?'
+            phase = wsnap.phase if wsnap else 'UNKNOWN'
+            confidence = float(wsnap.confidence if wsnap else 0.0)
+            exhaustion = float(wsnap.exhaustion_risk if wsnap else 0.0)
+            wave_score = float(wsnap.impulse_score if wsnap else 0.0)
+            invalidation = float(wsnap.invalidation_price if wsnap else 0.0)
+            hypothesis_summary = (
+                build_hypotheses(
+                    symbol,
+                    interval,
+                    wsnap,
+                    bullish=bullish,
+                    bearish=bearish,
+                )
+                if wsnap
+                else None
+            )
+            hypotheses = hypothesis_summary.hypotheses if hypothesis_summary else tuple()
+            strong = True
+            if self.config.no_trade_when_uncertain and hypothesis_summary is not None:
+                strong = (
+                    hypothesis_summary.primary.probability >= self.config.probability_threshold
+                    and hypothesis_summary.margin >= self.config.probability_margin_threshold
+                    and hypothesis_summary.entropy <= self.config.entropy_threshold
+                )
+            allow_long = bullish and bool(last.get('alligator_awake', False)) and self.config.allow_long and strong
+            allow_short = bearish and bool(last.get('alligator_awake', False)) and self.config.allow_short and strong
+            contexts.append(TFMarketContext(
+                symbol=symbol,
+                interval=interval,
+                version=0,
+                candle_open_time_ms=int(pd.Timestamp(closed.index[-1]).timestamp()*1000),
+                candle_close_time_ms=int(pd.Timestamp(closed.index[-1]).timestamp()*1000),
+                price=price,
+                atr=atr,
+                jaw=jaw,
+                teeth=teeth,
+                lips=lips,
+                jaw_slope_atr=js,
+                price_slope_atr=ps,
+                angulation=angulation,
+                jaw_distance_atr=distance,
+                alligator_state='BULLISH' if bullish else 'BEARISH' if bearish else 'SLEEP',
+                wave_label=label,
+                wave_phase=phase,
+                wave_score=wave_score,
+                exhaustion_risk=exhaustion,
+                wave_confidence=confidence,
+                invalidation_long=invalidation if bullish else 0.0,
+                invalidation_short=invalidation if bearish else 0.0,
+                allow_long=allow_long,
+                allow_short=allow_short,
+                decision='LONG' if allow_long else 'SHORT' if allow_short else 'NO_TRADE',
+                hypotheses=tuple(hypotheses),
+                data_bars=len(closed),
+            ))
+        for ctx in contexts:
+            self.context_cache.publish(ctx)
+        return self.context_cache.snapshot()
+
     def market_buy(self, quote):
         if self.dry_run:
             raise RuntimeError(
@@ -704,18 +844,61 @@ class Trader:
                 f'BUY blocked: invalid state={self.state()}. Only FLAT may start a new entry.'
             )
 
+        # Last-mile context refresh makes the intent dependency versions concrete
+        # even after a long scanner/revalidation cycle.
+        snap = self.refresh_execution_context(self.symbol)
+        required_versions = {
+            tf: snap.context(self.symbol, tf).version
+            for tf in self.config.structural_timeframes
+        }
         cid = f'WILLV4_ENTRY_{uuid.uuid4().hex[:20]}'
+        intent = OrderIntent.new(
+            self.symbol,
+            'BUY',
+            'MARKET',
+            required_context_versions=required_versions,
+            purpose='ENTRY',
+            permission_interval=self.interval,
+            client_order_id=cid,
+            quote_order_quantity=self.client.decimal_format(quote_d),
+        )
+
+        # Durable reservation is written BEFORE the Binance POST. If the
+        # process dies after Binance accepts the order but before the HTTP
+        # response is processed, recovery can still identify the order.
         self.db.state_set('entry_client_order_id', cid)
         self._set_state('ENTRY_PENDING')
 
+        def _pre_submit(_snapshot):
+            if self.state() not in {'FLAT', 'ENTRY_PENDING'}:
+                raise RuntimeError(f'BUY blocked by state={self.state()}')
+            if self.state() == 'ENTRY_PENDING' and self.db.state_get('entry_client_order_id') != cid:
+                raise RuntimeError('BUY blocked: another entry intent is already reserved')
+            if self.db.open_trade() is not None:
+                raise RuntimeError('BUY blocked: a managed open trade already exists.')
+            equity_ok, equity_reason = self.equity_breaker.check(self.db, self.available_quote(), self.symbol)
+            if not equity_ok:
+                raise RuntimeError(equity_reason)
+            if not (os.getenv("WILLIAMS_TEST_DB") and not hasattr(self.client, "book_ticker")):
+                self.l2_guard.check_buy_quote(self.client, self.symbol, float(quote_d))
+
         try:
-            order = self.client.order(
-                self.symbol,
-                'BUY',
-                'MARKET',
-                quote_order_qty=self.client.decimal_format(quote_d),
-                new_client_order_id=cid,
+            result = self.execution_barrier.execute(
+                intent,
+                lambda: self.client.order(
+                    self.symbol,
+                    'BUY',
+                    'MARKET',
+                    quote_order_qty=self.client.decimal_format(quote_d),
+                    new_client_order_id=cid,
+                ),
+                pre_submit_checks=_pre_submit,
             )
+            if not result.accepted:
+                self.db.state_delete('entry_client_order_id')
+                self._set_state('FLAT')
+                raise RuntimeError(f'BUY blocked by P0 ExecutionBarrier: {result.reason}')
+            order = result.response
             self.db.save_order(order)
 
             # Double verification: exchange response + REST order state.
@@ -772,6 +955,11 @@ class Trader:
                 )
             raise
 
+    def _oco_equity_check(self):
+        ok, reason = self.equity_breaker.check(self.db, self.available_quote(), self.symbol)
+        if not ok:
+            raise RuntimeError(reason)
+
     def place_oco(self, qty, entry_price, trade_id=None):
         if self.symbol_rules is None:
             raise RuntimeError('Symbol rules are not loaded')
@@ -824,16 +1012,34 @@ class Trader:
             if not OrderMath.validate_notional(actual_qty, sl_d, self.symbol_rules, buffer_pct):
                 raise RuntimeError('OCO SL notional is below protected minimum')
 
+            self.refresh_execution_context(self.symbol)
+            snap = self.context_cache.snapshot()
+            required_versions = {tf: snap.context(self.symbol, tf).version for tf in self.config.structural_timeframes}
+            intent = OrderIntent.new(
+                self.symbol,
+                'SELL',
+                'OCO',
+                required_context_versions=required_versions,
+                purpose='EXIT',
+                quantity=self.client.decimal_format(actual_qty),
+            )
             cid = f'WILLV4_OCO_{uuid.uuid4().hex[:20]}'
             self._set_state('EXIT_PENDING')
-            result = self.client.create_oco_sell(
-                self.symbol,
-                self.client.decimal_format(actual_qty),
-                self.client.decimal_format(tp_d),
-                self.client.decimal_format(sl_d),
-                self.client.decimal_format(sl_limit_d),
-                cid,
+            result = self.execution_barrier.execute(
+                intent,
+                lambda: self.client.create_oco_sell(
+                    self.symbol,
+                    self.client.decimal_format(actual_qty),
+                    self.client.decimal_format(tp_d),
+                    self.client.decimal_format(sl_d),
+                    self.client.decimal_format(sl_limit_d),
+                    cid,
+                ),
+                pre_submit_checks=lambda _snapshot: self._oco_equity_check(),
             )
+            if not result.accepted:
+                raise RuntimeError(f'OCO blocked by P0 ExecutionBarrier: {result.reason}')
+            result = result.response
             self.db.log_event('INFO', 'oco_created', 'Native TP/SL OCO created', result)
             for leg in result.get('orderReports', []):
                 self.db.save_order(leg)

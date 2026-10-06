@@ -12,13 +12,17 @@ from strategy import calculate_indicators, config_from_env
 from ws_hub import WebSocketHub
 from credentials_store import CredentialStore
 from market_scanner import MarketScanner
+from market_context import ContextCache
+from mtf_context_service import MultiTimeframeContextService
 
 load_dotenv()
 API_TOKEN = os.getenv('MOBILE_API_TOKEN', '').strip()
-VERSION = '4.17.0'
+VERSION = '4.18.0'
 
 app = FastAPI(title='Williams Binance Bot API', version=VERSION)
 hub = WebSocketHub()
+context_cache = ContextCache()
+mtf_service = MultiTimeframeContextService(context_cache)
 
 
 class MetricsRegistry:
@@ -158,6 +162,7 @@ class ControlState:
             self.api_secret,
             self.testnet,
         )
+        mtf_service.configure_credentials(self.api_key, self.api_secret, self.testnet)
 
     def ensure_trader(self):
         with self.lock:
@@ -166,6 +171,7 @@ class ControlState:
                     api_key=self.api_key or None,
                     api_secret=self.api_secret or None,
                     testnet=self.testnet,
+                    context_cache=context_cache,
                 )
             return self.trader
 
@@ -423,7 +429,10 @@ def startup():
         state.api_secret,
         state.testnet,
     )
+    mtf_service.configure_credentials(state.api_key, state.api_secret, state.testnet)
     hub.start()
+    if os.getenv('MTF_CONTEXT_ENABLED', 'true').lower() == 'true':
+        mtf_service.start()
     if (
         os.getenv('AUTO_START', 'true').lower() == 'true'
         and state.api_key
@@ -434,6 +443,7 @@ def startup():
 
 @app.on_event('shutdown')
 def shutdown():
+    mtf_service.stop()
     hub.stop()
     state.stop()
 
@@ -718,6 +728,8 @@ def status():
         'server_time': datetime.now(
             timezone.utc
         ).isoformat(),
+        'market_context': mtf_service.symbol_snapshot(t.symbol),
+        'market_context_status': mtf_service.snapshot_status(),
     }
 
 

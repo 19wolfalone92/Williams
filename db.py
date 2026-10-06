@@ -6,7 +6,7 @@ from contextlib import contextmanager
 
 
 class Database:
-    SCHEMA_VERSION = 4
+    SCHEMA_VERSION = 5
 
     def __init__(self, path=None):
         path = path or os.getenv('WILLIAMS_DB_PATH') or 'data/trader.sqlite3'
@@ -104,6 +104,44 @@ class Database:
             diagnosis TEXT,
             diagnosis_detail_json TEXT
         );
+        CREATE TABLE IF NOT EXISTS market_context(
+            symbol TEXT NOT NULL,
+            interval TEXT NOT NULL,
+            version INTEGER NOT NULL,
+            candle_close_time_ms INTEGER NOT NULL,
+            context_json TEXT NOT NULL,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY(symbol, interval)
+        );
+        CREATE TABLE IF NOT EXISTS wave_state(
+            symbol TEXT NOT NULL,
+            side TEXT NOT NULL,
+            phase TEXT NOT NULL,
+            state_json TEXT NOT NULL,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY(symbol, side)
+        );
+        CREATE TABLE IF NOT EXISTS execution_intents(
+            intent_id TEXT PRIMARY KEY,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            symbol TEXT NOT NULL,
+            side TEXT NOT NULL,
+            order_type TEXT NOT NULL,
+            purpose TEXT NOT NULL,
+            required_context_versions_json TEXT NOT NULL,
+            hypothesis_id TEXT,
+            invalidation_level REAL,
+            status TEXT NOT NULL,
+            reason TEXT,
+            client_order_id TEXT
+        );
+        CREATE TABLE IF NOT EXISTS execution_events(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            intent_id TEXT,
+            event TEXT NOT NULL,
+            payload_json TEXT
+        );
         CREATE INDEX IF NOT EXISTS idx_trade_journal_diagnosis
             ON trade_journal(diagnosis);
         CREATE INDEX IF NOT EXISTS idx_trades_open_symbol
@@ -155,6 +193,37 @@ class Database:
         self.conn.execute(
             'DELETE FROM bot_state WHERE key=?',
             (key,)
+        )
+        if not self._transaction_active:
+            self.conn.commit()
+
+    def save_execution_intent(self, intent, status, reason=''):
+        self.conn.execute(
+            '''INSERT OR REPLACE INTO execution_intents(
+                intent_id,symbol,side,order_type,purpose,
+                required_context_versions_json,hypothesis_id,invalidation_level,status,reason,client_order_id
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?)''',
+            (
+                intent.intent_id,
+                intent.symbol,
+                intent.side,
+                intent.order_type,
+                intent.purpose,
+                json.dumps(dict(intent.required_context_versions), sort_keys=True),
+                intent.hypothesis_id,
+                float(intent.invalidation_level or 0.0),
+                status,
+                reason,
+                getattr(intent, 'client_order_id', ''),
+            ),
+        )
+        if not self._transaction_active:
+            self.conn.commit()
+
+    def save_execution_event(self, intent_id, event, payload=None):
+        self.conn.execute(
+            'INSERT INTO execution_events(intent_id,event,payload_json) VALUES(?,?,?)',
+            (intent_id, event, json.dumps(payload, default=str) if payload is not None else None),
         )
         if not self._transaction_active:
             self.conn.commit()
