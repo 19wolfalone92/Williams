@@ -2830,11 +2830,7 @@ private class NativeEngine(
                         )
                     }
 
-                    val lists =
-                        signedGet(
-                            "/api/v3/openOrderList",
-                            ""
-                        )
+                    val lists = signedOpenOrderLists()
                     val entryPrice = quote / qty
 
                     val existingBotOco =
@@ -3693,7 +3689,7 @@ private class NativeEngine(
         }.getOrElse { JSONArray() }
 
         val openLists = runCatching {
-            signedGet("/api/v3/openOrderList", "")
+            signedOpenOrderLists()
                 .let {
                     it.optJSONArray("orderList")
                         ?: it.optJSONArray("ordersLists")
