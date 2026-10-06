@@ -3,6 +3,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 Decision = Literal["PROCEED", "HOLD", "REJECT", "ESCALATE"]
+ChatRole = Literal["user", "assistant"]
 
 class CouncilRequest(BaseModel):
     task: str = Field(min_length=3, max_length=48_000)
@@ -29,3 +30,19 @@ class CouncilDecision(BaseModel):
     min_required_agents: int = Field(ge=1)
     rationale: str
     agents: list[AgentDecision]
+
+
+class LunaMessage(BaseModel):
+    role: ChatRole
+    content: str = Field(min_length=1, max_length=12_000)
+
+class LunaRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=12_000)
+    history: list[LunaMessage] = Field(default_factory=list, max_length=20)
+    context: dict[str, object] = Field(default_factory=dict)
+
+class LunaResponse(BaseModel):
+    answer: str = Field(min_length=1, max_length=12_000)
+    mode: Literal["FREE", "PROVIDER"]
+    provider: str
+    model: str
