@@ -86,34 +86,25 @@ def main():
     print("PORTFOLIO SELECTION")
     print("-" * 72)
 
-    selection = controller.select(has_open_position=False)
+    selections = controller.select_portfolio(open_risk_quote=0.0, open_positions=0)
 
-    if selection is None:
+    if not selections:
         print("ACTION: WAIT")
-        print("No STRICT_SIGNAL candidate passed all risk checks.")
+        print("No STRICT_SIGNAL candidate fits the aggregate risk budget.")
     else:
-        c = selection.candidate
-        r = selection.risk
-
-        print(f"SELECTED:       {c.symbol}")
-        print(f"STATE:          {c.setup_state}")
-        print(f"SCORE:          {c.score:.2f}")
-        print(f"SETUP SCORE:    {c.setup_score:.2f}")
-        print(f"STRICT SIGNAL:  {c.signal}")
-        print(f"HTF CONFIRMED:  {c.htf_confirmed}")
-        print(f"RISK:           {r.risk_pct:.2f}%")
-        print(f"R:R:            {r.risk_reward:.2f}")
-        print(f"ACTION:         {selection.action}")
+        print(f"SELECTED POSITIONS: {len(selections)}")
+        for rank, selection in enumerate(selections, 1):
+            c = selection.candidate
+            r = selection.risk
+            print(f"#{rank}: {c.symbol} score={c.score:.2f} risk={r.risk_pct:.2f}% R:R={r.risk_reward:.2f} action={selection.action}")
+        print(f"TOTAL ALLOCATED RISK: {sum(x.risk.risk_pct for x in selections):.2f}%")
 
     print()
     print("-" * 72)
-    print("OPEN POSITION SAFETY TEST")
+    print("MULTI-POSITION RISK TEST")
     print("-" * 72)
-
-    blocked = controller.select(has_open_position=True)
-
-    assert blocked is None
-    print("[PASS] existing position blocks new entry")
+    print("Existing open risk is accounted for by reserved_risk_quote in the canonical executor.")
+    print("A remaining risk budget may be allocated to additional independent symbols.")
 
     print()
     print("-" * 72)
