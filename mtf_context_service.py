@@ -12,7 +12,8 @@ import websocket
 
 from binance_client import BinanceSpotClient
 from data import fetch_klines
-from market_context import ContextCache, TFMarketContext, WaveHypothesis
+from market_context import ContextCache, TFMarketContext
+from hypothesis_engine import build_hypotheses
 from strategy import calculate_indicators, config_from_env
 from trading_config import TradingConfig
 from wave_engine import MultiTimeframeWaveEngine
@@ -103,9 +104,9 @@ class MultiTimeframeContextService:
         wave_phase = "UNKNOWN"
         wave_score = 0.0
         exhaustion = 0.0
-        invalidation = float(last.get("last_down_level", 0.0) or 0.0) if bullish else float(last.get("last_up_level", 0.0) or 0.0)
+        invalidation = 0.0
         wave_conf = 0.0
-        hypotheses: list[WaveHypothesis] = []
+        hypothesis_summary = None
 
         try:
             report = MultiTimeframeWaveEngine(
@@ -120,41 +121,33 @@ class MultiTimeframeContextService:
             if wsnap is not None:
                 wave_label = wsnap.wave_label
                 wave_phase = wsnap.phase
-                wave_score = float(wsnap.wave_score if hasattr(wsnap, "wave_score") else wsnap.impulse_score or wsnap.confidence)
+                wave_score = float(wsnap.impulse_score or wsnap.confidence or 0.0)
                 exhaustion = float(wsnap.exhaustion_risk or 0.0)
                 wave_conf = float(wsnap.confidence or 0.0)
-                if wsnap.invalidation_price:
-                    invalidation = float(wsnap.invalidation_price)
-                p = wave_conf / 100.0 if wave_conf > 1.0 else wave_conf
-                p = min(0.99, max(0.01, p))
-                hypotheses.append(
-                    WaveHypothesis(
-                        hypothesis_id=f"{symbol}:{interval}:primary:{wave_label}",
-                        label=wave_label,
-                        direction="LONG" if bullish else "SHORT" if bearish else "NEUTRAL",
-                        probability=p,
-                        secondary_probability=max(0.0, min(1.0, 1.0 - p)),
-                        invalidation_level=invalidation,
-                        confidence=p,
-                        exhaustion_risk=exhaustion,
-                    )
+                invalidation = float(wsnap.invalidation_price or 0.0)
+                hypothesis_summary = build_hypotheses(
+                    symbol,
+                    interval,
+                    wsnap,
+                    bullish=bullish,
+                    bearish=bearish,
                 )
         except Exception as exc:
             log.debug("wave enrichment %s %s failed: %s", symbol, interval, exc)
 
-        long_ok = bullish and bool(last.get("alligator_awake", False)) and self.config.allow_long
-        short_ok = bearish and bool(last.get("alligator_awake", False)) and self.config.allow_short
-        if self.config.no_trade_when_uncertain and hypotheses:
-            h = max(hypotheses, key=lambda item: item.probability)
+        hypotheses = hypothesis_summary.hypotheses if hypothesis_summary else tuple()
+        strong = True
+        if self.config.no_trade_when_uncertain and hypothesis_summary is not None:
             strong = (
-                h.probability >= self.config.probability_threshold
-                and h.margin >= self.config.probability_margin_threshold
-                and h.entropy <= self.config.entropy_threshold
+                hypothesis_summary.primary.probability >= self.config.probability_threshold
+                and hypothesis_summary.margin >= self.config.probability_margin_threshold
+                and hypothesis_summary.entropy <= self.config.entropy_threshold
             )
-            long_ok = long_ok and strong
-            short_ok = short_ok and strong
-
+        long_ok = bullish and bool(last.get("alligator_awake", False)) and self.config.allow_long and strong
+        short_ok = bearish and bool(last.get("alligator_awake", False)) and self.config.allow_short and strong
         decision = "LONG" if long_ok else "SHORT" if short_ok else "NO_TRADE"
+        if hypothesis_summary is not None and hypothesis_summary.decision == "UNCERTAIN":
+            decision = "NO_TRADE"
         candle_open_ms = int(pd.Timestamp(frame.index[-1]).timestamp() * 1000)
         context = TFMarketContext(
             symbol=symbol,
