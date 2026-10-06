@@ -1,6 +1,7 @@
 package com.williamsbot
 
 import android.app.ActivityManager
+import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.os.Build
 import android.os.PowerManager
@@ -10,6 +11,7 @@ object AndroidRuntimeHealth {
     fun snapshot(context: Context): JSONObject {
         val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
         val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        val usage = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
 
         val ignoring = if (Build.VERSION.SDK_INT >= 23) {
             pm.isIgnoringBatteryOptimizations(context.packageName)
@@ -25,7 +27,7 @@ object AndroidRuntimeHealth {
         }
 
         if (Build.VERSION.SDK_INT >= 28) {
-            result.put("standby_bucket", am.appStandbyBucket)
+            result.put("standby_bucket", usage.appStandbyBucket)
         }
 
         return result
