@@ -6064,6 +6064,23 @@ private class NativeEngine(
             val value: Double
         )
 
+        fun valuePrice(asset: String): Double? {
+            if (asset in setOf("USDT", "USDC", "FDUSD", "TUSD", "USDE", "USDP", "DAI")) {
+                return 1.0
+            }
+            prices[asset + "USDT"]?.takeIf { it > 0.0 }?.let { return it }
+            prices[asset + "USDC"]?.let { cross ->
+                val usdc = prices["USDCUSDT"] ?: 0.0
+                if (cross > 0.0 && usdc > 0.0) return cross * usdc
+            }
+            for (bridge in listOf("BTC", "ETH", "BNB")) {
+                val direct = prices[asset + bridge] ?: continue
+                val bridgeUsdt = prices[bridge + "USDT"] ?: continue
+                if (direct > 0.0 && bridgeUsdt > 0.0) return direct * bridgeUsdt
+            }
+            return null
+        }
+
         val rows = mutableListOf<AssetRow>()
         val balances = account.optJSONArray("balances") ?: JSONArray()
         for (i in 0 until balances.length()) {
@@ -6074,9 +6091,7 @@ private class NativeEngine(
             val locked = row.optString("locked").toDoubleOrNull() ?: 0.0
             val total = free + locked
             if (total <= 0.000000000001) continue
-            val price = if (asset == "USDT") 1.0 else {
-                prices[asset + "USDT"] ?: livePrices[asset + "USDT"]
-            }
+            val price = valuePrice(asset)
             rows += AssetRow(
                 asset = asset,
                 free = free,
@@ -6086,6 +6101,7 @@ private class NativeEngine(
             )
         }
 
+        val unknownAssets = rows.filter { it.price == null }.map { it.asset }
         val totalEquity = rows.sumOf { it.value }
         val freeEquity = rows.sumOf {
             if (it.price != null && it.price > 0.0) it.free * it.price else 0.0
@@ -6148,7 +6164,9 @@ private class NativeEngine(
             .put("assets", assets)
             .put("positions", positions)
             .put("position_count", positionList().size)
-            .put("valuation_unknown_assets", rows.count { it.price == null })
+            .put("valuation_unknown_assets", unknownAssets.size)
+            .put("valuation_unknown_asset_list", JSONArray(unknownAssets))
+            .put("valuation_complete", unknownAssets.isEmpty())
     }
 
     fun diagnostics(run: Boolean): JSONObject {
