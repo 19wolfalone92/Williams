@@ -920,10 +920,6 @@ private fun DashboardScreen(
     val best = candidates.firstOrNull()
 
     LazyColumn(
-        item {
-            SystemHealthBar(status)
-        }
-
         modifier = Modifier
             .fillMaxSize()
             .padding(padding)
@@ -931,6 +927,10 @@ private fun DashboardScreen(
         verticalArrangement = Arrangement.spacedBy(12.dp),
         contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp)
     ) {
+        item {
+            SystemHealthBar(status)
+        }
+
         item {
             HeroCard(status = status, best = best)
         }
