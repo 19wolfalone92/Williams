@@ -6,6 +6,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
+/** L2 continuity regression coverage for Binance U/u diff-depth sequencing. */
 class OrderBookCacheSequenceTest {
     private fun snapshot(lastUpdateId: Long): JSONObject =
         JSONObject()
