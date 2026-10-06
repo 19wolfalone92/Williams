@@ -125,13 +125,9 @@ class MainActivity : ComponentActivity() {
                 13001
             )
         }
-        // Production architecture: Android is a client/control surface.
-        // StandaloneRuntime remains available only as an explicit debug diagnostic.
-        val debuggable =
-            (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
-        if (debuggable && intent.getBooleanExtra("ENABLE_STANDALONE_DIAGNOSTIC", false)) {
-            StandaloneRuntime.start(this)
-        }
+        // Primary mode: fully autonomous on-device Williams runtime.
+        // A remote backend remains optional and can be configured explicitly.
+        StandaloneRuntime.start(this)
         setContent {
             WilliamsTheme {
                 WilliamsApp(this)
@@ -317,10 +313,13 @@ private class StandaloneApi(context: Context) {
         .build()
 
     val backendUrl: String
-        get() = prefs.getString("backend_url", "")!!.trimEnd('/')
+        get() = prefs.getString("backend_url", "http://127.0.0.1:18080")
+            ?.trimEnd('/')
+            .takeUnless { it.isNullOrBlank() }
+            ?: "http://127.0.0.1:18080"
 
     val mobileToken: String
-        get() = prefs.getString("mobile_token", "")!!.trim()
+        get() = prefs.getString("mobile_token", "")?.trim() ?: ""
 
     fun saveConnection(url: String, token: String) {
         val normalized = url.trim().trimEnd('/')
@@ -330,6 +329,9 @@ private class StandaloneApi(context: Context) {
                 normalized.startsWith("http://localhost")
         if (!normalized.startsWith("https://") && !localhostHttp) {
             error("Backend URL должен использовать HTTPS; HTTP разрешён только для localhost")
+        }
+        if (!localhostHttp && token.trim().length < 32) {
+            error("Для удалённого Backend нужен Mobile API Token (минимум 32 символа).")
         }
         prefs.edit()
             .putString("backend_url", normalized)
@@ -348,7 +350,9 @@ private class StandaloneApi(context: Context) {
     ): String {
         val builder = Request.Builder()
             .url(backendUrl + path)
-            .header("Authorization", "Bearer " + mobileToken)
+        if (mobileToken.isNotBlank()) {
+            builder.header("Authorization", "Bearer " + mobileToken)
+        }
 
         val requestBody =
             body?.toRequestBody("application/json".toMediaType())
@@ -399,12 +403,8 @@ fun WilliamsApp(context: Context) {
     suspend fun loadAll(scan: Boolean) {
         withContext(Dispatchers.IO) {
             try {
-                require(api.backendUrl.isNotBlank()) {
-                    "Укажите Backend URL в Config. 127.0.0.1 — это сам телефон, а не VPS."
-                }
-                require(api.mobileToken.length >= 32) {
-                    "Укажите Mobile API Token (минимум 32 символа)."
-                }
+                // Autonomous mode uses the on-device runtime at 127.0.0.1:18080.
+                // A remote URL/token is only needed when the user explicitly configures one.
                 withContext(Dispatchers.Main) { refreshing = scan }
 
                 val statusJson = JSONObject(api.get("/api/v1/status"))
@@ -514,13 +514,6 @@ fun WilliamsApp(context: Context) {
             try {
                 require(apiKey.isNotBlank()) { "Введите API Key" }
                 require(apiSecret.isNotBlank()) { "Введите API Secret" }
-                require(api.backendUrl.isNotBlank()) {
-                    "Сначала сохраните Backend URL в разделе Config."
-                }
-                require(api.mobileToken.length >= 32) {
-                    "Сначала сохраните Mobile API Token (минимум 32 символа)."
-                }
-
                 val body = JSONObject()
                     .put("api_key", apiKey.trim())
                     .put("api_secret", apiSecret.trim())
@@ -1847,11 +1840,11 @@ private fun SettingsScreen(
                             tint = AppColors.green
                         )
                         Spacer(Modifier.width(8.dp))
-                        Text("Williams Backend", style = MaterialTheme.typography.titleMedium)
+                        Text("Williams Runtime", style = MaterialTheme.typography.titleMedium)
                     }
 
                     Text(
-                        "Android — клиент и пульт управления. Исполнение и связь с Binance остаются на backend.",
+                        "Автономный режим: торговый движок и связь с Binance работают прямо на телефоне. Удалённый Backend — опционально.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = AppColors.textMuted
                     )
