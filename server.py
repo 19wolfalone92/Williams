@@ -1235,6 +1235,11 @@ def quant_features(symbol: Optional[str] = None, limit: int = 20):
 def quant_shadow(limit: int = 50):
     return quant_store.recent_shadow(max(1, min(limit, 200)))
 
+
+@app.get('/api/v1/quant/shadow-execution', dependencies=[Depends(auth)])
+def quant_shadow_execution(limit: int = 50):
+    return quant_store.recent_shadow_executions(max(1, min(limit, 200)))
+
 @app.get('/api/v1/settings', dependencies=[Depends(auth)])
 def settings():
     t = state.ensure_trader()
