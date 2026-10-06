@@ -93,9 +93,42 @@ def scenario_fresh_missing_baseline():
         assert t.recovered is True
         assert c.created_oco_count==0
 
+def scenario_fresh_db_recovers_explicit_bot_buy():
+    with tempfile.TemporaryDirectory() as d:
+        c=FakeClient(base_free=1)
+        path=os.path.join(d,'x.sqlite3')
+        t=new_trader(path,c)
+
+        t.db.state_delete('foreign_base_balance:BTCUSDT')
+        c.orders.append({
+            'symbol':'BTCUSDT',
+            'side':'BUY',
+            'type':'MARKET',
+            'orderId':77,
+            'clientOrderId':'WILLV4_ENTRY_fresh_db',
+            'status':'FILLED',
+            'price':'100',
+            'origQty':'1',
+            'executedQty':'1',
+            'cummulativeQuoteQty':'100',
+            'transactTime':5000,
+            'time':5000
+        })
+
+        t.recover_state()
+
+        trade=t.db.open_trade('BTCUSDT')
+        assert trade is not None
+        assert trade['entry_order_id']=='77'
+        assert abs(float(trade['quantity'])-1.0)<1e-9
+        assert t.state()=='OPEN'
+        assert abs(float(t.db.state_get('foreign_base_balance:BTCUSDT')))<1e-9
+        assert c.created_oco_count==1
+
 def run():
     tests=[
         ('fresh DB -> missing baseline -> safe FLAT recovery',scenario_fresh_missing_baseline),
+        ('fresh DB -> explicit Williams BUY -> safe position recovery',scenario_fresh_db_recovers_explicit_bot_buy),
         ('BUY -> OCO -> crash -> TP',lambda:scenario_exit(104)),
         ('BUY -> OCO -> crash -> SL',lambda:scenario_exit(98)),
         ('BUY -> crash -> missing OCO',scenario_missing),
