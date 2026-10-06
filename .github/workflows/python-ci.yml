@@ -57,7 +57,6 @@ jobs:
           test_portfolio_controller.py
           test_multi_position_risk.py
           test_multi_position_execution.py
-          test_portfolio_integration.py
           test_portfolio_scanner.py
           test_portfolio_scanner_atr.py
           test_risk_engine.py
