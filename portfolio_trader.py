@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from portfolio_controller import PortfolioController
 from db import Database
 from equity_breaker import EquityCircuitBreaker
+from l2_slippage import L2SlippageGuard
+from execution_accumulator import accumulate_order
 
 
 POSITION_STATES = {
@@ -73,6 +75,9 @@ class MultiPositionTrader:
             float(os.getenv("BALANCE_TOLERANCE_PCT", "0.005")),
         )
         self._locks = set()
+        self.l2_guard = L2SlippageGuard(
+            float(os.getenv("MAX_L2_SLIPPAGE_PCT", os.getenv("MAX_SPREAD_PCT", "0.0015")))
+        )
         self.equity_breaker = EquityCircuitBreaker(float(os.getenv("MAX_DAILY_LOSS_PCT", "0.03")))
         self.max_trades_per_day = max(0, int(os.getenv("MAX_TRADES_PER_DAY", "5")))
         self.max_consecutive_losses = max(0, int(os.getenv("MAX_CONSECUTIVE_LOSSES", "3")))
@@ -1422,6 +1427,15 @@ class MultiPositionTrader:
             )
 
             try:
+                # Last-moment market-depth protection. A MARKET BUY is admitted
+                # only when the requested quote amount can be filled within the
+                # configured L2 slippage budget.
+                self.l2_guard.check_buy_quote(
+                    self.client,
+                    symbol,
+                    float(quote),
+                )
+
                 order = self.client.order_safe(
                     symbol,
                     "BUY",
@@ -1431,18 +1445,29 @@ class MultiPositionTrader:
                 )
                 self.db.save_order(order)
 
-                qty = float(
-                    order.get("executedQty", 0) or 0
+                # Confirm the exchange state immediately after submission.
+                order_id = order.get("orderId")
+                confirmed = self.client.get_order(
+                    symbol,
+                    order_id=order_id,
+                    orig_client_order_id=client_id if order_id is None else None,
                 )
-                spent = float(
-                    order.get("cummulativeQuoteQty", 0) or 0
-                )
+                if str(confirmed.get("status", "")).upper() != "FILLED":
+                    raise RuntimeError(
+                        f"{symbol}: BUY is not fully filled: "
+                        f"{confirmed.get('status', 'UNKNOWN')}"
+                    )
+                order = confirmed
+
+                execution = accumulate_order(order)
+                qty = float(execution.executed_qty)
+                spent = float(execution.quote_qty)
                 if qty <= 0 or spent <= 0:
                     raise RuntimeError(
-                        f"{symbol}: BUY returned invalid fill"
+                        f"{symbol}: BUY returned invalid authoritative fill"
                     )
 
-                entry = spent / qty
+                entry = float(execution.avg_price)
                 trade_id = self.db.save_trade(
                     entry_time=datetime.now(timezone.utc).isoformat(),
                     symbol=symbol,
