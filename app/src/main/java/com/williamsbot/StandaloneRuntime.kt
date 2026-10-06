@@ -2338,7 +2338,11 @@ private class NativeEngine(
                         stateMachine.state == TradingState.ENTRY_PENDING
                     ) {
                         stateMachine.transition(
-                            TradingState.READY_FLAT,
+                            if (positionList().isEmpty()) {
+                                TradingState.READY_FLAT
+                            } else {
+                                TradingState.PROTECTED
+                            },
                             "ExecutionResult failure: " +
                                 (result.error ?: "unknown execution failure")
                         )
@@ -3810,9 +3814,11 @@ private class NativeEngine(
         }
         require(
             if (gated) {
-                stateMachine.state == TradingState.ENTRY_PENDING
+                stateMachine.state == TradingState.ENTRY_PENDING ||
+                    stateMachine.state == TradingState.PROTECTED
             } else {
-                stateMachine.state == TradingState.READY_FLAT
+                stateMachine.state == TradingState.READY_FLAT ||
+                    stateMachine.state == TradingState.PROTECTED
             }
         ) {
             "FSM forbids BUY from state " + stateMachine.state.name
@@ -5549,11 +5555,26 @@ private class NativeEngine(
         val cooldown = consecutiveLosses >= 2 && lastLossAt > 0L &&
             System.currentTimeMillis() - lastLossAt < 30L * 60L * 1000L
         val hardPause = consecutiveLosses >= 3
+        val maxDailyLossPct = 0.03
+        val equity = estimateManagedEquity().coerceAtLeast(1.0)
+        val dailyLossPct = (-pnl / equity).coerceAtLeast(0.0)
+        val dailyLossLimit = dailyLossPct >= maxDailyLossPct
+        val maxTradesReached = count >= 5
         return JSONObject()
             .put("trades_today", count)
+            .put("max_trades_per_day", 5)
             .put("daily_pnl_usdt", pnl)
+            .put("daily_loss_pct", dailyLossPct)
+            .put("max_daily_loss_pct", maxDailyLossPct)
             .put("consecutive_losses", consecutiveLosses)
-            .put("allow", !cooldown && !hardPause)
+            .put("allow", !cooldown && !hardPause && !dailyLossLimit && !maxTradesReached)
+            .put("mode", when {
+                maxTradesReached -> "DAILY_TRADE_LIMIT"
+                dailyLossLimit -> "DAILY_LOSS_LIMIT"
+                hardPause -> "PAUSED"
+                cooldown -> "COOLDOWN"
+                else -> "ACTIVE"
+            })
             .put("mode", when {
                 hardPause -> "PAUSED"
                 cooldown -> "COOLDOWN"
@@ -5714,7 +5735,8 @@ private class NativeEngine(
                 }
             )
             .put("open_positions", positionList().size)
-            .put("max_open_positions", maxOpenPositions)
+            .put("position_capacity_mode", "RISK_BUDGET")
+            .put("risk_based_position_capacity", floor(maxTotalRiskPct / maxRiskPerTradePct).toInt())
             .put("reserved_risk_pct", reservedRiskPct())
             .put("max_total_risk_pct", maxTotalRiskPct)
             .put("max_risk_per_trade_pct", maxRiskPerTradePct)
