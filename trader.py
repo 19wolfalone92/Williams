@@ -825,6 +825,7 @@ class Trader:
             tf: snap.context(self.symbol, tf).version
             for tf in self.config.structural_timeframes
         }
+        cid = f'WILLV4_ENTRY_{uuid.uuid4().hex[:20]}'
         intent = OrderIntent.new(
             self.symbol,
             'BUY',
@@ -835,7 +836,6 @@ class Trader:
             client_order_id=cid,
             quote_order_quantity=self.client.decimal_format(quote_d),
         )
-        cid = f'WILLV4_ENTRY_{uuid.uuid4().hex[:20]}'
 
         # Durable reservation is written BEFORE the Binance POST. If the
         # process dies after Binance accepts the order but before the HTTP
