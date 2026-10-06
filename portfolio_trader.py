@@ -895,7 +895,9 @@ class MultiPositionTrader:
             float(os.getenv("MIN_RECOVERY_QTY", "0.000001")),
             remaining_expected * self.balance_tolerance_pct,
         )
-        if abs(exchange_qty - remaining_expected) > tolerance:
+        entry_time_ms = int(entry_order.get("time", entry_order.get("transactTime", 0)) or 0) if entry_order else 0
+        manual_sells = [o for o in all_orders if str(o.get("side", "")).upper() == "SELL" and str(o.get("status", "")).upper() == "FILLED" and int(o.get("time", o.get("transactTime", 0)) or 0) >= entry_time_ms and not self._sell_belongs_to_bot(o, all_orders)]
+        if abs(exchange_qty - remaining_expected) > tolerance and not manual_sells:
             raise RuntimeError(
                 f"{symbol}: managed quantity mismatch; "
                 f"expected={remaining_expected:.12g}, "
