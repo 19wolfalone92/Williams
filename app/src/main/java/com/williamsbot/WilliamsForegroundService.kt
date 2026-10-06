@@ -59,7 +59,7 @@ class WilliamsForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == Companion.ACTION_STOP_RUNTIME) {
+        if (intent?.action == Companion.ACTION_STOP) {
             stopSelf()
             return START_NOT_STICKY
         }
