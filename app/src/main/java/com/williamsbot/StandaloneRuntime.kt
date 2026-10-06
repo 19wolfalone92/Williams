@@ -180,6 +180,8 @@ private data class BaseAnalysis(
     val breakoutDistancePct: Double,
     val obi: Double? = null,
     val tradeFlowImbalance: Double? = null,
+    val wiseManCount: Int = 0,
+    val signalFamily: String = "NONE",
     val reason: String
 )
 
@@ -4841,50 +4843,68 @@ private class NativeEngine(
         spread: Double,
         volume: Double
     ): BaseAnalysis {
-        val i = candles.lastIndex
+        // Never make a signal from the still-forming Binance candle.
+        val closed = if (candles.size > 1) candles.dropLast(1) else emptyList()
+        val i = closed.lastIndex
         if (i < 40) {
             return BaseAnalysis(
                 symbol = symbol,
-                candles = candles,
+                candles = closed,
                 score = 0.0,
                 signal = false,
                 htfCandidate = false,
-                wave = neutralWave(candles),
+                wave = neutralWave(closed),
                 atrPct = 0.0,
                 riskPct = 0.0,
                 riskReward = 0.0,
                 spreadPct = spread,
                 breakoutDistancePct = 0.0,
-                obi = null,
-                tradeFlowImbalance = null,
-                reason = "Недостаточно свечей"
+                reason = "Недостаточно закрытых свечей"
             )
         }
 
-        val closes = candles.map { it.c }
-        val atrPct = atrPct(candles)
-        val atrAbs =
-            atrAbs(candles)
+        val closes = closed.map { it.c }
+        val medians = closed.map { (it.h + it.l) / 2.0 }
 
-        val alligator = alligator(closes)
+        // Williams Alligator 13/8/5 with 8/5/3 displacement.
+        val jawSeries = smma(medians, 13)
+        val teethSeries = smma(medians, 8)
+        val lipsSeries = smma(medians, 5)
+        val jaw = jawSeries.getOrElse(i - 8) { 0.0 }
+        val teeth = teethSeries.getOrElse(i - 5) { 0.0 }
+        val lips = lipsSeries.getOrElse(i - 3) { 0.0 }
+
         val bullish =
-            alligator.lips > alligator.teeth &&
-                alligator.teeth > alligator.jaw &&
-                closes[i] > alligator.lips
+            lips > teeth &&
+                teeth > jaw &&
+                closes[i] > lips
 
-        val aoValue = ao(candles, i)
+        val mouthMax = max(jaw, max(teeth, lips))
+        val mouthMin = min(jaw, min(teeth, lips))
+        val alligatorSpread =
+            if (closes[i] > 0.0) {
+                (mouthMax - mouthMin) / closes[i]
+            } else 0.0
+        val awake = alligatorSpread >= 0.001
+
+        val aoValue = ao(closed, i)
         val aoPositive = aoValue > 0.0
 
-        val fractalIndex = latestConfirmedUpFractal(candles, i)
-        val fractalHigh =
-            fractalIndex?.let { candles[it].h }
-        val teethSeries = smma(closes, 8)
-        val fractalTeeth =
-            fractalIndex?.let { teethSeries.getOrNull(it) }
-        val externalFractal =
+        val fractalIndex = latestConfirmedUpFractal(closed, i)
+        val fractalHigh = fractalIndex?.let { closed[it].h }
+        val fractalTeeth = fractalIndex?.let { idx ->
+            val shiftedIndex = idx - 5
+            teethSeries.getOrNull(shiftedIndex)
+        }
+        val fractalOutside =
             fractalHigh != null &&
                 fractalTeeth != null &&
                 fractalHigh > fractalTeeth
+
+        val previousFractalIndex = latestConfirmedUpFractal(closed, i - 1)
+        val previousFractalHigh =
+            previousFractalIndex?.let { closed[it].h }
+
         val breakoutDistance =
             if (fractalHigh != null && fractalHigh > 0.0) {
                 (closes[i] - fractalHigh) / fractalHigh
@@ -4892,50 +4912,117 @@ private class NativeEngine(
                 0.0
             }
 
-        val breakout =
-            externalFractal &&
+        val fractalBreak =
+            fractalOutside &&
                 closes[i] > fractalHigh!! &&
-                breakoutDistance <= 0.05
+                breakoutDistance <= 0.05 &&
+                previousFractalHigh != null &&
+                closes[i - 1] <= previousFractalHigh
+
+        // First Wise Man: reversal bar followed by breakout of its high.
+        var reversalHigh = Double.NaN
+        var reversalEntry = false
+        for (j in max(2, i - 40) until i) {
+            val range = closed[j].h - closed[j].l
+            if (range <= 0.0) continue
+            val priorLow1 = closed[j - 1].l
+            val priorLow2 = closed[j - 2].l
+            val closeLocation =
+                (closed[j].c - closed[j].l) / range
+            val jawJ = jawSeries.getOrNull(j - 8) ?: continue
+            val teethJ = teethSeries.getOrNull(j - 5) ?: continue
+            val lipsJ = lipsSeries.getOrNull(j - 3) ?: continue
+            val reversal =
+                closed[j].l < min(priorLow1, priorLow2) &&
+                    closeLocation >= 0.50 &&
+                    closed[j].l < min(jawJ, min(teethJ, lipsJ))
+            if (reversal) {
+                reversalHigh = closed[j].h
+                break
+            }
+        }
+        if (reversalHigh.isFinite()) {
+            reversalEntry =
+                closes[i] > reversalHigh &&
+                    bullish
+        }
+
+        // Second Wise Man: three consecutive green AO bars after a valid
+        // confirmed fractal outside the Teeth line.
+        var greenStreak = 0
+        for (j in i downTo max(1, i - 10)) {
+            if (ao(closed, j) > ao(closed, j - 1)) {
+                greenStreak++
+            } else {
+                break
+            }
+        }
+        val prevFractalForAo = latestConfirmedUpFractal(closed, i - 1)
+        val prevFractalTeethForAo =
+            prevFractalForAo?.let { teethSeries.getOrNull(it - 5) }
+        val prevFractalOutside =
+            prevFractalForAo != null &&
+                prevFractalTeethForAo != null &&
+                closed[prevFractalForAo].h > prevFractalTeethForAo
+        val superAo = greenStreak >= 3 && prevFractalOutside
+
+        // Third Wise Man: confirmed fractal breakout.
+        val wiseCount =
+            listOf(
+                reversalEntry,
+                superAo,
+                fractalBreak
+            ).count { it }
+
+        val family =
+            buildList {
+                if (reversalEntry) add("REVERSAL")
+                if (superAo) add("SUPER_AO")
+                if (fractalBreak) add("FRACTAL")
+            }.joinToString("+")
+                .ifBlank { "NONE" }
+
+        val longSignal =
+            fractalOutside &&
+                bullish &&
+                awake &&
+                wiseCount >= 2
+
+        val atrPct = atrPct(closed)
+        val atrAbs = atrAbs(closed)
 
         val trendScore = if (bullish) 35.0 else 0.0
         val aoScore =
             when {
-                aoPositive && ao(candles, i - 1) <= aoValue -> 20.0
+                aoPositive && ao(closed, i - 1) <= aoValue -> 20.0
                 aoPositive -> 12.0
                 else -> 0.0
             }
-
         val breakoutScore =
-            if (breakout) 25.0 else if (fractalHigh != null) 8.0 else 0.0
-
+            if (fractalBreak) 25.0
+            else if (fractalHigh != null) 8.0
+            else 0.0
         val atrScore =
             when {
                 atrPct <= 0.0 -> 0.0
                 atrPct <= 0.08 -> (1.0 - atrPct / 0.08) * 10.0
                 else -> 0.0
             }
-
         val volumeScore =
             when {
                 volume >= 100_000_000.0 -> 5.0
                 volume >= 10_000_000.0 -> 3.0
                 else -> 1.0
             }
-
-        val preliminaryWave = waveInfo(candles, "1h")
         var score =
             trendScore +
                 aoScore +
                 breakoutScore +
                 atrScore +
-                volumeScore
+                volumeScore +
+                (wiseCount * 2.0)
 
-        var strictSignal =
-            bullish &&
-                aoPositive &&
-                breakout &&
-                atrPct in 0.0..0.08
-
+        val preliminaryWave = waveInfo(closed, "1h")
         if (preliminaryWave.position == 3) {
             score += 5.0
         } else if (preliminaryWave.position == 5) {
@@ -4947,6 +5034,8 @@ private class NativeEngine(
 
         val obi = orderBookCache.imbalance(symbol)
         val flowImbalance = tradeFlowImbalance(symbol)
+        var strictSignal = longSignal
+
         if (obi != null) {
             score += (obi * 5.0).coerceIn(-5.0, 5.0)
             if (strictSignal && obi <= -0.80) strictSignal = false
@@ -4959,25 +5048,24 @@ private class NativeEngine(
 
         val riskPct =
             min(0.08, max(0.0, atrPct * 2.0))
-
         val rrValue =
             if (atrAbs > 0.0) 2.0 else 0.0
 
         val reason =
             when {
                 strictSignal ->
-                    "Alligator + AO + подтверждённый Fractal breakout"
+                    "Alligator + 2/3 Wise Men: $family"
                 preliminaryWave.position == 5 ->
                     "Wave 5: повышенный риск истощения"
                 bullish && aoPositive ->
-                    "Бычья пасть + положительный AO; ждём breakout"
+                    "Бычья пасть + положительный AO; ждём Wise-Man trigger"
                 else ->
                     "Наблюдение: структура ещё не готова"
             }
 
         return BaseAnalysis(
             symbol = symbol,
-            candles = candles,
+            candles = closed,
             score = score,
             signal = strictSignal,
             htfCandidate = bullish && aoPositive,
@@ -4989,6 +5077,8 @@ private class NativeEngine(
             breakoutDistancePct = breakoutDistance,
             obi = obi,
             tradeFlowImbalance = flowImbalance,
+            wiseManCount = wiseCount,
+            signalFamily = family,
             reason = reason
         )
     }
@@ -5280,8 +5370,8 @@ private class NativeEngine(
             .put("htf_confirmed", candidate.htfCandidate)
             .put("setup_state", setupState)
             .put("reason", candidate.reason)
-            .put("wise_man_count", wiseManCount(candidate))
-            .put("signal_family", "ALLIGATOR_AO_FRACTAL")
+            .put("wise_man_count", candidate.wiseManCount)
+            .put("signal_family", candidate.signalFamily)
             .put("wave_score", displayWaveScore)
             .put("wave_position", wave.position)
             .put("wave_phase", wave.phase)
@@ -5304,14 +5394,6 @@ private class NativeEngine(
             )
     }
 
-    private fun wiseManCount(candidate: BaseAnalysis): Int {
-        var count = 0
-        if (candidate.wave.alligatorBullish) count++
-        if (candidate.wave.aoPositive) count++
-        if (candidate.breakoutDistancePct > 0.0) count++
-        return count.coerceIn(0, 3)
-    }
-
     private fun alligator(
         closes: List<Double>
     ): TripleValues {
@@ -5331,10 +5413,14 @@ private class NativeEngine(
         values: List<Double>,
         length: Int
     ): List<Double> {
-        if (values.isEmpty()) return emptyList()
+        if (values.isEmpty() || length <= 0) return emptyList()
+        if (values.size < length) return List(values.size) { Double.NaN }
 
-        val output = MutableList(values.size) { values[0] }
-        for (i in 1 until values.size) {
+        val output = MutableList(values.size) { Double.NaN }
+        output[length - 1] =
+            values.take(length).average()
+
+        for (i in length until values.size) {
             output[i] =
                 (
                     output[i - 1] * (length - 1) +
@@ -5348,7 +5434,7 @@ private class NativeEngine(
         candles: List<CandleN>,
         index: Int
     ): Double {
-        if (index < 34) return 0.0
+        if (index < 33) return 0.0
 
         val medians =
             candles.map { (it.h + it.l) / 2.0 }
@@ -5357,7 +5443,7 @@ private class NativeEngine(
             medians.subList(index - 4, index + 1).average()
 
         val slow =
-            medians.subList(index - 34, index + 1).average()
+            medians.subList(index - 33, index + 1).average()
 
         return fast - slow
     }
