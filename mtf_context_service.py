@@ -11,7 +11,6 @@ import pandas as pd
 import websocket
 
 from binance_client import BinanceSpotClient
-from db import Database
 from data import fetch_klines
 from market_context import ContextCache, TFMarketContext
 from hypothesis_engine import build_hypotheses
@@ -26,7 +25,7 @@ class MultiTimeframeContextService:
     def __init__(self, context_cache: ContextCache | None = None, db=None):
         self.config = TradingConfig.from_env()
         self.cache = context_cache or ContextCache()
-        self.db = db or Database()
+        self.db = db
         self.client = BinanceSpotClient(
             os.getenv("BINANCE_API_KEY", ""),
             os.getenv("BINANCE_API_SECRET", ""),
@@ -221,6 +220,8 @@ class MultiTimeframeContextService:
         published = self.cache.publish(context)
         persisted_context = published.context(symbol, interval) or context
         try:
+            if self.db is None:
+                return
             self.db.save_market_context(persisted_context)
             self.db.save_wave_state(
                 symbol,
