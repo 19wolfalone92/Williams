@@ -134,7 +134,8 @@ def test_signed_post_transport_error_is_not_retried(monkeypatch):
     assert len(calls) == 1
 
 
-def test_order_rate_limits_include_10s_window(monkeypatch):
+
+def test_order_rate_limits_are_learned_from_exchange_info(monkeypatch):
     client = make_client()
 
     class FakeResponse:
@@ -166,22 +167,26 @@ def test_order_rate_limits_include_10s_window(monkeypatch):
                         "intervalNum": 1,
                         "limit": 1200,
                     },
-                ]
+                ],
+                "symbols": [],
             }
 
         @property
         def text(self):
             return "{}"
 
-    monkeypatch.setattr(client.session, "request", lambda *args, **kwargs: FakeResponse())
+    monkeypatch.setattr(
+        client.session,
+        "request",
+        lambda *args, **kwargs: FakeResponse(),
+    )
 
-    client._request("GET", "/api/v3/exchangeInfo", signed=False)
+    result = client.exchange_info()
 
+    assert result["rateLimits"][1]["limit"] == 50
+    assert client.request_weight_limit_1m == 6000
+    assert client.order_limit_10s == 50
+    assert client.order_limit_1m == 1200
+    assert client.last_used_weight_1m == 123
     assert client.last_order_count_10s == 49
     assert client.last_order_count_1m == 401
-
-    client._request = lambda *args, **kwargs: FakeResponse().json()
-    info = client._request("GET", "/api/v3/exchangeInfo")
-    client.order_limit_10s = 50
-    client.order_limit_1m = 1200
-    assert info["rateLimits"][1]["limit"] == 50
