@@ -19,6 +19,10 @@ class HypothesisSummary:
     margin: float
     entropy: float
     decision: str
+    long_probability: float = 0.0
+    short_probability: float = 0.0
+    no_trade_probability: float = 1.0
+    calibration_status: str = "UNCALIBRATED"
 
 
 def _label_kind(label: str) -> str:
@@ -118,9 +122,34 @@ def build_hypotheses(symbol: str, interval: str, snapshot, *, bullish: bool, bea
 
     primary_h = ordered[0]
     margin = primary_h.probability - second_prob
-    decision = (
-        "UNCERTAIN"
-        if primary_h.probability < 0.60 or margin < 0.15 or entropy > 0.80
-        else direction if direction != "NEUTRAL" else "NO_TRADE"
+    # Direction probabilities are deliberately evidence scores, not claimed
+    # statistical probabilities. Live entry requires the configured margin/
+    # entropy gates until an out-of-sample calibration dataset exists.
+    wave_kind = _label_kind(primary)
+    confidence01 = min(1.0, max(0.0, confidence / 100.0))
+    exhaustion01 = min(1.0, max(0.0, exhaustion / 100.0))
+    long_score = 0.10 + (0.42 if bullish else 0.0) + (0.18 if wave_kind == "W3" else 0.0)
+    short_score = 0.10 + (0.42 if bearish else 0.0) + (0.18 if wave_kind == "W3" else 0.0)
+    long_score += 0.18 * confidence01 - 0.14 * exhaustion01
+    short_score += 0.18 * confidence01 - 0.14 * exhaustion01
+    no_trade_score = 0.24 + (0.24 if not (bullish or bearish) else 0.0) + 0.22 * exhaustion01
+    if phase in {"CORRECTION", "TRANSITION", "UNKNOWN"}:
+        no_trade_score += 0.12
+    direction_probs = _softmax([long_score, short_score, no_trade_score])
+    long_probability, short_probability, no_trade_probability = direction_probs
+
+    if no_trade_probability >= max(long_probability, short_probability):
+        decision = "NO_TRADE"
+    elif long_probability >= short_probability:
+        decision = "LONG" if long_probability >= 0.60 else "UNCERTAIN"
+    else:
+        decision = "SHORT" if short_probability >= 0.60 else "UNCERTAIN"
+    if entropy > 0.80 or max(long_probability, short_probability) < 0.60:
+        decision = "NO_TRADE" if no_trade_probability >= 0.34 else "UNCERTAIN"
+
+    return HypothesisSummary(
+        tuple(ordered), primary_h, margin, entropy, decision,
+        long_probability=round(long_probability, 8),
+        short_probability=round(short_probability, 8),
+        no_trade_probability=round(no_trade_probability, 8),
     )
-    return HypothesisSummary(tuple(ordered), primary_h, margin, entropy, decision)

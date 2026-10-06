@@ -22,9 +22,10 @@ log = logging.getLogger("williams-mtf")
 
 
 class MultiTimeframeContextService:
-    def __init__(self, context_cache: ContextCache | None = None):
+    def __init__(self, context_cache: ContextCache | None = None, db=None):
         self.config = TradingConfig.from_env()
         self.cache = context_cache or ContextCache()
+        self.db = db
         self.client = BinanceSpotClient(
             os.getenv("BINANCE_API_KEY", ""),
             os.getenv("BINANCE_API_SECRET", ""),
@@ -35,11 +36,13 @@ class MultiTimeframeContextService:
         self.stop_event = threading.Event()
         self.thread: threading.Thread | None = None
         self.bootstrap_thread: threading.Thread | None = None
+        self.watchdog_thread: threading.Thread | None = None
         self.ws = None
         self.running = False
         self.last_error = None
         self.last_event_at = None
         self.last_closed_open_ms: dict[tuple[str, str], int] = {}
+        self.watchdog_seconds = max(30, int(os.getenv('MTF_WATCHDOG_SECONDS', '90')))
 
     def configure_credentials(self, key: str, secret: str, testnet: bool = True) -> None:
         with self.lock:
@@ -153,8 +156,31 @@ class MultiTimeframeContextService:
         long_ok = bullish and bool(last.get("alligator_awake", False)) and self.config.allow_long and strong
         short_ok = bearish and bool(last.get("alligator_awake", False)) and self.config.allow_short and strong
         decision = "LONG" if long_ok else "SHORT" if short_ok else "NO_TRADE"
-        if hypothesis_summary is not None and hypothesis_summary.decision == "UNCERTAIN":
+        if hypothesis_summary is not None and hypothesis_summary.decision in {"UNCERTAIN", "NO_TRADE"}:
             decision = "NO_TRADE"
+        operative_interval = interval
+        operative_parent_interval = ""
+        try:
+            with self.lock:
+                cached_frames = {
+                    tf: data.tail(self.config.wave_lookback).copy()
+                    for (sym, tf), data in self.frames.items()
+                    if sym == symbol and not data.empty
+                }
+            if len(cached_frames) >= 2:
+                mtf_report = MultiTimeframeWaveEngine(
+                    self.client,
+                    base_interval=interval,
+                    intervals=tuple(sorted(cached_frames.keys(), key=lambda x: MultiTimeframeWaveEngine.INTERVAL_SECONDS.get(x, 0))),
+                    lookback=self.config.wave_lookback,
+                    min_bars=self.config.wave_min_bars,
+                    include_micro=False,
+                ).analyse(symbol, cache=cached_frames, include_micro=False)
+                operative_interval = mtf_report.operative_interval or interval
+                operative_parent_interval = mtf_report.operative_parent_interval or ""
+        except Exception as exc:
+            log.debug("operative MTF selection %s failed: %s", symbol, exc)
+
         candle_open_ms = int(pd.Timestamp(frame.index[-1]).timestamp() * 1000)
         context = TFMarketContext(
             symbol=symbol,
@@ -179,13 +205,43 @@ class MultiTimeframeContextService:
             wave_confidence=wave_conf,
             invalidation_long=invalidation if bullish else 0.0,
             invalidation_short=invalidation if bearish else 0.0,
-            allow_long=long_ok,
-            allow_short=short_ok,
+            allow_long=long_ok and decision == "LONG",
+            allow_short=short_ok and decision == "SHORT",
             decision=decision,
+            long_probability=float(getattr(hypothesis_summary, 'long_probability', 0.0) if hypothesis_summary else (1.0 if long_ok else 0.0)),
+            short_probability=float(getattr(hypothesis_summary, 'short_probability', 0.0) if hypothesis_summary else (1.0 if short_ok else 0.0)),
+            no_trade_probability=float(getattr(hypothesis_summary, 'no_trade_probability', 1.0) if hypothesis_summary else 1.0),
+            calibration_status=str(getattr(hypothesis_summary, 'calibration_status', 'UNCALIBRATED') if hypothesis_summary else 'UNCALIBRATED'),
+            operative_interval=operative_interval,
+            operative_parent_interval=operative_parent_interval,
             hypotheses=tuple(hypotheses),
             data_bars=len(closed),
         )
-        self.cache.publish(context)
+        published = self.cache.publish(context)
+        persisted_context = published.context(symbol, interval) or context
+        try:
+            if self.db is None:
+                return
+            self.db.save_market_context(persisted_context)
+            self.db.save_wave_state(
+                symbol,
+                'LONG',
+                {
+                    'phase': wave_phase,
+                    'wave_label': wave_label,
+                    'confidence': wave_conf,
+                    'exhaustion_risk': exhaustion,
+                    'invalidation': context.invalidation_long,
+                    'decision': decision,
+                    'long_probability': getattr(hypothesis_summary, 'long_probability', 0.0) if hypothesis_summary else 0.0,
+                    'no_trade_probability': getattr(hypothesis_summary, 'no_trade_probability', 1.0) if hypothesis_summary else 1.0,
+                    'calibration_status': getattr(hypothesis_summary, 'calibration_status', 'UNCALIBRATED') if hypothesis_summary else 'UNCALIBRATED',
+                    'interval': interval,
+                    'version': persisted_context.version,
+                },
+            )
+        except Exception as exc:
+            self.last_error = f'context persistence: {type(exc).__name__}: {exc}'
 
     def bootstrap(self) -> None:
         for symbol in self.config.symbols:
@@ -299,6 +355,27 @@ class MultiTimeframeContextService:
             time.sleep(delay)
             delay = min(30.0, delay * 2.0)
 
+    def _watchdog(self) -> None:
+        while not self.stop_event.wait(15.0):
+            if not self.running:
+                continue
+            last = self.last_event_at
+            if last is None:
+                continue
+            age = (int(time.time() * 1000) - int(last)) / 1000.0
+            if age <= self.watchdog_seconds:
+                continue
+            try:
+                self.last_error = f'MTF watchdog: no Binance WS event for {age:.0f}s; recovering'
+                self.recover_recent()
+                if self.ws is not None:
+                    try:
+                        self.ws.close()
+                    except Exception:
+                        pass
+            except Exception as exc:
+                self.last_error = f'MTF watchdog recovery failed: {type(exc).__name__}: {exc}'
+
     def start(self) -> None:
         with self.lock:
             if self.running:
@@ -309,6 +386,8 @@ class MultiTimeframeContextService:
             self.bootstrap_thread.start()
             self.thread = threading.Thread(target=self._run, daemon=True, name="williams-mtf-ws")
             self.thread.start()
+            self.watchdog_thread = threading.Thread(target=self._watchdog, daemon=True, name="williams-mtf-watchdog")
+            self.watchdog_thread.start()
 
     def stop(self) -> None:
         self.stop_event.set()
@@ -329,6 +408,12 @@ class MultiTimeframeContextService:
             "contexts": populated,
             "ws_running": self.running,
             "last_event_at": self.last_event_at,
+            "event_age_seconds": (
+                round((int(time.time() * 1000) - int(self.last_event_at)) / 1000.0, 2)
+                if self.last_event_at else None
+            ),
+            "watchdog_seconds": self.watchdog_seconds,
+            "healthy": bool(self.running and self.last_error is None),
             "last_error": self.last_error,
         }
 
@@ -346,6 +431,12 @@ class MultiTimeframeContextService:
                 "decision": ctx.decision,
                 "allow_long": ctx.allow_long,
                 "allow_short": ctx.allow_short,
+                "long_probability": ctx.long_probability,
+                "short_probability": ctx.short_probability,
+                "no_trade_probability": ctx.no_trade_probability,
+                "calibration_status": ctx.calibration_status,
+                "operative_interval": ctx.operative_interval,
+                "operative_parent_interval": ctx.operative_parent_interval,
                 "angulation": ctx.angulation,
                 "jaw_distance_atr": ctx.jaw_distance_atr,
                 "invalidation_long": ctx.invalidation_long,

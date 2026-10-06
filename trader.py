@@ -15,6 +15,7 @@ from trading_config import TradingConfig
 from market_context import ContextCache, TFMarketContext
 from hypothesis_engine import build_hypotheses
 from execution_barrier import ExecutionBarrier, OrderIntent
+from execution_accumulator import accumulate_order, accumulate_fills
 from l2_slippage import L2SlippageGuard
 from equity_breaker import EquityCircuitBreaker
 from wise_men import WiseMenStateMachine
@@ -471,9 +472,9 @@ class Trader:
         order=matches[-1]; self.db.save_order(order)
         status=str(order.get('status','')).upper()
         if status=='FILLED':
-            qty=float(order.get('executedQty',0) or 0)
-            spent=float(order.get('cummulativeQuoteQty',0) or 0)
-            entry=spent/qty if spent and qty else float(order.get('price',0) or 0)
+            order, execution = self._authoritative_execution(order)
+            qty=float(execution.executed_qty)
+            entry=float(execution.avg_price)
 
             # HARD RECOVERY GUARD:
             # A confirmed BUY that is too small to represent a valid
@@ -679,10 +680,17 @@ class Trader:
             if not bool(hi.get('bullish_alligator',False)) or float(hi.get('ao',0) or 0)<=0:return False,'higher-timeframe trend not confirmed'
         return True,'ok'
 
-    def _position_quote(self,entry_price):
-        balance=self.available_quote(); cap=balance*self.position_fraction
-        risk_quote=balance*self.risk_per_trade_pct/max(self.stop_pct,1e-9)
-        return max(0.0,min(cap,risk_quote))
+    def _position_quote(self, entry_price, invalidation_price=0.0):
+        """Size from structural invalidation when valid, else configured fallback stop."""
+        balance = self.available_quote()
+        cap = balance * self.position_fraction
+        entry = float(entry_price)
+        invalidation = float(invalidation_price or 0.0)
+        stop_distance_pct = self.stop_pct
+        if 0.0 < invalidation < entry:
+            stop_distance_pct = (entry - invalidation) / max(entry, 1e-12)
+        risk_quote = balance * self.risk_per_trade_pct / max(stop_distance_pct, 1e-9)
+        return max(0.0, min(cap, risk_quote))
 
     def refresh_execution_context(self, symbol=None):
         """Build a fresh immutable MTF context immediately before execution.
@@ -812,6 +820,27 @@ class Trader:
             self.context_cache.publish(ctx)
         return self.context_cache.snapshot()
 
+    def _authoritative_execution(self, order):
+        """Resolve execution quantity/VWAP from fills, not a single REST field."""
+        order = dict(order or {})
+        fills = order.get('fills') or []
+        order_id = order.get('orderId')
+        if not fills and order_id is not None and hasattr(self.client, 'my_trades'):
+            try:
+                fills = self.client.my_trades(self.symbol, order_id=order_id, limit=1000) or []
+            except Exception as exc:
+                self.db.log_event(
+                    'WARNING', 'execution_fill_lookup_failed',
+                    'Could not refresh authoritative fills; using order accumulator',
+                    {'orderId': order_id, 'error': f'{type(exc).__name__}: {exc}'},
+                )
+        if fills:
+            order['fills'] = fills
+            summary = accumulate_fills(fills)
+        else:
+            summary = accumulate_order(order)
+        return order, summary
+
     def market_buy(self, quote):
         if self.dry_run:
             raise RuntimeError(
@@ -915,10 +944,10 @@ class Trader:
                     f'BUY not fully filled: status={status or "UNKNOWN"}'
                 )
             order = confirmed
-
-            qty_d = D(order.get('executedQty', '0'))
-            spent_d = D(order.get('cummulativeQuoteQty', '0'))
-            avg_d = spent_d / qty_d if qty_d > 0 else D('0')
+            order, execution = self._authoritative_execution(order)
+            qty_d = D(execution.executed_qty)
+            spent_d = D(execution.quote_qty)
+            avg_d = D(execution.avg_price)
 
             if qty_d <= 0 or qty_d < self.symbol_rules.min_qty:
                 self._set_state('RECONCILE_REQUIRED')
@@ -1382,7 +1411,8 @@ class Trader:
             return
 
         quote = self._position_quote(
-            float(last['close'])
+            float(last['close']),
+            float(getattr(fresh_candidate, 'wave_invalidation_price', 0.0) or 0.0),
         )
 
         if quote <= 0:

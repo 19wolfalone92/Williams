@@ -241,6 +241,51 @@ class Database:
         if not self._transaction_active:
             self.conn.commit()
 
+    def save_market_context(self, context):
+        """Persist the latest immutable MTF context for restart/audit recovery."""
+        payload = context.to_dict() if hasattr(context, "to_dict") else context
+        self.conn.execute(
+            """INSERT INTO market_context(symbol,interval,version,candle_close_time_ms,context_json,updated_at)
+               VALUES(?,?,?,?,?,?)
+               ON CONFLICT(symbol,interval) DO UPDATE SET
+                 version=excluded.version,
+                 candle_close_time_ms=excluded.candle_close_time_ms,
+                 context_json=excluded.context_json,
+                 updated_at=excluded.updated_at""",
+            (str(context.symbol).upper(), str(context.interval).lower(), int(context.version),
+             int(context.candle_close_time_ms), json.dumps(payload, default=str, sort_keys=True),
+             datetime.now(timezone.utc).isoformat()),
+        )
+        if not self._transaction_active:
+            self.conn.commit()
+
+    def save_wave_state(self, symbol, side, payload):
+        """Persist the selected wave hypothesis/state independently of trade rows."""
+        self.conn.execute(
+            """INSERT INTO wave_state(symbol,side,phase,state_json,updated_at)
+               VALUES(?,?,?,?,?)
+               ON CONFLICT(symbol,side) DO UPDATE SET
+                 phase=excluded.phase,
+                 state_json=excluded.state_json,
+                 updated_at=excluded.updated_at""",
+            (str(symbol).upper(), str(side).upper(), str(payload.get("phase", "UNKNOWN")),
+             json.dumps(payload, default=str, sort_keys=True), datetime.now(timezone.utc).isoformat()),
+        )
+        if not self._transaction_active:
+            self.conn.commit()
+
+    def load_wave_state(self, symbol, side):
+        row = self.conn.execute(
+            "SELECT state_json FROM wave_state WHERE symbol=? AND side=?",
+            (str(symbol).upper(), str(side).upper()),
+        ).fetchone()
+        if not row:
+            return None
+        try:
+            return json.loads(row["state_json"])
+        except Exception:
+            return None
+
     def save_order(self, data):
         oid = (
             str(data.get('orderId'))
