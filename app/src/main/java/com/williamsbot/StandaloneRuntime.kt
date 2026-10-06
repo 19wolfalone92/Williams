@@ -185,6 +185,7 @@ private class StandaloneServer(private val context: Context) {
     private val historyStore = MarketHistoryStore(context)
     private val rateGuard = BinanceRateGuard()
     private val auditStore = TradingAuditStore(context)
+    private val executionAccumulator = ExecutionAccumulator()
     private val stateMachine = TradingStateMachine(
         onTransition = { from, to, reason ->
             auditStore.recordState(from, to, reason)
@@ -762,6 +763,13 @@ private class NativeEngine(
             .put("max_total_risk_pct", maxTotalRiskPct)
             .put("max_risk_per_trade_pct", maxRiskPerTradePct)
             .put("reconcile_required", reconcileRequired)
+            .put("execution_state_contract", JSONObject()
+                .put("version", 1)
+                .put("state", stateMachine.state.name)
+                .put("execution_enabled", stateMachine.executionAllowed() && !reconcileRequired && !userStreamSyncRequired)
+                .put("reconciliation_required", reconcileRequired)
+                .put("user_stream_sync_required", userStreamSyncRequired)
+                .put("kill_switch_latched", killLatched))
             .put(
                 "positions",
                 JSONArray().apply {
@@ -2291,6 +2299,7 @@ private class NativeEngine(
     private fun handleUserEvent(event: JSONObject) {
         lastUserEventMs = System.currentTimeMillis()
         auditStore.recordUserEvent(event)
+        executionAccumulator.accept(event)
 
         val eventType = event.optString("e", "unknown")
         val eventTime = event.optLong("E", 0L)
@@ -2332,6 +2341,15 @@ private class NativeEngine(
                     .put("commissionAsset", event.optString("N"))
                     .put("eventTime", eventTime)
                     .put("transactionTime", event.optLong("T"))
+                    .put("executionAccumulator", executionAccumulator.snapshot(event.optString("i"))?.let { acc ->
+                        JSONObject()
+                            .put("executedQty", acc.executedQty.toPlainString())
+                            .put("executedQuote", acc.executedQuote.toPlainString())
+                            .put("vwap", acc.vwap.toPlainString())
+                            .put("feeUsdt", acc.feeUsdt.toPlainString())
+                            .put("feeKnown", acc.feeKnown)
+                            .put("fills", acc.fills)
+                    })
 
                 when {
                     clientId.startsWith("W4B_") &&
