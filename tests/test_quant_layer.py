@@ -88,8 +88,8 @@ def test_feature_bars_store_and_shadow():
 
 def test_regime_baseline_is_deterministic():
     engine = RegimeBaseline()
-    one = engine.classify(0.02, 0.004, 0.01, 0.03, 1.0, 0.4, 0.2)
-    two = engine.classify(0.02, 0.004, 0.01, 0.03, 1.0, 0.4, 0.2)
+    one = engine.classify(atr_pct=0.02, alligator_spread_pct=0.004, return_1=0.01, return_5=0.03, volume_zscore=1.0, obi=0.4, ao_acceleration=0.2)
+    two = engine.classify(atr_pct=0.02, alligator_spread_pct=0.004, return_1=0.01, return_5=0.03, volume_zscore=1.0, obi=0.4, ao_acceleration=0.2)
     assert one == two
     assert one[0] in {
         RegimeBaseline.TRENDING_EXPANSION,
