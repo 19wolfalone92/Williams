@@ -462,6 +462,15 @@ class WebSocketHub:
                         f'Out-of-order {event_type}: previous={previous}, current={event_time}',
                         raw=event,
                     )
+                    self._set_user(
+                        False,
+                        f'out-of-order {event_type}; REST resync required'
+                    )
+                    try:
+                        ws.close()
+                    except Exception:
+                        pass
+                    return
                 self._last_user_event_by_type[event_type]=max(
                     previous or 0,
                     event_time,
