@@ -417,7 +417,7 @@ private class StandaloneApi(context: Context) {
         .build()
 
     val backendUrl: String
-        get() = securePrefs.getString("backend_url", "http://127.0.0.1:18080")
+        get() = securePrefs.getString("backend_url", "")
             ?.trimEnd('/')
             .takeUnless { it.isNullOrBlank() }
             ?: "http://127.0.0.1:18080"
@@ -425,22 +425,15 @@ private class StandaloneApi(context: Context) {
     val mobileToken: String
         get() = securePrefs.getString("mobile_token", "")?.trim() ?: ""
 
-    fun isLocalStandalone(): Boolean {
-        val normalized = backendUrl.trimEnd('/')
-        return normalized == "http://127.0.0.1:18080" ||
-            normalized == "http://localhost:18080"
-    }
+    fun isLocalStandalone(): Boolean = false
 
     fun saveConnection(url: String, token: String) {
         val normalized = url.trim().trimEnd('/')
         require(normalized.isNotBlank()) { "Backend URL не задан" }
-        val localhostHttp =
-            normalized.startsWith("http://127.0.0.1") ||
-                normalized.startsWith("http://localhost")
-        if (!normalized.startsWith("https://") && !localhostHttp) {
-            error("Backend URL должен использовать HTTPS; HTTP разрешён только для localhost")
+        if (!normalized.startsWith("https://")) {
+            error("Production Backend URL должен использовать HTTPS")
         }
-        if (!localhostHttp && token.trim().length < 32) {
+        if (token.trim().length < 32) {
             error("Для удалённого Backend нужен Mobile API Token (минимум 32 символа).")
         }
         securePrefs.edit()
@@ -715,24 +708,9 @@ fun WilliamsApp(context: Context) {
                     .put("testnet", true)
                     .toString()
 
-                if (api.isLocalStandalone()) {
-                    // Local Android runtime: persist directly into the same
-                    // Keystore-backed store used by NativeEngine. This avoids
-                    // loopback HTTP body fragmentation and guarantees that the
-                    // status endpoint reads the exact credentials just saved.
-                    StandaloneRuntime.configureCredentials(
-                        context,
-                        apiKey.trim(),
-                        apiSecret.trim()
-                    )
-                    check(StandaloneRuntime.credentialsConfigured()) {
-                        "Ключи не появились в защищённом хранилище Williams"
-                    }
-                } else {
-                    // Remote/VPS mode keeps the credential write behind the
-                    // authenticated HTTP API.
-                    api.post("/api/v1/config/binance", body)
-                }
+                // Binance credentials are written only to the authenticated
+                // Backend/VPS. The APK never persists the Binance secret.
+                api.post("/api/v1/config/binance", body)
 
                 // Read back through the exact runtime selected by the configured
                 // Backend URL. This is the source of truth shown by the UI.
