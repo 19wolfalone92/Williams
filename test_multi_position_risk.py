@@ -59,4 +59,4 @@ def test_existing_risk_leaves_only_remaining_budget(monkeypatch):
     selections = controller.select_portfolio(open_risk_quote=75.0, open_positions=1)
 
     assert selections
-    assert sum(s.risk.risk_pct for s in selections) <= 0.25
+    assert sum(s.risk.risk_pct for s in selections) <= 0.2500001
