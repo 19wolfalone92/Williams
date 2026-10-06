@@ -1,4 +1,4 @@
-"""Backend equity/daily-loss circuit breaker."""
+"""Backend equity/daily-loss circuit breaker with realized + unrealized PnL."""
 from __future__ import annotations
 
 
@@ -6,14 +6,49 @@ class EquityCircuitBreaker:
     def __init__(self, max_daily_loss_pct: float = 0.03):
         self.max_daily_loss_pct = max(0.0, float(max_daily_loss_pct))
 
-    def check(self, db, current_equity_quote: float, symbol: str | None = None) -> tuple[bool, str]:
+    def _today_start_equity(self, db, current_equity_quote: float) -> float:
+        from datetime import datetime, timezone
+        today = datetime.now(timezone.utc).date().isoformat()
+        stored_day = db.state_get("daily_risk_day")
+        stored_equity = db.state_get("daily_start_equity")
+        if stored_day != today or stored_equity is None:
+            db.state_set("daily_risk_day", today)
+            db.state_set("daily_start_equity", str(max(0.0, float(current_equity_quote))))
+            return max(0.0, float(current_equity_quote))
+        return max(0.0, float(stored_equity))
+
+    def check(
+        self,
+        db,
+        current_equity_quote: float,
+        symbol: str | None = None,
+        unrealized_pnl_quote: float = 0.0,
+        fees_quote: float = 0.0,
+    ) -> tuple[bool, str]:
         equity = max(0.0, float(current_equity_quote))
-        try:
-            pnl = float(db.pnl_today(symbol) if symbol is not None else db.pnl_today_all() or 0.0)
-        except AttributeError:
-            pnl = float(db.pnl_today(symbol) if symbol is not None else 0.0)
         if equity <= 0:
             return False, "equity is zero"
-        if pnl <= -equity * self.max_daily_loss_pct:
-            return False, "daily equity loss circuit breaker tripped"
+
+        try:
+            realized = float(
+                db.pnl_today(symbol) if symbol is not None
+                else db.pnl_today_all()
+            )
+        except AttributeError:
+            realized = float(
+                db.pnl_today(symbol) if symbol is not None else 0.0
+            )
+
+        # Fees are a real loss and must be included even if legacy trade PnL
+        # records were written before fee accounting was enabled.
+        net_daily_pnl = realized + float(unrealized_pnl_quote) - abs(float(fees_quote))
+        start_equity = self._today_start_equity(db, equity)
+        loss_limit = start_equity * self.max_daily_loss_pct
+
+        if net_daily_pnl <= -loss_limit:
+            return False, (
+                "daily equity loss circuit breaker tripped: "
+                f"net_pnl={net_daily_pnl:.8f}, limit={-loss_limit:.8f}"
+            )
+
         return True, "ok"
