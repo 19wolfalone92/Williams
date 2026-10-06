@@ -22,8 +22,8 @@ class OrderBookCacheTest {
             "BTCUSDT",
             JSONObject()
                 .put("lastUpdateId", 100)
-                .put("bids", levels("99", "5"))
-                .put("asks", levels("101", "5", "102", "5"))
+                .put("bids", levels("99" to "5"))
+                .put("asks", levels("101" to "5", "102" to "5"))
         )
 
         assertEquals(
@@ -32,8 +32,8 @@ class OrderBookCacheTest {
                 "BTCUSDT",
                 101,
                 102,
-                levels("99", "4"),
-                levels("101", "1")
+                levels("99" to "4"),
+                levels("101" to "1")
             )
         )
 
@@ -60,8 +60,8 @@ class OrderBookCacheTest {
                 "ETHUSDT",
                 52,
                 53,
-                levels("99", "0"),
-                levels("101", "0")
+                levels("99" to "0"),
+                levels("101" to "0")
             )
         )
 
