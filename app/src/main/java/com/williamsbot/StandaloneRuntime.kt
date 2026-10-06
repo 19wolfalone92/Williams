@@ -1077,6 +1077,7 @@ private class NativeEngine(
                     if (running) {
                         requestScan()
                     }
+                }
 
                 try {
                     Thread.sleep(90_000L)
