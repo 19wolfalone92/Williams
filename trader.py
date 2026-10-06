@@ -77,7 +77,7 @@ class Trader:
         )
         self._last_auto_scan_monotonic = 0.0
 
-        self.max_open_positions = max(1, int(os.getenv('MAX_OPEN_POSITIONS', str(self.config.max_open_positions))))
+        self.max_open_positions = 0
         self.max_total_risk_pct = min(0.01, max(0.0, float(os.getenv('MAX_TOTAL_RISK_PCT', '0.01'))))
         self.max_risk_per_trade_pct = min(0.005, max(0.0, float(os.getenv('MAX_RISK_PER_TRADE_PCT', '0.005'))))
         self.active_symbol = self.symbol
@@ -917,10 +917,8 @@ class Trader:
             )
         if not self.client.testnet and os.getenv('ALLOW_LIVE', 'false').lower() != 'true':
             raise RuntimeError('BUY blocked: LIVE trading requires ALLOW_LIVE=true.')
-        if self.max_open_positions != 1:
-            raise RuntimeError('BUY blocked: MAX_OPEN_POSITIONS must remain exactly 1.')
-        if self.db.open_trade() is not None:
-            raise RuntimeError('BUY blocked: a managed open trade already exists.')
+        # Legacy single-symbol entry path: portfolio admission is risk-based.
+        # MultiPositionTrader is the authoritative auto-scan executor.
         if (not self.client.testnet) and (self.preflight_report is None or not self.preflight_report.get('ready')):
             raise RuntimeError('BUY blocked: P0 LIVE SAFETY GATE has not passed.')
         if self.symbol_rules is None:
@@ -1200,12 +1198,6 @@ class Trader:
                 'AUTO-SCAN BLOCKED: database reports an open trade'
             )
             return
-
-        # Never allow more than one managed position.
-        if self.max_open_positions != 1:
-            raise RuntimeError(
-                'Automatic scanner currently supports exactly one open position'
-            )
 
         self.db.log_event(
             'INFO',
