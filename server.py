@@ -508,6 +508,8 @@ def health():
     multi = state.ensure_multi()
     execution_state, unresolved_symbols, pending_symbols = _canonical_execution_state(multi)
     unresolved = bool(unresolved_symbols or pending_symbols)
+    p0_ready = bool(t.preflight_report and t.preflight_report.get('ready'))
+    execution_enabled = p0_ready and not unresolved
     return {
         'ok': True,
         'service': 'williams-binance-bot',
@@ -515,7 +517,7 @@ def health():
         'execution_state_contract': {
             'version': 1,
             'state': execution_state,
-            'execution_enabled': not unresolved,
+            'execution_enabled': execution_enabled,
             'reconciliation_required': unresolved,
             'kill_switch_latched': False,
         },
@@ -527,7 +529,7 @@ def health():
         'max_total_risk_pct': multi.max_total_risk_pct,
         'max_risk_per_trade_pct': multi.max_risk_per_trade_pct,
         'open_positions': len(multi.open_positions()),
-        'execution_enabled': not unresolved,
+        'execution_enabled': execution_enabled,
         'testnet': t.client.testnet,
     }
 
@@ -710,6 +712,8 @@ def status():
         multi,
         positions=positions,
     )
+    p0_ready = bool(t.preflight_report and t.preflight_report.get('ready'))
+    execution_enabled = p0_ready and not bool(unresolved_symbols or pending_symbols)
 
     selected_position = None
     if positions:
@@ -778,7 +782,7 @@ def status():
         'execution_state_contract': {
             'version': 1,
             'state': execution_state,
-            'execution_enabled': not bool(unresolved_symbols or pending_symbols),
+            'execution_enabled': execution_enabled,
             'reconciliation_required': bool(unresolved_symbols or pending_symbols),
             'kill_switch_latched': False,
         },
