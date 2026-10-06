@@ -23,6 +23,7 @@ import java.util.Locale
 import java.util.ArrayDeque
 import java.util.Calendar
 import java.util.concurrent.Callable
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import javax.crypto.Mac
@@ -545,6 +546,8 @@ private class NativeEngine(
     private val tradeFlow = java.util.concurrent.ConcurrentHashMap<String, ArrayDeque<TradeFlowSample>>()
     private val lastUserEventTimeByType = java.util.concurrent.ConcurrentHashMap<String, Long>()
     private var marketSocket: WebSocket? = null
+    private val marketReconnectScheduled = AtomicBoolean(false)
+    private val l2ResyncInFlight = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private val orderBookCache = OrderBookCache()
     @Volatile private var marketSocketConnected = false
     @Volatile private var marketSocketLastEventMs = 0L
@@ -582,7 +585,9 @@ private class NativeEngine(
     private var primaryCandles = emptyList<CandleN>()
     @Volatile private var lastScanDurationMs = 0L
     @Volatile private var lastSymbolsScanned = 0
-    private val maxOpenPositions = 1
+    // Position count is governed by the aggregate risk budget, not an artificial
+    // one-position switch. A fixed trade-risk cap still yields a finite capacity.
+    private val maxOpenPositions = 0
     private val maxTotalRiskPct = 0.01
     private val maxRiskPerTradePct = 0.005
     private val maxSpreadPct = 0.0015
@@ -889,7 +894,14 @@ private class NativeEngine(
                 floor(maxTotalRiskPct / maxRiskPerTradePct).toInt()
             )
             .put("position_capacity_mode", "RISK_BUDGET")
-            .put("risk_based_position_capacity", maxOpenPositions)
+            .put(
+                "risk_based_position_capacity",
+                if (maxOpenPositions > 0) {
+                    maxOpenPositions
+                } else {
+                    floor(maxTotalRiskPct / maxRiskPerTradePct).toInt()
+                }
+            )
             .put("reserved_risk_pct", reservedRiskPct())
             .put("circuit_breaker_tripped", equityCircuitBreaker.isTripped())
             .put("managed_equity", estimateManagedEquity())
@@ -898,7 +910,7 @@ private class NativeEngine(
             .put("reconcile_required", reconcileRequired)
             .put("p0_gate_passed", p0GatePassed())
             .put("p0_gate_reason", p0GateReason())
-            .put("max_open_positions_locked", true)
+            .put("max_open_positions_locked", false)
             .put("unresolved_symbols", unresolvedPositionSymbols())
             .put("pending_entry_symbols", pendingEntrySymbols())
             .put("execution_state_contract", JSONObject()
@@ -1199,6 +1211,12 @@ private class NativeEngine(
             .apply()
         worker?.interrupt()
         worker = null
+        marketReconnectScheduled.set(false)
+        l2ResyncInFlight.clear()
+        scanExecutor.shutdownNow()
+        indicatorExecutor.shutdownNow()
+        executionExecutor.shutdownNow()
+        tradingEventLoop.close()
 
         return JSONObject().put("stopped", true)
     }
@@ -1601,6 +1619,7 @@ private class NativeEngine(
     private fun startMarketDataStream() {
         if (marketSocket != null) return
         val request = Request.Builder().url(wsStreamUrl()).build()
+        marketReconnectScheduled.set(false)
         marketSocket = http.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 marketSocketConnected = true
@@ -1647,15 +1666,15 @@ private class NativeEngine(
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 marketSocketConnected = false
-                marketSocket = null
-                if (running) Thread { Thread.sleep(1500); if (running) startMarketDataStream() }.start()
+                if (marketSocket === webSocket) marketSocket = null
+                scheduleMarketReconnect(1500L)
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 marketSocketConnected = false
-                marketSocket = null
+                if (marketSocket === webSocket) marketSocket = null
                 lastError = "WS market: " + (t.message ?: t.javaClass.simpleName)
-                if (running) Thread { Thread.sleep(2500); if (running) startMarketDataStream() }.start()
+                scheduleMarketReconnect(2500L)
             }
         })
     }
@@ -1674,6 +1693,44 @@ private class NativeEngine(
                 if (bid <= 0.0 || ask < bid) return
                 livePrices[symbol] = (bid + ask) / 2.0
             }
+        }
+    }
+
+    private fun scheduleMarketReconnect(delayMs: Long) {
+        if (!running) return
+        if (!marketReconnectScheduled.compareAndSet(false, true)) return
+        Thread {
+            try {
+                Thread.sleep(delayMs.coerceAtLeast(250L))
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+            }
+            if (running) {
+                startMarketDataStream()
+            } else {
+                marketReconnectScheduled.set(false)
+            }
+        }.apply {
+            isDaemon = true
+            name = "williams-market-ws-reconnect"
+            start()
+        }
+    }
+
+    private fun requestL2Resync(symbol: String) {
+        if (!l2ResyncInFlight.add(symbol)) return
+        Thread {
+            try {
+                syncOrderBookSnapshot(symbol)
+            } catch (x: Exception) {
+                lastError = "L2 resync $symbol: " + (x.message ?: x.javaClass.simpleName)
+            } finally {
+                l2ResyncInFlight.remove(symbol)
+            }
+        }.apply {
+            isDaemon = true
+            name = "williams-l2-resync-$symbol"
+            start()
         }
     }
 
@@ -1749,14 +1806,7 @@ private class NativeEngine(
             asks = data.optJSONArray("a") ?: JSONArray()
         )
         if (!ok) {
-            Thread {
-                runCatching { syncOrderBookSnapshot(symbol) }
-                    .onFailure { lastError = "L2 resync $symbol: " + (it.message ?: it.javaClass.simpleName) }
-            }.apply {
-                isDaemon = true
-                name = "williams-l2-resync-$symbol"
-                start()
-            }
+            requestL2Resync(symbol)
         }
     }
 
@@ -2434,9 +2484,9 @@ private class NativeEngine(
                     .filter {
                         it.signal &&
                             it.score >= 70.0 &&
-                            positionList().isEmpty() &&
+                            positionList().none { open -> open.symbol == it.symbol } &&
                             synchronized(pendingEntries) {
-                                pendingEntries.isEmpty()
+                                it.symbol !in pendingEntries
                             }
                     }
                     .sortedByDescending { it.score }
@@ -4066,13 +4116,8 @@ private class NativeEngine(
         }
         // Williams conservative production contract: exactly one managed
         // position at a time. The scanner resumes only after it is flat.
-        if (positionList().size >= maxOpenPositions) {
+        if (maxOpenPositions > 0 && positionList().size >= maxOpenPositions) {
             error("MAX_OPEN_POSITIONS=$maxOpenPositions")
-        }
-        synchronized(pendingEntries) {
-            if (pendingEntries.isNotEmpty()) {
-                error("ENTRY_PENDING")
-            }
         }
         if (reconcileRequired) {
             error("RECONCILE_REQUIRED")
