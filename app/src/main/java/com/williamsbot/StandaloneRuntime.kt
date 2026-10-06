@@ -121,6 +121,12 @@ private data class PendingEntry(
     val stopDistance: Double
 )
 
+private data class ExecutionResult(
+    val symbol: String,
+    val success: Boolean,
+    val error: String? = null
+)
+
 private data class SymbolRules(
     val step: Double,
     val tick: Double,
@@ -576,6 +582,14 @@ private class NativeEngine(
     init {
         loadPersistedState()
         restoreExecutionAccumulators()
+        val interruptedGateSymbol =
+            prefs.getString("execution_gate_symbol", "") ?: ""
+        if (interruptedGateSymbol.isNotBlank()) {
+            reconcileRequired = true
+            lastError =
+                "Execution gate interrupted for " + interruptedGateSymbol +
+                    "; REST reconciliation required"
+        }
         stateMachine.force(
             when {
                 killLatched -> TradingState.KILL_SWITCH_LATCHED
@@ -2242,44 +2256,52 @@ private class NativeEngine(
             if (!stateMachine.transition(
                     TradingState.ENTRY_PENDING,
                     "BUY intent admitted by ExecutionGate"
-                )
-            ) {
+                )) {
                 executionGate.release(candidate.symbol)
                 return@post
             }
 
+            prefs.edit()
+                .putString("execution_gate_symbol", candidate.symbol)
+                .apply()
+
             executionExecutor.execute {
-                var failure: Throwable? = null
-                try {
+                val result = try {
                     executeBuyWithProtection(candidate, gated = true)
+                    ExecutionResult(candidate.symbol, true)
                 } catch (x: Throwable) {
-                    failure = x
+                    ExecutionResult(
+                        candidate.symbol,
+                        false,
+                        x.message ?: x.javaClass.simpleName
+                    )
                 }
 
-                val executionError = failure
                 tradingEventLoop.post {
-                    executionGate.release(candidate.symbol)
+                    executionGate.release(result.symbol)
+                    prefs.edit()
+                        .remove("execution_gate_symbol")
+                        .apply()
+
                     if (
-                        executionError != null &&
+                        !result.success &&
                         !reconcileRequired &&
-                        positions[candidate.symbol] == null &&
+                        positions[result.symbol] == null &&
                         synchronized(pendingEntries) {
-                            !pendingEntries.containsKey(candidate.symbol)
+                            !pendingEntries.containsKey(result.symbol)
                         } &&
                         stateMachine.state == TradingState.ENTRY_PENDING
                     ) {
                         stateMachine.transition(
                             TradingState.READY_FLAT,
                             "ExecutionResult failure: " +
-                                (executionError.message
-                                    ?: executionError.javaClass.simpleName)
+                                (result.error ?: "unknown execution failure")
                         )
                     }
-                    if (executionError != null) {
+                    if (!result.success) {
                         lastError =
-                            "ORDER " + candidate.symbol + ": " +
-                                (executionError.message
-                                    ?: executionError.javaClass.simpleName)
+                            "ORDER " + result.symbol + ": " +
+                                (result.error ?: "unknown execution failure")
                     }
                 }
             }
