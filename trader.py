@@ -831,6 +831,7 @@ class Trader:
             'MARKET',
             required_context_versions=required_versions,
             purpose='ENTRY',
+            permission_interval=self.interval,
             quote_order_quantity=self.client.decimal_format(quote_d),
         )
         cid = f'WILLV4_ENTRY_{uuid.uuid4().hex[:20]}'
