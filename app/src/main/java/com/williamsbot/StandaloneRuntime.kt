@@ -3421,6 +3421,23 @@ private class NativeEngine(
     ): JSONObject = signedRequest("GET", path, params)
 
     /**
+     * Binance array-root endpoints are normalized before callers inspect
+     * them. This prevents an empty [] response from being misread as a
+     * JSONObject and then silently swallowed by runCatching.
+     */
+    private fun signedOpenOrders(
+        symbol: String? = null
+    ): JSONObject {
+        val params = symbol?.let { "symbol=" + it } ?: ""
+        val body = signedRawGet("/api/v3/openOrders", params)
+        return runCatching {
+            JSONObject(body)
+        }.getOrElse {
+            JSONObject().put("orders", JSONArray(body))
+        }
+    }
+
+    /**
      * Binance /openOrderList returns a JSON array at the root when there are
      * no open order lists. Keep the internal representation as an object so
      * the existing reconciliation helpers can safely inspect the array.
@@ -3678,10 +3695,7 @@ private class NativeEngine(
         rules: SymbolRules
     ) {
         val openOrders = runCatching {
-            val response = signedGet(
-                "/api/v3/openOrders",
-                "symbol=" + symbol
-            )
+            val response = signedOpenOrders(symbol)
             response.optJSONArray("orders")
                 ?: if (response.has("symbol")) {
                     JSONArray().put(response)
