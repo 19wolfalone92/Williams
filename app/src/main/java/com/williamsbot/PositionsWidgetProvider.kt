@@ -24,10 +24,22 @@ class PositionsWidgetProvider : AppWidgetProvider() {
         private fun updateAsync(context: Context, manager: AppWidgetManager, ids: IntArray) {
             Thread {
                 val status = runCatching {
-                    val c = URL("http://127.0.0.1:18080/api/v1/status").openConnection() as HttpURLConnection
+                    val prefs = context.getSharedPreferences("williams_backend", Context.MODE_PRIVATE)
+                    val baseUrl = prefs.getString(
+                        "backend_url",
+                        "http://127.0.0.1:18080",
+                    )!!.trimEnd('/')
+                    val token = prefs.getString(
+                        "mobile_token",
+                        "",
+                    )!!.trim()
+                    require(token.isNotBlank()) { "Backend token is not configured" }
+
+                    val c = URL("$baseUrl/api/v1/status").openConnection() as HttpURLConnection
                     c.connectTimeout = 2500
                     c.readTimeout = 3500
                     c.requestMethod = "GET"
+                    c.setRequestProperty("Authorization", "Bearer $token")
                     c.inputStream.bufferedReader().use { JSONObject(it.readText()) }
                 }.getOrNull()
                 val views = RemoteViews(context.packageName, R.layout.widget_positions)
