@@ -326,6 +326,44 @@ class BinanceSpotClient:
         p={'symbol':symbol,'side':'SELL','quantity':quantity,'aboveType':'TAKE_PROFIT_LIMIT','abovePrice':take_profit_price,'aboveStopPrice':take_profit_price,'aboveTimeInForce':'GTC','belowType':'STOP_LOSS_LIMIT','belowStopPrice':stop_price,'belowPrice':stop_limit_price,'belowTimeInForce':'GTC','newOrderRespType':'FULL'}
         if list_client_order_id:p['listClientOrderId']=list_client_order_id
         return self._request('POST','/api/v3/orderList/oco',p,signed=True)
+    def create_oco_sell_safe(
+        self, symbol, quantity, take_profit_price, stop_price,
+        stop_limit_price, list_client_order_id
+    ):
+        """Create one OCO and reconcile ambiguous transport failures by list ID."""
+        if not list_client_order_id:
+            raise ValueError("create_oco_sell_safe requires list_client_order_id")
+        try:
+            return self.create_oco_sell(
+                symbol, quantity, take_profit_price, stop_price,
+                stop_limit_price, list_client_order_id,
+            )
+        except BinanceAPIError as exc:
+            if not exc.unknown_execution:
+                raise
+            try:
+                existing = self.order_list(
+                    symbol,
+                    list_client_order_id=list_client_order_id,
+                )
+            except BinanceAPIError as reconcile_exc:
+                raise BinanceAPIError(
+                    f"OCO execution is UNKNOWN for {symbol}; "
+                    f"listClientOrderId={list_client_order_id}. "
+                    "Reconciliation is required before retry.",
+                    unknown_execution=True,
+                    status_code=exc.status_code,
+                    payload=exc.payload,
+                ) from reconcile_exc
+            if existing:
+                return existing
+            raise BinanceAPIError(
+                f"OCO execution is UNKNOWN for {symbol}; no matching order list found.",
+                unknown_execution=True,
+                status_code=exc.status_code,
+                payload=exc.payload,
+            ) from exc
+
     def cancel_oco(self,symbol,order_list_id=None,list_client_order_id=None):
         p={'symbol':symbol}
         if order_list_id is not None:p['orderListId']=order_list_id
