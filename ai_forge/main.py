@@ -51,7 +51,8 @@ def status():
 
 @app.post("/v1/council",response_model=CouncilDecision,dependencies=[Depends(require_auth)])
 def run_council(payload:CouncilRequest):
-    if settings.mock_mode: return council.verify(mock_decisions(payload.task),5,payload.require_all)
+    if settings.mock_mode or (settings.free_mode and not providers):
+        return council.verify(mock_decisions(payload.task),5,payload.require_all)
     if not providers: raise HTTPException(503,"no AI providers configured")
     return council.verify([p.decide(payload.task,payload.context) for p in providers],len(providers),payload.require_all)
 
