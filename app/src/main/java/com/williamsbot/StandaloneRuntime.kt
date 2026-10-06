@@ -4679,11 +4679,25 @@ private class NativeEngine(
                 rules.tick
             ).toDouble()
 
-        if (stop >= entry || take <= entry) {
-            error("Invalid TP/SL relationship")
+        // For SELL TAKE_PROFIT_LIMIT keep the limit strictly below the trigger
+        // so Binance can represent the protective leg unambiguously.
+        val takeLimit =
+            fmtPrice(
+                take - max(rules.tick, take * 0.0001),
+                rules.tick
+            ).toDouble()
+
+        if (
+            stop >= entry ||
+            take <= entry ||
+            takeLimit <= entry ||
+            takeLimit >= take
+        ) {
+            error("Invalid TP/SL OCO relationship")
         }
 
         validateLimitPrice(symbol, "SELL", take, rules)
+        validateLimitPrice(symbol, "SELL", takeLimit, rules)
         validateLimitPrice(symbol, "SELL", stop, rules)
         validateLimitPrice(symbol, "SELL", stopLimit, rules)
 
@@ -4715,7 +4729,7 @@ private class NativeEngine(
                     "&aboveType=TAKE_PROFIT_LIMIT" +
                     "&abovePrice=" +
                     fmtPrice(
-                        take,
+                        takeLimit,
                         rules.tick
                     ) +
                     "&aboveStopPrice=" +
