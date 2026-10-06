@@ -27,9 +27,8 @@ class WilliamsForegroundService : Service() {
     private val supervisorHandler = Handler(Looper.getMainLooper())
     private val supervisor = object : Runnable {
         override fun run() {
-            // If the process survives but the autonomous worker has died, bootstrap()
-            // performs recovery and restarts only when the durable auto_run flag is true.
-            runCatching { StandaloneRuntime.bootstrap(applicationContext) }
+            // Production APK is a cockpit for the authenticated VPS backend.
+            // Binance credentials and the trading engine are never started locally.
             supervisorHandler.postDelayed(this, 60_000L)
         }
     }
@@ -52,9 +51,8 @@ class WilliamsForegroundService : Service() {
         connectivity = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         runCatching { connectivity.registerDefaultNetworkCallback(networkCallback) }
         startForeground(NOTIFICATION_ID, buildNotification())
-        // The trading runtime itself owns Binance WS reconnect/reconciliation.
-        // The FGS only keeps the Android process alive and surfaces connectivity.
-        StandaloneRuntime.bootstrap(applicationContext)
+        // The VPS trading backend owns Binance REST/WSS, reconciliation and orders.
+        // The Android FGS only keeps the cockpit/network monitor alive.
         supervisorHandler.postDelayed(supervisor, 60_000L)
     }
 
