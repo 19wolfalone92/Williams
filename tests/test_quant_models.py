@@ -9,6 +9,8 @@ from quant_models import (
     LightGBMDirectionModel,
 )
 from shadow_execution import ShadowExecutionSimulator
+from quant_ml_pipeline import FEATURE_COLUMNS, feature_matrix, feature_row, ShadowMLPipeline
+from feature_store import MarketFeatureVector
 
 
 def test_derivatives_features():
@@ -61,3 +63,21 @@ def test_optional_models_fail_closed_without_dependencies():
         LightGBMDirectionModel().fit(X, [0])
     with pytest.raises((RuntimeError, ValueError)):
         IsotonicProbabilityCalibrator().fit([0.2], [0])
+
+
+def test_shadow_ml_pipeline_feature_schema():
+    vector = MarketFeatureVector(
+        schema_version=1,
+        timestamp_ms=1,
+        symbol="BTCUSDT",
+        interval="1h",
+        source="test",
+        data_bars=100,
+    )
+    row = feature_row(vector)
+    matrix = feature_matrix([vector, vector])
+    assert len(row) == len(FEATURE_COLUMNS)
+    assert matrix.shape == (2, len(FEATURE_COLUMNS))
+    result = ShadowMLPipeline().predict(vector)
+    assert result["direction"] == "HOLD"
+    assert result["calibrated_probability"] == 0.0
