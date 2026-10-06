@@ -58,6 +58,11 @@ class MarketFeatureVector:
     wave_nested_w3: bool = False
     wave_nested_w3_parent_w5: bool = False
     wave_alignment_score: float = 0.0
+    wave_parent_position: int = 0
+    wave_parent_confidence: float = 0.0
+    wave_parent_exhaustion_risk: float = 0.0
+    wave_nested_w3_probability: float = 0.0
+    wave_tf_agreement: float = 0.0
     invalidation: float = 0.0
     target: float = 0.0
 
@@ -485,6 +490,13 @@ def _wave_fields(wave_report: Any) -> dict[str, Any]:
     frames = data.get("frames", {}) or {}
     setup_tf = str(data.get("entry_interval") or data.get("operative_interval") or "")
     setup = frames.get(setup_tf, {}) if setup_tf else {}
+    parent_tf = str(
+        data.get("entry_parent_interval")
+        or data.get("operative_parent_interval")
+        or ""
+    )
+    parent = frames.get(parent_tf, {}) if parent_tf else {}
+
     position = int(setup.get("position", data.get("entry_position", 0)) or 0)
     confidence = float(setup.get("confidence", 0.0) or 0.0)
     invalidation = 0.0
@@ -500,6 +512,24 @@ def _wave_fields(wave_report: Any) -> dict[str, Any]:
             target = (low + high) / 2.0 if low > 0 and high > 0 else max(low, high, 0.0)
         except (TypeError, ValueError):
             target = 0.0
+
+    nested_w3_prob = 0.0
+    if bool(data.get("nested_w3", False)):
+        nested_w3_prob = max(
+            (
+                float(frame.get("confidence", 0.0) or 0.0)
+                for frame in frames.values()
+                if isinstance(frame, dict) and int(frame.get("position", 0) or 0) == 3
+            ),
+            default=0.0,
+        )
+
+    setup_dir = str(setup.get("direction", "NEUTRAL")) if isinstance(setup, dict) else "NEUTRAL"
+    parent_dir = str(parent.get("direction", "NEUTRAL")) if isinstance(parent, dict) else "NEUTRAL"
+    tf_agreement = 1.0 if setup_dir == parent_dir and setup_dir not in {"", "NEUTRAL"} else (
+        0.5 if setup_dir == "NEUTRAL" or parent_dir == "NEUTRAL" else 0.0
+    )
+
     return {
         "wave_score": float(data.get("wave_score", 50.0) or 50.0),
         "wave_position": position,
@@ -510,6 +540,11 @@ def _wave_fields(wave_report: Any) -> dict[str, Any]:
         "wave_nested_w3": bool(data.get("nested_w3", False)),
         "wave_nested_w3_parent_w5": bool(data.get("nested_w3_parent_w5", False)),
         "wave_alignment_score": float(data.get("alignment_score", 0.0) or 0.0),
+        "wave_parent_position": int(parent.get("position", 0) or 0) if isinstance(parent, dict) else 0,
+        "wave_parent_confidence": float(parent.get("confidence", 0.0) or 0.0) if isinstance(parent, dict) else 0.0,
+        "wave_parent_exhaustion_risk": float(parent.get("exhaustion_risk", 0.0) or 0.0) if isinstance(parent, dict) else 0.0,
+        "wave_nested_w3_probability": nested_w3_prob,
+        "wave_tf_agreement": tf_agreement,
         "invalidation": invalidation,
         "target": target,
     }
@@ -535,9 +570,31 @@ def build_market_feature_vector(
     atr_pct = _atr_pct(df)
     vol_z = _volume_zscore(df)
 
-    dollar = build_dollar_bars(df)
-    volume = build_volume_bars(df)
-
+    dollar_proxy = build_dollar_bars(df)
+    volume_proxy = build_volume_bars(df)
+    dollar = dollar_proxy
+    volume = volume_proxy
+    bar_source = "ohlcv_proxy"
+    if trades:
+        raw_dollars = []
+        raw_volumes = []
+        for item in trades:
+            p = _safe_float(item.get("price", item.get("p", 0.0)))
+            q = _safe_float(item.get("qty", item.get("q", 0.0)))
+            if p > 0 and q > 0:
+                raw_dollars.append(p * q)
+                raw_volumes.append(q)
+        if raw_dollars and raw_volumes:
+            dollar_threshold = max(float(np.median(raw_dollars)) * 20.0, 1e-9)
+            volume_threshold = max(float(np.median(raw_volumes)) * 20.0, 1e-9)
+            dollar_trade_bars = build_dollar_bars_from_trades(trades, dollar_threshold)
+            volume_trade_bars = build_volume_bars_from_trades(trades, volume_threshold)
+            if dollar_trade_bars:
+                dollar = dollar_trade_bars
+            if volume_trade_bars:
+                volume = volume_trade_bars
+            bar_source = "trade_stream"
+    
     bid_qty = ask_qty = 0.0
     spread_pct = 0.0
     if order_book:
@@ -578,8 +635,9 @@ def build_market_feature_vector(
     )
 
     extra = {
-        "dollar_bar_proxy": True,
-        "volume_bar_proxy": True,
+        "dollar_bar_proxy": bar_source == "ohlcv_proxy",
+        "volume_bar_proxy": bar_source == "ohlcv_proxy",
+        "bar_source": bar_source,
         "trade_samples": len(trades or []),
         "features_version": 1,
         "wave_context_present": bool(wf),
@@ -617,6 +675,11 @@ def build_market_feature_vector(
         wave_nested_w3=wf.get("wave_nested_w3", False),
         wave_nested_w3_parent_w5=wf.get("wave_nested_w3_parent_w5", False),
         wave_alignment_score=wf.get("wave_alignment_score", 0.0),
+        wave_parent_position=wf.get("wave_parent_position", 0),
+        wave_parent_confidence=wf.get("wave_parent_confidence", 0.0),
+        wave_parent_exhaustion_risk=wf.get("wave_parent_exhaustion_risk", 0.0),
+        wave_nested_w3_probability=wf.get("wave_nested_w3_probability", 0.0),
+        wave_tf_agreement=wf.get("wave_tf_agreement", 0.0),
         invalidation=wf.get("invalidation", 0.0),
         target=wf.get("target", 0.0),
         regime=regime,
