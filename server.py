@@ -768,6 +768,14 @@ def status():
         'p0_gate_passed': bool(t.preflight_report and t.preflight_report.get('ready')),
         'p0_gate_reason': ('PASS' if t.preflight_report and t.preflight_report.get('ready') else 'NOT_READY'),
         'max_open_positions_locked': True,
+        'reconcile_required': bool(multi.unresolved_symbols() or multi._pending_entries()),
+        'execution_state_contract': {
+            'version': 1,
+            'state': ('RECONCILE_REQUIRED' if (multi.unresolved_symbols() or multi._pending_entries()) else ('OPEN' if positions else 'READY_FLAT')),
+            'execution_enabled': not bool(multi.unresolved_symbols() or multi._pending_entries()),
+            'reconciliation_required': bool(multi.unresolved_symbols() or multi._pending_entries()),
+            'kill_switch_latched': False,
+        },
     }
 
 
