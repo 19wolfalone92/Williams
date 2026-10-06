@@ -299,6 +299,9 @@ class MarketScanner:
             self.htf_interval,
             limit=160,
         )
+        # A signal is evaluated only on a fully closed candle.
+        if len(htf) > 1:
+            htf = htf.iloc[:-1].copy()
         if len(htf) < 80:
             return False
 
