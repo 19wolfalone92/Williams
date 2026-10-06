@@ -50,6 +50,11 @@ object StandaloneRuntime {
         server?.autostart()
     }
 
+    fun bootstrap(context: Context) {
+        start(context)
+        server?.bootstrap()
+    }
+
     fun startTrading() {
         server?.startTrading()
     }
@@ -248,13 +253,10 @@ private class StandaloneServer(private val context: Context) {
         }
     }
 
-    fun bootstrap(context: Context) {
-        start(context)
+    fun bootstrap() {
         Thread({
             try {
-                if (key().isNotBlank() && secret().isNotBlank()) {
-                    runCatching { e().recover() }
-                }
+                runCatching { e().recover() }
                 if (prefs.getBoolean("auto_run", false)) {
                     runCatching { e().start() }
                 }
