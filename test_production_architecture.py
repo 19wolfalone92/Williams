@@ -76,7 +76,13 @@ def test_execution_barrier_serializes_publish_and_submit():
 
     t = threading.Thread(target=publish)
     t.start()
-    intent = OrderIntent.new("BTCUSDT", "BUY", "MARKET", {"1h": version})
+    intent = OrderIntent.new(
+        "BTCUSDT",
+        "BUY",
+        "MARKET",
+        {"1h": version},
+        permission_interval="1h",
+    )
     result = barrier.execute(intent, submit)
     t.join()
     assert result.accepted
