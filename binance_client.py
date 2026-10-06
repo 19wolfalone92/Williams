@@ -420,18 +420,34 @@ class BinanceSpotClient:
         if orig_client_order_id is not None:p['origClientOrderId']=orig_client_order_id
         return self._request('DELETE','/api/v3/order',p,signed=True)
     def cancel_open_orders(self,symbol): return self._request('DELETE','/api/v3/openOrders',{'symbol':symbol},signed=True)
+    def _symbol_tick_size(self, symbol):
+        info = self.exchange_info(symbol)
+        for row in info.get('symbols', []) or []:
+            if str(row.get('symbol', '')).upper() != str(symbol).upper():
+                continue
+            for f in row.get('filters', []) or []:
+                if f.get('filterType') == 'PRICE_FILTER':
+                    tick = Decimal(str(f.get('tickSize', '0')))
+                    if tick > 0:
+                        return tick
+        raise BinanceAPIError(f'Binance PRICE_FILTER/tickSize unavailable for {symbol}')
+
     def create_oco_sell(self,symbol,quantity,take_profit_price,stop_price,stop_limit_price,list_client_order_id=None):
-        # For SELL TAKE_PROFIT_LIMIT the limit leg is intentionally just below
-        # the trigger, matching the Binance OCO price relationship.
-        tick = max(abs(float(take_profit_price)) * 0.0001, 1e-12)
-        take_limit_price = float(take_profit_price) - tick
-        if take_limit_price <= float(stop_price):
-            take_limit_price = float(take_profit_price)
+        # For SELL TAKE_PROFIT_LIMIT the limit leg is kept strictly below the
+        # trigger and quantized to Binance's actual PRICE_FILTER tickSize.
+        tick = self._symbol_tick_size(symbol)
+        take_trigger = Decimal(str(take_profit_price))
+        take_limit = self.decimal_floor(take_trigger - tick, tick)
+        if take_limit <= Decimal(str(stop_price)):
+            raise BinanceAPIError(
+                f'Invalid Binance OCO price relationship for {symbol}: '
+                f'take_limit={take_limit} stop_price={stop_price}'
+            )
         p={
             'symbol':symbol,'side':'SELL','quantity':quantity,
             'aboveType':'TAKE_PROFIT_LIMIT',
-            'abovePrice':take_limit_price,
-            'aboveStopPrice':take_profit_price,
+            'abovePrice':str(take_limit),
+            'aboveStopPrice':str(take_trigger),
             'aboveTimeInForce':'GTC',
             'belowType':'STOP_LOSS_LIMIT',
             'belowStopPrice':stop_price,
