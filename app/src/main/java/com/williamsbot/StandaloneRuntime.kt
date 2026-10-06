@@ -539,7 +539,6 @@ private class NativeEngine(
     private var lastError: String? = null
 
     @Volatile
-    @Volatile
     private var scannerState = "NOT_RUN"
 
     @Volatile
