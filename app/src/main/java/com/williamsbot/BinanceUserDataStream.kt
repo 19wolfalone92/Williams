@@ -47,7 +47,6 @@ class BinanceUserDataStream(
         connected = false
         socket?.close(1000, "Williams stopped")
         socket = null
-        lastPongMs = 0L
         worker?.interrupt()
         worker = null
         onConnection(false, "stopped")
