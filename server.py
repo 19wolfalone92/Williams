@@ -2,7 +2,7 @@ import os, threading, time, asyncio, json
 from datetime import datetime, timezone
 from typing import Optional
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect, Response
 from pydantic import BaseModel
 from db import Database
 from trader import Trader
@@ -19,6 +19,85 @@ VERSION = '4.17.0'
 
 app = FastAPI(title='Williams Binance Bot API', version=VERSION)
 hub = WebSocketHub()
+
+
+class MetricsRegistry:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.counters = {
+            "http_requests_total": 0,
+            "http_errors_total": 0,
+            "ws_connections_total": 0,
+            "trading_starts_total": 0,
+            "kill_switch_total": 0,
+        }
+        self.latency = {"http_request_seconds_sum": 0.0, "http_request_seconds_count": 0}
+
+    def inc(self, name, value=1):
+        with self.lock:
+            self.counters[name] = self.counters.get(name, 0) + value
+
+    def observe_http(self, seconds):
+        with self.lock:
+            self.latency["http_request_seconds_sum"] += seconds
+            self.latency["http_request_seconds_count"] += 1
+
+    def render(self, state):
+        with self.lock:
+            counters = dict(self.counters)
+            latency = dict(self.latency)
+        lines = [
+            "# HELP williams_http_requests_total Total HTTP requests.",
+            "# TYPE williams_http_requests_total counter",
+            f"williams_http_requests_total {counters['http_requests_total']}",
+            "# HELP williams_http_errors_total Total HTTP 4xx/5xx responses.",
+            "# TYPE williams_http_errors_total counter",
+            f"williams_http_errors_total {counters['http_errors_total']}",
+            "# HELP williams_http_request_seconds HTTP request latency.",
+            "# TYPE williams_http_request_seconds summary",
+            f"williams_http_request_seconds_sum {latency['http_request_seconds_sum']}",
+            f"williams_http_request_seconds_count {latency['http_request_seconds_count']}",
+            "# HELP williams_ws_connections_total WebSocket client connections.",
+            "# TYPE williams_ws_connections_total counter",
+            f"williams_ws_connections_total {counters['ws_connections_total']}",
+            "# HELP williams_trading_starts_total Trading starts.",
+            "# TYPE williams_trading_starts_total counter",
+            f"williams_trading_starts_total {counters['trading_starts_total']}",
+            "# HELP williams_kill_switch_total Kill switch invocations.",
+            "# TYPE williams_kill_switch_total counter",
+            f"williams_kill_switch_total {counters['kill_switch_total']}",
+            "# HELP williams_running Trading engine running state.",
+            "# TYPE williams_running gauge",
+            f"williams_running {1 if state.running else 0}",
+            "# HELP williams_paused Trading engine paused state.",
+            "# TYPE williams_paused gauge",
+            f"williams_paused {1 if state.paused else 0}",
+            "# HELP williams_open_positions Open managed positions.",
+            "# TYPE williams_open_positions gauge",
+            f"williams_open_positions {len(state.ensure_multi().open_positions())}",
+            "# HELP williams_reconciliation_required Reconciliation barrier state.",
+            "# TYPE williams_reconciliation_required gauge",
+            f"williams_reconciliation_required {1 if state.ensure_multi().unresolved_symbols() else 0}",
+        ]
+        return "\n".join(lines) + "\n"
+
+metrics = MetricsRegistry()
+
+@app.middleware("http")
+async def metrics_middleware(request, call_next):
+    started = time.perf_counter()
+    metrics.inc("http_requests_total")
+    try:
+        response = await call_next(request)
+        if response.status_code >= 400:
+            metrics.inc("http_errors_total")
+        return response
+    finally:
+        metrics.observe_http(time.perf_counter() - started)
+
+@app.get("/metrics")
+def prometheus_metrics():
+    return Response(content=metrics.render(state), media_type="text/plain; version=0.0.4")
 
 
 class CredentialPayload(BaseModel):
@@ -149,6 +228,7 @@ class ControlState:
                 name='williams-trader',
             )
             self.thread.start()
+            metrics.inc("trading_starts_total")
             return True
 
     def stop(self):
@@ -175,6 +255,7 @@ class ControlState:
         return True
 
     def kill(self):
+        metrics.inc("kill_switch_total")
         # Close only Williams-managed positions/orders; never cancel
         # unrelated account orders via DELETE /openOrders.
         with self.lock:
@@ -376,10 +457,22 @@ def db():
 def health():
     t = state.ensure_trader()
     multi = state.ensure_multi()
+    unresolved = bool(multi.unresolved_symbols() or multi._pending_entries())
+    execution_state = (
+        'RECONCILE_REQUIRED' if unresolved
+        else ('OPEN' if multi.open_positions() else 'READY_FLAT')
+    )
     return {
         'ok': True,
         'service': 'williams-binance-bot',
         'version': VERSION,
+        'execution_state_contract': {
+            'version': 1,
+            'state': execution_state,
+            'execution_enabled': not unresolved,
+            'reconciliation_required': unresolved,
+            'kill_switch_latched': False,
+        },
         'websocket': True,
         'auth_configured': len(API_TOKEN) >= 32,
         'max_open_positions': multi.max_open_positions,
@@ -448,6 +541,7 @@ async def realtime_ws(websocket: WebSocket):
         await websocket.close(1008)
         return
     await websocket.accept()
+    metrics.inc("ws_connections_total")
     client = type('RealtimeClient', (), {})()
     client.websocket = websocket
     client.loop = asyncio.get_running_loop()

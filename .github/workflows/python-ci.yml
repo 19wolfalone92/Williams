@@ -27,6 +27,9 @@ jobs:
         run: |
           python -m py_compile             strategy.py data.py risk_engine.py db.py binance_client.py             market_scanner.py wave_engine.py portfolio_scanner.py             portfolio_controller.py trader.py server.py ws_hub.py
 
+      - name: Run full static safety audit
+        run: python full_safety_audit.py
+
       - name: Run safe offline tests
         run: >-
           python -m pytest -q
@@ -47,3 +50,5 @@ jobs:
           test_williams_book_alignment.py
           test_book_wave_safety.py test_trade_journal.py
           test_multi_position_lifecycle.py
+          recovery_test.py
+          recovery_oco_failure_test.py

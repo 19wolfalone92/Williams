@@ -287,6 +287,27 @@ class TradingAuditStore(context: Context) :
     }
 
     @Synchronized
+    fun executionEvents(orderId: String): List<JSONObject> {
+        val rows = mutableListOf<JSONObject>()
+        writableDatabase.query(
+            "executions",
+            arrayOf("raw_json"),
+            "order_id=?",
+            arrayOf(orderId),
+            null,
+            null,
+            "transaction_time ASC, event_time ASC"
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                runCatching {
+                    rows.add(JSONObject(cursor.getString(0)))
+                }
+            }
+        }
+        return rows
+    }
+
+    @Synchronized
     fun recordState(from: TradingState, to: TradingState, reason: String) {
         val values = ContentValues()
         values.put("from_state", from.name)

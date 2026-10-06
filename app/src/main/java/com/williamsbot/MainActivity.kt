@@ -215,7 +215,12 @@ data class Status(
     val userWsConnected: Boolean = false,
     val userStreamSyncRequired: Boolean = true,
     val historyReady: Boolean = false,
-    val fsmState: String = "STOPPED"
+    val fsmState: String = "STOPPED",
+    val executionContractVersion: Int = 1,
+    val executionState: String = "STOPPED",
+    val executionEnabled: Boolean = false,
+    val executionContractReconcileRequired: Boolean = true,
+    val executionKillLatched: Boolean = false
 )
 
 data class Candle(
@@ -2326,6 +2331,7 @@ private fun parseStatus(json: JSONObject): Status {
                 it.isNaN() || it == 0.0
             }
 
+    val executionContract = json.optJSONObject("execution_state_contract")
     return Status(
         symbol =
             json.optString(
@@ -2443,7 +2449,17 @@ private fun parseStatus(json: JSONObject): Status {
         historyReady =
             json.optBoolean("history_ready", false),
         fsmState =
-            json.optString("fsm_state", "STOPPED")
+            json.optString("fsm_state", "STOPPED"),
+        executionContractVersion =
+            executionContract?.optInt("version", 1) ?: 1,
+        executionState =
+            executionContract?.optString("state", "STOPPED") ?: "STOPPED",
+        executionEnabled =
+            executionContract?.optBoolean("execution_enabled", false) ?: false,
+        executionContractReconcileRequired =
+            executionContract?.optBoolean("reconciliation_required", true) ?: true,
+        executionKillLatched =
+            executionContract?.optBoolean("kill_switch_latched", false) ?: false
     )
 }
 
