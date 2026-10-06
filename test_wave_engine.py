@@ -248,3 +248,34 @@ def test_primary_and_alternative_count_fields_are_serializable():
     assert payload["primary_count"] == "W5"
     assert payload["alternative_count"] == "W3_ALTERNATIVE"
     assert payload["exhaustion_components"]["ao_divergence"] == 30.0
+
+
+def _wave_snapshot(interval, position):
+    return WaveSnapshot(
+        interval=interval,
+        wave_degree="MEDIUM",
+        direction=DIRECTION_UP,
+        phase="IMPULSE",
+        position=position,
+        wave_label=f"W{position}",
+        confidence=85.0,
+        structural_confidence=85.0,
+        impulse_score=90.0,
+        exhaustion_risk=10.0,
+        alligator_bullish=True,
+        ao=3.0,
+        data_bars=220,
+        data_ok=True,
+    )
+
+
+def test_w3_can_be_nested_inside_parent_w1_w3_and_w5():
+    e = engine(base_interval="5m", intervals=["1d", "4h", "1h", "15m", "5m"])
+    for parent_position in (1, 3, 5):
+        parent = _wave_snapshot("1d", parent_position)
+        child = _wave_snapshot("4h", 3)
+        report = e._build_report({"1d": parent, "4h": child})
+        assert report.nested_w3 is True
+        assert parent_position in report.nested_w3_parent_positions
+        if parent_position == 5:
+            assert report.nested_w3_parent_w5 is True
