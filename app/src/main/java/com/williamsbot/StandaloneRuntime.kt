@@ -2969,7 +2969,7 @@ private class NativeEngine(
         val openOrders = JSONArray(
             signedRawGet("/api/v3/openOrders", "")
         )
-        val openLists = signedOpenOrderLists()
+        val openLists = signedOpenOrderLists().optJSONArray("orderList") ?: JSONArray()
 
         val expectedSymbols =
             pendingEntries.keys.toSet() +
