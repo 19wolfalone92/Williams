@@ -543,7 +543,7 @@ private class NativeEngine(
     private val maxRiskPerTradePct = 0.005
     private val maxSpreadPct = 0.0015
     private val maxSlippagePct = 0.005
-    private val equityCircuitBreaker = EquityCircuitBreaker(maxDrawdownPct = 0.05)
+    private val equityCircuitBreaker = EquityCircuitBreaker(maxDrawdownPct = 0.03)
     @Volatile private var lastEquityCheckMs = 0L
     @Volatile private var circuitBreakerTripInProgress = false
     private val feeBufferPerSidePct = 0.001
