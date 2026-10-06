@@ -555,6 +555,7 @@ private class NativeEngine(
 
     init {
         loadPersistedState()
+        restoreExecutionAccumulators()
         stateMachine.force(
             when {
                 killLatched -> TradingState.KILL_SWITCH_LATCHED
@@ -568,6 +569,25 @@ private class NativeEngine(
             },
             "restore persisted trading state"
         )
+    }
+
+    private fun restoreExecutionAccumulators() {
+        val orderIds = mutableSetOf<String>()
+        positionList().forEach { if (it.entryOrderId.isNotBlank()) orderIds.add(it.entryOrderId) }
+        synchronized(pendingEntries) {
+            pendingEntries.values.forEach { if (it.clientOrderId.isNotBlank()) {
+                auditStore.executionEvents(it.clientOrderId).forEach { event ->
+                    val id = event.optString("i")
+                    if (id.isNotBlank()) orderIds.add(id)
+                }
+            } }
+        }
+        orderIds.forEach { orderId ->
+            executionAccumulator.restore(
+                orderId,
+                auditStore.executionEvents(orderId)
+            )
+        }
     }
 
     private fun key(): String =
