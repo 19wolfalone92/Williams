@@ -193,3 +193,12 @@ Research backtest now also reports CPCV signal-return stability and adverse late
 ### Optional ML admission layer
 
 HMM/GMM regime models, LightGBM direction, isotonic probability calibration, SHAP explanation and the unified ShadowMLPipeline are implemented as optional research modules. They fail closed when optional dependencies are unavailable and do not have access to Binance credentials or order submission. Funding/OI/liquidation features are normalized through derivatives_features.py and enter the same MarketFeatureVector when an external derivatives provider supplies them.
+
+
+## AI-Forge Council Core
+
+The repository now contains a separate server-side AI Council under `ai_forge/`. It queries GPT, Gemini, DeepSeek, Grok and Mistral independently, then applies a quorum + weighted-consensus verifier. Provider API keys remain server-side and are never returned to the Android client.
+
+Safety boundary: AI-Forge produces analytical decisions only. It does not submit Binance orders and does not receive Binance credentials. For trading analysis, `PROCEED` is not a BUY/SELL command.
+
+See `AI_FORGE_README_RU.md`. GitHub Actions validates Python compilation/tests and performs a Docker smoke test in mock mode. A permanent public Core URL still requires a continuously running host; GitHub repository and Actions are not a permanent HTTP runtime.
