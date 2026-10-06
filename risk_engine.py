@@ -82,6 +82,7 @@ class RiskEngine:
         risk_pct_override: float = None,
         side: str = "LONG",
         invalidation_price: float = 0.0,
+        min_notional: float = 0.0,
     ) -> RiskAnalysis:
 
         entry = float(entry_price)
