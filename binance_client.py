@@ -167,6 +167,7 @@ class BinanceSpotClient:
     def avg_price(self,symbol): return self._request('GET','/api/v3/avgPrice',{'symbol':symbol})
     def klines(self,symbol,interval,limit=200): return self._request('GET','/api/v3/klines',{'symbol':symbol,'interval':interval,'limit':limit})
     def account(self): return self._request('GET','/api/v3/account',signed=True)
+    def api_restrictions(self): return self._request('GET','/sapi/v1/account/apiRestrictions',{},signed=True)
     def all_orders(self,symbol,limit=1000): return self._request('GET','/api/v3/allOrders',{'symbol':symbol,'limit':limit},signed=True)
     def order_list(self,symbol,order_list_id=None,list_client_order_id=None):
         p={'symbol':symbol}
