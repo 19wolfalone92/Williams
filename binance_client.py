@@ -32,7 +32,14 @@ class BinanceSpotClient:
         Callers must reconcile by order/clientOrderId before taking another action.
         """
         method = method.upper()
-        max_attempts = 3 if method == "GET" else 1
+        # Non-GET requests are never retried for transport/5xx errors because
+        # the matching engine may have accepted the order. A signed -1021
+        # timestamp rejection is safe to retry once after time synchronization.
+        max_attempts = (
+            3 if method == "GET"
+            else 2 if signed
+            else 1
+        )
         delays = (0.5, 1.0, 2.0)
 
         last_exc = None
@@ -79,13 +86,15 @@ class BinanceSpotClient:
                 )
             except (requests.Timeout, requests.ConnectionError) as exc:
                 last_exc = exc
-                if attempt + 1 >= max_attempts:
-                    raise BinanceAPIError(
-                        f'Binance transport error: {exc}',
-                        unknown_execution=method in {"POST", "DELETE"},
-                    ) from exc
-                time.sleep(delays[attempt])
-                continue
+                # Only idempotent GET requests are retried after a transport
+                # failure. POST/DELETE remain UNKNOWN and require reconciliation.
+                if method == "GET" and attempt + 1 < max_attempts:
+                    time.sleep(delays[attempt])
+                    continue
+                raise BinanceAPIError(
+                    f'Binance transport error: {exc}',
+                    unknown_execution=method in {"POST", "DELETE"},
+                ) from exc
 
             used = r.headers.get('X-MBX-USED-WEIGHT-1M')
             orders = r.headers.get('X-MBX-ORDER-COUNT-1M')
