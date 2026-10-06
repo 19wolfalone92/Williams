@@ -1065,19 +1065,18 @@ private class NativeEngine(
                             }
                             checkAutomaticCircuitBreaker()
                         }
-
-                        // The market radar is independent from execution safety.
-                        // Recovery, kill-switch and user-stream synchronization may
-                        // block orders, but they must not freeze scanner telemetry.
-                        if (running) {
-                            requestScan()
-                        }
                     } catch (x: Exception) {
                         lastError =
                             x.javaClass.simpleName + ": " +
                                 (x.message ?: "")
                     }
-                }
+
+                    // Scanner telemetry is deliberately outside the trading
+                    // pause/recovery gate. PAUSED, RECONCILE_REQUIRED and
+                    // KILL_SWITCH must never make the market radar appear dead.
+                    if (running) {
+                        requestScan()
+                    }
 
                 try {
                     Thread.sleep(90_000L)
