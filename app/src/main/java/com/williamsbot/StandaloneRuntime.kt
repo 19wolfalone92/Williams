@@ -575,21 +575,27 @@ private class NativeEngine(
         onConnection = { connected, error ->
             userStreamConnected = connected
             if (connected) {
-                userStreamSyncRequired = true
-                Thread {
-                    try {
-                        recoverPendingEntries()
-                        reconcilePositionsWithExchange()
-                        userStreamSyncRequired = false
-                    } catch (x: Exception) {
-                        setReconcileRequired(
-                            "User stream reconnect reconciliation failed: " +
-                                (x.message ?: x.javaClass.simpleName)
-                        )
+                if (running || positions.isNotEmpty()) {
+                    userStreamSyncRequired = true
+                    Thread {
+                        try {
+                            recoverPendingEntries()
+                            reconcilePositionsWithExchange()
+                            userStreamSyncRequired = false
+                        } catch (x: Exception) {
+                            setReconcileRequired(
+                                "User stream reconnect reconciliation failed: " +
+                                    (x.message ?: x.javaClass.simpleName)
+                            )
+                        }
+                    }.apply {
+                        isDaemon = true
+                        start()
                     }
-                }.apply {
-                    isDaemon = true
-                    start()
+                } else {
+                    // Read-only diagnostic connections must not mutate trading
+                    // state or trigger a reconciliation side effect.
+                    userStreamSyncRequired = false
                 }
             } else if (!error.equals("stopped")) {
                 userStreamSyncRequired = true
