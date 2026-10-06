@@ -1485,9 +1485,10 @@ private class NativeEngine(
                     .get()
                     .build()
             }
-            rateGuard.beforeRequest(isOrder = false)
+            val isOrderRequest = path.startsWith("/api/v3/order")
+            rateGuard.beforeRequest(isOrder = isOrderRequest)
             http.newCall(request).execute().use { response ->
-                rateGuard.observe(response.headers, response.code, isOrder = false)
+                rateGuard.observe(response.headers, response.code, isOrder = isOrderRequest)
                 lastBody = response.body?.string() ?: "{}"
                 auditStore.recordRestCall(
                     method,
@@ -1554,9 +1555,9 @@ private class NativeEngine(
                 .get()
                 .build()
 
-            rateGuard.beforeRequest(isOrder = method != "GET")
+            rateGuard.beforeRequest(isOrder = true)
             http.newCall(request).execute().use { response ->
-                rateGuard.observe(response.headers, response.code, isOrder = method != "GET")
+                rateGuard.observe(response.headers, response.code, isOrder = true)
                 lastBody = response.body?.string() ?: "{}"
                 auditStore.recordRestCall(
                     "GET",
