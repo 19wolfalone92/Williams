@@ -1,0 +1,50 @@
+name: AI-Forge Core CI
+
+on:
+  push:
+    branches: [main, master]
+    paths: [ai_forge/**, .github/workflows/ai-forge-ci.yml]
+  pull_request:
+    paths: [ai_forge/**, .github/workflows/ai-forge-ci.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Council tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      AI_FORGE_MOCK: true
+      AI_FORGE_API_TOKEN: ci-test-token
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: 3.12
+          cache: pip
+          cache-dependency-path: ai_forge/requirements.txt
+      - name: Install
+        run: pip install -r ai_forge/requirements.txt
+      - name: Compile
+        run: python -m compileall -q ai_forge
+      - name: Test
+        working-directory: ai_forge
+        run: pytest -q
+  container:
+    name: Build AI-Forge container
+    runs-on: ubuntu-24.04
+    needs: test
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build container
+        run: docker build -f ai_forge/Dockerfile -t ai-forge-core:ci ai_forge
+      - name: Smoke test
+        run: |
+          docker run -d --rm --name ai-forge-smoke -e AI_FORGE_MOCK=true -e AI_FORGE_API_TOKEN=ci-test-token -p 8787:8787 ai-forge-core:ci
+          trap "docker stop ai-forge-smoke >/dev/null 2>&1 || true" EXIT
+          for i in $(seq 1 20); do curl -fsS http://127.0.0.1:8787/health && exit 0; sleep 1; done
+          docker logs ai-forge-smoke
+          exit 1
