@@ -65,6 +65,7 @@ class OrderBookCacheTest {
             )
         )
 
+        assertNull(cache.estimateBuy("ETHUSDT", 10.0))
         assertNull(cache.estimateBuy("UNKNOWN", 10.0))
     }
 }
