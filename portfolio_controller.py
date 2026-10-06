@@ -27,7 +27,11 @@ class PortfolioController:
             max(0.0, float(os.getenv("MIN_RISK_ALLOCATION_PCT", "0.001"))),
         )
 
-        self.scanner = MarketScanner(client=client, symbols=symbols, interval=self.interval)
+        self.scanner = MarketScanner(
+            client=client,
+            symbols=(symbols if symbols else None),
+            interval=self.interval,
+        )
         self.risk_engine = RiskEngine(
             balance_quote=float(balance_quote),
             risk_per_trade_pct=self.max_risk_per_trade_pct,
