@@ -32,6 +32,7 @@ class MultiPositionTrader:
 
     ENTRY_PREFIX = "WILLV4_ENTRY_"
     OCO_PREFIX = "WILLV4_OCO_"
+    EMERGENCY_PREFIX = "WILLV4_EMERGENCY_"
 
     def __init__(self, client, db=None, symbols=None):
         self.client = client
@@ -549,7 +550,7 @@ class MultiPositionTrader:
                 f"{symbol}: emergency exit quantity below Binance LOT_SIZE"
             )
 
-        client_id = f"{self.ENTRY_PREFIX}EMERGENCY_{uuid.uuid4().hex[:16]}"
+        client_id = f"{self.EMERGENCY_PREFIX}{uuid.uuid4().hex[:16]}"
         sell = self.client.order_safe(
             symbol,
             "SELL",
