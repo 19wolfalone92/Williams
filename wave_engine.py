@@ -1292,7 +1292,19 @@ class MultiTimeframeWaveEngine:
         # W3 may be nested inside any higher-degree impulse W1/W3/W5, not only the adjacent timeframe.
         for parent_index, parent in enumerate(ordered):
             for child in ordered[parent_index + 1:]:
-                relation = self._nested_relationship(parent, child)\n                child_w3 = child.position == 3 and child.confidence >= 45.0\n                if relation == "ALIGNED_IMPULSE" and child_w3:\n                    nested_w3 = True\n                    nested_count += 1\n                    nested_parent_positions.add(int(parent.position))\n                    if parent.position == 5:\n                        nested_parent_w5 = True\n                elif relation == "CORRECTION_IMPULSE" and child.confidence >= 40.0:\n                    nested_countertrend_impulse = True\n                    nested_countertrend_count += 1\n\n        exhaustion = exhaustion_sum / max(total, 1e-12)
+                relation = self._nested_relationship(parent, child)
+                child_w3 = child.position == 3 and child.confidence >= 45.0
+                if relation == "ALIGNED_IMPULSE" and child_w3:
+                    nested_w3 = True
+                    nested_count += 1
+                    nested_parent_positions.add(int(parent.position))
+                    if parent.position == 5:
+                        nested_parent_w5 = True
+                elif relation == "CORRECTION_IMPULSE" and child.confidence >= 40.0:
+                    nested_countertrend_impulse = True
+                    nested_countertrend_count += 1
+
+        exhaustion = exhaustion_sum / max(total, 1e-12)
         impulse = impulse_sum / max(total, 1e-12)
         structure = confidence_sum / max(total, 1e-12)
         child_quality = setup.confidence if setup is not None else 0.0
