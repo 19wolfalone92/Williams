@@ -583,9 +583,8 @@ def _canonical_execution_state(multi, positions=None):
     unresolved_symbols = list(multi.unresolved_symbols())
     pending_symbols = [symbol for symbol, _ in multi._pending_entries()]
 
-    # Legacy single-position execution is still active when MAX_OPEN_POSITIONS=1.
-    # Mirror any legacy barrier/entry intent into the canonical contract so a
-    # legacy execution failure cannot disappear from Cockpit status.
+    # Preserve legacy persisted state only for recovery/compatibility; the
+    # authoritative runtime is risk-budgeted MultiPositionTrader.
     legacy_state = str(
         multi.db.state_get('position_state', 'FLAT')
     ).upper()
