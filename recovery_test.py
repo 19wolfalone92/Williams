@@ -125,6 +125,11 @@ def scenario_fresh_db_recovers_explicit_bot_buy():
         assert abs(float(t.db.state_get('foreign_base_balance:BTCUSDT')))<1e-9
         assert c.created_oco_count==1
 
+def test_recovery_suite():
+    """Run every offline recovery scenario under pytest/CI."""
+    run()
+
+
 def run():
     tests=[
         ('fresh DB -> missing baseline -> safe FLAT recovery',scenario_fresh_missing_baseline),
