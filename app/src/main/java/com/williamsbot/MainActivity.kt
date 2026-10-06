@@ -289,7 +289,18 @@ data class Candidate(
     val wavePath: String,
     val wavePrimaryCount: String,
     val waveAlternativeCount: String,
-    val waveAbcPhase: String
+    val waveAbcPhase: String,
+    val quantScore: Double = 0.0,
+    val regime: String = "UNKNOWN",
+    val regimeScore: Double = 0.0,
+    val obi: Double = 0.0,
+    val tradeFlowImbalance: Double = 0.0,
+    val wave3Probability: Double = 0.0,
+    val wave5Probability: Double = 0.0,
+    val shadowDirection: String = "HOLD",
+    val shadowConfidence: Double = 0.0,
+    val shadowReason: String = "",
+    val xaiTopFactor: String = ""
 )
 
 data class Trade(
@@ -1220,6 +1231,20 @@ private fun BestCandidateCard(best: Candidate?) {
                     MiniMetric("HTF", if (best.htfConfirmed) "OK" else "WAIT")
                     MiniMetric("W", waveText(best))
                 }
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    MiniMetric("REGIME", best.regime)
+                    MiniMetric("OBI", fmt(best.obi, 2))
+                    MiniMetric("SHADOW", best.shadowDirection + " " + fmt(best.shadowConfidence, 2))
+                }
+
+                if (best.xaiTopFactor.isNotBlank()) {
+                    Text(
+                        "XAI: " + best.xaiTopFactor,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AppColors.violet
+                    )
+                }
             }
         }
     }
@@ -1531,6 +1556,23 @@ private fun CandidateCardModern(candidate: Candidate) {
                 MiniMetric("W-SCORE", fmt(candidate.waveScore, 0))
                 MiniMetric("EXHAUST", fmt(candidate.waveExhaustionRisk, 0) + "%")
                 MiniMetric("HTF", if (candidate.htfConfirmed) "OK" else "WAIT")
+            }
+
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                MiniMetric("REGIME", candidate.regime)
+                MiniMetric("OBI", fmt(candidate.obi, 2))
+                MiniMetric("SHADOW", candidate.shadowDirection + " " + fmt(candidate.shadowConfidence, 2))
+            }
+
+            if (candidate.xaiTopFactor.isNotBlank()) {
+                Text(
+                    "XAI: " + candidate.xaiTopFactor,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AppColors.violet
+                )
             }
 
             Divider(color = AppColors.surface2)
@@ -2686,7 +2728,18 @@ private fun parseCandidates(array: JSONArray): List<Candidate> =
             wavePath = x.optString("wave_path", ""),
             wavePrimaryCount = x.optString("wave_primary_count", ""),
             waveAlternativeCount = x.optString("wave_alternative_count", ""),
-            waveAbcPhase = x.optString("wave_abc_phase", "")
+            waveAbcPhase = x.optString("wave_abc_phase", ""),
+            quantScore = x.optDouble("quant_score", x.optDouble("score", 0.0)),
+            regime = x.optString("regime", "UNKNOWN"),
+            regimeScore = x.optDouble("regime_score", 0.0),
+            obi = x.optDouble("obi", 0.0),
+            tradeFlowImbalance = x.optDouble("trade_flow_imbalance", 0.0),
+            wave3Probability = x.optDouble("wave3_probability", 0.0),
+            wave5Probability = x.optDouble("wave5_probability", 0.0),
+            shadowDirection = x.optJSONObject("shadow_intent")?.optString("direction", "HOLD") ?: "HOLD",
+            shadowConfidence = x.optJSONObject("shadow_intent")?.optDouble("confidence", 0.0) ?: 0.0,
+            shadowReason = x.optJSONObject("shadow_intent")?.optString("reason", "") ?: "",
+            xaiTopFactor = topXaiFactor(x.optJSONObject("xai_factors"))
         )
     }.sortedByDescending { it.score }
 
@@ -2721,6 +2774,22 @@ private fun parseLogs(array: JSONArray): List<String> =
             x.optString("level") + "  " +
             x.optString("message")
     }
+
+private fun topXaiFactor(factors: JSONObject?): String {
+    if (factors == null) return ""
+    var bestName = ""
+    var bestValue = 0.0
+    val keys = factors.keys()
+    while (keys.hasNext()) {
+        val key = keys.next()
+        val value = factors.optDouble(key, 0.0)
+        if (kotlin.math.abs(value) > kotlin.math.abs(bestValue)) {
+            bestName = key
+            bestValue = value
+        }
+    }
+    return if (bestName.isBlank()) "" else bestName + "=" + fmt(bestValue, 2)
+}
 
 private fun candidateColor(candidate: Candidate): Color =
     when {
