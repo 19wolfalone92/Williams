@@ -96,6 +96,104 @@ class MultiPositionTrader:
             state,
         )
 
+    def _sync_legacy_state(self):
+        """Keep the legacy single-symbol state as a mirror of canonical state."""
+        unresolved = self.unresolved_symbols()
+        pending = self._pending_entries()
+        if unresolved or pending:
+            canonical = "RECONCILE_REQUIRED"
+        elif self.open_trades():
+            canonical = "OPEN"
+        else:
+            canonical = "FLAT"
+        self.db.state_set("position_state", canonical)
+        return canonical
+
+    def _bot_entry_remaining(self, symbol):
+        """Return True when exchange history shows an unresolved Williams BUY."""
+        all_orders = self.client.all_orders(symbol, limit=1000)
+        min_qty = 0.0
+        try:
+            filters = self._filters(symbol)
+            lot = filters.get("LOT_SIZE") or filters.get("MARKET_LOT_SIZE") or {}
+            min_qty = float(lot.get("minQty", 0) or 0)
+        except Exception:
+            # A metadata failure is itself ambiguous; caller must keep the barrier.
+            raise
+
+        for buy in all_orders:
+            if (
+                str(buy.get("side", "")).upper() != "BUY"
+                or str(buy.get("status", "")).upper() != "FILLED"
+                or not str(buy.get("clientOrderId", "")).startswith(self.ENTRY_PREFIX)
+            ):
+                continue
+
+            bought = float(buy.get("executedQty", 0) or 0)
+            if bought <= 0:
+                continue
+
+            buy_time = int(
+                buy.get("time", buy.get("transactTime", 0)) or 0
+            )
+            sold = 0.0
+            for sell in all_orders:
+                if (
+                    str(sell.get("side", "")).upper() != "SELL"
+                    or str(sell.get("status", "")).upper() != "FILLED"
+                    or not str(sell.get("clientOrderId", "")).startswith(self.OCO_PREFIX)
+                ):
+                    continue
+                sell_time = int(
+                    sell.get("time", sell.get("transactTime", 0)) or 0
+                )
+                if sell_time >= buy_time:
+                    sold += float(sell.get("executedQty", 0) or 0)
+
+            if max(0.0, bought - sold) >= min_qty:
+                return True
+
+        return False
+
+    def _repair_stale_reconcile_states(self):
+        """Clear only stale barriers after exchange/SQLite evidence proves no active activity."""
+        repaired = []
+        for symbol in self.symbols:
+            symbol = str(symbol).upper()
+            if self.state(symbol) != "RECONCILE_REQUIRED":
+                continue
+            if self.db.open_trade(symbol) is not None:
+                continue
+            if any(item[0] == symbol for item in self._pending_entries()):
+                continue
+
+            try:
+                open_orders = self.client.open_orders(symbol)
+                if open_orders:
+                    # Any active exchange order means the state is still ambiguous.
+                    continue
+                if self._bot_entry_remaining(symbol):
+                    # A filled Williams BUY without a local trade is not safe to auto-clear.
+                    continue
+
+                self.set_state(symbol, "FLAT")
+                repaired.append(symbol)
+                self.db.log_event(
+                    "INFO",
+                    "stale_reconcile_cleared",
+                    "Cleared stale per-symbol reconciliation barrier after clean exchange recovery",
+                    {"symbol": symbol},
+                )
+            except Exception as exc:
+                self.db.log_event(
+                    "ERROR",
+                    "stale_reconcile_check_failed",
+                    str(exc),
+                    {"symbol": symbol},
+                )
+
+        return repaired
+
     def open_trades(self):
         return self.db.open_trades()
 
@@ -945,8 +1043,15 @@ class MultiPositionTrader:
     def recover(self):
         """Startup/full recovery. No new entry is allowed until it is clean."""
         results = self.reconcile_open_positions()
+        repaired = self._repair_stale_reconcile_states()
         unresolved = self.unresolved_symbols()
-        ok = not unresolved and not self._pending_entries()
+        pending = self._pending_entries()
+        ok = not unresolved and not pending
+        canonical_state = self._sync_legacy_state()
+        results.extend(
+            {"symbol": symbol, "state": "FLAT", "stale_reconcile_cleared": True}
+            for symbol in repaired
+        )
         self.db.log_event(
             "INFO" if ok else "ERROR",
             "multi_position_recovery_complete",

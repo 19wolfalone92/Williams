@@ -229,7 +229,9 @@ data class Status(
     val executionKillLatched: Boolean = false,
     val p0GatePassed: Boolean = false,
     val p0GateReason: String = "NOT_READY",
-    val maxOpenPositionsLocked: Boolean = true
+    val maxOpenPositionsLocked: Boolean = true,
+    val unresolvedSymbols: List<String> = emptyList(),
+    val pendingEntrySymbols: List<String> = emptyList()
 )
 
 data class Candle(
@@ -891,7 +893,13 @@ private fun ReconcileBarrierScreen(
                 InfoRow("P0 Gate", if (status.p0GatePassed) "PASS" else status.p0GateReason)
                 InfoRow("WSS", if (status.marketWsConnected) "CONNECTED" else "OFFLINE")
                 InfoRow("Binance", if (status.binanceConfigured) "CONFIGURED" else "NOT CONFIGURED")
-                InfoRow("Positions", status.openPositions.toString() + " / 1")
+                InfoRow("Positions", status.openPositions.toString() + " / " + status.maxOpenPositions)
+                status.unresolvedSymbols.takeIf { it.isNotEmpty() }?.let {
+                    InfoRow("Unresolved", it.joinToString(", "))
+                }
+                status.pendingEntrySymbols.takeIf { it.isNotEmpty() }?.let {
+                    InfoRow("Pending entry", it.joinToString(", "))
+                }
                 status.error?.takeIf { it.isNotBlank() }?.let { Text(it, color = AppColors.red) }
             }
         }

@@ -17,7 +17,7 @@ from mtf_context_service import MultiTimeframeContextService
 
 load_dotenv()
 API_TOKEN = os.getenv('MOBILE_API_TOKEN', '').strip()
-VERSION = '4.19.0'
+VERSION = '4.20.0'
 
 app = FastAPI(title='Williams Binance Bot API', version=VERSION)
 hub = WebSocketHub()
@@ -81,7 +81,7 @@ class MetricsRegistry:
             f"williams_open_positions {len(state.ensure_multi().open_positions())}",
             "# HELP williams_reconciliation_required Reconciliation barrier state.",
             "# TYPE williams_reconciliation_required gauge",
-            f"williams_reconciliation_required {1 if state.ensure_multi().unresolved_symbols() else 0}",
+            f"williams_reconciliation_required {1 if (_canonical_execution_state(state.ensure_multi())[1] or _canonical_execution_state(state.ensure_multi())[2]) else 0}",
         ]
         return "\n".join(lines) + "\n"
 
@@ -197,6 +197,8 @@ class ControlState:
         t = self.ensure_trader()
         try:
             t.setup()
+            # A successful explicit START is the controlled re-arm after KILL.
+            t.db.state_set('kill_switch_latched', 'false')
             with self.lock:
                 self.running = True
                 self.last_error = None
@@ -270,6 +272,8 @@ class ControlState:
             thread = self.thread
 
         t = self.ensure_trader()
+        # Persist the emergency latch before attempting any close operation.
+        t.db.state_set('kill_switch_latched', 'true')
         multi = self.ensure_multi()
         errors = []
         closed = []
@@ -491,14 +495,58 @@ def db():
     return state.ensure_trader().db
 
 
+def _canonical_execution_state(multi, positions=None):
+    """Single backend execution-state contract used by health, status and recovery."""
+    unresolved_symbols = list(multi.unresolved_symbols())
+    pending_symbols = [symbol for symbol, _ in multi._pending_entries()]
+
+    # Legacy single-position execution is still active when MAX_OPEN_POSITIONS=1.
+    # Mirror any legacy barrier/entry intent into the canonical contract so a
+    # legacy execution failure cannot disappear from Cockpit status.
+    legacy_state = str(
+        multi.db.state_get('position_state', 'FLAT')
+    ).upper()
+    active_symbol = str(
+        multi.db.state_get('active_symbol')
+        or (multi.symbols[0] if multi.symbols else '')
+    ).upper()
+    legacy_pending = str(
+        multi.db.state_get('entry_client_order_id', '')
+    ).strip()
+
+    if legacy_state == 'RECONCILE_REQUIRED' and active_symbol:
+        if active_symbol not in unresolved_symbols:
+            unresolved_symbols.append(active_symbol)
+    if legacy_pending and active_symbol:
+        if active_symbol not in pending_symbols:
+            pending_symbols.append(active_symbol)
+
+    if unresolved_symbols or pending_symbols:
+        return 'RECONCILE_REQUIRED', sorted(unresolved_symbols), sorted(pending_symbols)
+
+    if positions is None:
+        positions = multi.open_positions()
+    return ('OPEN' if positions else 'READY_FLAT'), unresolved_symbols, pending_symbols
+
+
 @app.get('/api/v1/health')
 def health():
     t = state.ensure_trader()
     multi = state.ensure_multi()
-    unresolved = bool(multi.unresolved_symbols() or multi._pending_entries())
-    execution_state = (
-        'RECONCILE_REQUIRED' if unresolved
-        else ('OPEN' if multi.open_positions() else 'READY_FLAT')
+    execution_state, unresolved_symbols, pending_symbols = _canonical_execution_state(multi)
+    unresolved = bool(unresolved_symbols or pending_symbols)
+    p0_ready = bool(t.preflight_report and t.preflight_report.get('ready'))
+    open_positions = multi.open_positions()
+    kill_switch_latched = str(
+        t.db.state_get('kill_switch_latched', 'false')
+    ).lower() == 'true'
+    execution_enabled = (
+        p0_ready
+        and not unresolved
+        and not open_positions
+        and state.running
+        and not state.paused
+        and not kill_switch_latched
     )
     return {
         'ok': True,
@@ -507,20 +555,19 @@ def health():
         'execution_state_contract': {
             'version': 1,
             'state': execution_state,
-            'execution_enabled': not unresolved,
+            'execution_enabled': execution_enabled,
             'reconciliation_required': unresolved,
-            'kill_switch_latched': False,
+            'kill_switch_latched': kill_switch_latched,
         },
+        'unresolved_symbols': unresolved_symbols,
+        'pending_entry_symbols': pending_symbols,
         'websocket': True,
         'auth_configured': len(API_TOKEN) >= 32,
         'max_open_positions': multi.max_open_positions,
         'max_total_risk_pct': multi.max_total_risk_pct,
         'max_risk_per_trade_pct': multi.max_risk_per_trade_pct,
-        'open_positions': len(multi.open_positions()),
-        'execution_enabled': not bool(
-            multi.unresolved_symbols()
-            or multi._pending_entries()
-        ),
+        'open_positions': len(open_positions),
+        'execution_enabled': execution_enabled,
         'testnet': t.client.testnet,
     }
 
@@ -698,6 +745,37 @@ def status():
         float(item['unrealized_pnl'] or 0.0)
         for item in positions
     )
+    reserved_risk_quote = multi.reserved_risk_quote()
+    account_equity_quote = max(
+        0.0,
+        float(balance or 0.0),
+    ) + sum(
+        max(0.0, float(item.get('current_price') or 0.0))
+        * max(0.0, float(item.get('quantity') or 0.0))
+        for item in positions
+    )
+    reserved_risk_pct = (
+        reserved_risk_quote / account_equity_quote
+        if account_equity_quote > 0.0
+        else 0.0
+    )
+
+    execution_state, unresolved_symbols, pending_symbols = _canonical_execution_state(
+        multi,
+        positions=positions,
+    )
+    p0_ready = bool(t.preflight_report and t.preflight_report.get('ready'))
+    kill_switch_latched = str(
+        t.db.state_get('kill_switch_latched', 'false')
+    ).lower() == 'true'
+    execution_enabled = (
+        p0_ready
+        and not bool(unresolved_symbols or pending_symbols)
+        and not positions
+        and state.running
+        and not state.paused
+        and not kill_switch_latched
+    )
 
     selected_position = None
     if positions:
@@ -710,15 +788,7 @@ def status():
         'testnet': t.client.testnet,
         'running': state.running,
         'paused': state.paused,
-        'state': (
-            'RECONCILE_REQUIRED'
-            if multi.unresolved_symbols()
-            else (
-                'OPEN'
-                if positions
-                else 'FLAT'
-            )
-        ),
+        'state': execution_state,
         'recovered': t.recovered,
         'last_error': state.last_error,
         'binance_configured': bool(
@@ -734,7 +804,8 @@ def status():
         'positions': positions,
         'open_positions': len(positions),
         'max_open_positions': multi.max_open_positions,
-        'reserved_risk_quote': multi.reserved_risk_quote(),
+        'reserved_risk_quote': reserved_risk_quote,
+        'reserved_risk_pct': reserved_risk_pct,
         'max_total_risk_pct': multi.max_total_risk_pct,
         'max_risk_per_trade_pct': multi.max_risk_per_trade_pct,
         'unrealized_pnl_quote': total_pnl,
@@ -768,13 +839,15 @@ def status():
         'p0_gate_passed': bool(t.preflight_report and t.preflight_report.get('ready')),
         'p0_gate_reason': ('PASS' if t.preflight_report and t.preflight_report.get('ready') else 'NOT_READY'),
         'max_open_positions_locked': True,
-        'reconcile_required': bool(multi.unresolved_symbols() or multi._pending_entries()),
+        'reconcile_required': bool(unresolved_symbols or pending_symbols),
+        'unresolved_symbols': unresolved_symbols,
+        'pending_entry_symbols': pending_symbols,
         'execution_state_contract': {
             'version': 1,
-            'state': ('RECONCILE_REQUIRED' if (multi.unresolved_symbols() or multi._pending_entries()) else ('OPEN' if positions else 'READY_FLAT')),
-            'execution_enabled': not bool(multi.unresolved_symbols() or multi._pending_entries()),
-            'reconciliation_required': bool(multi.unresolved_symbols() or multi._pending_entries()),
-            'kill_switch_latched': False,
+            'state': execution_state,
+            'execution_enabled': execution_enabled,
+            'reconciliation_required': bool(unresolved_symbols or pending_symbols),
+            'kill_switch_latched': kill_switch_latched,
         },
     }
 
@@ -958,25 +1031,22 @@ def manual_sell(symbol: str):
 @app.post('/api/v1/control/recover', dependencies=[Depends(auth)])
 def recover():
     t = state.ensure_trader()
-    if t.max_open_positions > 1:
-        result = state.ensure_multi().recover()
-        return {
-            'recovered': bool(result['ok']),
-            'state': (
-                'RECONCILE_REQUIRED'
-                if not result['ok']
-                else (
-                    'OPEN'
-                    if result['open_positions']
-                    else 'FLAT'
-                )
-            ),
-            'details': result,
-        }
-    t.recover_state()
+    multi = state.ensure_multi()
+
+    # Recovery must use the same canonical state machine as status/health.
+    # Never route the button through the legacy single-symbol recovery only.
+    result = multi.recover()
+    t.recovered = bool(result.get('ok'))
+    execution_state, unresolved_symbols, pending_symbols = _canonical_execution_state(
+        multi,
+        positions=multi.open_positions(),
+    )
     return {
-        'recovered': t.recovered,
-        'state': t.state(),
+        'recovered': bool(result.get('ok')),
+        'state': execution_state,
+        'unresolved_symbols': unresolved_symbols,
+        'pending_entry_symbols': pending_symbols,
+        'details': result,
     }
 
 

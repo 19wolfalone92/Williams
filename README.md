@@ -1,4 +1,4 @@
-# Williams Binance Bot + Android Dashboard 4.17.0
+# Williams Binance Bot + Android Dashboard 4.20.0
 
 Полноценная Testnet-first версия торгового бота по Williams (Alligator + AO + Fractals) с Android Dashboard, SQLite recovery, Binance WebSocket и защитными risk-фильтрами.
 
@@ -30,7 +30,7 @@
 По умолчанию:
 - риск на сделку: максимум 0,5%;
 - совокупный открытый риск: максимум 1%;
-- одновременно: до 3 позиций;
+- одновременно: ровно 1 управляемая позиция;
 - максимум дневного убытка: 3%;
 - максимум 5 сделок в день;
 - максимум 3 последовательных убытка;
@@ -50,9 +50,9 @@
 
 REST остаётся обязательным reconciliation-слоем: WebSocket не используется как единственный источник истины для финансового состояния.
 
-### Android 4.14
+### Android 4.20
 - Standalone native Testnet engine — без VPS и без Termux для работы приложения;
-- одновременно до 3 независимых позиций с общим risk budget;
+- ровно 1 управляемая позиция с единым risk budget;
 - отдельный SELL для каждой открытой позиции;
 - Android Foreground Service для продолжения работы торгового двигателя после ухода с экрана;
 - зашифрованный переносимый backup с восстановлением на другом телефоне;
@@ -125,7 +125,7 @@ python run_backtest.py --symbol BTCUSDT --interval 1h --start 2024-01-01 --end 2
 
 Открыть корень проекта в Android Studio и собрать `app`.
 
-Версия приложения: **4.12.0**, versionCode формируется GitHub Actions.
+Версия приложения: **4.20.0**, versionCode формируется GitHub Actions.
 
 Среда, в которой подготовлен этот архив, не содержит Android SDK/Gradle distribution, поэтому APK здесь не заявляется как собранный. Исходники Gradle-проекта подготовлены для сборки Android Studio.
 
@@ -137,7 +137,7 @@ python run_backtest.py --symbol BTCUSDT --interval 1h --start 2024-01-01 --end 2
 
 Полная инструкция: `BUILD_APK_RU.md`.
 
-Проект подготовлен с AGP 8.7.3, Gradle 8.9, Java/Kotlin target 17 и compile/target SDK 35. Для локальной сборки можно использовать Android Studio. Для автоматической debug-сборки в GitHub предусмотрен workflow `.github/workflows/android.yml`.
+Проект подготовлен с AGP 8.7.3, Gradle 8.9, Java/Kotlin target 17 и compile/target SDK 35. Для локальной сборки можно использовать Android Studio. Для автоматической debug-сборки в GitHub предусмотрен workflow `.github/workflows/android-apk.yml`.
 
 Release-подпись не хранится в проекте: создайте собственный keystore и локальный `keystore.properties`. Это необходимо для безопасного выпуска обновлений приложения.
 

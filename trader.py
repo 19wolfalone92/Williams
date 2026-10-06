@@ -160,12 +160,30 @@ class Trader:
         self.ensure_foreign_base_balance_baseline()
         self.recover_state()
 
+        # Canonical recovery owns the per-symbol lifecycle state used by
+        # server status/control. It also mirrors the canonical result into
+        # the legacy position_state consumed by the single-position entry gate.
+        self._multi_position_trader = MultiPositionTrader(
+            self.client,
+            db=self.db,
+            symbols=self.auto_scan_symbols,
+        )
+        recovery = self._multi_position_trader.recover()
+
         # Recovery is a second barrier: an inconsistent local/exchange state
         # must never be followed by scanner activation.
+        if not recovery.get('ok'):
+            raise RuntimeError(
+                'LIVE SAFETY GATE BLOCKED: canonical reconciliation failed: '
+                + str(recovery)
+            )
+
         if self.state() == 'RECONCILE_REQUIRED':
             raise RuntimeError(
-                'LIVE SAFETY GATE BLOCKED: local state requires reconciliation'
+                'LIVE SAFETY GATE BLOCKED: canonical state requires reconciliation'
             )
+
+        self.recovered = True
 
         self.notify(
             f'Williams STARTED\n'
@@ -322,10 +340,25 @@ class Trader:
             'filters': self.filters,
         }
 
-    def state(self): return self.db.state_get('position_state','FLAT')
-    def _set_state(self,state):
-        if state not in STATES: raise ValueError(f'Unknown state {state}')
-        self.db.state_set('position_state',state)
+    def state(self):
+        legacy = self.db.state_get('position_state')
+        if legacy is not None:
+            return legacy
+        return self.db.state_get(
+            f'position_state:{self.symbol}',
+            'FLAT',
+        )
+
+    def _set_state(self, state):
+        if state not in STATES:
+            raise ValueError(f'Unknown state {state}')
+        self.db.state_set('position_state', state)
+        # Mirror every legacy lifecycle transition into the canonical
+        # per-symbol state used by server/Cockpit recovery.
+        self.db.state_set(
+            f'position_state:{self.symbol}',
+            state,
+        )
 
     def normalize_qty(self, qty):
         if self.symbol_rules is None:
@@ -480,7 +513,7 @@ class Trader:
             # A confirmed BUY that is too small to represent a valid
             # Williams position must never silently become FLAT.
             if qty < self._min_qty():
-                self.db.state_delete('entry_client_order_id')
+                self.db.state_delete('entry_client_order_id'); self.db.state_delete(f'entry_client_order_id:{self.symbol}')
                 self._set_state('RECONCILE_REQUIRED')
                 self.db.log_event(
                     'ERROR',
@@ -544,7 +577,7 @@ class Trader:
         if baseline is None:
             entry_intent=self.db.state_get('entry_client_order_id')
 
-            unresolved_bot_buy=False
+            remaining_bot_buys=[]
             for buy in all_orders:
                 if (
                     buy.get('side') == 'BUY'
@@ -554,12 +587,48 @@ class Trader:
                     bought=float(buy.get('executedQty',0) or 0)
                     sold=self._filled_sell_qty_after(buy,all_orders)
                     remaining=max(0.0,bought-sold)
-
                     if remaining >= self._min_qty():
-                        unresolved_bot_buy=True
-                        break
+                        remaining_bot_buys.append((buy, remaining))
 
-            if open_trade is None and not entry_intent and not unresolved_bot_buy:
+            # A fresh DB may legitimately be missing the local trade row while
+            # Binance still has a completed Williams BUY. Infer the foreign
+            # baseline only from explicit bot-owned exchange evidence. Never
+            # infer a position from the account balance alone.
+            if open_trade is None and not entry_intent and len(remaining_bot_buys) <= 1:
+                bot_expected = remaining_bot_buys[0][1] if remaining_bot_buys else 0.0
+                if bot_expected > position_qty + self._min_qty():
+                    self._set_state('RECONCILE_REQUIRED')
+                    self.recovered=True
+                    self.db.log_event(
+                        'ERROR',
+                        'recovery_bot_balance_exceeds_account',
+                        'Known Williams position exceeds actual exchange balance',
+                        {
+                            'symbol':self.symbol,
+                            'bot_expected':bot_expected,
+                            'total_balance':float(position_qty)
+                        }
+                    )
+                    return
+
+                inferred_baseline = max(
+                    0.0,
+                    float(position_qty) - float(bot_expected),
+                )
+                self.db.state_set(baseline_key, inferred_baseline)
+                baseline = inferred_baseline
+                self.db.log_event(
+                    'INFO',
+                    'foreign_balance_baselined_from_bot_evidence',
+                    'Inferred foreign base-asset baseline from explicit Williams exchange orders',
+                    {
+                        'symbol':self.symbol,
+                        'total_balance':float(position_qty),
+                        'bot_expected':float(bot_expected),
+                        'foreign_baseline':float(inferred_baseline)
+                    }
+                )
+            elif open_trade is None and not entry_intent and len(remaining_bot_buys) == 0:
                 self.ensure_foreign_base_balance_baseline(position_qty)
                 baseline=self.db.state_get(baseline_key)
             else:
@@ -574,7 +643,7 @@ class Trader:
                         'total_balance':float(position_qty),
                         'open_trade':bool(open_trade),
                         'entry_intent':bool(entry_intent),
-                        'unresolved_bot_buy':bool(unresolved_bot_buy)
+                        'unresolved_bot_buy':bool(remaining_bot_buys)
                     }
                 )
                 return
@@ -896,6 +965,10 @@ class Trader:
         # process dies after Binance accepts the order but before the HTTP
         # response is processed, recovery can still identify the order.
         self.db.state_set('entry_client_order_id', cid)
+        self.db.state_set(
+            f'entry_client_order_id:{self.symbol}',
+            cid,
+        )
         self._set_state('ENTRY_PENDING')
 
         def _pre_submit(_snapshot):
