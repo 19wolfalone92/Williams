@@ -14,6 +14,7 @@ from feature_store import (
     build_volume_bars_from_trades,
 )
 from stress_suite import run_latency_slippage_stress
+from mock_exchange import MockExchange
 
 
 def _candles(n=80):
@@ -90,3 +91,22 @@ def test_latency_slippage_stress():
         cases=50,
     )
     assert not bad.passed
+
+
+def test_mock_exchange_failure_modes():
+    exchange = MockExchange()
+    order = exchange.market_buy("BTCUSDT", quote_order_qty=100)
+    assert float(order["executedQty"]) > 0
+    exchange.timeout_next = True
+    try:
+        exchange.market_buy("BTCUSDT", quote_order_qty=100)
+    except TimeoutError as exc:
+        assert "504" in str(exc)
+    else:
+        raise AssertionError("expected mock timeout")
+    exchange.sequence_gap_next = True
+    depth = exchange.depth("BTCUSDT", limit=20)
+    assert depth["lastUpdateId"] >= 11
+    exchange.partial_fill_ratio = 0.5
+    partial = exchange.market_sell("BTCUSDT", quantity=0.1)
+    assert float(partial["executedQty"]) <= 0.1
