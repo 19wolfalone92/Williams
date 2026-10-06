@@ -565,8 +565,7 @@ class MarketScanner:
 
     def scan(self) -> List[Candidate]:
         symbols = self._resolve_symbols()
-        symbols = symbols[:5]
-        self._refresh_spreads(symbols)
+        # Do not silently collapse the autonomous universe to five symbols.\n        # Discovery already applies liquidity/scan limits; every selected symbol\n        # gets the cheap base pass, while Wave/MTF analysis remains staged below.\n        self._refresh_spreads(symbols)
         candidates: List[Candidate] = []
         frames: Dict[str, pd.DataFrame] = {}
 
