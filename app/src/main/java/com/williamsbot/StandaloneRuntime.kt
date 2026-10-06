@@ -261,6 +261,8 @@ private class StandaloneServer(private val context: Context) {
         }
         socket = null
         engine?.stop()
+        engine?.shutdown()
+        engine = null
     }
 
     fun autostart() {
@@ -1198,6 +1200,14 @@ private class NativeEngine(
             }
         }
 
+    fun shutdown() {
+        runCatching { stop() }
+        scanExecutor.shutdownNow()
+        indicatorExecutor.shutdownNow()
+        executionExecutor.shutdownNow()
+        tradingEventLoop.close()
+    }
+
     fun stop(): JSONObject {
         running = false
         paused = false
@@ -1213,10 +1223,6 @@ private class NativeEngine(
         worker = null
         marketReconnectScheduled.set(false)
         l2ResyncInFlight.clear()
-        scanExecutor.shutdownNow()
-        indicatorExecutor.shutdownNow()
-        executionExecutor.shutdownNow()
-        tradingEventLoop.close()
 
         return JSONObject().put("stopped", true)
     }
