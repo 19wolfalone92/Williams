@@ -12,7 +12,8 @@ from portfolio_trader import MultiPositionTrader
 from binance_rules import OrderMath, SymbolRules, D
 from preflight_gate import PreflightCheckService
 from trading_config import TradingConfig
-from market_context import ContextCache, TFMarketContext, WaveHypothesis
+from market_context import ContextCache, TFMarketContext
+from hypothesis_engine import build_hypotheses
 from execution_barrier import ExecutionBarrier, OrderIntent
 from l2_slippage import L2SlippageGuard
 from equity_breaker import EquityCircuitBreaker
@@ -734,23 +735,25 @@ class Trader:
             exhaustion = float(wsnap.exhaustion_risk if wsnap else 0.0)
             wave_score = float(wsnap.impulse_score if wsnap else 0.0)
             invalidation = float(wsnap.invalidation_price if wsnap else 0.0)
-            p = confidence / 100.0 if confidence > 1.0 else confidence
-            p = max(0.01, min(0.99, p))
-            hypotheses = (WaveHypothesis(
-                hypothesis_id=f'{symbol}:{interval}:{label}',
-                label=label,
-                direction='LONG' if bullish else 'SHORT' if bearish else 'NEUTRAL',
-                probability=p,
-                secondary_probability=max(0.0, min(1.0, 1.0-p)),
-                invalidation_level=invalidation,
-                confidence=p,
-                exhaustion_risk=exhaustion,
-            ),)
-            strong = (not self.config.no_trade_when_uncertain) or (
-                p >= self.config.probability_threshold
-                and hypotheses[0].margin >= self.config.probability_margin_threshold
-                and hypotheses[0].entropy <= self.config.entropy_threshold
+            hypothesis_summary = (
+                build_hypotheses(
+                    symbol,
+                    interval,
+                    wsnap,
+                    bullish=bullish,
+                    bearish=bearish,
+                )
+                if wsnap
+                else None
             )
+            hypotheses = hypothesis_summary.hypotheses if hypothesis_summary else tuple()
+            strong = True
+            if self.config.no_trade_when_uncertain and hypothesis_summary is not None:
+                strong = (
+                    hypothesis_summary.primary.probability >= self.config.probability_threshold
+                    and hypothesis_summary.margin >= self.config.probability_margin_threshold
+                    and hypothesis_summary.entropy <= self.config.entropy_threshold
+                )
             allow_long = bullish and bool(last.get('alligator_awake', False)) and self.config.allow_long and strong
             allow_short = bearish and bool(last.get('alligator_awake', False)) and self.config.allow_short and strong
             contexts.append(TFMarketContext(
@@ -779,7 +782,7 @@ class Trader:
                 allow_long=allow_long,
                 allow_short=allow_short,
                 decision='LONG' if allow_long else 'SHORT' if allow_short else 'NO_TRADE',
-                hypotheses=hypotheses,
+                hypotheses=tuple(hypotheses),
                 data_bars=len(closed),
             ))
         for ctx in contexts:
