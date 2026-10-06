@@ -411,6 +411,14 @@ private class StandaloneServer(private val context: Context) {
             method == "GET" && path == "/api/v1/trades" ->
                 x.trades().toString()
 
+            method == "GET" && path == "/api/v1/portfolio" ->
+                x.portfolio().toString()
+
+            method == "GET" && path == "/api/v1/diagnostics" ->
+                x.diagnostics(
+                    run = params["run"].equals("true", true)
+                ).toString()
+
             method == "GET" && path == "/api/v1/trade-stats" ->
                 x.tradeStats().toString()
 
