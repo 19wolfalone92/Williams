@@ -902,6 +902,36 @@ class MultiPositionTrader:
                 f"exchange={exchange_qty:.12g}"
             )
 
+        # Reconcile externally/manual filled SELLs from Binance instead of
+        # leaving the local trade stale.
+        entry_time_ms = int(entry_order.get("time", entry_order.get("transactTime", 0)) or 0) if entry_order else 0
+        manual_sells = [
+            o for o in all_orders
+            if str(o.get("side", "")).upper() == "SELL"
+            and str(o.get("status", "")).upper() == "FILLED"
+            and int(o.get("time", o.get("transactTime", 0)) or 0) >= entry_time_ms
+            and not self._sell_belongs_to_bot(o, all_orders)
+        ]
+        manual_qty, manual_quote, manual_last = self._filled_exit_metrics(manual_sells)
+        if manual_qty > 0:
+            remaining_after_manual = max(0.0, remaining_expected - manual_qty)
+            if remaining_after_manual <= max(self._min_qty(), 1e-12):
+                exit_price = manual_quote / manual_qty if manual_quote > 0 else self._exit_price(manual_last)
+                pnl = (exit_price - float(trade["entry_price"])) * managed_original_qty
+                self.db.close_trade(
+                    trade["id"],
+                    datetime.fromtimestamp(int(manual_last.get("time", manual_last.get("transactTime", 0))) / 1000, tz=timezone.utc).isoformat(),
+                    exit_price, pnl, exit_price / float(trade["entry_price"]) - 1.0 if trade["entry_price"] else 0.0,
+                    "MANUAL_EXTERNAL",
+                    manual_last.get("orderListId"),
+                )
+                self.set_state(symbol, "FLAT")
+                self.db.log_event("WARNING", "external_position_closed", "Manual Binance SELL reconciled", {"symbol": symbol, "trade_id": trade["id"], "manual_qty": manual_qty})
+                return {"trade_id": trade["id"], "symbol": symbol, "state": "FLAT", "closed": True, "manual_external": True}
+            self.db.update_trade_quantity(trade["id"], remaining_after_manual)
+            remaining_expected = remaining_after_manual
+            self.db.log_event("WARNING", "external_partial_sell_reconciled", "Manual Binance partial SELL reconciled", {"symbol": symbol, "trade_id": trade["id"], "manual_qty": manual_qty, "remaining": remaining_expected})
+
         # An unrelated user SELL against this managed symbol is ambiguous.
         open_orders = self.client.open_orders(symbol)
         unknown_sells = [
