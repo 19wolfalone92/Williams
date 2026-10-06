@@ -17,10 +17,11 @@ POSITION_STATES = {
 
 
 class MultiPositionTrader:
-    """Independent lifecycle manager for several Binance Spot positions.
-
-    One SQLite trade row represents one managed position.  The row remains
-    OPEN until exchange evidence proves the position was fully sold.
+    """Durable lifecycle manager for Binance Spot.
+    
+    The current autonomous contract allows one managed position at a time.
+    One SQLite trade row represents that position and remains OPEN until
+    exchange evidence proves the position was fully sold.
 
     Lifecycle:
         ENTRY_PENDING -> OPEN/EXIT_PENDING -> OPEN -> FLAT
