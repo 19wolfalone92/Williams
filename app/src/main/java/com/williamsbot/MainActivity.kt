@@ -425,6 +425,12 @@ private class StandaloneApi(context: Context) {
     val mobileToken: String
         get() = securePrefs.getString("mobile_token", "")?.trim() ?: ""
 
+    fun isLocalStandalone(): Boolean {
+        val normalized = backendUrl.trimEnd('/')
+        return normalized == "http://127.0.0.1:18080" ||
+            normalized == "http://localhost:18080"
+    }
+
     fun saveConnection(url: String, token: String) {
         val normalized = url.trim().trimEnd('/')
         require(normalized.isNotBlank()) { "Backend URL не задан" }
@@ -709,7 +715,24 @@ fun WilliamsApp(context: Context) {
                     .put("testnet", true)
                     .toString()
 
-                api.post("/api/v1/config/binance", body)
+                if (api.isLocalStandalone()) {
+                    // Local Android runtime: persist directly into the same
+                    // Keystore-backed store used by NativeEngine. This avoids
+                    // loopback HTTP body fragmentation and guarantees that the
+                    // status endpoint reads the exact credentials just saved.
+                    StandaloneRuntime.configureCredentials(
+                        context,
+                        apiKey.trim(),
+                        apiSecret.trim()
+                    )
+                } else {
+                    // Remote/VPS mode keeps the credential write behind the
+                    // authenticated HTTP API.
+                    api.post("/api/v1/config/binance", body)
+                }
+
+                // Read back through the exact runtime selected by the configured
+                // Backend URL. This is the source of truth shown by the UI.
                 val verified = JSONObject(api.get("/api/v1/status"))
                 val configured = verified.optBoolean(
                     "binance_configured",
