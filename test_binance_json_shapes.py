@@ -132,3 +132,56 @@ def test_signed_post_transport_error_is_not_retried(monkeypatch):
 
     assert exc.value.unknown_execution is True
     assert len(calls) == 1
+
+
+def test_order_rate_limits_include_10s_window(monkeypatch):
+    client = make_client()
+
+    class FakeResponse:
+        status_code = 200
+        headers = {
+            "X-MBX-USED-WEIGHT-1M": "123",
+            "X-MBX-ORDER-COUNT-10S": "49",
+            "X-MBX-ORDER-COUNT-1M": "401",
+        }
+
+        def json(self):
+            return {
+                "rateLimits": [
+                    {
+                        "rateLimitType": "REQUEST_WEIGHT",
+                        "interval": "MINUTE",
+                        "intervalNum": 1,
+                        "limit": 6000,
+                    },
+                    {
+                        "rateLimitType": "ORDERS",
+                        "interval": "SECOND",
+                        "intervalNum": 10,
+                        "limit": 50,
+                    },
+                    {
+                        "rateLimitType": "ORDERS",
+                        "interval": "MINUTE",
+                        "intervalNum": 1,
+                        "limit": 1200,
+                    },
+                ]
+            }
+
+        @property
+        def text(self):
+            return "{}"
+
+    monkeypatch.setattr(client.session, "request", lambda *args, **kwargs: FakeResponse())
+
+    client._request("GET", "/api/v3/exchangeInfo", signed=False)
+
+    assert client.last_order_count_10s == 49
+    assert client.last_order_count_1m == 401
+
+    client._request = lambda *args, **kwargs: FakeResponse().json()
+    info = client._request("GET", "/api/v3/exchangeInfo")
+    client.order_limit_10s = 50
+    client.order_limit_1m = 1200
+    assert info["rateLimits"][1]["limit"] == 50
