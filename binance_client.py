@@ -50,8 +50,16 @@ class BinanceSpotClient:
         for attempt in range(max_attempts):
             now = time.time()
             wait = max(0.0, self.rate_limit_pause_until - now)
+            is_order_mutation = method in {"POST", "DELETE"} and (
+                path.startswith("/api/v3/order")
+                or path.startswith("/api/v3/orderList")
+                or path.startswith("/api/v3/openOrders")
+            )
 
             # Proactive governor: slow down before Binance returns 429/418.
+            # REQUEST_WEIGHT applies to all REST requests; ORDERS applies to
+            # order mutations only, so market/account reads are not throttled
+            # by the separate order counter.
             if self.request_weight_limit_1m > 0:
                 ratio = Decimal(str(self.last_used_weight_1m)) / Decimal(str(self.request_weight_limit_1m))
                 if ratio >= 0.98:
@@ -59,14 +67,14 @@ class BinanceSpotClient:
                 elif ratio >= 0.90:
                     wait = max(wait, 0.25)
 
-            if self.order_limit_10s > 0:
+            if is_order_mutation and self.order_limit_10s > 0:
                 order_ratio_10s = Decimal(str(self.last_order_count_10s)) / Decimal(str(self.order_limit_10s))
                 if order_ratio_10s >= 0.96:
                     wait = max(wait, 1.0)
                 elif order_ratio_10s >= 0.90:
                     wait = max(wait, 0.25)
 
-            if self.order_limit_1m > 0:
+            if is_order_mutation and self.order_limit_1m > 0:
                 order_ratio = Decimal(str(self.last_order_count_1m)) / Decimal(str(self.order_limit_1m))
                 if order_ratio >= 0.95:
                     wait = max(wait, 1.0)
