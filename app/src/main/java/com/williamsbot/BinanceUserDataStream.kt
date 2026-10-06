@@ -202,7 +202,7 @@ class BinanceUserDataStream(
         )
         val canonical = values.toSortedMap()
             .entries
-            .joinToString("&") { "${it.key}=${it.value}" }
+            .joinToString("&") { percentEncode(it.key) + "=" + percentEncode(it.value) }
         val signature = hmac(canonical, secret)
 
         val params = JSONObject()
@@ -219,6 +219,14 @@ class BinanceUserDataStream(
                 .toString()
         )
     }
+
+    private fun percentEncode(value: String): String =
+        java.net.URLEncoder.encode(
+            value,
+            StandardCharsets.UTF_8.toString()
+        )
+            .replace("+", "%20")
+            .replace("%7E", "~")
 
     private fun hmac(value: String, secret: String): String {
         val mac = Mac.getInstance("HmacSHA256")
