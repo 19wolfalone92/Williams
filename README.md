@@ -187,4 +187,9 @@ The quant layer is integrated ahead of ML admission and remains non-executing:
 - `AIOrderIntent` is shadow-only and has no Binance credential or order-submission path;
 - quant ranking is bounded and configurable; it never creates a BUY and never bypasses P0 execution/reconciliation/risk gates.
 
-Research backtest now also reports CPCV signal-return stability and adverse latency/slippage stress. Runtime telemetry is available via `/api/v1/quant/health`, `/api/v1/quant/features` and `/api/v1/quant/shadow`.
+Research backtest now also reports CPCV signal-return stability and adverse latency/slippage stress. Runtime telemetry is available via `/api/v1/quant/health`, `/api/v1/quant/features`, `/api/v1/quant/shadow` and `/api/v1/quant/shadow-execution`. Optional ML research dependencies are isolated in `requirements-research.txt`; they are not required for the production/Testnet runtime.
+
+
+### Optional ML admission layer
+
+HMM/GMM regime models, LightGBM direction, isotonic probability calibration, SHAP explanation and the unified ShadowMLPipeline are implemented as optional research modules. They fail closed when optional dependencies are unavailable and do not have access to Binance credentials or order submission. Funding/OI/liquidation features are normalized through derivatives_features.py and enter the same MarketFeatureVector when an external derivatives provider supplies them.
