@@ -160,12 +160,30 @@ class Trader:
         self.ensure_foreign_base_balance_baseline()
         self.recover_state()
 
+        # Canonical recovery owns the per-symbol lifecycle state used by
+        # server status/control. It also mirrors the canonical result into
+        # the legacy position_state consumed by the single-position entry gate.
+        self._multi_position_trader = MultiPositionTrader(
+            self.client,
+            db=self.db,
+            symbols=self.auto_scan_symbols,
+        )
+        recovery = self._multi_position_trader.recover()
+
         # Recovery is a second barrier: an inconsistent local/exchange state
         # must never be followed by scanner activation.
+        if not recovery.get('ok'):
+            raise RuntimeError(
+                'LIVE SAFETY GATE BLOCKED: canonical reconciliation failed: '
+                + str(recovery)
+            )
+
         if self.state() == 'RECONCILE_REQUIRED':
             raise RuntimeError(
-                'LIVE SAFETY GATE BLOCKED: local state requires reconciliation'
+                'LIVE SAFETY GATE BLOCKED: canonical state requires reconciliation'
             )
+
+        self.recovered = True
 
         self.notify(
             f'Williams STARTED\n'
