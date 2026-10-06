@@ -1119,7 +1119,7 @@ class MultiPositionTrader:
                 trade.get("exit_order_list_id") or ""
             )
             and not str(order.get("clientOrderId", "")).startswith(
-                self.OCO_PREFIX
+                (self.OCO_PREFIX, self.EMERGENCY_PREFIX)
             )
         ]
         if unknown_sells:
