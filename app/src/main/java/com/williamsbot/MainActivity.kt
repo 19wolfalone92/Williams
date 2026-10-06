@@ -746,7 +746,7 @@ fun WilliamsApp(context: Context) {
                     command("/api/v1/control/start")
                 },
                 onPause = {
-                    command("/api/v1/control/panic")
+                    command("/api/v1/control/pause")
                 },
                 onResume = {
                     command("/api/v1/control/resume")
