@@ -52,7 +52,7 @@ REST остаётся обязательным reconciliation-слоем: WebSoc
 
 ### Android 4.20
 - Standalone native Testnet engine — без VPS и без Termux для работы приложения;
-- одновременно до 3 независимых позиций с общим risk budget;
+- ровно 1 управляемая позиция с единым risk budget;
 - отдельный SELL для каждой открытой позиции;
 - Android Foreground Service для продолжения работы торгового двигателя после ухода с экрана;
 - зашифрованный переносимый backup с восстановлением на другом телефоне;
@@ -137,7 +137,7 @@ python run_backtest.py --symbol BTCUSDT --interval 1h --start 2024-01-01 --end 2
 
 Полная инструкция: `BUILD_APK_RU.md`.
 
-Проект подготовлен с AGP 8.7.3, Gradle 8.9, Java/Kotlin target 17 и compile/target SDK 35. Для локальной сборки можно использовать Android Studio. Для автоматической debug-сборки в GitHub предусмотрен workflow `.github/workflows/android.yml`.
+Проект подготовлен с AGP 8.7.3, Gradle 8.9, Java/Kotlin target 17 и compile/target SDK 35. Для локальной сборки можно использовать Android Studio. Для автоматической debug-сборки в GitHub предусмотрен workflow `.github/workflows/android-apk.yml`.
 
 Release-подпись не хранится в проекте: создайте собственный keystore и локальный `keystore.properties`. Это необходимо для безопасного выпуска обновлений приложения.
 
