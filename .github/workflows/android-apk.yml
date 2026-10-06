@@ -1,5 +1,5 @@
 name: Build Android APK
-# 4.14 standalone validation: widget + adaptive trade guard
+# 4.20 canonical reconciliation + cockpit validation
 
 on:
   push:
