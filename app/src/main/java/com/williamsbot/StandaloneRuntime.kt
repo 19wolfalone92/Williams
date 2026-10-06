@@ -458,6 +458,10 @@ private class NativeEngine(
         }
     )
     private val tradingEventLoop = TradingEventLoop()
+    private val executionGate = ExecutionGate()
+    private val executionExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "williams-execution-io").apply { isDaemon = true }
+    }
     
     private val primarySymbol = "BTCUSDT"
     private val interval = "1h"
@@ -2208,21 +2212,76 @@ private class NativeEngine(
                     .sortedByDescending { it.score }
                     .take(slots)
                     .forEach { candidate ->
-                        runCatching {
-                            executeBuyWithProtection(candidate)
-                        }.onFailure {
-                            lastError =
-                                "ORDER " +
-                                    candidate.symbol +
-                                    ": " +
-                                    (
-                                        it.message
-                                            ?: it.javaClass.simpleName
-                                    )
-                        }
-
+                        submitOrderIntent(candidate)
                         if (reconcileRequired) return@forEach
                     }
+            }
+        }
+    }
+
+    /**
+     * Scanner proposals cross a single serialized admission barrier.
+     * Only the event-loop thread reserves ENTRY_PENDING; REST execution
+     * runs on a separate executor and never blocks the event loop.
+     */
+    private fun submitOrderIntent(candidate: BaseAnalysis) {
+        tradingEventLoop.post {
+            val accepted =
+                running &&
+                    !paused &&
+                    !reconcileRequired &&
+                    !killLatched &&
+                    stateMachine.state == TradingState.READY_FLAT &&
+                    positionList().isEmpty() &&
+                    candidate.signal &&
+                    candidate.score >= 70.0 &&
+                    executionGate.tryReserve(candidate.symbol)
+
+            if (!accepted) return@post
+
+            if (!stateMachine.transition(
+                    TradingState.ENTRY_PENDING,
+                    "BUY intent admitted by ExecutionGate"
+                )
+            ) {
+                executionGate.release(candidate.symbol)
+                return@post
+            }
+
+            executionExecutor.execute {
+                var failure: Throwable? = null
+                try {
+                    executeBuyWithProtection(candidate, gated = true)
+                } catch (x: Throwable) {
+                    failure = x
+                }
+
+                val executionError = failure
+                tradingEventLoop.post {
+                    executionGate.release(candidate.symbol)
+                    if (
+                        executionError != null &&
+                        !reconcileRequired &&
+                        positions[candidate.symbol] == null &&
+                        synchronized(pendingEntries) {
+                            !pendingEntries.containsKey(candidate.symbol)
+                        } &&
+                        stateMachine.state == TradingState.ENTRY_PENDING
+                    ) {
+                        stateMachine.transition(
+                            TradingState.READY_FLAT,
+                            "ExecutionResult failure: " +
+                                (executionError.message
+                                    ?: executionError.javaClass.simpleName)
+                        )
+                    }
+                    if (executionError != null) {
+                        lastError =
+                            "ORDER " + candidate.symbol + ": " +
+                                (executionError.message
+                                    ?: executionError.javaClass.simpleName)
+                    }
+                }
             }
         }
     }
@@ -3660,7 +3719,8 @@ private class NativeEngine(
     }
 
     private fun executeBuyWithProtection(
-        candidate: BaseAnalysis
+        candidate: BaseAnalysis,
+        gated: Boolean = false
     ) {
         if (positions.containsKey(candidate.symbol)) {
             return
@@ -3683,7 +3743,13 @@ private class NativeEngine(
         if (userStreamSyncRequired) {
             error("USER_DATA_STREAM_SYNC_REQUIRED")
         }
-        require(stateMachine.state == TradingState.READY_FLAT) {
+        require(
+            if (gated) {
+                stateMachine.state == TradingState.ENTRY_PENDING
+            } else {
+                stateMachine.state == TradingState.READY_FLAT
+            }
+        ) {
             "FSM forbids BUY from state " + stateMachine.state.name
         }
         if (
@@ -3804,11 +3870,13 @@ private class NativeEngine(
                     .replace("-", "")
                     .take(28)
 
-        if (!stateMachine.transition(
-            TradingState.ENTRY_PENDING,
-            "BUY intent created"
-        )) {
-            error("FSM rejected BUY intent")
+        if (!gated) {
+            if (!stateMachine.transition(
+                TradingState.ENTRY_PENDING,
+                "BUY intent created"
+            )) {
+                error("FSM rejected BUY intent")
+            }
         }
 
         synchronized(pendingEntries) {
