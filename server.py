@@ -81,7 +81,7 @@ class MetricsRegistry:
             f"williams_open_positions {len(state.ensure_multi().open_positions())}",
             "# HELP williams_reconciliation_required Reconciliation barrier state.",
             "# TYPE williams_reconciliation_required gauge",
-            f"williams_reconciliation_required {1 if state.ensure_multi().unresolved_symbols() else 0}",
+            f"williams_reconciliation_required {1 if (_canonical_execution_state(state.ensure_multi())[1] or _canonical_execution_state(state.ensure_multi())[2]) else 0}",
         ]
         return "\n".join(lines) + "\n"
 
@@ -495,8 +495,31 @@ def _canonical_execution_state(multi, positions=None):
     """Single backend execution-state contract used by health, status and recovery."""
     unresolved_symbols = list(multi.unresolved_symbols())
     pending_symbols = [symbol for symbol, _ in multi._pending_entries()]
+
+    # Legacy single-position execution is still active when MAX_OPEN_POSITIONS=1.
+    # Mirror any legacy barrier/entry intent into the canonical contract so a
+    # legacy execution failure cannot disappear from Cockpit status.
+    legacy_state = str(
+        multi.db.state_get('position_state', 'FLAT')
+    ).upper()
+    active_symbol = str(
+        multi.db.state_get('active_symbol')
+        or (multi.symbols[0] if multi.symbols else '')
+    ).upper()
+    legacy_pending = str(
+        multi.db.state_get('entry_client_order_id', '')
+    ).strip()
+
+    if legacy_state == 'RECONCILE_REQUIRED' and active_symbol:
+        if active_symbol not in unresolved_symbols:
+            unresolved_symbols.append(active_symbol)
+    if legacy_pending and active_symbol:
+        if active_symbol not in pending_symbols:
+            pending_symbols.append(active_symbol)
+
     if unresolved_symbols or pending_symbols:
-        return 'RECONCILE_REQUIRED', unresolved_symbols, pending_symbols
+        return 'RECONCILE_REQUIRED', sorted(unresolved_symbols), sorted(pending_symbols)
+
     if positions is None:
         positions = multi.open_positions()
     return ('OPEN' if positions else 'READY_FLAT'), unresolved_symbols, pending_symbols
@@ -509,7 +532,14 @@ def health():
     execution_state, unresolved_symbols, pending_symbols = _canonical_execution_state(multi)
     unresolved = bool(unresolved_symbols or pending_symbols)
     p0_ready = bool(t.preflight_report and t.preflight_report.get('ready'))
-    execution_enabled = p0_ready and not unresolved
+    open_positions = multi.open_positions()
+    execution_enabled = (
+        p0_ready
+        and not unresolved
+        and not open_positions
+        and state.running
+        and not state.paused
+    )
     return {
         'ok': True,
         'service': 'williams-binance-bot',
@@ -528,7 +558,7 @@ def health():
         'max_open_positions': multi.max_open_positions,
         'max_total_risk_pct': multi.max_total_risk_pct,
         'max_risk_per_trade_pct': multi.max_risk_per_trade_pct,
-        'open_positions': len(multi.open_positions()),
+        'open_positions': len(open_positions),
         'execution_enabled': execution_enabled,
         'testnet': t.client.testnet,
     }
@@ -713,7 +743,13 @@ def status():
         positions=positions,
     )
     p0_ready = bool(t.preflight_report and t.preflight_report.get('ready'))
-    execution_enabled = p0_ready and not bool(unresolved_symbols or pending_symbols)
+    execution_enabled = (
+        p0_ready
+        and not bool(unresolved_symbols or pending_symbols)
+        and not positions
+        and state.running
+        and not state.paused
+    )
 
     selected_position = None
     if positions:
