@@ -4,6 +4,7 @@ name: Build Android APK
 # APK rebuild requested after current Spot Testnet execution-core verification
 # CI refresh: validate current main tree after Binance JSON-shape, risk-budget, and multi-position fixes
 # Final validation retrigger: fresh APK for current Williams trading core
+# Spot integration audit: portfolio endpoint + Binance user-stream lifecycle + backend-only credentials
 
 on:
   push:
