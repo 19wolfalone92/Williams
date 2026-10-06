@@ -42,6 +42,10 @@ class SymbolRules:
             (row for row in rows if not symbol or row.get("symbol") == symbol),
             None,
         )
+        if selected is None and len(rows) == 1:
+            # Some offline test doubles return one metadata row without echoing
+            # the requested symbol. Production exchangeInfo normally matches it.
+            selected = rows[0]
         if not selected:
             raise ValueError(f"Symbol metadata unavailable: {symbol or 'unknown'}")
         filters = {
@@ -53,7 +57,7 @@ class SymbolRules:
         price = filters.get("PRICE_FILTER") or {}
         notional = filters.get("NOTIONAL") or filters.get("MIN_NOTIONAL") or {}
         return cls(
-            symbol=str(selected.get("symbol", symbol or "")).upper(),
+            symbol=str(symbol or selected.get("symbol", "")).upper(),
             base_asset=str(selected.get("baseAsset", "")),
             quote_asset=str(selected.get("quoteAsset", "")),
             min_qty=D(lot.get("minQty", "0")),
