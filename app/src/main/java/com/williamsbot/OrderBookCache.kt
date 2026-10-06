@@ -101,6 +101,27 @@ class OrderBookCache(
     }
 
     @Synchronized
+    fun imbalance(symbol: String, levels: Int = 20, maxAgeMs: Long = 1500L): Double? {
+        val book = books[symbol.uppercase()] ?: return null
+        if (book.lastUpdateId < 0L) return null
+        if (System.currentTimeMillis() - book.updatedAtMs > maxAgeMs) return null
+        val n = levels.coerceAtLeast(1)
+        val bid = book.bids.entries.sortedByDescending { it.key }.take(n)
+            .sumOf { it.value }
+        val ask = book.asks.entries.sortedBy { it.key }.take(n)
+            .sumOf { it.value }
+        val total = bid + ask
+        return if (total > 0.0) (bid - ask) / total else null
+    }
+
+    @Synchronized
+    fun isFresh(symbol: String, maxAgeMs: Long = 1500L): Boolean {
+        val book = books[symbol.uppercase()] ?: return false
+        return book.lastUpdateId >= 0L &&
+            System.currentTimeMillis() - book.updatedAtMs <= maxAgeMs
+    }
+
+    @Synchronized
     fun estimateBuy(
         symbol: String,
         quoteNotional: Double,
