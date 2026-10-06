@@ -7,6 +7,7 @@ import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.ComponentActivity
+import androidx.core.content.ContextCompat
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
@@ -756,7 +757,6 @@ fun WilliamsApp(context: Context) {
                 },
                 onKill = {
                     command("/api/v1/control/kill")
-                    stopTradingService()
                 },
                 onScan = { refresh(true) },
                 onSettings = { tab = 4 }
