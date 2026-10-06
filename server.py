@@ -17,7 +17,7 @@ from mtf_context_service import MultiTimeframeContextService
 
 load_dotenv()
 API_TOKEN = os.getenv('MOBILE_API_TOKEN', '').strip()
-VERSION = '4.19.0'
+VERSION = '4.20.0'
 
 app = FastAPI(title='Williams Binance Bot API', version=VERSION)
 hub = WebSocketHub()
