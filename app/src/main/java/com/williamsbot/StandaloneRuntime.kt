@@ -3827,9 +3827,9 @@ private class NativeEngine(
                 "symbol=" + candidate.symbol +
                     "&side=BUY&type=MARKET" +
                     "&quoteOrderQty=" +
-                    "%.2f".format(
-                        java.util.Locale.US,
-                        notional
+                    ExecutionMath.plain(
+                        ExecutionMath.decimal(notional),
+                        2
                     ) +
                     "&newClientOrderId=" +
                     clientOrderId
