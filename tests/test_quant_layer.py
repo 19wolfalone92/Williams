@@ -40,10 +40,32 @@ def test_feature_bars_store_and_shadow():
     assert build_dollar_bars_from_trades(trades, 100)  # type: ignore[arg-type]
     assert build_volume_bars_from_trades(trades, 5)
     book = {"bids": [["99.9", "10"]], "asks": [["100.1", "5"]]}
-    vector = build_market_feature_vector("BTCUSDT", "1h", candles, order_book=book, trades=trades)
+    wave = {
+        "entry_interval": "1h",
+        "entry_parent_interval": "4h",
+        "alignment_score": 0.8,
+        "nested_w3": True,
+        "nested_w3_parent_w5": True,
+        "frames": {
+            "4h": {"position": 5, "confidence": 0.82, "exhaustion_risk": 70.0, "direction": "UP"},
+            "1h": {"position": 3, "confidence": 0.76, "exhaustion_risk": 20.0, "direction": "UP",
+                   "invalidation_price": 97.0, "target_zone_low": 105.0, "target_zone_high": 110.0},
+        },
+    }
+    vector = build_market_feature_vector(
+        "BTCUSDT", "1h", candles, wave_report=wave, order_book=book, trades=trades
+    )
     assert vector.schema_version == 1
     assert -1.0 <= vector.obi <= 1.0
     assert vector.dollar_bar_count > 0
+    assert vector.wave_position == 3
+    assert vector.wave_parent_position == 5
+    assert vector.wave_nested_w3_parent_w5
+    assert vector.wave_nested_w3_probability >= 0.76
+    assert vector.invalidation == 97.0
+    assert vector.target == 107.5
+    assert vector.wave_tf_agreement == 1.0
+    assert vector.extra["bar_source"] == "trade_stream"
     with tempfile.NamedTemporaryFile(suffix=".sqlite3") as f:
         store = FeatureStore(f.name)
         store.save_feature(vector)
@@ -105,6 +127,9 @@ def test_mock_exchange_failure_modes():
     else:
         raise AssertionError("expected mock timeout")
     exchange.sequence_gap_next = True
+    event = exchange.depth_update("BTCUSDT")
+    assert event["U"] > event["u"] - 1
+    assert event["U"] >= 7
     depth = exchange.depth("BTCUSDT", limit=20)
     assert depth["lastUpdateId"] >= 11
     exchange.partial_fill_ratio = 0.5
