@@ -161,6 +161,7 @@ class BinanceSpotClient:
     def ticker_price(self,symbol): return self._request('GET','/api/v3/ticker/price',{'symbol':symbol})
     def ticker_24hr(self,symbol=None): return self._request('GET','/api/v3/ticker/24hr',{'symbol':symbol} if symbol else {})
     def book_ticker(self,symbol=None): return self._request('GET','/api/v3/ticker/bookTicker',{'symbol':symbol} if symbol else {})
+    def depth(self,symbol,limit=100): return self._request('GET','/api/v3/depth',{'symbol':symbol,'limit':limit})
     def klines(self,symbol,interval,limit=200): return self._request('GET','/api/v3/klines',{'symbol':symbol,'interval':interval,'limit':limit})
     def account(self): return self._request('GET','/api/v3/account',signed=True)
     def all_orders(self,symbol,limit=1000): return self._request('GET','/api/v3/allOrders',{'symbol':symbol,'limit':limit},signed=True)
@@ -211,6 +212,28 @@ class BinanceSpotClient:
         if order_id is not None:p['orderId']=order_id
         if orig_client_order_id is not None:p['origClientOrderId']=orig_client_order_id
         return self._request('GET','/api/v3/order',p,signed=True)
+    def cancel_replace(self, symbol, cancel_order_id, side, type_, *, quantity=None, price=None, stop_price=None, time_in_force=None, new_client_order_id=None):
+        """Safer single-order cancel/replace using STOP_ON_FAILURE.
+
+        Binance documents cancel-replace as non-transactional: a successful
+        cancel can still be followed by a failed replacement. Callers must
+        inspect both cancelResult/newOrderResult and reconcile on ambiguity.
+        """
+        p={
+            'symbol':symbol,
+            'cancelReplaceMode':'STOP_ON_FAILURE',
+            'cancelOrderId':cancel_order_id,
+            'side':side,
+            'type':type_,
+            'newOrderRespType':'FULL',
+        }
+        if quantity is not None: p['quantity']=quantity
+        if price is not None: p['price']=price
+        if stop_price is not None: p['stopPrice']=stop_price
+        if time_in_force is not None: p['timeInForce']=time_in_force
+        if new_client_order_id: p['newClientOrderId']=new_client_order_id
+        return self._request('POST','/api/v3/order/cancelReplace',p,signed=True)
+
     def cancel_order(self,symbol,order_id=None,orig_client_order_id=None):
         p={'symbol':symbol}
         if order_id is not None:p['orderId']=order_id
