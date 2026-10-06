@@ -421,7 +421,24 @@ class BinanceSpotClient:
         return self._request('DELETE','/api/v3/order',p,signed=True)
     def cancel_open_orders(self,symbol): return self._request('DELETE','/api/v3/openOrders',{'symbol':symbol},signed=True)
     def create_oco_sell(self,symbol,quantity,take_profit_price,stop_price,stop_limit_price,list_client_order_id=None):
-        p={'symbol':symbol,'side':'SELL','quantity':quantity,'aboveType':'TAKE_PROFIT_LIMIT','abovePrice':take_profit_price,'aboveStopPrice':take_profit_price,'aboveTimeInForce':'GTC','belowType':'STOP_LOSS_LIMIT','belowStopPrice':stop_price,'belowPrice':stop_limit_price,'belowTimeInForce':'GTC','newOrderRespType':'FULL'}
+        # For SELL TAKE_PROFIT_LIMIT the limit leg is intentionally just below
+        # the trigger, matching the Binance OCO price relationship.
+        tick = max(abs(float(take_profit_price)) * 0.0001, 1e-12)
+        take_limit_price = float(take_profit_price) - tick
+        if take_limit_price <= float(stop_price):
+            take_limit_price = float(take_profit_price)
+        p={
+            'symbol':symbol,'side':'SELL','quantity':quantity,
+            'aboveType':'TAKE_PROFIT_LIMIT',
+            'abovePrice':take_limit_price,
+            'aboveStopPrice':take_profit_price,
+            'aboveTimeInForce':'GTC',
+            'belowType':'STOP_LOSS_LIMIT',
+            'belowStopPrice':stop_price,
+            'belowPrice':stop_limit_price,
+            'belowTimeInForce':'GTC',
+            'newOrderRespType':'FULL'
+        }
         if list_client_order_id:p['listClientOrderId']=list_client_order_id
         return self._request('POST','/api/v3/orderList/oco',p,signed=True)
     def create_oco_sell_safe(
