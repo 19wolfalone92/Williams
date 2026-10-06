@@ -531,6 +531,12 @@ private class NativeEngine(
     private var lastError: String? = null
 
     @Volatile
+    private var scannerState = "NOT_RUN"
+
+    @Volatile
+    private var scannerError: String? = null
+
+    @Volatile
     private var lastScanAt = 0L
 
     private var worker: Thread? = null
@@ -1216,7 +1222,7 @@ private class NativeEngine(
 
             JSONObject()
                 .put("recovered", true)
-                .put("state", stateName())
+                .put("state", stateMachine.state.name)
                 .put(
                     "execution_enabled",
                     !reconcileRequired
@@ -2119,17 +2125,20 @@ private class NativeEngine(
         synchronized(this) {
             if (scanning) return
             scanning = true
+            scannerState = "RUNNING"
+            scannerError = null
         }
 
         Thread {
             val startedAt = System.currentTimeMillis()
             try {
                 performScan()
-                lastError = null
+                scannerState = "READY"
+                scannerError = null
             } catch (x: Exception) {
-                lastError =
-                    x.javaClass.simpleName + ": " +
-                        (x.message ?: "")
+                scannerState = "ERROR"
+                scannerError = x.javaClass.simpleName + ": " + (x.message ?: "unknown scanner error")
+                lastError = scannerError
             } finally {
                 lastScanDurationMs =
                     System.currentTimeMillis() - startedAt
@@ -2143,31 +2152,20 @@ private class NativeEngine(
     }
 
     private fun performScan() {
-        if (
-            key().isNotBlank() &&
-            secret().isNotBlank()
-        ) {
-            runCatching { recover() }
-                .onFailure {
-                    setReconcileRequired(
-                        it.message ?: "recovery failed"
-                    )
+        // Market scanning is independent from the execution/reconciliation gate.
+        // It may run while STOPPED or RECONCILE_REQUIRED, but it never clears
+        // the gate and never submits orders unless the trading loop is running.
+        if (running && !reconcileRequired && !killLatched) {
+            for (open in positionList()) {
+                runCatching {
+                    val mark = JSONObject(
+                        getBody("/api/v3/ticker/price?symbol=" + open.symbol)
+                    ).optString("price").toDoubleOrNull() ?: 0.0
+                    TradeJournal.updateExcursion(prefs, open.symbol, mark)
                 }
-        }
-
-        if (reconcileRequired) return
-
-        // Update MFE/MAE from live marks before ranking new entries.
-        for (open in positionList()) {
-            runCatching {
-                val mark = JSONObject(
-                    getBody("/api/v3/ticker/price?symbol=" + open.symbol)
-                ).optString("price").toDoubleOrNull() ?: 0.0
-                TradeJournal.updateExcursion(prefs, open.symbol, mark)
             }
+            runCatching { manageWilliamsStops() }
         }
-
-        runCatching { manageWilliamsStops() }
 
         val universe = loadUniverse()
         scanSymbols = universe.first.toMutableList()
@@ -5690,6 +5688,8 @@ private class NativeEngine(
             .put("version", "4.20.1")
             .put("cached", true)
             .put("scanning", scanning)
+            .put("scanner_state", scannerState)
+            .put("scanner_error", scannerError ?: JSONObject.NULL)
             .put("last_error", lastError ?: JSONObject.NULL)
             .put("last_scan_at", lastScanAt)
             .put("last_scan_duration_ms", lastScanDurationMs)
@@ -5876,6 +5876,8 @@ private class NativeEngine(
             .put("rate_limits", rateGuard.snapshot())
             .put("history", historyStore.status(coreSymbols, analysisFrames))
             .put("scanner_scanning", scanning)
+            .put("scanner_state", scannerState)
+            .put("scanner_error", scannerError ?: JSONObject.NULL)
             .put("scanner_symbols", lastSymbolsScanned)
             .put("scanner_last_scan_at", lastScanAt)
             .put("scanner_duration_ms", lastScanDurationMs)
