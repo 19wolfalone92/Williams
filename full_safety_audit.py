@@ -464,6 +464,83 @@ else:
         finding("FAIL", f"Could not inspect production DB: {e}")
 
 # ---------------------------------------------------------------------
+# 15. WILLIAMS TRADING CORE REGRESSION INVARIANTS
+# ---------------------------------------------------------------------
+section("15. TRADING CORE REGRESSION INVARIANTS")
+
+android_root = ROOT / "app" / "src" / "main"
+android_files = [
+    p for p in android_root.rglob("*")
+    if p.is_file() and p.suffix.lower() in {".kt", ".java", ".xml"}
+] if android_root.exists() else []
+android_text = "\n".join(read_text(p) for p in android_files)
+
+for forbidden in ("LunaScreen", "AiForgeClient", "AI_FORGE", "AI Forge"):
+    finding(
+        "FAIL" if forbidden in android_text else "PASS",
+        f"Trading APK {'still contains' if forbidden in android_text else 'free of'} {forbidden}"
+    )
+
+native_runtime = ROOT / "app" / "src" / "main" / "java" / "com" / "williamsbot" / "StandaloneRuntime.kt"
+native = read_text(native_runtime)
+
+if native:
+    if re.search(r"private\s+val\s+maxOpenPositions\s*=\s*1\b", native):
+        finding("FAIL", "Android runtime still hard-locks maxOpenPositions=1")
+    elif re.search(r"private\s+val\s+maxOpenPositions\s*=\s*0\b", native):
+        finding("PASS", "Android runtime uses risk-budgeted multi-position mode")
+    else:
+        finding("WARN", "Could not prove Android multi-position default from source")
+
+    finding(
+        "PASS" if '/api/v3/orderList/oco' in native else "FAIL",
+        "Android uses current Spot OCO endpoint"
+    )
+    finding(
+        "PASS" if 'userDataStream.subscribe.signature' in android_text else "FAIL",
+        "Android uses signed User Data Stream subscription"
+    )
+    finding(
+        "PASS" if 'EncryptedSharedPreferences' in native and 'MasterKey.KeyScheme.AES256_GCM' in native else "FAIL",
+        "Binance credentials use encrypted Android storage"
+    )
+    finding(
+        "PASS" if '"testnet.binance.vision"' in native and 'api.binance.com' not in native else "WARN",
+        "Android trading REST base is pinned to Spot Testnet"
+    )
+    finding(
+        "FAIL" if 'max_open_positions_locked", true' in native else "PASS",
+        "Android status does not advertise fixed max-position lock"
+    )
+
+bc_text = read_text(ROOT / "binance_client.py")
+if bc_text:
+    finding(
+        "PASS" if "X-MBX-ORDER-COUNT-10S" in bc_text and "order_limit_10s" in bc_text else "FAIL",
+        "Python Binance client tracks 10s order-rate window"
+    )
+    finding(
+        "PASS" if "_update_rate_limits_from_exchange_info" in bc_text else "FAIL",
+        "Python client learns dynamic Binance rate limits"
+    )
+    finding(
+        "PASS" if "unknown_execution=True" in bc_text and "clientOrderId" in bc_text else "FAIL",
+        "Ambiguous order outcome requires clientOrderId reconciliation"
+    )
+
+ob_text = read_text(ROOT / "app" / "src" / "main" / "java" / "com" / "williamsbot" / "OrderBookCache.kt")
+finding(
+    "PASS" if "var valid: Boolean" in ob_text and "book.valid = false" in ob_text else "FAIL",
+    "L2 cache invalidates state on sequence gaps"
+)
+
+ws_text = read_text(ROOT / "ws_hub.py")
+finding(
+    "PASS" if "user_stream_out_of_order" in ws_text and "return" in ws_text else "FAIL",
+    "User-stream out-of-order events are rejected before mutation"
+)
+
+# ---------------------------------------------------------------------
 # 15. Git status
 # ---------------------------------------------------------------------
 section("15. GIT STATUS")
