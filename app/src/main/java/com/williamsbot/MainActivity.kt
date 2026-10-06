@@ -402,6 +402,12 @@ private class StandaloneApi(context: Context) {
             legacy.edit()
                 .remove("mobile_token")
                 .apply()
+        } else {
+            // Remove any legacy token left behind after a previous migration.
+            context.getSharedPreferences(
+                "williams_backend",
+                Context.MODE_PRIVATE
+            ).edit().remove("mobile_token").apply()
         }
     }
 
