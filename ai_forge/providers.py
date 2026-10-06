@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 import requests
 from .config import ProviderConfig
 from .models import AgentDecision
-from .prompts import SYSTEM_PROMPT, build_user_prompt
+from .prompts import LUNA_SYSTEM_PROMPT, SYSTEM_PROMPT, build_user_prompt
 
 class ProviderError(RuntimeError):
     pass
@@ -12,8 +12,13 @@ class ProviderError(RuntimeError):
 class Provider(ABC):
     def __init__(self, cfg: ProviderConfig, timeout: float):
         self.cfg, self.timeout = cfg, timeout
+
     @abstractmethod
     def _request(self, task, context):
+        raise NotImplementedError
+
+    @abstractmethod
+    def chat(self, history, message):
         raise NotImplementedError
     def decide(self, task, context):
         started = time.perf_counter()
@@ -24,6 +29,25 @@ class Provider(ABC):
             return AgentDecision(provider=self.cfg.name, model=self.cfg.model, decision="ESCALATE", confidence=0.0, rationale="Provider unavailable or invalid.", risk_flags=["provider_error"], latency_ms=max(0, int((time.perf_counter()-started)*1000)), ok=False, error=_safe_error(exc))
 
 class OpenAIProvider(Provider):
+    def chat(self, history, message):
+        messages = [{"role": "system", "content": LUNA_SYSTEM_PROMPT}]
+        messages.extend({"role": item["role"], "content": item["content"]} for item in history)
+        messages.append({"role": "user", "content": message})
+        data = _post_json(f"{self.cfg.base_url}/v1/responses", {"Authorization": f"Bearer {self.cfg.api_key}"}, {
+            "model": self.cfg.model, "store": False, "input": messages, "max_output_tokens": 1200
+        }, self.timeout)
+        if isinstance(data.get("output_text"), str) and data["output_text"].strip():
+            return data["output_text"].strip()
+        out=[]
+        for item in data.get("output",[]):
+            for content in item.get("content",[]) if isinstance(item,dict) else []:
+                if isinstance(content,dict) and isinstance(content.get("text"),str):
+                    out.append(content["text"])
+        answer="\n".join(out).strip()
+        if not answer:
+            raise ProviderError("no text in response")
+        return answer
+
     def _request(self, task, context):
         data = _post_json(f"{self.cfg.base_url}/v1/responses", {"Authorization": f"Bearer {self.cfg.api_key}"}, {
             "model": self.cfg.model, "store": False,
@@ -40,6 +64,22 @@ class OpenAIProvider(Provider):
         return "\n".join(out)
 
 class ChatCompletionsProvider(Provider):
+    def chat(self, history, message):
+        messages = [{"role": "system", "content": LUNA_SYSTEM_PROMPT}]
+        messages.extend({"role": item["role"], "content": item["content"]} for item in history)
+        messages.append({"role": "user", "content": message})
+        data = _post_json(f"{self.cfg.base_url}/v1/chat/completions", {"Authorization": f"Bearer {self.cfg.api_key}"}, {
+            "model": self.cfg.model, "messages": messages, "temperature": 0.2, "max_tokens": 1200
+        }, self.timeout)
+        content=data.get("choices",[{}])[0].get("message",{}).get("content")
+        if isinstance(content,str) and content.strip():
+            return content.strip()
+        if isinstance(content,list):
+            answer="\n".join(p.get("text","") for p in content if isinstance(p,dict) and isinstance(p.get("text"),str)).strip()
+            if answer:
+                return answer
+        raise ProviderError("no text in response")
+
     def _request(self, task, context):
         data = _post_json(f"{self.cfg.base_url}/v1/chat/completions", {"Authorization": f"Bearer {self.cfg.api_key}"}, {
             "model":self.cfg.model,
@@ -51,6 +91,23 @@ class ChatCompletionsProvider(Provider):
         raise ProviderError("no text in response")
 
 class GeminiProvider(Provider):
+    def chat(self, history, message):
+        contents=[]
+        for item in history:
+            role = "model" if item["role"] == "assistant" else "user"
+            contents.append({"role": role, "parts": [{"text": item["content"]}]})
+        contents.append({"role": "user", "parts": [{"text": message}]})
+        data = _post_json(f"{self.cfg.base_url}/v1beta/models/{self.cfg.model}:generateContent", {"x-goog-api-key": self.cfg.api_key, "x-goog-api-client": "williams-ai-forge/0.2.0"}, {
+            "systemInstruction":{"parts":[{"text":LUNA_SYSTEM_PROMPT}]},
+            "contents":contents,
+            "generationConfig":{"temperature":0.2,"maxOutputTokens":1200}
+        }, self.timeout)
+        parts=data.get("candidates",[{}])[0].get("content",{}).get("parts",[])
+        answer="\n".join(p.get("text","") for p in parts if isinstance(p,dict) and isinstance(p.get("text"),str)).strip()
+        if not answer:
+            raise ProviderError("no text in response")
+        return answer
+
     def _request(self, task, context):
         data = _post_json(f"{self.cfg.base_url}/v1beta/models/{self.cfg.model}:generateContent", {"x-goog-api-key": self.cfg.api_key, "x-goog-api-client": "williams-ai-forge/0.1.0"}, {
             "systemInstruction":{"parts":[{"text":SYSTEM_PROMPT}]},
