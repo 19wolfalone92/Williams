@@ -345,3 +345,70 @@ def test_filled_pending_buy_is_recovered_into_its_own_position(tmp_path: Path):
     assert db.state_get("entry_client_order_id:SOLUSDT") is None
     assert multi.state("SOLUSDT") == "OPEN"
     assert len(client.created_oco) == 1
+
+
+def test_recover_clears_stale_reconcile_barrier_when_exchange_is_clean(tmp_path: Path):
+    os.environ["WILLIAMS_DB_PATH"] = str(tmp_path / "stale_reconcile.sqlite3")
+    db = Database(os.environ["WILLIAMS_DB_PATH"])
+    client = FakeClient()
+
+    # Simulate the exact failure mode: a stale per-symbol barrier survives
+    # after the managed trade has already disappeared from SQLite/exchange.
+    db.state_set("position_state", "RECONCILE_REQUIRED")
+    db.state_set("position_state:BTCUSDT", "RECONCILE_REQUIRED")
+
+    multi = MultiPositionTrader(
+        client,
+        db=db,
+        symbols=["BTCUSDT"],
+    )
+
+    result = multi.recover()
+
+    assert result["ok"] is True
+    assert multi.state("BTCUSDT") == "FLAT"
+    assert db.state_get("position_state") == "FLAT"
+    assert db.state_get("position_state:BTCUSDT") == "FLAT"
+
+
+def test_recover_keeps_reconcile_barrier_for_unresolved_exchange_position(tmp_path: Path):
+    os.environ["WILLIAMS_DB_PATH"] = str(tmp_path / "unresolved_reconcile.sqlite3")
+    db = Database(os.environ["WILLIAMS_DB_PATH"])
+    client = FakeClient()
+
+    add_trade(
+        db,
+        symbol="SOLUSDT",
+        entry_price=200,
+        quantity=3,
+        entry_order_id="sol-buy-unresolved",
+        entry_client_order_id="WILLV4_ENTRY_SOL_UNRESOLVED",
+        stop_price=196,
+        take_profit_price=206,
+        risk_pct=0.002,
+    )
+    client.orders_by_symbol["SOLUSDT"] = [{
+        "symbol": "SOLUSDT",
+        "side": "BUY",
+        "type": "MARKET",
+        "orderId": "sol-buy-unresolved",
+        "clientOrderId": "WILLV4_ENTRY_SOL_UNRESOLVED",
+        "status": "FILLED",
+        "executedQty": "3",
+        "cummulativeQuoteQty": "600",
+        "time": 100,
+    }]
+    client.account = lambda: {
+        "balances": [
+            {"asset": "USDT", "free": "9000", "locked": "0"},
+            {"asset": "SOL", "free": "1.0", "locked": "0"},
+        ]
+    }
+    db.state_set("position_state:SOLUSDT", "RECONCILE_REQUIRED")
+
+    multi = MultiPositionTrader(client, db=db, symbols=["SOLUSDT"])
+    result = multi.recover()
+
+    assert result["ok"] is False
+    assert multi.state("SOLUSDT") == "RECONCILE_REQUIRED"
+    assert db.state_get("position_state") == "RECONCILE_REQUIRED"
