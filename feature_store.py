@@ -190,6 +190,7 @@ class FeatureStore:
 
     def save_shadow(self, payload: Mapping[str, Any]) -> None:
         data = dict(payload)
+        data.setdefault("action", data.get("direction", "HOLD"))
         with self._lock:
             self._conn.execute(
                 "INSERT INTO shadow_decisions "
