@@ -31,36 +31,49 @@ jobs:
         run: python full_safety_audit.py
 
       - name: Run safe offline tests
-        run: >-
-          python -m pytest -q
-          test_production_architecture.py
-          test_l2_slippage.py
-          test_hypothesis_engine.py
-          test_market_scanner.py
-          test_wave_engine.py
-          test_dynamic_scanner.py
-          test_portfolio_controller.py
-          test_multi_position_risk.py
-          test_multi_position_execution.py
-          test_portfolio_scanner.py
-          test_portfolio_scanner_atr.py
-          test_risk_engine.py
-          test_strategy_diagnostics.py
-          test_db_guard.py
-          test_db_isolation.py
-          test_atomic_real_db.py
-          test_atomic_switch_db_failure.py
-          test_atomic_switch_rollback.py
-          test_buy_safety.py
-          test_williams_book_alignment.py
-          test_book_wave_safety.py test_trade_journal.py
-          test_multi_position_lifecycle.py
-          recovery_test.py
-          recovery_oco_failure_test.py
-          test_chaos_hardening.py
-          test_wave_safety_fields.py
-          test_binance_market_data.py
-          test_binance_json_shapes.py
-          tests/test_quant_layer.py
-          tests/test_quant_models.py
-          test_preflight_gate.py test_execution_architecture.py
+        run: |
+          set -o pipefail
+          python -m pytest -q \
+            test_production_architecture.py \
+            test_l2_slippage.py \
+            test_hypothesis_engine.py \
+            test_market_scanner.py \
+            test_wave_engine.py \
+            test_dynamic_scanner.py \
+            test_portfolio_controller.py \
+            test_multi_position_risk.py \
+            test_multi_position_execution.py \
+            test_portfolio_scanner.py \
+            test_portfolio_scanner_atr.py \
+            test_risk_engine.py \
+            test_strategy_diagnostics.py \
+            test_db_guard.py \
+            test_db_isolation.py \
+            test_atomic_real_db.py \
+            test_atomic_switch_db_failure.py \
+            test_atomic_switch_rollback.py \
+            test_buy_safety.py \
+            test_williams_book_alignment.py \
+            test_book_wave_safety.py \
+            test_trade_journal.py \
+            test_multi_position_lifecycle.py \
+            recovery_test.py \
+            recovery_oco_failure_test.py \
+            test_chaos_hardening.py \
+            test_wave_safety_fields.py \
+            test_binance_market_data.py \
+            test_binance_json_shapes.py \
+            tests/test_quant_layer.py \
+            tests/test_quant_models.py \
+            test_preflight_gate.py \
+            test_execution_architecture.py \
+            2>&1 | tee pytest-output.txt
+
+      - name: Upload pytest diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-pytest-report
+          path: pytest-output.txt
+          if-no-files-found: warn
+          retention-days: 7
