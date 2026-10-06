@@ -118,6 +118,7 @@ class ControlState:
         self.running = False
         self.paused = False
         self.last_error = None
+        self.desired_running = False
         self.api_key = ''
         self.api_secret = ''
         self.testnet = True
@@ -201,6 +202,7 @@ class ControlState:
             t.db.state_set('kill_switch_latched', 'false')
             with self.lock:
                 self.running = True
+                self.desired_running = True
                 self.last_error = None
             while self.running:
                 if not self.paused:
@@ -218,6 +220,10 @@ class ControlState:
                 time.sleep(t.poll_seconds)
         except Exception as e:
             self.last_error = f'{type(e).__name__}: {e}'
+            try:
+                t.db.log_event('ERROR', 'api_loop_fatal', self.last_error)
+            except Exception:
+                pass
         finally:
             with self.lock:
                 self.running = False
@@ -241,6 +247,7 @@ class ControlState:
 
     def stop(self):
         with self.lock:
+            self.desired_running = False
             self.running = False
             self.paused = False
             thread = self.thread
@@ -264,6 +271,8 @@ class ControlState:
 
     def kill(self):
         metrics.inc("kill_switch_total")
+        with self.lock:
+            self.desired_running = False
         # Close only Williams-managed positions/orders; never cancel
         # unrelated account orders via DELETE /openOrders.
         with self.lock:
@@ -444,16 +453,86 @@ def _start_scanner_background():
         return True
 
 
+def _runtime_supervisor():
+    """Keep the autonomous backend alive without auto-restarting deliberate STOP/KILL."""
+    while not supervisor_stop.wait(10):
+        try:
+            with state.lock:
+                wanted = bool(state.desired_running)
+                alive = bool(state.thread and state.thread.is_alive())
+                paused = bool(state.paused)
+            if wanted and not alive and not paused:
+                # Never auto-rearm a latched emergency stop or unresolved recovery.
+                try:
+                    t = state.ensure_trader()
+                    latched = str(t.db.state_get('kill_switch_latched', 'false')).lower() == 'true'
+                    unresolved = bool(state.ensure_multi().unresolved_symbols())
+                except Exception as exc:
+                    state.last_error = f'supervisor probe: {type(exc).__name__}: {exc}'
+                    continue
+                if not latched and not unresolved:
+                    state.start()
+        except Exception as exc:
+            state.last_error = f'supervisor: {type(exc).__name__}: {exc}'
+
+
+def _heartbeat_loop():
+    interval = max(300, int(os.getenv('HEARTBEAT_SECONDS', '3600')))
+    while not heartbeat_stop.wait(interval):
+        try:
+            if not state.running or state.paused:
+                continue
+            t = state.ensure_trader()
+            multi = state.ensure_multi()
+            positions = multi.open_positions()
+            account = t.client.account()
+            usdt = next(
+                (float(b.get('free', 0) or 0) + float(b.get('locked', 0) or 0)
+                 for b in account.get('balances', []) if b.get('asset') == 'USDT'),
+                0.0,
+            )
+            t.notify(
+                'WILLIAMS HEARTBEAT\\n'
+                f'state={_canonical_execution_state(multi)[0]}\\n'
+                f'positions={len(positions)}\\n'
+                f'USDT≈{usdt:.2f}\\n'
+                f'testnet={t.client.testnet}\\n'
+                f'ws={hub.snapshot().get("ws_connected")}'
+            )
+        except Exception as exc:
+            try:
+                state.ensure_trader().db.log_event(
+                    'ERROR', 'heartbeat_error',
+                    f'{type(exc).__name__}: {exc}'
+                )
+            except Exception:
+                pass
+
+
 @app.on_event('startup')
 def startup():
-    global scanner_watchdog_thread
+    global scanner_watchdog_thread, supervisor_thread, heartbeat_thread
     scanner_watchdog_stop.clear()
+    supervisor_stop.clear()
+    heartbeat_stop.clear()
     scanner_watchdog_thread = threading.Thread(
         target=_scanner_watchdog,
         daemon=True,
         name="williams-scanner-watchdog",
     )
     scanner_watchdog_thread.start()
+    supervisor_thread = threading.Thread(
+        target=_runtime_supervisor,
+        daemon=True,
+        name='williams-runtime-supervisor',
+    )
+    supervisor_thread.start()
+    heartbeat_thread = threading.Thread(
+        target=_heartbeat_loop,
+        daemon=True,
+        name='williams-heartbeat',
+    )
+    heartbeat_thread.start()
     hub.configure_credentials(
         state.api_key,
         state.api_secret,
@@ -475,6 +554,8 @@ def startup():
 @app.on_event('shutdown')
 def shutdown():
     scanner_watchdog_stop.set()
+    supervisor_stop.set()
+    heartbeat_stop.set()
     mtf_service.stop()
     hub.stop()
     state.stop()
@@ -543,7 +624,6 @@ def health():
     execution_enabled = (
         p0_ready
         and not unresolved
-        and not open_positions
         and state.running
         and not state.paused
         and not kill_switch_latched
