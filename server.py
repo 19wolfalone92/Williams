@@ -645,7 +645,7 @@ def health():
         'pending_entry_symbols': pending_symbols,
         'websocket': True,
         'auth_configured': len(API_TOKEN) >= 32,
-        'max_open_positions': multi.max_open_positions,
+        'max_open_positions': risk_capacity_positions,
         'max_total_risk_pct': multi.max_total_risk_pct,
         'max_risk_per_trade_pct': multi.max_risk_per_trade_pct,
         'open_positions': len(open_positions),
@@ -850,13 +850,22 @@ def status():
     kill_switch_latched = str(
         t.db.state_get('kill_switch_latched', 'false')
     ).lower() == 'true'
+    remaining_risk_quote = max(
+        0.0,
+        account_equity_quote * multi.max_total_risk_pct - reserved_risk_quote,
+    )
     execution_enabled = (
         p0_ready
         and not bool(unresolved_symbols or pending_symbols)
-        and not positions
+        and remaining_risk_quote > 0.0
         and state.running
         and not state.paused
         and not kill_switch_latched
+    )
+    risk_capacity_positions = (
+        int(multi.max_total_risk_pct / multi.max_risk_per_trade_pct)
+        if multi.max_risk_per_trade_pct > 0
+        else 0
     )
 
     selected_position = None
@@ -920,7 +929,7 @@ def status():
         'history_ready': bool(mtf_service.snapshot_status().get('contexts', 0) >= len(t.config.symbols) * len(t.config.structural_timeframes)),
         'p0_gate_passed': bool(t.preflight_report and t.preflight_report.get('ready')),
         'p0_gate_reason': ('PASS' if t.preflight_report and t.preflight_report.get('ready') else 'NOT_READY'),
-        'max_open_positions_locked': True,
+        'max_open_positions_locked': False,
         'reconcile_required': bool(unresolved_symbols or pending_symbols),
         'unresolved_symbols': unresolved_symbols,
         'pending_entry_symbols': pending_symbols,
