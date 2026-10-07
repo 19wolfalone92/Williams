@@ -1,4 +1,7 @@
 <resources>
     <string name="app_name">Williams Trader</string>
     <string name="widget_positions_description">Открытые позиции Williams</string>
+    <string name="widget_title">WILLIAMS</string>
+    <string name="widget_risk_zero">0.00%</string>
+    <string name="widget_no_positions">Нет открытых позиций</string>
 </resources>
