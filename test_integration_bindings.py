@@ -394,3 +394,126 @@ def test_active_oco_two_legs_represent_one_quantity(tmp_path):
     assert result["protected"] is True
     assert result["remaining_quantity"] == 1.0
 
+
+
+def test_active_oco_partial_fill_keeps_second_leg_as_shared_protection(tmp_path):
+    """One OCO leg may be PARTIALLY_FILLED while its sibling remains NEW.
+
+    The two child SELLs are alternative exits for one inventory quantity. A
+    0.30 fill against a 1.00 position therefore leaves exactly 0.70 managed,
+    not 1.70 and not 1.00. The active OCO must remain recognized as one bundle.
+    """
+    db = Database(str(tmp_path / "active-partial-oco.sqlite3"))
+
+    class PartialActiveOcoBinance(FakeBinance):
+        def open_orders(self, symbol=None):
+            return [
+                {
+                    "symbol": "BTCUSDT",
+                    "side": "SELL",
+                    "type": "TAKE_PROFIT_LIMIT",
+                    "orderId": "21",
+                    "orderListId": "10",
+                    "clientOrderId": "WILLV4_OCO_TEST_TP",
+                    "status": "PARTIALLY_FILLED",
+                    "origQty": "1.0",
+                    "executedQty": "0.3",
+                    "cummulativeQuoteQty": "30",
+                    "price": "104",
+                    "stopPrice": "104",
+                },
+                {
+                    "symbol": "BTCUSDT",
+                    "side": "SELL",
+                    "type": "STOP_LOSS_LIMIT",
+                    "orderId": "22",
+                    "orderListId": "10",
+                    "clientOrderId": "WILLV4_OCO_TEST_SL",
+                    "status": "NEW",
+                    "origQty": "1.0",
+                    "executedQty": "0",
+                    "cummulativeQuoteQty": "0",
+                    "price": "97.5",
+                    "stopPrice": "98",
+                },
+            ]
+
+        def all_order_lists(self, symbol=None, limit=100):
+            return [{
+                "symbol": "BTCUSDT",
+                "orderListId": "10",
+                "listClientOrderId": "WILLV4_OCO_TEST",
+                "listStatusType": "EXEC_STARTED",
+                "listOrderStatus": "EXECUTING",
+            }]
+
+        def all_orders(self, symbol, limit=1000):
+            rows = [
+                {
+                    "symbol": "BTCUSDT",
+                    "side": "BUY",
+                    "type": "MARKET",
+                    "orderId": "1",
+                    "clientOrderId": "WILLV4_ENTRY_TEST",
+                    "status": "FILLED",
+                    "executedQty": "1.0",
+                    "cummulativeQuoteQty": "100",
+                    "time": 1000,
+                },
+                {
+                    "symbol": "BTCUSDT",
+                    "side": "SELL",
+                    "type": "TAKE_PROFIT_LIMIT",
+                    "orderId": "21",
+                    "orderListId": "10",
+                    "clientOrderId": "WILLV4_OCO_TEST_TP",
+                    "status": "PARTIALLY_FILLED",
+                    "origQty": "1.0",
+                    "executedQty": "0.3",
+                    "cummulativeQuoteQty": "30",
+                    "time": 2000,
+                },
+            ]
+            return rows
+
+        def account(self):
+            return {
+                "accountType": "SPOT",
+                "balances": [
+                    {"asset": "USDT", "free": "900", "locked": "0"},
+                    {"asset": "BTC", "free": "0.7", "locked": "0"},
+                ],
+            }
+
+    client = PartialActiveOcoBinance(
+        entry_status="FILLED",
+        entry_qty="1.0",
+    )
+    trader = MultiPositionTrader(client, db=db, symbols=[])
+
+    trade_id = db.save_trade(
+        entry_time="1970-01-01T00:00:01+00:00",
+        symbol="BTCUSDT",
+        side="LONG",
+        entry_price=100.0,
+        quantity=1.0,
+        entry_order_id="1",
+        entry_client_order_id="WILLV4_ENTRY_TEST",
+        exit_order_list_id="10",
+        exit_order_list_client_id="WILLV4_OCO_TEST",
+        stop_price=98.0,
+        take_profit_price=104.0,
+        risk_pct=0.5,
+        fees=0.0,
+    )
+    db.state_set("position_state:BTCUSDT", "OPEN")
+
+    result = trader._reconcile_trade(trade_id)
+
+    assert result["state"] == "OPEN"
+    assert result["protected"] is True
+    assert result["partial_exit"] is True
+    assert abs(result["remaining_quantity"] - 0.7) < 1e-9
+    assert abs(float(db.open_trade("BTCUSDT")["quantity"]) - 0.7) < 1e-9
+    assert client.oco_calls == 0
+
