@@ -689,17 +689,18 @@ fun WilliamsApp(context: Context) {
             try {
                 require(apiKey.isNotBlank()) { "Введите API Key" }
                 require(apiSecret.isNotBlank()) { "Введите API Secret" }
-                val body = JSONObject()
-                    .put("api_key", apiKey.trim())
-                    .put("api_secret", apiSecret.trim())
-                    .put("testnet", true)
-                    .toString()
+                // Write directly into the same Keystore-backed store consumed
+                // by NativeEngine. Binance secrets never cross the HTTP bridge.
+                val writeResult = StandaloneRuntime.configureCredentials(
+                    context,
+                    apiKey.trim(),
+                    apiSecret.trim()
+                )
+                require(writeResult.optBoolean("read_back_verified", false)) {
+                    "Credentials write/read-back verification failed"
+                }
 
-                // In autonomous mode the encrypted native runtime stores the
-                // Binance credentials on the phone. The secret is never returned.
-                api.post("/api/v1/config/binance", body)
-
-                val verified = JSONObject(api.get("/api/v1/status"))
+                val verified = StandaloneRuntime.status(context)
                 val configured = verified.optBoolean(
                     "binance_configured",
                     verified.optBoolean("auth_configured", false)
@@ -735,7 +736,7 @@ fun WilliamsApp(context: Context) {
     fun clearCredentials() {
         scope.launch(Dispatchers.IO) {
             try {
-                api.delete("/api/v1/config/binance")
+                StandaloneRuntime.clearCredentials(context)
                 withContext(Dispatchers.Main) {
                     message = "Binance-ключи удалены из автономного runtime"
                     apiKey = ""
