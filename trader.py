@@ -1236,12 +1236,7 @@ class Trader:
 
 
     def _auto_scan_process(self):
-        """Compatibility wrapper for the canonical portfolio execution engine.
-
-        AUTO_SCAN must never fall back to the legacy one-symbol/one-position
-        path. Multiple Spot positions are governed only by the aggregate risk
-        budget and per-trade risk cap.
-        """
+        """Run one guarded autonomous portfolio scan/execution cycle."""
         now = time.monotonic()
         interval = max(0, int(self.auto_scan_min_interval_seconds))
         if interval > 0 and self._last_auto_scan_monotonic > 0:
@@ -1257,22 +1252,23 @@ class Trader:
                 'status': 'SCAN_IN_PROGRESS',
                 'results': [],
             }
+
         self._auto_scan_lock = True
         self._last_auto_scan_monotonic = now
         try:
             if not hasattr(self, '_multi_position_trader'):
-            self._multi_position_trader = MultiPositionTrader(
-                self.client,
-                db=self.db,
-                symbols=self.auto_scan_symbols,
-            )
-            recovery = self._multi_position_trader.recover()
-            if not recovery.get('ok'):
-                return {
-                    'status': 'BLOCKED',
-                    'reason': 'canonical recovery requires reconciliation',
-                    'recovery': recovery,
-                }
+                self._multi_position_trader = MultiPositionTrader(
+                    self.client,
+                    db=self.db,
+                    symbols=self.auto_scan_symbols,
+                )
+                recovery = self._multi_position_trader.recover()
+                if not recovery.get('ok'):
+                    return {
+                        'status': 'BLOCKED',
+                        'reason': 'canonical recovery requires reconciliation',
+                        'recovery': recovery,
+                    }
             return self._multi_position_trader.scan_and_execute()
         finally:
             self._auto_scan_lock = False
