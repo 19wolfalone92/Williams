@@ -12,6 +12,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.ComponentActivity
 import androidx.core.content.ContextCompat
+import androidx.core.content.edit
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import androidx.activity.compose.setContent
@@ -123,14 +124,13 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         // Remove credentials/state left by obsolete local-trader builds.
         // Current APK never writes Binance secrets to Android storage.
-        getSharedPreferences("williams_native_secure", Context.MODE_PRIVATE)
-            .edit()
-            .remove("api_key")
-            .remove("api_secret")
-            .remove("auto_run")
-            .remove("recovery_pending")
-            .remove("local_api_token")
-            .apply()
+        getSharedPreferences("williams_native_secure", Context.MODE_PRIVATE).edit {
+            remove("api_key")
+            remove("api_secret")
+            remove("auto_run")
+            remove("recovery_pending")
+            remove("local_api_token")
+        }
         // Williams is a remote cockpit; 24/7 execution is handled by the backend.
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(
@@ -394,10 +394,10 @@ private class BackendApi(context: Context) {
         if (token.trim().length < 32) {
             error("Для Backend нужен Mobile API Token (минимум 32 символа).")
         }
-        securePrefs.edit()
-            .putString("backend_url", normalized)
-            .putString("mobile_token", token.trim())
-            .apply()
+        securePrefs.edit {
+            putString("backend_url", normalized)
+            putString("mobile_token", token.trim())
+        }
     }
 
     fun get(path: String): String = request("GET", path, null)
