@@ -63,7 +63,7 @@ class ExecutionGateIntegrationTest {
                 loop.post {
                     if (
                         fsm.state == TradingState.READY_FLAT &&
-                        gate.tryReserve("BTCUSDT")
+                        gate.tryAdmit("BTCUSDT")
                     ) {
                         assertTrue(
                             fsm.transition(
