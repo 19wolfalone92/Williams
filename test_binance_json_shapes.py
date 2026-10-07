@@ -230,3 +230,41 @@ def test_oco_quantizes_both_sell_stop_legs(monkeypatch):
     assert captured["params"]["abovePrice"] == "105.1"
     assert captured["params"]["belowStopPrice"] == "95.0"
     assert captured["params"]["belowPrice"] == "94.9"
+
+
+def test_order_mutation_rate_limit_is_unknown_and_not_retried(monkeypatch):
+    client = make_client()
+    calls = []
+
+    class FakeResponse:
+        status_code = 429
+        headers = {"Retry-After": "1"}
+
+        @property
+        def content(self):
+            return b'{"code":-1003,"msg":"Too many requests"}'
+
+        @property
+        def text(self):
+            return '{"code":-1003,"msg":"Too many requests"}'
+
+        def json(self):
+            return {"code": -1003, "msg": "Too many requests"}
+
+    def fake_request(*args, **kwargs):
+        calls.append(1)
+        return FakeResponse()
+
+    monkeypatch.setattr(client.session, "request", fake_request)
+
+    with pytest.raises(BinanceAPIError) as exc:
+        client._request(
+            "POST",
+            "/api/v3/order",
+            {"symbol": "BTCUSDT"},
+            signed=True,
+        )
+
+    assert exc.value.unknown_execution is True
+    assert exc.value.status_code == 429
+    assert len(calls) == 1
