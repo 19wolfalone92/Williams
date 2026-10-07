@@ -174,6 +174,11 @@ class MultiTimeframeWaveEngine:
         "1M": ["1M", "1w", "1d"],
     }
 
+    @staticmethod
+    def _normalize_interval(value: str) -> str:
+        text = str(value or "").strip()
+        return "1M" if text == "1M" else text.lower()
+
     def __init__(
         self,
         client,
@@ -184,9 +189,9 @@ class MultiTimeframeWaveEngine:
         include_micro: Optional[bool] = None,
     ) -> None:
         self.client = client
-        self.base_interval = (base_interval or os.getenv("INTERVAL", "1h")).lower()
-        self.context_interval = os.getenv("HTF_INTERVAL", "4h").lower()
-        self.execution_interval = os.getenv("EXECUTION_TIMEFRAME", "5m").lower()
+        self.base_interval = self._normalize_interval(base_interval or os.getenv("INTERVAL", "1h"))
+        self.context_interval = self._normalize_interval(os.getenv("HTF_INTERVAL", "4h"))
+        self.execution_interval = self._normalize_interval(os.getenv("EXECUTION_TIMEFRAME", "5m"))
         self.lookback = int(
             lookback if lookback is not None else os.getenv("WAVE_LOOKBACK", str(LOOKBACK_DEFAULT))
         )
@@ -207,9 +212,9 @@ class MultiTimeframeWaveEngine:
 
         raw = os.getenv("WAVE_TF_CHAIN", "").strip()
         if intervals is not None:
-            wanted = [str(x).lower().strip() for x in intervals if str(x).strip()]
+            wanted = [self._normalize_interval(x) for x in intervals if str(x).strip()]
         elif raw:
-            wanted = [x.lower().strip() for x in raw.split(",") if x.strip()]
+            wanted = [self._normalize_interval(x) for x in raw.split(",") if x.strip()]
         else:
             wanted = list(self.DEFAULT_CHAINS.get(
                 self.base_interval,
