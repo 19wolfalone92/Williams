@@ -284,21 +284,21 @@ if trader_file.exists():
         else:
             finding("PASS", f"{method}: DRY_RUN precedes exchange order")
 
-# Williams uses native OCO for protected exits.
-# Exit protection is implemented through native OCO.
-if re.search(r"def\s+place_oco\s*\(", text):
-    if re.search(r"\.create_oco_sell\s*\(", text):
-        finding(
-            "PASS",
-            "exit: native OCO via place_oco()/create_oco_sell()"
-        )
-    else:
-        finding(
-            "FAIL",
-            "exit: place_oco() exists but create_oco_sell() is missing"
-        )
+# Williams uses a local protected-exit wrapper backed by Binance native OCO.
+# The production core names the local wrapper _create_oco and the client call
+# create_oco_sell_safe/create_oco_sell. Do not require the obsolete place_oco name.
+has_local_oco = bool(re.search(r"def\s+_?create_oco\s*\(", text))
+has_binance_oco = bool(re.search(r"\.create_oco_sell(?:_safe)?\s*\(", text))
+if has_local_oco and has_binance_oco:
+    finding(
+        "PASS",
+        "exit: native Binance OCO via local _create_oco wrapper"
+    )
 else:
-    finding("FAIL", "exit: place_oco() not found")
+    finding(
+        "FAIL",
+        "exit: protected native OCO implementation is incomplete"
+    )
 
 # ---------------------------------------------------------------------
 # 10. Dangerous Python execution primitives
