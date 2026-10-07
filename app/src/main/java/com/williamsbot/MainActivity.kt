@@ -118,6 +118,7 @@ import kotlin.math.max
 import kotlin.math.min
 
 // Williams 4.22.2 Trading Core production cockpit
+// Autonomous runtime contract: local loopback API is intentional; no VPS required.
 // CI compile-log capture enabled
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
