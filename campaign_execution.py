@@ -106,6 +106,50 @@ class CampaignExecutionService:
             raise CampaignExecutionError(f"{symbol}: PRICE_FILTER.tickSize unavailable")
         return self._floor(price, tick)
 
+    def _check_buy_position_capacity(self, symbol: str, quantity: float) -> None:
+        filters = self._rules(symbol)
+        max_position_filter = filters.get("MAX_POSITION") or {}
+        max_position = float(
+            max_position_filter.get("maxPosition", "inf") or "inf"
+        )
+        if not max_position < float("inf"):
+            return
+
+        info = self.client.exchange_info(symbol)
+        rows = info.get("symbols", [])
+        if not rows:
+            raise CampaignExecutionError(
+                f"{symbol}: exchangeInfo unavailable for MAX_POSITION check"
+            )
+        asset = str(rows[0].get("baseAsset", "")).upper()
+        account = self.client.account()
+        base_total = 0.0
+        for balance in account.get("balances", []):
+            if str(balance.get("asset", "")).upper() == asset:
+                base_total = (
+                    float(balance.get("free", 0) or 0)
+                    + float(balance.get("locked", 0) or 0)
+                )
+                break
+
+        open_orders = self.client.open_orders(symbol)
+        pending_buy_qty = sum(
+            max(
+                0.0,
+                float(o.get("origQty", 0) or 0)
+                - float(o.get("executedQty", 0) or 0),
+            )
+            for o in open_orders
+            if str(o.get("side", "")).upper() == "BUY"
+        )
+        tolerance = max(1e-12, max_position * 1e-9)
+        if base_total + pending_buy_qty + float(quantity) > max_position + tolerance:
+            raise CampaignExecutionError(
+                f"{symbol}: MAX_POSITION would be exceeded "
+                f"(base={base_total:.12g}, pending_buy={pending_buy_qty:.12g}, "
+                f"new={float(quantity):.12g}, max={max_position:.12g})"
+            )
+
     def _current_price(self, symbol: str) -> float:
         row = self.client.ticker_price(symbol)
         price = float(row.get("price", 0) or 0)
@@ -283,6 +327,10 @@ class CampaignExecutionService:
                         f"{signal.symbol}: fractal last-mile validation failed: {exc}"
                     ) from exc
 
+            self._check_buy_position_capacity(
+                signal.symbol,
+                qty,
+            )
             self._check_algo_capacity(signal.symbol, additional=1)
 
         try:
@@ -975,6 +1023,7 @@ class CampaignExecutionService:
                 new_client_order_id=cid,
             ),
             lambda _snapshot: (
+                self._check_buy_position_capacity(signal.symbol, qty)
                 self._check_algo_capacity(signal.symbol, 1)
                 if self._current_price(signal.symbol) < trigger
                 else (_ for _ in ()).throw(
