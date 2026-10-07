@@ -131,14 +131,27 @@ private data class PositionState(
     var ocoListId: String = "",
     var entryOrderId: String = "",
     var entryClientOrderId: String = "",
-    var openedAt: Long = 0L
+    var openedAt: Long = 0L,
+    var campaignId: String = "",
+    var signalId: String = "",
+    var signalType: String = "",
+    var campaignState: String = "OPEN_INITIAL",
+    var stopSource: String = "INITIAL_SIGNAL",
+    var additions: Int = 0
 )
 
 private data class PendingEntry(
     val symbol: String,
     val clientOrderId: String,
     val notional: Double,
-    val stopDistance: Double
+    val stopDistance: Double,
+    val triggerPrice: Double = 0.0,
+    val protectivePrice: Double = 0.0,
+    val riskReservedPct: Double = 0.0,
+    val capitalReservedQuote: Double = 0.0,
+    val campaignId: String = "",
+    val signalId: String = "",
+    val signalType: String = "REVERSAL"
 )
 
 private data class ExecutionResult(
