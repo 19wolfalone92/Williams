@@ -13,9 +13,7 @@ object AndroidRuntimeHealth {
         val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
         val usage = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
 
-        val ignoring = if (Build.VERSION.SDK_INT >= 23) {
-            pm.isIgnoringBatteryOptimizations(context.packageName)
-        } else true
+        val ignoring = pm.isIgnoringBatteryOptimizations(context.packageName)
 
         val result = JSONObject()
             .put("battery_optimization_ignored", ignoring)
