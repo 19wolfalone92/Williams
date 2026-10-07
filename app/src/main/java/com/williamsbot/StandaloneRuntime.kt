@@ -2510,6 +2510,1083 @@ private class NativeEngine(
         }
     }
 
+    private fun campaignPendingRiskPct(): Double =
+        synchronized(pendingEntries) {
+            pendingEntries.values.sumOf { it.riskReservedPct }
+        }
+
+    private fun campaignRiskUsedPct(): Double =
+        (
+            positionList().sumOf { p ->
+                if (p.riskPct > 0.0) p.riskPct
+                else if (p.entry > 0.0 && p.stop > 0.0) {
+                    ((p.entry - p.stop) / p.entry).coerceAtLeast(0.0)
+                } else 0.0
+            } + campaignPendingRiskPct()
+        ).coerceAtLeast(0.0)
+
+    private fun campaignRemainingRiskPct(equity: Double): Double =
+        if (equity <= 0.0) 0.0
+        else (maxTotalRiskPct - campaignRiskUsedPct()).coerceAtLeast(0.0)
+
+    private fun campaignBaseBalance(symbol: String, account: JSONObject? = null): Double {
+        val a = account ?: signedAccount()
+        val info = JSONObject(
+            getBody("/api/v3/exchangeInfo?symbol=" + symbol)
+        )
+        val asset = info.optJSONArray("symbols")
+            ?.optJSONObject(0)
+            ?.optString("baseAsset", "")
+            ?.uppercase(Locale.US)
+            ?: return 0.0
+        val balances = a.optJSONArray("balances") ?: JSONArray()
+        for (i in 0 until balances.length()) {
+            val row = balances.optJSONObject(i) ?: continue
+            if (row.optString("asset").uppercase(Locale.US) == asset) {
+                return (row.optString("free").toDoubleOrNull() ?: 0.0) +
+                    (row.optString("locked").toDoubleOrNull() ?: 0.0)
+            }
+        }
+        return 0.0
+    }
+
+    private fun checkCampaignOrderCapacity(symbol: String, additional: Int = 1) {
+        val rules = symbolFilters(symbol)
+        val response = signedGet("/api/v3/openOrders", "symbol=" + symbol)
+        val orders = response.optJSONArray("orders")
+            ?: if (response.has("symbol")) JSONArray().put(response) else JSONArray()
+        require(orders.length() + additional <= rules.maxNumOrders) {
+            "Binance MAX_NUM_ORDERS would be exceeded"
+        }
+        val algoOpen = (0 until orders.length()).count { i ->
+            val type = orders.optJSONObject(i)
+                ?.optString("type", "")
+                ?.uppercase(Locale.US)
+                ?: ""
+            type in setOf("STOP_LOSS", "STOP_LOSS_LIMIT", "TAKE_PROFIT", "TAKE_PROFIT_LIMIT")
+        }
+        require(algoOpen + additional <= rules.maxNumAlgoOrders) {
+            "Binance MAX_NUM_ALGO_ORDERS would be exceeded"
+        }
+    }
+
+    private fun withCampaignMutation(
+        symbol: String,
+        purpose: String,
+        block: () -> JSONObject
+    ): JSONObject {
+        if (!running) error("Runtime is not running")
+        if (paused) error("Runtime is paused")
+        if (reconcileRequired) error("RECONCILE_REQUIRED")
+        if (killLatched) error("KILL_SWITCH_LATCHED")
+        require(executionGate.tryReserve(symbol)) {
+            "Campaign execution already reserved for " + symbol
+        }
+        prefs.edit()
+            .putString("execution_gate_symbol", symbol)
+            .putString("execution_gate_purpose", purpose)
+            .apply()
+        return try {
+            block()
+        } finally {
+            executionGate.release(symbol)
+            prefs.edit()
+                .remove("execution_gate_symbol")
+                .remove("execution_gate_purpose")
+                .apply()
+        }
+    }
+
+    private fun campaignEntryCandidate(candidate: BaseAnalysis): CampaignSignalN? =
+        candidate.campaignSignals
+            .sortedBy { it.signalBarTimeMs }
+            .firstOrNull()
+
+    private fun submitCampaignEntry(candidate: BaseAnalysis) {
+        if (!campaignEngineEnabled || !candidate.campaignReady) return
+        if (reconcileRequired || paused || killLatched) return
+        if (positionList().any { it.symbol == candidate.symbol }) return
+        if (synchronized(pendingEntries) { pendingEntries.containsKey(candidate.symbol) }) return
+        if (positionList().size >= maxOpenPositions) return
+
+        val signal = campaignEntryCandidate(candidate) ?: return
+        val equity = estimateManagedEquity()
+        val remainingRisk = campaignRemainingRiskPct(equity)
+        val riskPct = min(
+            campaignInitialRiskPct,
+            min(maxRiskPerTradePct, remainingRisk)
+        )
+        if (riskPct <= 0.0 || equity <= 0.0) return
+
+        val current = runCatching { currentCampaignPrice(candidate.symbol) }.getOrDefault(0.0)
+        if (current <= 0.0) return
+
+        val rules = runCatching { symbolFilters(candidate.symbol) }.getOrNull() ?: return
+        val trigger = normalizePrice(signal.triggerPrice, rules.tick)
+        val stop = normalizePrice(signal.protectivePrice, rules.tick)
+        if (trigger <= current || stop <= 0.0 || stop >= trigger) return
+
+        val stopFraction = ((trigger - stop) / trigger).coerceAtLeast(0.000001)
+        val effectiveLoss = stopFraction + 2.0 * feeBufferPerSidePct + maxSlippagePct
+        val riskQuote = equity * riskPct
+        val freeUsdt = liveUsdtBalance.coerceAtLeast(0.0)
+        val pendingCapital = synchronized(pendingEntries) {
+            pendingEntries.values.sumOf { it.capitalReservedQuote }
+        }
+        val usableCapital = max(0.0, freeUsdt - pendingCapital)
+        val notional = min(
+            equity * 0.25,
+            min(usableCapital * 0.95, riskQuote / effectiveLoss)
+        )
+        val qty = floorStep(notional / trigger, rules.step)
+        if (qty <= 0.0 || qty < rules.minQty) return
+        if (qty * trigger < rules.minNotional) return
+
+        val existingBase = runCatching {
+            campaignBaseBalance(candidate.symbol)
+        }.getOrDefault(0.0)
+        if (rules.maxPosition.isFinite() && existingBase + qty > rules.maxPosition) return
+
+        val clientId =
+            "W5E_" + signal.type + "_" + signal.signalBarTimeMs + "_" +
+                System.nanoTime().toString(16).takeLast(10)
+        val campaignId = "W5C_" + System.nanoTime().toString(16)
+
+        val pending = PendingEntry(
+            symbol = candidate.symbol,
+            clientOrderId = clientId,
+            notional = qty * trigger,
+            stopDistance = stopFraction,
+            triggerPrice = trigger,
+            protectivePrice = stop,
+            riskReservedPct = riskPct,
+            capitalReservedQuote = qty * trigger,
+            campaignId = campaignId,
+            signalId = signal.signalId,
+            signalType = signal.type
+        )
+        synchronized(pendingEntries) {
+            pendingEntries[candidate.symbol] = pending
+        }
+        stateMachine.force(
+            TradingState.ENTRY_PENDING,
+            "Williams campaign conditional entry armed"
+        )
+        savePersistedState()
+
+        executionExecutor.execute {
+            try {
+                val order = withCampaignMutation(
+                    candidate.symbol,
+                    "CAMPAIGN_ENTRY"
+                ) {
+                    require(currentCampaignPrice(candidate.symbol) < trigger) {
+                        "Campaign trigger already crossed; no market substitution"
+                    }
+                    checkCampaignOrderCapacity(candidate.symbol, 1)
+                    if (
+                        rules.maxPosition.isFinite() &&
+                        campaignBaseBalance(candidate.symbol) + qty > rules.maxPosition
+                    ) {
+                        error("Binance MAX_POSITION would be exceeded")
+                    }
+                    signedPost(
+                        "/api/v3/order",
+                        "symbol=" + candidate.symbol +
+                            "&side=BUY&type=STOP_LOSS" +
+                            "&quantity=" + fmtQty(qty, rules.decimals) +
+                            "&stopPrice=" + fmtPrice(trigger, rules.decimals) +
+                            "&newClientOrderId=" + clientId
+                    )
+                }
+                lastOrder = order
+                savePersistedState()
+                recoverCampaignPendingEntries()
+            } catch (x: Throwable) {
+                val observed = runCatching {
+                    signedGet(
+                        "/api/v3/order",
+                        "symbol=" + candidate.symbol +
+                            "&origClientOrderId=" + clientId
+                    )
+                }.getOrNull()
+                if (observed != null) {
+                    lastOrder = observed
+                    runCatching { recoverCampaignPendingEntries() }
+                } else {
+                    setReconcileRequired(
+                        "Campaign entry mutation ambiguous for " + candidate.symbol +
+                            ": " + (x.message ?: x.javaClass.simpleName)
+                    )
+                }
+            }
+        }
+    }
+
+    private fun createCampaignStop(position: PositionState): JSONObject {
+        val symbol = position.symbol
+        val rules = symbolFilters(symbol)
+        val qty = floorStep(position.qty, rules.step)
+        val stop = normalizePrice(position.stop, rules.tick)
+        require(qty >= rules.minQty && qty > 0.0) {
+            symbol + ": campaign protection quantity below minimum"
+        }
+        require(stop > 0.0) { symbol + ": campaign stop invalid" }
+        require(qty * stop >= rules.minNotional) {
+            symbol + ": campaign protection below minimum notional"
+        }
+        require(currentCampaignPrice(symbol) > stop) {
+            symbol + ": market price is already at/below campaign stop"
+        }
+
+        val clientId = "W5S_" + System.nanoTime().toString(16)
+        val order = withCampaignMutation(symbol, "CAMPAIGN_PROTECTION") {
+            checkCampaignOrderCapacity(symbol, 1)
+            signedPost(
+                "/api/v3/order",
+                "symbol=" + symbol +
+                    "&side=SELL&type=STOP_LOSS" +
+                    "&quantity=" + fmtQty(qty, rules.decimals) +
+                    "&stopPrice=" + fmtPrice(stop, rules.decimals) +
+                    "&newClientOrderId=" + clientId
+            )
+        }
+        lastOrder = order
+        return order
+    }
+
+    private fun replaceCampaignStop(position: PositionState, proposedStop: Double) {
+        if (proposedStop <= position.stop) return
+        val rules = symbolFilters(position.symbol)
+        val stop = normalizePrice(proposedStop, rules.tick)
+        val market = currentCampaignPrice(position.symbol)
+        if (stop <= position.stop || stop >= market) return
+
+        val oldId = position.protectiveOrderId.toLongOrNull()
+        if (oldId == null) {
+            val created = createCampaignStop(
+                position.copy(
+                    stop = stop,
+                    stopSource = "3_5_BAR_STRUCTURE"
+                )
+            )
+            synchronized(positions) {
+                positions[position.symbol] =
+                    position.copy(
+                        stop = stop,
+                        stopSource = "3_5_BAR_STRUCTURE",
+                        protectiveOrderId = created.optString("orderId", "")
+                    )
+            }
+            savePersistedState()
+            return
+        }
+
+        val newClientId = "W5S_" + System.nanoTime().toString(16)
+        val result = withCampaignMutation(position.symbol, "CAMPAIGN_TRAIL") {
+            signedCancelReplace(
+                position.symbol,
+                oldId,
+                "SELL",
+                "STOP_LOSS",
+                quantity = fmtQty(
+                    floorStep(position.qty, rules.step),
+                    rules.decimals
+                ),
+                stopPrice = fmtPrice(stop, rules.decimals),
+                newClientOrderId = newClientId
+            )
+        }
+        val cancelResult = result.optString("cancelResult", "").uppercase(Locale.US)
+        val newResult = result.optString("newOrderResult", "").uppercase(Locale.US)
+        if (cancelResult != "SUCCESS" || newResult != "SUCCESS") {
+            setReconcileRequired(
+                "Campaign protective stop replacement ambiguous for " + position.symbol
+            )
+            return
+        }
+        val newResponse = result.optJSONObject("newOrderResponse")
+            ?: error("Campaign protective replacement has no response")
+        val newId = newResponse.optString("orderId", "")
+        require(newId.isNotBlank()) {
+            "Campaign protective replacement returned no orderId"
+        }
+        synchronized(positions) {
+            positions[position.symbol] =
+                position.copy(
+                    stop = stop,
+                    stopSource = "3_5_BAR_STRUCTURE",
+                    protectiveOrderId = newId,
+                    campaignState = "TRAILING"
+                )
+        }
+        savePersistedState()
+    }
+
+    private fun currentCampaignPrice(symbol: String): Double =
+        livePrices[symbol]
+            ?: JSONObject(
+                getBody("/api/v3/ticker/price?symbol=" + symbol)
+            ).optString("price").toDoubleOrNull()
+            ?: 0.0
+
+    private fun campaignExitMarket(position: PositionState, reason: String) {
+        val symbol = position.symbol
+        try {
+            val stopId = position.protectiveOrderId.toLongOrNull()
+            if (stopId != null) {
+                withCampaignMutation(
+                    symbol,
+                    "CAMPAIGN_EXIT_CANCEL_PROTECTION"
+                ) {
+                    signedDelete(
+                        "/api/v3/order",
+                        "symbol=" + symbol + "&orderId=" + stopId
+                    )
+                    JSONObject()
+                }
+            }
+
+            val account = signedAccount()
+            val rules = symbolFilters(symbol)
+            val base = campaignBaseBalance(symbol, account)
+            val qty = floorStep(
+                min(position.qty, base),
+                if (rules.marketStep > 0.0) rules.marketStep else rules.step
+            )
+            val minQty = if (rules.marketMinQty > 0.0) rules.marketMinQty else rules.minQty
+            require(qty >= minQty) {
+                symbol + ": campaign exit quantity below minimum"
+            }
+
+            val cid = "W5X_" + System.nanoTime().toString(16)
+            val order = withCampaignMutation(symbol, "CAMPAIGN_EXIT") {
+                signedPost(
+                    "/api/v3/order",
+                    "symbol=" + symbol +
+                        "&side=SELL&type=MARKET" +
+                        "&quantity=" + fmtQty(
+                            qty,
+                            if (rules.marketStep > 0.0) {
+                                max(
+                                    0,
+                                    rules.marketStep.toString()
+                                        .substringAfter('.', "")
+                                        .trimEnd('0')
+                                        .length
+                                )
+                            } else rules.decimals
+                        ) +
+                        "&newClientOrderId=" + cid
+                )
+            }
+            lastOrder = order
+            val executed = order.optString("executedQty").toDoubleOrNull() ?: 0.0
+            val quote = order.optString("cummulativeQuoteQty").toDoubleOrNull() ?: 0.0
+            require(executed > 0.0 && quote > 0.0) {
+                symbol + ": campaign exit has no authoritative fill"
+            }
+
+            val remaining = max(0.0, position.qty - executed)
+            if (remaining > max(0.000001, position.qty * 0.005)) {
+                setReconcileRequired(
+                    symbol + ": campaign exit partially filled; residual=" + remaining
+                )
+                return
+            }
+
+            recordCompletedTrade(
+                position,
+                quote / executed,
+                reason,
+                order
+            )
+            synchronized(positions) { positions.remove(symbol) }
+            savePersistedState()
+            stateMachine.force(
+                if (positionList().isEmpty()) TradingState.READY_FLAT else TradingState.PROTECTED,
+                "Williams campaign closed"
+            )
+        } catch (x: Throwable) {
+            setReconcileRequired(
+                symbol + ": campaign exit failed: " +
+                    (x.message ?: x.javaClass.simpleName)
+            )
+        }
+    }
+
+    private fun recoverCampaignPendingEntries() {
+        val pending = synchronized(pendingEntries) {
+            pendingEntries.values.toList()
+        }
+        for (intent in pending) {
+            try {
+                val order = signedGet(
+                    "/api/v3/order",
+                    "symbol=" + intent.symbol + "&origClientOrderId=" + intent.clientOrderId
+                )
+                lastOrder = order
+                val status = order.optString("status", "").uppercase(Locale.US)
+                val executed = order.optString("executedQty").toDoubleOrNull() ?: 0.0
+                val quote = order.optString("cummulativeQuoteQty").toDoubleOrNull() ?: 0.0
+
+                when {
+                    status == "NEW" || status == "PENDING_NEW" -> Unit
+
+                    status == "PARTIALLY_FILLED" -> {
+                        val orderId = order.optLong("orderId", -1L)
+                        require(orderId > 0L) {
+                            intent.symbol + ": partial campaign entry missing orderId"
+                        }
+                        try {
+                            signedDelete(
+                                "/api/v3/order",
+                                "symbol=" + intent.symbol + "&orderId=" + orderId
+                            )
+                        } catch (cancelError: Throwable) {
+                            setReconcileRequired(
+                                intent.symbol + ": partial campaign BUY cancel ambiguous: " +
+                                    (cancelError.message ?: cancelError.javaClass.simpleName)
+                            )
+                            continue
+                        }
+                        val finalOrder = signedGet(
+                            "/api/v3/order",
+                            "symbol=" + intent.symbol + "&orderId=" + orderId
+                        )
+                        val finalQty = finalOrder.optString("executedQty").toDoubleOrNull() ?: executed
+                        val finalQuote = finalOrder.optString("cummulativeQuoteQty").toDoubleOrNull() ?: quote
+                        if (finalQty > 0.0) {
+                            createCampaignPositionFromFill(
+                                intent,
+                                finalOrder,
+                                finalQty,
+                                finalQuote
+                            )
+                        } else {
+                            clearCampaignPending(intent.symbol)
+                        }
+                    }
+
+                    status == "FILLED" -> {
+                        require(executed > 0.0 && quote > 0.0) {
+                            intent.symbol + ": filled campaign BUY has invalid fill"
+                        }
+                        createCampaignPositionFromFill(
+                            intent,
+                            order,
+                            executed,
+                            quote
+                        )
+                    }
+
+                    status in setOf("CANCELED", "EXPIRED", "REJECTED") -> {
+                        if (executed > 0.0) {
+                            require(quote > 0.0) {
+                                intent.symbol + ": terminal campaign fill lacks quote"
+                            }
+                            createCampaignPositionFromFill(
+                                intent,
+                                order,
+                                executed,
+                                quote
+                            )
+                        } else {
+                            clearCampaignPending(intent.symbol)
+                        }
+                    }
+
+                    else -> setReconcileRequired(
+                        intent.symbol + ": unknown campaign pending status=" + status
+                    )
+                }
+            } catch (x: Throwable) {
+                setReconcileRequired(
+                    intent.symbol + ": campaign pending recovery failed: " +
+                        (x.message ?: x.javaClass.simpleName)
+                )
+            }
+        }
+    }
+
+    private fun clearCampaignPending(symbol: String) {
+        synchronized(pendingEntries) { pendingEntries.remove(symbol) }
+        savePersistedState()
+        if (positionList().isEmpty()) {
+            stateMachine.force(
+                TradingState.READY_FLAT,
+                "Campaign conditional entry cleared"
+            )
+        }
+    }
+
+    private fun createCampaignPositionFromFill(
+        intent: PendingEntry,
+        order: JSONObject,
+        qty: Double,
+        quote: Double
+    ) {
+        if (qty <= 0.0 || quote <= 0.0) {
+            throw IllegalArgumentException(
+                intent.symbol + ": invalid campaign fill"
+            )
+        }
+        val entry = quote / qty
+        val stop = intent.protectivePrice
+        if (stop <= 0.0 || stop >= entry) {
+            throw IllegalStateException(
+                intent.symbol + ": invalid campaign stop=" + stop + " entry=" + entry
+            )
+        }
+
+        val existing = synchronized(positions) { positions[intent.symbol] }
+        if (existing != null && existing.campaignId == intent.campaignId) {
+            synchronized(pendingEntries) { pendingEntries.remove(intent.symbol) }
+            savePersistedState()
+            return
+        }
+
+        val provisional = PositionState(
+            symbol = intent.symbol,
+            qty = qty,
+            entry = entry,
+            stop = stop,
+            take = 0.0,
+            riskPct = intent.riskReservedPct,
+            entryOrderId = order.optString("orderId", ""),
+            entryClientOrderId = intent.clientOrderId,
+            openedAt = order.optLong("transactTime", System.currentTimeMillis()),
+            campaignId = intent.campaignId,
+            signalId = intent.signalId,
+            signalType = intent.signalType,
+            campaignState = "OPEN_INITIAL",
+            stopSource = "INITIAL_SIGNAL"
+        )
+
+        try {
+            val protection = createCampaignStop(provisional)
+            val protected = provisional.copy(
+                protectiveOrderId = protection.optString("orderId", "")
+            )
+            require(protected.protectiveOrderId.isNotBlank()) {
+                intent.symbol + ": campaign protection has no orderId"
+            }
+
+            synchronized(positions) {
+                positions[intent.symbol] = protected
+            }
+            synchronized(pendingEntries) {
+                pendingEntries.remove(intent.symbol)
+            }
+
+            TradeJournal.recordEntry(
+                prefs = prefs,
+                symbol = protected.symbol,
+                entry = protected.entry,
+                qty = protected.qty,
+                stop = protected.stop,
+                take = 0.0,
+                riskPct = protected.riskPct,
+                contextJson = JSONObject()
+                    .put("campaign_id", protected.campaignId)
+                    .put("signal_id", protected.signalId)
+                    .put("signal_type", protected.signalType)
+                    .put("entry_trigger", intent.triggerPrice)
+                    .put("protective_reference", intent.protectivePrice)
+                    .put("campaign_entry_mode", "CONDITIONAL_STOP")
+                    .toString()
+            )
+            savePersistedState()
+            stateMachine.force(
+                TradingState.PROTECTED,
+                "Campaign entry filled and hard protection armed"
+            )
+        } catch (x: Throwable) {
+            try {
+                val balanceQty = campaignBaseBalance(intent.symbol)
+                val rules = symbolFilters(intent.symbol)
+                val emergencyQty = floorStep(
+                    min(qty, balanceQty),
+                    if (rules.marketStep > 0.0) rules.marketStep else rules.step
+                )
+                require(
+                    emergencyQty >= (
+                        if (rules.marketMinQty > 0.0) rules.marketMinQty else rules.minQty
+                    )
+                )
+                val cid = "W5EM_" + System.nanoTime().toString(16)
+                val emergency = withCampaignMutation(
+                    intent.symbol,
+                    "CAMPAIGN_EMERGENCY_EXIT"
+                ) {
+                    signedPost(
+                        "/api/v3/order",
+                        "symbol=" + intent.symbol +
+                            "&side=SELL&type=MARKET" +
+                            "&quantity=" +
+                            fmtQty(
+                                emergencyQty,
+                                if (rules.marketStep > 0.0) {
+                                    max(
+                                        0,
+                                        rules.marketStep.toString()
+                                            .substringAfter('.', "")
+                                            .trimEnd('0')
+                                            .length
+                                    )
+                                } else rules.decimals
+                            ) +
+                            "&newClientOrderId=" + cid
+                    )
+                }
+                lastOrder = emergency
+                val sold = emergency.optString("executedQty").toDoubleOrNull() ?: 0.0
+                if (sold + max(0.000001, qty * 0.005) >= qty) {
+                    synchronized(pendingEntries) { pendingEntries.remove(intent.symbol) }
+                    savePersistedState()
+                    stateMachine.force(
+                        if (positionList().isEmpty()) TradingState.READY_FLAT else TradingState.PROTECTED,
+                        "Unprotected campaign emergency exit complete"
+                    )
+                } else {
+                    setReconcileRequired(
+                        intent.symbol + ": emergency campaign exit partial after protection failure"
+                    )
+                }
+            } catch (emergency: Throwable) {
+                setReconcileRequired(
+                    intent.symbol + ": protection failed and emergency exit failed: " +
+                        (emergency.message ?: emergency.javaClass.simpleName)
+                )
+            }
+        }
+    }
+
+    private fun reconcileCampaignPositions() {
+        for (stored in positionList().filter { it.campaignId.isNotBlank() }) {
+            try {
+                val rules = symbolFilters(stored.symbol)
+                val actualBase = campaignBaseBalance(stored.symbol)
+                val tolerance = max(0.000001, stored.qty * 0.005)
+                require(actualBase + tolerance >= stored.qty) {
+                    stored.symbol + ": campaign inventory below expected"
+                }
+
+                val response = signedGet(
+                    "/api/v3/openOrders",
+                    "symbol=" + stored.symbol
+                )
+                val orders = response.optJSONArray("orders")
+                    ?: if (response.has("symbol")) JSONArray().put(response) else JSONArray()
+
+                val managedStops = mutableListOf<JSONObject>()
+                val unknownSells = mutableListOf<JSONObject>()
+
+                for (j in 0 until orders.length()) {
+                    val o = orders.optJSONObject(j) ?: continue
+                    if (o.optString("side").uppercase(Locale.US) != "SELL") continue
+                    val cid = o.optString("clientOrderId")
+                    if (
+                        cid.startsWith("W5S_") &&
+                        o.optString("type").uppercase(Locale.US) in
+                            setOf("STOP_LOSS", "STOP_LOSS_LIMIT")
+                    ) {
+                        managedStops += o
+                    } else {
+                        unknownSells += o
+                    }
+                }
+                require(unknownSells.isEmpty()) {
+                    stored.symbol + ": unknown open SELL conflicts with campaign"
+                }
+                require(managedStops.size <= 1) {
+                    stored.symbol + ": multiple campaign protection stops"
+                }
+
+                if (managedStops.isEmpty()) {
+                    val created = createCampaignStop(stored)
+                    synchronized(positions) {
+                        positions[stored.symbol] =
+                            stored.copy(
+                                protectiveOrderId = created.optString("orderId", "")
+                            )
+                    }
+                    savePersistedState()
+                    continue
+                }
+
+                val stop = managedStops.single()
+                val stopId = stop.optString("orderId", "")
+                require(stopId.isNotBlank()) {
+                    stored.symbol + ": campaign stop missing orderId"
+                }
+                val stopQty = stop.optString("origQty").toDoubleOrNull() ?: 0.0
+
+                if (abs(stopQty - stored.qty) > tolerance) {
+                    replaceCampaignStop(
+                        stored.copy(protectiveOrderId = stopId),
+                        stored.stop
+                    )
+                } else {
+                    synchronized(positions) {
+                        positions[stored.symbol] =
+                            stored.copy(
+                                protectiveOrderId = stopId,
+                                campaignState = "TREND_ACTIVE"
+                            )
+                    }
+                    savePersistedState()
+                }
+            } catch (x: Throwable) {
+                setReconcileRequired(
+                    stored.symbol + ": campaign reconciliation failed: " +
+                        (x.message ?: x.javaClass.simpleName)
+                )
+            }
+        }
+
+        if (
+            positionList().isNotEmpty() &&
+            stateMachine.state != TradingState.RECONCILE_REQUIRED &&
+            !killLatched
+        ) {
+            stateMachine.force(
+                TradingState.PROTECTED,
+                "Campaign positions reconciled"
+            )
+        }
+    }
+
+    private fun manageCampaignPositions() {
+        for (stored in positionList().filter { it.campaignId.isNotBlank() }) {
+            try {
+                val raw = fetchCandles(
+                    stored.symbol,
+                    campaignExecutionTimeframe,
+                    80
+                )
+                val candles = if (raw.size >= 2) raw.dropLast(1) else emptyList()
+                if (candles.size < 20) continue
+
+                val rules = symbolFilters(stored.symbol)
+                val currentPrice = currentCampaignPrice(stored.symbol)
+                val recentLow = candles
+                    .takeLast(campaignTrailBars)
+                    .minOfOrNull { it.l }
+                    ?: continue
+                val proposed = normalizePrice(
+                    recentLow - rules.tick,
+                    rules.tick
+                )
+
+                if (
+                    proposed > stored.stop &&
+                    proposed < currentPrice
+                ) {
+                    replaceCampaignStop(
+                        stored,
+                        proposed
+                    )
+                }
+
+                val current = synchronized(positions) {
+                    positions[stored.symbol]
+                } ?: stored
+                val wave = waveInfo(
+                    candles,
+                    campaignExecutionTimeframe
+                )
+                if (
+                    wave.exhaustionRisk >= 75.0 ||
+                    wave.aoBearishDivergence
+                ) {
+                    synchronized(positions) {
+                        positions[stored.symbol] =
+                            current.copy(
+                                campaignState = "EXHAUSTION_WATCH"
+                            )
+                    }
+                    savePersistedState()
+                    if (
+                        prefs.getBoolean("campaign_auto_exhaustion_exit", false) &&
+                        wave.exhaustionRisk >= 85.0 &&
+                        wave.aoBearishDivergence
+                    ) {
+                        campaignExitMarket(
+                            positions[stored.symbol] ?: current,
+                            "WAVE_EXHAUSTION"
+                        )
+                    }
+                }
+
+                if (prefs.getBoolean("campaign_exit_on_teeth", false)) {
+                    val teeth = smma(candles.map { it.c }, 8).lastOrNull() ?: 0.0
+                    if (teeth > 0.0 && candles.last().c < teeth) {
+                        campaignExitMarket(
+                            positions[stored.symbol] ?: current,
+                            "CLOSE_BELOW_TEETH"
+                        )
+                    }
+                }
+            } catch (x: Throwable) {
+                setReconcileRequired(
+                    stored.symbol + ": campaign monitor failed: " +
+                        (x.message ?: x.javaClass.simpleName)
+                )
+            }
+        }
+    }
+
+    private fun submitCampaignAddOn(
+        candidate: BaseAnalysis,
+        position: PositionState
+    ) {
+        if (!campaignEngineEnabled || position.campaignId.isBlank()) return
+
+        val latestSignalTime =
+            position.signalId.substringAfterLast(':').toLongOrNull()
+                ?: position.openedAt
+        val signal = candidate.campaignSignals
+            .filter {
+                it.type in setOf("SUPER_AO", "FRACTAL") &&
+                    it.signalBarTimeMs > latestSignalTime
+            }
+            .sortedBy { it.signalBarTimeMs }
+            .firstOrNull()
+            ?: return
+
+        if (synchronized(pendingEntries) { pendingEntries.containsKey(candidate.symbol) }) return
+
+        val equity = estimateManagedEquity()
+        val remainingCampaign =
+            (campaignRiskLimitPct - position.riskPct).coerceAtLeast(0.0)
+        val remainingPortfolio =
+            (maxTotalRiskPct - campaignRiskUsedPct()).coerceAtLeast(0.0)
+
+        val trancheBias = when (position.additions) {
+            0 -> 1.0
+            1 -> 1.0
+            2 -> 0.75
+            else -> 0.5
+        }
+        val riskPct = min(
+            campaignAddRiskCapPct * trancheBias,
+            min(remainingCampaign, remainingPortfolio)
+        )
+        if (riskPct <= 0.0 || equity <= 0.0) return
+
+        val rules = symbolFilters(candidate.symbol)
+        val trigger = normalizePrice(signal.triggerPrice, rules.tick)
+        if (trigger <= currentCampaignPrice(candidate.symbol)) return
+
+        val stop = position.stop
+        if (stop <= 0.0 || stop >= trigger) return
+
+        val stopFraction = (trigger - stop) / trigger
+        val effectiveLoss =
+            stopFraction + 2.0 * feeBufferPerSidePct + maxSlippagePct
+        val riskQuote = equity * riskPct
+        val freeUsdt = liveUsdtBalance.coerceAtLeast(0.0)
+        val pendingCapital = synchronized(pendingEntries) {
+            pendingEntries.values.sumOf { it.capitalReservedQuote }
+        }
+        val notional = min(
+            equity * 0.15,
+            min(
+                max(0.0, freeUsdt - pendingCapital) * 0.95,
+                riskQuote / max(effectiveLoss, 0.000001)
+            )
+        )
+        val qty = floorStep(notional / trigger, rules.step)
+        if (qty < rules.minQty || qty * trigger < rules.minNotional) return
+        if (
+            rules.maxPosition.isFinite() &&
+            campaignBaseBalance(candidate.symbol) + qty > rules.maxPosition
+        ) return
+
+        val clientId =
+            "W5E_ADD_" + signal.type + "_" + signal.signalBarTimeMs + "_" +
+                System.nanoTime().toString(16).takeLast(8)
+        val pending = PendingEntry(
+            symbol = candidate.symbol,
+            clientOrderId = clientId,
+            notional = qty * trigger,
+            stopDistance = stopFraction,
+            triggerPrice = trigger,
+            protectivePrice = stop,
+            riskReservedPct = riskPct,
+            capitalReservedQuote = qty * trigger,
+            campaignId = position.campaignId,
+            signalId = signal.signalId,
+            signalType = signal.type
+        )
+        synchronized(pendingEntries) {
+            pendingEntries[candidate.symbol] = pending
+        }
+        savePersistedState()
+
+        executionExecutor.execute {
+            try {
+                withCampaignMutation(
+                    candidate.symbol,
+                    "CAMPAIGN_ADD_ON"
+                ) {
+                    require(currentCampaignPrice(candidate.symbol) < trigger) {
+                        "Add-on trigger already crossed"
+                    }
+                    checkCampaignOrderCapacity(candidate.symbol, 1)
+                    signedPost(
+                        "/api/v3/order",
+                        "symbol=" + candidate.symbol +
+                            "&side=BUY&type=STOP_LOSS" +
+                            "&quantity=" + fmtQty(qty, rules.decimals) +
+                            "&stopPrice=" + fmtPrice(trigger, rules.decimals) +
+                            "&newClientOrderId=" + clientId
+                    )
+                }
+                savePersistedState()
+                recoverCampaignPendingEntries()
+            } catch (x: Throwable) {
+                val observed = runCatching {
+                    signedGet(
+                        "/api/v3/order",
+                        "symbol=" + candidate.symbol +
+                            "&origClientOrderId=" + clientId
+                    )
+                }.getOrNull()
+                if (observed != null) {
+                    lastOrder = observed
+                    runCatching { recoverCampaignPendingEntries() }
+                } else {
+                    setReconcileRequired(
+                        candidate.symbol + ": campaign add-on mutation ambiguous: " +
+                            (x.message ?: x.javaClass.simpleName)
+                    )
+                }
+            }
+        }
+    }
+
+    private fun performCampaignScan() {
+        if (reconcileRequired) return
+
+        for (open in positionList()) {
+            runCatching {
+                TradeJournal.updateExcursion(
+                    prefs,
+                    open.symbol,
+                    currentCampaignPrice(open.symbol)
+                )
+            }
+        }
+
+        runCatching { recoverCampaignPendingEntries() }
+            .onFailure {
+                if (!killLatched) {
+                    setReconcileRequired(
+                        "Campaign pending recovery: " +
+                            (it.message ?: it.javaClass.simpleName)
+                    )
+                }
+            }
+        if (reconcileRequired) return
+
+        runCatching { reconcileCampaignPositions() }
+        if (reconcileRequired) return
+
+        runCatching { manageCampaignPositions() }
+        if (reconcileRequired) return
+
+        val universe = loadUniverse()
+        scanSymbols = universe.first.toMutableList()
+        val volumes = universe.second
+        val spreads = universe.third
+
+        val futures = scanSymbols.map { symbol ->
+            scanExecutor.submit(
+                Callable {
+                    try {
+                        val candles = fetchCandles(
+                            symbol,
+                            campaignExecutionTimeframe,
+                            150
+                        )
+                        val result = analyseBase(
+                            symbol = symbol,
+                            candles = candles,
+                            spread = spreads[symbol] ?: 0.0,
+                            volume = volumes[symbol] ?: 0.0
+                        )
+                        markScanProgress()
+                        result
+                    } catch (x: Exception) {
+                        markScanProgress()
+                        scannerError =
+                            symbol + ": " +
+                                (x.message ?: x.javaClass.simpleName)
+                        null
+                    }
+                }
+            )
+        }
+
+        val preliminary = mutableListOf<BaseAnalysis>()
+        futures.forEach { future ->
+            runCatching {
+                future.get(30L, TimeUnit.SECONDS)
+            }.getOrElse {
+                future.cancel(true)
+                scannerError =
+                    scannerError ?: "campaign scanner task timeout: " +
+                    (it.message ?: it.javaClass.simpleName)
+                null
+            }.let {
+                if (it is BaseAnalysis) preliminary.add(it)
+            }
+        }
+
+        if (preliminary.isEmpty()) {
+            scannerState = "WAITING_FOR_HISTORY"
+            scannerError = "Campaign scanner received no market data"
+            return
+        }
+
+        val ranked = preliminary
+            .map { runCatching { enrichWithMtf(it) }.getOrElse { it } }
+            .sortedWith(
+                compareByDescending<BaseAnalysis> { it.campaignReady }
+                    .thenByDescending { it.score }
+                    .thenBy { it.wave.exhaustionRisk }
+            )
+
+        candidates = JSONArray().apply {
+            ranked.take(20).forEach { put(toJson(it)) }
+        }
+        lastSymbolsScanned = scanSymbols.size
+        scannerState = "READY"
+        lastScanAt = System.currentTimeMillis()
+
+        if (
+            key().isBlank() ||
+            secret().isBlank() ||
+            !restAccountReady
+        ) return
+
+        val guard = dailyTradeGuard()
+        if (!guard.optBoolean("allow", true)) return
+
+        val active = positionList().associateBy { it.symbol }
+        for (candidate in ranked) {
+            if (!candidate.campaignReady) continue
+            val position = active[candidate.symbol]
+            if (position != null) {
+                submitCampaignAddOn(candidate, position)
+            } else {
+                submitCampaignEntry(candidate)
+            }
+        }
+    }
+
     private fun performScan() {
         // Exchange reconciliation is performed at START/reconnect. Repeating
         // it for every scanner pass serializes the scanner behind signed REST
