@@ -59,18 +59,20 @@ def main() -> None:
     must(android, "Williams 4.22.2", "MainActivity.kt")
     for needle in (
         "Top 50 liquid USDT", "1D / 4H / 1H / 15M",
-        "http://127.0.0.1", "http://localhost",
         '.putString("api_key"', '.putString("api_secret"',
     ):
         must_not(android, needle, "MainActivity.kt")
+    must(android, "TradingForegroundService", "MainActivity.kt")
+    must(android, "http://127.0.0.1:18080", "MainActivity.kt")
 
     remote = read("test_android_remote_only.py")
     for needle in (
-        "test_android_is_https_backend_only",
-        "test_android_never_persists_binance_credentials",
-        "test_android_has_no_direct_binance_user_data_client",
+        "test_android_has_autonomous_runtime",
+        "test_android_local_runtime_does_not_require_remote_https",
+        "test_native_runtime_uses_binance_spot_testnet",
+        "test_android_has_portfolio_local_api",
     ):
-        must(remote, needle, "Android remote-only contract")
+        must(remote, needle, "Android autonomous contract")
 
     testnet = read("test_testnet_release_gate.py")
     must(testnet, "if not live_e2e_enabled():", "testnet release gate")
