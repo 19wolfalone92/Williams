@@ -279,3 +279,11 @@ def test_w3_can_be_nested_inside_parent_w1_w3_and_w5():
         assert parent_position in report.nested_w3_parent_positions
         if parent_position == 5:
             assert report.nested_w3_parent_w5 is True
+
+
+
+def test_monthly_binance_interval_is_not_collapsed_to_one_minute():
+    e = engine(base_interval="1h", intervals=["1M", "1m", "1h"])
+    assert "1M" in e.intervals
+    assert "1m" in e.intervals
+    assert e.intervals.index("1M") < e.intervals.index("1m")
