@@ -1004,7 +1004,7 @@ private class NativeEngine(
             prefs.edit()
                 .putString("api_key", oldKey)
                 .putString("api_secret", oldSecret)
-                .commit()
+                .apply()
             restAccountReady = false
             throw IllegalStateException(
                 "Binance credentials validation failed: " +
