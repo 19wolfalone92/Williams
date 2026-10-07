@@ -1636,10 +1636,22 @@ class MultiPositionTrader:
                 symbol,
                 "ENTRY_PENDING",
             )
-            self.db.state_set(
-                self._pending_key(symbol),
-                client_id,
-            )
+            # The pending-entry key is a durable cross-thread/process
+            # mutex. A second execution loop must not generate a second BUY.
+            claimed = False
+            try:
+                claim = getattr(self.db, "try_claim_state", None)
+                claimed = (
+                    claim(self._pending_key(symbol), client_id)
+                    if claim is not None
+                    else False
+                )
+            except Exception:
+                claimed = False
+            if not claimed:
+                self.set_state(symbol, "ENTRY_PENDING")
+                self._locks.discard(symbol)
+                continue
 
             try:
                 # Last-moment market-depth protection. A MARKET BUY is admitted
