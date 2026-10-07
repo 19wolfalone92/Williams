@@ -2528,7 +2528,7 @@ private class NativeEngine(
                         val candles = fetchCandles(symbol, interval, 150)
                         val result = analyseBase(
                             symbol = symbol,
-                            candles = candles,
+                            candles = workCandles,
                             spread = spreads[symbol] ?: 0.0,
                             volume = volumes[symbol] ?: 0.0
                         )
@@ -5259,11 +5259,21 @@ private class NativeEngine(
         spread: Double,
         volume: Double
     ): BaseAnalysis {
-        val i = candles.lastIndex
+        val workCandles =
+            if (campaignEngineEnabled &&
+                campaignExecutionTimeframe != interval
+            ) {
+                runCatching {
+                    fetchCandles(symbol, campaignExecutionTimeframe, 150)
+                }.getOrElse { candles }
+            } else {
+                candles
+            }
+        val i = workCandles.lastIndex
         if (i < 40) {
             return BaseAnalysis(
                 symbol = symbol,
-                candles = candles,
+                candles = workCandles,
                 score = 0.0,
                 signal = false,
                 htfCandidate = false,
@@ -5279,17 +5289,17 @@ private class NativeEngine(
             )
         }
 
-        val closes = candles.map { it.c }
-        val atrPct = atrPct(candles)
+        val closes = workCandles.map { it.c }
+        val atrPct = atrPct(workCandles)
         val atrAbs =
-            atrAbs(candles)
+            atrAbs(workCandles)
 
         val campaignRules = runCatching { symbolFilters(symbol) }.getOrNull()
         val campaignTick = campaignRules?.tick ?: 0.0
         val campaignSignals = if (campaignEngineEnabled && campaignTick > 0.0) {
             longCampaignSignals(
                 symbol = symbol,
-                candles = candles,
+                candles = workCandles,
                 frame = campaignExecutionTimeframe,
                 tick = campaignTick
             )
@@ -5355,7 +5365,7 @@ private class NativeEngine(
                 else -> 1.0
             }
 
-        val preliminaryWave = waveInfo(candles, "1h")
+        val preliminaryWave = waveInfo(workCandles, campaignExecutionTimeframe)
         var score =
             trendScore +
                 aoScore +
