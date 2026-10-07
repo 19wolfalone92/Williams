@@ -1809,7 +1809,7 @@ class MultiPositionTrader:
                     self._pending_key(symbol)
                 )
 
-                self._create_oco(
+                oco_result = self._create_oco(
                     symbol,
                     qty,
                     entry,
@@ -1819,10 +1819,23 @@ class MultiPositionTrader:
                     risk_pct=requested_risk_pct * 100.0,
                 )
 
-                self.set_state(
-                    symbol,
-                    "OPEN",
-                )
+                if isinstance(oco_result, dict) and oco_result.get("emergency_exit"):
+                    # _create_oco may close or quarantine the position when the
+                    # market has already crossed the intended protection.
+                    # Never overwrite that authoritative state with OPEN.
+                    results.append(
+                        {
+                            "symbol": symbol,
+                            "trade_id": trade_id,
+                            "risk_pct": requested_risk_pct * 100.0,
+                            "entry_price": entry,
+                            "quantity": qty,
+                            **oco_result,
+                        }
+                    )
+                    continue
+
+                self.set_state(symbol, "OPEN")
                 results.append(
                     {
                         "symbol": symbol,
