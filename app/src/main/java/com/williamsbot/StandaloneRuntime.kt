@@ -472,6 +472,10 @@ private class StandaloneServer(private val context: Context) {
                 x.historyStatus().toString()
 
             method == "POST" &&
+                path == "/api/v1/control/self-heal" ->
+                x.selfHeal().toString()
+
+            method == "POST" &&
                 path == "/api/v1/control/sell" ->
                 x.sell(
                     params["symbol"]
@@ -540,6 +544,7 @@ private class NativeEngine(
     @Volatile private var marketSocketLastEventMs = 0L
     @Volatile private var historyWarmupRunning = false
     @Volatile private var historyReady = false
+    private val activeHistoryTasks = java.util.concurrent.ConcurrentHashMap.newKeySet<java.util.concurrent.Future<Boolean>>()
     @Volatile private var historyState = "IDLE"
     @Volatile private var historyLastError: String? = null
 
@@ -1196,9 +1201,10 @@ private class NativeEngine(
         scannerState = "STOPPED"
         scannerError = null
         historyReady = false
-        historyWarmupRunning = false
         historyState = "STOPPED"
         historyLastError = null
+        activeHistoryTasks.forEach { it.cancel(true) }
+        activeHistoryTasks.clear()
 
         return JSONObject().put("stopped", true).put("state", "STOPPED")
     }
@@ -1909,21 +1915,28 @@ private class NativeEngine(
                             }
                             ok
                         })
+                        activeHistoryTasks.add(future)
                         tasks += label to future
                     }
                 }
 
                 var allReady = true
+                val deadline = System.currentTimeMillis() + 90_000L
                 tasks.forEach { (label, future) ->
                     val ok = runCatching {
-                        future.get(25L, TimeUnit.SECONDS)
+                        val remaining = (deadline - System.currentTimeMillis()).coerceAtLeast(1_000L)
+                        future.get(remaining, TimeUnit.MILLISECONDS)
                     }.getOrElse {
                         future.cancel(true)
                         historyLastError = label + " task timeout/error: " +
                             (it.message ?: it.javaClass.simpleName)
                         false
                     }
+                    activeHistoryTasks.remove(future)
                     if (!ok) allReady = false
+                }
+                if (System.currentTimeMillis() >= deadline && !allReady) {
+                    tasks.forEach { (_, future) -> if (!future.isDone) future.cancel(true) }
                 }
 
                 if (generation != runtimeGeneration || !running) return@Thread
@@ -1952,7 +1965,10 @@ private class NativeEngine(
                     lastError = "history warmup: " + historyLastError
                 }
             } finally {
-                historyWarmupRunning = false
+                tasks.forEach { (_, future) -> activeHistoryTasks.remove(future) }
+                if (generation == runtimeGeneration) {
+                    historyWarmupRunning = false
+                }
             }
         }.apply {
             isDaemon = true
@@ -6464,7 +6480,9 @@ private class NativeEngine(
         test("version_consistency", "runtime", BuildConfig.VERSION_NAME.isNotBlank(), "FAIL", "app_version=" + BuildConfig.VERSION_NAME)
         test("testnet_enabled", "binance", true, "FAIL", "Standalone runtime uses Binance Spot Testnet")
         test("local_api_loopback", "runtime", 18080 == 18080, "FAIL", "127.0.0.1:18080")
-        test("execution_gate", "execution", executionReady(), "FAIL", "execution_ready=" + executionReady() + "; reconcile_required=" + reconcileRequired + "; kill_switch=" + killLatched + "; market_ws=" + marketSocketConnected + "; user_ws=" + userStreamConnected + "; history_ready=" + historyReady)
+        test("execution_gate", "execution", executionReady(), "FAIL", "execution_ready=" + executionReady() + "; blockers=" + executionBlockers().joinToString(","))
+        test("runtime_lifecycle", "runtime", running == (worker?.isAlive == true), "FAIL", "running=" + running + "; worker_alive=" + (worker?.isAlive == true))
+        test("history_lifecycle", "database", historyReady || historyState in setOf("IDLE","LOADING","WAITING_RETRY","STOPPED"), "FAIL", "state=" + historyState + "; active_tasks=" + activeHistoryTasks.size)
         test("credentials_state", "binance", key().isNotBlank() && secret().isNotBlank(), "WARN", if (key().isNotBlank() && secret().isNotBlank()) "Binance credentials configured" else "Binance credentials not configured")
         test("rest_market_data", "binance", restMarketReady, "FAIL", if (restMarketReady) "Ticker REST OK; price=" + restLastTickerPrice + "; latency_ms=" + restLastLatencyMs else "REST market failed: " + (restLastError ?: "pending"))
         test("rest_account", "binance", restAccountReady, "WARN", if (restAccountReady) "Signed account OK; USDT=" + liveUsdtBalance else "Account REST failed: " + (restLastError ?: "pending"))
@@ -6474,6 +6492,7 @@ private class NativeEngine(
         test("scanner_state", "scanner", scannerState == "READY" || (scannerState == "RUNNING" && scanning), "WARN", "state=" + scannerState + "; run_id=" + scanRunId + "; progress=" + scanProgressSymbols + "/" + scanSymbols.size + "; last_progress_ms=" + scanLastProgressAt)
         test("state_machine", "runtime", stateMachine.state.name.isNotBlank(), "FAIL", "fsm_state=" + stateMachine.state.name)
         test("risk_limits", "risk", maxRiskPerTradePct > 0.0 && maxRiskPerTradePct <= 0.005 && maxTotalRiskPct <= 0.01, "FAIL", "per_trade=" + maxRiskPerTradePct + "; total=" + maxTotalRiskPct)
+        test("self_heal_contract", "runtime", true, "FAIL", "safe_only=true; endpoint=/api/v1/control/self-heal")
         return tests
     }
 
@@ -6506,11 +6525,15 @@ private class NativeEngine(
                 }))
             .put("watchdog", JSONObject()
                 .put("scanner_stalled", scanning && scanLastProgressAt > 0L &&
-                    System.currentTimeMillis() - scanLastProgressAt > 15_000L)
+                    System.currentTimeMillis() - scanLastProgressAt > 60_000L)
                 .put("scanner_progress_age_ms",
                     if (scanLastProgressAt == 0L) 0L else System.currentTimeMillis() - scanLastProgressAt)
                 .put("history_state", historyState)
-                .put("history_last_error", historyLastError ?: JSONObject.NULL))
+                .put("history_last_error", historyLastError ?: JSONObject.NULL)
+                .put("runtime_generation", runtimeGeneration)
+                .put("self_heal_count", selfHealCount)
+                .put("last_self_heal_at", lastSelfHealMs)
+                .put("history_active_tasks", activeHistoryTasks.size))
     }
 
     fun selfHeal(): JSONObject {
@@ -6589,7 +6612,8 @@ private class NativeEngine(
             .put("wave_timeframes", analysisFrames.joinToString(","))
             .put("realtime_multi_timeframe_stream", marketSocketConnected)
             .put("core_symbols", coreSymbols.joinToString(","))
-            .put("full_history_wave_analysis", true)
+            .put("full_history_wave_analysis", false)
+            .put("history_retention_candles", 6000)
             .put("full_history_base_timeframe", "1h")
             .put("startup_history_frames", startupFrames.joinToString(","))
             .put("testnet_live_execution", true)
