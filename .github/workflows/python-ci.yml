@@ -69,6 +69,7 @@ jobs:
             test_preflight_gate.py \
             test_execution_architecture.py \
             test_integration_bindings.py \
+            test_testnet_release_gate.py \
             2>&1 | tee pytest-output.txt
 
       - name: Upload pytest diagnostics
