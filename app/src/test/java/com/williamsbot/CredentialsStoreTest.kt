@@ -127,8 +127,10 @@ private class FakeSharedPreferences : SharedPreferences {
     override fun getAll(): MutableMap<String, *> = values.toMutableMap()
 
     override fun getString(key: String, defValue: String?): String? {
-        if (corruptNextApiKeyRead &&
-            key == EncryptedCredentialsStore.KEY_API_KEY
+        if (
+            corruptNextApiKeyRead &&
+            key == EncryptedCredentialsStore.KEY_API_KEY &&
+            values[key] == "new_key"
         ) {
             corruptNextApiKeyRead = false
             return "corrupted_key"
