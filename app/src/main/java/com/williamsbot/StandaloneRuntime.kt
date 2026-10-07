@@ -1,3 +1,4 @@
+@file:Suppress("UseKtx")
 package com.williamsbot
 
 import android.annotation.SuppressLint
