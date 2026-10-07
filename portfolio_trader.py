@@ -579,6 +579,12 @@ class MultiPositionTrader:
     # Risk
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _effective_risk_fraction(stop_fraction):
+        fee_per_side = max(0.0, float(os.getenv("FEE_BUFFER_PER_SIDE_PCT", "0.001")))
+        slippage_buffer = max(0.0, float(os.getenv("RISK_SLIPPAGE_BUFFER_PCT", "0.0015")))
+        return max(0.0, float(stop_fraction) + (2.0 * fee_per_side) + slippage_buffer)
+
     def reserved_risk_quote(self):
         total = 0.0
         for trade in self.open_trades():
@@ -588,24 +594,19 @@ class MultiPositionTrader:
             if entry <= 0 or qty <= 0:
                 continue
             if stop > 0:
-                stop_fraction = max(
-                    0.0,
-                    (entry - stop) / entry,
-                )
+                stop_fraction = max(0.0, (entry - stop) / entry)
             else:
-                stop_fraction = float(
-                    os.getenv("STOP_LOSS_PCT", "0.02")
-                )
-            total += entry * qty * stop_fraction
+                stop_fraction = float(os.getenv("STOP_LOSS_PCT", "0.02"))
+            total += entry * qty * self._effective_risk_fraction(stop_fraction)
         return total
 
     def _allocation_quote(self, balance, risk_fraction, stop_fraction):
         risk_quote = balance * risk_fraction
+        effective_loss_fraction = self._effective_risk_fraction(stop_fraction)
         return min(
             balance * float(os.getenv("POSITION_FRACTION", "0.25")),
-            risk_quote / max(stop_fraction, 1e-9),
+            risk_quote / max(effective_loss_fraction, 1e-9),
         )
-
     def _fee_quote_for_asset(self, asset, base_asset, trade_price=0.0):
         asset = str(asset or "").upper()
         if asset in {"USDT", "USDC", "FDUSD", "BUSD"}:
