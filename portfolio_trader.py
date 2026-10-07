@@ -850,10 +850,6 @@ class MultiPositionTrader:
                     raise RuntimeError(
                         f"{symbol}: pending BUY has invalid fill"
                     )
-                if qty <= 0 or spent <= 0:
-                    raise RuntimeError(
-                        f"{symbol}: pending BUY has invalid fill"
-                    )
 
                 entry = spent / qty
                 existing = self.db.trade_by_entry_client_order_id(
