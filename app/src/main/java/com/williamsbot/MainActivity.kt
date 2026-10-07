@@ -15,6 +15,8 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.edit
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import com.williamsbot.data.credentials.EncryptedCredentialsStore
+import com.williamsbot.domain.credentials.StoredCredentials
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
@@ -689,15 +691,31 @@ fun WilliamsApp(context: Context) {
             try {
                 require(apiKey.isNotBlank()) { "Введите API Key" }
                 require(apiSecret.isNotBlank()) { "Введите API Secret" }
-                val body = JSONObject()
-                    .put("api_key", apiKey.trim())
-                    .put("api_secret", apiSecret.trim())
-                    .put("testnet", true)
-                    .toString()
+                val localRuntime =
+                    api.backendUrl.startsWith("http://127.0.0.1:18080") ||
+                        api.backendUrl.startsWith("http://localhost:18080")
 
-                // In autonomous mode the encrypted native runtime stores the
-                // Binance credentials on the phone. The secret is never returned.
-                api.post("/api/v1/config/binance", body)
+                if (localRuntime) {
+                    val saved = EncryptedCredentialsStore
+                        .create(context)
+                        .save(
+                            StoredCredentials(
+                                apiKey = apiKey.trim(),
+                                apiSecret = apiSecret.trim(),
+                                testnet = true
+                            )
+                        )
+                    check(saved) {
+                        "Не удалось подтвердить запись Binance credentials в защищённое хранилище"
+                    }
+                } else {
+                    val body = JSONObject()
+                        .put("api_key", apiKey.trim())
+                        .put("api_secret", apiSecret.trim())
+                        .put("testnet", true)
+                        .toString()
+                    api.post("/api/v1/config/binance", body)
+                }
 
                 val verified = JSONObject(api.get("/api/v1/status"))
                 val configured = verified.optBoolean(
@@ -735,7 +753,17 @@ fun WilliamsApp(context: Context) {
     fun clearCredentials() {
         scope.launch(Dispatchers.IO) {
             try {
-                api.delete("/api/v1/config/binance")
+                val localRuntime =
+                    api.backendUrl.startsWith("http://127.0.0.1:18080") ||
+                        api.backendUrl.startsWith("http://localhost:18080")
+
+                if (localRuntime) {
+                    check(EncryptedCredentialsStore.create(context).clear()) {
+                        "Не удалось подтвердить удаление Binance credentials"
+                    }
+                } else {
+                    api.delete("/api/v1/config/binance")
+                }
                 withContext(Dispatchers.Main) {
                     message = "Binance-ключи удалены из автономного runtime"
                     apiKey = ""
