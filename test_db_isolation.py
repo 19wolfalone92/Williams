@@ -28,3 +28,12 @@ if __name__ == "__main__":
     p = clean_database()
     print(p)
     remove_database(p)
+
+
+def test_try_claim_state_is_atomic(tmp_path):
+    from db import Database
+
+    db = Database(str(tmp_path / "claim.sqlite3"))
+    assert db.try_claim_state("entry_client_order_id:BTCUSDT", "WILLV4_ENTRY_A") is True
+    assert db.try_claim_state("entry_client_order_id:BTCUSDT", "WILLV4_ENTRY_B") is False
+    assert db.state_get("entry_client_order_id:BTCUSDT") == "WILLV4_ENTRY_A"
