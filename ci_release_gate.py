@@ -69,7 +69,9 @@ def main() -> None:
     must(android, "TradingForegroundService", "MainActivity.kt")
     must(android, "http://127.0.0.1:18080", "MainActivity.kt")
     must(android, "val maxOpenPositions: Int = 5", "MainActivity.kt")
-    must(read("app/src/main/java/com/williamsbot/StandaloneRuntime.kt"), 'prefs.getInt("max_open_positions", 5)', "StandaloneRuntime.kt")
+    standalone = read("app/src/main/java/com/williamsbot/StandaloneRuntime.kt")
+    must(standalone, "private val maxOpenPositions: Int", "StandaloneRuntime.kt")
+    must(standalone, "get() = userPreferences.maxOpenPositions", "StandaloneRuntime.kt")
     must(read("app/src/main/java/com/williamsbot/StandaloneRuntime.kt"), "private val maxSlippagePct = 0.0015", "StandaloneRuntime.kt")
 
     remote = read("test_android_remote_only.py")
