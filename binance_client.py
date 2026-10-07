@@ -439,7 +439,14 @@ class BinanceSpotClient:
         tick = self._symbol_tick_size(symbol)
         take_trigger = Decimal(str(take_profit_price))
         take_limit = self.decimal_floor(take_trigger - tick, tick)
-        if take_limit <= Decimal(str(stop_price)):
+        stop_trigger = self.decimal_floor(Decimal(str(stop_price)), tick)
+        stop_limit = self.decimal_floor(Decimal(str(stop_limit_price)), tick)
+        if stop_limit >= stop_trigger:
+            raise BinanceAPIError(
+                f'Invalid Binance OCO stop leg for {symbol}: '
+                f'stop_limit={stop_limit} must be below stop_trigger={stop_trigger}'
+            )
+        if take_limit <= stop_trigger:
             raise BinanceAPIError(
                 f'Invalid Binance OCO price relationship for {symbol}: '
                 f'take_limit={take_limit} stop_price={stop_price}'
@@ -451,8 +458,8 @@ class BinanceSpotClient:
             'aboveStopPrice':str(take_trigger),
             'aboveTimeInForce':'GTC',
             'belowType':'STOP_LOSS_LIMIT',
-            'belowStopPrice':stop_price,
-            'belowPrice':stop_limit_price,
+            'belowStopPrice':str(stop_trigger),
+            'belowPrice':str(stop_limit),
             'belowTimeInForce':'GTC',
             'newOrderRespType':'FULL'
         }
