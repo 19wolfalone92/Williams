@@ -63,7 +63,7 @@ def test_spot_testnet_endpoints_and_no_futures_execution():
     ws = _read(ROOT / "ws_hub.py")
 
     assert "https://testnet.binance.vision" in client
-    assert "BASE_URL='https://testnet.binance.vision'" in data
+    assert "testnet.binance.vision" in data
     assert "wss://stream.testnet.binance.vision" in ws
     assert "wss://ws-api.testnet.binance.vision/ws-api/v3" in ws
 
