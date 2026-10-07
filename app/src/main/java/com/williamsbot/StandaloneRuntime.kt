@@ -5631,7 +5631,7 @@ private class NativeEngine(
 
     private fun scannerSnapshot(): JSONObject =
         JSONObject()
-            .put("version", "4.17.0")
+            .put("version", BuildConfig.VERSION_NAME)
             .put("cached", true)
             .put("scanning", scanning)
             .put("last_error", lastError ?: JSONObject.NULL)
@@ -5715,7 +5715,7 @@ private class NativeEngine(
         val dailyGuard = dailyTradeGuard()
 
         return JSONObject()
-            .put("version", "4.17.0")
+            .put("version", BuildConfig.VERSION_NAME)
             .put("symbol", primarySymbol)
             .put("interval", interval)
             .put("testnet", true)
@@ -6023,6 +6023,25 @@ private class NativeEngine(
                 )
         )
 
+    private fun diagnosticSelfTests(): JSONArray {
+        val tests = JSONArray()
+        fun test(name: String, ok: Boolean, severity: String, detail: String) {
+            tests.put(JSONObject().put("name", name).put("ok", ok).put("severity", severity).put("detail", detail))
+        }
+        test("version_consistency", BuildConfig.VERSION_NAME.isNotBlank(), "FAIL", "app_version=" + BuildConfig.VERSION_NAME)
+        test("testnet_enabled", true, "FAIL", "Standalone runtime uses Binance Spot Testnet")
+        test("local_api_loopback", port == 18080, "FAIL", "127.0.0.1:" + port)
+        test("execution_gate", !reconcileRequired && !killLatched, "FAIL", "reconcile_required=" + reconcileRequired + "; kill_switch=" + killLatched)
+        test("credentials_state", key().isNotBlank() && secret().isNotBlank(), "WARN", if (key().isNotBlank() && secret().isNotBlank()) "Binance credentials configured" else "Binance credentials not configured")
+        test("market_websocket", marketSocketConnected, "WARN", if (marketSocketConnected) "Market stream connected" else "Market stream disconnected")
+        test("user_websocket", userStreamConnected, "WARN", if (userStreamConnected) "User stream connected" else "User stream disconnected")
+        test("history_ready", historyReady, "WARN", if (historyReady) "Market history is ready" else "Market history is not ready")
+        test("scanner_state", !scanning && lastSymbolsScanned >= 0, "WARN", "scanning=" + scanning + "; symbols=" + lastSymbolsScanned + "; duration_ms=" + lastScanDurationMs)
+        test("state_machine", stateMachine.state.name.isNotBlank(), "FAIL", "fsm_state=" + stateMachine.state.name)
+        test("risk_limits", maxRiskPerTradePct > 0.0 && maxRiskPerTradePct <= 0.005 && maxTotalRiskPct <= 0.01, "FAIL", "per_trade=" + maxRiskPerTradePct + "; total=" + maxTotalRiskPct)
+        return tests
+    }
+
     fun diagnostics(): JSONObject =
         JSONObject()
             .put("runtime", "standalone")
@@ -6030,10 +6049,12 @@ private class NativeEngine(
             .put("binance_testnet", true)
             .put("status", status())
             .put("settings", settings())
+            .put("self_tests", diagnosticSelfTests())
+            .put("diagnostic_contract_version", 2)
 
     fun settings(): JSONObject =
         JSONObject()
-            .put("version", "4.17.0")
+            .put("version", BuildConfig.VERSION_NAME)
             .put("symbol", primarySymbol)
             .put("interval", interval)
             .put("position_fraction", 0.95)
