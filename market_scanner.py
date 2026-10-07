@@ -17,6 +17,11 @@ from shadow_execution import ShadowExecutionSimulator
 log = logging.getLogger("williams-scanner")
 
 
+def _normalize_interval(value):
+    text = str(value or "").strip()
+    return "1M" if text == "1M" else text.lower()
+
+
 @dataclass
 class Candidate:
     symbol: str
@@ -115,7 +120,7 @@ class MarketScanner:
     def __init__(self, client, symbols=None, interval=None):
         self.client = client
 
-        self.interval = (interval or os.getenv("INTERVAL", "1h")).lower()
+        self.interval = _normalize_interval(interval or os.getenv("INTERVAL", "1h"))
 
         # `None` means resolve the configured/default universe. An explicit []
         # remains a genuine empty test universe and does not fall back to all.
@@ -155,7 +160,7 @@ class MarketScanner:
         self.stop_pct = float(os.getenv("STOP_LOSS_PCT", "0.02"))
         self.target_pct = float(os.getenv("TAKE_PROFIT_PCT", "0.04"))
         self.min_rr = self.min_risk_reward
-        self.htf_interval = os.getenv("HTF_INTERVAL", "4h").lower()
+        self.htf_interval = _normalize_interval(os.getenv("HTF_INTERVAL", "4h"))
 
         self.wave_engine = MultiTimeframeWaveEngine(
             self.client,
