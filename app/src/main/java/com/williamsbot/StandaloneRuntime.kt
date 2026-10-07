@@ -2686,60 +2686,25 @@ private class NativeEngine(
                     // replacement failed after cancellation, never leave the
                     // position naked: attempt one direct market exit first.
                     val emergency = runCatching {
-                        val account = signedAccount()
-                        val balances = account.getJSONArray("balances")
-                        val asset = stored.symbol.removeSuffix("USDT")
-                        var free = 0.0
-                        for (i in 0 until balances.length()) {
-                            val row = balances.getJSONObject(i)
-                            if (row.optString("asset") == asset) {
-                                free = row.optString("free").toDoubleOrNull() ?: 0.0
-                                break
-                            }
-                        }
                         val rules = symbolFilters(stored.symbol)
-                        val qty = floorStep(min(stored.qty, free), rules.step)
-                        require(qty >= rules.minQty) {
-                            "Emergency SELL quantity below Binance minimum"
+                        require(stored.qty >= max(rules.minQty, rules.marketMinQty)) {
+                            "Emergency SL quantity below Binance minimum"
                         }
+
                         ocoTxJournal.updateStep(txId, "EMERGENCY_SL_SENT")
-                        val sell = signedRecoveryPost(
-                            "/api/v3/order",
-                            "symbol=" + stored.symbol +
-                                "&side=SELL&type=MARKET&quantity=" +
-                                fmtQty(qty, rules.decimals)
-                        )
-                        val exitPrice = sell.optString("cummulativeQuoteQty")
-                            .toDoubleOrNull()
-                            ?.let { q -> if (qty > 0.0) q / qty else 0.0 }
-                            ?.takeIf { it > 0.0 }
-                            ?: stored.entry
-                        TradeJournal.close(
-                            runtimeState = runtimeState,
-                            symbol = stored.symbol,
-                            exitPrice = exitPrice,
-                            reason = "EMERGENCY_UNPROTECTED_EXIT",
-                            order = sell
-                        )
-                        recordCompletedTrade(
+                        val emergency = placeEmergencyStopLoss(
                             stored = stored,
-                            exitPrice = exitPrice,
-                            reason = "EMERGENCY_UNPROTECTED_EXIT",
-                            raw = sell
+                            rules = rules
                         )
-                        synchronized(positions) {
-                            positions.remove(stored.symbol)
-                        }
-                        savePersistedState()
-                        stateMachine.force(
-                            if (positionList().isEmpty()) {
-                                TradingState.READY_FLAT
-                            } else {
-                                TradingState.PROTECTED
-                            },
-                            "Emergency exit after failed OCO replacement"
-                        )
+
+                        // Emergency protection is intentionally not promoted to
+                        // READY. The normal gate remains closed until REST proves
+                        // the actual protection state after the non-atomic OCO
+                        // replacement.
                         ocoTxJournal.markCompleted(txId)
+                        setReconcileRequired(
+                            "Emergency SL placed after OCO replacement failure; REST reconciliation required"
+                        )
                         true
                     }.getOrElse {
                         setReconcileRequired(
@@ -4546,6 +4511,43 @@ private class NativeEngine(
                     (x.message ?: x.javaClass.simpleName)
             )
         }
+    }
+
+    private fun placeEmergencyStopLoss(
+        stored: PositionState,
+        rules: SymbolRules
+    ): JSONObject {
+        val stop = fmtPrice(stored.stop, rules.tick)
+        val stopLimit = fmtPrice(
+            stored.stop * 0.999,
+            rules.tick
+        )
+        require(stored.stop > 0.0) {
+            "Emergency SL stop price is invalid"
+        }
+        require(stopLimit.toDouble() < stored.stop) {
+            "Emergency SL limit price must remain below stop price"
+        }
+
+        val clientId =
+            "W4E_" +
+                java.util.UUID.randomUUID()
+                    .toString()
+                    .replace("-", "")
+                    .take(28)
+
+        return signedRecoveryPost(
+            "/api/v3/order",
+            "symbol=" + stored.symbol +
+                "&side=SELL" +
+                "&type=STOP_LOSS_LIMIT" +
+                "&timeInForce=GTC" +
+                "&quantity=" +
+                fmtQty(stored.qty, rules.decimals) +
+                "&price=" + stopLimit +
+                "&stopPrice=" + stop +
+                "&newClientOrderId=" + clientId
+        )
     }
 
     private fun createProtection(
