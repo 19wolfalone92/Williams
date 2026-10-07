@@ -18,12 +18,14 @@ import kotlin.math.max
 /**
  * Device-independent encrypted backup.
  *
- * Android Keystore protects the live preferences on the current phone.
+ * Android Keystore protects the backend connection on the current phone.
  * A portable backup therefore uses a user-supplied password instead of
  * exporting the Keystore-bound ciphertext.
+ * Binance API credentials are NEVER included in the backup because they belong
+ * exclusively to the remote Williams backend.
  *
  * Trade state is intentionally NOT included. After import, Binance remains
- * the source of truth and the engine must reconcile open positions/orders.
+ * the source of truth and the backend must reconcile open positions/orders.
  */
 object BackupManager {
     private const val MAGIC = "WILLIAMS_BACKUP_V1"
@@ -36,7 +38,7 @@ object BackupManager {
     private fun prefs(context: Context) =
         EncryptedSharedPreferences.create(
             context,
-            "williams_native_secure",
+            "williams_backend_connection",
             MasterKey.Builder(context)
                 .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
                 .build(),
@@ -58,9 +60,8 @@ object BackupManager {
             .put("schema", 1)
             .put("magic", MAGIC)
             .put("app_version", BuildConfig.VERSION_NAME)
-            .put("testnet", true)
-            .put("api_key", p.getString("api_key", "") ?: "")
-            .put("api_secret", p.getString("api_secret", "") ?: "")
+            .put("backend_url", p.getString("backend_url", "") ?: "")
+            .put("mobile_token", p.getString("mobile_token", "") ?: "")
             .put("created_at_ms", System.currentTimeMillis())
 
         val encrypted = encrypt(payload.toString().toByteArray(Charsets.UTF_8), password)
@@ -108,26 +109,24 @@ object BackupManager {
         require(payload.optInt("schema", -1) == 1) {
             "Неподдерживаемая версия backup"
         }
-        require(payload.optBoolean("testnet", true)) {
-            "Безопасность: backup не является Testnet-конфигурацией"
+        val backendUrl = payload.optString("backend_url").trim().trimEnd('/')
+        val mobileToken = payload.optString("mobile_token").trim()
+        require(backendUrl.startsWith("https://")) {
+            "Backup не содержит HTTPS Backend URL"
         }
-
-        val apiKey = payload.optString("api_key").trim()
-        val apiSecret = payload.optString("api_secret").trim()
-        require(apiKey.isNotBlank() && apiSecret.isNotBlank()) {
-            "Backup не содержит Binance API credentials"
+        require(mobileToken.length >= 32) {
+            "Backup не содержит корректный Mobile API Token"
         }
 
         prefs(context).edit()
-            .putString("api_key", apiKey)
-            .putString("api_secret", apiSecret)
-            .putBoolean("recovery_pending", true)
+            .putString("backend_url", backendUrl)
+            .putString("mobile_token", mobileToken)
             .apply()
 
         return JSONObject()
             .put("restored", true)
-            .put("testnet", true)
-            .put("recovery_pending", true)
+            .put("backend_url", backendUrl)
+            .put("binance_credentials_restored", false)
     }
 
     private data class Encrypted(
