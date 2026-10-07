@@ -701,10 +701,27 @@ class CampaignExecutionService:
             risk_quote=requested,
             capital_reserved_quote=qty * trigger,
         )
-        self.db.state_set(
-            f"add_on_client_order_id:{campaign.campaign_id}:{signal.signal_id}",
+        # Reuse the same durable per-symbol pending key. Only one conditional
+        # order for a symbol may be waiting at a time; this keeps startup
+        # recovery idempotent and avoids a second persistence protocol.
+        claimed = self.db.try_claim_state(
+            f"entry_client_order_id:{signal.symbol}",
             cid,
         )
+        if not claimed:
+            campaign.pending_risk_quote = 0.0
+            campaign.capital_reserved_quote = 0.0
+            try:
+                campaign.transition(
+                    CampaignState.TREND_ACTIVE,
+                    reason="another pending order already exists for symbol",
+                )
+            except ValueError:
+                pass
+            self.db.save_campaign(campaign)
+            raise CampaignExecutionError(
+                f"{signal.symbol}: another pending conditional order exists"
+            )
         intent = OrderIntent.new(
             signal.symbol,
             "BUY",
