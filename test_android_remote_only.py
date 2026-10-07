@@ -112,3 +112,9 @@ def test_debug_android_manifest_does_not_allow_cleartext():
 
     assert 'usesCleartextTraffic="true"' not in debug_manifest
     assert 'cleartextTrafficPermitted="true"' not in debug_network
+
+
+
+def test_android_has_no_direct_binance_user_data_client():
+    direct_ws = ANDROID / "java/com/williamsbot/BinanceUserDataStream.kt"
+    assert not direct_ws.exists()
