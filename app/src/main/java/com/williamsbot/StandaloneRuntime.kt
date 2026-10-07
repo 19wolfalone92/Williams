@@ -906,7 +906,7 @@ private class NativeEngine(
             .put("analysis_timeframes", JSONArray(analysisFrames))
             .put(
                 "execution_enabled",
-                !reconcileRequired
+                executionReady()
             )
             .put("state", stateName())
             .put("open_positions", positionList().size)
@@ -6607,10 +6607,11 @@ private class NativeEngine(
             .put("position_fraction", 0.95)
             .put("stop_loss_pct", 0.02)
             .put("take_profit_pct", 0.04)
-            .put("poll_seconds", 15)
+            .put("poll_seconds", 10)
             .put("scan_mode", "adaptive_parallel_cached")
             .put("wave_timeframes", analysisFrames.joinToString(","))
-            .put("realtime_multi_timeframe_stream", marketSocketConnected)
+            .put("realtime_multi_timeframe_stream", false)
+            .put("market_stream_connected", marketSocketConnected)
             .put("core_symbols", coreSymbols.joinToString(","))
             .put("full_history_wave_analysis", false)
             .put("history_retention_candles", 6000)
