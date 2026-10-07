@@ -122,16 +122,15 @@ import kotlin.math.min
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // Remove credentials/state left by obsolete local-trader builds.
-        // Current APK never writes Binance secrets to Android storage.
-        getSharedPreferences("williams_native_secure", Context.MODE_PRIVATE).edit {
-            remove("api_key")
-            remove("api_secret")
-            remove("auto_run")
-            remove("recovery_pending")
-            remove("local_api_token")
+        // Williams autonomous runtime: trading engine, Binance connection and
+        // local API bridge run on the phone. Remote Backend is optional.
+        val serviceIntent = Intent(
+            this,
+            TradingForegroundService::class.java
+        ).apply {
+            action = TradingForegroundService.ACTION_START
         }
-        // Williams is a remote cockpit; 24/7 execution is handled by the backend.
+        ContextCompat.startForegroundService(this, serviceIntent)
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(
                 this,
@@ -378,21 +377,24 @@ private class BackendApi(context: Context) {
         .build()
 
     val backendUrl: String
-        get() = securePrefs.getString("backend_url", "")
+        get() = securePrefs.getString("backend_url", "http://127.0.0.1:18080")
             ?.trimEnd('/')
             ?: ""
 
     val mobileToken: String
-        get() = securePrefs.getString("mobile_token", "")?.trim() ?: ""
+        get() = securePrefs.getString("mobile_token", "standalone")?.trim() ?: "standalone"
 
     fun saveConnection(url: String, token: String) {
         val normalized = url.trim().trimEnd('/')
         require(normalized.isNotBlank()) { "Backend URL не задан" }
-        require(normalized.startsWith("https://")) {
-            "Backend URL должен использовать HTTPS."
+        val localRuntime =
+            normalized.startsWith("http://127.0.0.1:18080") ||
+                normalized.startsWith("http://localhost:18080")
+        if (!normalized.startsWith("https://") && !localRuntime) {
+            error("Удалённый Backend URL должен использовать HTTPS.")
         }
-        if (token.trim().length < 32) {
-            error("Для Backend нужен Mobile API Token (минимум 32 символа).")
+        if (!localRuntime && token.trim().length < 32) {
+            error("Для удалённого Backend нужен Mobile API Token (минимум 32 символа).")
         }
         securePrefs.edit {
             putString("backend_url", normalized)
@@ -409,15 +411,23 @@ private class BackendApi(context: Context) {
         path: String,
         body: String?
     ): String {
-        require(backendUrl.startsWith("https://")) {
-            "Сначала укажите HTTPS Backend URL."
+        val localRuntime =
+            backendUrl.startsWith("http://127.0.0.1:18080") ||
+                backendUrl.startsWith("http://localhost:18080")
+        require(localRuntime || backendUrl.startsWith("https://")) {
+            "Укажите HTTPS Backend URL или используйте автономный Williams Runtime."
         }
-        require(mobileToken.isNotBlank()) {
-            "Сначала укажите Mobile API Token."
+        if (!localRuntime) {
+            require(mobileToken.isNotBlank()) {
+                "Сначала укажите Mobile API Token."
+            }
         }
-        val builder = Request.Builder()
+        val requestBuilder = Request.Builder()
             .url(backendUrl + path)
-            .header("Authorization", "Bearer " + mobileToken)
+        if (mobileToken.isNotBlank()) {
+            requestBuilder.header("Authorization", "Bearer " + mobileToken)
+        }
+        val builder = requestBuilder
 
         val requestBody =
             body?.toRequestBody("application/json".toMediaType())
@@ -461,7 +471,7 @@ fun WilliamsApp(context: Context) {
     var apiSecret by remember { mutableStateOf("") }
     var backendUrl by remember { mutableStateOf(api.backendUrl) }
     var mobileToken by remember { mutableStateOf(api.mobileToken) }
-    var message by remember { mutableStateOf("Подключение к Williams Backend…") }
+    var message by remember { mutableStateOf("Williams Runtime: автономный режим") }
     var refreshing by remember { mutableStateOf(false) }
     var backupPassword by remember { mutableStateOf("") }
     var backupMessage by remember { mutableStateOf("") }
@@ -683,39 +693,30 @@ fun WilliamsApp(context: Context) {
                     .put("testnet", true)
                     .toString()
 
-                // Binance credentials are never persisted on Android.
-                // They are sent once over the authenticated HTTPS backend API,
-                // where the VPS CredentialStore encrypts them at rest.
+                // In autonomous mode the encrypted native runtime stores the
+                // Binance credentials on the phone. The secret is never returned.
                 api.post("/api/v1/config/binance", body)
 
-                // Read back through the exact runtime selected by the configured
-                // Backend URL. This is the source of truth shown by the UI.
                 val verified = JSONObject(api.get("/api/v1/status"))
                 val configured = verified.optBoolean(
                     "binance_configured",
                     verified.optBoolean("auth_configured", false)
                 )
                 val testnet = verified.optBoolean("testnet", false)
-                val p0Passed = verified.optBoolean("p0_gate_passed", false)
-                var diagText: String? = null
-                runCatching {
-                    val report = api.get("/api/v1/diagnostics?run=true")
-                    DiagnosticsArchive.writeLatest(context, report)
-                    diagText = "Диагностика сохранена на телефоне."
-                }
+                val executionEnabled = verified.optBoolean("execution_enabled", false)
 
                 withContext(Dispatchers.Main) {
                     apiKey = ""
                     apiSecret = ""
                     status = parseStatus(verified)
-                    diagnosticsMessage = diagText ?: ""
+                    diagnosticsMessage = ""
                     message = when {
-                        configured && testnet && p0Passed ->
-                            "Binance Spot Testnet готов: P0 safety gate PASS"
+                        configured && testnet && executionEnabled ->
+                            "Binance Spot Testnet подключён; автономный runtime готов"
                         configured && testnet ->
-                            "Binance Testnet подключён, но P0 safety gate ещё не пройден"
+                            "Binance Testnet подключён; execution пока заблокирован safety/reconcile gate"
                         configured ->
-                            "Ключи сохранены, но backend не подтвердил режим TESTNET"
+                            "Ключи сохранены, но runtime не подтвердил TESTNET"
                         else ->
                             "Ключи сохранены, но Binance ещё не подтвердил конфигурацию"
                     }
@@ -734,7 +735,7 @@ fun WilliamsApp(context: Context) {
             try {
                 api.delete("/api/v1/config/binance")
                 withContext(Dispatchers.Main) {
-                    message = "Binance-ключи удалены на Backend"
+                    message = "Binance-ключи удалены из автономного runtime"
                     apiKey = ""
                     apiSecret = ""
                 }
@@ -2351,8 +2352,8 @@ private fun SettingsScreen(
                         Text("Сохранить подключение")
                     }
 
-                    InfoRow("Execution authority", "Remote Backend / VPS")
-                    InfoRow("Scanner universe", "Full Spot USDT universe • backend-controlled")
+                    InfoRow("Execution authority", "Автономный телефон • Binance напрямую")
+                    InfoRow("Scanner universe", "Native Spot USDT universe")
                     InfoRow("MTF", "Full native Binance timeframes")
                 }
             }
