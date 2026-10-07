@@ -121,6 +121,16 @@ import kotlin.math.min
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Remove credentials/state left by obsolete local-trader builds.
+        // Current APK never writes Binance secrets to Android storage.
+        getSharedPreferences("williams_native_secure", Context.MODE_PRIVATE)
+            .edit()
+            .remove("api_key")
+            .remove("api_secret")
+            .remove("auto_run")
+            .remove("recovery_pending")
+            .remove("local_api_token")
+            .apply()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             val power = getSystemService(PowerManager::class.java)
             if (!power.isIgnoringBatteryOptimizations(packageName)) {
@@ -144,7 +154,7 @@ class MainActivity : ComponentActivity() {
             )
         }
         // Keep the local runtime alive when the phone is used as the autonomous
-        // Testnet engine. The VPS backend remains the preferred 24/7 authority.
+        // Backend/VPS is the only trading authority; Android is the cockpit.
         val serviceIntent = android.content.Intent(this, WilliamsForegroundService::class.java)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             ContextCompat.startForegroundService(this, serviceIntent)
