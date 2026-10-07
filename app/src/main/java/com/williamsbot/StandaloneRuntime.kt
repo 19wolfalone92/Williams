@@ -1029,6 +1029,7 @@ private class NativeEngine(
 
     @Synchronized
     fun kill(): JSONObject {
+        executionGate.close()
         killLatched = true
         stateMachine.force(
             TradingState.KILL_SWITCH_LATCHED,
