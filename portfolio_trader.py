@@ -578,7 +578,7 @@ class MultiPositionTrader:
     # Protection
     # ------------------------------------------------------------------
 
-    def _fee_quote_for_asset(self, asset, trade_price=0.0):
+    def _fee_quote_for_asset(self, asset, base_asset, trade_price=0.0):
         asset = str(asset or "").upper()
         if asset in {"USDT", "USDC", "FDUSD", "BUSD"}:
             return 1.0
@@ -587,7 +587,7 @@ class MultiPositionTrader:
         if trade_price > 0 and asset:
             # For the traded base asset, valuing the commission at the fill
             # price is exact enough for transaction accounting.
-            return float(trade_price) if asset == self._last_base_asset else 0.0
+            return float(trade_price) if asset == str(base_asset or "").upper() else 0.0
         try:
             return float(self.client.ticker_price(asset + "USDT")["price"])
         except Exception:
@@ -629,7 +629,6 @@ class MultiPositionTrader:
                 )
 
         base_asset = symbol[:-4] if symbol.endswith("USDT") else ""
-        self._last_base_asset = base_asset
         summary = accumulate_order(payload, base_asset=base_asset)
         fills = list(payload.get("fills") or [])
         extra_fee_quote = Decimal("0")
@@ -641,7 +640,7 @@ class MultiPositionTrader:
                 continue
             price = float(fill.get("price", "0") or 0.0)
             extra_fee_quote += commission * Decimal(str(
-                self._fee_quote_for_asset(asset, trade_price=price)
+                self._fee_quote_for_asset(asset, base_asset, trade_price=price)
             ))
 
         if extra_fee_quote <= 0:
