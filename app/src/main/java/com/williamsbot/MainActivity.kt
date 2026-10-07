@@ -2454,13 +2454,22 @@ private fun SettingsScreen(
                         Text("УДАЛИТЬ КЛЮЧИ")
                     }
 
+                    val credentialsDrafted =
+                        apiKey.isNotBlank() && apiSecret.isNotBlank()
                     Text(
-                        if (status.binanceConfigured)
-                            "Статус: Binance подключён. Secret не возвращается в приложение."
-                        else
-                            "Статус: API ключи ещё не заданы.",
-                        color = if (status.binanceConfigured)
-                            AppColors.green else AppColors.amber
+                        when {
+                            status.binanceConfigured ->
+                                "Статус: Binance подключён. Secret не возвращается в приложение."
+                            credentialsDrafted ->
+                                "Статус: ключи введены, но ещё не сохранены. Нажмите «СОХРАНИТЬ TESTNET КЛЮЧИ»."
+                            else ->
+                                "Статус: API ключи ещё не заданы."
+                        },
+                        color = when {
+                            status.binanceConfigured -> AppColors.green
+                            credentialsDrafted -> AppColors.amber
+                            else -> AppColors.amber
+                        }
                     )
                 }
             }
