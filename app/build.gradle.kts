@@ -40,7 +40,7 @@ android {
         minSdk = 26
         targetSdk = 36
         versionCode = resolvedVersionCode
-        versionName = "4.22.2"
+        versionName = "4.22.3"
     }
 
     buildFeatures {
