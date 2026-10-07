@@ -9,6 +9,11 @@ BASE_URL = (
     else 'https://api.binance.com'
 )
 
+def _normalize_interval(value):
+    text = str(value or "").strip()
+    return "1M" if text == "1M" else text.lower()
+
+
 def _frame(rows):
     cols=['open_time','open','high','low','close','volume','close_time','quote_volume','trades','taker_buy_base','taker_buy_quote','ignore']
     df=pd.DataFrame(rows,columns=cols)
@@ -51,7 +56,7 @@ def save_csv(df,path):df.reset_index().to_csv(path,index=False)
 def fetch_klines_history(client, symbol, interval, start_ms=0, end_ms=None):
     """Download all available Spot klines in Binance's 1000-row pages."""
     symbol = str(symbol).upper()
-    interval = str(interval).lower()
+    interval = _normalize_interval(interval)
     rows = []
     cursor = int(start_ms or 0)
     end_value = int(end_ms) if end_ms is not None else None
@@ -80,7 +85,7 @@ def fetch_klines_cached_history(client, symbol, interval, cache_dir=None):
     os.makedirs(cache_dir, exist_ok=True)
     path = os.path.join(
         cache_dir,
-        f"{str(symbol).upper()}_{str(interval).lower()}.csv",
+        f"{str(symbol).upper()}_{_normalize_interval(interval)}.csv",
     )
 
     cached = pd.DataFrame()
