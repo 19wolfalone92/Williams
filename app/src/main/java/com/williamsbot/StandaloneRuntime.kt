@@ -529,14 +529,14 @@ private class NativeEngine(
     private var primaryCandles = emptyList<CandleN>()
     private var lastScanDurationMs = 0L
     private var lastSymbolsScanned = 0
-    // Default remains one open position, but the runtime is configurable and
-    // is not hard-locked to one position.
+    // Default supports the portfolio model: up to five independent positions;
+    // aggregate risk remains capped separately at 1%.
     private val maxOpenPositions: Int
-        get() = prefs.getInt("max_open_positions", 1).coerceIn(1, 10)
+        get() = prefs.getInt("max_open_positions", 5).coerceIn(1, 10)
     private val maxTotalRiskPct = 0.01
     private val maxRiskPerTradePct = 0.005
     private val maxSpreadPct = 0.0015
-    private val maxSlippagePct = 0.005
+    private val maxSlippagePct = 0.0015
     private val equityCircuitBreaker = EquityCircuitBreaker(maxDrawdownPct = 0.05)
     @Volatile private var lastEquityCheckMs = 0L
     @Volatile private var circuitBreakerTripInProgress = false
