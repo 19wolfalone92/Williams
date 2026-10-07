@@ -6,6 +6,7 @@ import ast
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
+EXPECTED_VERSION = '4.23.0'
 
 def read(path: str) -> str:
     p = ROOT / path
@@ -22,7 +23,7 @@ def main() -> None:
     for path in (
         "trading_config.py", "market_scanner.py", "portfolio_controller.py",
         "portfolio_trader.py", "trader.py", "server.py", "wave_engine.py",
-        "binance_client.py", "preflight_gate.py", "test_testnet_release_gate.py",
+        "binance_client.py", "preflight_gate.py", "test_testnet_release_gate.py", "self_heal.py",
     ):
         ast.parse(read(path), filename=path)
 
@@ -57,10 +58,10 @@ def main() -> None:
     must(trader, "_auto_scan_lock", "trader.py")
 
     server = read("server.py")
-    must(server, "VERSION = '4.22.3'", "server.py")
+    must(server, f"VERSION = '{EXPECTED_VERSION}'", "server.py")
 
     android = read("app/src/main/java/com/williamsbot/MainActivity.kt")
-    must(android, "Williams 4.22.3", "MainActivity.kt")
+    must(android, f"Williams {EXPECTED_VERSION}", "MainActivity.kt")
     for needle in (
         "Top 50 liquid USDT", "1D / 4H / 1H / 15M",
         '.putString("api_key"', '.putString("api_secret"',
@@ -68,9 +69,14 @@ def main() -> None:
         must_not(android, needle, "MainActivity.kt")
     must(android, "TradingForegroundService", "MainActivity.kt")
     must(android, "http://127.0.0.1:18080", "MainActivity.kt")
+    gradle = read("app/build.gradle.kts")
+    must(gradle, f'versionName = "{EXPECTED_VERSION}"', "app/build.gradle.kts")
     must(android, "val maxOpenPositions: Int = 5", "MainActivity.kt")
-    must(read("app/src/main/java/com/williamsbot/StandaloneRuntime.kt"), 'prefs.getInt("max_open_positions", 5)', "StandaloneRuntime.kt")
-    must(read("app/src/main/java/com/williamsbot/StandaloneRuntime.kt"), "private val maxSlippagePct = 0.0015", "StandaloneRuntime.kt")
+    runtime = read("app/src/main/java/com/williamsbot/StandaloneRuntime.kt")
+    must(runtime, 'prefs.getInt("max_open_positions", 5)', "StandaloneRuntime.kt")
+    must(runtime, "private val maxSlippagePct = 0.0015", "StandaloneRuntime.kt")
+    must(runtime, "control/self-heal", "StandaloneRuntime.kt")
+    must(runtime, "activeHistoryTasks", "StandaloneRuntime.kt")
 
     remote = read("test_android_remote_only.py")
     for needle in (
