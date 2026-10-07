@@ -117,7 +117,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.math.max
 import kotlin.math.min
 
-// Williams 4.22.3 Trading Core production cockpit
+// Williams 4.23.0 Trading Core production cockpit
 // Autonomous runtime contract: local loopback API is intentional; no VPS required.
 // CI compile-log capture enabled
 // Diagnostic contract v2: runtime self-tests are exposed through /api/v1/diagnostics.
@@ -756,6 +756,34 @@ fun WilliamsApp(context: Context) {
         }
     }
 
+    fun selfHeal() {
+        scope.launch(Dispatchers.IO) {
+            try {
+                val result = JSONObject(api.post("/api/v1/control/self-heal"))
+                val blockers = result.optJSONArray("execution_blockers")
+                val blockerText = if (blockers == null || blockers.length() == 0) {
+                    "нет"
+                } else {
+                    (0 until blockers.length()).joinToString(", ") { blockers.optString(it) }
+                }
+                withContext(Dispatchers.Main) {
+                    diagnosticsMessage =
+                        if (result.optBoolean("execution_ready", false)) {
+                            "SELF-HEAL: контур восстановлен, Execution READY."
+                        } else {
+                            "SELF-HEAL: безопасное восстановление выполнено. Блокировки: $blockerText"
+                        }
+                }
+                loadAll(false)
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    diagnosticsMessage =
+                        e.message ?: "Не удалось выполнить безопасное восстановление"
+                }
+            }
+        }
+    }
+
     fun runDiagnostics() {
         scope.launch(Dispatchers.IO) {
             try {
@@ -985,6 +1013,7 @@ fun WilliamsApp(context: Context) {
                 padding = padding,
                 status = status,
                 onRun = ::runDiagnostics,
+                onSelfHeal = ::selfHeal,
                 onExport = ::exportDiagnostics,
                 message = diagnosticsMessage
             )
@@ -1192,6 +1221,7 @@ private fun DiagnosticsScreen(
     padding: PaddingValues,
     status: Status,
     onRun: () -> Unit,
+    onSelfHeal: () -> Unit,
     onExport: () -> Unit,
     message: String
 ) {
@@ -1214,6 +1244,10 @@ private fun DiagnosticsScreen(
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = onRun) { Text("RUN DIAGNOSTICS") }
+                OutlinedButton(
+                    onClick = onSelfHeal,
+                    enabled = !status.executionKillLatched && !status.reconcileRequired
+                ) { Text("SELF-HEAL") }
                 OutlinedButton(onClick = onExport) { Text("EXPORT SNAPSHOT") }
             }
         }
