@@ -712,6 +712,7 @@ class MultiPositionTrader:
         execution = self._authoritative_execution(symbol, confirmed)
         executed_qty = float(execution.executed_qty)
         exit_quote = float(execution.quote_qty)
+        exit_fee_quote = float(execution.fee_quote_equivalent)
         exit_price = (
             float(execution.avg_price)
             if execution.avg_price
@@ -735,7 +736,13 @@ class MultiPositionTrader:
 
         if trade is not None and executed_qty + tolerance >= managed_qty:
             entry_price = float(trade.get("entry_price") or 0.0)
-            pnl = (exit_price - entry_price) * managed_qty
+            entry_fee_quote = float(trade.get("fees") or 0.0)
+            pnl = (
+                exit_quote
+                - entry_price * managed_qty
+                - entry_fee_quote
+                - exit_fee_quote
+            )
             pnl_pct = (exit_price / entry_price - 1.0) if entry_price > 0 else 0.0
             self.db.close_trade(
                 trade_id,
@@ -744,6 +751,7 @@ class MultiPositionTrader:
                 pnl,
                 pnl_pct,
                 reason,
+                fees=entry_fee_quote + exit_fee_quote,
             )
             self.set_state(symbol, "FLAT")
             state = "FLAT"
@@ -1589,12 +1597,10 @@ class MultiPositionTrader:
             )
             self.db.save_order(sell)
 
-            executed_qty = float(
-                sell.get("executedQty", 0) or 0
-            )
-            quote = float(
-                sell.get("cummulativeQuoteQty", 0) or 0
-            )
+            execution = self._authoritative_execution(symbol, sell)
+            executed_qty = float(execution.executed_qty)
+            quote = float(execution.quote_qty)
+            exit_fee_quote = float(execution.fee_quote_equivalent)
             if executed_qty <= 0:
                 raise RuntimeError(
                     f"{symbol}: manual SELL returned no fill"
@@ -1613,7 +1619,13 @@ class MultiPositionTrader:
 
             if executed_qty + tolerance >= managed_qty:
                 entry_price = float(trade["entry_price"])
-                pnl = (exit_price - entry_price) * managed_qty
+                entry_fee_quote = float(trade.get("fees") or 0.0)
+                pnl = (
+                    quote
+                    - entry_price * managed_qty
+                    - entry_fee_quote
+                    - exit_fee_quote
+                )
                 pnl_pct = (exit_price / entry_price - 1.0) if entry_price else 0.0
                 self.db.close_trade(
                     trade["id"],
@@ -1622,6 +1634,7 @@ class MultiPositionTrader:
                     pnl,
                     pnl_pct,
                     "MANUAL_SELL",
+                    fees=entry_fee_quote + exit_fee_quote,
                 )
                 self.set_state(symbol, "FLAT")
                 self.db.log_event(
