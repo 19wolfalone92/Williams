@@ -148,6 +148,21 @@ class Selection:
         })()
 
 
+def test_market_quantity_uses_market_lot_size_over_lot_size(tmp_path):
+    trader = MultiPositionTrader(
+        FakeClient(),
+        db=Database(str(tmp_path / "market-lot.sqlite3")),
+        symbols=[],
+    )
+    trader._filters = lambda symbol: {
+        "LOT_SIZE": {"minQty": "0.001", "stepSize": "0.001"},
+        "MARKET_LOT_SIZE": {"minQty": "0.010", "stepSize": "0.010"},
+    }
+
+    assert trader._normalize_qty("BTCUSDT", "0.049", market=True) == 0.04
+    assert trader._normalize_qty("BTCUSDT", "0.049", market=False) == 0.049
+
+
 def test_multi_position_execution_creates_independent_trades(tmp_path, monkeypatch):
     monkeypatch.setenv("MAX_OPEN_POSITIONS", "0")
     monkeypatch.setenv("MAX_TOTAL_RISK_PCT", "0.01")
