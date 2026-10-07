@@ -1136,6 +1136,11 @@ class MultiPositionTrader:
                 f"{symbol}: managed trade has no authoritative entry quantity"
             )
 
+        exit_orders = self._bot_exit_orders(
+            trade,
+            all_orders,
+            oco,
+        )
         bot_sold_qty, bot_sold_quote, bot_last_exit = self._executed_exit_metrics(
             exit_orders
         )
