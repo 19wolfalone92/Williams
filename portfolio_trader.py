@@ -50,7 +50,7 @@ class MultiPositionTrader:
             )
         self.max_open_positions = max(
             0,
-            int(os.getenv("MAX_OPEN_POSITIONS", "0")),
+            int(os.getenv("MAX_OPEN_POSITIONS", "1")),
         )
         self.max_total_risk_pct = min(
             0.01,
