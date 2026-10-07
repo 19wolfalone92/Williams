@@ -890,10 +890,11 @@ fun WilliamsApp(context: Context) {
         }
     }
 
-    val titles = listOf("Overview", "Wave Map", "Positions", "Incidents", "Config")
+    val titles = listOf("Overview", "Wave Map", "Portfolio", "Positions", "Incidents", "Config")
     val icons = listOf(
         Icons.Filled.Dashboard,
         Icons.Filled.Radar,
+        Icons.Filled.AccountBalanceWallet,
         Icons.Filled.ShowChart,
         Icons.Filled.History,
         Icons.Filled.Settings
@@ -986,7 +987,6 @@ fun WilliamsApp(context: Context) {
             0 -> DashboardScreen(
                 padding = padding,
                 status = status,
-                portfolio = portfolio,
                 marketPairs = marketPairs,
                 candidates = candidates,
                 message = message,
@@ -1007,8 +1007,8 @@ fun WilliamsApp(context: Context) {
                     command("/api/v1/control/kill")
                 },
                 onScan = { refresh(true) },
-                onSettings = { tab = 4 },
-                 onRecoverDashboard = { command("/api/v1/control/recover") }
+                onSettings = { tab = 5 },
+                onRecoverDashboard = { command("/api/v1/control/recover") }
             )
 
             1 -> ScannerScreen(
@@ -1020,7 +1020,13 @@ fun WilliamsApp(context: Context) {
                 onRefresh = { refresh(true) }
             )
 
-            2 -> PositionScreen(
+            2 -> PortfolioScreen(
+                padding = padding,
+                portfolio = portfolio,
+                status = status
+            )
+
+            3 -> PositionScreen(
                 padding = padding,
                 status = status,
                 portfolio = portfolio,
@@ -1051,7 +1057,7 @@ fun WilliamsApp(context: Context) {
                 }
             )
 
-            3 -> HistoryScreen(
+            4 -> HistoryScreen(
                 padding = padding,
                 trades = trades,
                 logs = logs
@@ -1119,6 +1125,33 @@ private fun SystemHealthBar(status: Status) {
             )
             Spacer(Modifier.weight(1f))
             Text("RISK BUDGET • ${status.maxOpenPositions} POS", color = AppColors.textMuted, style = MaterialTheme.typography.labelSmall)
+        }
+    }
+}
+
+@Composable
+private fun PortfolioScreen(
+    padding: PaddingValues,
+    portfolio: PortfolioSummary,
+    status: Status
+) {
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(padding)
+            .padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+        contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp)
+    ) {
+        item {
+            Text(
+                "Portfolio",
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Bold
+            )
+        }
+        item {
+            PortfolioCard(portfolio, status)
         }
     }
 }
@@ -1266,7 +1299,6 @@ private fun ReconcileBarrierScreen(
 private fun DashboardScreen(
     padding: PaddingValues,
     status: Status,
-    portfolio: PortfolioSummary,
     marketPairs: List<MarketPair>,
     candidates: List<Candidate>,
     message: String,
@@ -1336,10 +1368,6 @@ private fun DashboardScreen(
 
         item {
             MarketPairsCard(marketPairs)
-        }
-
-        item {
-            PortfolioCard(portfolio, status)
         }
 
         item {
