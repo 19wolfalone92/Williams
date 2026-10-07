@@ -25,6 +25,7 @@ permissions:
 
 concurrency:
   # Serialize Android verification per branch; newer pushes supersede older APK builds.
+  # A fresh runner is preferred over a potentially stale lint process.
   group: android-${{ github.ref }}
   cancel-in-progress: true
 
