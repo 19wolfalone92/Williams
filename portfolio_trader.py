@@ -482,6 +482,21 @@ class MultiPositionTrader:
             return "STOP_LOSS"
         return "BOT_OCO_EXIT"
 
+    def _sell_belongs_to_bot(self, order, all_orders):
+        client_id = str(order.get("clientOrderId") or "").strip()
+        if client_id.startswith(
+            (self.OCO_PREFIX, self.EMERGENCY_PREFIX, self.MANUAL_PREFIX)
+        ):
+            return True
+        order_list_id = str(order.get("orderListId") or "").strip()
+        if not order_list_id:
+            return False
+        return any(
+            str(row.get("orderListId") or "") == order_list_id
+            and str(row.get("clientOrderId") or "").startswith(self.OCO_PREFIX)
+            for row in all_orders or []
+        )
+
     def _bot_exit_orders(self, trade, all_orders, oco):
         entry_id = str(trade.get("entry_order_id") or "")
         entry_order = next(
