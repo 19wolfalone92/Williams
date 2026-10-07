@@ -59,6 +59,37 @@ class CredentialsStoreTest {
     }
 
     @Test
+    fun markUnverified_writes_and_read_back_confirms_unverified() {
+        val credentials = StoredCredentials("key", "secret", true)
+        assertTrue(store.save(credentials))
+
+        assertTrue(store.markUnverified())
+        assertEquals(CredentialState.SAVED_UNVERIFIED, store.state())
+        assertFalse(fakePrefs.getBoolean(EncryptedCredentialsStore.KEY_VERIFIED_MARKER, true))
+    }
+
+    @Test
+    fun markUnverified_returns_false_when_commit_fails() {
+        val credentials = StoredCredentials("key", "secret", true)
+        assertTrue(store.save(credentials))
+
+        fakePrefs.shouldCommitSucceed = false
+
+        assertFalse(store.markUnverified())
+        assertEquals(CredentialState.VERIFIED, store.state())
+    }
+
+    @Test
+    fun markUnverified_returns_false_when_read_back_still_reports_verified() {
+        val credentials = StoredCredentials("key", "secret", true)
+        assertTrue(store.save(credentials))
+
+        fakePrefs.forceVerifiedMarkerTrueOnRead = true
+
+        assertFalse(store.markUnverified())
+    }
+
+    @Test
     fun clear_removes_all_keys_and_sets_missing_state() {
         val credentials = StoredCredentials("key", "secret", false)
         assertTrue(store.save(credentials))
@@ -80,6 +111,7 @@ private class FakeSharedPreferences : SharedPreferences {
 
     var shouldCommitSucceed: Boolean = true
     var corruptNextApiKeyRead: Boolean = false
+    var forceVerifiedMarkerTrueOnRead: Boolean = false
 
     override fun getAll(): MutableMap<String, *> = values.toMutableMap()
 
