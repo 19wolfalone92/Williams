@@ -3190,7 +3190,8 @@ private class NativeEngine(
             val order = openOrders.optJSONObject(i) ?: continue
             val clientId = order.optString("clientOrderId")
             if (!clientId.startsWith("W4B_") &&
-                !clientId.startsWith("W4S_")
+                !clientId.startsWith("W4S_") &&
+                !clientId.startsWith("W4E_")
             ) continue
 
             val symbol =
