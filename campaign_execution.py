@@ -921,6 +921,14 @@ class CampaignExecutionService:
         ).fetchall()
         return self.engine.load_campaign(str(rows[0]["campaign_id"])) if rows else None
 
+    def _validate_add_on_submission(self, symbol: str, qty: float, trigger: float) -> None:
+        if self._current_price(symbol) >= trigger:
+            raise CampaignExecutionError(
+                f"{symbol}: add-on trigger crossed before submission"
+            )
+        self._check_buy_position_capacity(symbol, qty)
+        self._check_algo_capacity(symbol, 1)
+
     def arm_add_on(
         self,
         signal: SignalSpec,
@@ -1039,13 +1047,10 @@ class CampaignExecutionService:
                 stop_price=self.client.decimal_format(trigger),
                 new_client_order_id=cid,
             ),
-            lambda _snapshot: (
-                self._check_buy_position_capacity(signal.symbol, qty)
-                self._check_algo_capacity(signal.symbol, 1)
-                if self._current_price(signal.symbol) < trigger
-                else (_ for _ in ()).throw(
-                    CampaignExecutionError("add-on trigger crossed before submission")
-                )
+            lambda _snapshot: self._validate_add_on_submission(
+                signal.symbol,
+                qty,
+                trigger,
             ),
         )
         self.db.save_campaign_order(
