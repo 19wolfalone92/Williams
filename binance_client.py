@@ -132,6 +132,21 @@ class BinanceSpotClient:
                 except ValueError:
                     pass
 
+            # Binance HTTP 409 means cancelReplace partially succeeded.
+            # It is an ambiguous order mutation and must never be retried blindly.
+            if (
+                r.status_code == 409
+                and method == "POST"
+                and path == "/api/v3/order/cancelReplace"
+            ):
+                raise BinanceAPIError(
+                    f"Binance 409: cancelReplace partially succeeded; "
+                    "reconciliation is required before retry. payload={payload}",
+                    unknown_execution=True,
+                    status_code=409,
+                    payload=payload,
+                )
+
             if r.status_code in (418, 429):
                 retry_after = r.headers.get('Retry-After')
                 try:
