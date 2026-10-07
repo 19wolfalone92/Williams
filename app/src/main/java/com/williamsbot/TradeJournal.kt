@@ -1,5 +1,7 @@
 package com.williamsbot
 
+import com.williamsbot.domain.runtime.RuntimeStateStore
+
 import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.math.max
@@ -56,7 +58,7 @@ object TradeJournal {
 
     @Synchronized
     fun updateExcursion(
-        runtimeState: SharedPreferences,
+        runtimeState: RuntimeStateStore,
         symbol: String,
         price: Double
     ) {
