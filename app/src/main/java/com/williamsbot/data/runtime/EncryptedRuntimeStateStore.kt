@@ -1,11 +1,13 @@
 package com.williamsbot.data.runtime
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.williamsbot.domain.runtime.RuntimeStateStore
 
+@SuppressLint("UseKtx")
 class EncryptedRuntimeStateStore(
     private val prefs: SharedPreferences
 ) : RuntimeStateStore {

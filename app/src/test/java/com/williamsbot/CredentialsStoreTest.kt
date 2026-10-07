@@ -59,6 +59,47 @@ class CredentialsStoreTest {
     }
 
     @Test
+    fun markUnverified_writes_and_read_back_confirms_unverified() {
+        val credentials = StoredCredentials("key", "secret", true)
+        assertTrue(store.save(credentials))
+
+        assertTrue(store.markUnverified())
+        assertEquals(CredentialState.SAVED_UNVERIFIED, store.state())
+        assertFalse(fakePrefs.getBoolean(EncryptedCredentialsStore.KEY_VERIFIED_MARKER, true))
+    }
+
+    @Test
+    fun markUnverified_returns_false_when_commit_fails() {
+        val credentials = StoredCredentials("key", "secret", true)
+        assertTrue(store.save(credentials))
+
+        fakePrefs.shouldCommitSucceed = false
+
+        assertFalse(store.markUnverified())
+        assertEquals(CredentialState.VERIFIED, store.state())
+    }
+
+    @Test
+    fun markUnverified_returns_false_when_read_back_still_reports_verified() {
+        val credentials = StoredCredentials("key", "secret", true)
+        assertTrue(store.save(credentials))
+
+        fakePrefs.forceVerifiedMarkerTrueOnRead = true
+
+        assertFalse(store.markUnverified())
+    }
+
+    @Test
+    fun markUnverified_returns_false_when_read_back_throws() {
+        val credentials = StoredCredentials("key", "secret", true)
+        assertTrue(store.save(credentials))
+
+        fakePrefs.throwOnVerifiedMarkerRead = true
+
+        assertFalse(store.markUnverified())
+    }
+
+    @Test
     fun clear_removes_all_keys_and_sets_missing_state() {
         val credentials = StoredCredentials("key", "secret", false)
         assertTrue(store.save(credentials))
@@ -80,12 +121,16 @@ private class FakeSharedPreferences : SharedPreferences {
 
     var shouldCommitSucceed: Boolean = true
     var corruptNextApiKeyRead: Boolean = false
+    var forceVerifiedMarkerTrueOnRead: Boolean = false
+    var throwOnVerifiedMarkerRead: Boolean = false
 
     override fun getAll(): MutableMap<String, *> = values.toMutableMap()
 
     override fun getString(key: String, defValue: String?): String? {
-        if (corruptNextApiKeyRead &&
-            key == EncryptedCredentialsStore.KEY_API_KEY
+        if (
+            corruptNextApiKeyRead &&
+            key == EncryptedCredentialsStore.KEY_API_KEY &&
+            values[key] == "new_key"
         ) {
             corruptNextApiKeyRead = false
             return "corrupted_key"
@@ -109,8 +154,21 @@ private class FakeSharedPreferences : SharedPreferences {
     override fun getFloat(key: String, defValue: Float): Float =
         (values[key] as? Float) ?: defValue
 
-    override fun getBoolean(key: String, defValue: Boolean): Boolean =
-        (values[key] as? Boolean) ?: defValue
+    override fun getBoolean(key: String, defValue: Boolean): Boolean {
+        if (
+            throwOnVerifiedMarkerRead &&
+            key == EncryptedCredentialsStore.KEY_VERIFIED_MARKER
+        ) {
+            throw IllegalStateException("simulated read-back failure")
+        }
+        if (
+            forceVerifiedMarkerTrueOnRead &&
+            key == EncryptedCredentialsStore.KEY_VERIFIED_MARKER
+        ) {
+            return true
+        }
+        return (values[key] as? Boolean) ?: defValue
+    }
 
     override fun contains(key: String): Boolean = values.containsKey(key)
 

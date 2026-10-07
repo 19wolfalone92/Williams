@@ -1,5 +1,6 @@
 package com.williamsbot.data.credentials
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
@@ -8,6 +9,7 @@ import com.williamsbot.domain.credentials.CredentialState
 import com.williamsbot.domain.credentials.CredentialsStore
 import com.williamsbot.domain.credentials.StoredCredentials
 
+@SuppressLint("UseKtx")
 class EncryptedCredentialsStore(
     private val prefs: SharedPreferences
 ) : CredentialsStore {
@@ -137,6 +139,33 @@ class EncryptedCredentialsStore(
         }
 
         return false
+    }
+
+    override fun markUnverified(): Boolean {
+        return try {
+            val committed = prefs.edit()
+                .putBoolean(KEY_VERIFIED_MARKER, false)
+                .commit()
+
+            if (!committed) {
+                currentState = evaluateCurrentState()
+                false
+            } else {
+                val readBack = runCatching {
+                    prefs.getBoolean(KEY_VERIFIED_MARKER, true)
+                }.getOrElse {
+                    currentState = evaluateCurrentState()
+                    return false
+                }
+
+                currentState = evaluateCurrentState()
+                !readBack && currentState == CredentialState.SAVED_UNVERIFIED
+            }
+        } catch (_: Throwable) {
+            currentState = runCatching { evaluateCurrentState() }
+                .getOrDefault(CredentialState.SAVED_UNVERIFIED)
+            false
+        }
     }
 
     private fun evaluateCurrentState(): CredentialState {

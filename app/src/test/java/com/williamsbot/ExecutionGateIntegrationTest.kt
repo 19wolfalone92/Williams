@@ -9,6 +9,46 @@ import java.util.concurrent.atomic.AtomicInteger
 
 class ExecutionGateIntegrationTest {
     @Test
+    fun reconcileRequired_blocks_execution_until_successful_reconciliation() {
+        val fsm = TradingStateMachine(TradingState.RECONCILE_REQUIRED)
+
+        assertTrue(!fsm.executionAllowed())
+        assertTrue(
+            !fsm.canAdmitEntry(
+                openPositions = 0,
+                maxOpenPositions = 1
+            )
+        )
+
+        assertTrue(
+            fsm.transition(
+                TradingState.SYNC_REQUIRED,
+                "reconciliation started"
+            )
+        )
+        assertTrue(
+            fsm.transition(
+                TradingState.INITIALIZING,
+                "reconciliation completed"
+            )
+        )
+        assertTrue(
+            fsm.transition(
+                TradingState.READY_FLAT,
+                "runtime reconciled"
+            )
+        )
+
+        assertTrue(fsm.executionAllowed())
+        assertTrue(
+            fsm.canAdmitEntry(
+                openPositions = 0,
+                maxOpenPositions = 1
+            )
+        )
+    }
+
+    @Test
     fun twoSimultaneousSignals_onlyOneEntersPending_andResultReturnsToLoop() {
         val loop = TradingEventLoop("execution-gate-test")
         val gate = ExecutionGate()
@@ -23,7 +63,7 @@ class ExecutionGateIntegrationTest {
                 loop.post {
                     if (
                         fsm.state == TradingState.READY_FLAT &&
-                        gate.tryReserve("BTCUSDT")
+                        gate.tryAdmit("BTCUSDT")
                     ) {
                         assertTrue(
                             fsm.transition(

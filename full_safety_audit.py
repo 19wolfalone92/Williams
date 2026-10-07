@@ -502,9 +502,18 @@ if native:
         "PASS" if 'userDataStream.subscribe.signature' in android_text else "FAIL",
         "Android uses signed User Data Stream subscription"
     )
+    credentials_store = android_root / "java" / "com" / "williamsbot" / "data" / "credentials" / "EncryptedCredentialsStore.kt"
+    credentials_text = read_text(credentials_store) if credentials_store.exists() else ""
+    credential_storage_ok = (
+        "EncryptedSharedPreferences.create(" in credentials_text and
+        "MasterKey.KeyScheme.AES256_GCM" in credentials_text and
+        "PrefValueEncryptionScheme.AES256_GCM" in credentials_text and
+        "commit()" in credentials_text and
+        "read() == credentials" in credentials_text
+    )
     finding(
-        "PASS" if 'EncryptedSharedPreferences' in native and 'MasterKey.KeyScheme.AES256_GCM' in native else "FAIL",
-        "Binance credentials use encrypted Android storage"
+        "PASS" if credential_storage_ok else "FAIL",
+        "Binance credentials use encrypted Android storage with write/read-back verification"
     )
     finding(
         "PASS" if '"testnet.binance.vision"' in native and 'api.binance.com' not in native else "WARN",

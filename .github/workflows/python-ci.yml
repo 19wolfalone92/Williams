@@ -26,8 +26,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - name: Checkout
+      - name: Checkout exact PR head
         uses: actions/checkout@v4
+        with:
+          # Pull requests otherwise checkout the synthetic merge-ref, which can
+          # lag the branch head while GitHub refreshes refs/pull/*/merge.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
 
       - name: Set up Python
         uses: actions/setup-python@v5
