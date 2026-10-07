@@ -646,6 +646,18 @@ private class NativeEngine(
             } else 0.0
         }
 
+    private fun executionReady(): Boolean =
+        running &&
+            !paused &&
+            !reconcileRequired &&
+            !killLatched &&
+            !userStreamSyncRequired &&
+            marketSocketConnected &&
+            userStreamConnected &&
+            historyReady &&
+            stateMachine.executionAllowed() &&
+            !equityCircuitBreaker.isTripped()
+
     private fun stateName(): String =
         when (stateMachine.state) {
             TradingState.KILL_SWITCH_LATCHED -> "KILL_SWITCH_LATCHED"
@@ -794,7 +806,7 @@ private class NativeEngine(
         JSONObject()
             .put("ok", true)
             .put("service", "williams-native")
-            .put("version", "4.20.1")
+            .put("version", BuildConfig.VERSION_NAME)
             .put("standalone", true)
             .put("websocket", marketSocketConnected)
             .put("market_stream_last_event_ms", marketSocketLastEventMs)
@@ -826,7 +838,7 @@ private class NativeEngine(
             .put("execution_state_contract", JSONObject()
                 .put("version", 1)
                 .put("state", stateMachine.state.name)
-                .put("execution_enabled", stateMachine.executionAllowed() && !reconcileRequired && !userStreamSyncRequired)
+                .put("execution_enabled", executionReady())
                 .put("reconciliation_required", reconcileRequired)
                 .put("user_stream_sync_required", userStreamSyncRequired)
                 .put("kill_switch_latched", killLatched))
@@ -1202,7 +1214,7 @@ private class NativeEngine(
             JSONObject()
                 .put("recovered", false)
                 .put("state", "RECONCILE_REQUIRED")
-                .put("execution_enabled", !reconcileRequired)
+                .put("execution_enabled", executionReady())
                 .put(
                     "error",
                     x.message ?: x.javaClass.simpleName
@@ -1246,20 +1258,40 @@ private class NativeEngine(
     }
 
     private fun getBody(path: String): String {
-        rateGuard.beforeRequest()
-        val request = Request.Builder()
-            .url(baseUrl + path)
-            .get()
-            .build()
-
-        http.newCall(request).execute().use { response ->
-            rateGuard.observe(response.headers, response.code)
-            val body = response.body?.string() ?: "{}"
-            if (!response.isSuccessful) {
-                error("Binance HTTP " + response.code + ": " + body)
+        // GET market-data calls are idempotent. Testnet can transiently return
+        // 5xx/502 responses, so retry only safe reads; never retry mutations.
+        var lastCode = 0
+        var lastBody = "{}"
+        val delays = longArrayOf(500L, 1000L, 2000L)
+        repeat(3) { attempt ->
+            try {
+                rateGuard.beforeRequest()
+                val request = Request.Builder()
+                    .url(baseUrl + path)
+                    .get()
+                    .build()
+                http.newCall(request).execute().use { response ->
+                    rateGuard.observe(response.headers, response.code)
+                    lastCode = response.code
+                    lastBody = response.body?.string() ?: "{}"
+                    if (response.isSuccessful) return lastBody
+                    if (response.code in setOf(500, 502, 503, 504) && attempt < 2) {
+                        Thread.sleep(delays[attempt])
+                        return@use
+                    }
+                }
+            } catch (x: java.io.IOException) {
+                lastBody = x.message ?: x.javaClass.simpleName
+                if (attempt < 2) {
+                    Thread.sleep(delays[attempt])
+                    return@repeat
+                }
+            } catch (x: InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw x
             }
-            return body
         }
+        error("Binance HTTP " + lastCode + ": " + lastBody)
     }
 
     private fun signedAccount(): JSONObject =
@@ -6025,20 +6057,27 @@ private class NativeEngine(
 
     private fun diagnosticSelfTests(): JSONArray {
         val tests = JSONArray()
-        fun test(name: String, ok: Boolean, severity: String, detail: String) {
-            tests.put(JSONObject().put("name", name).put("ok", ok).put("severity", severity).put("detail", detail))
+        fun test(name: String, domain: String, ok: Boolean, failureSeverity: String, detail: String) {
+            tests.put(
+                JSONObject()
+                    .put("name", name)
+                    .put("domain", domain)
+                    .put("ok", ok)
+                    .put("severity", if (ok) "PASS" else failureSeverity)
+                    .put("detail", detail)
+            )
         }
-        test("version_consistency", BuildConfig.VERSION_NAME.isNotBlank(), "FAIL", "app_version=" + BuildConfig.VERSION_NAME)
-        test("testnet_enabled", true, "FAIL", "Standalone runtime uses Binance Spot Testnet")
-        test("local_api_loopback", 18080 == 18080, "FAIL", "127.0.0.1:18080")
-        test("execution_gate", !reconcileRequired && !killLatched, "FAIL", "reconcile_required=" + reconcileRequired + "; kill_switch=" + killLatched)
-        test("credentials_state", key().isNotBlank() && secret().isNotBlank(), "WARN", if (key().isNotBlank() && secret().isNotBlank()) "Binance credentials configured" else "Binance credentials not configured")
-        test("market_websocket", marketSocketConnected, "WARN", if (marketSocketConnected) "Market stream connected" else "Market stream disconnected")
-        test("user_websocket", userStreamConnected, "WARN", if (userStreamConnected) "User stream connected" else "User stream disconnected")
-        test("history_ready", historyReady, "WARN", if (historyReady) "Market history is ready" else "Market history is not ready")
-        test("scanner_state", !scanning && lastSymbolsScanned >= 0, "WARN", "scanning=" + scanning + "; symbols=" + lastSymbolsScanned + "; duration_ms=" + lastScanDurationMs)
-        test("state_machine", stateMachine.state.name.isNotBlank(), "FAIL", "fsm_state=" + stateMachine.state.name)
-        test("risk_limits", maxRiskPerTradePct > 0.0 && maxRiskPerTradePct <= 0.005 && maxTotalRiskPct <= 0.01, "FAIL", "per_trade=" + maxRiskPerTradePct + "; total=" + maxTotalRiskPct)
+        test("version_consistency", "runtime", BuildConfig.VERSION_NAME.isNotBlank(), "FAIL", "app_version=" + BuildConfig.VERSION_NAME)
+        test("testnet_enabled", "binance", true, "FAIL", "Standalone runtime uses Binance Spot Testnet")
+        test("local_api_loopback", "runtime", 18080 == 18080, "FAIL", "127.0.0.1:18080")
+        test("execution_gate", "execution", executionReady(), "FAIL", "execution_ready=" + executionReady() + "; reconcile_required=" + reconcileRequired + "; kill_switch=" + killLatched + "; market_ws=" + marketSocketConnected + "; user_ws=" + userStreamConnected + "; history_ready=" + historyReady)
+        test("credentials_state", "binance", key().isNotBlank() && secret().isNotBlank(), "WARN", if (key().isNotBlank() && secret().isNotBlank()) "Binance credentials configured" else "Binance credentials not configured")
+        test("market_websocket", "websocket", marketSocketConnected, "WARN", if (marketSocketConnected) "Market stream connected" else "Market stream disconnected")
+        test("user_websocket", "websocket", userStreamConnected && !userStreamSyncRequired, "WARN", if (userStreamConnected && !userStreamSyncRequired) "User stream connected and synchronized" else "User stream disconnected or synchronization pending")
+        test("history_ready", "database", historyReady, "WARN", if (historyReady) "Market history is ready" else "Market history is not ready")
+        test("scanner_state", "scanner", !scanning && lastSymbolsScanned >= 0, "WARN", "scanning=" + scanning + "; symbols=" + lastSymbolsScanned + "; duration_ms=" + lastScanDurationMs)
+        test("state_machine", "runtime", stateMachine.state.name.isNotBlank(), "FAIL", "fsm_state=" + stateMachine.state.name)
+        test("risk_limits", "risk", maxRiskPerTradePct > 0.0 && maxRiskPerTradePct <= 0.005 && maxTotalRiskPct <= 0.01, "FAIL", "per_trade=" + maxRiskPerTradePct + "; total=" + maxTotalRiskPct)
         return tests
     }
 
@@ -6049,8 +6088,16 @@ private class NativeEngine(
             .put("binance_testnet", true)
             .put("status", status())
             .put("settings", settings())
+            .put("system_info", JSONObject()
+                .put("runtime", "standalone")
+                .put("app_version", BuildConfig.VERSION_NAME)
+                .put("android_sdk", android.os.Build.VERSION.SDK_INT)
+                .put("device_model", android.os.Build.MODEL)
+                .put("manufacturer", android.os.Build.MANUFACTURER))
+            .put("configuration_sanitized", settings())
+            .put("tests", diagnosticSelfTests())
             .put("self_tests", diagnosticSelfTests())
-            .put("diagnostic_contract_version", 2)
+            .put("diagnostic_contract_version", 3)
 
     fun settings(): JSONObject =
         JSONObject()
