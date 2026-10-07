@@ -439,6 +439,7 @@ def test_active_oco_partial_fill_keeps_second_leg_as_shared_protection(tmp_path)
                     "cummulativeQuoteQty": "30",
                     "price": "104",
                     "stopPrice": "104",
+                    "time": 2000,
                 },
                 {
                     "symbol": "BTCUSDT",
@@ -453,6 +454,7 @@ def test_active_oco_partial_fill_keeps_second_leg_as_shared_protection(tmp_path)
                     "cummulativeQuoteQty": "0",
                     "price": "97.5",
                     "stopPrice": "98",
+                    "time": 2000,
                 },
             ]
 
