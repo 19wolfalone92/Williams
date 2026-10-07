@@ -2416,10 +2416,3 @@ class MultiPositionTrader:
             "campaign_engine": self.campaign_engine_enabled,
         }
 
-        return {
-            "status": "EXECUTED",
-            "recovery": recovery,
-            "results": self.execute(selections),
-            "open_positions": len(self.open_trades()),
-            "reserved_risk_quote": self.reserved_risk_quote(),
-        }
