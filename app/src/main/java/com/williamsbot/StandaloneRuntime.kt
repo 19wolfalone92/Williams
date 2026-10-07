@@ -53,6 +53,22 @@ object StandaloneRuntime {
         server?.autostart()
     }
 
+    /** Configure credentials in the exact Keystore-backed store consumed by NativeEngine. */
+    fun configureCredentials(context: Context, apiKey: String, apiSecret: String): JSONObject {
+        start(context)
+        return server!!.configureCredentials(apiKey, apiSecret)
+    }
+
+    fun clearCredentials(context: Context): JSONObject {
+        start(context)
+        return server!!.clearCredentials()
+    }
+
+    fun status(context: Context): JSONObject {
+        start(context)
+        return server!!.status()
+    }
+
     fun startTrading() {
         server?.startTrading()
     }
@@ -252,6 +268,13 @@ private class StandaloneServer(private val context: Context) {
             e().start()
         }
     }
+
+    fun configureCredentials(apiKey: String, apiSecret: String): JSONObject =
+        e().configure(apiKey, apiSecret)
+
+    fun clearCredentials(): JSONObject = e().clear()
+
+    fun status(): JSONObject = e().status()
 
     fun startTrading() {
         e().start()
@@ -869,9 +892,12 @@ private class NativeEngine(
                 key().isNotBlank() && secret().isNotBlank()
             )
 
-    fun configure(j: JSONObject): JSONObject {
-        val newKey = j.optString("api_key").trim()
-        val newSecret = j.optString("api_secret").trim()
+    fun configure(j: JSONObject): JSONObject =
+        configure(j.optString("api_key"), j.optString("api_secret"))
+
+    fun configure(apiKey: String, apiSecret: String): JSONObject {
+        val newKey = apiKey.trim()
+        val newSecret = apiSecret.trim()
 
         if (running) {
             error(
@@ -904,6 +930,7 @@ private class NativeEngine(
             .put("configured", true)
             .put("testnet", true)
             .put("standalone", true)
+            .put("read_back_verified", key() == newKey && secret() == newSecret)
     }
 
     fun clear(): JSONObject {
