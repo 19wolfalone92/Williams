@@ -123,7 +123,21 @@ class FakeBinance:
 
     def open_orders(self, symbol=None):
         self.open_orders_calls += 1
-        return []
+        return [
+            {
+                "symbol": "BTCUSDT",
+                "side": "SELL",
+                "type": "STOP_LOSS_LIMIT",
+                "orderId": "99",
+                "orderListId": "10",
+                "clientOrderId": "WILLV4_OCO_TEST",
+                "status": "NEW",
+                "origQty": "0.4",
+                "executedQty": "0",
+                "price": "97.5",
+                "stopPrice": "98",
+            }
+        ]
 
     def book_ticker(self, symbol):
         return {"bidPrice": "100", "askPrice": "100.01"}
@@ -279,7 +293,8 @@ def test_user_stream_subscription_reconnect_performs_rest_catchup(tmp_path):
         assert fake.open_orders_calls >= 1
 
         rows = hub.db.recent_orders("BTCUSDT", 10)
-        assert rows == []
+        assert len(rows) == 1
+        assert rows[0]["order_id"] == "99"
     finally:
         if old is None:
             os.environ.pop("WILLIAMS_DB_PATH", None)
