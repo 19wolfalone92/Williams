@@ -139,12 +139,16 @@ class BinanceSpotClient:
                 and method == "POST"
                 and path == "/api/v3/order/cancelReplace"
             ):
+                try:
+                    payload_409 = r.json()
+                except ValueError:
+                    payload_409 = {"code": 409, "msg": r.text}
                 raise BinanceAPIError(
                     f"Binance 409: cancelReplace partially succeeded; "
-                    "reconciliation is required before retry. payload={payload}",
+                    "reconciliation is required before retry. payload={payload_409}",
                     unknown_execution=True,
                     status_code=409,
-                    payload=payload,
+                    payload=payload_409,
                 )
 
             if r.status_code in (418, 429):
