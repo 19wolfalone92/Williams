@@ -20,3 +20,18 @@ def test_spot_market_data_methods_build_expected_routes(monkeypatch):
         ("GET", "/api/v3/aggTrades", {"symbol": "BTCUSDT", "limit": 20}, False),
         ("GET", "/api/v3/avgPrice", {"symbol": "BTCUSDT"}, False),
     ]
+
+
+def test_legacy_history_endpoint_follows_testnet_switch(monkeypatch):
+    import data
+
+    monkeypatch.setenv("TESTNET", "false")
+    # Reload is intentionally avoided; verify the source rule through a
+    # fresh module import so the environment boundary is explicit.
+    import importlib
+    reloaded = importlib.reload(data)
+    assert reloaded.BASE_URL == "https://api.binance.com"
+
+    monkeypatch.setenv("TESTNET", "true")
+    reloaded = importlib.reload(data)
+    assert reloaded.BASE_URL == "https://testnet.binance.vision"
