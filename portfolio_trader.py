@@ -1198,19 +1198,17 @@ class MultiPositionTrader:
             persisted_qty * self.balance_tolerance_pct,
         )
 
-        # A pre-existing reconciliation barrier must not be silently cleared
-        # when exchange inventory is lower and there is no matching SELL
-        # evidence. That is an unresolved inventory discrepancy, not a normal
-        # restart/partial-exit case.
+        # A reduction in managed inventory is only acceptable when the
+        # exchange history accounts for that reduction with real SELL fills.
         if (
-            self.state(symbol) == "RECONCILE_REQUIRED"
-            and exchange_qty + tolerance_abs < persisted_qty
+            exchange_qty + tolerance_abs < persisted_qty
             and total_sold_qty + tolerance_abs < persisted_qty - exchange_qty
         ):
             raise RuntimeError(
-                f"{symbol}: reconciliation barrier preserved; "
-                f"managed={persisted_qty:.12g}, exchange={exchange_qty:.12g}, "
-                f"evidenced_sells={total_sold_qty:.12g}"
+                f"{symbol}: exchange inventory decreased without matching SELL "
+                f"evidence (managed={persisted_qty:.12g}, "
+                f"exchange={exchange_qty:.12g}, "
+                f"evidenced_sells={total_sold_qty:.12g})"
             )
 
         # Current exchange inventory is the idempotent source of truth for the
@@ -1336,6 +1334,14 @@ class MultiPositionTrader:
         for order in open_orders:
             if str(order.get("side", "")).upper() != "SELL":
                 continue
+            order_time = int(
+                order.get(
+                    "time",
+                    order.get("transactTime", order.get("updateTime", 0)),
+                ) or 0
+            )
+            if order_time and entry_time_ms and order_time < entry_time_ms:
+                continue
             client_id = str(order.get("clientOrderId", "") or "")
             list_id = str(order.get("orderListId", "") or "")
             if (
@@ -1351,6 +1357,14 @@ class MultiPositionTrader:
             remaining_legs = []
             for order in open_orders:
                 if str(order.get("side", "")).upper() != "SELL":
+                    continue
+                order_time = int(
+                    order.get(
+                        "time",
+                        order.get("transactTime", order.get("updateTime", 0)),
+                    ) or 0
+                )
+                if order_time and entry_time_ms and order_time < entry_time_ms:
                     continue
                 list_id = str(order.get("orderListId", "") or "")
                 client_id = str(order.get("clientOrderId", "") or "")
