@@ -262,6 +262,7 @@ def test_multiple_positions_are_independent_and_exit_is_mapped_to_one_symbol(tmp
             "executedQty": "0",
             "price": "4160",
             "stopPrice": "4160",
+            "time": 200,
         },
         {
             "symbol": "ETHUSDT",
@@ -275,6 +276,7 @@ def test_multiple_positions_are_independent_and_exit_is_mapped_to_one_symbol(tmp
             "executedQty": "0",
             "price": "3910",
             "stopPrice": "3920",
+            "time": 200,
         },
     ]
 
