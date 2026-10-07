@@ -819,6 +819,16 @@ class CampaignExecutionService:
                     continue
 
                 open_orders = self.client.open_orders(symbol)
+                unknown_sells = [
+                    o for o in open_orders
+                    if str(o.get("side", "")).upper() == "SELL"
+                    and not str(o.get("clientOrderId", "")).startswith(self.STOP_PREFIX)
+                ]
+                if unknown_sells:
+                    raise CampaignExecutionError(
+                        f"{symbol}: unrecognized open SELL order conflicts with campaign"
+                    )
+
                 managed_stops = [
                     o for o in open_orders
                     if str(o.get("side", "")).upper() == "SELL"
@@ -851,7 +861,7 @@ class CampaignExecutionService:
 
                 stop = managed_stops[0]
                 stop_qty = float(stop.get("origQty", 0) or 0)
-                if stop_qty + tolerance < expected:
+                if abs(stop_qty - expected) > tolerance:
                     order_id = stop.get("orderId")
                     if order_id is None:
                         raise CampaignExecutionError(f"{symbol}: protective stop has no orderId")
@@ -861,15 +871,22 @@ class CampaignExecutionService:
                         quantity=expected,
                         proposed_stop=float(campaign.current_stop_price),
                     )
-                    campaign.tags["protective_order_id"] = str(
+                    new_id = str(
                         (protection.get("newOrderResponse") or {}).get("orderId", "")
                     )
+                    if not new_id:
+                        raise CampaignExecutionError(
+                            f"{symbol}: protective stop replacement returned no new order id"
+                        )
+                    campaign.tags["protective_order_id"] = new_id
                     self.db.save_campaign(campaign)
                     self.db.state_set(f"position_state:{symbol}", "OPEN")
                     results.append({
                         "symbol": symbol,
                         "campaign_id": campaign.campaign_id,
                         "action": "PROTECTION_RESIZED",
+                        "old_quantity": stop_qty,
+                        "new_quantity": expected,
                     })
                     continue
 
