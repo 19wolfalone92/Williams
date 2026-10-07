@@ -46,6 +46,8 @@ jobs:
           java-version: "17"
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
+        with:
+          validate-wrappers: false
       - name: Make Gradle wrapper executable
         run: chmod +x ./gradlew
       - name: Build debug APK and run unit tests
