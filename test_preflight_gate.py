@@ -80,6 +80,9 @@ class FakeClient:
             "enableWithdrawals": False,
         }
 
+    def api_trading_status(self):
+        return {"data": {"isLocked": False, "plannedRecoverTime": 0}}
+
     def account(self):
         return {"status": "TRADING", "accountType": "SPOT", "balances": []}
 
@@ -111,6 +114,7 @@ def test_live_preflight_passes_clean_account():
     ).verify_all()
     assert report["ready"] is True
     assert report["checks"]["api_restrictions"] == "PASS"
+    assert report["checks"]["api_trading_status"] == "PASS"
 
 
 def test_live_preflight_blocks_withdrawals():
