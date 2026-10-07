@@ -3748,7 +3748,7 @@ private class NativeEngine(
                         val candles = fetchCandles(symbol, interval, 150)
                         val result = analyseBase(
                             symbol = symbol,
-                            candles = workCandles,
+                            candles = candles,
                             spread = spreads[symbol] ?: 0.0,
                             volume = volumes[symbol] ?: 0.0
                         )
@@ -6528,7 +6528,7 @@ private class NativeEngine(
                 score = 0.0,
                 signal = false,
                 htfCandidate = false,
-                wave = neutralWave(candles),
+                wave = neutralWave(workCandles),
                 atrPct = 0.0,
                 riskPct = 0.0,
                 riskReward = 0.0,
@@ -6536,7 +6536,7 @@ private class NativeEngine(
                 breakoutDistancePct = 0.0,
                 obi = null,
                 tradeFlowImbalance = null,
-                reason = "Недостаточно свечей: " + candles.size + "/40"
+                reason = "Недостаточно свечей: " + workCandles.size + "/40"
             )
         }
 
@@ -6564,12 +6564,12 @@ private class NativeEngine(
                 alligator.teeth > alligator.jaw &&
                 closes[i] > alligator.lips
 
-        val aoValue = ao(candles, i)
+        val aoValue = ao(workCandles, i)
         val aoPositive = aoValue > 0.0
 
-        val fractalIndex = latestConfirmedUpFractal(candles, i)
+        val fractalIndex = latestConfirmedUpFractal(workCandles, i)
         val fractalHigh =
-            fractalIndex?.let { candles[it].h }
+            fractalIndex?.let { workCandles[it].h }
         val teethSeries = smma(closes, 8)
         val fractalTeeth =
             fractalIndex?.let { teethSeries.getOrNull(it) }
@@ -6594,7 +6594,7 @@ private class NativeEngine(
         val trendScore = if (bullish) 35.0 else 0.0
         val aoScore =
             when {
-                aoPositive && ao(candles, i - 1) <= aoValue -> 20.0
+                aoPositive && ao(workCandles, i - 1) <= aoValue -> 20.0
                 aoPositive -> 12.0
                 else -> 0.0
             }
@@ -6681,7 +6681,7 @@ private class NativeEngine(
 
         return BaseAnalysis(
             symbol = symbol,
-            candles = candles,
+            candles = workCandles,
             score = score,
             signal = strictSignal,
             htfCandidate = bullish && aoPositive,
