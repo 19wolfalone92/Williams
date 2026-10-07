@@ -815,7 +815,7 @@ fun WilliamsApp(context: Context) {
         }
     }
 
-    val titles = listOf("Overview", "Wave Map", "Positions", "Incidents", "Config")
+    val titles = listOf("Overview", "Wave Map", "Positions", "Incidents", "Diagnostics", "Config")
     val icons = listOf(
         Icons.Filled.Dashboard,
         Icons.Filled.Radar,
@@ -979,6 +979,14 @@ fun WilliamsApp(context: Context) {
                 padding = padding,
                 trades = trades,
                 logs = logs
+            )
+
+            4 -> DiagnosticsScreen(
+                padding = padding,
+                status = status,
+                onRun = ::runDiagnostics,
+                onExport = ::exportDiagnostics,
+                message = diagnosticsMessage
             )
 
             else -> SettingsScreen(
@@ -1175,6 +1183,58 @@ private fun PortfolioCard(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun DiagnosticsScreen(
+    padding: PaddingValues,
+    status: Status,
+    onRun: () -> Unit,
+    onExport: () -> Unit,
+    message: String
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+        contentPadding = PaddingValues(top = 10.dp, bottom = 24.dp)
+    ) {
+        item {
+            Text("Diagnostics", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+        }
+        item { DiagnosticRow("REST price", if (status.price != null) "PASS • " + fmt(status.price, 6) else "FAIL • no price") }
+        item { DiagnosticRow("USDT balance", if (status.balance != null) "PASS • " + fmt(status.balance, 4) else "WAIT • no account data") }
+        item { DiagnosticRow("History", if (status.historyReady) "PASS" else "BLOCK • " + status.scannerState) }
+        item { DiagnosticRow("Market WS", if (status.marketWsConnected) "CONNECTED" else "DEGRADED • REST fallback") }
+        item { DiagnosticRow("User WS", if (status.userWsConnected && !status.userStreamSyncRequired) "CONNECTED" else "DEGRADED • REST reconciliation") }
+        item { DiagnosticRow("Scanner", status.scannerState + " • " + status.scannerSymbols + " symbols • " + status.scanDurationMs + " ms") }
+        item { DiagnosticRow("Execution", if (status.p0GatePassed) "READY" else "BLOCKED • " + status.p0GateReason) }
+        status.error?.let { item { DiagnosticRow("Last error", it) } }
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = onRun) { Text("RUN DIAGNOSTICS") }
+                OutlinedButton(onClick = onExport) { Text("EXPORT SNAPSHOT") }
+            }
+        }
+        if (message.isNotBlank()) item {
+            Text(message, color = AppColors.textMuted, style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
+@Composable
+private fun DiagnosticRow(label: String, value: String) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = AppColors.surface)
+    ) {
+        Row(
+            Modifier.fillMaxWidth().padding(12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(label, fontWeight = FontWeight.SemiBold)
+            Text(value, color = AppColors.textMuted)
         }
     }
 }
