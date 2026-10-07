@@ -1214,8 +1214,13 @@ class MultiPositionTrader:
                                 - float(order.get("executedQty", 0) or 0),
                             )
                         )
-                # OCO TP and SL are alternative exits for the same quantity.
-                active_managed_qty = max(remaining_legs, default=0.0)
+                # OCO TP and SL are alternative exits for the same position
+                # quantity. They are not additive inventory. When one child is
+                # partially filled, its remaining quantity is the authoritative
+                # residual of the OCO bundle; a sibling can still show the
+                # original quantity while it remains active. Using max/sum here
+                # would overstate protection after a partial fill.
+                active_managed_qty = min(remaining_legs) if remaining_legs else 0.0
                 break
 
         if active_list:
