@@ -434,6 +434,33 @@ class MultiPositionTrader:
         return qty, quote, last
 
     @staticmethod
+    def _executed_exit_metrics(rows):
+        """Count every executed SELL quantity, including terminal partial fills.
+
+        Binance can report a partially-filled order later as CANCELED/EXPIRED.
+        The executed quantity is still real inventory movement and must remain
+        part of reconciliation.
+        """
+        qty = 0.0
+        quote = 0.0
+        last = None
+        for row in rows:
+            if str(row.get("side", "")).upper() != "SELL":
+                continue
+            row_qty = float(row.get("executedQty", 0) or 0)
+            if row_qty <= 0:
+                continue
+            row_quote = float(row.get("cummulativeQuoteQty", 0) or 0)
+            qty += row_qty
+            if row_quote > 0:
+                quote += row_quote
+            if last is None or int(
+                row.get("time", row.get("transactTime", 0)) or 0
+            ) >= int(last.get("time", last.get("transactTime", 0)) or 0):
+                last = row
+        return qty, quote, last
+
+    @staticmethod
     def _filled_qty(rows):
         return MultiPositionTrader._filled_exit_metrics(rows)[0]
 
@@ -791,7 +818,18 @@ class MultiPositionTrader:
                     order.get("status", "")
                 ).upper()
 
-                if status in {"CANCELED", "EXPIRED", "REJECTED"}:
+                qty = float(
+                    order.get("executedQty", 0) or 0
+                )
+                spent = float(
+                    order.get("cummulativeQuoteQty", 0) or 0
+                )
+
+                # A terminal order may still contain a real partial fill.
+                # Never clear the durable entry intent and leave the bought
+                # asset untracked/unprotected.
+                terminal = status in {"CANCELED", "EXPIRED", "REJECTED"}
+                if terminal and qty <= 0:
                     self.db.state_delete(
                         self._pending_key(symbol)
                     )
@@ -801,16 +839,17 @@ class MultiPositionTrader:
                     )
                     continue
 
-                if status != "FILLED":
+                # While a BUY is still live, keep the durable intent pending.
+                # Do not create OCO protection until the final entry quantity
+                # is known.
+                if status != "FILLED" and not terminal:
                     self.set_state(symbol, "ENTRY_PENDING")
                     continue
 
-                qty = float(
-                    order.get("executedQty", 0) or 0
-                )
-                spent = float(
-                    order.get("cummulativeQuoteQty", 0) or 0
-                )
+                if qty <= 0 or spent <= 0:
+                    raise RuntimeError(
+                        f"{symbol}: pending BUY has invalid fill"
+                    )
                 if qty <= 0 or spent <= 0:
                     raise RuntimeError(
                         f"{symbol}: pending BUY has invalid fill"
@@ -920,33 +959,15 @@ class MultiPositionTrader:
             history_lists,
         )
 
-        if oco:
-            if not trade.get("exit_order_list_id"):
-                self.db.update_trade_oco(
-                    trade["id"],
-                    oco.get("orderListId"),
-                    list_client_order_id=oco.get(
-                        "listClientOrderId"
-                    ),
-                )
-                trade = self.db.open_trade(symbol)
+        if oco and not trade.get("exit_order_list_id"):
+            self.db.update_trade_oco(
+                trade["id"],
+                oco.get("orderListId"),
+                list_client_order_id=oco.get("listClientOrderId"),
+            )
+            trade = self.db.open_trade(symbol) or trade
 
-        exit_orders = self._bot_exit_orders(
-            trade,
-            all_orders,
-            oco,
-        )
-        filled_exits = [
-            order for order in exit_orders
-            if str(order.get("status", "")).upper() == "FILLED"
-        ]
-        sold_qty, sold_quote, last_exit = self._filled_exit_metrics(
-            filled_exits
-        )
-
-        entry_id = str(
-            trade.get("entry_order_id") or ""
-        )
+        entry_id = str(trade.get("entry_order_id") or "")
         entry_order = next(
             (
                 o for o in all_orders
@@ -959,40 +980,101 @@ class MultiPositionTrader:
         ) if entry_order else float(
             trade.get("quantity") or 0
         )
+        if bought_qty <= 0:
+            raise RuntimeError(
+                f"{symbol}: managed trade has no authoritative entry fill"
+            )
 
-        managed_original_qty = min(
-            float(trade.get("quantity") or bought_qty),
-            bought_qty or float(trade.get("quantity") or 0),
+        exit_orders = self._bot_exit_orders(
+            trade,
+            all_orders,
+            oco,
         )
+        bot_sold_qty, bot_sold_quote, bot_last_exit = self._executed_exit_metrics(
+            exit_orders
+        )
+
+        entry_time_ms = int(
+            entry_order.get(
+                "time",
+                entry_order.get("transactTime", 0),
+            ) or 0
+        ) if entry_order else 0
+
+        # Any external SELL after the managed BUY is treated as an external
+        # reduction of the managed inventory. It is deliberately reconciled
+        # into the same cumulative sell total so repeated recovery cycles do
+        # not subtract the same manual sale twice.
+        external_sells = [
+            o for o in all_orders
+            if str(o.get("side", "")).upper() == "SELL"
+            and int(
+                o.get("time", o.get("transactTime", 0)) or 0
+            ) >= entry_time_ms
+            and not self._sell_belongs_to_bot(o, all_orders)
+            and float(o.get("executedQty", 0) or 0) > 0
+        ]
+        manual_qty, manual_quote, manual_last = self._executed_exit_metrics(
+            external_sells
+        )
+
+        total_sold_qty = bot_sold_qty + manual_qty
+        total_sold_quote = bot_sold_quote + manual_quote
+        last_exit = bot_last_exit
+        if (
+            manual_last is not None
+            and (
+                last_exit is None
+                or int(
+                    manual_last.get(
+                        "time",
+                        manual_last.get("transactTime", 0),
+                    ) or 0
+                ) >= int(
+                    last_exit.get(
+                        "time",
+                        last_exit.get("transactTime", 0),
+                    ) or 0
+                )
+            )
+        ):
+            last_exit = manual_last
+
+        tolerance_abs = max(
+            float(os.getenv("MIN_RECOVERY_QTY", "0.000001")),
+            bought_qty * self.balance_tolerance_pct,
+        )
+
+        if total_sold_qty > bought_qty + tolerance_abs:
+            raise RuntimeError(
+                f"{symbol}: executed SELL quantity exceeds managed BUY quantity "
+                f"(bought={bought_qty:.12g}, sold={total_sold_qty:.12g})"
+            )
+
         remaining_expected = max(
             0.0,
-            managed_original_qty - sold_qty,
+            bought_qty - total_sold_qty,
         )
 
-        if filled_exits and remaining_expected <= 0:
-            if last_exit is None:
+        if remaining_expected <= float(os.getenv("MIN_RECOVERY_QTY", "0.000001")):
+            if total_sold_qty <= 0 or last_exit is None:
                 raise RuntimeError(
-                    f"{symbol}: filled managed exit has no usable execution"
+                    f"{symbol}: open trade has no remaining quantity and no "
+                    "filled managed exit evidence"
                 )
+
             entry_price = float(trade["entry_price"])
             exit_price = (
-                sold_quote / sold_qty
-                if sold_quote > 0 and sold_qty > 0
+                total_sold_quote / total_sold_qty
+                if total_sold_quote > 0 and total_sold_qty > 0
                 else self._exit_price(last_exit)
             )
-            realized_qty = min(
-                managed_original_qty,
-                sold_qty,
-            )
             realized_quote = (
-                sold_quote
-                if sold_quote > 0
-                else exit_price * realized_qty
+                total_sold_quote
+                if total_sold_quote > 0
+                else exit_price * total_sold_qty
             )
-            pnl = (
-                realized_quote
-                - entry_price * realized_qty
-            )
+            pnl = realized_quote - entry_price * bought_qty
             pnl_pct = (
                 exit_price / entry_price - 1.0
                 if entry_price else 0.0
@@ -1018,11 +1100,13 @@ class MultiPositionTrader:
             self.db.log_event(
                 "INFO",
                 "position_closed",
-                f"{symbol} position fully closed by managed exit",
+                f"{symbol} position fully closed by managed/external execution",
                 {
                     "trade_id": trade["id"],
-                    "quantity": managed_original_qty,
-                    "sold_qty": sold_qty,
+                    "quantity": bought_qty,
+                    "sold_qty": total_sold_qty,
+                    "bot_sold_qty": bot_sold_qty,
+                    "external_sold_qty": manual_qty,
                     "exit_price": exit_price,
                     "reason": self._exit_reason(last_exit),
                 },
@@ -1039,96 +1123,47 @@ class MultiPositionTrader:
             symbol,
             account=account,
         )
-
         if exchange_qty < 0:
             raise RuntimeError(
                 f"{symbol}: invalid negative exchange balance"
             )
 
-        if remaining_expected < float(os.getenv("MIN_RECOVERY_QTY", "0.000001")):
-            if filled_exits:
-                last_exit = max(
-                    filled_exits,
-                    key=lambda row: int(
-                        row.get(
-                            "time",
-                            row.get("transactTime", 0),
-                        ) or 0
-                    ),
-                )
-                self.db.close_trade(
-                    trade["id"],
-                    datetime.fromtimestamp(
-                        int(
-                            last_exit.get(
-                                "transactTime",
-                                last_exit.get("time", 0),
-                            )
-                        ) / 1000,
-                        tz=timezone.utc,
-                    ).isoformat(),
-                    self._exit_price(last_exit),
-                    0.0,
-                    0.0,
-                    self._exit_reason(last_exit),
-                    last_exit.get("orderListId"),
-                )
-                self.set_state(symbol, "FLAT")
-                return {
-                    "trade_id": trade["id"],
-                    "symbol": symbol,
-                    "state": "FLAT",
-                    "closed": True,
-                }
-            raise RuntimeError(
-                f"{symbol}: open trade has no remaining quantity and no "
-                "filled managed exit evidence"
-            )
-
-        tolerance = max(
-            float(os.getenv("MIN_RECOVERY_QTY", "0.000001")),
-            remaining_expected * self.balance_tolerance_pct,
-        )
-        entry_time_ms = int(entry_order.get("time", entry_order.get("transactTime", 0)) or 0) if entry_order else 0
-        manual_sells = [o for o in all_orders if str(o.get("side", "")).upper() == "SELL" and str(o.get("status", "")).upper() == "FILLED" and int(o.get("time", o.get("transactTime", 0)) or 0) >= entry_time_ms and not self._sell_belongs_to_bot(o, all_orders)]
-        if abs(exchange_qty - remaining_expected) > tolerance and not manual_sells:
+        # The exchange inventory is the final source of truth after all
+        # executions are included. A significant mismatch is unsafe and stays
+        # behind RECONCILE_REQUIRED.
+        if abs(exchange_qty - remaining_expected) > tolerance_abs:
             raise RuntimeError(
                 f"{symbol}: managed quantity mismatch; "
                 f"expected={remaining_expected:.12g}, "
                 f"exchange={exchange_qty:.12g}"
             )
 
-        # Reconcile externally/manual filled SELLs from Binance instead of
-        # leaving the local trade stale.
-        entry_time_ms = int(entry_order.get("time", entry_order.get("transactTime", 0)) or 0) if entry_order else 0
-        manual_sells = [
-            o for o in all_orders
-            if str(o.get("side", "")).upper() == "SELL"
-            and str(o.get("status", "")).upper() == "FILLED"
-            and int(o.get("time", o.get("transactTime", 0)) or 0) >= entry_time_ms
-            and not self._sell_belongs_to_bot(o, all_orders)
-        ]
-        manual_qty, manual_quote, manual_last = self._filled_exit_metrics(manual_sells)
         if manual_qty > 0:
-            remaining_after_manual = max(0.0, remaining_expected - manual_qty)
-            if remaining_after_manual <= max(self._min_qty(), 1e-12):
-                exit_price = manual_quote / manual_qty if manual_quote > 0 else self._exit_price(manual_last)
-                pnl = (exit_price - float(trade["entry_price"])) * managed_original_qty
-                self.db.close_trade(
+            current_qty = float(trade.get("quantity") or 0.0)
+            if abs(current_qty - remaining_expected) > tolerance_abs:
+                self.db.update_trade_quantity(
                     trade["id"],
-                    datetime.fromtimestamp(int(manual_last.get("time", manual_last.get("transactTime", 0))) / 1000, tz=timezone.utc).isoformat(),
-                    exit_price, pnl, exit_price / float(trade["entry_price"]) - 1.0 if trade["entry_price"] else 0.0,
-                    "MANUAL_EXTERNAL",
-                    manual_last.get("orderListId"),
+                    remaining_expected,
                 )
-                self.set_state(symbol, "FLAT")
-                self.db.log_event("WARNING", "external_position_closed", "Manual Binance SELL reconciled", {"symbol": symbol, "trade_id": trade["id"], "manual_qty": manual_qty})
-                return {"trade_id": trade["id"], "symbol": symbol, "state": "FLAT", "closed": True, "manual_external": True}
-            self.db.update_trade_quantity(trade["id"], remaining_after_manual)
-            remaining_expected = remaining_after_manual
-            self.db.log_event("WARNING", "external_partial_sell_reconciled", "Manual Binance partial SELL reconciled", {"symbol": symbol, "trade_id": trade["id"], "manual_qty": manual_qty, "remaining": remaining_expected})
+                self.db.log_event(
+                    "WARNING",
+                    "external_partial_sell_reconciled",
+                    "Manual Binance SELL reconciled into managed quantity",
+                    {
+                        "symbol": symbol,
+                        "trade_id": trade["id"],
+                        "manual_qty": manual_qty,
+                        "remaining": remaining_expected,
+                    },
+                )
+            else:
+                # Keep the user-visible lifecycle quantity aligned even when
+                # the same historical manual SELL is seen again.
+                self.db.update_trade_quantity(
+                    trade["id"],
+                    remaining_expected,
+                )
 
-        # An unrelated user SELL against this managed symbol is ambiguous.
         open_orders = self.client.open_orders(symbol)
         unknown_sells = [
             order for order in open_orders
@@ -1146,8 +1181,10 @@ class MultiPositionTrader:
                 "with managed position"
             )
 
-        # If the OCO is active, position is safely OPEN.
+        # An active OCO remains valid as long as its remaining executable
+        # quantity is consistent with the actual account balance.
         active_list = False
+        active_managed_qty = 0.0
         for row in open_lists:
             if str(row.get("symbol", "")).upper() != symbol:
                 continue
@@ -1164,24 +1201,44 @@ class MultiPositionTrader:
             ).startswith(self.OCO_PREFIX)
             if same_id or same_client or prefix:
                 active_list = True
+                list_id = str(row.get("orderListId", ""))
+                for order in open_orders:
+                    if str(order.get("side", "")).upper() != "SELL":
+                        continue
+                    if list_id and str(order.get("orderListId", "")) == list_id:
+                        active_managed_qty += max(
+                            0.0,
+                            float(order.get("origQty", 0) or 0)
+                            - float(order.get("executedQty", 0) or 0),
+                        )
                 break
 
         if active_list:
-            self.set_state(symbol, "OPEN")
-            if abs(exchange_qty - float(trade["quantity"])) > tolerance:
-                self.db.update_trade_quantity(
-                    trade["id"],
-                    min(exchange_qty, remaining_expected),
+            # The active Binance OCO owns the protection. Do not create a
+            # second list after a partial execution.
+            if abs(active_managed_qty - remaining_expected) > tolerance_abs:
+                raise RuntimeError(
+                    f"{symbol}: active OCO quantity mismatch; "
+                    f"expected={remaining_expected:.12g}, "
+                    f"oco_remaining={active_managed_qty:.12g}"
                 )
+            self.set_state(symbol, "OPEN")
+            self.db.update_trade_quantity(
+                trade["id"],
+                remaining_expected,
+            )
             return {
                 "trade_id": trade["id"],
                 "symbol": symbol,
                 "state": "OPEN",
                 "protected": True,
+                "remaining_quantity": remaining_expected,
+                "partial_exit": total_sold_qty > 0,
             }
 
-        # No managed OCO is currently open, but the position exists.
-        # Recreate protection using the originally stored price distances.
+        # No managed OCO is currently open. This is the normal recovery path
+        # after an OCO child was partially filled and the list became terminal:
+        # protect only the inventory that still exists.
         entry = float(trade["entry_price"])
         stop = float(trade.get("stop_price") or 0.0)
         take = float(trade.get("take_profit_price") or 0.0)
@@ -1197,9 +1254,19 @@ class MultiPositionTrader:
             else float(os.getenv("TAKE_PROFIT_PCT", "0.04"))
         )
 
+        protection_qty = min(exchange_qty, remaining_expected)
+        if protection_qty <= 0:
+            raise RuntimeError(
+                f"{symbol}: remaining managed quantity cannot be protected"
+            )
+
+        self.db.update_trade_quantity(
+            trade["id"],
+            protection_qty,
+        )
         self._create_oco(
             symbol,
-            min(exchange_qty, remaining_expected),
+            protection_qty,
             entry,
             trade["id"],
             stop_fraction=stop_fraction,
@@ -1213,7 +1280,8 @@ class MultiPositionTrader:
             {
                 "symbol": symbol,
                 "trade_id": trade["id"],
-                "quantity": min(exchange_qty, remaining_expected),
+                "quantity": protection_qty,
+                "executed_sell_qty": total_sold_qty,
             },
         )
         return {
@@ -1222,6 +1290,8 @@ class MultiPositionTrader:
             "state": "OPEN",
             "protected": True,
             "oco_restored": True,
+            "remaining_quantity": protection_qty,
+            "partial_exit": total_sold_qty > 0,
         }
 
     def reconcile_open_positions(self):
