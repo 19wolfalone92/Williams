@@ -20,9 +20,9 @@ class PortfolioController:
     def __init__(self, client, balance_quote: float, symbols=None, interval=None):
         self.client = client
         self.interval = interval or os.getenv("INTERVAL", "1h")
-        self.max_open_positions = max(0, int(os.getenv("MAX_OPEN_POSITIONS", "1")))
+        self.max_open_positions = max(0, int(os.getenv("MAX_OPEN_POSITIONS", "5")))
         self.max_total_risk_pct = min(0.01, max(0.0, float(os.getenv("MAX_TOTAL_RISK_PCT", "0.01"))))
-        self.max_risk_per_trade_pct = min(0.005, max(0.0, float(os.getenv("MAX_RISK_PER_TRADE_PCT", "0.005"))))
+        self.max_risk_per_trade_pct = min(0.005, max(0.0, float(os.getenv("MAX_RISK_PER_TRADE_PCT", os.getenv("RISK_PER_TRADE_PCT", "0.005")))))
         self.min_risk_allocation_pct = min(
             self.max_risk_per_trade_pct,
             max(0.0, float(os.getenv("MIN_RISK_ALLOCATION_PCT", "0.001"))),
