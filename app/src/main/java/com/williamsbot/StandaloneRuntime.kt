@@ -1691,7 +1691,9 @@ private class NativeEngine(
                 )
             )
             val cutoff = time - 5000L
-            while (queue.isNotEmpty() && queue.peekFirst().timeMs < cutoff) {
+            while (queue.isNotEmpty()) {
+                val first = queue.peekFirst() ?: break
+                if (first.timeMs >= cutoff) break
                 queue.removeFirst()
             }
             while (queue.size > 2000) queue.removeFirst()
@@ -1704,7 +1706,9 @@ private class NativeEngine(
         var buy = 0.0
         var sell = 0.0
         synchronized(queue) {
-            while (queue.isNotEmpty() && queue.peekFirst().timeMs < now - 5000L) {
+            while (queue.isNotEmpty()) {
+                val first = queue.peekFirst() ?: break
+                if (first.timeMs >= now - 5000L) break
                 queue.removeFirst()
             }
             queue.forEach {
