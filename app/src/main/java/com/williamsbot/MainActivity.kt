@@ -120,6 +120,7 @@ import kotlin.math.min
 // Williams 4.22.3 Trading Core production cockpit
 // Autonomous runtime contract: local loopback API is intentional; no VPS required.
 // CI compile-log capture enabled
+// Diagnostic contract v2: runtime self-tests are exposed through /api/v1/diagnostics.
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
