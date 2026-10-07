@@ -28,16 +28,19 @@ def main() -> None:
 
     env = read(".env.example")
     for needle in (
-        "TESTNET=true", "ALLOW_LIVE=false", "MAX_OPEN_POSITIONS=1",
+        "TESTNET=true", "ALLOW_LIVE=false", "MAX_OPEN_POSITIONS=5",
         "AUTO_SCAN_SYMBOLS=", "SCAN_ALL_USDT=true", "SCAN_MAX_SYMBOLS=0",
         "LIQUIDITY_PRESELECT=0", "WAVE_FULL_TF_ALL=true",
     ):
         must(env, needle, ".env.example")
 
     cfg = read("trading_config.py")
-    must(cfg, "max_open_positions: int = 1", "trading_config.py")
-    must(cfg, 'MAX_OPEN_POSITIONS", 1', "trading_config.py")
+    must(cfg, "max_open_positions: int = 5", "trading_config.py")
+    must(cfg, 'MAX_OPEN_POSITIONS", 5', "trading_config.py")
     must(cfg, '{"ALL", "AUTO", "*"}', "trading_config.py")
+    must(cfg, 'risk_key = "MAX_RISK_PER_TRADE_PCT"', "trading_config.py")
+    must(cfg, 'min(0.005', "trading_config.py")
+    must(cfg, 'min(0.01', "trading_config.py")
 
     scanner = read("market_scanner.py")
     for needle in (
