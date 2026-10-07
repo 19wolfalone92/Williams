@@ -1980,6 +1980,29 @@ private class NativeEngine(
                 )
             }
 
+            val intervalMs = frameSeconds(frame) * 1000L
+            val expectedRemoteTimestamp =
+                ((System.currentTimeMillis() + serverTimeOffsetMs) / intervalMs) * intervalMs
+
+            if (
+                !MarketHistoryStore.validateFetchedGap(
+                    candles = batch,
+                    gapStart = newest,
+                    expectedRemoteTimestamp = expectedRemoteTimestamp,
+                    intervalMs = intervalMs
+                )
+            ) {
+                historyStore.setError(
+                    normalizedSymbol,
+                    frame,
+                    "Bounded history gap validation failed",
+                    complete = false
+                )
+                throw IllegalStateException(
+                    "Invalid bounded history gap for $normalizedSymbol:$frame"
+                )
+            }
+
             historyStore.upsertBatch(
                 normalizedSymbol,
                 frame,
