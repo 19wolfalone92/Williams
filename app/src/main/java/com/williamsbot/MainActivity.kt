@@ -12,8 +12,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.ComponentActivity
 import androidx.core.content.ContextCompat
-import androidx.security.crypto.EncryptedSharedPreferences
-import androidx.security.crypto.MasterKey
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
@@ -369,47 +367,11 @@ data class PositionView(
     val ocoListClientId: String = ""
 )
 
-private class StandaloneApi(context: Context) {
-    private val securePrefs = EncryptedSharedPreferences.create(
-        context,
-        "williams_backend_secure",
-        MasterKey.Builder(context)
-            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-            .build(),
-        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+private class BackendApi(context: Context) {
+    private val securePrefs = context.getSharedPreferences(
+        "williams_backend_connection",
+        Context.MODE_PRIVATE
     )
-
-    init {
-        val legacy = context.getSharedPreferences(
-            "williams_backend",
-            Context.MODE_PRIVATE
-        )
-        if (
-            securePrefs.getString("backend_url", null) == null &&
-            legacy.getString("backend_url", null) != null
-        ) {
-            securePrefs.edit()
-                .putString(
-                    "backend_url",
-                    legacy.getString("backend_url", "http://127.0.0.1:18080")
-                )
-                .putString(
-                    "mobile_token",
-                    legacy.getString("mobile_token", "")
-                )
-                .apply()
-            legacy.edit()
-                .remove("mobile_token")
-                .apply()
-        } else {
-            // Remove any legacy token left behind after a previous migration.
-            context.getSharedPreferences(
-                "williams_backend",
-                Context.MODE_PRIVATE
-            ).edit().remove("mobile_token").apply()
-        }
-    }
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(8, TimeUnit.SECONDS)
@@ -417,32 +379,18 @@ private class StandaloneApi(context: Context) {
         .build()
 
     val backendUrl: String
-        get() = securePrefs.getString("backend_url", "http://127.0.0.1:18080")
+        get() = securePrefs.getString("backend_url", "")
             ?.trimEnd('/')
-            .takeUnless { it.isNullOrBlank() }
-            ?: "http://127.0.0.1:18080"
+            ?: ""
 
     val mobileToken: String
         get() = securePrefs.getString("mobile_token", "")?.trim() ?: ""
 
-    private val localApiToken: String by lazy {
-        StandaloneRuntime.localApiToken(context)
-    }
-
-    fun isLocalStandalone(): Boolean {
-        val normalized = backendUrl.trimEnd('/')
-        return normalized == "http://127.0.0.1:18080" ||
-            normalized == "http://localhost:18080"
-    }
-
     fun saveConnection(url: String, token: String) {
         val normalized = url.trim().trimEnd('/')
         require(normalized.isNotBlank()) { "Backend URL не задан" }
-        val localhostHttp =
-            normalized.startsWith("http://127.0.0.1") ||
-                normalized.startsWith("http://localhost")
-        if (!normalized.startsWith("https://") && !localhostHttp) {
-            error("Backend URL должен использовать HTTPS; HTTP разрешён только для localhost")
+        require(normalized.startsWith("https://")) {
+            "Backend URL должен использовать HTTPS."
         }
         if (!localhostHttp && token.trim().length < 32) {
             error("Для удалённого Backend нужен Mobile API Token (минимум 32 символа).")
@@ -462,13 +410,15 @@ private class StandaloneApi(context: Context) {
         path: String,
         body: String?
     ): String {
+        require(backendUrl.startsWith("https://")) {
+            "Сначала укажите HTTPS Backend URL."
+        }
+        require(mobileToken.isNotBlank()) {
+            "Сначала укажите Mobile API Token."
+        }
         val builder = Request.Builder()
             .url(backendUrl + path)
-        if (isLocalStandalone()) {
-            builder.header("Authorization", "Bearer " + localApiToken)
-        } else if (mobileToken.isNotBlank()) {
-            builder.header("Authorization", "Bearer " + mobileToken)
-        }
+            .header("Authorization", "Bearer " + mobileToken)
 
         val requestBody =
             body?.toRequestBody("application/json".toMediaType())
@@ -495,7 +445,7 @@ private class StandaloneApi(context: Context) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun WilliamsApp(context: Context) {
-    val api = remember { StandaloneApi(context) }
+    val api = remember { BackendApi(context) }
     val scope = rememberCoroutineScope()
 
     var tab by remember { mutableIntStateOf(0) }
@@ -721,24 +671,10 @@ fun WilliamsApp(context: Context) {
                     .put("testnet", true)
                     .toString()
 
-                if (api.isLocalStandalone()) {
-                    // Local Android runtime: persist directly into the same
-                    // Keystore-backed store used by NativeEngine. This avoids
-                    // loopback HTTP body fragmentation and guarantees that the
-                    // status endpoint reads the exact credentials just saved.
-                    StandaloneRuntime.configureCredentials(
-                        context,
-                        apiKey.trim(),
-                        apiSecret.trim()
-                    )
-                    check(StandaloneRuntime.credentialsConfigured()) {
-                        "Ключи не появились в защищённом хранилище Williams"
-                    }
-                } else {
-                    // Remote/VPS mode keeps the credential write behind the
-                    // authenticated HTTP API.
-                    api.post("/api/v1/config/binance", body)
-                }
+                // Binance credentials are never persisted on Android.
+                // They are sent once over the authenticated HTTPS backend API,
+                // where the VPS CredentialStore encrypts them at rest.
+                api.post("/api/v1/config/binance", body)
 
                 // Read back through the exact runtime selected by the configured
                 // Backend URL. This is the source of truth shown by the UI.
@@ -779,7 +715,7 @@ fun WilliamsApp(context: Context) {
             try {
                 api.delete("/api/v1/config/binance")
                 withContext(Dispatchers.Main) {
-                    message = "Ключи удалены с устройства"
+                    message = "Binance-ключи удалены на Backend"
                     apiKey = ""
                     apiSecret = ""
                 }
@@ -971,7 +907,7 @@ fun WilliamsApp(context: Context) {
                                 style = MaterialTheme.typography.titleMedium
                             )
                             Text(
-                                "AUTONOMOUS • Android runs Williams locally",
+                                "BACKEND CONTROL • Android is dashboard only",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = AppColors.textMuted
                             )
