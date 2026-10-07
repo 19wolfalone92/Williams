@@ -1183,6 +1183,17 @@ private class NativeEngine(
                 ocoTxJournal.markCompleted(it.txId)
             }
 
+            if (!killLatched && !reconcileRequired) {
+                stateMachine.force(
+                    if (positionList().isEmpty()) {
+                        TradingState.READY_FLAT
+                    } else {
+                        TradingState.PROTECTED
+                    },
+                    "REST recovery completed"
+                )
+            }
+
             JSONObject()
                 .put("recovered", !reconcileRequired)
                 .put("state", stateName())
