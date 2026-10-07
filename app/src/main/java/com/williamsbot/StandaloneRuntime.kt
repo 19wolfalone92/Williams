@@ -1969,7 +1969,6 @@ private class NativeEngine(
                     lastError = "history warmup: " + historyLastError
                 }
             } finally {
-                tasks.forEach { (_, future) -> activeHistoryTasks.remove(future) }
                 if (generation == runtimeGeneration) {
                     historyWarmupRunning = false
                 }
