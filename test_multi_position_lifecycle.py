@@ -412,3 +412,155 @@ def test_recover_keeps_reconcile_barrier_for_unresolved_exchange_position(tmp_pa
     assert result["ok"] is False
     assert multi.state("SOLUSDT") == "RECONCILE_REQUIRED"
     assert db.state_get("position_state") == "RECONCILE_REQUIRED"
+
+
+
+def test_partial_manual_sell_keeps_residual_position_protected(tmp_path: Path):
+    class ManualPartialClient(FakeClient):
+        def __init__(self):
+            super().__init__()
+            self.cancelled = False
+            self.manual_order = None
+
+        def account(self):
+            return {
+                "balances": [
+                    {"asset": "USDT", "free": "9400", "locked": "0"},
+                    {"asset": "BTC", "free": "0.4", "locked": "0"},
+                ],
+            }
+
+        def cancel_oco(self, symbol, order_list_id=None, list_client_order_id=None):
+            self.cancelled = True
+            return {"orderListId": order_list_id or 10}
+
+        def order_safe(self, symbol, side, type_, *, quantity=None, new_client_order_id=None, **kwargs):
+            assert side == "SELL"
+            assert type_ == "MARKET"
+            self.manual_order = {
+                "symbol": symbol,
+                "side": "SELL",
+                "type": "MARKET",
+                "orderId": "manual-1",
+                "clientOrderId": new_client_order_id,
+                "status": "FILLED",
+                "executedQty": "0.6",
+                "cummulativeQuoteQty": "60",
+            }
+            return self.manual_order
+
+        def all_orders(self, symbol, limit=1000):
+            return [
+                {
+                    "symbol": "BTCUSDT",
+                    "side": "BUY",
+                    "type": "MARKET",
+                    "orderId": "buy-1",
+                    "clientOrderId": "WILLV4_ENTRY_TEST",
+                    "status": "FILLED",
+                    "executedQty": "1.0",
+                    "cummulativeQuoteQty": "100",
+                    "time": 1000,
+                },
+                self.manual_order or {},
+            ]
+
+        def book_ticker(self, symbol=None):
+            return {"symbol": symbol or "BTCUSDT", "bidPrice": "100", "askPrice": "100"}
+
+        def ticker_price(self, symbol):
+            return {"symbol": symbol, "price": "100"}
+
+    db = Database(str(tmp_path / "manual-partial.sqlite3"))
+    client = ManualPartialClient()
+    trade_id = add_trade(
+        db,
+        symbol="BTCUSDT",
+        entry_price=100,
+        quantity=1.0,
+        entry_order_id="buy-1",
+        entry_client_order_id="WILLV4_ENTRY_TEST",
+        exit_order_list_id="10",
+        exit_order_list_client_id="WILLV4_OCO_TEST",
+        stop_price=98,
+        take_profit_price=104,
+        risk_pct=0.5,
+    )
+    db.state_set("position_state:BTCUSDT", "OPEN")
+    trader = MultiPositionTrader(client, db=db, symbols=["BTCUSDT"])
+    result = trader.manual_sell("BTCUSDT")
+
+    assert result["sold"] is True
+    assert result["partial"] is True
+    assert abs(float(result["residual_quantity"]) - 0.4) < 1e-9
+    trade = db.open_trade("BTCUSDT")
+    assert trade is not None
+    assert trade["id"] == trade_id
+    assert abs(float(trade["quantity"]) - 0.4) < 1e-9
+    assert trader.state("BTCUSDT") == "OPEN"
+    assert client.cancelled is True
+    assert len(client.created_oco) == 1
+    assert abs(client.created_oco[0]["quantity"] - 0.4) < 1e-9
+    assert str(client.manual_order["clientOrderId"]).startswith("WILLV4_MANUAL_")
+
+
+def test_partial_emergency_sell_never_closes_trade_as_flat(tmp_path: Path):
+    class EmergencyPartialClient(FakeClient):
+        def account(self):
+            return {
+                "balances": [
+                    {"asset": "USDT", "free": "9400", "locked": "0"},
+                    {"asset": "BTC", "free": "0.4", "locked": "0"},
+                ],
+            }
+
+        def order_safe(self, symbol, side, type_, *, quantity=None, new_client_order_id=None, **kwargs):
+            assert side == "SELL"
+            assert type_ == "MARKET"
+            return {
+                "symbol": symbol,
+                "side": "SELL",
+                "type": "MARKET",
+                "orderId": "emergency-1",
+                "clientOrderId": new_client_order_id,
+                "status": "FILLED",
+                "executedQty": "0.6",
+                "cummulativeQuoteQty": "60",
+            }
+
+        def get_order(self, symbol, order_id=None, orig_client_order_id=None):
+            return {
+                "symbol": symbol,
+                "side": "SELL",
+                "type": "MARKET",
+                "orderId": "emergency-1",
+                "clientOrderId": orig_client_order_id or "WILLV4_EMERGENCY_TEST",
+                "status": "FILLED",
+                "executedQty": "0.6",
+                "cummulativeQuoteQty": "60",
+            }
+
+    db = Database(str(tmp_path / "emergency-partial.sqlite3"))
+    client = EmergencyPartialClient()
+    trade_id = add_trade(
+        db,
+        symbol="BTCUSDT",
+        entry_price=100,
+        quantity=1.0,
+        entry_order_id="buy-1",
+        entry_client_order_id="WILLV4_ENTRY_TEST",
+        stop_price=98,
+        take_profit_price=104,
+        risk_pct=0.5,
+    )
+    db.state_set("position_state:BTCUSDT", "OPEN")
+    trader = MultiPositionTrader(client, db=db, symbols=["BTCUSDT"])
+    result = trader._emergency_market_sell("BTCUSDT", 1.0, trade_id, "TEST_PARTIAL")
+
+    assert result["emergency_exit"] is True
+    assert result["state"] == "RECONCILE_REQUIRED"
+    assert abs(float(result["residual_quantity"]) - 0.4) < 1e-9
+    trade = db.open_trade("BTCUSDT")
+    assert trade is not None
+    assert abs(float(trade["quantity"]) - 0.4) < 1e-9
+    assert trader.state("BTCUSDT") == "RECONCILE_REQUIRED"
