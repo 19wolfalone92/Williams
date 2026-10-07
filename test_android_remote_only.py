@@ -36,8 +36,8 @@ def test_android_never_persists_binance_credentials():
     assert '.putString("api_secret"' not in main
     assert '.put("api_key"' not in backup
     assert '.put("api_secret"' not in backup
-    assert ".putString("api_key"" not in backup
-    assert ".putString("api_secret"" not in backup
+    assert '.putString("api_key"' not in backup
+    assert '.putString("api_secret"' not in backup
 
 
 def test_server_spot_contract_is_present():
