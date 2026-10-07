@@ -1745,64 +1745,70 @@ private class NativeEngine(
         historyReady = false
         Thread {
             try {
+                var recentReady = true
                 for (symbol in coreSymbols) {
                     for (frame in analysisFrames) {
                         if (!running) return@Thread
-                        // Keep the full historical source available to the wave engine.
-                        // The live RAM cache remains bounded to avoid Android OOM.
-                        runCatching {
-                            fetchFullHistory(symbol, frame)
-                            val recent = historyStore.loadRecent(symbol, frame, 600)
-                            val recentCandleN = recent.map {
-                                CandleN(
-                                    it.openTime,
-                                    it.open,
-                                    it.high,
-                                    it.low,
-                                    it.close,
-                                    it.volume
-                                )
-                            }
-                            val key = symbol + ":" + frame
-                            liveCandleCache[key] = recentCandleN.toMutableList()
-                            candleCache[key] = System.currentTimeMillis() to recentCandleN
-                            if (recent.size >= 40) {
-                                val recentN = recent.map {
-                                    CandleN(
-                                        it.openTime,
-                                        it.open,
-                                        it.high,
-                                        it.low,
-                                        it.close,
-                                        it.volume
-                                    )
-                                }
-                                indicatorSnapshots[key] =
-                                    buildIndicatorSnapshot(
-                                        recentN,
-                                        symbol,
-                                        frame
-                                    )
-                            }
+                        val recent = runCatching {
+                            fetchCandles(symbol, frame, 150)
+                        }.getOrElse {
+                            recentReady = false
+                            lastError = "recent history " + symbol + ":" + frame +
+                                " failed: " + (it.message ?: it.javaClass.simpleName)
+                            emptyList()
+                        }
+
+                        val key = symbol + ":" + frame
+                        if (recent.size >= 40) {
+                            liveCandleCache[key] = recent.toMutableList()
+                            candleCache[key] =
+                                System.currentTimeMillis() to recent
+                            indicatorSnapshots[key] =
+                                buildIndicatorSnapshot(recent, symbol, frame)
+                        } else {
+                            recentReady = false
                         }
                     }
                 }
 
-                historyReady =
-                    coreSymbols.all { symbol ->
-                        analysisFrames.all { frame ->
-                            historyStore.isComplete(symbol, frame)
+                // Execution only needs a valid recent analysis window. Full
+                // historical backfill is deliberately decoupled from the
+                // startup gate and continues in the background.
+                historyReady = recentReady
+
+                if (historyReady && running) {
+                    Thread {
+                        for (symbol in coreSymbols) {
+                            for (frame in analysisFrames) {
+                                if (!running) return@Thread
+                                runCatching {
+                                    fetchFullHistory(symbol, frame)
+                                }.onFailure {
+                                    lastError = "background history " +
+                                        symbol + ":" + frame + ": " +
+                                        (it.message ?: it.javaClass.simpleName)
+                                }
+                            }
                         }
+                    }.apply {
+                        isDaemon = true
+                        name = "williams-history-backfill"
+                        start()
                     }
+                }
             } catch (x: Exception) {
                 historyReady = false
                 lastError =
                     "history warmup: " +
-                        (x.message ?: x.javaClass.simpleName)
+                    (x.message ?: x.javaClass.simpleName)
             } finally {
                 historyWarmupRunning = false
             }
-        }.apply { isDaemon = true }.start()
+        }.apply {
+            isDaemon = true
+            name = "williams-recent-history"
+            start()
+        }
     }
 
     private fun fetchCandles(
