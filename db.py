@@ -189,6 +189,21 @@ class Database:
         if not self._transaction_active:
             self.conn.commit()
 
+    def try_claim_state(self, key, value) -> bool:
+        """Atomically create a state key only if it does not already exist.
+
+        Used for durable entry intents: concurrent execution loops/processes
+        may both observe FLAT, but only one can successfully claim the
+        pending-entry key in SQLite.
+        """
+        cur = self.conn.execute(
+            'INSERT OR IGNORE INTO bot_state(key,value) VALUES(?,?)',
+            (str(key), str(value)),
+        )
+        if not self._transaction_active:
+            self.conn.commit()
+        return cur.rowcount == 1
+
     def state_delete(self, key):
         self.conn.execute(
             'DELETE FROM bot_state WHERE key=?',
