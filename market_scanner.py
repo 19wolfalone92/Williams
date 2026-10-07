@@ -495,6 +495,8 @@ class MarketScanner:
             return enriched
         except Exception as exc:
             log.warning("Wave analysis unavailable for %s: %s", candidate.symbol, exc)
+            if candidate.signal and os.getenv("NO_TRADE_WHEN_UNCERTAIN", "true").lower() == "true":
+                return None
             if candidate.signal and self.require_htf_confirmation:
                 if not self._htf_confirmation(candidate.symbol):
                     return None
