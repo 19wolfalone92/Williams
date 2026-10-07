@@ -375,7 +375,7 @@ private class BackendApi(context: Context) {
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(8, TimeUnit.SECONDS)
-        .readTimeout(45, TimeUnit.SECONDS)
+        .readTimeout(10, TimeUnit.SECONDS)
         .build()
 
     val backendUrl: String
@@ -461,7 +461,6 @@ fun WilliamsApp(context: Context) {
 
     var tab by remember { mutableIntStateOf(0) }
     var status by remember { mutableStateOf(Status()) }
-    var portfolio by remember { mutableStateOf(PortfolioSummary()) }
     var marketPairs by remember { mutableStateOf(emptyList<MarketPair>()) }
     var selectedPositionSymbol by remember { mutableStateOf<String?>(null) }
     var candles by remember { mutableStateOf(emptyList<Candle>()) }
@@ -489,75 +488,29 @@ fun WilliamsApp(context: Context) {
                 var scannerJson = JSONObject()
 
                 runCatching {
-                    val json = JSONObject(api.get("/api/v1/status"))
+                    val json = JSONObject(api.get("/api/v1/status?fast=true"))
                     withContext(Dispatchers.Main) { status = parseStatus(json) }
                 }.onFailure {
                     failures += "status: " + (it.message ?: it.javaClass.simpleName)
                 }
 
                 runCatching {
-                    val json = JSONObject(
-                        api.get(
-                            "/api/v1/market/klines?symbol=" +
-                                (selectedPositionSymbol ?: "BTCUSDT") +
-                                "&interval=" + selectedChartInterval
-                        )
-                    )
-                    withContext(Dispatchers.Main) {
-                        candles = parseCandles(
-                            json.optJSONArray("candles") ?: JSONArray()
+                    val json = JSONObject(api.get("/api/v1/market/tickers"))
+                    val rows = json.optJSONArray("pairs") ?: JSONArray()
+                    val loaded = List(rows.length()) { i ->
+                        val row = rows.optJSONObject(i) ?: JSONObject()
+                        MarketPair(
+                            row.optString("symbol"),
+                            row.optDouble("price").takeUnless { it.isNaN() || it <= 0.0 }
                         )
                     }
+                    withContext(Dispatchers.Main) { marketPairs = loaded }
                 }.onFailure {
                     failures += "market: " + (it.message ?: it.javaClass.simpleName)
                 }
 
                 runCatching {
-                    val symbols = listOf(
-                        "BTCUSDT",
-                        "ETHUSDT",
-                        "BNBUSDT",
-                        "SOLUSDT",
-                        "XRPUSDT"
-                    )
-                    val loaded = symbols.map { symbol ->
-                        val j = runCatching {
-                            JSONObject(
-                                api.get(
-                                    "/api/v1/market/klines?symbol=" +
-                                        symbol +
-                                        "&interval=" + selectedChartInterval
-                                )
-                            )
-                        }.getOrNull()
-                        val arr = j?.optJSONArray("candles")
-                        val last = arr?.let {
-                            if (it.length() > 0) it.optJSONObject(it.length() - 1) else null
-                        }
-                        MarketPair(
-                            symbol,
-                            last?.optDouble("close")
-                                ?.takeUnless { it.isNaN() || it <= 0.0 }
-                        )
-                    }
-                    withContext(Dispatchers.Main) { marketPairs = loaded }
-                }.onFailure {
-                    failures += "market-pairs: " + (it.message ?: it.javaClass.simpleName)
-                }
-
-                runCatching {
                     scannerJson = JSONObject(api.get("/api/v1/scanner?refresh=" + scan))
-                    if (scan && scannerJson.optBoolean("scanning", false)) {
-                        for (i in 0 until 90) {
-                            delay(1000L)
-                            scannerJson = JSONObject(api.get("/api/v1/scanner?refresh=false"))
-                            val state = scannerJson.optString("scanner_state", "NOT_RUN")
-                            if (!scannerJson.optBoolean("scanning", false) ||
-                                state == "READY" ||
-                                state == "ERROR"
-                            ) break
-                        }
-                    }
                     withContext(Dispatchers.Main) {
                         candidates = parseCandidates(
                             scannerJson.optJSONArray("candidates") ?: JSONArray()
@@ -567,50 +520,20 @@ fun WilliamsApp(context: Context) {
                     failures += "scanner: " + (it.message ?: it.javaClass.simpleName)
                 }
 
-                runCatching {
-                    val p = JSONObject(api.get("/api/v1/portfolio"))
-                    val parsedPortfolio = parsePortfolio(p)
-                    withContext(Dispatchers.Main) {
-                        portfolio = parsedPortfolio
-                        if (parsedPortfolio.positions.isNotEmpty()) {
-                            val telemetry = parsedPortfolio.positions.associateBy { it.symbol }
-                            status = status.copy(
-                                positions = status.positions.map { base ->
-                                    telemetry[base.symbol] ?: base
-                                }
-                            )
-                        }
+                if (tab == 3) {
+                    runCatching {
+                        val rows = JSONArray(api.get("/api/v1/trades"))
+                        withContext(Dispatchers.Main) { trades = parseTrades(rows) }
+                    }.onFailure {
+                        failures += "trades: " + (it.message ?: it.javaClass.simpleName)
                     }
-                }.onFailure {
-                    failures += "portfolio: " + (it.message ?: it.javaClass.simpleName)
-                }
 
-                runCatching {
-                    val json = JSONObject(api.get("/api/v1/status"))
-                    withContext(Dispatchers.Main) {
-                        status = parseStatus(json)
-                        if (selectedPositionSymbol == null &&
-                            status.positions.isNotEmpty()
-                        ) {
-                            selectedPositionSymbol = status.positions.first().symbol
-                        }
+                    runCatching {
+                        val rows = JSONArray(api.get("/api/v1/logs"))
+                        withContext(Dispatchers.Main) { logs = parseLogs(rows) }
+                    }.onFailure {
+                        failures += "logs: " + (it.message ?: it.javaClass.simpleName)
                     }
-                }.onFailure {
-                    failures += "status-refresh: " + (it.message ?: it.javaClass.simpleName)
-                }
-
-                runCatching {
-                    val rows = JSONArray(api.get("/api/v1/trades"))
-                    withContext(Dispatchers.Main) { trades = parseTrades(rows) }
-                }.onFailure {
-                    failures += "trades: " + (it.message ?: it.javaClass.simpleName)
-                }
-
-                runCatching {
-                    val rows = JSONArray(api.get("/api/v1/logs"))
-                    withContext(Dispatchers.Main) { logs = parseLogs(rows) }
-                }.onFailure {
-                    failures += "logs: " + (it.message ?: it.javaClass.simpleName)
                 }
 
                 withContext(Dispatchers.Main) {
@@ -622,9 +545,9 @@ fun WilliamsApp(context: Context) {
                         scannerError != null ->
                             "Сканер: " + scannerError
                         scan && scannerJson.optBoolean("scanning", false) ->
-                            "Сканирование продолжается в фоне"
+                            "Сканирование запущено в фоне"
                         scan ->
-                            "Сканирование завершено"
+                            "Сканирование запрошено"
                         else ->
                             "Данные обновлены"
                     }
@@ -700,7 +623,7 @@ fun WilliamsApp(context: Context) {
                     "Credentials write/read-back verification failed"
                 }
 
-                val verified = StandaloneRuntime.status(context)
+                val verified = StandaloneRuntime.status(context, fast = true)
                 val configured = verified.optBoolean(
                     "binance_configured",
                     verified.optBoolean("auth_configured", false)
@@ -724,7 +647,7 @@ fun WilliamsApp(context: Context) {
                             "Ключи сохранены, но Binance ещё не подтвердил конфигурацию"
                     }
                 }
-                loadAll(false)
+                refresh(false)
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
                     message = e.message ?: "Не удалось сохранить ключи"
@@ -737,12 +660,14 @@ fun WilliamsApp(context: Context) {
         scope.launch(Dispatchers.IO) {
             try {
                 StandaloneRuntime.clearCredentials(context)
+                val verified = StandaloneRuntime.status(context, fast = true)
                 withContext(Dispatchers.Main) {
-                    message = "Binance-ключи удалены из автономного runtime"
+                    status = parseStatus(verified)
+                    message = "Binance-ключи удалены. Можно ввести новые ключи."
                     apiKey = ""
                     apiSecret = ""
                 }
-                loadAll(false)
+                refresh(false)
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
                     message = e.message ?: "Не удалось удалить ключи"
@@ -883,14 +808,14 @@ fun WilliamsApp(context: Context) {
     }
 
     LaunchedEffect(Unit) {
-        loadAll(true)
+        loadAll(false)
         while (isActive) {
             delay(15_000L)
             loadAll(false)
         }
     }
 
-    val titles = listOf("Overview", "Wave Map", "Portfolio", "Positions", "Incidents", "Config")
+    val titles = listOf("Overview", "Wave Map", "Positions", "Incidents", "Config")
     val icons = listOf(
         Icons.Filled.Dashboard,
         Icons.Filled.Radar,
@@ -1007,7 +932,7 @@ fun WilliamsApp(context: Context) {
                     command("/api/v1/control/kill")
                 },
                 onScan = { refresh(true) },
-                onSettings = { tab = 5 },
+                onSettings = { tab = 4 },
                 onRecoverDashboard = { command("/api/v1/control/recover") }
             )
 
@@ -1020,16 +945,9 @@ fun WilliamsApp(context: Context) {
                 onRefresh = { refresh(true) }
             )
 
-            2 -> PortfolioScreen(
-                padding = padding,
-                portfolio = portfolio,
-                status = status
-            )
-
-            3 -> PositionScreen(
+            2 -> PositionScreen(
                 padding = padding,
                 status = status,
-                portfolio = portfolio,
                 candles = candles,
                 selectedSymbol = selectedPositionSymbol,
                 interval = selectedChartInterval,
@@ -1057,7 +975,7 @@ fun WilliamsApp(context: Context) {
                 }
             )
 
-            4 -> HistoryScreen(
+            3 -> HistoryScreen(
                 padding = padding,
                 trades = trades,
                 logs = logs
@@ -2031,7 +1949,6 @@ private fun MarketPairsCard(pairs: List<MarketPair>) {
 private fun PositionScreen(
     padding: PaddingValues,
     status: Status,
-    portfolio: PortfolioSummary,
     candles: List<Candle>,
     selectedSymbol: String?,
     interval: String,
@@ -2047,10 +1964,6 @@ private fun PositionScreen(
         verticalArrangement = Arrangement.spacedBy(12.dp),
         contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp)
     ) {
-        item {
-            PortfolioCard(portfolio, status)
-        }
-
         item {
             Text(
                 "Позиции",

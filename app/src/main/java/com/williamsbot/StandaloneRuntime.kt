@@ -20,6 +20,7 @@ import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.URLDecoder
+import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.util.Locale
 import java.util.ArrayDeque
@@ -399,7 +400,7 @@ private class StandaloneServer(private val context: Context) {
                 x.health().toString()
 
             method == "GET" && path == "/api/v1/status" ->
-                x.status().toString()
+                x.status(fast = params["fast"].equals("true", true)).toString()
 
             method == "GET" && path == "/api/v1/market/indicators" ->
                 x.indicators(params["symbol"], params["interval"]).toString()
@@ -409,6 +410,9 @@ private class StandaloneServer(private val context: Context) {
                     requestedSymbol = params["symbol"],
                     requestedInterval = params["interval"]
                 ).toString()
+
+            method == "GET" && path == "/api/v1/market/tickers" ->
+                x.marketTickers().toString()
 
             method == "GET" && path == "/api/v1/scanner" ->
                 x.scanner(
@@ -509,9 +513,9 @@ private class NativeEngine(
     private val analysisFrames = listOf("1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w", "1M")
     // Startup only needs the frames that directly participate in execution.
     // The complete 15-TF matrix is analysis metadata, not a startup blocker.
-    private val startupFrames = listOf("5m", "15m", "1h", "4h", "1d")
+    private val startupFrames = listOf("15m", "1h", "4h")
     private val maxScanSymbols = 5
-    private val waveTopN = 10
+    private val waveTopN = 5
     private val scanExecutor = Executors.newFixedThreadPool(12)
     private val historyBackfillExecutor = Executors.newFixedThreadPool(2) { runnable ->
         Thread(runnable, "williams-history-backfill").apply { isDaemon = true }
@@ -961,6 +965,9 @@ private class NativeEngine(
         candidates = JSONArray()
         primaryCandles = emptyList()
         scanSymbols = mutableListOf()
+        historyReady = false
+        historyWarmupRunning = false
+        lastError = null
         clearReconcileRequired()
 
         return JSONObject()
@@ -1761,7 +1768,7 @@ private class NativeEngine(
                         if (!running) return@Thread
 
                         val recent = runCatching {
-                            fetchCandles(symbol, frame, 150)
+                            fetchCandles(symbol, frame, 120)
                         }.getOrElse {
                             recentReady = false
                             lastError =
@@ -2093,64 +2100,40 @@ private class NativeEngine(
     }
 
     private fun loadUniverse(): Triple<List<String>, Map<String, Double>, Map<String, Double>> {
-        val info = JSONObject(getBody("/api/v3/exchangeInfo"))
-        rateGuard.updateFromExchangeInfo(info)
-        val infoRows = info.getJSONArray("symbols")
+        val encodedSymbols = URLEncoder.encode(
+            JSONArray(coreSymbols).toString(),
+            StandardCharsets.UTF_8.name()
+        )
 
-        val tradingUsdt = HashSet<String>()
-        for (i in 0 until infoRows.length()) {
-            val item = infoRows.getJSONObject(i)
-            if (
-                item.optString("status") == "TRADING" &&
-                item.optString("quoteAsset") == "USDT"
-            ) {
-                val symbol = item.optString("symbol")
-                if (
-                    symbol.isNotBlank() &&
-                    !symbol.contains("UPUSDT") &&
-                    !symbol.contains("DOWNUSDT") &&
-                    !symbol.contains("BULLUSDT") &&
-                    !symbol.contains("BEARUSDT")
-                ) {
-                    tradingUsdt.add(symbol)
-                }
-            }
-        }
-
-        val volumeRows = JSONArray(getBody("/api/v3/ticker/24hr"))
+        val volumeRows = JSONArray(
+            getBody("/api/v3/ticker/24hr?symbols=" + encodedSymbols)
+        )
         val volumes = HashMap<String, Double>()
-
         for (i in 0 until volumeRows.length()) {
-            val item = volumeRows.getJSONObject(i)
-            val symbol = item.optString("symbol")
-            if (tradingUsdt.contains(symbol)) {
+            val item = volumeRows.optJSONObject(i) ?: continue
+            val symbol = item.optString("symbol").uppercase(Locale.US)
+            if (symbol in coreSymbols) {
                 volumes[symbol] =
                     item.optString("quoteVolume").toDoubleOrNull() ?: 0.0
             }
         }
 
-        val bookRows = JSONArray(getBody("/api/v3/ticker/bookTicker"))
+        val bookRows = JSONArray(
+            getBody("/api/v3/ticker/bookTicker?symbols=" + encodedSymbols)
+        )
         val spreads = HashMap<String, Double>()
-
         for (i in 0 until bookRows.length()) {
-            val item = bookRows.getJSONObject(i)
-            val symbol = item.optString("symbol")
-            if (tradingUsdt.contains(symbol)) {
-                val bid =
-                    item.optString("bidPrice").toDoubleOrNull() ?: 0.0
-                val ask =
-                    item.optString("askPrice").toDoubleOrNull() ?: 0.0
-                if (bid > 0.0 && ask >= bid) {
-                    spreads[symbol] = (ask - bid) / bid
-                }
+            val item = bookRows.optJSONObject(i) ?: continue
+            val symbol = item.optString("symbol").uppercase(Locale.US)
+            if (symbol !in coreSymbols) continue
+            val bid = item.optString("bidPrice").toDoubleOrNull() ?: 0.0
+            val ask = item.optString("askPrice").toDoubleOrNull() ?: 0.0
+            if (bid > 0.0 && ask >= bid) {
+                spreads[symbol] = (ask - bid) / bid
             }
         }
 
-        val symbols = coreSymbols.filter { tradingUsdt.contains(it) }.toMutableList()
-        require(symbols.size == coreSymbols.size) {
-            "Core Binance universe incomplete: expected BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT"
-        }
-        return Triple(symbols, volumes, spreads)
+        return Triple(coreSymbols.toList(), volumes, spreads)
     }
 
     private fun requestScan() {
@@ -5721,8 +5704,8 @@ private class NativeEngine(
         return scannerSnapshot()
     }
 
-    fun status(): JSONObject {
-        if (primaryCandles.isEmpty()) {
+    fun status(fast: Boolean = false): JSONObject {
+        if (!fast && primaryCandles.isEmpty()) {
             runCatching {
                 primaryCandles =
                     fetchCandles(primarySymbol, interval, 150)
@@ -5732,7 +5715,8 @@ private class NativeEngine(
             }
         }
 
-        var balance: Double? = null
+        var balance: Double? =
+            if (fast && liveUsdtBalance > 0.0) liveUsdtBalance else null
         var livePnl = 0.0
         var livePnlPct = 0.0
 
@@ -5755,7 +5739,7 @@ private class NativeEngine(
             livePnlPct = livePnl / totalEntryNotional
         }
 
-        if (key().isNotBlank() && secret().isNotBlank()) {
+        if (!fast && key().isNotBlank() && secret().isNotBlank()) {
             runCatching {
                 val balances =
                     signedAccount().getJSONArray("balances")
@@ -5989,6 +5973,39 @@ private class NativeEngine(
             .put("candles", output)
     }
 
+    fun marketTickers(): JSONObject {
+        val encodedSymbols = URLEncoder.encode(
+            JSONArray(coreSymbols).toString(),
+            StandardCharsets.UTF_8.name()
+        )
+        val rows = JSONArray(
+            getBody("/api/v3/ticker/price?symbols=" + encodedSymbols)
+        )
+        val priceMap = HashMap<String, Double>()
+        for (i in 0 until rows.length()) {
+            val item = rows.optJSONObject(i) ?: continue
+            val symbol = item.optString("symbol").uppercase(Locale.US)
+            if (symbol !in coreSymbols) continue
+            val price = item.optString("price").toDoubleOrNull() ?: continue
+            if (price > 0.0) priceMap[symbol] = price
+        }
+
+        val pairs = JSONArray()
+        for (symbol in coreSymbols) {
+            pairs.put(
+                JSONObject()
+                    .put("symbol", symbol)
+                    .put(
+                        "price",
+                        livePrices[symbol] ?: priceMap[symbol] ?: JSONObject.NULL
+                    )
+            )
+        }
+        return JSONObject()
+            .put("symbols", JSONArray(coreSymbols))
+            .put("pairs", pairs)
+    }
+
     fun portfolio(): JSONObject {
         val configured = key().isNotBlank() && secret().isNotBlank()
         val statusJson = status()
@@ -6112,12 +6129,15 @@ private class NativeEngine(
         return tests
     }
 
-    fun diagnostics(): JSONObject =
-        JSONObject()
+    fun diagnostics(): JSONObject {
+        // Diagnostics stay local and responsive even when market/history/scanner
+        // network work is slow or blocked.
+        val tests = diagnosticSelfTests()
+        return JSONObject()
             .put("runtime", "standalone")
             .put("device_local_api", "http://127.0.0.1:18080")
             .put("binance_testnet", true)
-            .put("status", status())
+            .put("status", status(fast = true))
             .put("settings", settings())
             .put("system_info", JSONObject()
                 .put("runtime", "standalone")
@@ -6126,9 +6146,10 @@ private class NativeEngine(
                 .put("device_model", android.os.Build.MODEL)
                 .put("manufacturer", android.os.Build.MANUFACTURER))
             .put("configuration_sanitized", settings())
-            .put("tests", diagnosticSelfTests())
-            .put("self_tests", diagnosticSelfTests())
-            .put("diagnostic_contract_version", 3)
+            .put("tests", tests)
+            .put("self_tests", tests)
+            .put("diagnostic_contract_version", 4)
+    }
 
     fun settings(): JSONObject =
         JSONObject()
