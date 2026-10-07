@@ -219,6 +219,7 @@ class ControlState:
                     t.client,
                     db=t.db,
                     symbols=t.auto_scan_symbols,
+                    execution_barrier=t.execution_barrier,
                 )
             return t._multi_position_trader
 

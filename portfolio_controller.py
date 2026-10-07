@@ -86,8 +86,13 @@ class PortfolioController:
         )
 
     def select_portfolio(self, open_risk_quote: float = 0.0, open_positions: int = 0):
-        """Return all candidates that fit the remaining aggregate-risk budget."""
-        if self.max_open_positions > 0 and open_positions >= self.max_open_positions:
+        """Return candidates for new campaigns and, in campaign mode, later add-ons."""
+        campaign_mode = os.getenv("CAMPAIGN_ENGINE", "false").lower() == "true"
+        if (
+            self.max_open_positions > 0
+            and open_positions >= self.max_open_positions
+            and not campaign_mode
+        ):
             return []
         analysed = self._analyse_candidates(self.scanner.scan())
         if not analysed:
@@ -99,7 +104,15 @@ class PortfolioController:
         used_pct = float(open_risk_quote) / balance if balance > 0 else self.max_total_risk_pct
         remaining_pct = max(0.0, self.max_total_risk_pct - used_pct)
         selections = []
-        remaining_slots = (max(0, self.max_open_positions - int(open_positions)) if self.max_open_positions > 0 else len(analysed))
+        remaining_slots = (
+            len(analysed)
+            if campaign_mode
+            else (
+                max(0, self.max_open_positions - int(open_positions))
+                if self.max_open_positions > 0
+                else len(analysed)
+            )
+        )
 
         for base in analysed:
             if remaining_pct <= 0 or remaining_slots <= 0:

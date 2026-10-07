@@ -11,6 +11,7 @@ from strategy import calculate_indicators, config_from_env
 from wave_engine import DIRECTION_NEUTRAL, MultiTimeframeWaveEngine
 from feature_store import FeatureStore, build_market_feature_vector
 from ai_shadow import ShadowDecisionEngine, journal_shadow_decision
+from williams_signals import extract_long_signal_specs
 from shadow_execution import ShadowExecutionSimulator
 
 
@@ -76,6 +77,14 @@ class Candidate:
     wave_scenario_primary: str = ""
     wave_scenario_alternative: str = ""
     wave_operative_interval: str = ""
+    # Campaign entry contract. These fields describe a conditional entry,
+    # not an instruction to submit a MARKET order.
+    campaign_ready: bool = False
+    entry_signal_type: str = ""
+    entry_trigger_price: float = 0.0
+    entry_protective_reference: float = 0.0
+    entry_signal_time_ms: int = 0
+    campaign_signal_specs: list = field(default_factory=list)
     # Quant layer is advisory: it can rank candidates but never creates a signal.
     quant_rank_adjustment: float = 0.0
     quant_score: float = 0.0
@@ -394,8 +403,36 @@ class MarketScanner:
 
             indicators = calculate_indicators(closed, config_from_env())
             last = indicators.iloc[-1]
+
+            if metadata is not None and symbol in metadata:
+                filters = {
+                    f.get("filterType"): f
+                    for f in metadata[symbol].get("filters", [])
+                    if isinstance(f, dict)
+                }
+            else:
+                info = self.client.exchange_info(symbol)
+                rows = info.get("symbols", [])
+                filters = {
+                    f.get("filterType"): f
+                    for f in (rows[0].get("filters", []) if rows else [])
+                    if isinstance(f, dict)
+                }
+            tick_size = float(
+                (filters.get("PRICE_FILTER") or {}).get("tickSize", "0") or 0.0
+            )
+            if tick_size <= 0:
+                return None
+
+            campaign_specs = extract_long_signal_specs(
+                symbol,
+                indicators,
+                timeframe=self.interval,
+                tick_size=tick_size,
+                htf_confirmed=False,
+            )
             setup_state = self._setup_state(last)
-            if setup_state == "NONE":
+            if setup_state == "NONE" and not campaign_specs:
                 return None
 
             price = float(last["close"])
@@ -417,11 +454,12 @@ class MarketScanner:
             if rr < self.min_rr:
                 return None
 
-            strict_signal = bool(last.get("long_signal", False))
+            legacy_strict_signal = bool(last.get("long_signal", False))
+            campaign_signal = bool(campaign_specs)
             setup_score = float(last.get("long_setup_score", 0.0))
             breakout_distance_pct = float(last.get("long_breakout_distance_pct", 0.0))
 
-            if strict_signal:
+            if campaign_signal:
                 signal_strength = 1.0
             elif setup_state == "SETUP_READY":
                 signal_strength = 0.8
@@ -444,7 +482,7 @@ class MarketScanner:
                 5.0 * (1.0 - spread_pct / max(self.max_spread_pct, 1e-9)),
             )
             strategy_score = 30.0 * (setup_score / 100.0)
-            breakout_bonus = 15.0 if strict_signal else 0.0
+            breakout_bonus = 15.0 if legacy_strict_signal else 0.0
 
             base_score = self._clamp(
                 strategy_score
@@ -457,8 +495,8 @@ class MarketScanner:
                 100.0,
             )
 
-            if strict_signal:
-                reason = "strict long signal passed strategy and scanner filters"
+            if campaign_signal:
+                reason = "Williams campaign signal detected; conditional entry candidate"
             elif setup_state == "SETUP_READY":
                 reason = "bullish setup ready; waiting for strict fractal breakout"
             else:
@@ -467,7 +505,7 @@ class MarketScanner:
             candidate = Candidate(
                 symbol=symbol,
                 score=round(base_score, 2),
-                signal=strict_signal,
+                signal=campaign_signal,
                 setup_score=round(setup_score, 2),
                 signal_strength=round(signal_strength, 3),
                 breakout_distance_pct=round(breakout_distance_pct, 4),
@@ -483,6 +521,20 @@ class MarketScanner:
                 wise_man_count=int(last.get("long_wise_man_count", 0) or 0),
                 signal_family=str(last.get("long_signal_family", "NONE") or "NONE"),
                 base_score=round(base_score, 2),
+                campaign_ready=campaign_signal,
+                entry_signal_type=(
+                    campaign_specs[0].signal_type.value if campaign_specs else ""
+                ),
+                entry_trigger_price=(
+                    float(campaign_specs[0].trigger_price) if campaign_specs else 0.0
+                ),
+                entry_protective_reference=(
+                    float(campaign_specs[0].protective_reference) if campaign_specs else 0.0
+                ),
+                entry_signal_time_ms=(
+                    int(campaign_specs[0].signal_bar_time_ms) if campaign_specs else 0
+                ),
+                campaign_signal_specs=[s.to_dict() for s in campaign_specs],
             )
             return candidate, closed
 
@@ -600,6 +652,40 @@ class MarketScanner:
         if shadow is not None:
             reason += f"; shadow={shadow.direction}:{shadow.confidence:.2f}"
 
+        enriched_signal_specs = []
+        from campaign_model import SignalRole, SignalSpec, SignalType
+        frame_setup = report.frames.get(self.interval)
+        for raw in candidate.campaign_signal_specs:
+            try:
+                spec = SignalSpec(
+                    signal_id=str(raw["signal_id"]),
+                    symbol=str(raw["symbol"]),
+                    side=str(raw["side"]),
+                    signal_type=SignalType(str(raw["signal_type"])),
+                    role=SignalRole(str(raw["role"])),
+                    timeframe=str(raw["timeframe"]),
+                    signal_bar_time_ms=int(raw["signal_bar_time_ms"]),
+                    trigger_price=float(raw["trigger_price"]),
+                    protective_reference=float(raw["protective_reference"]),
+                    trigger_buffer_ticks=int(raw.get("trigger_buffer_ticks", 1) or 1),
+                    invalidation_price=float(frame_setup.invalidation_price if frame_setup else raw.get("invalidation_price", 0.0) or 0.0),
+                    teeth_at_detection=float(raw.get("teeth_at_detection", 0.0) or 0.0),
+                    alligator_bullish=bool(raw.get("alligator_bullish", False)),
+                    alligator_awake=bool(raw.get("alligator_awake", False)),
+                    angulation_score=float(raw.get("angulation_score", 0.0) or 0.0),
+                    wave_confidence=float(report.wave_score),
+                    wave_exhaustion_risk=float(report.exhaustion_risk),
+                    htf_confirmed=bool(htf_confirmed),
+                    context_versions=dict(raw.get("context_versions", {}) or {}),
+                    reason=str(raw.get("reason", "")),
+                    created_at_ms=int(raw.get("created_at_ms", 0) or 0),
+                    expires_at_ms=int(raw.get("expires_at_ms", 0) or 0),
+                    source_candle_index=int(raw.get("source_candle_index", -1) or -1),
+                )
+                enriched_signal_specs.append(spec.to_dict())
+            except Exception:
+                enriched_signal_specs.append(raw)
+
         return replace(
             candidate,
             score=round(final_score, 2),
@@ -641,6 +727,23 @@ class MarketScanner:
             wave_scenario_primary=(setup.scenario_primary if setup else ""),
             wave_scenario_alternative=(setup.scenario_alternative if setup else ""),
             wave_operative_interval=report.operative_interval,
+            campaign_ready=bool(candidate.campaign_ready and htf_confirmed),
+            entry_signal_type=(
+                enriched_signal_specs[0].get("signal_type", "") if enriched_signal_specs else candidate.entry_signal_type
+            ),
+            entry_trigger_price=(
+                float(enriched_signal_specs[0].get("trigger_price", 0.0) or 0.0)
+                if enriched_signal_specs else candidate.entry_trigger_price
+            ),
+            entry_protective_reference=(
+                float(enriched_signal_specs[0].get("protective_reference", 0.0) or 0.0)
+                if enriched_signal_specs else candidate.entry_protective_reference
+            ),
+            entry_signal_time_ms=(
+                int(enriched_signal_specs[0].get("signal_bar_time_ms", 0) or 0)
+                if enriched_signal_specs else candidate.entry_signal_time_ms
+            ),
+            campaign_signal_specs=enriched_signal_specs,
             regime=(vector.regime if vector is not None else "UNKNOWN"),
             regime_score=(round(float(vector.regime_score), 4) if vector is not None else 0.0),
             obi=(round(float(vector.obi), 6) if vector is not None else 0.0),

@@ -131,14 +131,28 @@ private data class PositionState(
     var ocoListId: String = "",
     var entryOrderId: String = "",
     var entryClientOrderId: String = "",
-    var openedAt: Long = 0L
+    var openedAt: Long = 0L,
+    var campaignId: String = "",
+    var signalId: String = "",
+    var signalType: String = "",
+    var campaignState: String = "OPEN_INITIAL",
+    var stopSource: String = "INITIAL_SIGNAL",
+    var additions: Int = 0,
+    var protectiveOrderId: String = ""
 )
 
 private data class PendingEntry(
     val symbol: String,
     val clientOrderId: String,
     val notional: Double,
-    val stopDistance: Double
+    val stopDistance: Double,
+    val triggerPrice: Double = 0.0,
+    val protectivePrice: Double = 0.0,
+    val riskReservedPct: Double = 0.0,
+    val capitalReservedQuote: Double = 0.0,
+    val campaignId: String = "",
+    val signalId: String = "",
+    val signalType: String = "REVERSAL"
 )
 
 private data class ExecutionResult(
@@ -181,6 +195,18 @@ private data class TradeFlowSample(
     val aggressiveBuy: Boolean
 )
 
+private data class CampaignSignalN(
+    val signalId: String,
+    val type: String,
+    val role: String,
+    val signalBarTimeMs: Long,
+    val triggerPrice: Double,
+    val protectivePrice: Double,
+    val teethAtDetection: Double,
+    val invalidationPrice: Double,
+    val reason: String
+)
+
 private data class BaseAnalysis(
     val symbol: String,
     val candles: List<CandleN>,
@@ -195,7 +221,9 @@ private data class BaseAnalysis(
     val breakoutDistancePct: Double,
     val obi: Double? = null,
     val tradeFlowImbalance: Double? = null,
-    val reason: String
+    val reason: String,
+    val campaignSignals: List<CampaignSignalN> = emptyList(),
+    val campaignReady: Boolean = false
 )
 
 private class StandaloneServer(private val context: Context) {
@@ -577,6 +605,15 @@ private class NativeEngine(
     // aggregate risk remains capped separately at 1%.
     private val maxOpenPositions: Int
         get() = prefs.getInt("max_open_positions", 5).coerceIn(1, 10)
+    private val campaignEngineEnabled: Boolean
+        get() = prefs.getBoolean("campaign_engine_enabled", true)
+    private val campaignExecutionTimeframe: String
+        get() = prefs.getString("campaign_execution_timeframe", "5m") ?: "5m"
+    private val campaignRiskLimitPct = 0.005
+    private val campaignInitialRiskPct = 0.002
+    private val campaignAddRiskCapPct = 0.002
+    private val campaignTrailBars: Int
+        get() = prefs.getInt("campaign_trail_bars", 5).coerceIn(3, 5)
     private val maxTotalRiskPct = 0.01
     private val maxRiskPerTradePct = 0.005
     private val maxSpreadPct = 0.0015
@@ -674,7 +711,9 @@ private class NativeEngine(
                 pendingEntries.isNotEmpty() -> TradingState.ENTRY_PENDING
                 positions.isEmpty() -> TradingState.STOPPED
                 positions.values.all {
-                    it.ocoListId.isNotBlank() || it.ocoListClientId.isNotBlank()
+                    it.ocoListId.isNotBlank() ||
+                        it.ocoListClientId.isNotBlank() ||
+                        it.protectiveOrderId.isNotBlank()
                 } -> TradingState.PROTECTED
                 else -> TradingState.OPEN_UNPROTECTED
             },
@@ -702,14 +741,22 @@ private class NativeEngine(
     private fun positionList(): List<PositionState> =
         synchronized(positions) { positions.values.toList() }
 
-    private fun reservedRiskPct(): Double =
-        positionList().sumOf {
+    private fun reservedRiskPct(): Double {
+        val openRisk = positionList().sumOf {
             if (it.riskPct > 0.0) it.riskPct
             else if (it.entry > 0.0) {
-                ((it.entry - it.stop) / it.entry)
-                    .coerceAtLeast(0.0)
+                ((it.entry - it.stop) / it.entry).coerceAtLeast(0.0)
             } else 0.0
         }
+        val pendingRisk = if (campaignEngineEnabled) {
+            synchronized(pendingEntries) {
+                pendingEntries.values.sumOf { it.riskReservedPct }
+            }
+        } else {
+            0.0
+        }
+        return (openRisk + pendingRisk).coerceAtMost(1.0)
+    }
 
     private fun marketDataFresh(maxAgeMs: Long = 30_000L): Boolean =
         restMarketReady &&
@@ -770,6 +817,13 @@ private class NativeEngine(
                     .put("entry_order_id", it.entryOrderId)
                     .put("entry_client_order_id", it.entryClientOrderId)
                     .put("opened_at", it.openedAt)
+                    .put("campaign_id", it.campaignId)
+                    .put("signal_id", it.signalId)
+                    .put("signal_type", it.signalType)
+                    .put("campaign_state", it.campaignState)
+                    .put("stop_source", it.stopSource)
+                    .put("additions", it.additions)
+                    .put("protective_order_id", it.protectiveOrderId)
             )
         }
 
@@ -782,6 +836,13 @@ private class NativeEngine(
                         .put("client_order_id", it.clientOrderId)
                         .put("notional", it.notional)
                         .put("stop_distance", it.stopDistance)
+                        .put("trigger_price", it.triggerPrice)
+                        .put("protective_price", it.protectivePrice)
+                        .put("risk_reserved_pct", it.riskReservedPct)
+                        .put("capital_reserved_quote", it.capitalReservedQuote)
+                        .put("campaign_id", it.campaignId)
+                        .put("signal_id", it.signalId)
+                        .put("signal_type", it.signalType)
                 )
             }
         }
@@ -818,7 +879,14 @@ private class NativeEngine(
                         entryClientOrderId = item.optString(
                             "entry_client_order_id"
                         ),
-                        openedAt = item.optLong("opened_at", 0L)
+                        openedAt = item.optLong("opened_at", 0L),
+                        campaignId = item.optString("campaign_id", ""),
+                        signalId = item.optString("signal_id", ""),
+                        signalType = item.optString("signal_type", ""),
+                        campaignState = item.optString("campaign_state", "OPEN_INITIAL"),
+                        stopSource = item.optString("stop_source", "INITIAL_SIGNAL"),
+                        additions = item.optInt("additions", 0),
+                        protectiveOrderId = item.optString("protective_order_id", "")
                     )
                 }
             }
@@ -846,7 +914,14 @@ private class NativeEngine(
                         stopDistance = item.optDouble(
                             "stop_distance",
                             0.02
-                        )
+                        ),
+                        triggerPrice = item.optDouble("trigger_price", 0.0),
+                        protectivePrice = item.optDouble("protective_price", 0.0),
+                        riskReservedPct = item.optDouble("risk_reserved_pct", 0.0),
+                        capitalReservedQuote = item.optDouble("capital_reserved_quote", 0.0),
+                        campaignId = item.optString("campaign_id", ""),
+                        signalId = item.optString("signal_id", ""),
+                        signalType = item.optString("signal_type", "REVERSAL")
                     )
                 }
             }
@@ -2435,7 +2510,1214 @@ private class NativeEngine(
         }
     }
 
+    private fun campaignPendingRiskPct(): Double =
+        synchronized(pendingEntries) {
+            pendingEntries.values.sumOf { it.riskReservedPct }
+        }
+
+    private fun campaignRiskUsedPct(): Double =
+        (
+            positionList().sumOf { p ->
+                if (p.riskPct > 0.0) p.riskPct
+                else if (p.entry > 0.0 && p.stop > 0.0) {
+                    ((p.entry - p.stop) / p.entry).coerceAtLeast(0.0)
+                } else 0.0
+            } + campaignPendingRiskPct()
+        ).coerceAtLeast(0.0)
+
+    private fun campaignRemainingRiskPct(equity: Double): Double =
+        if (equity <= 0.0) 0.0
+        else (maxTotalRiskPct - campaignRiskUsedPct()).coerceAtLeast(0.0)
+
+    private fun campaignBaseBalance(symbol: String, account: JSONObject? = null): Double {
+        val a = account ?: signedAccount()
+        val info = JSONObject(
+            getBody("/api/v3/exchangeInfo?symbol=" + symbol)
+        )
+        val asset = info.optJSONArray("symbols")
+            ?.optJSONObject(0)
+            ?.optString("baseAsset", "")
+            ?.uppercase(Locale.US)
+            ?: return 0.0
+        val balances = a.optJSONArray("balances") ?: JSONArray()
+        for (i in 0 until balances.length()) {
+            val row = balances.optJSONObject(i) ?: continue
+            if (row.optString("asset").uppercase(Locale.US) == asset) {
+                return (row.optString("free").toDoubleOrNull() ?: 0.0) +
+                    (row.optString("locked").toDoubleOrNull() ?: 0.0)
+            }
+        }
+        return 0.0
+    }
+
+    private fun checkCampaignOrderCapacity(symbol: String, additional: Int = 1) {
+        val rules = symbolFilters(symbol)
+        val response = signedGet("/api/v3/openOrders", "symbol=" + symbol)
+        val orders = response.optJSONArray("orders")
+            ?: if (response.has("symbol")) JSONArray().put(response) else JSONArray()
+        require(orders.length() + additional <= rules.maxNumOrders) {
+            "Binance MAX_NUM_ORDERS would be exceeded"
+        }
+        val algoOpen = (0 until orders.length()).count { i ->
+            val type = orders.optJSONObject(i)
+                ?.optString("type", "")
+                ?.uppercase(Locale.US)
+                ?: ""
+            type in setOf("STOP_LOSS", "STOP_LOSS_LIMIT", "TAKE_PROFIT", "TAKE_PROFIT_LIMIT")
+        }
+        require(algoOpen + additional <= rules.maxNumAlgoOrders) {
+            "Binance MAX_NUM_ALGO_ORDERS would be exceeded"
+        }
+    }
+
+    private fun withCampaignMutation(
+        symbol: String,
+        purpose: String,
+        block: () -> JSONObject
+    ): JSONObject {
+        if (!running) error("Runtime is not running")
+        if (paused) error("Runtime is paused")
+        if (reconcileRequired) error("RECONCILE_REQUIRED")
+        if (killLatched) error("KILL_SWITCH_LATCHED")
+        require(executionGate.tryReserve(symbol)) {
+            "Campaign execution already reserved for " + symbol
+        }
+        prefs.edit()
+            .putString("execution_gate_symbol", symbol)
+            .putString("execution_gate_purpose", purpose)
+            .apply()
+        return try {
+            block()
+        } finally {
+            executionGate.release(symbol)
+            prefs.edit()
+                .remove("execution_gate_symbol")
+                .remove("execution_gate_purpose")
+                .apply()
+        }
+    }
+
+    private fun campaignEntryCandidate(candidate: BaseAnalysis): CampaignSignalN? =
+        candidate.campaignSignals
+            .sortedBy { it.signalBarTimeMs }
+            .firstOrNull()
+
+    private fun submitCampaignEntry(candidate: BaseAnalysis) {
+        if (!campaignEngineEnabled || !candidate.campaignReady) return
+        if (reconcileRequired || paused || killLatched) return
+        if (positionList().any { it.symbol == candidate.symbol }) return
+        if (synchronized(pendingEntries) { pendingEntries.containsKey(candidate.symbol) }) return
+        if (positionList().size >= maxOpenPositions) return
+
+        val signal = campaignEntryCandidate(candidate) ?: return
+        val equity = estimateManagedEquity()
+        val remainingRisk = campaignRemainingRiskPct(equity)
+        val riskPct = min(
+            campaignInitialRiskPct,
+            min(maxRiskPerTradePct, remainingRisk)
+        )
+        if (riskPct <= 0.0 || equity <= 0.0) return
+
+        val current = runCatching { currentCampaignPrice(candidate.symbol) }.getOrDefault(0.0)
+        if (current <= 0.0) return
+
+        val rules = runCatching { symbolFilters(candidate.symbol) }.getOrNull() ?: return
+        val trigger = normalizePrice(signal.triggerPrice, rules.tick)
+        val stop = normalizePrice(signal.protectivePrice, rules.tick)
+        if (trigger <= current || stop <= 0.0 || stop >= trigger) return
+
+        val stopFraction = ((trigger - stop) / trigger).coerceAtLeast(0.000001)
+        val effectiveLoss = stopFraction + 2.0 * feeBufferPerSidePct + maxSlippagePct
+        val riskQuote = equity * riskPct
+        val freeUsdt = liveUsdtBalance.coerceAtLeast(0.0)
+        val pendingCapital = synchronized(pendingEntries) {
+            pendingEntries.values.sumOf { it.capitalReservedQuote }
+        }
+        val usableCapital = max(0.0, freeUsdt - pendingCapital)
+        val notional = min(
+            equity * 0.25,
+            min(usableCapital * 0.95, riskQuote / effectiveLoss)
+        )
+        val qty = floorStep(notional / trigger, rules.step)
+        if (qty <= 0.0 || qty < rules.minQty) return
+        if (qty * trigger < rules.minNotional) return
+
+        val existingBase = runCatching {
+            campaignBaseBalance(candidate.symbol)
+        }.getOrDefault(0.0)
+        if (rules.maxPosition.isFinite() && existingBase + qty > rules.maxPosition) return
+
+        val clientId =
+            "W5E_" + signal.type + "_" + signal.signalBarTimeMs + "_" +
+                System.nanoTime().toString(16).takeLast(10)
+        val campaignId = "W5C_" + System.nanoTime().toString(16)
+
+        val pending = PendingEntry(
+            symbol = candidate.symbol,
+            clientOrderId = clientId,
+            notional = qty * trigger,
+            stopDistance = stopFraction,
+            triggerPrice = trigger,
+            protectivePrice = stop,
+            riskReservedPct = riskPct,
+            capitalReservedQuote = qty * trigger,
+            campaignId = campaignId,
+            signalId = signal.signalId,
+            signalType = signal.type
+        )
+        synchronized(pendingEntries) {
+            pendingEntries[candidate.symbol] = pending
+        }
+        stateMachine.force(
+            TradingState.ENTRY_PENDING,
+            "Williams campaign conditional entry armed"
+        )
+        savePersistedState()
+
+        executionExecutor.execute {
+            try {
+                val order = withCampaignMutation(
+                    candidate.symbol,
+                    "CAMPAIGN_ENTRY"
+                ) {
+                    require(currentCampaignPrice(candidate.symbol) < trigger) {
+                        "Campaign trigger already crossed; no market substitution"
+                    }
+                    checkCampaignOrderCapacity(candidate.symbol, 1)
+                    if (
+                        rules.maxPosition.isFinite() &&
+                        campaignBaseBalance(candidate.symbol) + qty > rules.maxPosition
+                    ) {
+                        error("Binance MAX_POSITION would be exceeded")
+                    }
+                    signedPost(
+                        "/api/v3/order",
+                        "symbol=" + candidate.symbol +
+                            "&side=BUY&type=STOP_LOSS" +
+                            "&quantity=" + fmtQty(qty, rules.decimals) +
+                            "&stopPrice=" + fmtPrice(trigger, rules.decimals) +
+                            "&newClientOrderId=" + clientId
+                    )
+                }
+                lastOrder = order
+                savePersistedState()
+                recoverCampaignPendingEntries()
+            } catch (x: Throwable) {
+                val observed = runCatching {
+                    signedGet(
+                        "/api/v3/order",
+                        "symbol=" + candidate.symbol +
+                            "&origClientOrderId=" + clientId
+                    )
+                }.getOrNull()
+                if (observed != null) {
+                    lastOrder = observed
+                    runCatching { recoverCampaignPendingEntries() }
+                } else {
+                    setReconcileRequired(
+                        "Campaign entry mutation ambiguous for " + candidate.symbol +
+                            ": " + (x.message ?: x.javaClass.simpleName)
+                    )
+                }
+            }
+        }
+    }
+
+    private fun createCampaignStop(position: PositionState): JSONObject {
+        val symbol = position.symbol
+        val rules = symbolFilters(symbol)
+        val qty = floorStep(position.qty, rules.step)
+        val stop = normalizePrice(position.stop, rules.tick)
+        require(qty >= rules.minQty && qty > 0.0) {
+            symbol + ": campaign protection quantity below minimum"
+        }
+        require(stop > 0.0) { symbol + ": campaign stop invalid" }
+        require(qty * stop >= rules.minNotional) {
+            symbol + ": campaign protection below minimum notional"
+        }
+        require(currentCampaignPrice(symbol) > stop) {
+            symbol + ": market price is already at/below campaign stop"
+        }
+
+        val clientId = "W5S_" + System.nanoTime().toString(16)
+        val order = withCampaignMutation(symbol, "CAMPAIGN_PROTECTION") {
+            checkCampaignOrderCapacity(symbol, 1)
+            signedPost(
+                "/api/v3/order",
+                "symbol=" + symbol +
+                    "&side=SELL&type=STOP_LOSS" +
+                    "&quantity=" + fmtQty(qty, rules.decimals) +
+                    "&stopPrice=" + fmtPrice(stop, rules.decimals) +
+                    "&newClientOrderId=" + clientId
+            )
+        }
+        lastOrder = order
+        return order
+    }
+
+    private fun replaceCampaignStop(position: PositionState, proposedStop: Double) {
+        if (proposedStop <= position.stop) return
+        val rules = symbolFilters(position.symbol)
+        val stop = normalizePrice(proposedStop, rules.tick)
+        val market = currentCampaignPrice(position.symbol)
+        if (stop <= position.stop || stop >= market) return
+
+        val oldId = position.protectiveOrderId.toLongOrNull()
+        if (oldId == null) {
+            val created = createCampaignStop(
+                position.copy(
+                    stop = stop,
+                    stopSource = "3_5_BAR_STRUCTURE"
+                )
+            )
+            synchronized(positions) {
+                positions[position.symbol] =
+                    position.copy(
+                        stop = stop,
+                        stopSource = "3_5_BAR_STRUCTURE",
+                        protectiveOrderId = created.optString("orderId", "")
+                    )
+            }
+            savePersistedState()
+            return
+        }
+
+        val newClientId = "W5S_" + System.nanoTime().toString(16)
+        val result = withCampaignMutation(position.symbol, "CAMPAIGN_TRAIL") {
+            signedCancelReplace(
+                position.symbol,
+                oldId,
+                "SELL",
+                "STOP_LOSS",
+                quantity = fmtQty(
+                    floorStep(position.qty, rules.step),
+                    rules.decimals
+                ),
+                stopPrice = fmtPrice(stop, rules.decimals),
+                newClientOrderId = newClientId
+            )
+        }
+        val cancelResult = result.optString("cancelResult", "").uppercase(Locale.US)
+        val newResult = result.optString("newOrderResult", "").uppercase(Locale.US)
+        if (cancelResult != "SUCCESS" || newResult != "SUCCESS") {
+            setReconcileRequired(
+                "Campaign protective stop replacement ambiguous for " + position.symbol
+            )
+            return
+        }
+        val newResponse = result.optJSONObject("newOrderResponse")
+            ?: error("Campaign protective replacement has no response")
+        val newId = newResponse.optString("orderId", "")
+        require(newId.isNotBlank()) {
+            "Campaign protective replacement returned no orderId"
+        }
+        synchronized(positions) {
+            positions[position.symbol] =
+                position.copy(
+                    stop = stop,
+                    stopSource = "3_5_BAR_STRUCTURE",
+                    protectiveOrderId = newId,
+                    campaignState = "TRAILING"
+                )
+        }
+        savePersistedState()
+    }
+
+    private fun currentCampaignPrice(symbol: String): Double =
+        livePrices[symbol]
+            ?: JSONObject(
+                getBody("/api/v3/ticker/price?symbol=" + symbol)
+            ).optString("price").toDoubleOrNull()
+            ?: 0.0
+
+    private fun campaignExitMarket(position: PositionState, reason: String) {
+        val symbol = position.symbol
+        try {
+            val stopId = position.protectiveOrderId.toLongOrNull()
+            if (stopId != null) {
+                withCampaignMutation(
+                    symbol,
+                    "CAMPAIGN_EXIT_CANCEL_PROTECTION"
+                ) {
+                    signedDelete(
+                        "/api/v3/order",
+                        "symbol=" + symbol + "&orderId=" + stopId
+                    )
+                    JSONObject()
+                }
+            }
+
+            val account = signedAccount()
+            val rules = symbolFilters(symbol)
+            val base = campaignBaseBalance(symbol, account)
+            val qty = floorStep(
+                min(position.qty, base),
+                if (rules.marketStep > 0.0) rules.marketStep else rules.step
+            )
+            val minQty = if (rules.marketMinQty > 0.0) rules.marketMinQty else rules.minQty
+            require(qty >= minQty) {
+                symbol + ": campaign exit quantity below minimum"
+            }
+
+            val cid = "W5X_" + System.nanoTime().toString(16)
+            val order = withCampaignMutation(symbol, "CAMPAIGN_EXIT") {
+                signedPost(
+                    "/api/v3/order",
+                    "symbol=" + symbol +
+                        "&side=SELL&type=MARKET" +
+                        "&quantity=" + fmtQty(
+                            qty,
+                            if (rules.marketStep > 0.0) {
+                                max(
+                                    0,
+                                    rules.marketStep.toString()
+                                        .substringAfter('.', "")
+                                        .trimEnd('0')
+                                        .length
+                                )
+                            } else rules.decimals
+                        ) +
+                        "&newClientOrderId=" + cid
+                )
+            }
+            lastOrder = order
+            val executed = order.optString("executedQty").toDoubleOrNull() ?: 0.0
+            val quote = order.optString("cummulativeQuoteQty").toDoubleOrNull() ?: 0.0
+            require(executed > 0.0 && quote > 0.0) {
+                symbol + ": campaign exit has no authoritative fill"
+            }
+
+            val remaining = max(0.0, position.qty - executed)
+            if (remaining > max(0.000001, position.qty * 0.005)) {
+                setReconcileRequired(
+                    symbol + ": campaign exit partially filled; residual=" + remaining
+                )
+                return
+            }
+
+            recordCompletedTrade(
+                position,
+                quote / executed,
+                reason,
+                order
+            )
+            synchronized(positions) { positions.remove(symbol) }
+            savePersistedState()
+            stateMachine.force(
+                if (positionList().isEmpty()) TradingState.READY_FLAT else TradingState.PROTECTED,
+                "Williams campaign closed"
+            )
+        } catch (x: Throwable) {
+            setReconcileRequired(
+                symbol + ": campaign exit failed: " +
+                    (x.message ?: x.javaClass.simpleName)
+            )
+        }
+    }
+
+    private fun recoverCampaignPendingEntries() {
+        val pending = synchronized(pendingEntries) {
+            pendingEntries.values.toList()
+        }
+        for (intent in pending) {
+            try {
+                val order = signedGet(
+                    "/api/v3/order",
+                    "symbol=" + intent.symbol + "&origClientOrderId=" + intent.clientOrderId
+                )
+                lastOrder = order
+                val status = order.optString("status", "").uppercase(Locale.US)
+                val executed = order.optString("executedQty").toDoubleOrNull() ?: 0.0
+                val quote = order.optString("cummulativeQuoteQty").toDoubleOrNull() ?: 0.0
+
+                when {
+                    status == "NEW" || status == "PENDING_NEW" -> Unit
+
+                    status == "PARTIALLY_FILLED" -> {
+                        val orderId = order.optLong("orderId", -1L)
+                        require(orderId > 0L) {
+                            intent.symbol + ": partial campaign entry missing orderId"
+                        }
+                        try {
+                            signedDelete(
+                                "/api/v3/order",
+                                "symbol=" + intent.symbol + "&orderId=" + orderId
+                            )
+                        } catch (cancelError: Throwable) {
+                            setReconcileRequired(
+                                intent.symbol + ": partial campaign BUY cancel ambiguous: " +
+                                    (cancelError.message ?: cancelError.javaClass.simpleName)
+                            )
+                            continue
+                        }
+                        val finalOrder = signedGet(
+                            "/api/v3/order",
+                            "symbol=" + intent.symbol + "&orderId=" + orderId
+                        )
+                        val finalQty = finalOrder.optString("executedQty").toDoubleOrNull() ?: executed
+                        val finalQuote = finalOrder.optString("cummulativeQuoteQty").toDoubleOrNull() ?: quote
+                        if (finalQty > 0.0) {
+                            applyCampaignFill(
+                                intent,
+                                finalOrder,
+                                finalQty,
+                                finalQuote
+                            )
+                        } else {
+                            clearCampaignPending(intent.symbol)
+                        }
+                    }
+
+                    status == "FILLED" -> {
+                        require(executed > 0.0 && quote > 0.0) {
+                            intent.symbol + ": filled campaign BUY has invalid fill"
+                        }
+                        applyCampaignFill(
+                            intent,
+                            order,
+                            executed,
+                            quote
+                        )
+                    }
+
+                    status in setOf("CANCELED", "EXPIRED", "REJECTED") -> {
+                        if (executed > 0.0) {
+                            require(quote > 0.0) {
+                                intent.symbol + ": terminal campaign fill lacks quote"
+                            }
+                            applyCampaignFill(
+                                intent,
+                                order,
+                                executed,
+                                quote
+                            )
+                        } else {
+                            clearCampaignPending(intent.symbol)
+                        }
+                    }
+
+                    else -> setReconcileRequired(
+                        intent.symbol + ": unknown campaign pending status=" + status
+                    )
+                }
+            } catch (x: Throwable) {
+                setReconcileRequired(
+                    intent.symbol + ": campaign pending recovery failed: " +
+                        (x.message ?: x.javaClass.simpleName)
+                )
+            }
+        }
+    }
+
+    private fun clearCampaignPending(symbol: String) {
+        synchronized(pendingEntries) { pendingEntries.remove(symbol) }
+        savePersistedState()
+        if (positionList().isEmpty()) {
+            stateMachine.force(
+                TradingState.READY_FLAT,
+                "Campaign conditional entry cleared"
+            )
+        }
+    }
+
+    private fun applyCampaignAddOnFill(
+        existing: PositionState,
+        intent: PendingEntry,
+        order: JSONObject,
+        qty: Double,
+        quote: Double
+    ) {
+        val entry = quote / qty
+        val oldQty = existing.qty
+        val newQty = oldQty + qty
+        val newAvg =
+            ((oldQty * existing.entry) + (qty * entry)) / max(newQty, 1e-12)
+
+        require(existing.stop > 0.0 && existing.stop < entry) {
+            existing.symbol + ": add-on cannot be protected by current stop"
+        }
+
+        val provisional = existing.copy(
+            qty = newQty,
+            entry = newAvg,
+            riskPct = existing.riskPct + intent.riskReservedPct,
+            signalId = intent.signalId,
+            signalType = intent.signalType,
+            additions = existing.additions + 1,
+            campaignState = "POSITION_EXPANDING"
+        )
+
+        try {
+            val stopId = existing.protectiveOrderId.toLongOrNull()
+            val protectedId =
+                if (stopId == null) {
+                    createCampaignStop(provisional).optString("orderId", "")
+                } else {
+                    val result = withCampaignMutation(
+                        existing.symbol,
+                        "CAMPAIGN_ADD_ON_PROTECTION_RESIZE"
+                    ) {
+                        val rules = symbolFilters(existing.symbol)
+                        signedCancelReplace(
+                            existing.symbol,
+                            stopId,
+                            "SELL",
+                            "STOP_LOSS",
+                            quantity = fmtQty(
+                                floorStep(newQty, rules.step),
+                                rules.decimals
+                            ),
+                            stopPrice = fmtPrice(
+                                existing.stop,
+                                rules.decimals
+                            ),
+                            newClientOrderId =
+                                "W5S_" + System.nanoTime().toString(16)
+                        )
+                    }
+                    val cancelOk =
+                        result.optString("cancelResult")
+                            .uppercase(Locale.US) == "SUCCESS"
+                    val newOk =
+                        result.optString("newOrderResult")
+                            .uppercase(Locale.US) == "SUCCESS"
+                    require(cancelOk && newOk) {
+                        existing.symbol + ": add-on protection resize ambiguous"
+                    }
+                    result.optJSONObject("newOrderResponse")
+                        ?.optString("orderId", "")
+                        ?: ""
+                }
+
+            require(protectedId.isNotBlank()) {
+                existing.symbol + ": add-on protection has no orderId"
+            }
+
+            synchronized(positions) {
+                positions[existing.symbol] =
+                    provisional.copy(
+                        protectiveOrderId = protectedId,
+                        campaignState = "TREND_ACTIVE"
+                    )
+            }
+            synchronized(pendingEntries) {
+                pendingEntries.remove(existing.symbol)
+            }
+            savePersistedState()
+            stateMachine.force(
+                TradingState.PROTECTED,
+                "Williams campaign add-on filled"
+            )
+        } catch (x: Throwable) {
+            setReconcileRequired(
+                existing.symbol + ": add-on fill protection failed: " +
+                    (x.message ?: x.javaClass.simpleName)
+            )
+        }
+    }
+
+    private fun applyCampaignFill(
+        intent: PendingEntry,
+        order: JSONObject,
+        qty: Double,
+        quote: Double
+    ) {
+        val existing = synchronized(positions) { positions[intent.symbol] }
+        if (existing != null && existing.campaignId == intent.campaignId) {
+            applyCampaignAddOnFill(
+                existing,
+                intent,
+                order,
+                qty,
+                quote
+            )
+        } else {
+            createCampaignPositionFromFill(
+                intent,
+                order,
+                qty,
+                quote
+            )
+        }
+    }
+
+    private fun createCampaignPositionFromFill(
+        intent: PendingEntry,
+        order: JSONObject,
+        qty: Double,
+        quote: Double
+    ) {
+        if (qty <= 0.0 || quote <= 0.0) {
+            throw IllegalArgumentException(
+                intent.symbol + ": invalid campaign fill"
+            )
+        }
+        val entry = quote / qty
+        val stop = intent.protectivePrice
+        if (stop <= 0.0 || stop >= entry) {
+            throw IllegalStateException(
+                intent.symbol + ": invalid campaign stop=" + stop + " entry=" + entry
+            )
+        }
+
+        val existing = synchronized(positions) { positions[intent.symbol] }
+        if (existing != null && existing.campaignId == intent.campaignId) {
+            applyCampaignAddOnFill(
+                existing,
+                intent,
+                order,
+                qty,
+                quote
+            )
+            return
+        }
+
+        val provisional = PositionState(
+            symbol = intent.symbol,
+            qty = qty,
+            entry = entry,
+            stop = stop,
+            take = 0.0,
+            riskPct = intent.riskReservedPct,
+            entryOrderId = order.optString("orderId", ""),
+            entryClientOrderId = intent.clientOrderId,
+            openedAt = order.optLong("transactTime", System.currentTimeMillis()),
+            campaignId = intent.campaignId,
+            signalId = intent.signalId,
+            signalType = intent.signalType,
+            campaignState = "OPEN_INITIAL",
+            stopSource = "INITIAL_SIGNAL"
+        )
+
+        try {
+            val protection = createCampaignStop(provisional)
+            val protected = provisional.copy(
+                protectiveOrderId = protection.optString("orderId", "")
+            )
+            require(protected.protectiveOrderId.isNotBlank()) {
+                intent.symbol + ": campaign protection has no orderId"
+            }
+
+            synchronized(positions) {
+                positions[intent.symbol] = protected
+            }
+            synchronized(pendingEntries) {
+                pendingEntries.remove(intent.symbol)
+            }
+
+            TradeJournal.recordEntry(
+                prefs = prefs,
+                symbol = protected.symbol,
+                entry = protected.entry,
+                qty = protected.qty,
+                stop = protected.stop,
+                take = 0.0,
+                riskPct = protected.riskPct,
+                contextJson = JSONObject()
+                    .put("campaign_id", protected.campaignId)
+                    .put("signal_id", protected.signalId)
+                    .put("signal_type", protected.signalType)
+                    .put("entry_trigger", intent.triggerPrice)
+                    .put("protective_reference", intent.protectivePrice)
+                    .put("campaign_entry_mode", "CONDITIONAL_STOP")
+                    .toString()
+            )
+            savePersistedState()
+            stateMachine.force(
+                TradingState.PROTECTED,
+                "Campaign entry filled and hard protection armed"
+            )
+        } catch (x: Throwable) {
+            try {
+                val balanceQty = campaignBaseBalance(intent.symbol)
+                val rules = symbolFilters(intent.symbol)
+                val emergencyQty = floorStep(
+                    min(qty, balanceQty),
+                    if (rules.marketStep > 0.0) rules.marketStep else rules.step
+                )
+                require(
+                    emergencyQty >= (
+                        if (rules.marketMinQty > 0.0) rules.marketMinQty else rules.minQty
+                    )
+                )
+                val cid = "W5EM_" + System.nanoTime().toString(16)
+                val emergency = withCampaignMutation(
+                    intent.symbol,
+                    "CAMPAIGN_EMERGENCY_EXIT"
+                ) {
+                    signedPost(
+                        "/api/v3/order",
+                        "symbol=" + intent.symbol +
+                            "&side=SELL&type=MARKET" +
+                            "&quantity=" +
+                            fmtQty(
+                                emergencyQty,
+                                if (rules.marketStep > 0.0) {
+                                    max(
+                                        0,
+                                        rules.marketStep.toString()
+                                            .substringAfter('.', "")
+                                            .trimEnd('0')
+                                            .length
+                                    )
+                                } else rules.decimals
+                            ) +
+                            "&newClientOrderId=" + cid
+                    )
+                }
+                lastOrder = emergency
+                val sold = emergency.optString("executedQty").toDoubleOrNull() ?: 0.0
+                if (sold + max(0.000001, qty * 0.005) >= qty) {
+                    synchronized(pendingEntries) { pendingEntries.remove(intent.symbol) }
+                    savePersistedState()
+                    stateMachine.force(
+                        if (positionList().isEmpty()) TradingState.READY_FLAT else TradingState.PROTECTED,
+                        "Unprotected campaign emergency exit complete"
+                    )
+                } else {
+                    setReconcileRequired(
+                        intent.symbol + ": emergency campaign exit partial after protection failure"
+                    )
+                }
+            } catch (emergency: Throwable) {
+                setReconcileRequired(
+                    intent.symbol + ": protection failed and emergency exit failed: " +
+                        (emergency.message ?: emergency.javaClass.simpleName)
+                )
+            }
+        }
+    }
+
+    private fun reconcileCampaignPositions() {
+        for (stored in positionList().filter { it.campaignId.isNotBlank() }) {
+            try {
+                val rules = symbolFilters(stored.symbol)
+                val actualBase = campaignBaseBalance(stored.symbol)
+                val tolerance = max(0.000001, stored.qty * 0.005)
+                require(actualBase + tolerance >= stored.qty) {
+                    stored.symbol + ": campaign inventory below expected"
+                }
+
+                val response = signedGet(
+                    "/api/v3/openOrders",
+                    "symbol=" + stored.symbol
+                )
+                val orders = response.optJSONArray("orders")
+                    ?: if (response.has("symbol")) JSONArray().put(response) else JSONArray()
+
+                val managedStops = mutableListOf<JSONObject>()
+                val unknownSells = mutableListOf<JSONObject>()
+
+                for (j in 0 until orders.length()) {
+                    val o = orders.optJSONObject(j) ?: continue
+                    if (o.optString("side").uppercase(Locale.US) != "SELL") continue
+                    val cid = o.optString("clientOrderId")
+                    if (
+                        cid.startsWith("W5S_") &&
+                        o.optString("type").uppercase(Locale.US) in
+                            setOf("STOP_LOSS", "STOP_LOSS_LIMIT")
+                    ) {
+                        managedStops += o
+                    } else {
+                        unknownSells += o
+                    }
+                }
+                require(unknownSells.isEmpty()) {
+                    stored.symbol + ": unknown open SELL conflicts with campaign"
+                }
+                require(managedStops.size <= 1) {
+                    stored.symbol + ": multiple campaign protection stops"
+                }
+
+                if (managedStops.isEmpty()) {
+                    val created = createCampaignStop(stored)
+                    synchronized(positions) {
+                        positions[stored.symbol] =
+                            stored.copy(
+                                protectiveOrderId = created.optString("orderId", "")
+                            )
+                    }
+                    savePersistedState()
+                    continue
+                }
+
+                val stop = managedStops.single()
+                val stopId = stop.optString("orderId", "")
+                require(stopId.isNotBlank()) {
+                    stored.symbol + ": campaign stop missing orderId"
+                }
+                val stopQty = stop.optString("origQty").toDoubleOrNull() ?: 0.0
+
+                if (abs(stopQty - stored.qty) > tolerance) {
+                    replaceCampaignStop(
+                        stored.copy(protectiveOrderId = stopId),
+                        stored.stop
+                    )
+                } else {
+                    synchronized(positions) {
+                        positions[stored.symbol] =
+                            stored.copy(
+                                protectiveOrderId = stopId,
+                                campaignState = "TREND_ACTIVE"
+                            )
+                    }
+                    savePersistedState()
+                }
+            } catch (x: Throwable) {
+                setReconcileRequired(
+                    stored.symbol + ": campaign reconciliation failed: " +
+                        (x.message ?: x.javaClass.simpleName)
+                )
+            }
+        }
+
+        if (
+            positionList().isNotEmpty() &&
+            stateMachine.state != TradingState.RECONCILE_REQUIRED &&
+            !killLatched
+        ) {
+            stateMachine.force(
+                TradingState.PROTECTED,
+                "Campaign positions reconciled"
+            )
+        }
+    }
+
+    private fun manageCampaignPositions() {
+        for (stored in positionList().filter { it.campaignId.isNotBlank() }) {
+            try {
+                val raw = fetchCandles(
+                    stored.symbol,
+                    campaignExecutionTimeframe,
+                    80
+                )
+                val candles = if (raw.size >= 2) raw.dropLast(1) else emptyList()
+                if (candles.size < 20) continue
+
+                val rules = symbolFilters(stored.symbol)
+                val currentPrice = currentCampaignPrice(stored.symbol)
+                val recentLow = candles
+                    .takeLast(campaignTrailBars)
+                    .minOfOrNull { it.l }
+                    ?: continue
+                val proposed = normalizePrice(
+                    recentLow - rules.tick,
+                    rules.tick
+                )
+
+                if (
+                    proposed > stored.stop &&
+                    proposed < currentPrice
+                ) {
+                    replaceCampaignStop(
+                        stored,
+                        proposed
+                    )
+                }
+
+                val current = synchronized(positions) {
+                    positions[stored.symbol]
+                } ?: stored
+                val wave = waveInfo(
+                    candles,
+                    campaignExecutionTimeframe
+                )
+                if (
+                    wave.exhaustionRisk >= 75.0 ||
+                    wave.aoBearishDivergence
+                ) {
+                    synchronized(positions) {
+                        positions[stored.symbol] =
+                            current.copy(
+                                campaignState = "EXHAUSTION_WATCH"
+                            )
+                    }
+                    savePersistedState()
+                    if (
+                        prefs.getBoolean("campaign_auto_exhaustion_exit", false) &&
+                        wave.exhaustionRisk >= 85.0 &&
+                        wave.aoBearishDivergence
+                    ) {
+                        campaignExitMarket(
+                            positions[stored.symbol] ?: current,
+                            "WAVE_EXHAUSTION"
+                        )
+                    }
+                }
+
+                if (prefs.getBoolean("campaign_exit_on_teeth", false)) {
+                    val teeth = smma(candles.map { it.c }, 8).lastOrNull() ?: 0.0
+                    if (teeth > 0.0 && candles.last().c < teeth) {
+                        campaignExitMarket(
+                            positions[stored.symbol] ?: current,
+                            "CLOSE_BELOW_TEETH"
+                        )
+                    }
+                }
+            } catch (x: Throwable) {
+                setReconcileRequired(
+                    stored.symbol + ": campaign monitor failed: " +
+                        (x.message ?: x.javaClass.simpleName)
+                )
+            }
+        }
+    }
+
+    private fun submitCampaignAddOn(
+        candidate: BaseAnalysis,
+        position: PositionState
+    ) {
+        if (!campaignEngineEnabled || position.campaignId.isBlank()) return
+
+        val latestSignalTime =
+            position.signalId.substringAfterLast(':').toLongOrNull()
+                ?: position.openedAt
+        val signal = candidate.campaignSignals
+            .filter {
+                it.type in setOf("SUPER_AO", "FRACTAL") &&
+                    it.signalBarTimeMs > latestSignalTime
+            }
+            .sortedBy { it.signalBarTimeMs }
+            .firstOrNull()
+            ?: return
+
+        if (synchronized(pendingEntries) { pendingEntries.containsKey(candidate.symbol) }) return
+
+        val equity = estimateManagedEquity()
+        val remainingCampaign =
+            (campaignRiskLimitPct - position.riskPct).coerceAtLeast(0.0)
+        val remainingPortfolio =
+            (maxTotalRiskPct - campaignRiskUsedPct()).coerceAtLeast(0.0)
+
+        val trancheBias = when (position.additions) {
+            0 -> 1.0
+            1 -> 1.0
+            2 -> 0.75
+            else -> 0.5
+        }
+        val riskPct = min(
+            campaignAddRiskCapPct * trancheBias,
+            min(remainingCampaign, remainingPortfolio)
+        )
+        if (riskPct <= 0.0 || equity <= 0.0) return
+
+        val rules = symbolFilters(candidate.symbol)
+        val trigger = normalizePrice(signal.triggerPrice, rules.tick)
+        if (trigger <= currentCampaignPrice(candidate.symbol)) return
+
+        val stop = position.stop
+        if (stop <= 0.0 || stop >= trigger) return
+
+        val stopFraction = (trigger - stop) / trigger
+        val effectiveLoss =
+            stopFraction + 2.0 * feeBufferPerSidePct + maxSlippagePct
+        val riskQuote = equity * riskPct
+        val freeUsdt = liveUsdtBalance.coerceAtLeast(0.0)
+        val pendingCapital = synchronized(pendingEntries) {
+            pendingEntries.values.sumOf { it.capitalReservedQuote }
+        }
+        val notional = min(
+            equity * 0.15,
+            min(
+                max(0.0, freeUsdt - pendingCapital) * 0.95,
+                riskQuote / max(effectiveLoss, 0.000001)
+            )
+        )
+        val qty = floorStep(notional / trigger, rules.step)
+        if (qty < rules.minQty || qty * trigger < rules.minNotional) return
+        if (
+            rules.maxPosition.isFinite() &&
+            campaignBaseBalance(candidate.symbol) + qty > rules.maxPosition
+        ) return
+
+        val clientId =
+            "W5E_ADD_" + signal.type + "_" + signal.signalBarTimeMs + "_" +
+                System.nanoTime().toString(16).takeLast(8)
+        val pending = PendingEntry(
+            symbol = candidate.symbol,
+            clientOrderId = clientId,
+            notional = qty * trigger,
+            stopDistance = stopFraction,
+            triggerPrice = trigger,
+            protectivePrice = stop,
+            riskReservedPct = riskPct,
+            capitalReservedQuote = qty * trigger,
+            campaignId = position.campaignId,
+            signalId = signal.signalId,
+            signalType = signal.type
+        )
+        synchronized(pendingEntries) {
+            pendingEntries[candidate.symbol] = pending
+        }
+        savePersistedState()
+
+        executionExecutor.execute {
+            try {
+                withCampaignMutation(
+                    candidate.symbol,
+                    "CAMPAIGN_ADD_ON"
+                ) {
+                    require(currentCampaignPrice(candidate.symbol) < trigger) {
+                        "Add-on trigger already crossed"
+                    }
+                    checkCampaignOrderCapacity(candidate.symbol, 1)
+                    signedPost(
+                        "/api/v3/order",
+                        "symbol=" + candidate.symbol +
+                            "&side=BUY&type=STOP_LOSS" +
+                            "&quantity=" + fmtQty(qty, rules.decimals) +
+                            "&stopPrice=" + fmtPrice(trigger, rules.decimals) +
+                            "&newClientOrderId=" + clientId
+                    )
+                }
+                savePersistedState()
+                recoverCampaignPendingEntries()
+            } catch (x: Throwable) {
+                val observed = runCatching {
+                    signedGet(
+                        "/api/v3/order",
+                        "symbol=" + candidate.symbol +
+                            "&origClientOrderId=" + clientId
+                    )
+                }.getOrNull()
+                if (observed != null) {
+                    lastOrder = observed
+                    runCatching { recoverCampaignPendingEntries() }
+                } else {
+                    setReconcileRequired(
+                        candidate.symbol + ": campaign add-on mutation ambiguous: " +
+                            (x.message ?: x.javaClass.simpleName)
+                    )
+                }
+            }
+        }
+    }
+
+    private fun performCampaignScan() {
+        if (reconcileRequired) return
+
+        for (open in positionList()) {
+            runCatching {
+                TradeJournal.updateExcursion(
+                    prefs,
+                    open.symbol,
+                    currentCampaignPrice(open.symbol)
+                )
+            }
+        }
+
+        runCatching { recoverCampaignPendingEntries() }
+            .onFailure {
+                if (!killLatched) {
+                    setReconcileRequired(
+                        "Campaign pending recovery: " +
+                            (it.message ?: it.javaClass.simpleName)
+                    )
+                }
+            }
+        if (reconcileRequired) return
+
+        runCatching { reconcileCampaignPositions() }
+        if (reconcileRequired) return
+
+        runCatching { manageCampaignPositions() }
+        if (reconcileRequired) return
+
+        val universe = loadUniverse()
+        scanSymbols = universe.first.toMutableList()
+        val volumes = universe.second
+        val spreads = universe.third
+
+        val futures = scanSymbols.map { symbol ->
+            scanExecutor.submit(
+                Callable {
+                    try {
+                        val candles = fetchCandles(
+                            symbol,
+                            campaignExecutionTimeframe,
+                            150
+                        )
+                        val result = analyseBase(
+                            symbol = symbol,
+                            candles = candles,
+                            spread = spreads[symbol] ?: 0.0,
+                            volume = volumes[symbol] ?: 0.0
+                        )
+                        markScanProgress()
+                        result
+                    } catch (x: Exception) {
+                        markScanProgress()
+                        scannerError =
+                            symbol + ": " +
+                                (x.message ?: x.javaClass.simpleName)
+                        null
+                    }
+                }
+            )
+        }
+
+        val preliminary = mutableListOf<BaseAnalysis>()
+        futures.forEach { future ->
+            runCatching {
+                future.get(30L, TimeUnit.SECONDS)
+            }.getOrElse {
+                future.cancel(true)
+                scannerError =
+                    scannerError ?: "campaign scanner task timeout: " +
+                    (it.message ?: it.javaClass.simpleName)
+                null
+            }.let {
+                if (it is BaseAnalysis) preliminary.add(it)
+            }
+        }
+
+        if (preliminary.isEmpty()) {
+            scannerState = "WAITING_FOR_HISTORY"
+            scannerError = "Campaign scanner received no market data"
+            return
+        }
+
+        val ranked = preliminary
+            .map { runCatching { enrichWithMtf(it) }.getOrElse { it } }
+            .sortedWith(
+                compareByDescending<BaseAnalysis> { it.campaignReady }
+                    .thenByDescending { it.score }
+                    .thenBy { it.wave.exhaustionRisk }
+            )
+
+        candidates = JSONArray().apply {
+            ranked.take(20).forEach { put(toJson(it)) }
+        }
+        lastSymbolsScanned = scanSymbols.size
+        scannerState = "READY"
+        lastScanAt = System.currentTimeMillis()
+
+        if (
+            key().isBlank() ||
+            secret().isBlank() ||
+            !restAccountReady
+        ) return
+
+        val guard = dailyTradeGuard()
+        if (!guard.optBoolean("allow", true)) return
+
+        val active = positionList().associateBy { it.symbol }
+        for (candidate in ranked) {
+            if (!candidate.campaignReady) continue
+            val position = active[candidate.symbol]
+            if (position != null) {
+                submitCampaignAddOn(candidate, position)
+            } else {
+                submitCampaignEntry(candidate)
+            }
+        }
+    }
+
     private fun performScan() {
+        if (campaignEngineEnabled) {
+            performCampaignScan()
+            return
+        }
         // Exchange reconciliation is performed at START/reconnect. Repeating
         // it for every scanner pass serializes the scanner behind signed REST
         // calls and was a major source of apparent hangs.
@@ -3017,6 +4299,28 @@ private class NativeEngine(
                             .put("fills", acc.fills)
                     })
 
+                if (campaignEngineEnabled && clientId.startsWith("W5_")) {
+                    Thread {
+                        runCatching {
+                            Thread.sleep(120L)
+                            recoverCampaignPendingEntries()
+                            reconcileCampaignPositions()
+                        }.onFailure {
+                            if (!killLatched) {
+                                setReconcileRequired(
+                                    "campaign executionReport reconciliation failed: " +
+                                        (it.message ?: it.javaClass.simpleName)
+                                )
+                            }
+                        }
+                    }.apply {
+                        isDaemon = true
+                        name = "williams-campaign-execution-reconcile"
+                        start()
+                    }
+                    return
+                }
+
                 when {
                     clientId.startsWith("W4B_") &&
                         status == "NEW" ->
@@ -3171,6 +4475,11 @@ private class NativeEngine(
     }
 
     private fun recoverPendingEntries() {
+        if (campaignEngineEnabled) {
+            recoverCampaignPendingEntries()
+            return
+        }
+
         val pending =
             synchronized(pendingEntries) {
                 pendingEntries.values.toList()
@@ -3392,6 +4701,10 @@ private class NativeEngine(
     }
 
     private fun reconcilePositionsWithExchange() {
+        if (campaignEngineEnabled) {
+            reconcileCampaignPositions()
+            return
+        }
         if (positions.isEmpty()) {
             savePersistedState()
             return
@@ -5013,21 +6326,209 @@ private class NativeEngine(
         params: String
     ): JSONObject = signedRequest("DELETE", path, params)
 
+    private fun campaignSignalId(symbol: String, frame: String, type: String, barTimeMs: Long): String =
+        symbol.uppercase(Locale.US) + ":" +
+            frame.lowercase(Locale.US) + ":" +
+            type.uppercase(Locale.US) + ":" +
+            barTimeMs
+
+    private fun shiftedSeries(values: List<Double>, shift: Int): List<Double> =
+        List(values.size) { i ->
+            val source = i - shift
+            if (source >= 0) values[source] else Double.NaN
+        }
+
+    private fun longCampaignSignals(
+        symbol: String,
+        candles: List<CandleN>,
+        frame: String,
+        tick: Double
+    ): List<CampaignSignalN> {
+        if (candles.size < 45 || tick <= 0.0) return emptyList()
+
+        val medians = candles.map { (it.h + it.l) / 2.0 }
+        val jaw = smma(medians, 13)
+        val teeth = smma(medians, 8)
+        val lips = smma(medians, 5)
+        val jawS = shiftedSeries(jaw, 8)
+        val teethS = shiftedSeries(teeth, 5)
+        val lipsS = shiftedSeries(lips, 3)
+
+        fun bullishAlligator(i: Int): Boolean =
+            i in candles.indices &&
+                jawS[i].isFinite() &&
+                teethS[i].isFinite() &&
+                lipsS[i].isFinite() &&
+                lipsS[i] > teethS[i] &&
+                teethS[i] > jawS[i] &&
+                candles[i].c > lipsS[i]
+
+        fun upFractal(i: Int): Boolean {
+            if (i < 2 || i + 2 >= candles.size) return false
+            return candles[i].h > candles[i - 1].h &&
+                candles[i].h > candles[i - 2].h &&
+                candles[i].h > candles[i + 1].h &&
+                candles[i].h > candles[i + 2].h
+        }
+
+        fun downFractal(i: Int): Boolean {
+            if (i < 2 || i + 2 >= candles.size) return false
+            return candles[i].l < candles[i - 1].l &&
+                candles[i].l < candles[i - 2].l &&
+                candles[i].l < candles[i + 1].l &&
+                candles[i].l < candles[i + 2].l
+        }
+
+        fun latestUpFractal(centerLimit: Int): Int? {
+            for (i in centerLimit downTo 2) {
+                if (upFractal(i)) return i
+            }
+            return null
+        }
+
+        fun latestDownFractal(centerLimit: Int): Int? {
+            for (i in centerLimit downTo 2) {
+                if (downFractal(i)) return i
+            }
+            return null
+        }
+
+        fun angulationScore(i: Int): Double {
+            val start = max(0, i - 4)
+            if (i - start < 2 || !jawS[i].isFinite()) return 0.0
+            val now = max(0.0, jawS[i] - candles[i].l)
+            val then = if (jawS[start].isFinite()) {
+                max(0.0, jawS[start] - candles[start].l)
+            } else 0.0
+            return max(0.0, now - then) / max(candles[i].c, 1e-9) * 100.0
+        }
+
+        fun lastValidFractalLevel(at: Int): Pair<Int, Double>? {
+            val center = latestUpFractal(max(2, at - 2)) ?: return null
+            return center to candles[center].h
+        }
+
+        val current = candles.lastIndex
+        val out = mutableListOf<CampaignSignalN>()
+
+        // WM1: bullish reversal bar. It is the context bar; execution waits
+        // for a break above its high. Countertrend WM1 is intentionally allowed.
+        val reversalStart = max(2, candles.lastIndex - 20)
+        for (i in candles.lastIndex downTo reversalStart) {
+            val priorLow = min(candles[i - 1].l, candles[i - 2].l)
+            val range = max(candles[i].h - candles[i].l, 1e-12)
+            val closeLocation = (candles[i].c - candles[i].l) / range
+            val belowMouth =
+                jawS[i].isFinite() &&
+                    teethS[i].isFinite() &&
+                    lipsS[i].isFinite() &&
+                    candles[i].l < min(jawS[i], min(teethS[i], lipsS[i]))
+            if (
+                candles[i].l < priorLow &&
+                closeLocation >= 0.50 &&
+                belowMouth &&
+                angulationScore(i) > 0.0
+            ) {
+                val trigger = candles[i].h + tick
+                if (candles[current].c < trigger) {
+                    out += CampaignSignalN(
+                        signalId = campaignSignalId(symbol, frame, "REVERSAL", candles[i].t),
+                        type = "REVERSAL",
+                        role = "ENTRY",
+                        signalBarTimeMs = candles[i].t,
+                        triggerPrice = trigger,
+                        protectivePrice = candles[i].l - tick,
+                        teethAtDetection = teethS[i].takeIf { it.isFinite() } ?: 0.0,
+                        invalidationPrice = candles[i].l - tick,
+                        reason = "WM1 bullish reversal; waiting above signal-bar high"
+                    )
+                }
+                break
+            }
+        }
+
+        // WM2: three consecutive rising AO histogram bars, with the previously
+        // valid buy-fractal/Balance-Line context still present.
+        var streak = 0
+        for (i in candles.lastIndex downTo 35) {
+            val a = ao(candles, i)
+            val p = ao(candles, i - 1)
+            if (a > p) streak++ else break
+            if (streak == 3) {
+                val priorFractalValid = lastValidFractalLevel(i - 1)?.let { (center, level) ->
+                    teethS[center + 2].isFinite() && level > teethS[center + 2]
+                } ?: false
+                if (priorFractalValid) {
+                    val trigger = candles[i].h + tick
+                    if (candles[current].c < trigger) {
+                        out += CampaignSignalN(
+                            signalId = campaignSignalId(symbol, frame, "SUPER_AO", candles[i].t),
+                            type = "SUPER_AO",
+                            role = "ENTRY",
+                            signalBarTimeMs = candles[i].t,
+                            triggerPrice = trigger,
+                            protectivePrice = candles[i].l - tick,
+                            teethAtDetection = teethS[i].takeIf { it.isFinite() } ?: 0.0,
+                            invalidationPrice = candles[i].l - tick,
+                            reason = "WM2 Super AO: third rising AO bar; conditional trigger above price bar"
+                        )
+                    }
+                }
+                break
+            }
+        }
+
+        // WM3: most recent confirmed buy fractal. The signal is persistent,
+        // but the trigger is armable only while it remains above current Teeth.
+        val fractalCenter = latestUpFractal(candles.lastIndex - 2)
+        if (fractalCenter != null) {
+            val trigger = candles[fractalCenter].h + tick
+            val currentTeeth = teethS[current].takeIf { it.isFinite() } ?: 0.0
+            if (candles[current].c < trigger && trigger > currentTeeth) {
+                out += CampaignSignalN(
+                    signalId = campaignSignalId(symbol, frame, "FRACTAL", candles[fractalCenter].t),
+                    type = "FRACTAL",
+                    role = "ENTRY",
+                    signalBarTimeMs = candles[fractalCenter].t,
+                    triggerPrice = trigger,
+                    protectivePrice = candles[fractalCenter].l - tick,
+                    teethAtDetection = currentTeeth,
+                    invalidationPrice = candles[fractalCenter].l - tick,
+                    reason = "WM3 confirmed buy fractal; trigger must remain above Teeth"
+                )
+            }
+        }
+
+        // Keep at most one signal per family, ordered by formation time. The
+        // campaign engine chooses the earliest still-valid first-entry signal.
+        return out.distinctBy { it.signalId }.sortedBy { it.signalBarTimeMs }
+    }
+
     private fun analyseBase(
         symbol: String,
         candles: List<CandleN>,
         spread: Double,
         volume: Double
     ): BaseAnalysis {
-        val i = candles.lastIndex
+        val workCandles =
+            if (campaignEngineEnabled &&
+                campaignExecutionTimeframe != interval
+            ) {
+                runCatching {
+                    fetchCandles(symbol, campaignExecutionTimeframe, 150)
+                }.getOrElse { candles }
+            } else {
+                candles
+            }
+        val i = workCandles.lastIndex
         if (i < 40) {
             return BaseAnalysis(
                 symbol = symbol,
-                candles = candles,
+                candles = workCandles,
                 score = 0.0,
                 signal = false,
                 htfCandidate = false,
-                wave = neutralWave(candles),
+                wave = neutralWave(workCandles),
                 atrPct = 0.0,
                 riskPct = 0.0,
                 riskReward = 0.0,
@@ -5035,14 +6536,27 @@ private class NativeEngine(
                 breakoutDistancePct = 0.0,
                 obi = null,
                 tradeFlowImbalance = null,
-                reason = "Недостаточно свечей: " + candles.size + "/40"
+                reason = "Недостаточно свечей: " + workCandles.size + "/40"
             )
         }
 
-        val closes = candles.map { it.c }
-        val atrPct = atrPct(candles)
+        val closes = workCandles.map { it.c }
+        val atrPct = atrPct(workCandles)
         val atrAbs =
-            atrAbs(candles)
+            atrAbs(workCandles)
+
+        val campaignRules = runCatching { symbolFilters(symbol) }.getOrNull()
+        val campaignTick = campaignRules?.tick ?: 0.0
+        val campaignSignals = if (campaignEngineEnabled && campaignTick > 0.0) {
+            longCampaignSignals(
+                symbol = symbol,
+                candles = workCandles,
+                frame = campaignExecutionTimeframe,
+                tick = campaignTick
+            )
+        } else {
+            emptyList()
+        }
 
         val alligator = alligator(closes)
         val bullish =
@@ -5050,12 +6564,12 @@ private class NativeEngine(
                 alligator.teeth > alligator.jaw &&
                 closes[i] > alligator.lips
 
-        val aoValue = ao(candles, i)
+        val aoValue = ao(workCandles, i)
         val aoPositive = aoValue > 0.0
 
-        val fractalIndex = latestConfirmedUpFractal(candles, i)
+        val fractalIndex = latestConfirmedUpFractal(workCandles, i)
         val fractalHigh =
-            fractalIndex?.let { candles[it].h }
+            fractalIndex?.let { workCandles[it].h }
         val teethSeries = smma(closes, 8)
         val fractalTeeth =
             fractalIndex?.let { teethSeries.getOrNull(it) }
@@ -5080,7 +6594,7 @@ private class NativeEngine(
         val trendScore = if (bullish) 35.0 else 0.0
         val aoScore =
             when {
-                aoPositive && ao(candles, i - 1) <= aoValue -> 20.0
+                aoPositive && ao(workCandles, i - 1) <= aoValue -> 20.0
                 aoPositive -> 12.0
                 else -> 0.0
             }
@@ -5102,7 +6616,7 @@ private class NativeEngine(
                 else -> 1.0
             }
 
-        val preliminaryWave = waveInfo(candles, "1h")
+        val preliminaryWave = waveInfo(workCandles, campaignExecutionTimeframe)
         var score =
             trendScore +
                 aoScore +
@@ -5111,10 +6625,16 @@ private class NativeEngine(
                 volumeScore
 
         var strictSignal =
-            bullish &&
-                aoPositive &&
-                breakout &&
-                atrPct in 0.0..0.08
+            if (campaignEngineEnabled) {
+                campaignSignals.isNotEmpty() &&
+                    atrPct in 0.0..0.08 &&
+                    spread <= maxSpreadPct
+            } else {
+                bullish &&
+                    aoPositive &&
+                    breakout &&
+                    atrPct in 0.0..0.08
+            }
 
         if (preliminaryWave.position == 3) {
             score += 5.0
@@ -5145,6 +6665,10 @@ private class NativeEngine(
 
         val reason =
             when {
+                campaignEngineEnabled && campaignSignals.isNotEmpty() ->
+                    "Williams campaign: " +
+                        campaignSignals.joinToString("+") { it.type } +
+                        "; conditional entry"
                 strictSignal ->
                     "Alligator + AO + подтверждённый Fractal breakout"
                 preliminaryWave.position == 5 ->
@@ -5157,7 +6681,7 @@ private class NativeEngine(
 
         return BaseAnalysis(
             symbol = symbol,
-            candles = candles,
+            candles = workCandles,
             score = score,
             signal = strictSignal,
             htfCandidate = bullish && aoPositive,
@@ -5169,7 +6693,9 @@ private class NativeEngine(
             breakoutDistancePct = breakoutDistance,
             obi = obi,
             tradeFlowImbalance = flowImbalance,
-            reason = reason
+            reason = reason,
+            campaignSignals = campaignSignals,
+            campaignReady = campaignEngineEnabled && campaignSignals.isNotEmpty()
         )
     }
 
@@ -5338,10 +6864,16 @@ private class NativeEngine(
         // Entry is no longer tied to the 1h candle's breakout. We enter on the
         // lower-TF Wave 3 after higher-TF context confirms the direction.
         val finalSignal =
-            entrySignal &&
-                baseCandidate.atrPct <= 0.08 &&
-                baseCandidate.spreadPct <= 0.0015 &&
-                baseCandidate.riskReward >= 1.5
+            if (campaignEngineEnabled) {
+                baseCandidate.campaignSignals.isNotEmpty() &&
+                    baseCandidate.atrPct <= 0.08 &&
+                    baseCandidate.spreadPct <= 0.0015
+            } else {
+                entrySignal &&
+                    baseCandidate.atrPct <= 0.08 &&
+                    baseCandidate.spreadPct <= 0.0015 &&
+                    baseCandidate.riskReward >= 1.5
+            }
 
         if (!finalSignal && baseCandidate.signal) {
             score = min(score, 84.0)
@@ -5397,7 +6929,8 @@ private class NativeEngine(
                 nestedW3ParentW5 = nestedW3ParentW5,
                 countertrendCorrectionImpulse = countertrendCorrectionImpulse
             ),
-            reason = reason
+            reason = reason,
+            campaignReady = campaignEngineEnabled && baseCandidate.campaignSignals.isNotEmpty()
         )
     }
 
@@ -5445,6 +6978,39 @@ private class NativeEngine(
             .put("htf_confirmed", candidate.htfCandidate)
             .put("setup_state", setupState)
             .put("reason", candidate.reason)
+            .put("campaign_engine", campaignEngineEnabled)
+            .put("campaign_ready", candidate.campaignReady)
+            .put(
+                "campaign_signals",
+                JSONArray().apply {
+                    candidate.campaignSignals.forEach { s ->
+                        put(
+                            JSONObject()
+                                .put("signal_id", s.signalId)
+                                .put("type", s.type)
+                                .put("role", s.role)
+                                .put("signal_bar_time_ms", s.signalBarTimeMs)
+                                .put("trigger_price", s.triggerPrice)
+                                .put("protective_price", s.protectivePrice)
+                                .put("teeth_at_detection", s.teethAtDetection)
+                                .put("invalidation_price", s.invalidationPrice)
+                                .put("reason", s.reason)
+                        )
+                    }
+                }
+            )
+            .put(
+                "entry_signal_type",
+                candidate.campaignSignals.firstOrNull()?.type ?: JSONObject.NULL
+            )
+            .put(
+                "entry_trigger_price",
+                candidate.campaignSignals.firstOrNull()?.triggerPrice ?: JSONObject.NULL
+            )
+            .put(
+                "entry_protective_price",
+                candidate.campaignSignals.firstOrNull()?.protectivePrice ?: JSONObject.NULL
+            )
             .put("wise_man_count", wiseManCount(candidate))
             .put("signal_family", "ALLIGATOR_AO_FRACTAL")
             .put("wave_score", displayWaveScore)
@@ -6626,6 +8192,14 @@ private class NativeEngine(
     fun settings(): JSONObject =
         JSONObject()
             .put("version", BuildConfig.VERSION_NAME)
+            .put("campaign_engine", campaignEngineEnabled)
+            .put("campaign_execution_timeframe", campaignExecutionTimeframe)
+            .put("campaign_entry_mode", "CONDITIONAL_STOP")
+            .put("campaign_fixed_take_profit", false)
+            .put("campaign_risk_limit_pct", campaignRiskLimitPct)
+            .put("campaign_initial_risk_pct", campaignInitialRiskPct)
+            .put("campaign_add_on_risk_cap_pct", campaignAddRiskCapPct)
+            .put("campaign_trail_bars", campaignTrailBars)
             .put("symbol", primarySymbol)
             .put("interval", interval)
             .put("position_fraction", 0.95)
