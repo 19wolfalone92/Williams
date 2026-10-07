@@ -389,6 +389,9 @@ private class StandaloneServer(private val context: Context) {
                     refresh = params["refresh"].equals("true", true)
                 ).toString()
 
+            method == "GET" && path == "/api/v1/portfolio" ->
+                x.portfolio().toString()
+
             method == "GET" && path == "/api/v1/trades" ->
                 x.trades().toString()
 
@@ -5813,6 +5816,82 @@ private class NativeEngine(
             .put("symbol", symbol)
             .put("interval", selectedInterval)
             .put("candles", output)
+    }
+
+    fun portfolio(): JSONObject {
+        val configured = key().isNotBlank() && secret().isNotBlank()
+        val statusJson = status()
+        val positions = JSONArray()
+        val sourcePositions = statusJson.optJSONArray("positions") ?: JSONArray()
+        var totalPositionValue = 0.0
+        for (i in 0 until sourcePositions.length()) {
+            val p = sourcePositions.optJSONObject(i) ?: continue
+            val symbol = p.optString("symbol", "")
+            val qty = p.optDouble("qty", 0.0)
+            val entry = p.optDouble("entry", p.optDouble("avg_entry_price", 0.0))
+            val current = statusJson.optJSONObject("live_prices")
+                ?.optDouble(symbol, 0.0)
+                ?.takeIf { it > 0.0 }
+                ?: entry
+            val value = qty * current
+            totalPositionValue += value
+            positions.put(
+                JSONObject()
+                    .put("symbol", symbol)
+                    .put("qty", qty)
+                    .put("avg_entry_price", entry)
+                    .put("stop_loss", p.optDouble("stop", 0.0))
+                    .put("take_profit", p.optDouble("take", 0.0))
+                    .put("risk_pct", p.optDouble("risk_pct", 0.0))
+                    .put("current_price", current)
+                    .put("position_value_usdt", value)
+                    .put("allocation_pct", 0.0)
+                    .put("unrealized_pnl_usdt", (current - entry) * qty)
+                    .put("unrealized_pnl_pct", if (entry > 0.0) (current - entry) / entry else 0.0)
+                    .put("oco_list_id", p.optString("oco_list_id", ""))
+                    .put("oco_list_client_id", p.optString("oco_list_client_id", ""))
+            )
+        }
+
+        val assets = JSONArray()
+        var totalEquity = statusJson.optDouble("quote_balance", 0.0)
+        if (configured) {
+            runCatching {
+                val balances = signedAccount().getJSONArray("balances")
+                for (i in 0 until balances.length()) {
+                    val b = balances.getJSONObject(i)
+                    val free = b.optString("free").toDoubleOrNull() ?: 0.0
+                    val locked = b.optString("locked").toDoubleOrNull() ?: 0.0
+                    val total = free + locked
+                    if (total <= 0.0) continue
+                    val asset = b.optString("asset")
+                    if (asset == "USDT") {
+                        totalEquity = total
+                    }
+                    assets.put(
+                        JSONObject()
+                            .put("asset", asset)
+                            .put("free", free)
+                            .put("locked", locked)
+                            .put("total", total)
+                            .put("price_usdt", if (asset == "USDT") 1.0 else JSONObject.NULL)
+                            .put("value_usdt", if (asset == "USDT") total else 0.0)
+                            .put("allocation_pct", 0.0)
+                    )
+                }
+            }
+        }
+
+        val freeEquity = statusJson.optDouble("quote_balance", totalEquity)
+        return JSONObject()
+            .put("configured", configured)
+            .put("total_equity_usdt", totalEquity + totalPositionValue)
+            .put("free_equity_usdt", freeEquity)
+            .put("locked_equity_usdt", 0.0)
+            .put("realized_pnl_usdt", 0.0)
+            .put("unrealized_pnl_usdt", statusJson.optDouble("pnl", 0.0))
+            .put("assets", assets)
+            .put("positions", positions)
     }
 
     fun trades(): JSONArray = TradeJournal.trades(prefs)
