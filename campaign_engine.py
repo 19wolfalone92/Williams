@@ -19,6 +19,7 @@ from campaign_model import (
     CampaignState,
     SignalRole,
     SignalSpec,
+    SignalType,
     SignalState,
     TradingCampaign,
     reverse_pyramid_risk_weight,
@@ -236,6 +237,48 @@ class CampaignEngine:
         )
         return campaign
 
+    def arm_add_on(self, campaign: TradingCampaign, signal: SignalSpec, *, risk_quote: float, capital_reserved_quote: float) -> TradingCampaign:
+        if campaign.position_qty <= 0:
+            raise ValueError("add-on requires an open campaign position")
+        if signal.side != campaign.side:
+            raise ValueError("add-on side does not match campaign")
+        if signal.signal_bar_time_ms <= 0:
+            raise ValueError("add-on signal has no valid signal time")
+        if campaign.state not in {
+            CampaignState.OPEN_INITIAL,
+            CampaignState.TREND_ACTIVE,
+            CampaignState.TRAILING,
+            CampaignState.EXHAUSTION_WATCH,
+        }:
+            raise ValueError(f"Cannot arm add-on from {campaign.state.value}")
+
+        # The book continues the same campaign with later Wise-Men signals.
+        # A new signal becomes an add-on, never a second independent campaign.
+        campaign.current_signal_id = signal.signal_id
+        campaign.current_signal_type = signal.signal_type.value
+        campaign.pending_risk_quote = max(0.0, float(risk_quote))
+        campaign.capital_reserved_quote = max(0.0, float(capital_reserved_quote))
+        campaign.next_action = "SUBMIT_ADD_ON"
+        campaign.transition(CampaignState.ADD_ON_ARMING, reason=f"{signal.signal_type.value} confirmation")
+        campaign.transition(CampaignState.ADD_ON_PENDING, reason="conditional add-on admitted")
+        self.db.save_campaign_signal(signal, campaign.campaign_id, state=SignalState.ARMED.value)
+        self.db.save_campaign(campaign)
+        event = (
+            CampaignEventType.WM2_CONFIRMED.value
+            if signal.signal_type == SignalType.SUPER_AO
+            else CampaignEventType.WM3_CONFIRMED.value
+            if signal.signal_type == SignalType.FRACTAL
+            else CampaignEventType.ADD_ON_ARMED.value
+        )
+        self.db.log_campaign_event(
+            campaign.campaign_id,
+            event,
+            signal_id=signal.signal_id,
+            reason=signal.reason,
+            payload=signal.to_dict(),
+        )
+        return campaign
+
     def mark_triggered(self, campaign: TradingCampaign, signal_id: str, order_id: str = "") -> TradingCampaign:
         if campaign.state != CampaignState.ENTRY_PENDING:
             raise ValueError(f"Cannot trigger entry from {campaign.state.value}")
@@ -248,6 +291,48 @@ class CampaignEngine:
             CampaignEventType.ENTRY_TRIGGERED.value,
             signal_id=signal_id,
             order_id=order_id,
+        )
+        return campaign
+
+    def record_add_on_fill(
+        self,
+        campaign: TradingCampaign,
+        *,
+        quantity: float,
+        average_entry_price: float,
+        fill_order_id: str,
+        risk_quote: float,
+        fee_quote: float = 0.0,
+    ) -> TradingCampaign:
+        if campaign.state != CampaignState.POSITION_EXPANDING:
+            raise ValueError(f"Cannot record add-on fill from {campaign.state.value}")
+        old_qty = float(campaign.position_qty)
+        old_entry = float(campaign.average_entry_price)
+        if quantity <= 0 or average_entry_price <= 0:
+            raise ValueError("Invalid add-on fill")
+        new_qty = old_qty + float(quantity)
+        campaign.average_entry_price = (
+            (old_qty * old_entry) + (float(quantity) * float(average_entry_price))
+        ) / max(new_qty, 1e-12)
+        campaign.position_qty = new_qty
+        campaign.additions += 1
+        campaign.tranche_index = min(4, campaign.tranche_index + 1)
+        campaign.open_risk_quote += max(0.0, float(risk_quote))
+        campaign.pending_risk_quote = 0.0
+        campaign.capital_reserved_quote = 0.0
+        campaign.tags["last_add_on_fee_quote"] = float(fee_quote)
+        campaign.next_action = "MONITOR_CAMPAIGN"
+        campaign.transition(CampaignState.TREND_ACTIVE, reason="add-on filled and position revalued")
+        self.db.save_campaign(campaign)
+        self.db.log_campaign_event(
+            campaign.campaign_id,
+            CampaignEventType.ADD_ON_FILLED.value,
+            order_id=fill_order_id,
+            payload={
+                "quantity": quantity,
+                "average_entry_price": average_entry_price,
+                "risk_quote": risk_quote,
+            },
         )
         return campaign
 
