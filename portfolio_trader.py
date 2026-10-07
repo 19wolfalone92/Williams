@@ -1889,27 +1889,142 @@ class MultiPositionTrader:
                 continue
         return CampaignEngine.choose_initial_signal(specs) if specs else None
 
+    def _signal_specs(self, selection):
+        raw_specs = list(
+            getattr(selection.candidate, "campaign_signal_specs", []) or []
+        )
+        specs = []
+        for raw in raw_specs:
+            try:
+                specs.append(
+                    SignalSpec(
+                        signal_id=str(raw["signal_id"]),
+                        symbol=str(raw["symbol"]),
+                        side=str(raw["side"]),
+                        signal_type=SignalType(str(raw["signal_type"])),
+                        role=SignalRole(str(raw["role"])),
+                        timeframe=str(raw["timeframe"]),
+                        signal_bar_time_ms=int(raw["signal_bar_time_ms"]),
+                        trigger_price=float(raw["trigger_price"]),
+                        protective_reference=float(raw["protective_reference"]),
+                        trigger_buffer_ticks=int(raw.get("trigger_buffer_ticks", 1) or 1),
+                        invalidation_price=float(raw.get("invalidation_price", 0.0) or 0.0),
+                        teeth_at_detection=float(raw.get("teeth_at_detection", 0.0) or 0.0),
+                        alligator_bullish=bool(raw.get("alligator_bullish", False)),
+                        alligator_awake=bool(raw.get("alligator_awake", False)),
+                        angulation_score=float(raw.get("angulation_score", 0.0) or 0.0),
+                        wave_confidence=float(raw.get("wave_confidence", 0.0) or 0.0),
+                        wave_exhaustion_risk=float(raw.get("wave_exhaustion_risk", 0.0) or 0.0),
+                        htf_confirmed=bool(raw.get("htf_confirmed", False)),
+                        context_versions=dict(raw.get("context_versions", {}) or {}),
+                        reason=str(raw.get("reason", "")),
+                        created_at_ms=int(raw.get("created_at_ms", 0) or 0),
+                        expires_at_ms=int(raw.get("expires_at_ms", 0) or 0),
+                        source_candle_index=int(raw.get("source_candle_index", -1) or -1),
+                    )
+                )
+            except Exception:
+                continue
+        return specs
+
     def execute_campaign(self, selections):
         if not selections:
             return []
 
         results = []
-        # Campaigns are portfolio objects, so multiple symbols may hold
-        # independent pending entries as long as the aggregate risk budget fits.
         equity = self._balance()
         if equity <= 0:
             return []
 
-        for selection in selections:
-            signal = self._selection_signal(selection)
-            if signal is None:
-                continue
-            symbol = signal.symbol.upper()
+        open_count = len(self.open_trades())
+        pending = {symbol for symbol, _ in self._pending_entries()}
 
-            # Do not place a second pending entry for the same symbol.
-            if any(s == symbol for s, _ in self._pending_entries()):
+        for selection in selections:
+            specs = self._signal_specs(selection)
+            if not specs:
                 continue
-            if self.db.open_trade(symbol):
+            symbol = str(selection.candidate.symbol).upper()
+            if symbol in pending:
+                continue
+
+            campaign = self.campaign_execution._active_campaign_for_symbol(symbol)
+
+            # Active campaign: later WM2/WM3 signals are add-ons. A new
+            # reversal is not auto-added by default because it can represent
+            # countertrend risk; this is explicitly configurable.
+            if campaign is not None and campaign.position_qty > 0:
+                latest_time = int(
+                    campaign.tags.get("last_signal_time_ms", 0)
+                    or campaign.tags.get("signal_bar_time_ms", 0)
+                    or 0
+                )
+                allow_reversal_add = (
+                    os.getenv("CAMPAIGN_ALLOW_REVERSAL_ADD", "false").lower()
+                    == "true"
+                )
+                eligible = [
+                    s for s in specs
+                    if s.signal_bar_time_ms > latest_time
+                    and (
+                        s.signal_type in {SignalType.SUPER_AO, SignalType.FRACTAL}
+                        or (
+                            allow_reversal_add
+                            and s.signal_type == SignalType.REVERSAL
+                        )
+                    )
+                ]
+                if not eligible:
+                    continue
+                signal = min(
+                    eligible,
+                    key=lambda s: (s.signal_bar_time_ms, s.created_at_ms),
+                )
+                add_signal = __import__(
+                    "dataclasses"
+                ).replace(signal, role=SignalRole.ADD_ON)
+
+                try:
+                    result = self.campaign_execution.arm_add_on(
+                        add_signal,
+                        equity_quote=equity,
+                        candidate_risk_pct=min(
+                            self.max_risk_per_trade_pct,
+                            max(0.0, float(selection.risk.risk_pct) / 100.0),
+                        ),
+                    )
+                    results.append(
+                        {
+                            "symbol": symbol,
+                            "campaign": True,
+                            "action": "ADD_ON_ARMED",
+                            **result,
+                        }
+                    )
+                    pending.add(symbol)
+                except CampaignExecutionError as exc:
+                    self.db.log_event(
+                        "WARNING",
+                        "campaign_add_on_not_armed",
+                        str(exc),
+                        {"symbol": symbol, "signal_id": signal.signal_id},
+                    )
+                    results.append(
+                        {
+                            "symbol": symbol,
+                            "campaign": True,
+                            "action": "WAIT_ADD_ON",
+                            "error": str(exc),
+                        }
+                    )
+                continue
+
+            # No open campaign: this is a new initial campaign. Position
+            # capacity applies only to new campaigns, not later additions.
+            if self.max_open_positions > 0 and open_count >= self.max_open_positions:
+                continue
+
+            signal = self.campaign_execution.engine.choose_initial_signal(specs)
+            if signal is None:
                 continue
 
             try:
@@ -1929,6 +2044,7 @@ class MultiPositionTrader:
                         **result,
                     }
                 )
+                pending.add(symbol)
             except CampaignExecutionError as exc:
                 self.db.log_event(
                     "WARNING",
