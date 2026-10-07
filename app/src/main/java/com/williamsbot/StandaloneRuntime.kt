@@ -1866,8 +1866,8 @@ private class NativeEngine(
         historyLastError = null
 
         Thread {
+            val tasks = mutableListOf<Pair<String, java.util.concurrent.Future<Boolean>>>()
             try {
-                val tasks = mutableListOf<Pair<String, java.util.concurrent.Future<Boolean>>>()
                 for (symbol in coreSymbols) {
                     for (frame in startupFrames) {
                         if (!running || generation != runtimeGeneration) return@Thread
