@@ -25,17 +25,17 @@ def test_android_is_https_backend_only():
     assert "StandaloneRuntime" not in fgs
     assert "http://127.0.0.1" not in main
     assert "http://localhost" not in main
-    assert "cleartextTrafficPermitted="true"" not in network
+    assert 'cleartextTrafficPermitted="true"' not in network
 
 
 def test_android_never_persists_binance_credentials():
     main = _read(ANDROID / "java/com/williamsbot/MainActivity.kt")
     backup = _read(ANDROID / "java/com/williamsbot/BackupManager.kt")
 
-    assert ".putString("api_key"" not in main
-    assert ".putString("api_secret"" not in main
-    assert ".put("api_key"" not in backup
-    assert ".put("api_secret"" not in backup
+    assert '.putString("api_key"' not in main
+    assert '.putString("api_secret"' not in main
+    assert '.put("api_key"' not in backup
+    assert '.put("api_secret"' not in backup
     assert ".putString("api_key"" not in backup
     assert ".putString("api_secret"" not in backup
 
