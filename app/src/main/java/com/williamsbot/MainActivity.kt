@@ -758,9 +758,11 @@ fun WilliamsApp(context: Context) {
                         api.backendUrl.startsWith("http://localhost:18080")
 
                 if (localRuntime) {
+                    StandaloneRuntime.stopTrading()
                     check(EncryptedCredentialsStore.create(context).clear()) {
                         "Не удалось подтвердить удаление Binance credentials"
                     }
+                    StandaloneRuntime.clearAfterCredentialsCleared()
                 } else {
                     api.delete("/api/v1/config/binance")
                 }
