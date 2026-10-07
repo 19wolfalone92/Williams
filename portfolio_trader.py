@@ -1776,8 +1776,12 @@ class MultiPositionTrader:
                     )
                 order = confirmed
 
-                execution = accumulate_order(order)
-                qty = float(execution.executed_qty)
+                base_asset = symbol[:-4] if symbol.endswith("USDT") else ""
+                execution = accumulate_order(
+                    order,
+                    base_asset=base_asset,
+                )
+                qty = float(execution.net_base_qty)
                 spent = float(execution.quote_qty)
                 if qty <= 0 or spent <= 0:
                     raise RuntimeError(
@@ -1802,7 +1806,7 @@ class MultiPositionTrader:
                         entry * (1.0 + target_fraction),
                     ),
                     risk_pct=requested_risk_pct * 100.0,
-                    fees=0,
+                    fees=float(execution.fee_quote),
                 )
 
                 self.db.state_delete(
