@@ -84,7 +84,7 @@ object TradeJournal {
 
     @Synchronized
     fun close(
-        runtimeState: SharedPreferences,
+        runtimeState: RuntimeStateStore,
         symbol: String,
         exitPrice: Double,
         reason: String,
@@ -120,7 +120,7 @@ object TradeJournal {
     }
 
     @Synchronized
-    fun trades(runtimeState: SharedPreferences): JSONArray {
+    fun trades(runtimeState: RuntimeStateStore): JSONArray {
         val src = read(runtimeState)
         val out = JSONArray()
         for (i in src.length()-1 downTo 0) out.put(src.getJSONObject(i))
@@ -128,7 +128,7 @@ object TradeJournal {
     }
 
     @Synchronized
-    fun stats(runtimeState: SharedPreferences): JSONObject {
+    fun stats(runtimeState: RuntimeStateStore): JSONObject {
         val rows = read(runtimeState)
         var closed = 0
         var wins = 0
@@ -171,12 +171,12 @@ object TradeJournal {
         return "losing_signal_needs_review"
     }
 
-    private fun read(runtimeState: SharedPreferences): JSONArray =
-        runCatching { JSONArray(runtimeState.getString(KEY, "[]") ?: "[]") }.getOrElse { JSONArray() }
+    private fun read(runtimeState: RuntimeStateStore): JSONArray =
+        runCatching { JSONArray(runtimeState.tradeJournalJson) }.getOrElse { JSONArray() }
 
-    private fun write(runtimeState: SharedPreferences, value: JSONArray) {
-        runtimeState.edit {
-            putString(KEY, value.toString())
+    private fun write(runtimeState: RuntimeStateStore, value: JSONArray) {
+        check(runtimeState.saveTradeJournal(value.toString())) {
+            "Failed to persist trade journal"
         }
     }
 
