@@ -174,10 +174,8 @@ def test_multi_position_execution_creates_independent_trades(tmp_path, monkeypat
     client = FakeClient()
     db = Database(str(tmp_path / "trades.sqlite3"))
     trader = MultiPositionTrader(client, db=db, symbols=["BTCUSDT", "ETHUSDT"])
-    trader._allocation_quote = lambda balance, risk_fraction, stop_fraction: min(
-        balance * 0.25,
-        balance * risk_fraction / stop_fraction,
-    )
+    # Exercise the production allocation path, including fee and slippage
+    # buffers, so the test protects the real aggregate-risk contract.
 
     result = trader.execute([Selection("BTCUSDT"), Selection("ETHUSDT")])
 
@@ -188,4 +186,11 @@ def test_multi_position_execution_creates_independent_trades(tmp_path, monkeypat
     assert client.buy_calls == 2
     assert client.oco_calls == 2
     assert trader.reserved_risk_quote() / 10000.0 <= 0.01
-    assert all(float(row["risk_pct"]) <= 0.5 for row in trades)
+    assert all(
+        float(row["entry_price"]) * float(row["quantity"]) *
+        trader._effective_risk_fraction(
+            (float(row["entry_price"]) - float(row["stop_price"])) /
+            float(row["entry_price"])
+        ) / 10000.0 <= 0.005 + 1e-9
+        for row in trades
+    )
