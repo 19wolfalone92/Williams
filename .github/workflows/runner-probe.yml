@@ -1,0 +1,34 @@
+name: Williams Runner Probe
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/runner-probe.yml"
+
+jobs:
+  slim:
+    name: Probe ubuntu-slim
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    steps:
+      - name: Runner diagnostics
+        run: |
+          set -euo pipefail
+          echo "runner=ubuntu-slim"
+          uname -a
+          python3 --version
+          df -h
+
+  full:
+    name: Probe ubuntu-26.04
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      - name: Runner diagnostics
+        run: |
+          set -euo pipefail
+          echo "runner=ubuntu-26.04"
+          uname -a
+          python3 --version
+          df -h
