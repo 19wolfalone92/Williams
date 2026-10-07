@@ -237,6 +237,7 @@ class BinanceSpotClient:
     def klines(self,symbol,interval,limit=200): return self._request('GET','/api/v3/klines',{'symbol':symbol,'interval':interval,'limit':limit})
     def account(self): return self._request('GET','/api/v3/account',signed=True)
     def api_restrictions(self): return self._request('GET','/sapi/v1/account/apiRestrictions',{},signed=True)
+    def api_trading_status(self): return self._request('GET','/sapi/v1/account/apiTradingStatus',{},signed=True)
     def my_trades(self, symbol, order_id=None, limit=1000):
         params = {'symbol': symbol, 'limit': int(limit)}
         if order_id is not None:
