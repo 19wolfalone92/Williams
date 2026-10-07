@@ -17,6 +17,40 @@ import org.json.JSONObject
 class MarketHistoryStore(context: Context) :
     SQLiteOpenHelper(context, "williams_market_history.db", null, 1) {
 
+    companion object {
+        /**
+         * Validates a fetched closed-candle segment before persistence.
+         *
+         * The expectedRemoteTimestamp is the exclusive upper bound: no candle
+         * may start at or after it, and the final candle must end exactly at it.
+         */
+        fun validateFetchedGap(
+            candles: List<Candle>,
+            gapStart: Long,
+            expectedRemoteTimestamp: Long,
+            intervalMs: Long
+        ): Boolean {
+            if (candles.isEmpty() || intervalMs <= 0L) return false
+            if (expectedRemoteTimestamp <= gapStart) return false
+            if (candles.first().openTime != gapStart) return false
+
+            for (i in candles.indices) {
+                val candle = candles[i]
+                if (candle.openTime < gapStart) return false
+                if (candle.openTime >= expectedRemoteTimestamp) return false
+                if (candle.closeTime >= expectedRemoteTimestamp) return false
+                if (i > 0) {
+                    val previous = candles[i - 1]
+                    if (candle.openTime - previous.openTime != intervalMs) {
+                        return false
+                    }
+                }
+            }
+
+            return candles.last().openTime + intervalMs == expectedRemoteTimestamp
+        }
+    }
+
     data class Candle(
         val openTime: Long,
         val open: Double,
