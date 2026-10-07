@@ -1317,6 +1317,22 @@ class MultiPositionTrader:
         active_list = False
         active_managed_qty = 0.0
         candidate_list_ids = set()
+
+        # A specifically persisted/returned OCO list is authoritative even if
+        # a mock or an exchange response omits child-order timestamps. The
+        # timestamp requirement below is only for orphaned client-id matches.
+        if oco:
+            oco_id = str(oco.get("orderListId", "") or "")
+            oco_status = str(
+                oco.get("listOrderStatus", oco.get("listStatusType", ""))
+            ).upper()
+            if (
+                oco_id
+                and oco_id == str(trade.get("exit_order_list_id") or "")
+                and oco_status in {"EXECUTING", "EXEC_STARTED", "EXECUTING"}
+            ):
+                active_list = True
+                candidate_list_ids.add(oco_id)
         for row in open_lists:
             if str(row.get("symbol", "")).upper() != symbol:
                 continue
@@ -1340,14 +1356,23 @@ class MultiPositionTrader:
                     order.get("transactTime", order.get("updateTime", 0)),
                 ) or 0
             )
-            if not order_time or (entry_time_ms and order_time < entry_time_ms):
-                continue
             client_id = str(order.get("clientOrderId", "") or "")
             list_id = str(order.get("orderListId", "") or "")
+            exact_managed_list = (
+                list_id == str(trade.get("exit_order_list_id") or "")
+                or (list_id and list_id in candidate_list_ids)
+            )
+            if (
+                not exact_managed_list
+                and (
+                    not order_time
+                    or (entry_time_ms and order_time < entry_time_ms)
+                )
+            ):
+                continue
             if (
                 client_id.startswith(self.OCO_PREFIX)
-                or list_id == str(trade.get("exit_order_list_id") or "")
-                or list_id in candidate_list_ids
+                or exact_managed_list
             ):
                 active_list = True
                 if list_id:
@@ -1364,14 +1389,21 @@ class MultiPositionTrader:
                         order.get("transactTime", order.get("updateTime", 0)),
                     ) or 0
                 )
-                if not order_time or (entry_time_ms and order_time < entry_time_ms):
-                    continue
                 list_id = str(order.get("orderListId", "") or "")
                 client_id = str(order.get("clientOrderId", "") or "")
-                if (
-                    client_id.startswith(self.OCO_PREFIX)
+                exact_managed_list = (
+                    list_id == str(trade.get("exit_order_list_id") or "")
                     or (list_id and list_id in candidate_list_ids)
+                )
+                if (
+                    not exact_managed_list
+                    and (
+                        not order_time
+                        or (entry_time_ms and order_time < entry_time_ms)
+                    )
                 ):
+                    continue
+                if client_id.startswith(self.OCO_PREFIX) or exact_managed_list:
                     remaining_legs.append(
                         max(
                             0.0,
