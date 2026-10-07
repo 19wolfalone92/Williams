@@ -1198,8 +1198,8 @@ def market_klines(
             }
         )
     return {
-        'symbol': t.symbol,
-        'interval': t.interval,
+        'symbol': target_symbol,
+        'interval': target_interval,
         'candles': rows,
     }
 
