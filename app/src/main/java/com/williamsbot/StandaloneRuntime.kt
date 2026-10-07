@@ -521,7 +521,7 @@ private class NativeEngine(
     private val maxScanSymbols = 5
     private val waveTopN = 5
     private val scanExecutor = Executors.newFixedThreadPool(12)
-    private val historyBackfillExecutor = Executors.newFixedThreadPool(2) { runnable ->
+    private val historyBackfillExecutor = Executors.newFixedThreadPool(6) { runnable ->
         Thread(runnable, "williams-history-backfill").apply { isDaemon = true }
     }
     // Market WebSocket callbacks must stay lightweight. Indicator/Williams
@@ -590,6 +590,22 @@ private class NativeEngine(
     @Volatile private var userStreamSyncRequired = true
     @Volatile private var lastUserEventMs = 0L
     @Volatile private var liveUsdtBalance = 0.0
+    @Volatile private var restMarketReady = false
+    @Volatile private var restAccountReady = false
+    @Volatile private var restLastSuccessMs = 0L
+    @Volatile private var restLastLatencyMs = 0L
+    @Volatile private var restLastError: String? = null
+    @Volatile private var restLastTickerPrice = 0.0
+    @Volatile private var restProbeRunning = false
+    private var restProbeThread: Thread? = null
+
+    @Volatile private var scannerState = "NOT_RUN"
+    @Volatile private var scannerError: String? = null
+    @Volatile private var scanRunId = ""
+    @Volatile private var scanStartedAt = 0L
+    @Volatile private var scanLastProgressAt = 0L
+    @Volatile private var scanProgressSymbols = 0
+
     private val positions = mutableMapOf<String, PositionState>()
     private val pendingEntries = mutableMapOf<String, PendingEntry>()
 
@@ -632,6 +648,7 @@ private class NativeEngine(
 
     init {
         loadPersistedState()
+        startRestDataProbe()
         restoreExecutionAccumulators()
         val interruptedGateSymbol =
             prefs.getString("execution_gate_symbol", "") ?: ""
@@ -690,9 +707,8 @@ private class NativeEngine(
             !paused &&
             !reconcileRequired &&
             !killLatched &&
-            !userStreamSyncRequired &&
-            marketSocketConnected &&
-            userStreamConnected &&
+            restMarketReady &&
+            restAccountReady &&
             historyReady &&
             stateMachine.executionAllowed() &&
             !equityCircuitBreaker.isTripped()
@@ -1054,9 +1070,7 @@ private class NativeEngine(
                                 warmCoreHistoryAsync()
                             }
                         } else if (
-                            marketSocketConnected &&
-                            userStreamConnected &&
-                            !userStreamSyncRequired &&
+                            restMarketReady &&
                             !reconcileRequired &&
                             !killLatched
                         ) {
@@ -1112,6 +1126,10 @@ private class NativeEngine(
             .apply()
         worker?.interrupt()
         worker = null
+        restProbeRunning = false
+        restProbeThread?.interrupt()
+        restProbeThread = null
+        scannerState = "STOPPED"
 
         return JSONObject().put("stopped", true)
     }
@@ -1472,18 +1490,17 @@ private class NativeEngine(
     }
 
     private fun wsStreamUrl(): String =
+        // Keep realtime WSS small and reliable. Deep MTF frames remain REST-backed.
         "wss://stream.testnet.binance.vision/stream?streams=" +
             coreSymbols.flatMap { symbol ->
-                analysisFrames.map { frame ->
+                startupFrames.map { frame ->
                     symbol.lowercase(Locale.US) + "@kline_" + frame
                 } + listOf(
                     symbol.lowercase(Locale.US) + "@bookTicker",
                     symbol.lowercase(Locale.US) + "@depth@100ms",
                     symbol.lowercase(Locale.US) + "@aggTrade"
                 )
-            }.joinToString("/")
-
-    private fun startMarketDataStream() {
+            }.joinToString("/")    private fun startMarketDataStream() {
         if (marketSocket != null) return
         val request = Request.Builder().url(wsStreamUrl()).build()
         marketSocket = http.newWebSocket(request, object : WebSocketListener() {
@@ -1772,61 +1789,71 @@ private class NativeEngine(
 
         Thread {
             try {
-                var recentReady = true
+                val tasks = mutableListOf<Pair<String, java.util.concurrent.Future<Boolean>>>()
                 for (symbol in coreSymbols) {
                     for (frame in startupFrames) {
                         if (!running) return@Thread
-                        var recent = emptyList<CandleN>()
-                        var failure: Throwable? = null
-
-                        // Testnet REST can transiently fail. Retry only this
-                        // idempotent market-data read; never leave zero history
-                        // as an unexplained runtime state.
-                        for (attempt in 0 until 3) {
-                            val result = runCatching {
-                                fetchCandles(symbol, frame, startupHistoryLimit)
-                            }
-                            if (result.isSuccess) {
-                                recent = result.getOrDefault(emptyList())
-                                if (recent.size >= minStartupHistoryCandles) break
-                                failure = IllegalStateException(
-                                    "received ${recent.size} closed candles"
-                                )
-                            } else {
-                                failure = result.exceptionOrNull()
-                            }
-                            if (attempt < 2) {
-                                try { Thread.sleep(500L * (attempt + 1)) }
-                                catch (_: InterruptedException) {
-                                    Thread.currentThread().interrupt()
-                                    return@Thread
+                        val label = symbol + ":" + frame
+                        val future = historyBackfillExecutor.submit(Callable {
+                            var recent = emptyList<CandleN>()
+                            var failure: Throwable? = null
+                            for (attempt in 0 until 3) {
+                                val result = runCatching {
+                                    fetchCandles(symbol, frame, startupHistoryLimit)
+                                }
+                                if (result.isSuccess) {
+                                    recent = result.getOrDefault(emptyList())
+                                    if (recent.size >= minStartupHistoryCandles) break
+                                    failure = IllegalStateException("received " + recent.size + " closed candles")
+                                } else {
+                                    failure = result.exceptionOrNull()
+                                }
+                                if (attempt < 2) {
+                                    try { Thread.sleep(500L * (attempt + 1)) }
+                                    catch (_: InterruptedException) {
+                                        Thread.currentThread().interrupt()
+                                        return@Callable false
+                                    }
                                 }
                             }
-                        }
 
-                        val persistedCount = historyStore.count(symbol, frame).toInt()
-                        val cacheKey = symbol + ":" + frame
-                        if (recent.size >= minStartupHistoryCandles &&
-                            persistedCount >= minStartupHistoryCandles) {
-                            liveCandleCache[cacheKey] =
-                                recent.takeLast(startupHistoryLimit).toMutableList()
-                            candleCache[cacheKey] = System.currentTimeMillis() to recent
-                            indicatorSnapshots[cacheKey] =
-                                buildIndicatorSnapshot(recent, symbol, frame)
-                        } else {
-                            recentReady = false
-                            val detail = failure?.message
-                                ?: "persisted=$persistedCount, received=${recent.size}"
-                            historyLastError = symbol + ":" + frame + " " + detail
-                            lastError = "history " + symbol + ":" + frame +
-                                " failed: " + detail
-                        }
+                            val persistedCount = historyStore.count(symbol, frame).toInt()
+                            val ok = recent.size >= minStartupHistoryCandles &&
+                                persistedCount >= minStartupHistoryCandles
+                            if (ok) {
+                                val cacheKey = symbol + ":" + frame
+                                liveCandleCache[cacheKey] =
+                                    recent.takeLast(startupHistoryLimit).toMutableList()
+                                candleCache[symbol + ":" + frame + ":" + startupHistoryLimit] =
+                                    System.currentTimeMillis() to recent
+                                indicatorSnapshots[cacheKey] =
+                                    buildIndicatorSnapshot(recent, symbol, frame)
+                            } else {
+                                historyLastError = label + " " +
+                                    (failure?.message
+                                        ?: "persisted=" + persistedCount + ", received=" + recent.size)
+                            }
+                            ok
+                        })
+                        tasks += label to future
                     }
                 }
 
-                historyReady = recentReady
+                var allReady = true
+                tasks.forEach { (label, future) ->
+                    val ok = runCatching {
+                        future.get(35L, TimeUnit.SECONDS)
+                    }.getOrElse {
+                        historyLastError = label + " task timeout/error: " +
+                            (it.message ?: it.javaClass.simpleName)
+                        false
+                    }
+                    if (!ok) allReady = false
+                }
+
+                historyReady = allReady && running
+                historyState = if (historyReady && running) "READY" else "WAITING_RETRY"
                 if (historyReady && running) {
-                    historyState = "READY"
                     for (symbol in coreSymbols) {
                         historyBackfillExecutor.execute {
                             runCatching { fetchFullHistory(symbol, "1h") }
@@ -1836,15 +1863,12 @@ private class NativeEngine(
                                 }
                         }
                     }
-                } else if (running) {
-                    historyState = "WAITING_RETRY"
                 }
             } catch (x: Exception) {
                 historyReady = false
                 historyState = "WAITING_RETRY"
                 historyLastError = x.message ?: x.javaClass.simpleName
-                lastError = "history warmup: " +
-                    (x.message ?: x.javaClass.simpleName)
+                lastError = "history warmup: " + historyLastError
             } finally {
                 historyWarmupRunning = false
             }
@@ -2242,43 +2266,59 @@ private class NativeEngine(
     }
 
     private fun requestScan() {
-        // Scanner lifecycle is subordinate to market/history/user-stream
-        // readiness. Never expose scanning=true while prerequisites are false.
+        // Scanner requires REST market data + history only. WebSockets are
+        // realtime acceleration and diagnostics, not a hard scanner dependency.
         if (
             !running ||
             paused ||
             reconcileRequired ||
             killLatched ||
             !historyReady ||
-            !marketSocketConnected ||
-            !userStreamConnected ||
-            userStreamSyncRequired
+            !restMarketReady
         ) {
+            scannerState = when {
+                !running -> "STOPPED"
+                paused -> "PAUSED"
+                reconcileRequired -> "BLOCKED_RECONCILE"
+                killLatched -> "BLOCKED_KILL"
+                !historyReady -> "WAITING_FOR_HISTORY"
+                !restMarketReady -> "WAITING_FOR_REST"
+                else -> "WAITING"
+            }
             return
         }
 
         synchronized(this) {
             if (scanning) return
             scanning = true
+            scannerError = null
+            scanRunId = "scan-" + System.currentTimeMillis()
+            scanStartedAt = System.currentTimeMillis()
+            scanLastProgressAt = scanStartedAt
+            scanProgressSymbols = 0
+            scannerState = "RUNNING"
         }
 
         Thread {
             val startedAt = System.currentTimeMillis()
             try {
                 performScan()
+                scannerState = "READY"
+                scannerError = null
                 lastError = null
             } catch (x: Exception) {
-                lastError =
-                    x.javaClass.simpleName + ": " +
-                        (x.message ?: "")
+                scannerState = "FAILED"
+                scannerError = x.javaClass.simpleName + ": " + (x.message ?: "")
+                lastError = scannerError
             } finally {
-                lastScanDurationMs =
-                    System.currentTimeMillis() - startedAt
+                lastScanDurationMs = System.currentTimeMillis() - startedAt
                 lastScanAt = System.currentTimeMillis()
                 scanning = false
+                scanLastProgressAt = System.currentTimeMillis()
             }
         }.also {
             it.isDaemon = true
+            it.name = "williams-scanner"
             it.start()
         }
     }
@@ -2312,13 +2352,20 @@ private class NativeEngine(
                 Callable {
                     try {
                         val candles = fetchCandles(symbol, interval, 150)
-                        analyseBase(
+                        val result = analyseBase(
                             symbol = symbol,
                             candles = candles,
                             spread = spreads[symbol] ?: 0.0,
                             volume = volumes[symbol] ?: 0.0
                         )
-                    } catch (_: Exception) {
+                        scanProgressSymbols += 1
+                        scanLastProgressAt = System.currentTimeMillis()
+                        result
+                    } catch (x: Exception) {
+                        scanProgressSymbols += 1
+                        scanLastProgressAt = System.currentTimeMillis()
+                        scannerError = symbol + ": " +
+                            (x.message ?: x.javaClass.simpleName)
                         null
                     }
                 }
@@ -5795,6 +5842,75 @@ private class NativeEngine(
             })
     }
 
+    private fun startRestDataProbe() {
+        if (restProbeRunning) return
+        restProbeRunning = true
+        restProbeThread = Thread {
+            var lastAccountProbe = 0L
+            while (restProbeRunning) {
+                val started = System.currentTimeMillis()
+                try {
+                    val encodedSymbols = URLEncoder.encode(
+                        JSONArray(coreSymbols).toString(),
+                        StandardCharsets.UTF_8.name()
+                    )
+                    val rows = JSONArray(
+                        getBody("/api/v3/ticker/price?symbols=" + encodedSymbols)
+                    )
+                    var found = 0
+                    for (i in 0 until rows.length()) {
+                        val row = rows.optJSONObject(i) ?: continue
+                        val symbol = row.optString("symbol").uppercase(Locale.US)
+                        val price = row.optString("price").toDoubleOrNull() ?: 0.0
+                        if (symbol in coreSymbols && price > 0.0) {
+                            livePrices[symbol] = price
+                            if (symbol == primarySymbol) restLastTickerPrice = price
+                            found++
+                        }
+                    }
+                    restMarketReady = found == coreSymbols.size
+                    restLastSuccessMs = System.currentTimeMillis()
+                    restLastLatencyMs = System.currentTimeMillis() - started
+                    if (!restMarketReady) {
+                        restLastError = "ticker returned " + found + "/" + coreSymbols.size + " symbols"
+                    }
+
+                    if (key().isNotBlank() && secret().isNotBlank() &&
+                        System.currentTimeMillis() - lastAccountProbe >= 15_000L
+                    ) {
+                        lastAccountProbe = System.currentTimeMillis()
+                        val balances = signedAccount().optJSONArray("balances") ?: JSONArray()
+                        var usdt = 0.0
+                        var foundUsdt = false
+                        for (i in 0 until balances.length()) {
+                            val row = balances.optJSONObject(i) ?: continue
+                            if (row.optString("asset") == "USDT") {
+                                usdt = row.optString("free").toDoubleOrNull() ?: 0.0
+                                foundUsdt = true
+                            }
+                        }
+                        liveUsdtBalance = usdt
+                        restAccountReady = foundUsdt
+                    } else if (key().isBlank() || secret().isBlank()) {
+                        restAccountReady = false
+                    }
+                } catch (x: Exception) {
+                    restLastError = x.javaClass.simpleName + ": " + (x.message ?: "")
+                    restLastLatencyMs = System.currentTimeMillis() - started
+                    restMarketReady = false
+                    if (key().isNotBlank() && secret().isNotBlank()) restAccountReady = false
+                }
+
+                try { Thread.sleep(5_000L) }
+                catch (_: InterruptedException) { break }
+            }
+        }.apply {
+            isDaemon = true
+            name = "williams-rest-probe"
+            start()
+        }
+    }
+
     private fun scannerSnapshot(): JSONObject =
         JSONObject()
             .put("version", BuildConfig.VERSION_NAME)
@@ -5835,8 +5951,7 @@ private class NativeEngine(
             }
         }
 
-        var balance: Double? =
-            if (fast && liveUsdtBalance > 0.0) liveUsdtBalance else null
+        var balance: Double? = liveUsdtBalance.takeIf { it > 0.0 }
         var livePnl = 0.0
         var livePnlPct = 0.0
 
@@ -5859,7 +5974,7 @@ private class NativeEngine(
             livePnlPct = livePnl / totalEntryNotional
         }
 
-        if (!fast && key().isNotBlank() && secret().isNotBlank()) {
+        if (!fast && key().isNotBlank() && secret().isNotBlank() && !restAccountReady) {
             runCatching {
                 val balances =
                     signedAccount().getJSONArray("balances")
@@ -5890,7 +6005,7 @@ private class NativeEngine(
             .put("paused", paused)
             .put("recovered", true)
             .put("state", stateName())
-            .put("execution_enabled", !reconcileRequired)
+            .put("execution_enabled", executionReady())
             .put(
                 "position_symbol",
                 positionList().firstOrNull()?.symbol ?: JSONObject.NULL
@@ -5988,9 +6103,21 @@ private class NativeEngine(
             .put("rate_limits", rateGuard.snapshot())
             .put("history", historyStore.status(coreSymbols, analysisFrames))
             .put("scanner_scanning", scanning)
+            .put("scanner_state", scannerState)
+            .put("scanner_error", scannerError ?: JSONObject.NULL)
+            .put("scanner_run_id", scanRunId)
             .put("scanner_symbols", lastSymbolsScanned)
+            .put("scanner_progress_symbols", scanProgressSymbols)
             .put("scanner_last_scan_at", lastScanAt)
+            .put("scanner_started_at", scanStartedAt)
+            .put("scanner_last_progress_at", scanLastProgressAt)
             .put("scanner_duration_ms", lastScanDurationMs)
+            .put("rest_market_ready", restMarketReady)
+            .put("rest_account_ready", restAccountReady)
+            .put("rest_last_success_ms", restLastSuccessMs)
+            .put("rest_last_latency_ms", restLastLatencyMs)
+            .put("rest_last_error", restLastError ?: JSONObject.NULL)
+            .put("rest_ticker_price", if (restLastTickerPrice > 0.0) restLastTickerPrice else JSONObject.NULL)
     }
 
     fun historyStatus(): JSONObject =
@@ -6242,10 +6369,12 @@ private class NativeEngine(
         test("local_api_loopback", "runtime", 18080 == 18080, "FAIL", "127.0.0.1:18080")
         test("execution_gate", "execution", executionReady(), "FAIL", "execution_ready=" + executionReady() + "; reconcile_required=" + reconcileRequired + "; kill_switch=" + killLatched + "; market_ws=" + marketSocketConnected + "; user_ws=" + userStreamConnected + "; history_ready=" + historyReady)
         test("credentials_state", "binance", key().isNotBlank() && secret().isNotBlank(), "WARN", if (key().isNotBlank() && secret().isNotBlank()) "Binance credentials configured" else "Binance credentials not configured")
-        test("market_websocket", "websocket", marketSocketConnected, "WARN", if (marketSocketConnected) "Market stream connected" else "Market stream disconnected")
-        test("user_websocket", "websocket", userStreamConnected && !userStreamSyncRequired, "WARN", if (userStreamConnected && !userStreamSyncRequired) "User stream connected and synchronized" else "User stream disconnected or synchronization pending")
+        test("rest_market_data", "binance", restMarketReady, "FAIL", if (restMarketReady) "Ticker REST OK; price=" + restLastTickerPrice + "; latency_ms=" + restLastLatencyMs else "REST market failed: " + (restLastError ?: "pending"))
+        test("rest_account", "binance", restAccountReady, "WARN", if (restAccountReady) "Signed account OK; USDT=" + liveUsdtBalance else "Account REST failed: " + (restLastError ?: "pending"))
+        test("market_websocket", "websocket", marketSocketConnected, "WARN", if (marketSocketConnected) "Market stream connected" else "Market stream disconnected; REST fallback active")
+        test("user_websocket", "websocket", userStreamConnected && !userStreamSyncRequired, "WARN", if (userStreamConnected && !userStreamSyncRequired) "User stream connected and synchronized" else "User stream degraded; REST reconciliation active")
         test("history_ready", "database", historyReady, "WARN", if (historyReady) "Market history is ready" else "history_state=" + historyState + "; error=" + (historyLastError ?: "pending"))
-        test("scanner_state", "scanner", !scanning && lastSymbolsScanned >= 0, "WARN", "scanning=" + scanning + "; symbols=" + lastSymbolsScanned + "; duration_ms=" + lastScanDurationMs)
+        test("scanner_state", "scanner", scannerState == "READY" || (scannerState == "RUNNING" && scanning), "WARN", "state=" + scannerState + "; run_id=" + scanRunId + "; progress=" + scanProgressSymbols + "/" + scanSymbols.size + "; last_progress_ms=" + scanLastProgressAt)
         test("state_machine", "runtime", stateMachine.state.name.isNotBlank(), "FAIL", "fsm_state=" + stateMachine.state.name)
         test("risk_limits", "risk", maxRiskPerTradePct > 0.0 && maxRiskPerTradePct <= 0.005 && maxTotalRiskPct <= 0.01, "FAIL", "per_trade=" + maxRiskPerTradePct + "; total=" + maxTotalRiskPct)
         return tests
@@ -6270,7 +6399,27 @@ private class NativeEngine(
             .put("configuration_sanitized", settings())
             .put("tests", tests)
             .put("self_tests", tests)
-            .put("diagnostic_contract_version", 4)
+            .put("diagnostic_contract_version", 5)
+            .put("execution_gate", JSONObject()
+                .put("ready", executionReady())
+                .put("reasons", JSONArray().apply {
+                    if (!running) put("runtime_not_running")
+                    if (paused) put("paused")
+                    if (reconcileRequired) put("reconcile_required")
+                    if (killLatched) put("kill_switch_latched")
+                    if (!restMarketReady) put("rest_market_not_ready")
+                    if (!restAccountReady) put("rest_account_not_ready")
+                    if (!historyReady) put("history_not_ready")
+                    if (!marketSocketConnected) put("market_ws_degraded")
+                    if (!userStreamConnected || userStreamSyncRequired) put("user_ws_degraded")
+                }))
+            .put("watchdog", JSONObject()
+                .put("scanner_stalled", scanning && scanLastProgressAt > 0L &&
+                    System.currentTimeMillis() - scanLastProgressAt > 15_000L)
+                .put("scanner_progress_age_ms",
+                    if (scanLastProgressAt == 0L) 0L else System.currentTimeMillis() - scanLastProgressAt)
+                .put("history_state", historyState)
+                .put("history_last_error", historyLastError ?: JSONObject.NULL))
     }
 
     fun settings(): JSONObject =
