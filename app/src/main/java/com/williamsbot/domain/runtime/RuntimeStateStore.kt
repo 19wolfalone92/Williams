@@ -6,6 +6,7 @@ interface RuntimeStateStore {
     val reconcileRequired: Boolean
     val killLatched: Boolean
     val executionGateSymbol: String
+    val tradeJournalJson: String
 
     fun saveTradingState(
         positionsJson: String,
@@ -16,4 +17,5 @@ interface RuntimeStateStore {
     fun setKillLatched(latched: Boolean): Boolean
     fun setExecutionGateSymbol(symbol: String): Boolean
     fun clearExecutionGateSymbol(): Boolean
+    fun saveTradeJournal(json: String): Boolean
 }
