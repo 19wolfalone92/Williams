@@ -17,6 +17,7 @@ class EncryptedRuntimeStateStore(
         private const val KEY_RECONCILE_REQUIRED = "reconcile_required"
         private const val KEY_KILL_LATCHED = "kill_latched"
         private const val KEY_EXECUTION_GATE_SYMBOL = "execution_gate_symbol"
+        private const val KEY_TRADE_JOURNAL = "trade_journal_v1"
 
         fun create(context: Context): EncryptedRuntimeStateStore =
             EncryptedRuntimeStateStore(
@@ -47,6 +48,9 @@ class EncryptedRuntimeStateStore(
     override val executionGateSymbol: String
         get() = prefs.getString(KEY_EXECUTION_GATE_SYMBOL, "") ?: ""
 
+    override val tradeJournalJson: String
+        get() = prefs.getString(KEY_TRADE_JOURNAL, "[]") ?: "[]"
+
     override fun saveTradingState(
         positionsJson: String,
         pendingEntriesJson: String
@@ -67,4 +71,7 @@ class EncryptedRuntimeStateStore(
 
     override fun clearExecutionGateSymbol(): Boolean =
         prefs.edit().remove(KEY_EXECUTION_GATE_SYMBOL).commit()
+
+    override fun saveTradeJournal(json: String): Boolean =
+        prefs.edit().putString(KEY_TRADE_JOURNAL, json).commit()
 }
