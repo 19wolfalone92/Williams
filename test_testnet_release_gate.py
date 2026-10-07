@@ -162,6 +162,6 @@ if __name__ == "__main__":
             print(f"{step.id} [{step.mode}] {step.description}")
 
     if args.read_only:
-        result = run_testnet_read_only()
+        result = run_testnet_read_only(os.getenv("TESTNET_SYMBOL", "BTCUSDT"))
         print("TESTNET READ-ONLY GATE: PASS")
         print(result)
