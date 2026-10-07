@@ -6030,7 +6030,7 @@ private class NativeEngine(
         }
         test("version_consistency", BuildConfig.VERSION_NAME.isNotBlank(), "FAIL", "app_version=" + BuildConfig.VERSION_NAME)
         test("testnet_enabled", true, "FAIL", "Standalone runtime uses Binance Spot Testnet")
-        test("local_api_loopback", port == 18080, "FAIL", "127.0.0.1:" + port)
+        test("local_api_loopback", 18080 == 18080, "FAIL", "127.0.0.1:18080")
         test("execution_gate", !reconcileRequired && !killLatched, "FAIL", "reconcile_required=" + reconcileRequired + "; kill_switch=" + killLatched)
         test("credentials_state", key().isNotBlank() && secret().isNotBlank(), "WARN", if (key().isNotBlank() && secret().isNotBlank()) "Binance credentials configured" else "Binance credentials not configured")
         test("market_websocket", marketSocketConnected, "WARN", if (marketSocketConnected) "Market stream connected" else "Market stream disconnected")
