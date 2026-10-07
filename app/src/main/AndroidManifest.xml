@@ -1,8 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
     <application
         android:theme="@style/AppTheme"
@@ -12,15 +10,6 @@
         android:roundIcon="@drawable/ic_launcher"
         android:allowBackup="false"
         android:supportsRtl="true">
-
-        <service
-            android:name=".WilliamsForegroundService"
-            android:exported="false"
-            android:foregroundServiceType="specialUse">
-            <property
-                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="continuous trading runtime and network connectivity" />
-        </service>
 
         <receiver
             android:name=".PositionsWidgetProvider"
