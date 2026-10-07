@@ -24,8 +24,7 @@ permissions:
   contents: read
 
 concurrency:
-  # Keep each commit's verification isolated so a later push cannot cancel
-  # the APK validation that is already exercising this exact source tree.
+  # Serialize Android verification per branch; newer pushes supersede older APK builds.
   group: android-${{ github.ref }}
   cancel-in-progress: true
 
