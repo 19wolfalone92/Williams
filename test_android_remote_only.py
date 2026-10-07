@@ -118,3 +118,15 @@ def test_debug_android_manifest_does_not_allow_cleartext():
 def test_android_has_no_direct_binance_user_data_client():
     direct_ws = ANDROID / "java/com/williamsbot/BinanceUserDataStream.kt"
     assert not direct_ws.exists()
+
+
+
+def test_positions_widget_uses_encrypted_https_backend_only():
+    widget = _read(
+        ANDROID / "java/com/williamsbot/PositionsWidgetProvider.kt"
+    )
+
+    assert "EncryptedSharedPreferences" in widget
+    assert 'williams_backend_connection' in widget
+    assert "http://127.0.0.1:18080" not in widget
+    assert '"https://"' in widget
