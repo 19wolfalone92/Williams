@@ -426,7 +426,7 @@ class MarketScanner:
 
             campaign_specs = extract_long_signal_specs(
                 symbol,
-                calculate_indicators(closed, config_from_env()),
+                indicators,
                 timeframe=self.interval,
                 tick_size=tick_size,
                 htf_confirmed=False,
