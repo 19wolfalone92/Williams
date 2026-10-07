@@ -4,6 +4,7 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import androidx.core.database.sqlite.transaction
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -81,8 +82,7 @@ class MarketHistoryStore(context: Context) :
     ) {
         if (candles.isEmpty()) return
         val db = writableDatabase
-        db.beginTransaction()
-        try {
+        db.transaction {
             val insert = ContentValues()
             for (c in candles) {
                 insert.clear()
@@ -158,10 +158,6 @@ class MarketHistoryStore(context: Context) :
                 SQLiteDatabase.CONFLICT_REPLACE
             )
 
-            db.setTransactionSuccessful()
-        } finally {
-            db.endTransaction()
-        }
     }
 
     @Synchronized
