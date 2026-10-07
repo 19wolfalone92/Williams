@@ -24,9 +24,8 @@ permissions:
   contents: read
 
 concurrency:
-  # Serialize Android verification per branch; newer pushes supersede older APK builds.
-  # A fresh runner is preferred over a potentially stale lint process.
-  group: android-${{ github.ref }}
+  # Each commit validates its exact source tree; never cancel a different commit's APK build.
+  group: android-${{ github.workflow }}-${{ github.ref }}-${{ github.sha }}
   cancel-in-progress: true
 
 env:
@@ -82,6 +81,8 @@ jobs:
         run: |
           set -euo pipefail
           test -s build/williams-debug.p12
+      - name: Run release contract gate
+        run: python3 ci_release_gate.py
       - name: Validate quant Python sources
         run: |
           set -euo pipefail
@@ -91,12 +92,15 @@ jobs:
           set -euo pipefail
           for f in feature_store.py ai_shadow.py cpcv_backtester.py stress_suite.py mock_exchange.py quant_models.py shap_explain.py derivatives_features.py shadow_execution.py quant_ml_pipeline.py; do test -f "$f"; done
       - name: Run required Android lint
-        run: gradle --no-daemon :app:lintDebug --stacktrace
+        run: |
+          chmod +x ./gradlew
+          ./gradlew --no-daemon :app:lintDebug --stacktrace
 
       - name: Run Android unit tests
         run: |
           set +e
-          gradle --no-daemon :app:testDebugUnitTest --stacktrace 2>&1 | tee android-unit-tests.log
+          chmod +x ./gradlew
+          ./gradlew --no-daemon :app:testDebugUnitTest --stacktrace 2>&1 | tee android-unit-tests.log
           rc=${PIPESTATUS[0]}
           set -e
           exit "$rc"
@@ -117,7 +121,8 @@ jobs:
           WILLIAMS_DEBUG_KEYSTORE_B64: ${{ secrets.WILLIAMS_DEBUG_KEYSTORE_B64 }}
         run: |
           set +e
-          gradle --no-daemon :app:assembleDebug --stacktrace 2>&1 | tee build-debug.log
+          chmod +x ./gradlew
+          ./gradlew --no-daemon :app:assembleDebug --stacktrace 2>&1 | tee build-debug.log
           rc=${PIPESTATUS[0]}
           set -e
           exit "$rc"
@@ -130,7 +135,9 @@ jobs:
           if-no-files-found: ignore
           retention-days: 3
       - name: Build release APK
-        run: gradle --no-daemon :app:assembleRelease --stacktrace
+        run: |
+          chmod +x ./gradlew
+          ./gradlew --no-daemon :app:assembleRelease --stacktrace
       - name: Verify APK files
         run: |
           set -euo pipefail
