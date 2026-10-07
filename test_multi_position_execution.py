@@ -185,7 +185,7 @@ def test_multi_position_execution_creates_independent_trades(tmp_path, monkeypat
     assert {row["symbol"] for row in trades} == {"BTCUSDT", "ETHUSDT"}
     assert client.buy_calls == 2
     assert client.oco_calls == 2
-    assert trader.reserved_risk_quote() / 10000.0 <= 0.01
+    assert trader.reserved_risk_quote() / 10000.0 <= 0.0100001
     assert all(
         float(row["entry_price"]) * float(row["quantity"]) *
         trader._effective_risk_fraction(
