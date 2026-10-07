@@ -985,7 +985,7 @@ private class NativeEngine(
         prefs.edit()
             .putString("api_key", newKey)
             .putString("api_secret", newSecret)
-            .commit()
+            .apply()
 
         return try {
             val account = signedAccount()
