@@ -61,6 +61,21 @@ class CampaignExecutionService:
         import math
         return math.floor(float(value) / step + 1e-12) * step
 
+    def _normalize_qty(self, symbol: str, quantity: float) -> float:
+        filters = self._rules(symbol)
+        lot = filters.get("LOT_SIZE") or filters.get("MARKET_LOT_SIZE") or {}
+        step = float(lot.get("stepSize", "0") or 0)
+        minimum = float(lot.get("minQty", "0") or 0)
+        maximum = float(lot.get("maxQty", "inf") or "inf")
+        qty = self._floor(float(quantity), step)
+        if qty > maximum:
+            qty = self._floor(maximum, step)
+        if qty < minimum:
+            raise CampaignExecutionError(
+                f"{symbol}: quantity {qty:.12g} below LOT_SIZE {minimum:.12g}"
+            )
+        return qty
+
     def _normalized_entry_qty(self, symbol: str, notional: float, trigger: float) -> float:
         filters = self._rules(symbol)
         lot = filters.get("LOT_SIZE") or {}
@@ -185,27 +200,30 @@ class CampaignExecutionService:
         qty = self._normalized_entry_qty(signal.symbol, notional, trigger)
         client_id = f"{self.ENTRY_PREFIX}{uuid.uuid4().hex[:20]}"
 
+        claimed = self.db.try_claim_state(
+            f"entry_client_order_id:{signal.symbol}",
+            f"RESERVE_{uuid.uuid4().hex[:12]}",
+        )
+        if not claimed:
+            raise CampaignExecutionError(
+                f"{signal.symbol}: another conditional entry is already reserved"
+            )
+
         campaign = self.engine.create_campaign(
             signal,
             initial_risk_pct=requested_risk,
         )
+        campaign.initial_stop_price = stop
+        campaign.current_stop_price = stop
         campaign.pending_risk_quote = risk_quote
         campaign.capital_reserved_quote = qty * trigger
         self.db.save_campaign(campaign)
         self.db.state_set(f"campaign_state:{campaign.campaign_id}", campaign.state.value)
 
-        claimed = self.db.try_claim_state(
+        self.db.state_set(
             f"entry_client_order_id:{signal.symbol}",
             client_id,
         )
-        if not claimed:
-            self.engine.mark_reconcile_required(
-                campaign,
-                "another unresolved entry intent exists for symbol",
-            )
-            raise CampaignExecutionError(
-                f"{signal.symbol}: another conditional entry is already reserved"
-            )
 
         intent = OrderIntent.new(
             signal.symbol,
@@ -312,6 +330,314 @@ class CampaignExecutionService:
             self.engine.mark_reconcile_required(campaign, str(exc))
             raise
 
+    def _find_campaign_by_pending_client_id(self, client_id: str):
+        row = self.db.conn.execute(
+            "SELECT campaign_id FROM campaign_orders WHERE client_order_id=? "
+            "ORDER BY id DESC LIMIT 1",
+            (str(client_id),),
+        ).fetchone()
+        if not row:
+            return None
+        return self.engine.load_campaign(str(row["campaign_id"]))
+
+    def reconcile_pending_entries(self) -> list[dict[str, Any]]:
+        """Adopt/complete conditional BUYs after scans, restarts or app crashes."""
+        rows = self.db.conn.execute(
+            "SELECT key,value FROM bot_state WHERE key LIKE 'entry_client_order_id:%' "
+            "AND value LIKE 'WILLV5_ENTRY_%'"
+        ).fetchall()
+        results = []
+        for row in rows:
+            symbol = str(row["key"]).split(":", 1)[1].upper()
+            client_id = str(row["value"])
+            try:
+                order = self.client.get_order(
+                    symbol,
+                    orig_client_order_id=client_id,
+                )
+                self.db.save_order(order)
+                status = str(order.get("status", "")).upper()
+                campaign = self._find_campaign_by_pending_client_id(client_id)
+
+                if campaign is None:
+                    self.db.state_set(f"position_state:{symbol}", "RECONCILE_REQUIRED")
+                    results.append({"symbol": symbol, "state": "RECONCILE_REQUIRED", "reason": "pending entry has no campaign"})
+                    continue
+
+                if status in {"NEW", "PENDING_NEW", "PARTIALLY_FILLED"}:
+                    executed = float(order.get("executedQty", 0) or 0)
+                    if executed > 0:
+                        # A triggered conditional market order may be partially
+                        # filled. Stop the residual execution and protect exactly
+                        # what was actually acquired.
+                        if status == "PARTIALLY_FILLED":
+                            run_cancel = getattr(self.client, "cancel_order", None)
+                            if run_cancel is not None and order.get("orderId") is not None:
+                                try:
+                                    run_cancel(symbol, order_id=order.get("orderId"))
+                                except Exception as exc:
+                                    self.engine.mark_reconcile_required(
+                                        campaign,
+                                        f"partial entry cancel ambiguous: {exc}",
+                                    )
+                                    raise
+
+                        avg = float(order.get("cummulativeQuoteQty", 0) or 0) / max(executed, 1e-12)
+                        self.engine.mark_triggered(
+                            campaign,
+                            campaign.current_signal_id,
+                            str(order.get("orderId", "")),
+                        )
+                        stop = float(campaign.initial_stop_price or 0.0)
+                        if stop <= 0:
+                            raise CampaignExecutionError(
+                                f"{symbol}: campaign has no initial structural stop"
+                            )
+                        protection = self.create_hard_stop(
+                            campaign,
+                            quantity=executed,
+                            stop_price=stop,
+                        )
+                        campaign.tags["protective_order_id"] = protection.get("order_id", "")
+                        self.engine.record_initial_fill(
+                            campaign,
+                            quantity=executed,
+                            average_entry_price=avg,
+                            initial_stop_price=stop,
+                            fill_order_id=str(order.get("orderId", "")),
+                            risk_quote=campaign.pending_risk_quote,
+                        )
+
+                        existing = self.db.open_trade(symbol)
+                        if existing is None:
+                            self.db.save_trade(
+                                entry_time=datetime.fromtimestamp(
+                                    int(order.get("transactTime", order.get("time", 0)) or 0) / 1000,
+                                    tz=timezone.utc,
+                                ).isoformat(),
+                                symbol=symbol,
+                                side="LONG",
+                                entry_price=avg,
+                                quantity=executed,
+                                entry_order_id=str(order.get("orderId", "")),
+                                stop_price=stop,
+                                take_profit_price=None,
+                                risk_pct=float(campaign.tags.get("initial_risk_pct", 0.0) or 0.0) * 100.0,
+                                fees=0.0,
+                            )
+                        self.db.state_delete(f"entry_client_order_id:{symbol}")
+                        self.db.state_set(f"position_state:{symbol}", "OPEN")
+                        results.append({
+                            "symbol": symbol,
+                            "campaign_id": campaign.campaign_id,
+                            "state": "OPEN",
+                            "filled_quantity": executed,
+                            "partial_entry": status == "PARTIALLY_FILLED",
+                        })
+                    else:
+                        results.append({
+                            "symbol": symbol,
+                            "campaign_id": campaign.campaign_id,
+                            "state": "ENTRY_PENDING",
+                            "order_status": status,
+                        })
+                    continue
+
+                if status in {"CANCELED", "EXPIRED", "REJECTED"}:
+                    executed = float(order.get("executedQty", 0) or 0)
+                    if executed > 0:
+                        self.engine.mark_triggered(campaign, campaign.current_signal_id, str(order.get("orderId", "")))
+                        stop = float(campaign.initial_stop_price or 0.0)
+                        protection = self.create_hard_stop(
+                            campaign,
+                            quantity=executed,
+                            stop_price=stop,
+                        )
+                        campaign.tags["protective_order_id"] = protection.get("order_id", "")
+                        avg = float(order.get("cummulativeQuoteQty", 0) or 0) / max(executed, 1e-12)
+                        self.engine.record_initial_fill(
+                            campaign,
+                            quantity=executed,
+                            average_entry_price=avg,
+                            initial_stop_price=stop,
+                            fill_order_id=str(order.get("orderId", "")),
+                            risk_quote=campaign.pending_risk_quote,
+                        )
+                        if self.db.open_trade(symbol) is None:
+                            self.db.save_trade(
+                                entry_time=datetime.now(timezone.utc).isoformat(),
+                                symbol=symbol,
+                                side="LONG",
+                                entry_price=avg,
+                                quantity=executed,
+                                entry_order_id=str(order.get("orderId", "")),
+                                stop_price=stop,
+                                take_profit_price=None,
+                                risk_pct=float(campaign.tags.get("initial_risk_pct", 0.0) or 0.0) * 100.0,
+                                fees=0.0,
+                            )
+                        self.db.state_delete(f"entry_client_order_id:{symbol}")
+                        self.db.state_set(f"position_state:{symbol}", "OPEN")
+                    else:
+                        campaign.state = CampaignState.CLOSED
+                        campaign.next_action = "WAIT"
+                        self.db.save_campaign(campaign)
+                        self.db.state_delete(f"entry_client_order_id:{symbol}")
+                        self.db.state_set(f"position_state:{symbol}", "FLAT")
+                    results.append({"symbol": symbol, "campaign_id": campaign.campaign_id, "state": campaign.state.value})
+                    continue
+
+                campaign.mark_reconcile_required(
+                    f"unknown pending-entry status {status}"
+                )
+                self.db.save_campaign(campaign)
+                self.db.state_set(f"position_state:{symbol}", "RECONCILE_REQUIRED")
+                results.append({"symbol": symbol, "campaign_id": campaign.campaign_id, "state": "RECONCILE_REQUIRED", "status": status})
+            except Exception as exc:
+                if campaign is not None:
+                    self.engine.mark_reconcile_required(campaign, str(exc))
+                self.db.state_set(f"position_state:{symbol}", "RECONCILE_REQUIRED")
+                results.append({"symbol": symbol, "state": "RECONCILE_REQUIRED", "error": str(exc)})
+        return results
+
+    def _active_campaign_for_symbol(self, symbol: str):
+        rows = self.db.conn.execute(
+            "SELECT campaign_id FROM campaigns WHERE symbol=? "
+            "AND state NOT IN ('CLOSED','FLAT') ORDER BY updated_at DESC LIMIT 1",
+            (str(symbol).upper(),),
+        ).fetchall()
+        return self.engine.load_campaign(str(rows[0]["campaign_id"])) if rows else None
+
+    def arm_add_on(
+        self,
+        signal: SignalSpec,
+        *,
+        equity_quote: float,
+        candidate_risk_pct: float,
+    ) -> dict[str, Any]:
+        campaign = self._active_campaign_for_symbol(signal.symbol)
+        if campaign is None or campaign.position_qty <= 0:
+            raise CampaignExecutionError(f"{signal.symbol}: no active campaign for add-on")
+        if signal.signal_bar_time_ms <= 0:
+            raise CampaignExecutionError("add-on signal time is invalid")
+        if signal.signal_bar_time_ms <= int(campaign.tags.get("last_signal_time_ms", 0) or 0):
+            raise CampaignExecutionError("signal is not newer than current campaign signal")
+
+        reserved = float(campaign.open_risk_quote or 0) + float(campaign.pending_risk_quote or 0)
+        campaign_capacity = float(equity_quote) * self.engine.campaign_risk_limit_pct
+        remaining = max(0.0, campaign_capacity - reserved)
+        requested = min(
+            remaining,
+            float(equity_quote) * min(
+                float(candidate_risk_pct),
+                float(os.getenv("CAMPAIGN_ADD_RISK_MAX_PCT", "0.002")),
+            ),
+        )
+        if requested <= 0:
+            raise CampaignExecutionError("campaign risk budget exhausted")
+
+        current = self._current_price(signal.symbol)
+        trigger = self._normalize_price(signal.symbol, signal.trigger_price)
+        if trigger <= current:
+            raise CampaignExecutionError(
+                f"{signal.symbol}: add-on trigger already crossed; no market substitution"
+            )
+
+        stop = self._normalize_price(
+            signal.symbol,
+            min(
+                float(campaign.current_stop_price or signal.protective_reference),
+                float(signal.protective_reference),
+            ),
+        )
+        if stop <= 0 or stop >= trigger:
+            raise CampaignExecutionError(f"{signal.symbol}: invalid add-on protection reference")
+
+        stop_fraction = (trigger - stop) / trigger
+        effective_loss_fraction = stop_fraction + 0.002 + float(os.getenv("RISK_SLIPPAGE_BUFFER_PCT", "0.0015"))
+        notional = min(
+            equity_quote * float(os.getenv("CAMPAIGN_ADD_CAPITAL_FRACTION", "0.25")),
+            requested / max(effective_loss_fraction, 1e-12),
+        )
+        qty = self._normalized_entry_qty(signal.symbol, notional, trigger)
+        cid = f"{self.ENTRY_PREFIX}ADD_{uuid.uuid4().hex[:16]}"
+
+        self.db.save_campaign_signal(signal, campaign.campaign_id, state="DETECTED")
+        campaign.tags["last_signal_time_ms"] = int(signal.signal_bar_time_ms)
+        campaign.tags["pending_add_signal_id"] = signal.signal_id
+        campaign.pending_risk_quote = requested
+        campaign.capital_reserved_quote = qty * trigger
+        self.engine.arm_add_on(
+            campaign,
+            signal,
+            risk_quote=requested,
+            capital_reserved_quote=qty * trigger,
+        )
+        self.db.state_set(
+            f"add_on_client_order_id:{campaign.campaign_id}:{signal.signal_id}",
+            cid,
+        )
+        intent = OrderIntent.new(
+            signal.symbol,
+            "BUY",
+            "STOP_LOSS",
+            required_context_versions=dict(signal.context_versions),
+            hypothesis_id=f"WILLIAMS_ADD_{signal.signal_type.value}",
+            invalidation_level=stop,
+            quantity=self.client.decimal_format(qty),
+            client_order_id=cid,
+            purpose="CAMPAIGN_ADD_ON",
+            campaign_id=campaign.campaign_id,
+            signal_id=signal.signal_id,
+            risk_quote=requested,
+            capital_reserved_quote=qty * trigger,
+        )
+        order = self._submit(
+            intent,
+            lambda: self.client.order_safe(
+                signal.symbol,
+                "BUY",
+                "STOP_LOSS",
+                quantity=self.client.decimal_format(qty),
+                stop_price=self.client.decimal_format(trigger),
+                new_client_order_id=cid,
+            ),
+            lambda _snapshot: (
+                self._check_algo_capacity(signal.symbol, 1)
+                if self._current_price(signal.symbol) < trigger
+                else (_ for _ in ()).throw(
+                    CampaignExecutionError("add-on trigger crossed before submission")
+                )
+            ),
+        )
+        self.db.save_campaign_order(
+            PendingOrderRecord(
+                order_id=str(order.get("orderId", "") or ""),
+                client_order_id=cid,
+                symbol=signal.symbol,
+                side="BUY",
+                order_type="STOP_LOSS",
+                purpose="ADD_ON",
+                status=str(order.get("status", "NEW")),
+                stop_price=trigger,
+                quantity=qty,
+                risk_quote=requested,
+                capital_reserved_quote=qty * trigger,
+                signal_id=signal.signal_id,
+                campaign_id=campaign.campaign_id,
+            )
+        )
+        self.db.save_campaign(campaign)
+        return {
+            "campaign_id": campaign.campaign_id,
+            "signal_id": signal.signal_id,
+            "order_id": order.get("orderId"),
+            "client_order_id": cid,
+            "trigger_price": trigger,
+            "quantity": qty,
+            "risk_quote": requested,
+        }
+
     def create_hard_stop(
         self,
         campaign,
@@ -322,7 +648,7 @@ class CampaignExecutionService:
         stop = self._normalize_price(campaign.symbol, stop_price)
         if stop <= 0:
             raise CampaignExecutionError("invalid protective stop")
-        qty = self._normalized_entry_qty(campaign.symbol, quantity, max(stop, 1e-12))
+        qty = self._normalize_qty(campaign.symbol, quantity)
         self._check_algo_capacity(campaign.symbol, 1)
         cid = f"{self.STOP_PREFIX}{uuid.uuid4().hex[:20]}"
         intent = OrderIntent.new(
