@@ -275,7 +275,7 @@ private class StandaloneServer(private val context: Context) {
 
     fun clearCredentials(): JSONObject = e().clear()
 
-    fun status(): JSONObject = e().status()
+    fun status(fast: Boolean = false): JSONObject = e().status(fast = fast)
 
     fun startTrading() {
         e().start()
