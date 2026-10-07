@@ -1,0 +1,98 @@
+#!/usr/bin/env python3
+"""Fast, stdlib-only release gate for the Williams repository."""
+from __future__ import annotations
+import ast
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+
+def read(path: str) -> str:
+    p = ROOT / path
+    assert p.is_file(), f"missing required file: {path}"
+    return p.read_text(encoding="utf-8", errors="replace")
+
+def must(text: str, needle: str, where: str) -> None:
+    assert needle in text, f"{where}: missing {needle!r}"
+
+def must_not(text: str, needle: str, where: str) -> None:
+    assert needle not in text, f"{where}: forbidden {needle!r}"
+
+def main() -> None:
+    for path in (
+        "trading_config.py", "market_scanner.py", "portfolio_controller.py",
+        "portfolio_trader.py", "trader.py", "server.py", "wave_engine.py",
+        "binance_client.py", "preflight_gate.py", "test_testnet_release_gate.py",
+    ):
+        ast.parse(read(path), filename=path)
+
+    env = read(".env.example")
+    for needle in (
+        "TESTNET=true", "ALLOW_LIVE=false", "MAX_OPEN_POSITIONS=1",
+        "AUTO_SCAN_SYMBOLS=", "SCAN_ALL_USDT=true", "SCAN_MAX_SYMBOLS=0",
+        "LIQUIDITY_PRESELECT=0", "WAVE_FULL_TF_ALL=true",
+    ):
+        must(env, needle, ".env.example")
+
+    cfg = read("trading_config.py")
+    must(cfg, "max_open_positions: int = 1", "trading_config.py")
+    must(cfg, 'MAX_OPEN_POSITIONS", 1', "trading_config.py")
+    must(cfg, '{"ALL", "AUTO", "*"}', "trading_config.py")
+
+    scanner = read("market_scanner.py")
+    for needle in (
+        'os.getenv("SCAN_ALL_USDT", "true")',
+        'os.getenv("SCAN_MAX_SYMBOLS", "0")',
+        'os.getenv("LIQUIDITY_PRESELECT", "0")',
+        'os.getenv("SCAN_WORKERS", "4")',
+    ):
+        must(scanner, needle, "market_scanner.py")
+
+    trader = read("trader.py")
+    must(trader, "os.getenv('AUTO_SCAN_SYMBOLS', '').strip()", "trader.py")
+    must(trader, "SCAN_THROTTLED", "trader.py")
+    must(trader, "_auto_scan_lock", "trader.py")
+
+    server = read("server.py")
+    must(server, "VERSION = '4.22.2'", "server.py")
+
+    android = read("app/src/main/java/com/williamsbot/MainActivity.kt")
+    must(android, "Williams 4.22.2", "MainActivity.kt")
+    for needle in (
+        "Top 50 liquid USDT", "1D / 4H / 1H / 15M",
+        "http://127.0.0.1", "http://localhost",
+        '.putString("api_key"', '.putString("api_secret"',
+    ):
+        must_not(android, needle, "MainActivity.kt")
+
+    remote = read("test_android_remote_only.py")
+    for needle in (
+        "test_android_is_https_backend_only",
+        "test_android_never_persists_binance_credentials",
+        "test_android_has_no_direct_binance_user_data_client",
+    ):
+        must(remote, needle, "Android remote-only contract")
+
+    testnet = read("test_testnet_release_gate.py")
+    must(testnet, "if not live_e2e_enabled():", "testnet release gate")
+    must(testnet, "Binance Spot Testnet", "testnet release gate")
+
+    android_ci = read(".github/workflows/android-apk.yml")
+    must(android_ci, "python3 ci_release_gate.py", "android workflow")
+    must(android_ci, "group: android-${{ github.workflow }}-${{ github.ref }}-${{ github.sha }}", "android workflow")
+    must(android_ci, "./gradlew --no-daemon :app:lintDebug", "android workflow")
+    must_not(android_ci, "gradle --no-daemon :app:", "android workflow")
+
+    python_ci = read(".github/workflows/python-ci.yml")
+    must(python_ci, "python3 ci_release_gate.py", "python workflow")
+    must(python_ci, "group: backend-ci-${{ github.ref }}-${{ github.sha }}", "python workflow")
+
+    testnet_ci = read(".github/workflows/testnet-readonly.yml")
+    must(testnet_ci, "python3 ci_release_gate.py", "testnet workflow")
+    must(testnet_ci, 'ALLOW_LIVE: "false"', "testnet workflow")
+    must(testnet_ci, 'TESTNET: "true"', "testnet workflow")
+    must(testnet_ci, "test_testnet_release_gate.py --read-only", "testnet workflow")
+
+    print("WILLIAMS RELEASE CONTRACT GATE: PASS")
+
+if __name__ == "__main__":
+    main()
