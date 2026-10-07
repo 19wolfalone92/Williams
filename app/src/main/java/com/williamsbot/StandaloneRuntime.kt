@@ -5053,9 +5053,11 @@ private class NativeEngine(
             }
 
         val breakout =
-            externalFractal &&
-                closes[i] > fractalHigh!! &&
-                breakoutDistance <= 0.05
+            fractalHigh?.let { fractal ->
+                externalFractal &&
+                    closes[i] > fractal &&
+                    breakoutDistance <= 0.05
+            } ?: false
 
         val trendScore = if (bullish) 35.0 else 0.0
         val aoScore =
@@ -5309,8 +5311,8 @@ private class NativeEngine(
             // AO bearish divergence warns that the junior impulse is losing
             // momentum. It lowers priority rather than blindly vetoing a
             // strong nested W3.
-            if (junior?.aoBearishDivergence == true) bonus -= 12.0
-            if (junior?.aoBullishDivergence == true) bonus += 4.0
+            if (junior.aoBearishDivergence) bonus -= 12.0
+            if (junior.aoBullishDivergence) bonus += 4.0
         }
 
         var score = (baseCandidate.score + bonus).coerceIn(0.0, 100.0)
