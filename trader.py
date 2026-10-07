@@ -207,6 +207,7 @@ class Trader:
                 self.client,
                 db=self.db,
                 symbols=self.auto_scan_symbols or [self.symbol],
+                execution_barrier=self.execution_barrier,
             )
             recovery = recovery_trader.recover()
             if not recovery.get('ok'):
@@ -250,6 +251,7 @@ class Trader:
             self.client,
             db=self.db,
             symbols=self.auto_scan_symbols,
+            execution_barrier=self.execution_barrier,
         )
         recovery = self._multi_position_trader.recover()
 
