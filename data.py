@@ -1,5 +1,13 @@
 import os, time, pandas as pd, requests
-BASE_URL='https://testnet.binance.vision'
+
+# Legacy historical mode is retained for research/backtests only. Its
+# endpoint follows the same TESTNET switch as the trading client so a live
+# runtime cannot silently continue pulling Testnet candles.
+BASE_URL = (
+    'https://testnet.binance.vision'
+    if os.getenv('TESTNET', 'true').lower() == 'true'
+    else 'https://api.binance.com'
+)
 
 def _frame(rows):
     cols=['open_time','open','high','low','close','volume','close_time','quote_volume','trades','taker_buy_base','taker_buy_quote','ignore']
