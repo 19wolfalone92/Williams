@@ -56,6 +56,8 @@ class RiskEngine:
         max_daily_loss_pct: float = 0.03,
         min_rr: float = 1.5,
         max_atr_pct: float = 0.08,
+        fee_buffer_per_side_pct: float = 0.001,
+        slippage_buffer_pct: float = 0.0015,
     ):
         self.balance = float(balance_quote)
         self.risk_per_trade_pct = float(risk_per_trade_pct)
@@ -63,6 +65,8 @@ class RiskEngine:
         self.max_daily_loss_pct = float(max_daily_loss_pct)
         self.min_rr = float(min_rr)
         self.max_atr_pct = float(max_atr_pct)
+        self.fee_buffer_per_side_pct = max(0.0, float(fee_buffer_per_side_pct))
+        self.slippage_buffer_pct = max(0.0, float(slippage_buffer_pct))
 
     @staticmethod
     def _clamp(value, low, high):
@@ -132,14 +136,20 @@ class RiskEngine:
         if rr < self.min_rr:
             return self._blocked(symbol, side, entry, f"R:R {rr:.3f} below minimum {self.min_rr:.3f}")
 
-        # Maximum money we are allowed to lose on this trade.
+        # Maximum money we are allowed to lose on this trade. Size against the
+        # protective stop plus bounded fee/slippage reserve.
         effective_risk_pct = self.risk_per_trade_pct if risk_pct_override is None else float(risk_pct_override)
         if effective_risk_pct <= 0:
             return self._blocked(symbol, side, entry, "risk allocation is zero")
         risk_quote = self.balance * effective_risk_pct
+        effective_loss_fraction = (
+            stop_pct
+            + (2.0 * self.fee_buffer_per_side_pct)
+            + self.slippage_buffer_pct
+        )
 
-        # Position size based on actual stop distance.
-        risk_based_position = risk_quote / stop_pct
+        # Position size based on stop + execution-cost reserve.
+        risk_based_position = risk_quote / max(effective_loss_fraction, 1e-9)
 
         # Hard portfolio exposure cap.
         max_position_quote = self.balance * self.max_position_fraction
