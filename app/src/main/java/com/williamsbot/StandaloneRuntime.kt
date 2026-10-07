@@ -1040,9 +1040,9 @@ private class NativeEngine(
                 stateName()
             } else {
                 reconcileRequired = true
-                runtimeState.edit()
-                    .putBoolean("reconcile_required", true)
-                    .apply()
+                check(runtimeState.setReconcileRequired(true)) {
+                    "Failed to persist reconciliation-required state"
+                }
                 "RECONCILE_REQUIRED"
             }
 
