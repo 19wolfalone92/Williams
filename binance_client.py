@@ -145,6 +145,21 @@ class BinanceSpotClient:
                 if method == "GET" and attempt + 1 < max_attempts:
                     continue
 
+                # A rate-limit response for an order mutation must not be
+                # blindly repeated. Keep the execution outcome conservative:
+                # reconcile by clientOrderId/orderId before any retry.
+                raise BinanceAPIError(
+                    f'Binance {r.status_code}: rate limit response; '
+                    'order mutation requires reconciliation before retry.',
+                    unknown_execution=method in {"POST", "DELETE"},
+                    status_code=r.status_code,
+                    payload=(
+                        r.json()
+                        if r.content
+                        else {"code": r.status_code, "msg": r.text}
+                    ),
+                )
+
             if r.status_code >= 500:
                 if method == "GET" and attempt + 1 < max_attempts:
                     time.sleep(delays[attempt])
