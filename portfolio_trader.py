@@ -1136,9 +1136,10 @@ class MultiPositionTrader:
                     f"{symbol}: persisted managed quantity exceeds Binance BUY fill "
                     f"(managed={persisted_qty:.12g}, gross={gross_qty:.12g})"
                 )
-            bought_qty = persisted_qty
-        else:
-            bought_qty = gross_qty
+        # Always compare cumulative exits with the original BUY fill.
+        # The persisted quantity may already be a residual after a prior
+        # partial SELL; using it as bought_qty would subtract that SELL twice.
+        bought_qty = gross_qty if gross_qty > 0 else persisted_qty
         if bought_qty <= 0:
             raise RuntimeError(
                 f"{symbol}: managed trade has no authoritative entry fill"
@@ -1353,7 +1354,12 @@ class MultiPositionTrader:
         # quantity is consistent with the actual account balance.
         active_list = False
         active_managed_qty = 0.0
-        for row in open_lists:
+        active_list_rows = list(open_lists)
+        for row in history_lists:
+            if str(row.get("listOrderStatus", "")).upper() in {"EXECUTING", "EXEC_STARTED"}:
+                active_list_rows.append(row)
+
+        for row in active_list_rows:
             if str(row.get("symbol", "")).upper() != symbol:
                 continue
             same_id = (
@@ -1388,7 +1394,7 @@ class MultiPositionTrader:
                 # residual of the OCO bundle; a sibling can still show the
                 # original quantity while it remains active. Using max/sum here
                 # would overstate protection after a partial fill.
-                active_managed_qty = min(remaining_legs) if remaining_legs else 0.0
+                active_managed_qty = min(remaining_legs) if remaining_legs else remaining_expected
                 break
 
         if active_list:
