@@ -399,8 +399,8 @@ private class BackendApi(context: Context) {
         require(normalized.startsWith("https://")) {
             "Backend URL должен использовать HTTPS."
         }
-        if (!localhostHttp && token.trim().length < 32) {
-            error("Для удалённого Backend нужен Mobile API Token (минимум 32 символа).")
+        if (token.trim().length < 32) {
+            error("Для Backend нужен Mobile API Token (минимум 32 символа).")
         }
         securePrefs.edit()
             .putString("backend_url", normalized)
@@ -2339,13 +2339,7 @@ private fun SettingsScreen(
                         Text("Сохранить подключение")
                     }
 
-                    InfoRow(
-                        "Execution authority",
-                        if (backendUrl == "http://127.0.0.1:18080" ||
-                            backendUrl == "http://localhost:18080"
-                        ) "Phone Native Trading Core"
-                        else "Remote Backend"
-                    )
+                    InfoRow("Execution authority", "Remote Backend / VPS")
                     InfoRow("Scanner universe", "Top 50 liquid USDT • 5 core WSS")
                     InfoRow("MTF", "1D / 4H / 1H / 15M")
                 }
@@ -3082,7 +3076,7 @@ private fun parseStatus(json: JSONObject): Status {
         error =
             json.optString("last_error")
                 .takeIf { it.isNotBlank() },
-        // Native StandaloneRuntime exposes the same state as auth_configured;
+        // Backend exposes the same state as auth_configured;
         // keep compatibility with backend status payloads that use binance_configured.
         binanceConfigured =
             json.optBoolean(
