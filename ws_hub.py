@@ -192,6 +192,7 @@ class WebSocketHub:
 
         while not self.stop_event.is_set():
             app=None
+            rotation_timer=None
 
             try:
                 app=websocket.WebSocketApp(
@@ -301,7 +302,14 @@ class WebSocketHub:
                 self.user_sync_required=True
 
                 def opened(ws):
+                    nonlocal rotation_timer
                     self._user_ws=ws
+                    rotation_timer=threading.Timer(
+                        23 * 60 * 60,
+                        lambda: ws.close()
+                    )
+                    rotation_timer.daemon=True
+                    rotation_timer.start()
 
                     request={
                         'id':f'williams-user-{int(time.time()*1000)}',
@@ -326,6 +334,8 @@ class WebSocketHub:
                     )
 
                 def on_close(ws,code,msg):
+                    if rotation_timer is not None:
+                        rotation_timer.cancel()
                     self.user_connected=False
                     self.user_subscription_id=None
                     self.user_connected_since=0.0
@@ -369,7 +379,10 @@ class WebSocketHub:
                 )
 
             finally:
+                if rotation_timer is not None:
+                    rotation_timer.cancel()
                 self.user_connected=False
+                self.user_connected_since=0.0
 
                 if self._user_ws is app:
                     self._user_ws=None
