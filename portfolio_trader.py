@@ -597,6 +597,15 @@ class MultiPositionTrader:
         return max(0.0, float(stop_fraction) + (2.0 * fee_per_side) + slippage_buffer)
 
     def reserved_risk_quote(self):
+        if self.campaign_engine_enabled:
+            try:
+                return max(
+                    0.0,
+                    float(self.campaign_execution.engine.portfolio_reserved_risk_quote()),
+                )
+            except Exception:
+                # A campaign risk calculation failure must never open extra capacity.
+                return self.max_total_risk_pct * max(self._balance(), 0.0)
         total = 0.0
         for trade in self.open_trades():
             entry = float(trade.get("entry_price") or 0.0)
@@ -2184,6 +2193,20 @@ class MultiPositionTrader:
                 "results": [],
             }
 
+        if self.campaign_engine_enabled:
+            pending_recovery = self.campaign_execution.reconcile_pending_entries()
+            # A resolved/verified pending campaign is now represented by the
+            # campaign state; unresolved mutation remains a hard global block.
+            unresolved = self.unresolved_symbols()
+            if unresolved:
+                return {
+                    "status": "BLOCKED",
+                    "recovery": recovery,
+                    "pending_recovery": pending_recovery,
+                    "results": [],
+                    "reason": "campaign reconciliation required",
+                }
+
         allowed, risk_reason = self._daily_entry_guard()
         if not allowed:
             self.db.log_event("WARNING", "daily_entry_blocked", risk_reason)
@@ -2198,20 +2221,28 @@ class MultiPositionTrader:
             }
 
         open_trades = self.open_trades()
-        pending_entries = self._pending_entries()
-        if pending_entries:
-            return {
-                "status": "BLOCKED",
-                "results": [],
-                "reason": "ENTRY_PENDING: durable entry intent requires recovery",
-            }
+
+        # A pending conditional campaign is normal in campaign mode; it is not
+        # a recovery failure and must not block unrelated symbols.
+        if not self.campaign_engine_enabled:
+            pending_entries = self._pending_entries()
+            if pending_entries:
+                return {
+                    "status": "BLOCKED",
+                    "results": [],
+                    "reason": "ENTRY_PENDING: durable entry intent requires recovery",
+                }
+
         if self.max_open_positions > 0 and len(open_trades) >= self.max_open_positions:
-            return {
-                "status": "POSITION_LIMIT",
-                "results": [],
-                "reason": f"MAX_OPEN_POSITIONS={self.max_open_positions}",
-                "open_positions": len(open_trades),
-            }
+            # Existing campaigns can still be monitored/add to; only new
+            # independent campaigns are blocked by this portfolio capacity.
+            if not self.campaign_engine_enabled:
+                return {
+                    "status": "POSITION_LIMIT",
+                    "results": [],
+                    "reason": f"MAX_OPEN_POSITIONS={self.max_open_positions}",
+                    "open_positions": len(open_trades),
+                }
 
         controller = PortfolioController(
             self.client,
@@ -2222,6 +2253,20 @@ class MultiPositionTrader:
             open_risk_quote=self.reserved_risk_quote(),
             open_positions=len(open_trades),
         )
+        results = (
+            self.execute_campaign(selections)
+            if self.campaign_engine_enabled
+            else self.execute(selections)
+        )
+        return {
+            "status": "EXECUTED",
+            "recovery": recovery,
+            "results": results,
+            "open_positions": len(self.open_trades()),
+            "reserved_risk_quote": self.reserved_risk_quote(),
+            "campaign_engine": self.campaign_engine_enabled,
+        }
+
         return {
             "status": "EXECUTED",
             "recovery": recovery,
