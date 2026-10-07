@@ -214,14 +214,26 @@ class MarketHistoryStore(context: Context) :
     }
 
     @Synchronized
-    fun setError(symbol: String, interval: String, message: String?) {
+    fun setError(
+        symbol: String,
+        interval: String,
+        message: String?,
+        complete: Boolean? = null
+    ) {
         val values = ContentValues()
         values.put("symbol", symbol)
         values.put("interval", interval)
         values.put("oldest_open_time", oldest(symbol, interval))
         values.put("newest_open_time", newest(symbol, interval))
         values.put("candle_count", count(symbol, interval))
-        values.put("complete", if (isComplete(symbol, interval)) 1 else 0)
+        values.put(
+            "complete",
+            when (complete) {
+                true -> 1
+                false -> 0
+                null -> if (isComplete(symbol, interval)) 1 else 0
+            }
+        )
         values.put("updated_at", System.currentTimeMillis())
         values.put("last_error", message)
         writableDatabase.insertWithOnConflict(
