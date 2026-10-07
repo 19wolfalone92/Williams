@@ -504,8 +504,9 @@ fun WilliamsApp(context: Context) {
                 runCatching {
                     val json = JSONObject(
                         api.get(
-                            "/api/v1/market/klines?interval=" +
-                                selectedChartInterval
+                            "/api/v1/market/klines?symbol=" +
+                                (selectedPositionSymbol ?: "BTCUSDT") +
+                                "&interval=" + selectedChartInterval
                         )
                     )
                     withContext(Dispatchers.Main) {
@@ -527,7 +528,13 @@ fun WilliamsApp(context: Context) {
                     )
                     val loaded = symbols.map { symbol ->
                         val j = runCatching {
-                            JSONObject(api.get("/api/v1/market/klines?symbol=" + symbol))
+                            JSONObject(
+                                api.get(
+                                    "/api/v1/market/klines?symbol=" +
+                                        symbol +
+                                        "&interval=" + selectedChartInterval
+                                )
+                            )
                         }.getOrNull()
                         val arr = j?.optJSONArray("candles")
                         val last = arr?.let {
@@ -641,11 +648,17 @@ fun WilliamsApp(context: Context) {
         }
     }
 
-    LaunchedEffect(selectedPositionSymbol) {
+    LaunchedEffect(selectedPositionSymbol, selectedChartInterval) {
         val symbol = selectedPositionSymbol ?: return@LaunchedEffect
         withContext(Dispatchers.IO) {
             runCatching {
-                val json = JSONObject(api.get("/api/v1/market/klines?symbol=" + symbol))
+                val json = JSONObject(
+                    api.get(
+                        "/api/v1/market/klines?symbol=" +
+                            symbol +
+                            "&interval=" + selectedChartInterval
+                    )
+                )
                 val parsed = parseCandles(json.optJSONArray("candles") ?: JSONArray())
                 withContext(Dispatchers.Main) { candles = parsed }
             }
