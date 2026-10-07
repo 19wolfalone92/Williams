@@ -22,6 +22,16 @@ sealed class AdmissionResult<out T> {
     data class Rejected(val reason: GateCloseReason) : AdmissionResult<Nothing>()
 }
 
+class UnknownNetworkOutcomeException(
+    val method: String,
+    val path: String,
+    cause: Throwable
+) : java.io.IOException(
+    "Unknown network outcome for $method $path: " +
+        (cause.message ?: cause.javaClass.simpleName),
+    cause
+)
+
 enum class GateCloseReason {
     NONE,
     INIT,
