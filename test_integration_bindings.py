@@ -393,3 +393,4 @@ def test_active_oco_two_legs_represent_one_quantity(tmp_path):
     assert result["state"] == "OPEN"
     assert result["protected"] is True
     assert result["remaining_quantity"] == 1.0
+
