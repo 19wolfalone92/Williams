@@ -208,7 +208,6 @@ private class StandaloneServer(private val context: Context) {
         .build()
 
     private val historyStore = MarketHistoryStore(context)
-    private val ocoTxJournal = OcoReplacementTxJournal(context)
     private val rateGuard = BinanceRateGuard()
     private val auditStore = TradingAuditStore(context)
     private val stateMachine = TradingStateMachine(
