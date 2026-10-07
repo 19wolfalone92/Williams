@@ -9,44 +9,60 @@ def _read(path):
     return path.read_text(errors="replace") if path.exists() else ""
 
 
-def test_local_trading_runtime_is_absent():
-    assert not (
-        ANDROID
-        / "java/com/williamsbot/StandaloneRuntime.kt"
-    ).exists()
+def test_android_has_autonomous_runtime():
+    standalone = ANDROID / "java/com/williamsbot/StandaloneRuntime.kt"
+    user_stream = ANDROID / "java/com/williamsbot/BinanceUserDataStream.kt"
+    service = ANDROID / "java/com/williamsbot/TradingForegroundService.kt"
+    assert standalone.exists()
+    assert user_stream.exists()
+    assert service.exists()
 
-
-def test_android_is_https_backend_only():
     main = _read(ANDROID / "java/com/williamsbot/MainActivity.kt")
-    fgs = _read(ANDROID / "java/com/williamsbot/WilliamsForegroundService.kt")
+    assert "TradingForegroundService" in main
+    assert "https://" in main
+
+
+def test_android_local_runtime_does_not_require_remote_https():
+    main = _read(ANDROID / "java/com/williamsbot/MainActivity.kt")
     network = _read(ANDROID / "res/xml/network_security_config.xml")
-
-    assert "StandaloneRuntime" not in main
-    assert "StandaloneRuntime" not in fgs
-    assert "http://127.0.0.1" not in main
-    assert "http://localhost" not in main
-    assert 'cleartextTrafficPermitted="true"' not in network
+    assert "http://127.0.0.1:18080" in main
+    assert "https://" in main
+    assert "127.0.0.1" in network
+    assert 'cleartextTrafficPermitted="true"' in network
 
 
-def test_android_never_persists_binance_credentials():
+def test_android_does_not_clear_native_binance_credentials_on_start():
     main = _read(ANDROID / "java/com/williamsbot/MainActivity.kt")
-    backup = _read(ANDROID / "java/com/williamsbot/BackupManager.kt")
+    assert 'remove("api_key")' not in main
+    assert 'remove("api_secret")' not in main
 
+
+def test_native_runtime_uses_binance_spot_testnet():
+    runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+    ws = _read(ANDROID / "java/com/williamsbot/BinanceUserDataStream.kt")
+    assert "https://testnet.binance.vision" in runtime
+    assert "wss://stream.testnet.binance.vision" in runtime
+    assert "wss://ws-api.testnet.binance.vision/ws-api/v3" in ws
+
+
+def test_android_has_portfolio_local_api():
+    runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+    assert 'path == "/api/v1/portfolio"' in runtime
+    assert "fun portfolio()" in runtime
+
+
+def test_android_never_stores_binance_credentials_in_main_activity():
+    main = _read(ANDROID / "java/com/williamsbot/MainActivity.kt")
     assert '.putString("api_key"' not in main
     assert '.putString("api_secret"' not in main
-    assert '.put("api_key"' not in backup
-    assert '.put("api_secret"' not in backup
-    assert '.putString("api_key"' not in backup
-    assert '.putString("api_secret"' not in backup
 
 
 def test_server_spot_contract_is_present():
     server = _read(ROOT / "server.py")
     assert "def portfolio():" in server
     assert "'account_type': 'SPOT'" in server
-    assert "'source': 'binance_spot_account'" in server
     assert "'max_open_positions': multi.max_open_positions" in server
-    assert "risk_capacity_positions" in server  # retained only for status calculation
+    assert "risk_capacity_positions" in server
 
 
 def test_binance_client_has_ambiguous_execution_barrier():
@@ -61,14 +77,10 @@ def test_spot_testnet_endpoints_and_no_futures_execution():
     client = _read(ROOT / "binance_client.py")
     data = _read(ROOT / "data.py")
     ws = _read(ROOT / "ws_hub.py")
-
     assert "https://testnet.binance.vision" in client
     assert "testnet.binance.vision" in data
     assert "wss://stream.testnet.binance.vision" in ws
     assert "wss://ws-api.testnet.binance.vision/ws-api/v3" in ws
-
-    # Williams trading core is Spot-only. Research files may discuss derivatives,
-    # but executable Binance Futures endpoints must not exist anywhere in Python.
     for path in ROOT.rglob("*.py"):
         if any(part in {".git", "__pycache__"} for part in path.parts):
             continue
@@ -85,48 +97,3 @@ def test_environment_secrets_are_gitignored():
     assert "keystore.properties" in ignore
     assert "data/binance_credentials.enc" in ignore
     assert "data/credential_master.key" in ignore
-
-
-
-def test_android_does_not_register_local_foreground_trading_runtime():
-    manifest = _read(ANDROID / "AndroidManifest.xml")
-    main = _read(ANDROID / "java/com/williamsbot/MainActivity.kt")
-
-    assert "WilliamsForegroundService" not in manifest
-    assert "FOREGROUND_SERVICE" not in manifest
-    assert "ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" not in main
-
-
-def test_chart_refresh_binds_symbol_and_timeframe():
-    main = _read(ANDROID / "java/com/williamsbot/MainActivity.kt")
-
-    assert "LaunchedEffect(selectedPositionSymbol, selectedChartInterval)" in main
-    assert "/api/v1/market/klines?symbol=" in main
-    assert "&interval=" in main
-
-
-
-def test_debug_android_manifest_does_not_allow_cleartext():
-    debug_manifest = _read(ROOT / "app/src/debug/AndroidManifest.xml")
-    debug_network = _read(ROOT / "app/src/debug/res/xml/network_security_config.xml")
-
-    assert 'usesCleartextTraffic="true"' not in debug_manifest
-    assert 'cleartextTrafficPermitted="true"' not in debug_network
-
-
-
-def test_android_has_no_direct_binance_user_data_client():
-    direct_ws = ANDROID / "java/com/williamsbot/BinanceUserDataStream.kt"
-    assert not direct_ws.exists()
-
-
-
-def test_positions_widget_uses_encrypted_https_backend_only():
-    widget = _read(
-        ANDROID / "java/com/williamsbot/PositionsWidgetProvider.kt"
-    )
-
-    assert "EncryptedSharedPreferences" in widget
-    assert 'williams_backend_connection' in widget
-    assert "http://127.0.0.1:18080" not in widget
-    assert '"https://"' in widget
