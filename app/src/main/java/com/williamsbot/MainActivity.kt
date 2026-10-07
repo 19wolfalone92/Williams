@@ -700,6 +700,8 @@ fun WilliamsApp(context: Context) {
                     "binance_configured",
                     verified.optBoolean("auth_configured", false)
                 )
+                val testnet = verified.optBoolean("testnet", false)
+                val p0Passed = verified.optBoolean("p0_gate_passed", false)
                 var diagText: String? = null
                 runCatching {
                     val report = api.get("/api/v1/diagnostics?run=true")
@@ -712,10 +714,15 @@ fun WilliamsApp(context: Context) {
                     apiSecret = ""
                     status = parseStatus(verified)
                     diagnosticsMessage = diagText ?: ""
-                    message = if (configured) {
-                        "Binance Testnet подключён и подтверждён статусом /api/v1/status"
-                    } else {
-                        "Ключи сохранены, но Binance ещё не подтвердил конфигурацию"
+                    message = when {
+                        configured && testnet && p0Passed ->
+                            "Binance Spot Testnet готов: P0 safety gate PASS"
+                        configured && testnet ->
+                            "Binance Testnet подключён, но P0 safety gate ещё не пройден"
+                        configured ->
+                            "Ключи сохранены, но backend не подтвердил режим TESTNET"
+                        else ->
+                            "Ключи сохранены, но Binance ещё не подтвердил конфигурацию"
                     }
                 }
                 loadAll(false)
