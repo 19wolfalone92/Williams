@@ -86,7 +86,7 @@ class TradingConfig:
     max_daily_loss_pct: float = 0.03
     max_consecutive_losses: int = 3
     cooldown_minutes: int = 30
-    max_open_positions: int = 0
+    max_open_positions: int = 1
 
     min_risk_reward: float = 1.5
     atr_period: int = 14
@@ -107,11 +107,15 @@ class TradingConfig:
     def from_env(cls, env: Mapping[str, str] | None = None) -> "TradingConfig":
         source = os.environ if env is None else env
         symbols = _csv(source, "WILLIAMS_SYMBOLS", DEFAULT_SYMBOLS)
+        # ALL/AUTO/* means "use the autonomous Spot/USDT scanner"; keep a real
+        # seed symbol for legacy status/chart paths instead of treating ALL as a symbol.
+        if len(symbols) == 1 and symbols[0].upper() in {"ALL", "AUTO", "*"}:
+            symbols = DEFAULT_SYMBOLS
         # AUTO_SCAN_SYMBOLS remains a backwards-compatible override.
         if str(source.get("AUTO_SCAN_SYMBOLS", "")).strip():
             symbols = _csv(source, "AUTO_SCAN_SYMBOLS", symbols)
 
-        max_positions = max(0, _int(source, "MAX_OPEN_POSITIONS", 0))
+        max_positions = max(0, _int(source, "MAX_OPEN_POSITIONS", 1))
         risk = max(0.0, min(0.01, _float(source, "RISK_PER_TRADE_PCT", 0.005)))
         total_risk = max(0.0, min(0.02, _float(source, "MAX_TOTAL_RISK_PCT", 0.01)))
 
