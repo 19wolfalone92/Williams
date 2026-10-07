@@ -143,14 +143,6 @@ class MainActivity : ComponentActivity() {
                 13001
             )
         }
-        // Keep the local runtime alive when the phone is used as the autonomous
-        // Backend/VPS is the only trading authority; Android is the cockpit.
-        val serviceIntent = android.content.Intent(this, WilliamsForegroundService::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            ContextCompat.startForegroundService(this, serviceIntent)
-        } else {
-            startService(serviceIntent)
-        }
         setContent {
             WilliamsTheme {
                 WilliamsApp(this)
