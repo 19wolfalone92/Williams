@@ -526,7 +526,10 @@ private class NativeEngine(
     private var primaryCandles = emptyList<CandleN>()
     private var lastScanDurationMs = 0L
     private var lastSymbolsScanned = 0
-    private val maxOpenPositions = 1
+    // Default remains one open position, but the runtime is configurable and
+    // is not hard-locked to one position.
+    private val maxOpenPositions: Int
+        get() = prefs.getInt("max_open_positions", 1).coerceIn(1, 10)
     private val maxTotalRiskPct = 0.01
     private val maxRiskPerTradePct = 0.005
     private val maxSpreadPct = 0.0015
