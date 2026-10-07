@@ -3,8 +3,22 @@ name: Python backend tests
 on:
   push:
     branches: [main, master]
+    paths:
+      - "*.py"
+      - "tests/**"
+      - "requirements.txt"
+      - ".github/workflows/**"
   pull_request:
+    paths:
+      - "*.py"
+      - "tests/**"
+      - "requirements.txt"
+      - ".github/workflows/**"
   workflow_dispatch:
+
+concurrency:
+  group: backend-ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   backend-test:
