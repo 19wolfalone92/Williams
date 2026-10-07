@@ -1,7 +1,7 @@
 package com.williamsbot
 
-import android.content.SharedPreferences
-import androidx.core.content.edit
+import com.williamsbot.domain.runtime.RuntimeStateStore
+
 import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.math.max
@@ -17,7 +17,7 @@ object TradeJournal {
 
     @Synchronized
     fun recordEntry(
-        prefs: SharedPreferences,
+        runtimeState: RuntimeStateStore,
         symbol: String,
         entry: Double,
         qty: Double,
@@ -49,21 +49,21 @@ object TradeJournal {
             .put("mae_pct", 0.0)
             .put("mfe_r", 0.0)
             .put("mae_r", 0.0)
-        val all = read(prefs)
+        val all = read(runtimeState)
         all.put(row)
         trim(all)
-        write(prefs, all)
+        write(runtimeState, all)
         return id
     }
 
     @Synchronized
     fun updateExcursion(
-        prefs: SharedPreferences,
+        runtimeState: RuntimeStateStore,
         symbol: String,
         price: Double
     ) {
         if (price <= 0.0) return
-        val all = read(prefs)
+        val all = read(runtimeState)
         for (i in 0 until all.length()) {
             val row = all.getJSONObject(i)
             if (row.optString("symbol") != symbol || row.optString("status") != "OPEN") continue
@@ -79,18 +79,18 @@ object TradeJournal {
             row.put("last_price", price)
             row.put("last_mark_at", System.currentTimeMillis())
         }
-        write(prefs, all)
+        write(runtimeState, all)
     }
 
     @Synchronized
     fun close(
-        prefs: SharedPreferences,
+        runtimeState: RuntimeStateStore,
         symbol: String,
         exitPrice: Double,
         reason: String,
         order: JSONObject? = null
     ) {
-        val all = read(prefs)
+        val all = read(runtimeState)
         for (i in 0 until all.length()) {
             val row = all.getJSONObject(i)
             if (row.optString("symbol") != symbol || row.optString("status") != "OPEN") continue
@@ -116,20 +116,20 @@ object TradeJournal {
             if (order != null) row.put("exit_order", order)
             break
         }
-        write(prefs, all)
+        write(runtimeState, all)
     }
 
     @Synchronized
-    fun trades(prefs: SharedPreferences): JSONArray {
-        val src = read(prefs)
+    fun trades(runtimeState: RuntimeStateStore): JSONArray {
+        val src = read(runtimeState)
         val out = JSONArray()
         for (i in src.length()-1 downTo 0) out.put(src.getJSONObject(i))
         return out
     }
 
     @Synchronized
-    fun stats(prefs: SharedPreferences): JSONObject {
-        val rows = read(prefs)
+    fun stats(runtimeState: RuntimeStateStore): JSONObject {
+        val rows = read(runtimeState)
         var closed = 0
         var wins = 0
         var losses = 0
@@ -171,12 +171,12 @@ object TradeJournal {
         return "losing_signal_needs_review"
     }
 
-    private fun read(prefs: SharedPreferences): JSONArray =
-        runCatching { JSONArray(prefs.getString(KEY, "[]") ?: "[]") }.getOrElse { JSONArray() }
+    private fun read(runtimeState: RuntimeStateStore): JSONArray =
+        runCatching { JSONArray(runtimeState.tradeJournalJson) }.getOrElse { JSONArray() }
 
-    private fun write(prefs: SharedPreferences, value: JSONArray) {
-        prefs.edit {
-            putString(KEY, value.toString())
+    private fun write(runtimeState: RuntimeStateStore, value: JSONArray) {
+        check(runtimeState.saveTradeJournal(value.toString())) {
+            "Failed to persist trade journal"
         }
     }
 

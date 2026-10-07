@@ -1,10 +1,14 @@
-@file:Suppress("UseKtx")
 package com.williamsbot
 
 import android.annotation.SuppressLint
 import android.content.Context
-import androidx.security.crypto.EncryptedSharedPreferences
-import androidx.security.crypto.MasterKey
+import com.williamsbot.data.credentials.EncryptedCredentialsStore
+import com.williamsbot.data.preferences.EncryptedUserPreferencesStore
+import com.williamsbot.data.runtime.EncryptedRuntimeStateStore
+import com.williamsbot.domain.credentials.CredentialState
+import com.williamsbot.domain.credentials.CredentialsProvider
+import com.williamsbot.domain.preferences.UserPreferencesStore
+import com.williamsbot.domain.runtime.RuntimeStateStore
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.WebSocket
@@ -53,12 +57,21 @@ object StandaloneRuntime {
         server?.autostart()
     }
 
+    fun credentialsConfigured(): Boolean = server?.credentialsConfigured() ?: false
+
+    fun credentialState(): CredentialState =
+        server?.credentialState() ?: CredentialState.MISSING
+
     fun startTrading() {
         server?.startTrading()
     }
 
     fun stopTrading() {
         server?.stopTrading()
+    }
+
+    fun clearAfterCredentialsCleared() {
+        server?.clearAfterCredentialsCleared()
     }
 
     fun stop() {
@@ -183,15 +196,9 @@ private data class BaseAnalysis(
 
 private class StandaloneServer(private val context: Context) {
     private val port = 18080
-    private val prefs = EncryptedSharedPreferences.create(
-        context,
-        "williams_native_secure",
-        MasterKey.Builder(context)
-            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-            .build(),
-        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-    )
+    private val credentialsProvider: CredentialsProvider = EncryptedCredentialsStore.create(context)
+    private val userPreferences: UserPreferencesStore = EncryptedUserPreferencesStore.create(context)
+    private val runtimeState: RuntimeStateStore = EncryptedRuntimeStateStore.create(context)
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
@@ -246,12 +253,11 @@ private class StandaloneServer(private val context: Context) {
     }
 
     fun autostart() {
-        if (
-            prefs.getBoolean("auto_run", false)
-        ) {
-            e().start()
-        }
+        if (userPreferences.autoRun) e().start()
     }
+
+    fun credentialsConfigured(): Boolean = credentialsProvider.isConfigured
+    fun credentialState(): CredentialState = credentialsProvider.state()
 
     fun startTrading() {
         e().start()
@@ -261,9 +267,13 @@ private class StandaloneServer(private val context: Context) {
         e().stop()
     }
 
+    fun clearAfterCredentialsCleared() {
+        e().clearAfterCredentialsCleared()
+    }
+
     private fun e(): NativeEngine {
         if (engine == null) {
-            engine = NativeEngine(context, prefs, client)
+            engine = NativeEngine(context, credentialsProvider, userPreferences, runtimeState, client)
         }
         return engine!!
     }
@@ -410,12 +420,6 @@ private class StandaloneServer(private val context: Context) {
             method == "GET" && path == "/api/v1/diagnostics" ->
                 x.diagnostics().toString()
 
-            method == "POST" && path == "/api/v1/config/binance" ->
-                x.configure(JSONObject(body)).toString()
-
-            method == "DELETE" && path == "/api/v1/config/binance" ->
-                x.clear().toString()
-
             method == "POST" && path == "/api/v1/control/start" ->
                 x.start().toString()
 
@@ -459,7 +463,9 @@ private class StandaloneServer(private val context: Context) {
 
 private class NativeEngine(
     private val context: Context,
-    private val prefs: android.content.SharedPreferences,
+    private val credentialsProvider: CredentialsProvider,
+    private val userPreferences: UserPreferencesStore,
+    private val runtimeState: RuntimeStateStore,
     private val http: OkHttpClient
 ) {
     private val baseUrl = "https://testnet.binance.vision"
@@ -532,7 +538,7 @@ private class NativeEngine(
     // Default supports the portfolio model: up to five independent positions;
     // aggregate risk remains capped separately at 1%.
     private val maxOpenPositions: Int
-        get() = prefs.getInt("max_open_positions", 5).coerceIn(1, 10)
+        get() = userPreferences.maxOpenPositions
     private val maxTotalRiskPct = 0.01
     private val maxRiskPerTradePct = 0.005
     private val maxSpreadPct = 0.0015
@@ -595,7 +601,7 @@ private class NativeEngine(
         loadPersistedState()
         restoreExecutionAccumulators()
         val interruptedGateSymbol =
-            prefs.getString("execution_gate_symbol", "") ?: ""
+            runtimeState.executionGateSymbol
         if (interruptedGateSymbol.isNotBlank()) {
             reconcileRequired = true
             lastError =
@@ -628,11 +634,9 @@ private class NativeEngine(
         }
     }
 
-    private fun key(): String =
-        prefs.getString("api_key", "") ?: ""
+    private fun key(): String = credentialsProvider.read()?.apiKey ?: ""
 
-    private fun secret(): String =
-        prefs.getString("api_secret", "") ?: ""
+    private fun secret(): String = credentialsProvider.read()?.apiSecret ?: ""
 
     private fun positionList(): List<PositionState> =
         synchronized(positions) { positions.values.toList() }
@@ -704,10 +708,7 @@ private class NativeEngine(
             }
         }
 
-        prefs.edit()
-            .putString("positions_json", pos.toString())
-            .putString("pending_entries_json", pending.toString())
-            .apply()
+        check(runtimeState.saveTradingState(pos.toString(), pending.toString())) { "Failed to persist trading runtime state" }
     }
 
     private fun loadPersistedState() {
@@ -715,7 +716,7 @@ private class NativeEngine(
             positions.clear()
             runCatching {
                 val array = JSONArray(
-                    prefs.getString("positions_json", "[]")
+                    runtimeState.positionsJson
                 )
                 for (i in 0 until array.length()) {
                     val item = array.getJSONObject(i)
@@ -746,7 +747,7 @@ private class NativeEngine(
             pendingEntries.clear()
             runCatching {
                 val array = JSONArray(
-                    prefs.getString("pending_entries_json", "[]")
+                    runtimeState.pendingEntriesJson
                 )
                 for (i in 0 until array.length()) {
                     val item = array.getJSONObject(i)
@@ -770,10 +771,8 @@ private class NativeEngine(
             }
         }
 
-        reconcileRequired =
-            prefs.getBoolean("reconcile_required", false)
-        killLatched =
-            prefs.getBoolean("kill_latched", false)
+        reconcileRequired = runtimeState.reconcileRequired
+        killLatched = runtimeState.killLatched
     }
 
     private fun setReconcileRequired(reason: String) {
@@ -782,18 +781,14 @@ private class NativeEngine(
             TradingState.RECONCILE_REQUIRED,
             reason
         )
-        prefs.edit()
-            .putBoolean("reconcile_required", true)
-            .apply()
+        check(runtimeState.setReconcileRequired(true)) { "Failed to persist reconciliation-required state" }
         lastError = "RECONCILE_REQUIRED: " + reason
-        stop()
+        stopRuntime()
     }
 
     private fun clearReconcileRequired() {
         reconcileRequired = false
-        prefs.edit()
-            .putBoolean("reconcile_required", false)
-            .apply()
+        check(runtimeState.setReconcileRequired(false)) { "Failed to clear reconciliation-required state" }
         if (!killLatched && pendingEntries.isEmpty() && positions.isEmpty()) {
             stateMachine.force(
                 TradingState.READY_FLAT,
@@ -869,70 +864,35 @@ private class NativeEngine(
                 key().isNotBlank() && secret().isNotBlank()
             )
 
-    fun configure(j: JSONObject): JSONObject {
-        val newKey = j.optString("api_key").trim()
-        val newSecret = j.optString("api_secret").trim()
-
-        if (running) {
-            error(
-                "Stop the bot before changing Binance credentials."
-            )
+    fun clearAfterCredentialsCleared() {
+        require(positionList().isEmpty()) {
+            "Close/reconcile all positions before clearing credentials."
+        }
+        synchronized(pendingEntries) {
+            require(pendingEntries.isEmpty()) {
+                "Resolve pending entries before clearing credentials."
+            }
         }
 
-        if (
-            positions.isNotEmpty() &&
-            (newKey != key() || newSecret != secret())
-        ) {
-            error(
-                "Stop/reconcile the bot before changing Binance credentials."
-            )
+        stopRuntime()
+        check(runtimeState.saveTradingState("[]", "[]")) {
+            "Failed to clear persisted trading runtime state"
         }
-
-        require(
-            newKey.isNotBlank() &&
-                newSecret.isNotBlank()
-        ) {
-            "API Key and API Secret are required"
+        check(runtimeState.setReconcileRequired(false)) {
+            "Failed to clear reconciliation-required state"
         }
-
-        prefs.edit()
-            .putString("api_key", newKey)
-            .putString("api_secret", newSecret)
-            .apply()
-
-        return JSONObject()
-            .put("configured", true)
-            .put("testnet", true)
-            .put("standalone", true)
-    }
-
-    fun clear(): JSONObject {
-        if (
-            positions.isNotEmpty() ||
-            pendingEntries.isNotEmpty()
-        ) {
-            error(
-                "Close/reconcile all positions before deleting Binance credentials."
-            )
-        }
-
-        stop()
-        prefs.edit()
-            .remove("api_key")
-            .remove("api_secret")
-            .remove("positions_json")
-            .remove("pending_entries_json")
-            .putBoolean("auto_run", false)
-            .apply()
+        runtimeState.clearExecutionGateSymbol()
 
         candidates = JSONArray()
         primaryCandles = emptyList()
         scanSymbols = mutableListOf()
-        clearReconcileRequired()
 
-        return JSONObject()
-            .put("configured", false)
-            .put("cleared", true)
+        if (!killLatched) {
+            stateMachine.force(
+                TradingState.READY_FLAT,
+                "credentials cleared by user"
+            )
+        }
     }
 
     fun start(): JSONObject {
@@ -954,9 +914,7 @@ private class NativeEngine(
             "RECONCILE_REQUIRED must be resolved before START"
         }
 
-        prefs.edit()
-            .putBoolean("auto_run", true)
-            .apply()
+        check(userPreferences.setAutoRun(true)) { "Failed to persist user auto-run intent" }
 
         stateMachine.force(TradingState.INITIALIZING, "bot start")
         userStreamSyncRequired = true
@@ -1048,7 +1006,7 @@ private class NativeEngine(
             .put("interval_seconds", 15)
     }
 
-    fun stop(): JSONObject {
+    private fun stopRuntime() {
         running = false
         paused = false
         marketSocket?.close(1000, "Williams stopped")
@@ -1056,12 +1014,13 @@ private class NativeEngine(
         marketSocketConnected = false
         userStream.stop()
         userStreamConnected = false
-        prefs.edit()
-            .putBoolean("auto_run", false)
-            .apply()
         worker?.interrupt()
         worker = null
+    }
 
+    fun stop(): JSONObject {
+        stopRuntime()
+        check(userPreferences.setAutoRun(false)) { "Failed to persist user auto-run intent" }
         return JSONObject().put("stopped", true)
     }
 
@@ -1072,10 +1031,8 @@ private class NativeEngine(
             TradingState.KILL_SWITCH_LATCHED,
             "kill switch requested"
         )
-        prefs.edit()
-            .putBoolean("kill_latched", true)
-            .putBoolean("auto_run", false)
-            .apply()
+        check(runtimeState.setKillLatched(true)) { "Failed to persist kill-switch state" }
+        check(userPreferences.setAutoRun(false)) { "Failed to persist user auto-run intent" }
 
         running = false
         paused = true
@@ -1122,9 +1079,9 @@ private class NativeEngine(
                 stateName()
             } else {
                 reconcileRequired = true
-                prefs.edit()
-                    .putBoolean("reconcile_required", true)
-                    .apply()
+                check(runtimeState.setReconcileRequired(true)) {
+                    "Failed to persist reconciliation-required state"
+                }
                 "RECONCILE_REQUIRED"
             }
 
@@ -1159,9 +1116,7 @@ private class NativeEngine(
             TradingState.READY_FLAT,
             "kill switch reset"
         )
-        prefs.edit()
-            .putBoolean("kill_latched", false)
-            .apply()
+        check(runtimeState.setKillLatched(false)) { "Failed to persist kill-switch reset" }
         lastError = null
         return JSONObject()
             .put("reset", true)
@@ -2156,7 +2111,7 @@ private class NativeEngine(
                 val mark = JSONObject(
                     getBody("/api/v3/ticker/price?symbol=" + open.symbol)
                 ).optString("price").toDoubleOrNull() ?: 0.0
-                TradeJournal.updateExcursion(prefs, open.symbol, mark)
+                TradeJournal.updateExcursion(runtimeState, open.symbol, mark)
             }
         }
 
@@ -2313,9 +2268,10 @@ private class NativeEngine(
                 return@post
             }
 
-            prefs.edit()
-                .putString("execution_gate_symbol", candidate.symbol)
-                .apply()
+            if (!runtimeState.setExecutionGateSymbol(candidate.symbol)) {
+                executionGate.release(candidate.symbol)
+                return@post
+            }
 
             executionExecutor.execute {
                 val result = try {
@@ -2331,9 +2287,7 @@ private class NativeEngine(
 
                 tradingEventLoop.post {
                     executionGate.release(result.symbol)
-                    prefs.edit()
-                        .remove("execution_gate_symbol")
-                        .apply()
+                    runtimeState.clearExecutionGateSymbol()
 
                     if (
                         !result.success &&
@@ -2558,7 +2512,7 @@ private class NativeEngine(
                             ?.takeIf { it > 0.0 }
                             ?: stored.entry
                         TradeJournal.close(
-                            prefs = prefs,
+                            runtimeState = runtimeState,
                             symbol = stored.symbol,
                             exitPrice = exitPrice,
                             reason = "EMERGENCY_UNPROTECTED_EXIT",
@@ -3251,7 +3205,7 @@ private class NativeEngine(
                     }
 
                 TradeJournal.close(
-                    prefs = prefs,
+                    runtimeState = runtimeState,
                     symbol = stored.symbol,
                     exitPrice = exitPrice,
                     reason = reason,
@@ -4210,7 +4164,7 @@ private class NativeEngine(
                     .put("obi", candidate.obi)
                     .put("trade_flow_imbalance", candidate.tradeFlowImbalance)
             TradeJournal.recordEntry(
-                prefs = prefs,
+                runtimeState = runtimeState,
                 symbol = candidate.symbol,
                 entry = entry,
                 qty = protection.qty,
@@ -4647,7 +4601,7 @@ private class NativeEngine(
                         ).optString("price").toDoubleOrNull() ?: stored.entry
                     }.getOrDefault(stored.entry)
             TradeJournal.close(
-                prefs = prefs,
+                runtimeState = runtimeState,
                 symbol = symbol,
                 exitPrice = exitPrice,
                 reason = "MANUAL_SELL",
@@ -5616,7 +5570,7 @@ private class NativeEngine(
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
         }.timeInMillis
-        val rows = TradeJournal.trades(prefs)
+        val rows = TradeJournal.trades(runtimeState)
         var count = 0
         var pnl = 0.0
         var consecutiveLosses = 0
@@ -6034,9 +5988,9 @@ private class NativeEngine(
             .put("positions", positions)
     }
 
-    fun trades(): JSONArray = TradeJournal.trades(prefs)
+    fun trades(): JSONArray = TradeJournal.trades(runtimeState)
 
-    fun tradeStats(): JSONObject = TradeJournal.stats(prefs)
+    fun tradeStats(): JSONObject = TradeJournal.stats(runtimeState)
 
     fun logs(): JSONArray =
         JSONArray().put(
