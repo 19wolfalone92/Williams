@@ -51,11 +51,10 @@
 REST остаётся обязательным reconciliation-слоем: WebSocket не используется как единственный источник истины для финансового состояния.
 
 ### Android 4.22
-- Android может работать как локальный Testnet runtime через Foreground Service;
-- для 24/7 торговли предпочтительна архитектура Android cockpit → HTTPS/WSS → backend/VPS → Binance;
+- Android работает как remote cockpit: торговый процесс и Binance execution выполняются на backend/VPS;
+- Android подключается к backend по HTTPS/WSS и не является 24/7 торговым процессом;
 - одновременно допускается несколько позиций; каждая имеет максимум 0,5% риска, а суммарный открытый защитный риск не превышает 1%;
-- отдельный SELL для каждой открытой позиции;
-- Android Foreground Service + системная настройка исключения из Battery Optimization для локального runtime;
+- отдельный SELL/OCO protection для каждой открытой позиции;
 - зашифрованный переносимый backup с восстановлением на другом телефоне;
 - после restore торговое состояние сверяется с Binance, а автоторговля автоматически не запускается;
 - Compose dashboard;
