@@ -7,6 +7,8 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.widget.RemoteViews
+import androidx.security.crypto.EncryptedSharedPreferences
+import androidx.security.crypto.MasterKey
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
@@ -24,15 +26,18 @@ class PositionsWidgetProvider : AppWidgetProvider() {
         private fun updateAsync(context: Context, manager: AppWidgetManager, ids: IntArray) {
             Thread {
                 val status = runCatching {
-                    val prefs = context.getSharedPreferences("williams_backend", Context.MODE_PRIVATE)
-                    val baseUrl = prefs.getString(
-                        "backend_url",
-                        "http://127.0.0.1:18080",
-                    )!!.trimEnd('/')
-                    val token = prefs.getString(
-                        "mobile_token",
-                        "",
-                    )!!.trim()
+                    val prefs = EncryptedSharedPreferences.create(
+                        context,
+                        "williams_backend_connection",
+                        MasterKey.Builder(context)
+                            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                            .build(),
+                        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+                    )
+                    val baseUrl = prefs.getString("backend_url", "")!!.trim().trimEnd('/')
+                    val token = prefs.getString("mobile_token", "")!!.trim()
+                    require(baseUrl.startsWith("https://")) { "HTTPS Backend URL is not configured" }
                     require(token.isNotBlank()) { "Backend token is not configured" }
 
                     val c = URL("$baseUrl/api/v1/status").openConnection() as HttpURLConnection
@@ -47,7 +52,7 @@ class PositionsWidgetProvider : AppWidgetProvider() {
                 val risk = status?.optDouble("reserved_risk_pct", 0.0) ?: 0.0
                 views.setTextViewText(R.id.widget_risk, String.format(Locale.US, "%.2f%%", risk * 100.0))
                 val hasPositions = open != null && open.length() > 0
-                views.setTextViewText(R.id.widget_empty, if (hasPositions) "" else "Нет открытых позиций")
+                views.setTextViewText(R.id.widget_empty, if (hasPositions) "" else context.getString(R.string.widget_no_positions))
                 views.setViewVisibility(R.id.widget_positions, if (hasPositions) android.view.View.VISIBLE else android.view.View.GONE)
                 val rowIds = intArrayOf(R.id.widget_pos1, R.id.widget_pos2, R.id.widget_pos3)
                 for (i in rowIds.indices) {
