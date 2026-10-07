@@ -1143,11 +1143,11 @@ def market_klines(
 ):
     t = state.ensure_trader()
     target_symbol = str(symbol or t.symbol).strip().upper()
-    target_interval = str(interval or t.interval).strip().lower()
+    raw_interval = str(interval or t.interval).strip()
+    target_interval = "1M" if raw_interval == "1M" else raw_interval.lower()
     allowed_intervals = {
         "1m", "3m", "5m", "15m", "30m", "1h", "2h",
-        "4h", "6h", "8h", "12h", "1d", "3d", "1w",
-        "1M".lower(),
+        "4h", "6h", "8h", "12h", "1d", "3d", "1w", "1M",
     }
     if target_interval not in allowed_intervals:
         raise HTTPException(400, f"Unsupported Binance interval: {target_interval}")
