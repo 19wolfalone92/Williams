@@ -12,6 +12,7 @@ class ExecutionSummary:
     avg_price: Decimal
     fee_quote: Decimal = Decimal("0")
     commission_base: Decimal = Decimal("0")
+    fee_quote_equivalent: Decimal = Decimal("0")
 
     @property
     def filled(self) -> bool:
@@ -29,6 +30,7 @@ class ExecutionSummary:
             "fee_quote": str(self.fee_quote),
             "commission_base": str(self.commission_base),
             "net_base_qty": str(self.net_base_qty),
+            "fee_quote_equivalent": str(self.fee_quote_equivalent),
         }
 
 
@@ -37,6 +39,7 @@ def accumulate_fills(fills, base_asset=None) -> ExecutionSummary:
     quote = Decimal("0")
     fee_quote = Decimal("0")
     commission_base = Decimal("0")
+    fee_quote_equivalent = Decimal("0")
     for fill in fills or []:
         q = Decimal(str(fill.get("qty", "0") or "0"))
         p = Decimal(str(fill.get("price", "0") or "0"))
@@ -48,10 +51,20 @@ def accumulate_fills(fills, base_asset=None) -> ExecutionSummary:
         commission_asset = str(fill.get("commissionAsset", "")).upper()
         if commission_asset in {"USDT", "USDC", "FDUSD", "BUSD"}:
             fee_quote += commission
+        if commission_asset in {"USDT", "USDC", "FDUSD", "BUSD"}:
+            fee_quote_equivalent += commission
         if base_asset and commission_asset == str(base_asset).upper():
             commission_base += commission
+            fee_quote_equivalent += commission * p
     avg = quote / qty if qty > 0 else Decimal("0")
-    return ExecutionSummary(qty, quote, avg, fee_quote, commission_base)
+    return ExecutionSummary(
+        qty,
+        quote,
+        avg,
+        fee_quote,
+        commission_base,
+        fee_quote_equivalent,
+    )
 
 
 def accumulate_order(order: dict, base_asset=None) -> ExecutionSummary:
