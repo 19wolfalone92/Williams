@@ -517,3 +517,44 @@ def test_active_oco_partial_fill_keeps_second_leg_as_shared_protection(tmp_path)
     assert abs(float(db.open_trade("BTCUSDT")["quantity"]) - 0.7) < 1e-9
     assert client.oco_calls == 0
 
+
+
+
+def test_market_klines_uses_requested_symbol_and_interval(monkeypatch):
+    import pandas as pd
+    import server
+
+    class TraderStub:
+        symbol = "BTCUSDT"
+        interval = "1h"
+
+        class Client:
+            pass
+
+        client = Client()
+
+    captured = {}
+
+    def fake_fetch(client, symbol, interval, limit=120):
+        captured.update(symbol=symbol, interval=interval, limit=limit)
+        idx = pd.date_range("2026-10-01", periods=40, freq="h", tz="UTC")
+        return pd.DataFrame(
+            {
+                "open": [100.0] * 40,
+                "high": [101.0] * 40,
+                "low": [99.0] * 40,
+                "close": [100.0] * 40,
+                "volume": [10.0] * 40,
+            },
+            index=idx,
+        )
+
+    monkeypatch.setattr(server.state, "ensure_trader", lambda: TraderStub())
+    monkeypatch.setattr(server, "fetch_klines", fake_fetch)
+
+    payload = server.market_klines(limit=30, symbol="ETHUSDT", interval="4h")
+
+    assert captured == {"symbol": "ETHUSDT", "interval": "4h", "limit": 30}
+    assert payload["symbol"] == "ETHUSDT"
+    assert payload["interval"] == "4h"
+    assert len(payload["candles"]) == 39
