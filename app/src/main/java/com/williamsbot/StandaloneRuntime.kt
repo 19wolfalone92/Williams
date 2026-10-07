@@ -1126,9 +1126,6 @@ private class NativeEngine(
             .apply()
         worker?.interrupt()
         worker = null
-        restProbeRunning = false
-        restProbeThread?.interrupt()
-        restProbeThread = null
         scannerState = "STOPPED"
 
         return JSONObject().put("stopped", true)
@@ -1500,7 +1497,9 @@ private class NativeEngine(
                     symbol.lowercase(Locale.US) + "@depth@100ms",
                     symbol.lowercase(Locale.US) + "@aggTrade"
                 )
-            }.joinToString("/")    private fun startMarketDataStream() {
+            }.joinToString("/")
+
+    private fun startMarketDataStream() {
         if (marketSocket != null) return
         val request = Request.Builder().url(wsStreamUrl()).build()
         marketSocket = http.newWebSocket(request, object : WebSocketListener() {
