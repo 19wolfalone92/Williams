@@ -1198,6 +1198,21 @@ class MultiPositionTrader:
             persisted_qty * self.balance_tolerance_pct,
         )
 
+        # A pre-existing reconciliation barrier must not be silently cleared
+        # when exchange inventory is lower and there is no matching SELL
+        # evidence. That is an unresolved inventory discrepancy, not a normal
+        # restart/partial-exit case.
+        if (
+            self.state(symbol) == "RECONCILE_REQUIRED"
+            and exchange_qty + tolerance_abs < persisted_qty
+            and total_sold_qty + tolerance_abs < persisted_qty - exchange_qty
+        ):
+            raise RuntimeError(
+                f"{symbol}: reconciliation barrier preserved; "
+                f"managed={persisted_qty:.12g}, exchange={exchange_qty:.12g}, "
+                f"evidenced_sells={total_sold_qty:.12g}"
+            )
+
         # Current exchange inventory is the idempotent source of truth for the
         # residual managed position. Historical SELL rows are evidence, not an
         # amount to subtract again on every restart.
