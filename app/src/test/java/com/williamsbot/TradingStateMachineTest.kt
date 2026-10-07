@@ -28,6 +28,16 @@ class TradingStateMachineTest {
     }
 
     @Test
+    fun portfolioAdmissionHonorsPositionAndSafetyLimits() {
+        val fsm = TradingStateMachine(TradingState.PROTECTED)
+        assertTrue(fsm.canAdmitEntry(openPositions = 1, maxOpenPositions = 5))
+        assertFalse(fsm.canAdmitEntry(openPositions = 5, maxOpenPositions = 5))
+        assertFalse(fsm.canAdmitEntry(openPositions = 1, maxOpenPositions = 5, hasPendingEntry = true))
+        assertFalse(fsm.canAdmitEntry(openPositions = 1, maxOpenPositions = 5, reconciliationRequired = true))
+        assertFalse(fsm.canAdmitEntry(openPositions = 1, maxOpenPositions = 5, killLatched = true))
+    }
+
+    @Test
     fun unsafeJumpIsRejected() {
         val fsm = TradingStateMachine()
         assertTrue(fsm.transition(TradingState.INITIALIZING, "start"))
