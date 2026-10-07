@@ -232,7 +232,7 @@ class MultiTimeframeWaveEngine:
         # For full historical wave analysis, use Binance-native intervals across
         # the complete hierarchy. A custom WAVE_TF_CHAIN can still narrow this
         # for tests or low-resource deployments.
-        if not raw and os.getenv("WAVE_FULL_TF_ALL", "false").lower() == "true":
+        if not raw and os.getenv("WAVE_FULL_TF_ALL", "true").lower() == "true":
             wanted = list(self.INTERVAL_SECONDS.keys())
 
         # Synthetic seconds are never used for structural wave counting.
