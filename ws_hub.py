@@ -27,12 +27,19 @@ class WebSocketHub:
             self.api_key=key.strip()
             self.api_secret=secret.strip()
             self.testnet=bool(testnet)
+            for ws in (self._user_ws, self._market_ws):
+                if ws is not None:
+                    try:
+                        ws.close()
+                    except Exception:
+                        pass
             self.client=BinanceSpotClient(
                 self.api_key,
                 self.api_secret,
                 self.testnet
             )
             self.user_connected=False
+            self.user_connected_since=0.0
             self.user_subscription_id=None
             self.user_connected_since=0.0
 
