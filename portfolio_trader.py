@@ -1202,15 +1202,20 @@ class MultiPositionTrader:
             if same_id or same_client or prefix:
                 active_list = True
                 list_id = str(row.get("orderListId", ""))
+                remaining_legs = []
                 for order in open_orders:
                     if str(order.get("side", "")).upper() != "SELL":
                         continue
                     if list_id and str(order.get("orderListId", "")) == list_id:
-                        active_managed_qty += max(
-                            0.0,
-                            float(order.get("origQty", 0) or 0)
-                            - float(order.get("executedQty", 0) or 0),
+                        remaining_legs.append(
+                            max(
+                                0.0,
+                                float(order.get("origQty", 0) or 0)
+                                - float(order.get("executedQty", 0) or 0),
+                            )
                         )
+                # OCO TP and SL are alternative exits for the same quantity.
+                active_managed_qty = max(remaining_legs, default=0.0)
                 break
 
         if active_list:
