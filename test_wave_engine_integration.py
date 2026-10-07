@@ -130,3 +130,19 @@ def test_watch_candidate_can_be_ranked_with_wave_context_without_creating_signal
     assert result[0].signal is False
     assert result[0].score == 69.0
     assert result[0].wave_score == 95.0
+
+
+
+def test_strict_signal_is_blocked_when_wave_analysis_is_unavailable(monkeypatch):
+    monkeypatch.setenv("NO_TRADE_WHEN_UNCERTAIN", "true")
+    monkeypatch.setenv("REQUIRE_HTF_CONFIRMATION", "false")
+    scanner = MarketScanner(FakeClient(), symbols=["BTCUSDT"], interval="1h")
+    closed = pd.DataFrame({"close": [100.0]})
+    candidate = make_candidate(signal=True, base_score=70.0)
+    scanner._analyse_base = lambda symbol, metadata=None: (candidate, closed)
+
+    def fail_wave(symbol, cache=None):
+        raise RuntimeError("wave service unavailable")
+
+    scanner.wave_engine.analyse = fail_wave
+    assert scanner.analyse("BTCUSDT") is None
