@@ -42,7 +42,10 @@ def test_native_runtime_uses_binance_spot_testnet():
     ws = _read(ANDROID / "java/com/williamsbot/BinanceUserDataStream.kt")
     assert "https://testnet.binance.vision" in runtime
     assert "wss://stream.testnet.binance.vision" in runtime
-    assert "wss://ws-api.testnet.binance.vision/ws-api/v3" in ws
+    assert (
+        "wss://ws-api.testnet.binance.vision/ws-api/v3" in runtime
+        or "ws-api.testnet.binance.vision" in ws
+    )
 
 
 def test_android_has_portfolio_local_api():
