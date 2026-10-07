@@ -173,18 +173,78 @@ class WebSocketHub:
         ind=calculate_indicators(df.iloc[:-1].copy(),config_from_env()); self.candles=[self._row(i,r) for i,r in ind.iterrows()]
     def _row(self,i,r):return {'time':i.isoformat(),'open':float(r.open),'high':float(r.high),'low':float(r.low),'close':float(r.close),'jaw':None if pd.isna(r.jaw_shifted) else float(r.jaw_shifted),'teeth':None if pd.isna(r.teeth_shifted) else float(r.teeth_shifted),'lips':None if pd.isna(r.lips_shifted) else float(r.lips_shifted),'ao':None if pd.isna(r.ao) else float(r.ao),'long_signal':bool(r.long_signal),'fractal_up':bool(r.fractal_up),'fractal_down':bool(r.fractal_down)}
     def _refresh_account(self):
-        if not self.api_key or not self.api_secret:return
+        if not self.api_key or not self.api_secret:
+            return
         try:
-            a=self.client.account(); self.balance=next((float(b['free']) for b in a.get('balances',[]) if b['asset']==self.quote_asset),0.0); qty=next((float(b['free'])+float(b['locked']) for b in a.get('balances',[]) if b['asset']==self.base_asset),0.0); tr=self.db.open_trade(); self.position={'side':'LONG','quantity':qty,'entry_price':float(tr['entry_price']) if tr else None} if tr and qty>0 else None; self._refresh_orders()
-        except Exception as e:self.last_error=f'account: {e}'
+            # REST account state is the source of truth after WS reconnects.
+            a = self.client.account()
+            self.balance = next(
+                (
+                    float(b.get('free', 0) or 0) + float(b.get('locked', 0) or 0)
+                    for b in a.get('balances', [])
+                    if b.get('asset') == self.quote_asset
+                ),
+                0.0,
+            )
+            qty = next(
+                (
+                    float(b.get('free', 0) or 0) + float(b.get('locked', 0) or 0)
+                    for b in a.get('balances', [])
+                    if b.get('asset') == self.base_asset
+                ),
+                0.0,
+            )
+            trades = self.db.open_trades()
+            tr = next(
+                (
+                    row for row in trades
+                    if str(row.get('symbol', '')).upper() == self.symbol
+                ),
+                None,
+            )
+            self.position = (
+                {
+                    'side': 'LONG',
+                    'quantity': qty,
+                    'entry_price': float(tr['entry_price']) if tr else None,
+                }
+                if tr and qty > 0
+                else None
+            )
+            self._refresh_orders()
+        except Exception as e:
+            self.last_error = f'account: {e}'
+
     def _refresh_orders(self):
         try:
-            active=[o for o in self.db.recent_orders(self.symbol,100) if str(o.get('status','')).upper() in {'NEW','PENDING_NEW','PARTIALLY_FILLED'}];self.orders=active[:20];self.tp=self.sl=None
+            # Explicit REST catch-up. The old implementation only reread the
+            # local SQLite cache, which could hide orders created/filled while
+            # User Data Stream was disconnected.
+            exchange_orders = self.client.open_orders()
+            for order in exchange_orders:
+                self.db.save_order(order)
+
+            active = [
+                o for o in exchange_orders
+                if str(o.get('symbol', '')).upper() == self.symbol
+                and str(o.get('status', '')).upper()
+                in {'NEW', 'PENDING_NEW', 'PARTIALLY_FILLED'}
+            ]
+            self.orders = active[:20]
+            self.tp = self.sl = None
             for o in active:
-                typ=str(o.get('type','')).upper()
-                if 'TAKE_PROFIT' in typ and o.get('price'):self.tp=float(o['price'])
-                elif 'STOP_LOSS' in typ:self.sl=float(o.get('stop_price') or o.get('price') or 0) or None
-        except Exception:pass
+                typ = str(o.get('type', '')).upper()
+                if 'TAKE_PROFIT' in typ and o.get('price'):
+                    self.tp = float(o['price'])
+                elif 'STOP_LOSS' in typ:
+                    self.sl = float(
+                        o.get('stopPrice')
+                        or o.get('stop_price')
+                        or o.get('price')
+                        or 0
+                    ) or None
+        except Exception as e:
+            self.last_error = f'orders: {e}'
     def _market_url(self):
         base='wss://stream.testnet.binance.vision' if self.testnet else 'wss://stream.binance.com:9443';s=self.symbol.lower();return f'{base}/stream?streams={s}@aggTrade/{s}@kline_{self.interval}'
     def _market_loop(self):
@@ -239,6 +299,16 @@ class WebSocketHub:
 
             self.market_connected_once = True
             self.market_last_error = None
+
+            # REST-fill the market-data gap after a reconnect so the cockpit
+            # and strategy context do not remain blind to the outage interval.
+            if self.market_connected_once and not was_connected:
+                try:
+                    self._load_candles()
+                except Exception as exc:
+                    self.market_last_error = (
+                        f'market REST resync: {type(exc).__name__}: {exc}'
+                    )
 
             # A successful reconnect/open clears the previous
             # market WS error instead of leaving a stale red state.
@@ -550,19 +620,24 @@ class WebSocketHub:
                     'updateTime':event.get('T'),
                 }
 
-                if o['symbol']==self.symbol:
-                    self.db.save_order(o)
+                # Persist every executionReport, not only the
+                # configured cockpit symbol. Multi-position mode may hold any
+                # dynamically discovered USDT pair.
+                self.db.save_order(o)
+
+                status = str(o.get('status', '')).upper()
+                executed_qty = float(o.get('executedQty', 0) or 0)
+
+                if str(o.get('symbol', '')).upper() == self.symbol:
                     self._refresh_orders()
 
-                status=str(o.get('status','')).upper()
-                if status=='FILLED':
-                    self._refresh_account()
-
-                if status in {'FILLED','CANCELED','REJECTED','EXPIRED'}:
-                    self.user_sync_required=True
+                if executed_qty > 0 or status in {
+                    'FILLED', 'CANCELED', 'REJECTED', 'EXPIRED'
+                }:
+                    self.user_sync_required = True
                     try:
                         self._refresh_account()
-                        self.user_sync_required=False
+                        self.user_sync_required = False
                     except Exception as e:
                         self._set_user(
                             False,
