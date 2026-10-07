@@ -5603,10 +5603,16 @@ private class NativeEngine(
         // Entry is no longer tied to the 1h candle's breakout. We enter on the
         // lower-TF Wave 3 after higher-TF context confirms the direction.
         val finalSignal =
-            entrySignal &&
-                baseCandidate.atrPct <= 0.08 &&
-                baseCandidate.spreadPct <= 0.0015 &&
-                baseCandidate.riskReward >= 1.5
+            if (campaignEngineEnabled) {
+                baseCandidate.campaignSignals.isNotEmpty() &&
+                    baseCandidate.atrPct <= 0.08 &&
+                    baseCandidate.spreadPct <= 0.0015
+            } else {
+                entrySignal &&
+                    baseCandidate.atrPct <= 0.08 &&
+                    baseCandidate.spreadPct <= 0.0015 &&
+                    baseCandidate.riskReward >= 1.5
+            }
 
         if (!finalSignal && baseCandidate.signal) {
             score = min(score, 84.0)
@@ -5662,7 +5668,8 @@ private class NativeEngine(
                 nestedW3ParentW5 = nestedW3ParentW5,
                 countertrendCorrectionImpulse = countertrendCorrectionImpulse
             ),
-            reason = reason
+            reason = reason,
+            campaignReady = campaignEngineEnabled && baseCandidate.campaignSignals.isNotEmpty()
         )
     }
 
@@ -5710,6 +5717,39 @@ private class NativeEngine(
             .put("htf_confirmed", candidate.htfCandidate)
             .put("setup_state", setupState)
             .put("reason", candidate.reason)
+            .put("campaign_engine", campaignEngineEnabled)
+            .put("campaign_ready", candidate.campaignReady)
+            .put(
+                "campaign_signals",
+                JSONArray().apply {
+                    candidate.campaignSignals.forEach { s ->
+                        put(
+                            JSONObject()
+                                .put("signal_id", s.signalId)
+                                .put("type", s.type)
+                                .put("role", s.role)
+                                .put("signal_bar_time_ms", s.signalBarTimeMs)
+                                .put("trigger_price", s.triggerPrice)
+                                .put("protective_price", s.protectivePrice)
+                                .put("teeth_at_detection", s.teethAtDetection)
+                                .put("invalidation_price", s.invalidationPrice)
+                                .put("reason", s.reason)
+                        )
+                    }
+                }
+            )
+            .put(
+                "entry_signal_type",
+                candidate.campaignSignals.firstOrNull()?.type ?: JSONObject.NULL
+            )
+            .put(
+                "entry_trigger_price",
+                candidate.campaignSignals.firstOrNull()?.triggerPrice ?: JSONObject.NULL
+            )
+            .put(
+                "entry_protective_price",
+                candidate.campaignSignals.firstOrNull()?.protectivePrice ?: JSONObject.NULL
+            )
             .put("wise_man_count", wiseManCount(candidate))
             .put("signal_family", "ALLIGATOR_AO_FRACTAL")
             .put("wave_score", displayWaveScore)
@@ -6891,6 +6931,14 @@ private class NativeEngine(
     fun settings(): JSONObject =
         JSONObject()
             .put("version", BuildConfig.VERSION_NAME)
+            .put("campaign_engine", campaignEngineEnabled)
+            .put("campaign_execution_timeframe", campaignExecutionTimeframe)
+            .put("campaign_entry_mode", "CONDITIONAL_STOP")
+            .put("campaign_fixed_take_profit", false)
+            .put("campaign_risk_limit_pct", campaignRiskLimitPct)
+            .put("campaign_initial_risk_pct", campaignInitialRiskPct)
+            .put("campaign_add_on_risk_cap_pct", campaignAddRiskCapPct)
+            .put("campaign_trail_bars", campaignTrailBars)
             .put("symbol", primarySymbol)
             .put("interval", interval)
             .put("position_fraction", 0.95)
