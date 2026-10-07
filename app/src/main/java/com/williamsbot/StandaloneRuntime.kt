@@ -865,6 +865,7 @@ private class NativeEngine(
             )
 
     fun clearAfterCredentialsCleared() {
+        executionGate.close()
         require(positionList().isEmpty()) {
             "Close/reconcile all positions before clearing credentials."
         }
@@ -946,6 +947,7 @@ private class NativeEngine(
                 .put("error", x.message ?: x.javaClass.simpleName)
         }
 
+        executionGate.open()
         running = true
         paused = false
         startMarketDataStream()
@@ -1019,8 +1021,9 @@ private class NativeEngine(
     }
 
     fun stop(): JSONObject {
-        stopRuntime()
+        executionGate.close()
         check(userPreferences.setAutoRun(false)) { "Failed to persist user auto-run intent" }
+        stopRuntime()
         return JSONObject().put("stopped", true)
     }
 
@@ -2256,7 +2259,7 @@ private class NativeEngine(
                     ) &&
                     candidate.signal &&
                     candidate.score >= 70.0 &&
-                    executionGate.tryReserve(candidate.symbol)
+                    executionGate.tryAdmit(candidate.symbol)
 
             if (!accepted) return@post
 
