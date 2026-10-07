@@ -88,11 +88,20 @@ object DiagnosticsArchive {
         for (i in 0 until tests.length()) {
             val test = tests.optJSONObject(i) ?: continue
             if (test.optString("domain") != domain) continue
-            out.append(test.optString("status", "UNKNOWN"))
+            val severity = test.optString(
+                "severity",
+                if (test.optBoolean("ok", false)) "PASS" else "UNKNOWN"
+            )
+            out.append(severity)
                 .append(" | ")
                 .append(test.optString("name"))
                 .append(" | ")
-                .append(test.optString("message"))
+                .append(
+                    test.optString(
+                        "detail",
+                        test.optString("message", "")
+                    )
+                )
                 .append('\n')
         }
         if (out.length == 0) out.append("No test records for this domain.\n")
