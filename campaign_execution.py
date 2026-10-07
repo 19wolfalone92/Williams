@@ -220,6 +220,12 @@ class CampaignExecutionService:
         campaign.pending_risk_quote = risk_quote
         campaign.capital_reserved_quote = qty * trigger
         self.db.save_campaign(campaign)
+        campaign.tags["pending_order_client_id"] = client_id
+        campaign.tags["pending_order_quantity"] = qty
+        campaign.tags["pending_order_trigger"] = trigger
+        # IMPORTANT: persist ENTRY_PENDING before touching Binance. A fast
+        # conditional fill can arrive on the user stream immediately.
+        self.engine.arm_entry(campaign, signal)
         self.db.state_set(f"campaign_state:{campaign.campaign_id}", campaign.state.value)
 
         intent = OrderIntent.new(
@@ -308,11 +314,8 @@ class CampaignExecutionService:
                     campaign_id=campaign.campaign_id,
                 )
             )
-            self.engine.arm_entry(campaign, signal)
-            self.db.state_set(
-                f"campaign_state:{campaign.campaign_id}",
-                campaign.state.value,
-            )
+            campaign.tags["pending_order_id"] = str(order.get("orderId", "") or "")
+            self.db.save_campaign(campaign)
             return {
                 "campaign_id": campaign.campaign_id,
                 "signal_id": signal.signal_id,
@@ -324,7 +327,21 @@ class CampaignExecutionService:
                 "risk_quote": risk_quote,
             }
         except Exception as exc:
-            self.engine.mark_reconcile_required(campaign, str(exc))
+            # A pre-submit barrier rejection is safe to clear. Any exchange
+            # mutation ambiguity remains fail-closed and recoverable by CID.
+            message = str(exc)
+            if "ExecutionBarrier blocked" in message:
+                campaign.state = CampaignState.CLOSED
+                campaign.pending_risk_quote = 0.0
+                campaign.capital_reserved_quote = 0.0
+                self.db.set_campaign_signal_state(
+                    signal.signal_id,
+                    SignalState.INVALIDATED.value,
+                )
+                self.db.state_delete(f"entry_client_order_id:{signal.symbol}")
+                self.db.save_campaign(campaign)
+            else:
+                self.engine.mark_reconcile_required(campaign, message)
             raise
 
     def _find_campaign_by_pending_client_id(self, client_id: str):
@@ -333,9 +350,20 @@ class CampaignExecutionService:
             "ORDER BY id DESC LIMIT 1",
             (str(client_id),),
         ).fetchone()
-        if not row:
-            return None
-        return self.engine.load_campaign(str(row["campaign_id"]))
+        if row:
+            return self.engine.load_campaign(str(row["campaign_id"]))
+
+        # Recovery race guard: Binance may have accepted the conditional order
+        # before campaign_orders was persisted. Find the durable campaign by
+        # its persisted pending clientOrderId tag.
+        for item in self.db.open_campaigns():
+            try:
+                tags = json.loads(item.get("tags_json") or "{}")
+            except Exception:
+                tags = {}
+            if str(tags.get("pending_order_client_id", "")) == str(client_id):
+                return self.engine.load_campaign(str(item["campaign_id"]))
+        return None
 
     def reconcile_pending_entries(self) -> list[dict[str, Any]]:
         """Adopt conditional BUYs after triggers, partial fills, restart or crash."""
