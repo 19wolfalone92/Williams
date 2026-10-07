@@ -202,15 +202,20 @@ class CampaignEngine:
         *,
         campaign_reserved_risk_quote: float,
         equity_quote: float,
+        tranche_index: int = 1,
     ) -> float:
         if equity_quote <= 0:
             return 0.0
         campaign_capacity = equity_quote * self.campaign_risk_limit_pct
-        remaining = max(0.0, campaign_capacity - float(campaign_reserved_risk_quote))
-        weight = reverse_pyramid_risk_weight(1)
-        # 1:5:4:3:2 is a size progression in the book. In Williams we use it
-        # to bias *available* add-on budget, while still hard-capping risk.
-        weighted = self.campaign_risk_limit_pct * (weight / 15.0)
+        remaining = max(
+            0.0,
+            campaign_capacity - float(campaign_reserved_risk_quote),
+        )
+        weight = reverse_pyramid_risk_weight(tranche_index)
+        # 1:5:4:3:2 is retained as a risk-allocation bias only. The hard
+        # campaign cap always dominates the historical ratio.
+        total_weight = 1 + 5 + 4 + 3 + 2
+        weighted = self.campaign_risk_limit_pct * (weight / total_weight)
         return min(remaining / equity_quote, weighted)
 
     # ------------------------------------------------------------------
