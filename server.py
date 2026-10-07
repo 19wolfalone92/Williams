@@ -15,6 +15,7 @@ from market_scanner import MarketScanner
 from market_context import ContextCache
 from mtf_context_service import MultiTimeframeContextService
 from feature_store import FeatureStore
+from binance_client import BinanceSpotClient
 
 load_dotenv()
 API_TOKEN = os.getenv('MOBILE_API_TOKEN', '').strip()
@@ -132,10 +133,35 @@ class ControlState:
             self.testnet = stored['testnet']
 
     def configure(self, key, secret, testnet=True):
+        key = key.strip()
+        secret = secret.strip()
+        testnet = bool(testnet)
+        if not key or not secret:
+            raise RuntimeError('Binance API key and secret are required.')
+
+        # Validate the exact Spot credentials before persisting them. This prevents
+        # the backend from storing a broken/expired key and only discovering it
+        # later inside the autonomous trading loop.
+        candidate = BinanceSpotClient(key, secret, testnet=testnet)
+        try:
+            candidate.sync_time()
+            account = candidate.account()
+            if str(account.get('accountType', 'SPOT')).upper() not in {'SPOT', ''}:
+                raise RuntimeError('Configured Binance account is not Spot.')
+            if not testnet:
+                restrictions = candidate.api_restrictions()
+                if not (
+                    bool(restrictions.get('enableReading', False))
+                    and bool(restrictions.get('enableSpotAndMarginTrading', False))
+                    and not bool(restrictions.get('enableWithdrawals', True))
+                ):
+                    raise RuntimeError(
+                        'Live Spot API key must allow reading + Spot trading and have withdrawals disabled.'
+                    )
+        except Exception as exc:
+            raise RuntimeError(f'Binance credential validation failed: {exc}') from exc
+
         with self.lock:
-            key = key.strip()
-            secret = secret.strip()
-            testnet = bool(testnet)
             if self.running and (
                 key != self.api_key
                 or secret != self.api_secret
@@ -691,6 +717,7 @@ def clear_binance_config():
         state.paused = False
     state.credentials.clear()
     hub.configure_credentials('', '', True)
+    mtf_service.configure_credentials('', '', True)
     return {
         'configured': False,
         'cleared': True,
