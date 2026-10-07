@@ -586,7 +586,7 @@ private class NativeEngine(
                     isDaemon = true
                     start()
                 }
-            } else if (!error.equals("stopped")) {
+            } else if (!error.equals("stopped") && running) {
                 userStreamSyncRequired = true
                 executionGate.closeNormalExecution(
                     GateCloseReason.USER_STREAM_DISCONNECTED
