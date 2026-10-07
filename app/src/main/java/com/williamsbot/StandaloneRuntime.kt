@@ -783,6 +783,12 @@ private class NativeEngine(
                     .put("entry_order_id", it.entryOrderId)
                     .put("entry_client_order_id", it.entryClientOrderId)
                     .put("opened_at", it.openedAt)
+                    .put("campaign_id", it.campaignId)
+                    .put("signal_id", it.signalId)
+                    .put("signal_type", it.signalType)
+                    .put("campaign_state", it.campaignState)
+                    .put("stop_source", it.stopSource)
+                    .put("additions", it.additions)
             )
         }
 
@@ -795,6 +801,13 @@ private class NativeEngine(
                         .put("client_order_id", it.clientOrderId)
                         .put("notional", it.notional)
                         .put("stop_distance", it.stopDistance)
+                        .put("trigger_price", it.triggerPrice)
+                        .put("protective_price", it.protectivePrice)
+                        .put("risk_reserved_pct", it.riskReservedPct)
+                        .put("capital_reserved_quote", it.capitalReservedQuote)
+                        .put("campaign_id", it.campaignId)
+                        .put("signal_id", it.signalId)
+                        .put("signal_type", it.signalType)
                 )
             }
         }
@@ -831,7 +844,13 @@ private class NativeEngine(
                         entryClientOrderId = item.optString(
                             "entry_client_order_id"
                         ),
-                        openedAt = item.optLong("opened_at", 0L)
+                        openedAt = item.optLong("opened_at", 0L),
+                        campaignId = item.optString("campaign_id", ""),
+                        signalId = item.optString("signal_id", ""),
+                        signalType = item.optString("signal_type", ""),
+                        campaignState = item.optString("campaign_state", "OPEN_INITIAL"),
+                        stopSource = item.optString("stop_source", "INITIAL_SIGNAL"),
+                        additions = item.optInt("additions", 0)
                     )
                 }
             }
@@ -859,7 +878,14 @@ private class NativeEngine(
                         stopDistance = item.optDouble(
                             "stop_distance",
                             0.02
-                        )
+                        ),
+                        triggerPrice = item.optDouble("trigger_price", 0.0),
+                        protectivePrice = item.optDouble("protective_price", 0.0),
+                        riskReservedPct = item.optDouble("risk_reserved_pct", 0.0),
+                        capitalReservedQuote = item.optDouble("capital_reserved_quote", 0.0),
+                        campaignId = item.optString("campaign_id", ""),
+                        signalId = item.optString("signal_id", ""),
+                        signalType = item.optString("signal_type", "REVERSAL")
                     )
                 }
             }
