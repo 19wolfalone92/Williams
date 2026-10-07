@@ -323,10 +323,10 @@ class WebSocketHub:
         self.broadcast({'type':'ticker','data':self._live()})
     def _user_loop(self):
         delay=1
-        rotation_timer=None
+        rotation_timer=[None]
 
         while not self.stop_event.is_set():
-            rotation_timer=None
+            rotation_timer[0]=None
             if not self.api_key or not self.api_secret:
                 self.user_connected=False
                 self.user_connected_since=0.0
@@ -374,14 +374,13 @@ class WebSocketHub:
                 self.user_sync_required=True
 
                 def opened(ws):
-                    nonlocal rotation_timer
                     self._user_ws=ws
-                    rotation_timer=threading.Timer(
+                    rotation_timer[0]=threading.Timer(
                         23 * 60 * 60,
                         lambda: ws.close()
                     )
-                    rotation_timer.daemon=True
-                    rotation_timer.start()
+                    rotation_timer[0].daemon=True
+                    rotation_timer[0].start()
 
                     request={
                         'id':f'williams-user-{int(time.time()*1000)}',
@@ -406,8 +405,8 @@ class WebSocketHub:
                     )
 
                 def on_close(ws,code,msg):
-                    if rotation_timer is not None:
-                        rotation_timer.cancel()
+                    if rotation_timer[0] is not None:
+                        rotation_timer[0].cancel()
                     self.user_connected=False
                     self.user_subscription_id=None
                     self.user_connected_since=0.0
@@ -451,8 +450,8 @@ class WebSocketHub:
                 )
 
             finally:
-                if rotation_timer is not None:
-                    rotation_timer.cancel()
+                if rotation_timer[0] is not None:
+                    rotation_timer[0].cancel()
                 self.user_connected=False
                 self.user_connected_since=0.0
 
