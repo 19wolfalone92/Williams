@@ -708,6 +708,23 @@ def configure(payload: CredentialPayload):
     dependencies=[Depends(auth)],
 )
 def clear_binance_config():
+    t = state.ensure_trader()
+    multi = state.ensure_multi()
+    try:
+        managed_positions = multi.open_positions()
+        exchange_orders = t.client.open_orders()
+    except Exception as exc:
+        raise HTTPException(
+            503,
+            'Cannot verify Spot account state before credential removal: ' + str(exc),
+        )
+    if managed_positions or exchange_orders:
+        raise HTTPException(
+            409,
+            'Credentials cannot be removed while Spot positions or open orders exist. '
+            'Close/reconcile the account first.',
+        )
+
     state.stop()
     with state.lock:
         state.api_key = ''
