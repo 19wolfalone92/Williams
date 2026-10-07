@@ -2432,8 +2432,7 @@ private class NativeEngine(
                         killLatched = killLatched
                     ) &&
                     candidate.signal &&
-                    candidate.score >= 70.0 &&
-                    executionGate.tryAdmit(candidate.symbol)
+                    candidate.score >= 70.0
 
             if (!accepted) return@post
 
@@ -2451,19 +2450,32 @@ private class NativeEngine(
             }
 
             executionExecutor.execute {
-                val result = try {
-                    executeBuyWithProtection(candidate, gated = true)
-                    ExecutionResult(candidate.symbol, true)
-                } catch (x: Throwable) {
-                    ExecutionResult(
-                        candidate.symbol,
-                        false,
-                        x.message ?: x.javaClass.simpleName
-                    )
-                }
+                val result =
+                    when (
+                        val admission =
+                            executionGate.executeWithAdmission(
+                                symbol = candidate.symbol,
+                                scope = AdmissionScope.NORMAL_EXECUTION
+                            ) {
+                                executeBuyWithProtection(
+                                    candidate,
+                                    gated = true
+                                )
+                            }
+                    ) {
+                        is AdmissionResult.Admitted ->
+                            ExecutionResult(candidate.symbol, true)
+
+                        is AdmissionResult.Rejected ->
+                            ExecutionResult(
+                                candidate.symbol,
+                                false,
+                                "EXECUTION_GATE_CLOSED: " +
+                                    admission.reason.name
+                            )
+                    }
 
                 tradingEventLoop.post {
-                    executionGate.release(result.symbol)
                     runtimeState.clearExecutionGateSymbol()
 
                     if (
