@@ -24,16 +24,6 @@ class WilliamsForegroundService : Service() {
 
     private lateinit var connectivity: ConnectivityManager
     private var online = true
-    private val supervisorHandler = Handler(Looper.getMainLooper())
-    private val supervisor = object : Runnable {
-        override fun run() {
-            // If the process survives but the autonomous worker has died, bootstrap()
-            // performs recovery and restarts only when the durable auto_run flag is true.
-            runCatching { StandaloneRuntime.bootstrap(applicationContext) }
-            supervisorHandler.postDelayed(this, 60_000L)
-        }
-    }
-
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
             online = true
@@ -52,10 +42,7 @@ class WilliamsForegroundService : Service() {
         connectivity = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         runCatching { connectivity.registerDefaultNetworkCallback(networkCallback) }
         startForeground(NOTIFICATION_ID, buildNotification())
-        // The trading runtime itself owns Binance WS reconnect/reconciliation.
-        // The FGS only keeps the Android process alive and surfaces connectivity.
-        StandaloneRuntime.bootstrap(applicationContext)
-        supervisorHandler.postDelayed(supervisor, 60_000L)
+        // Android is a dashboard only. Binance trading and WS recovery run on the backend.
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -67,7 +54,6 @@ class WilliamsForegroundService : Service() {
     }
 
     override fun onDestroy() {
-        supervisorHandler.removeCallbacks(supervisor)
         runCatching { connectivity.unregisterNetworkCallback(networkCallback) }
         super.onDestroy()
     }
