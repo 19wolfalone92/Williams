@@ -399,15 +399,30 @@ def _scanner_snapshot():
             and age is not None
             and age < SCANNER_CACHE_SECONDS
         )
+        scanning = bool(scanner_cache["scanning"])
+        last_error = scanner_cache["last_error"]
+        if scanning:
+            state_name = "RUNNING"
+        elif last_error:
+            state_name = "ERROR"
+        elif scanner_cache["time"]:
+            state_name = "READY"
+        else:
+            state_name = "NOT_RUN"
         return {
             "cached": bool(scanner_cache["data"]),
             "duration_ms": int(scanner_cache["duration_ms"]),
             "symbols_scanned": int(scanner_cache["symbols_scanned"]),
+            "scanner_symbols": int(scanner_cache["symbols_scanned"]),
             "fresh": fresh,
             "cache_ttl_seconds": SCANNER_CACHE_SECONDS,
-            "scanning": bool(scanner_cache["scanning"]),
+            "scanning": scanning,
+            "scanner_state": state_name,
             "age_seconds": age,
-            "last_error": scanner_cache["last_error"],
+            "scanner_age_seconds": age,
+            "last_error": last_error,
+            "scanner_error": last_error,
+            "started_at": scanner_cache["started_at"],
             "candidates": list(scanner_cache["data"]),
         }
 
@@ -467,10 +482,16 @@ def _scanner_watchdog():
                 scanner_cache["last_error"] = f"watchdog: {type(exc).__name__}: {exc}"
 
 
-def _start_scanner_background():
+def _start_scanner_background(force=False):
     with scanner_lock:
         if scanner_cache["scanning"]:
             return False
+        if force:
+            scanner_cache["data"] = []
+            scanner_cache["time"] = 0.0
+            scanner_cache["duration_ms"] = 0
+        scanner_cache["last_error"] = None
+        scanner_cache["started_at"] = time.time()
         scanner_cache["scanning"] = True
         thread = threading.Thread(
             target=_scanner_worker,
@@ -966,6 +987,9 @@ def status():
         'scanner_scanning': bool(_scanner_snapshot()['scanning']),
         'scanner_symbols': int(_scanner_snapshot()['symbols_scanned']),
         'scanner_duration_ms': int(_scanner_snapshot()['duration_ms']),
+        'scanner_state': _scanner_snapshot()['scanner_state'],
+        'scanner_error': _scanner_snapshot()['scanner_error'],
+        'scanner_age_seconds': _scanner_snapshot()['scanner_age_seconds'],
         'market_ws_connected': bool(hub.market_connected),
         'user_ws_connected': bool(hub.user_connected),
         'user_stream_sync_required': bool(hub.user_sync_required),
@@ -1097,8 +1121,10 @@ def positions():
 @app.get('/api/v1/scanner', dependencies=[Depends(auth)])
 def scanner(refresh: bool = False):
     started = False
-    if refresh and not _scanner_cache_fresh():
-        started = _start_scanner_background()
+    if refresh:
+        # A manual SCAN must always request a fresh snapshot even if the
+        # previous result is still inside the normal cache TTL.
+        started = _start_scanner_background(force=True)
     result = _scanner_snapshot()
     result["version"] = VERSION
     if refresh:
@@ -1110,12 +1136,27 @@ def scanner(refresh: bool = False):
     '/api/v1/market/klines',
     dependencies=[Depends(auth)],
 )
-def market_klines(limit: int = 120):
+def market_klines(
+    limit: int = 120,
+    symbol: Optional[str] = None,
+    interval: Optional[str] = None,
+):
     t = state.ensure_trader()
+    target_symbol = str(symbol or t.symbol).strip().upper()
+    target_interval = str(interval or t.interval).strip().lower()
+    allowed_intervals = {
+        "1m", "3m", "5m", "15m", "30m", "1h", "2h",
+        "4h", "6h", "8h", "12h", "1d", "3d", "1w",
+        "1M".lower(),
+    }
+    if target_interval not in allowed_intervals:
+        raise HTTPException(400, f"Unsupported Binance interval: {target_interval}")
+    if not target_symbol.endswith("USDT") or not target_symbol.isalnum():
+        raise HTTPException(400, "Invalid Spot symbol")
     df = fetch_klines(
         t.client,
-        t.symbol,
-        t.interval,
+        target_symbol,
+        target_interval,
         limit=max(30, min(limit, 250)),
     )
     ind = calculate_indicators(
