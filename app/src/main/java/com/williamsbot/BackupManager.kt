@@ -2,6 +2,7 @@ package com.williamsbot
 
 import android.content.Context
 import android.util.Base64
+import androidx.core.content.edit
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import org.json.JSONObject
@@ -118,10 +119,10 @@ object BackupManager {
             "Backup не содержит корректный Mobile API Token"
         }
 
-        prefs(context).edit()
-            .putString("backend_url", backendUrl)
-            .putString("mobile_token", mobileToken)
-            .apply()
+        prefs(context).edit {
+            putString("backend_url", backendUrl)
+            putString("mobile_token", mobileToken)
+        }
 
         return JSONObject()
             .put("restored", true)
