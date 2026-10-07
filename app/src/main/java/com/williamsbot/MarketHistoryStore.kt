@@ -158,6 +158,7 @@ class MarketHistoryStore(context: Context) :
                 SQLiteDatabase.CONFLICT_REPLACE
             )
 
+        }
     }
 
     @Synchronized
