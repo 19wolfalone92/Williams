@@ -21,7 +21,7 @@ class WebSocketHub:
         self.user_sync_required=True
         self.user_last_event_at=None
         self._last_user_event_by_type={}
-        self.user_stream_reconnects=0
+        self.user_stream_reconnects=0; self.user_connected_since=0.0
     def configure_credentials(self,key,secret,testnet=True):
         with self.lock:
             self.api_key=key.strip()
@@ -34,6 +34,7 @@ class WebSocketHub:
             )
             self.user_connected=False
             self.user_subscription_id=None
+            self.user_connected_since=0.0
 
         # Only start the user thread when the hub is already running.
         # During startup(), start() will create both threads itself.
@@ -248,8 +249,22 @@ class WebSocketHub:
         while not self.stop_event.is_set():
             if not self.api_key or not self.api_secret:
                 self.user_connected=False
+                self.user_connected_since=0.0
                 self.stop_event.wait(1)
                 continue
+
+            # Binance Spot WebSocket API connections have a finite lifetime.
+            # Rotate proactively so the trading stream never reaches the hard boundary.
+            if self.user_connected and self.user_connected_since:
+                if time.time() - self.user_connected_since >= 23 * 60 * 60:
+                    self.last_error='user ws: proactive 23h rotation'
+                    try:
+                        if self._user_ws is not None:
+                            self._user_ws.close()
+                    except Exception:
+                        pass
+                    self.user_connected=False
+                    self.user_connected_since=0.0
 
             app=None
 
@@ -306,6 +321,7 @@ class WebSocketHub:
                 def on_close(ws,code,msg):
                     self.user_connected=False
                     self.user_subscription_id=None
+                    self.user_connected_since=0.0
                     self.user_sync_required=True
 
                     if not self.stop_event.is_set():
