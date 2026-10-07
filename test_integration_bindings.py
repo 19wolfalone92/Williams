@@ -204,7 +204,13 @@ class FakeBinance:
 
 def test_terminal_partial_entry_is_materialized_and_protected(tmp_path):
     db = Database(str(tmp_path / "partial-entry.sqlite3"))
-    client = FakeBinance(entry_status="CANCELED", entry_qty="0.4")
+
+    class NoOpenOrdersFakeBinance(FakeBinance):
+        def open_orders(self, symbol=None):
+            self.open_orders_calls += 1
+            return []
+
+    client = NoOpenOrdersFakeBinance(entry_status="CANCELED", entry_qty="0.4")
     trader = MultiPositionTrader(client, db=db, symbols=[])
 
     db.state_set("entry_client_order_id:BTCUSDT", "WILLV4_ENTRY_TEST")
@@ -222,7 +228,17 @@ def test_terminal_partial_entry_is_materialized_and_protected(tmp_path):
 
 def test_terminal_partial_oco_is_counted_once_and_reprotected(tmp_path):
     db = Database(str(tmp_path / "partial-oco.sqlite3"))
-    client = FakeBinance(entry_status="FILLED", entry_qty="1.0", exit_qty="0.3")
+
+    class TerminalOcoFakeBinance(FakeBinance):
+        def open_orders(self, symbol=None):
+            self.open_orders_calls += 1
+            return []
+
+    client = TerminalOcoFakeBinance(
+        entry_status="FILLED",
+        entry_qty="1.0",
+        exit_qty="0.3",
+    )
     trader = MultiPositionTrader(client, db=db, symbols=[])
 
     trade_id = db.save_trade(
