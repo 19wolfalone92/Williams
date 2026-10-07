@@ -49,6 +49,24 @@ class TradingStateMachine(
         state == TradingState.READY_FLAT ||
             state == TradingState.PROTECTED
 
+    /**
+     * Portfolio-level admission is independent from whether another
+     * position is already open. READY_FLAT means "no position", while
+     * PROTECTED is the normal state from which another bounded entry may be
+     * admitted.
+     */
+    fun canAdmitEntry(
+        openPositions: Int,
+        maxOpenPositions: Int,
+        hasPendingEntry: Boolean = false,
+        reconciliationRequired: Boolean = false,
+        killLatched: Boolean = false
+    ): Boolean {
+        if (reconciliationRequired || killLatched || hasPendingEntry) return false
+        if (maxOpenPositions <= 0 || openPositions >= maxOpenPositions) return false
+        return executionAllowed()
+    }
+
     private fun allowed(from: TradingState, to: TradingState): Boolean =
         when (from) {
             TradingState.STOPPED ->
