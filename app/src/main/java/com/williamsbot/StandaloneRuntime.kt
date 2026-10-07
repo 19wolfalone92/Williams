@@ -2440,6 +2440,7 @@ private class NativeEngine(
                 continue
             }
 
+            var ocoCancelled = false
             try {
                 if (stored.ocoListId.isNotBlank()) {
                     signedDelete(
@@ -2447,6 +2448,7 @@ private class NativeEngine(
                         "symbol=" + stored.symbol +
                             "&orderListId=" + stored.ocoListId
                     )
+                    ocoCancelled = true
                 } else if (stored.ocoListClientId.isNotBlank()) {
                     signedDelete(
                         "/api/v3/orderList",
@@ -2454,6 +2456,7 @@ private class NativeEngine(
                             "&listClientOrderId=" +
                             stored.ocoListClientId
                     )
+                    ocoCancelled = true
                 } else {
                     setReconcileRequired(
                         "Williams trailing update: managed OCO identifier missing for " +
@@ -2489,6 +2492,75 @@ private class NativeEngine(
                 }
                 savePersistedState()
             } catch (x: Exception) {
+                if (ocoCancelled) {
+                    // OCO cancellation + replacement is not atomic. If the
+                    // replacement failed after cancellation, never leave the
+                    // position naked: attempt one direct market exit first.
+                    val emergency = runCatching {
+                        val account = signedAccount()
+                        val balances = account.getJSONArray("balances")
+                        val asset = stored.symbol.removeSuffix("USDT")
+                        var free = 0.0
+                        for (i in 0 until balances.length()) {
+                            val row = balances.getJSONObject(i)
+                            if (row.optString("asset") == asset) {
+                                free = row.optString("free").toDoubleOrNull() ?: 0.0
+                                break
+                            }
+                        }
+                        val rules = symbolFilters(stored.symbol)
+                        val qty = floorStep(min(stored.qty, free), rules.step)
+                        require(qty >= rules.minQty) {
+                            "Emergency SELL quantity below Binance minimum"
+                        }
+                        val sell = signedPost(
+                            "/api/v3/order",
+                            "symbol=" + stored.symbol +
+                                "&side=SELL&type=MARKET&quantity=" +
+                                fmtQty(qty, rules.decimals)
+                        )
+                        val exitPrice = sell.optString("cummulativeQuoteQty")
+                            .toDoubleOrNull()
+                            ?.let { q -> if (qty > 0.0) q / qty else 0.0 }
+                            ?.takeIf { it > 0.0 }
+                            ?: stored.entry
+                        TradeJournal.close(
+                            prefs = prefs,
+                            symbol = stored.symbol,
+                            exitPrice = exitPrice,
+                            reason = "EMERGENCY_UNPROTECTED_EXIT",
+                            order = sell
+                        )
+                        recordCompletedTrade(
+                            stored = stored,
+                            exitPrice = exitPrice,
+                            reason = "EMERGENCY_UNPROTECTED_EXIT",
+                            raw = sell
+                        )
+                        synchronized(positions) {
+                            positions.remove(stored.symbol)
+                        }
+                        savePersistedState()
+                        stateMachine.force(
+                            if (positionList().isEmpty()) {
+                                TradingState.READY_FLAT
+                            } else {
+                                TradingState.PROTECTED
+                            },
+                            "Emergency exit after failed OCO replacement"
+                        )
+                        true
+                    }.getOrElse {
+                        setReconcileRequired(
+                            "OCO replacement failed and emergency SELL failed for " +
+                                stored.symbol + ": " +
+                                (it.message ?: it.javaClass.simpleName)
+                        )
+                        false
+                    }
+                    if (emergency) return
+                }
+
                 setReconcileRequired(
                     "Williams trailing stop update failed for " +
                         stored.symbol +
