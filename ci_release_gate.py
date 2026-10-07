@@ -79,8 +79,8 @@ def main() -> None:
     android_ci = read(".github/workflows/android-apk.yml")
     must(android_ci, "python3 ci_release_gate.py", "android workflow")
     must(android_ci, "group: android-${{ github.workflow }}-${{ github.ref }}-${{ github.sha }}", "android workflow")
-    must(android_ci, "./gradlew --no-daemon :app:lintDebug", "android workflow")
-    must_not(android_ci, "gradle --no-daemon :app:", "android workflow")
+    must(android_ci, "gradle --no-daemon :app:lintDebug", "android workflow")
+    must_not(android_ci, "./gradlew --no-daemon :app:", "android workflow")
 
     python_ci = read(".github/workflows/python-ci.yml")
     must(python_ci, "python3 ci_release_gate.py", "python workflow")
