@@ -1,5 +1,6 @@
 package com.williamsbot
 
+import android.annotation.SuppressLint
 import android.content.Context
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
@@ -32,6 +33,7 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.floor
 
+@SuppressLint("StaticFieldLeak")
 object StandaloneRuntime {
     private var server: StandaloneServer? = null
 
