@@ -77,7 +77,10 @@ class TradingForegroundService : Service() {
     ): Int {
         when (intent?.action) {
             ACTION_START -> {
-                StandaloneRuntime.startTrading()
+                // ACTION_START means "keep the foreground runtime alive".
+                // Trading itself is started explicitly through the local control API
+                // after Binance Testnet credentials have been configured.
+                StandaloneRuntime.start(this)
             }
 
             ACTION_STOP -> {
