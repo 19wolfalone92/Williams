@@ -437,7 +437,7 @@ class BinanceSpotClient:
         # For SELL TAKE_PROFIT_LIMIT the limit leg is kept strictly below the
         # trigger and quantized to Binance's actual PRICE_FILTER tickSize.
         tick = self._symbol_tick_size(symbol)
-        take_trigger = Decimal(str(take_profit_price))
+        take_trigger = self.decimal_floor(Decimal(str(take_profit_price)), tick)
         take_limit = self.decimal_floor(take_trigger - tick, tick)
         stop_trigger = self.decimal_floor(Decimal(str(stop_price)), tick)
         stop_limit = self.decimal_floor(Decimal(str(stop_limit_price)), tick)
