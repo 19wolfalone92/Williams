@@ -35,6 +35,7 @@ jobs:
           set -o pipefail
           python -m pytest -q \
             test_production_architecture.py \
+            test_android_remote_only.py \
             test_l2_slippage.py \
             test_hypothesis_engine.py \
             test_market_scanner.py \
