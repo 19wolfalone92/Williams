@@ -70,6 +70,10 @@ object StandaloneRuntime {
         server?.stopTrading()
     }
 
+    fun clearAfterCredentialsCleared() {
+        server?.clearAfterCredentialsCleared()
+    }
+
     fun stop() {
         server?.stop()
         server = null
@@ -261,6 +265,10 @@ private class StandaloneServer(private val context: Context) {
 
     fun stopTrading() {
         e().stop()
+    }
+
+    fun clearAfterCredentialsCleared() {
+        e().clearAfterCredentialsCleared()
     }
 
     private fun e(): NativeEngine {
@@ -855,6 +863,37 @@ private class NativeEngine(
                 "auth_configured",
                 key().isNotBlank() && secret().isNotBlank()
             )
+
+    fun clearAfterCredentialsCleared() {
+        require(positionList().isEmpty()) {
+            "Close/reconcile all positions before clearing credentials."
+        }
+        synchronized(pendingEntries) {
+            require(pendingEntries.isEmpty()) {
+                "Resolve pending entries before clearing credentials."
+            }
+        }
+
+        stopRuntime()
+        check(runtimeState.saveTradingState("[]", "[]")) {
+            "Failed to clear persisted trading runtime state"
+        }
+        check(runtimeState.setReconcileRequired(false)) {
+            "Failed to clear reconciliation-required state"
+        }
+        runtimeState.clearExecutionGateSymbol()
+
+        candidates = JSONArray()
+        primaryCandles = emptyList()
+        scanSymbols = mutableListOf()
+
+        if (!killLatched) {
+            stateMachine.force(
+                TradingState.READY_FLAT,
+                "credentials cleared by user"
+            )
+        }
+    }
 
     fun start(): JSONObject {
         if (killLatched) {
