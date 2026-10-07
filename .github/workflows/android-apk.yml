@@ -1,4 +1,5 @@
 name: Build Android APK
+# Final Binance Spot Testnet checklist validation.
 
 on:
   push:
