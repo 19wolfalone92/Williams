@@ -1,11 +1,13 @@
 package com.williamsbot.data.preferences
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.williamsbot.domain.preferences.UserPreferencesStore
 
+@SuppressLint("UseKtx")
 class EncryptedUserPreferencesStore(
     private val prefs: SharedPreferences
 ) : UserPreferencesStore {
