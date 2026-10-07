@@ -249,6 +249,34 @@ def test_multiple_positions_are_independent_and_exit_is_mapped_to_one_symbol(tmp
         "listStatusType": "EXEC_STARTED",
         "listOrderStatus": "EXECUTING",
     })
+    client.orders_by_symbol["ETHUSDT"] += [
+        {
+            "symbol": "ETHUSDT",
+            "side": "SELL",
+            "type": "TAKE_PROFIT_LIMIT",
+            "orderId": "eth-tp-1",
+            "orderListId": "202",
+            "clientOrderId": "WILLV4_OCO_ETH_TP",
+            "status": "NEW",
+            "origQty": "2",
+            "executedQty": "0",
+            "price": "4160",
+            "stopPrice": "4160",
+        },
+        {
+            "symbol": "ETHUSDT",
+            "side": "SELL",
+            "type": "STOP_LOSS_LIMIT",
+            "orderId": "eth-sl-1",
+            "orderListId": "202",
+            "clientOrderId": "WILLV4_OCO_ETH_SL",
+            "status": "NEW",
+            "origQty": "2",
+            "executedQty": "0",
+            "price": "3910",
+            "stopPrice": "3920",
+        },
+    ]
 
     multi = MultiPositionTrader(client, db=db)
     result = multi.reconcile_open_positions()
@@ -555,6 +583,7 @@ def test_partial_emergency_sell_never_closes_trade_as_flat(tmp_path: Path):
     )
     db.state_set("position_state:BTCUSDT", "OPEN")
     trader = MultiPositionTrader(client, db=db, symbols=["BTCUSDT"])
+    trader.dry_run = False
     result = trader._emergency_market_sell("BTCUSDT", 1.0, trade_id, "TEST_PARTIAL")
 
     assert result["emergency_exit"] is True
