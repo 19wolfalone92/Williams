@@ -232,6 +232,41 @@ def test_oco_quantizes_both_sell_stop_legs(monkeypatch):
     assert captured["params"]["belowPrice"] == "94.9"
 
 
+def test_cancel_replace_http_409_is_unknown_and_not_retried(monkeypatch):
+    client = make_client()
+    calls = []
+
+    class FakeResponse:
+        status_code = 409
+        headers = {}
+        content = b'{"code":-2022,"msg":"Order cancel-replace partially failed."}'
+
+        @property
+        def text(self):
+            return self.content.decode()
+
+        def json(self):
+            return {"code": -2022, "msg": "Order cancel-replace partially failed."}
+
+    def fake_request(*args, **kwargs):
+        calls.append(1)
+        return FakeResponse()
+
+    monkeypatch.setattr(client.session, "request", fake_request)
+
+    with pytest.raises(BinanceAPIError) as exc:
+        client._request(
+            "POST",
+            "/api/v3/order/cancelReplace",
+            {"symbol": "BTCUSDT", "cancelReplaceMode": "STOP_ON_FAILURE"},
+            signed=True,
+        )
+
+    assert exc.value.unknown_execution is True
+    assert exc.value.status_code == 409
+    assert len(calls) == 1
+
+
 def test_order_mutation_rate_limit_is_unknown_and_not_retried(monkeypatch):
     client = make_client()
     calls = []
