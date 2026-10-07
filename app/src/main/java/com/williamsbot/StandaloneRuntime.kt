@@ -540,6 +540,8 @@ private class NativeEngine(
     @Volatile private var marketSocketLastEventMs = 0L
     @Volatile private var historyWarmupRunning = false
     @Volatile private var historyReady = false
+    @Volatile private var historyState = "IDLE"
+    @Volatile private var historyLastError: String? = null
 
     private val scanCacheTtlMs = 12_000L
     private val deepWatchTopN = 10
@@ -971,6 +973,8 @@ private class NativeEngine(
         scanSymbols = mutableListOf()
         historyReady = false
         historyWarmupRunning = false
+        historyState = "IDLE"
+        historyLastError = null
         lastError = null
         clearReconcileRequired()
 
@@ -1004,6 +1008,9 @@ private class NativeEngine(
 
         stateMachine.force(TradingState.INITIALIZING, "bot start")
         userStreamSyncRequired = true
+        historyReady = false
+        historyState = "LOADING"
+        historyLastError = null
 
         try {
             recoverPendingEntries()
@@ -1034,9 +1041,9 @@ private class NativeEngine(
 
         running = true
         paused = false
+        warmCoreHistoryAsync()
         startMarketDataStream()
         userStream.start()
-        warmCoreHistoryAsync()
 
         worker = Thread {
             while (running) {
@@ -1757,74 +1764,87 @@ private class NativeEngine(
     }
 
     private fun warmCoreHistoryAsync() {
-        if (historyWarmupRunning) return
+        if (historyWarmupRunning || !running) return
         historyWarmupRunning = true
         historyReady = false
+        historyState = "LOADING"
+        historyLastError = null
 
         Thread {
             try {
                 var recentReady = true
-
-                // Warm only the execution-critical matrix. Do not make startup
-                // depend on 75 REST calls or on historical backfill.
                 for (symbol in coreSymbols) {
                     for (frame in startupFrames) {
                         if (!running) return@Thread
+                        var recent = emptyList<CandleN>()
+                        var failure: Throwable? = null
 
-                        val recent = runCatching {
-                            fetchCandles(symbol, frame, startupHistoryLimit)
-                        }.getOrElse {
-                            recentReady = false
-                            lastError =
-                                "history " + symbol + ":" + frame +
-                                    " failed: " +
-                                    (it.message ?: it.javaClass.simpleName)
-                            emptyList()
+                        // Testnet REST can transiently fail. Retry only this
+                        // idempotent market-data read; never leave zero history
+                        // as an unexplained runtime state.
+                        for (attempt in 0 until 3) {
+                            val result = runCatching {
+                                fetchCandles(symbol, frame, startupHistoryLimit)
+                            }
+                            if (result.isSuccess) {
+                                recent = result.getOrDefault(emptyList())
+                                if (recent.size >= minStartupHistoryCandles) break
+                                failure = IllegalStateException(
+                                    "received ${recent.size} closed candles"
+                                )
+                            } else {
+                                failure = result.exceptionOrNull()
+                            }
+                            if (attempt < 2) {
+                                try { Thread.sleep(500L * (attempt + 1)) }
+                                catch (_: InterruptedException) {
+                                    Thread.currentThread().interrupt()
+                                    return@Thread
+                                }
+                            }
                         }
 
-                        val key = symbol + ":" + frame
-                        if (recent.size >= minStartupHistoryCandles) {
-                            liveCandleCache[key] = recent.takeLast(startupHistoryLimit).toMutableList()
-                            candleCache[key] =
-                                System.currentTimeMillis() to recent
-                            indicatorSnapshots[key] =
+                        val persistedCount = historyStore.count(symbol, frame).toInt()
+                        val cacheKey = symbol + ":" + frame
+                        if (recent.size >= minStartupHistoryCandles &&
+                            persistedCount >= minStartupHistoryCandles) {
+                            liveCandleCache[cacheKey] =
+                                recent.takeLast(startupHistoryLimit).toMutableList()
+                            candleCache[cacheKey] = System.currentTimeMillis() to recent
+                            indicatorSnapshots[cacheKey] =
                                 buildIndicatorSnapshot(recent, symbol, frame)
                         } else {
                             recentReady = false
-                            lastError =
-                                "Недостаточно свечей " + symbol + ":" +
-                                    frame + " (" + recent.size + "/" +
-                                    minStartupHistoryCandles + ")"
+                            val detail = failure?.message
+                                ?: "persisted=$persistedCount, received=${recent.size}"
+                            historyLastError = symbol + ":" + frame + " " + detail
+                            lastError = "history " + symbol + ":" + frame +
+                                " failed: " + detail
                         }
                     }
                 }
 
-                // The base 1h series is the execution minimum. Other startup
-                // frames provide MTF context; all five must be available.
                 historyReady = recentReady
-
                 if (historyReady && running) {
-                    // Full history is valuable for analysis but MUST NEVER
-                    // block START or the scanner. Limit the backfill to the
-                    // base 1h series and run only two symbols concurrently to
-                    // stay below Binance rate limits.
+                    historyState = "READY"
                     for (symbol in coreSymbols) {
                         historyBackfillExecutor.execute {
-                            runCatching {
-                                fetchFullHistory(symbol, "1h")
-                            }.onFailure {
-                                lastError =
-                                    "background history " + symbol + ": " +
+                            runCatching { fetchFullHistory(symbol, "1h") }
+                                .onFailure {
+                                    lastError = "background history " + symbol + ": " +
                                         (it.message ?: it.javaClass.simpleName)
-                            }
+                                }
                         }
                     }
+                } else if (running) {
+                    historyState = "WAITING_RETRY"
                 }
             } catch (x: Exception) {
                 historyReady = false
-                lastError =
-                    "history warmup: " +
-                        (x.message ?: x.javaClass.simpleName)
+                historyState = "WAITING_RETRY"
+                historyLastError = x.message ?: x.javaClass.simpleName
+                lastError = "history warmup: " +
+                    (x.message ?: x.javaClass.simpleName)
             } finally {
                 historyWarmupRunning = false
             }
@@ -5958,6 +5978,8 @@ private class NativeEngine(
             .put("user_stream_sync_required", userStreamSyncRequired)
             .put("user_stream_last_event_ms", lastUserEventMs)
             .put("history_ready", historyReady)
+            .put("history_state", historyState)
+            .put("history_last_error", historyLastError ?: JSONObject.NULL)
             .put("fsm_state", stateMachine.state.name)
             .put("kill_switch_latched", killLatched)
             .put("live_prices", JSONObject().apply {
@@ -6222,7 +6244,7 @@ private class NativeEngine(
         test("credentials_state", "binance", key().isNotBlank() && secret().isNotBlank(), "WARN", if (key().isNotBlank() && secret().isNotBlank()) "Binance credentials configured" else "Binance credentials not configured")
         test("market_websocket", "websocket", marketSocketConnected, "WARN", if (marketSocketConnected) "Market stream connected" else "Market stream disconnected")
         test("user_websocket", "websocket", userStreamConnected && !userStreamSyncRequired, "WARN", if (userStreamConnected && !userStreamSyncRequired) "User stream connected and synchronized" else "User stream disconnected or synchronization pending")
-        test("history_ready", "database", historyReady, "WARN", if (historyReady) "Market history is ready" else "Market history is not ready")
+        test("history_ready", "database", historyReady, "WARN", if (historyReady) "Market history is ready" else "history_state=" + historyState + "; error=" + (historyLastError ?: "pending"))
         test("scanner_state", "scanner", !scanning && lastSymbolsScanned >= 0, "WARN", "scanning=" + scanning + "; symbols=" + lastSymbolsScanned + "; duration_ms=" + lastScanDurationMs)
         test("state_machine", "runtime", stateMachine.state.name.isNotBlank(), "FAIL", "fsm_state=" + stateMachine.state.name)
         test("risk_limits", "risk", maxRiskPerTradePct > 0.0 && maxRiskPerTradePct <= 0.005 && maxTotalRiskPct <= 0.01, "FAIL", "per_trade=" + maxRiskPerTradePct + "; total=" + maxTotalRiskPct)
