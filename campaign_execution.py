@@ -515,7 +515,7 @@ class CampaignExecutionService:
                                 trade["id"],
                                 total_qty,
                             )
-                            self.db.execute(
+                            self.db.conn.execute(
                                 "UPDATE trades SET entry_price=?, stop_price=?, "
                                 "risk_pct=?, updated_at=CURRENT_TIMESTAMP "
                                 "WHERE id=? AND exit_time IS NULL",
@@ -528,7 +528,8 @@ class CampaignExecutionService:
                                     ) * 100.0,
                                     int(trade["id"]),
                                 ),
-                            ) if hasattr(self.db, "execute") else None
+                            )
+                            self.db.conn.commit()
 
                         self.db.state_delete(f"entry_client_order_id:{symbol}")
                         self.db.state_set(f"position_state:{symbol}", "OPEN")
