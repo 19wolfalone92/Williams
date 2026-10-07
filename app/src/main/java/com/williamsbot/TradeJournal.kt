@@ -1,6 +1,7 @@
 package com.williamsbot
 
 import android.content.SharedPreferences
+import androidx.core.content.edit
 import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.math.max
@@ -174,7 +175,9 @@ object TradeJournal {
         runCatching { JSONArray(prefs.getString(KEY, "[]") ?: "[]") }.getOrElse { JSONArray() }
 
     private fun write(prefs: SharedPreferences, value: JSONArray) {
-        prefs.edit().putString(KEY, value.toString()).apply()
+        prefs.edit {
+            putString(KEY, value.toString())
+        }
     }
 
     private fun trim(value: JSONArray) {
