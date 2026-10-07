@@ -809,7 +809,12 @@ private class NativeEngine(
             GateCloseReason.REST_RECONCILIATION_PENDING
         )
         check(runtimeState.setReconcileRequired(false)) { "Failed to clear reconciliation-required state" }
-        if (!killLatched && pendingEntries.isEmpty() && positions.isEmpty()) {
+        if (
+            !killLatched &&
+            pendingEntries.isEmpty() &&
+            positions.isEmpty() &&
+            !ocoTxJournal.hasPending()
+        ) {
             stateMachine.force(
                 TradingState.READY_FLAT,
                 "reconciliation cleared"
@@ -1173,6 +1178,10 @@ private class NativeEngine(
             clearReconcileRequired()
             recoverPendingEntries()
             reconcilePositionsWithExchange()
+
+            ocoTxJournal.pending()?.let {
+                ocoTxJournal.markCompleted(it.txId)
+            }
 
             JSONObject()
                 .put("recovered", !reconcileRequired)
