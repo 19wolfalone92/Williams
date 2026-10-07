@@ -11,6 +11,27 @@ import org.junit.Test
 
 class ExecutionGateTest {
     @Test
+    fun recoveryAdmission_cannotEscalateToNormalMutation() {
+        val gate = ExecutionGate()
+
+        val result = gate.executeWithAdmission(
+            symbol = "BTCUSDT",
+            scope = AdmissionScope.PROTECTIVE_RECOVERY
+        ) {
+            gate.executeWithAdmission(
+                symbol = "BTCUSDT",
+                scope = AdmissionScope.NORMAL_EXECUTION
+            ) {
+                true
+            }
+        }
+
+        assertTrue(result is AdmissionResult.Admitted)
+        val nested = (result as AdmissionResult.Admitted).value
+        assertTrue(nested is AdmissionResult.Rejected)
+    }
+
+    @Test
     fun differentSymbols_canAdmitConcurrently() {
         val gate = ExecutionGate()
         assertTrue(gate.tryAdmit("BTCUSDT"))
