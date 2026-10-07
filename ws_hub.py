@@ -323,8 +323,10 @@ class WebSocketHub:
         self.broadcast({'type':'ticker','data':self._live()})
     def _user_loop(self):
         delay=1
+        rotation_timer=None
 
         while not self.stop_event.is_set():
+            rotation_timer=None
             if not self.api_key or not self.api_secret:
                 self.user_connected=False
                 self.user_connected_since=0.0
