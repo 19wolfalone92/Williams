@@ -72,6 +72,8 @@ def test_spot_testnet_endpoints_and_no_futures_execution():
     for path in ROOT.rglob("*.py"):
         if any(part in {".git", "__pycache__"} for part in path.parts):
             continue
+        if path == ROOT / "test_android_remote_only.py":
+            continue
         text = path.read_text(errors="replace")
         assert "/fapi/" not in text, f"Futures REST endpoint found in {path}"
         assert "binancefuture.com" not in text, f"Futures Testnet host found in {path}"
