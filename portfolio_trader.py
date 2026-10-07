@@ -10,6 +10,7 @@ from l2_slippage import L2SlippageGuard
 from execution_accumulator import ExecutionSummary, accumulate_order
 from campaign_execution import CampaignExecutionService, CampaignExecutionError
 from campaign_model import SignalSpec, SignalType, SignalRole
+from campaign_monitor import CampaignMonitor
 
 
 POSITION_STATES = {
@@ -95,6 +96,11 @@ class MultiPositionTrader:
             self.client,
             self.db,
             execution_barrier=self.execution_barrier,
+        )
+        self.campaign_monitor = CampaignMonitor(
+            self.client,
+            self.db,
+            self.campaign_execution,
         )
 
     # ------------------------------------------------------------------
@@ -2344,6 +2350,11 @@ class MultiPositionTrader:
 
         if self.campaign_engine_enabled:
             pending_recovery = self.campaign_execution.reconcile_pending_entries()
+            active_recovery = self.campaign_execution.reconcile_active_campaigns()
+            # Manage open campaigns before looking for new opportunities. If a
+            # protection mutation becomes ambiguous, the whole execution path
+            # stays fail-closed.
+            campaign_monitor = self.campaign_monitor.monitor_all()
             # A resolved/verified pending campaign is now represented by the
             # campaign state; unresolved mutation remains a hard global block.
             unresolved = self.unresolved_symbols()
@@ -2352,6 +2363,8 @@ class MultiPositionTrader:
                     "status": "BLOCKED",
                     "recovery": recovery,
                     "pending_recovery": pending_recovery,
+                    "active_recovery": active_recovery,
+                    "campaign_monitor": campaign_monitor,
                     "results": [],
                     "reason": "campaign reconciliation required",
                 }
@@ -2410,6 +2423,8 @@ class MultiPositionTrader:
         return {
             "status": "EXECUTED",
             "recovery": recovery,
+            "pending_recovery": pending_recovery if self.campaign_engine_enabled else [],
+            "campaign_monitor": campaign_monitor if self.campaign_engine_enabled else [],
             "results": results,
             "open_positions": len(self.open_trades()),
             "reserved_risk_quote": self.reserved_risk_quote(),
