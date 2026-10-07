@@ -55,6 +55,9 @@ class ExecutionGate {
     @Volatile
     private var currentReason: GateCloseReason = GateCloseReason.NONE
 
+    private val threadAdmissions =
+        ThreadLocal.withInitial { mutableMapOf<String, AdmissionScope>() }
+
     @Synchronized
     fun tryAdmit(
         symbol: String,
@@ -87,6 +90,24 @@ class ExecutionGate {
         scope: AdmissionScope = AdmissionScope.NORMAL_EXECUTION,
         block: () -> T
     ): AdmissionResult<T> {
+        val normalized = symbol.trim().uppercase()
+        if (normalized.isBlank()) {
+            return AdmissionResult.Rejected(currentReason)
+        }
+
+        val owned = threadAdmissions.get()
+        val nestedScope = owned[normalized]
+        if (nestedScope != null) {
+            // A higher-level admission already owns this symbol on the same
+            // worker. Reuse it so nested signedPost/signedDelete calls do not
+            // self-reject. A NORMAL owner may invoke protective recovery.
+            return try {
+                AdmissionResult.Admitted(block())
+            } catch (x: Throwable) {
+                throw x
+            }
+        }
+
         val admitted = synchronized(this) {
             val permitted = when (scope) {
                 AdmissionScope.NORMAL_EXECUTION -> normalOpen
@@ -95,18 +116,19 @@ class ExecutionGate {
             if (!permitted) {
                 return@synchronized false
             }
-            val normalized = symbol.trim().uppercase()
-            normalized.isNotBlank() && reservedSymbols.add(normalized)
+            reservedSymbols.add(normalized)
         }
 
         if (!admitted) {
             return AdmissionResult.Rejected(currentReason)
         }
 
+        owned[normalized] = scope
         return try {
             AdmissionResult.Admitted(block())
         } finally {
-            release(symbol)
+            owned.remove(normalized)
+            release(normalized)
         }
     }
 
