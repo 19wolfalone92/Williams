@@ -101,6 +101,11 @@ android {
     lint {
         abortOnError = true
         warningsAsErrors = true
+        // API 36 is the current stable Android target used by the project.
+        // Lint also knows about API 37 preview and otherwise raises
+        // OldTargetApi even though we intentionally do not ship against
+        // the preview SDK yet.
+        disable += "OldTargetApi"
     }
 
     packaging {
