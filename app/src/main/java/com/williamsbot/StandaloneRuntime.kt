@@ -1347,7 +1347,9 @@ private class NativeEngine(
                         error("Binance " + response.code + ": " + lastBody)
                     }
                 } catch (x: java.io.IOException) {
-                    if (attempt == 0) continue
+                    if (attempt == 0) {
+                        return@repeat
+                    }
                     throw x
                 }
             }
