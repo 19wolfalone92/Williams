@@ -3,18 +3,34 @@ package com.williamsbot
 /**
  * Atomic admission gate between scanner proposals and Binance execution.
  *
- * The gate is deliberately small: it owns only the reservation invariant.
- * Network I/O must never run while holding the gate.
+ * The gate owns both the open/closed lifecycle and per-symbol reservation.
+ * close() and tryAdmit() share the same monitor, so their ordering has a
+ * well-defined linearization point. An admitted operation may remain
+ * in-flight after close(); close() prevents only new admissions.
  */
 class ExecutionGate {
     private val reservedSymbols = LinkedHashSet<String>()
+    private var open = true
 
     @Synchronized
-    fun tryReserve(symbol: String): Boolean {
+    fun tryAdmit(symbol: String): Boolean {
         val normalized = symbol.uppercase()
-        if (normalized.isBlank()) return false
+        if (normalized.isBlank() || !open) return false
         return reservedSymbols.add(normalized)
     }
+
+    @Synchronized
+    fun close() {
+        open = false
+    }
+
+    @Synchronized
+    fun open() {
+        open = true
+    }
+
+    @Synchronized
+    fun isOpen(): Boolean = open
 
     @Synchronized
     fun release(symbol: String) {
