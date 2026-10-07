@@ -12,6 +12,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.ComponentActivity
 import androidx.core.content.ContextCompat
+import androidx.security.crypto.EncryptedSharedPreferences
+import androidx.security.crypto.MasterKey
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
@@ -368,9 +370,14 @@ data class PositionView(
 )
 
 private class BackendApi(context: Context) {
-    private val securePrefs = context.getSharedPreferences(
+    private val securePrefs = EncryptedSharedPreferences.create(
+        context,
         "williams_backend_connection",
-        Context.MODE_PRIVATE
+        MasterKey.Builder(context)
+            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+            .build(),
+        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
     )
 
     private val client = OkHttpClient.Builder()
