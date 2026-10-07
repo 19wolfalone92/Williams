@@ -1,4 +1,5 @@
 name: Build Android APK
+# Deep Spot validation v4: latest root-cause fixes and Binance contract tests.
 
 on:
   push:
