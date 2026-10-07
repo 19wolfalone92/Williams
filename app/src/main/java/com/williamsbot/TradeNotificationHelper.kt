@@ -11,6 +11,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import androidx.core.content.edit
 import org.json.JSONArray
 
 object TradeNotificationHelper {
@@ -82,6 +83,9 @@ object TradeNotificationHelper {
             }
         }
 
-        prefs.edit().putBoolean("initialized", true).putStringSet("seen", seen).apply()
+        prefs.edit {
+            putBoolean("initialized", true)
+            putStringSet("seen", seen)
+        }
     }
 }
