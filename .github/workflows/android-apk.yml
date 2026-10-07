@@ -57,13 +57,6 @@ jobs:
         run: |
           yes | sdkmanager --licenses >/dev/null || true
           sdkmanager "${ANDROID_PLATFORM}" "${ANDROID_BUILD_TOOLS}"
-      - name: Verify Gradle wrapper
-        run: |
-          set -euo pipefail
-          chmod +x ./gradlew
-          test -s gradle/wrapper/gradle-wrapper.jar
-          grep -q "gradle-8.14.5-bin.zip" gradle/wrapper/gradle-wrapper.properties
-
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v5
         with:
@@ -99,15 +92,12 @@ jobs:
           set -euo pipefail
           for f in feature_store.py ai_shadow.py cpcv_backtester.py stress_suite.py mock_exchange.py quant_models.py shap_explain.py derivatives_features.py shadow_execution.py quant_ml_pipeline.py; do test -f "$f"; done
       - name: Run required Android lint
-        run: |
-          chmod +x ./gradlew
-          ./gradlew --no-daemon :app:lintDebug --stacktrace
+        run: gradle --no-daemon :app:lintDebug --stacktrace
 
       - name: Run Android unit tests
         run: |
           set +e
-          chmod +x ./gradlew
-          ./gradlew --no-daemon :app:testDebugUnitTest --stacktrace 2>&1 | tee android-unit-tests.log
+          gradle --no-daemon :app:testDebugUnitTest --stacktrace 2>&1 | tee android-unit-tests.log
           rc=${PIPESTATUS[0]}
           set -e
           exit "$rc"
@@ -128,8 +118,7 @@ jobs:
           WILLIAMS_DEBUG_KEYSTORE_B64: ${{ secrets.WILLIAMS_DEBUG_KEYSTORE_B64 }}
         run: |
           set +e
-          chmod +x ./gradlew
-          ./gradlew --no-daemon :app:assembleDebug --stacktrace 2>&1 | tee build-debug.log
+          gradle --no-daemon :app:assembleDebug --stacktrace 2>&1 | tee build-debug.log
           rc=${PIPESTATUS[0]}
           set -e
           exit "$rc"
@@ -142,9 +131,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 3
       - name: Build release APK
-        run: |
-          chmod +x ./gradlew
-          ./gradlew --no-daemon :app:assembleRelease --stacktrace
+        run: gradle --no-daemon :app:assembleRelease --stacktrace
       - name: Verify APK files
         run: |
           set -euo pipefail
