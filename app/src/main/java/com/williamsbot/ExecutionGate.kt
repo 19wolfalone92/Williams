@@ -7,6 +7,8 @@ package com.williamsbot
  * close() and tryAdmit() share the same monitor, so their ordering has a
  * well-defined linearization point. An admitted operation may remain
  * in-flight after close(); close() prevents only new admissions.
+ * This class is the runtime admission barrier; callers must not split the
+ * admission check from the network side effect.
  */
 class ExecutionGate {
     private val reservedSymbols = LinkedHashSet<String>()
