@@ -100,12 +100,15 @@ class ExecutionGate {
         if (nestedScope != null) {
             // A higher-level admission already owns this symbol on the same
             // worker. Reuse it so nested signedPost/signedDelete calls do not
-            // self-reject. A NORMAL owner may invoke protective recovery.
-            return try {
-                AdmissionResult.Admitted(block())
-            } catch (x: Throwable) {
-                throw x
+            // self-reject. A NORMAL owner may invoke protective recovery, but
+            // a recovery owner can never escalate into normal execution.
+            if (
+                nestedScope == AdmissionScope.PROTECTIVE_RECOVERY &&
+                scope == AdmissionScope.NORMAL_EXECUTION
+            ) {
+                return AdmissionResult.Rejected(currentReason)
             }
+            return AdmissionResult.Admitted(block())
         }
 
         val admitted = synchronized(this) {
