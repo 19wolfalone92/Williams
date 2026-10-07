@@ -285,14 +285,16 @@ if trader_file.exists():
             finding("PASS", f"{method}: DRY_RUN precedes exchange order")
 
 # Williams uses a local protected-exit wrapper backed by Binance native OCO.
-# The production core names the local wrapper _create_oco and the client call
-# create_oco_sell_safe/create_oco_sell. Do not require the obsolete place_oco name.
-has_local_oco = bool(re.search(r"def\s+_?create_oco\s*\(", text))
-has_binance_oco = bool(re.search(r"\.create_oco_sell(?:_safe)?\s*\(", text))
+# The wrapper lives in portfolio_trader.py and the exchange call lives in
+# binance_client.py, so validate both files as one execution contract.
+portfolio_trader_text = read_text(ROOT / "portfolio_trader.py")
+binance_client_text = read_text(ROOT / "binance_client.py")
+has_local_oco = bool(re.search(r"def\s+_?create_oco\s*\(", portfolio_trader_text))
+has_binance_oco = bool(re.search(r"def\s+create_oco_sell(?:_safe)?\s*\(", binance_client_text))
 if has_local_oco and has_binance_oco:
     finding(
         "PASS",
-        "exit: native Binance OCO via local _create_oco wrapper"
+        "exit: native Binance OCO via portfolio_trader wrapper + Binance client"
     )
 else:
     finding(
