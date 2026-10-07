@@ -51,7 +51,6 @@ def accumulate_fills(fills, base_asset=None) -> ExecutionSummary:
         commission_asset = str(fill.get("commissionAsset", "")).upper()
         if commission_asset in {"USDT", "USDC", "FDUSD", "BUSD"}:
             fee_quote += commission
-        if commission_asset in {"USDT", "USDC", "FDUSD", "BUSD"}:
             fee_quote_equivalent += commission
         if base_asset and commission_asset == str(base_asset).upper():
             commission_base += commission
