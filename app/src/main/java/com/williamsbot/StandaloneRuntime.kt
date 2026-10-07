@@ -208,6 +208,7 @@ private class StandaloneServer(private val context: Context) {
         .build()
 
     private val historyStore = MarketHistoryStore(context)
+    private val ocoTxJournal = OcoReplacementTxJournal(context)
     private val rateGuard = BinanceRateGuard()
     private val auditStore = TradingAuditStore(context)
     private val stateMachine = TradingStateMachine(
@@ -587,6 +588,13 @@ private class NativeEngine(
                 }
             } else if (!error.equals("stopped")) {
                 userStreamSyncRequired = true
+                executionGate.closeNormalExecution(
+                    GateCloseReason.USER_STREAM_DISCONNECTED
+                )
+                stateMachine.force(
+                    TradingState.RECONCILE_REQUIRED,
+                    "user data stream disconnected"
+                )
                 if (positions.isNotEmpty() && !killLatched) {
                     lastError = "user ws: " + (error ?: "disconnected")
                 }
@@ -607,6 +615,11 @@ private class NativeEngine(
             lastError =
                 "Execution gate interrupted for " + interruptedGateSymbol +
                     "; REST reconciliation required"
+        }
+        if (reconcileRequired || ocoTxJournal.hasPending()) {
+            executionGate.closeNormalExecution(
+                GateCloseReason.RECONCILE_REQUIRED
+            )
         }
         stateMachine.force(
             when {
@@ -659,6 +672,7 @@ private class NativeEngine(
             marketSocketConnected &&
             userStreamConnected &&
             historyReady &&
+            executionGate.isNormalOpen() &&
             stateMachine.executionAllowed() &&
             !equityCircuitBreaker.isTripped()
 
@@ -777,6 +791,9 @@ private class NativeEngine(
 
     private fun setReconcileRequired(reason: String) {
         reconcileRequired = true
+        executionGate.closeNormalExecution(
+            GateCloseReason.RECONCILE_REQUIRED
+        )
         stateMachine.force(
             TradingState.RECONCILE_REQUIRED,
             reason
@@ -788,6 +805,9 @@ private class NativeEngine(
 
     private fun clearReconcileRequired() {
         reconcileRequired = false
+        executionGate.closeNormalExecution(
+            GateCloseReason.REST_RECONCILIATION_PENDING
+        )
         check(runtimeState.setReconcileRequired(false)) { "Failed to clear reconciliation-required state" }
         if (!killLatched && pendingEntries.isEmpty() && positions.isEmpty()) {
             stateMachine.force(
@@ -947,7 +967,9 @@ private class NativeEngine(
                 .put("error", x.message ?: x.javaClass.simpleName)
         }
 
-        executionGate.open()
+        executionGate.closeNormalExecution(
+            GateCloseReason.REST_RECONCILIATION_PENDING
+        )
         running = true
         paused = false
         startMarketDataStream()
@@ -969,6 +991,7 @@ private class NativeEngine(
                             !reconcileRequired &&
                             !killLatched
                         ) {
+                            executionGate.openAll()
                             if (positions.isEmpty()) {
                                 stateMachine.transition(
                                     TradingState.READY_FLAT,
@@ -1053,7 +1076,7 @@ private class NativeEngine(
         }
         for (intent in pending) {
             runCatching {
-                signedDelete(
+                signedRecoveryDelete(
                     "/api/v3/order",
                     "symbol=" + intent.symbol +
                         "&origClientOrderId=" + intent.clientOrderId
@@ -1263,53 +1286,180 @@ private class NativeEngine(
     private fun signedRequest(
         method: String,
         path: String,
-        params: String
+        params: String,
+        scope: AdmissionScope = AdmissionScope.NORMAL_EXECUTION
     ): JSONObject {
-        var lastBody = "{}"
-        repeat(2) { attempt ->
-            val query = if (params.isBlank()) {
-                "timestamp=" + signedTimestamp() + "&recvWindow=" + BINANCE_RECV_WINDOW_MS
-            } else {
-                params + "&timestamp=" + signedTimestamp() + "&recvWindow=" + BINANCE_RECV_WINDOW_MS
-            }
-            val signature = hmac(query, secret())
-            val request = when (method) {
-                "POST" -> Request.Builder()
-                    .url(baseUrl + path)
-                    .header("X-MBX-APIKEY", key())
-                    .post((query + "&signature=" + signature).toRequestBody("application/x-www-form-urlencoded".toMediaType()))
-                    .build()
-                "DELETE" -> Request.Builder()
-                    .url(baseUrl + path + "?" + query + "&signature=" + signature)
-                    .header("X-MBX-APIKEY", key())
-                    .delete()
-                    .build()
-                else -> Request.Builder()
+        if (method == "GET") {
+            var lastBody = "{}"
+            repeat(2) { attempt ->
+                val query = if (params.isBlank()) {
+                    "timestamp=" + signedTimestamp() +
+                        "&recvWindow=" + BINANCE_RECV_WINDOW_MS
+                } else {
+                    params +
+                        "&timestamp=" + signedTimestamp() +
+                        "&recvWindow=" + BINANCE_RECV_WINDOW_MS
+                }
+                val signature = hmac(query, secret())
+                val request = Request.Builder()
                     .url(baseUrl + path + "?" + query + "&signature=" + signature)
                     .header("X-MBX-APIKEY", key())
                     .get()
                     .build()
+
+                try {
+                    rateGuard.beforeRequest()
+                    http.newCall(request).execute().use { response ->
+                        rateGuard.observe(response.headers, response.code)
+                        lastBody = response.body?.string() ?: "{}"
+                        auditStore.recordRestCall(
+                            method,
+                            path,
+                            response.code,
+                            params.ifBlank { null },
+                            lastBody
+                        )
+                        if (response.isSuccessful) return JSONObject(lastBody)
+                        if (attempt == 0 && lastBody.contains("-1021")) {
+                            runCatching { syncServerTime() }
+                            return@use
+                        }
+                        error("Binance " + response.code + ": " + lastBody)
+                    }
+                } catch (x: java.io.IOException) {
+                    if (attempt == 0) continue
+                    throw x
+                }
             }
+            error("Binance signed GET failed: " + lastBody)
+        }
+
+        val symbol = extractSymbol(params)
+        val admission = executionGate.executeWithAdmission(
+            symbol = symbol,
+            scope = scope
+        ) {
+            performSignedMutationOnce(method, path, params)
+        }
+
+        return when (admission) {
+            is AdmissionResult.Admitted -> admission.value
+            is AdmissionResult.Rejected -> {
+                throw IllegalStateException(
+                    "EXECUTION_GATE_CLOSED: " + admission.reason.name
+                )
+            }
+        }
+    }
+
+    private fun performSignedMutationOnce(
+        method: String,
+        path: String,
+        params: String
+    ): JSONObject {
+        val query =
+            if (params.isBlank()) {
+                "timestamp=" + signedTimestamp() +
+                    "&recvWindow=" + BINANCE_RECV_WINDOW_MS
+            } else {
+                params +
+                    "&timestamp=" + signedTimestamp() +
+                    "&recvWindow=" + BINANCE_RECV_WINDOW_MS
+            }
+        val signature = hmac(query, secret())
+        val request = when (method) {
+            "POST" -> Request.Builder()
+                .url(baseUrl + path)
+                .header("X-MBX-APIKEY", key())
+                .post(
+                    (query + "&signature=" + signature)
+                        .toRequestBody(
+                            "application/x-www-form-urlencoded".toMediaType()
+                        )
+                )
+                .build()
+
+            "DELETE" -> Request.Builder()
+                .url(baseUrl + path + "?" + query + "&signature=" + signature)
+                .header("X-MBX-APIKEY", key())
+                .delete()
+                .build()
+
+            else -> error("Unsupported signed mutation method: $method")
+        }
+
+        try {
             rateGuard.beforeRequest()
             http.newCall(request).execute().use { response ->
                 rateGuard.observe(response.headers, response.code)
-                lastBody = response.body?.string() ?: "{}"
+                val body = response.body?.string() ?: "{}"
                 auditStore.recordRestCall(
                     method,
                     path,
                     response.code,
                     params.ifBlank { null },
-                    lastBody
+                    body
                 )
-                if (response.isSuccessful) return JSONObject(lastBody)
-                if (attempt == 0 && lastBody.contains("-1021")) {
-                    runCatching { syncServerTime() }
-                    return@use
-                }
-                error("Binance " + response.code + ": " + lastBody)
+                if (response.isSuccessful) return JSONObject(body)
+
+                // An HTTP response is an authoritative, confirmed outcome.
+                error("Binance " + response.code + ": " + body)
             }
+        } catch (x: UnknownNetworkOutcomeException) {
+            throw x
+        } catch (x: java.io.IOException) {
+            // POST/DELETE must never be retried automatically: the exchange
+            // may have accepted the mutation even though the client lost the
+            // response. The caller must reconcile instead.
+            throw UnknownNetworkOutcomeException(
+                method = method,
+                path = path,
+                cause = x
+            )
         }
-        error("Binance timestamp retry failed: " + lastBody)
+    }
+
+    private fun extractSymbol(params: String): String {
+        params.split("&").firstOrNull {
+            it.startsWith("symbol=")
+        }?.substringAfter("=")?.trim()?.uppercase(Locale.US)
+            ?.takeIf { it.isNotBlank() }
+            ?.let { return it }
+        return "GLOBAL"
+    }
+
+    private fun signedRecoveryPost(
+        path: String,
+        params: String
+    ): JSONObject {
+        require(
+            path == "/api/v3/order" ||
+                path == "/api/v3/orderList/oco" ||
+                path == "/api/v3/order/cancelReplace"
+        ) {
+            "Recovery POST is not allowed for $path"
+        }
+        return signedRequest(
+            "POST",
+            path,
+            params,
+            AdmissionScope.PROTECTIVE_RECOVERY
+        )
+    }
+
+    private fun signedRecoveryDelete(
+        path: String,
+        params: String
+    ): JSONObject {
+        require(path == "/api/v3/orderList" || path == "/api/v3/order") {
+            "Recovery DELETE is not allowed for $path"
+        }
+        return signedRequest(
+            "DELETE",
+            path,
+            params,
+            AdmissionScope.PROTECTIVE_RECOVERY
+        )
     }
 
     private fun signedRawGet(
@@ -2455,23 +2605,34 @@ private class NativeEngine(
             }
 
             var ocoCancelled = false
+            val txId = ocoTxJournal.begin(
+                symbol = stored.symbol,
+                oldOcoId = stored.ocoListId,
+                oldOcoClientId = stored.ocoListClientId,
+                quantity = stored.qty
+            )
             try {
                 if (stored.ocoListId.isNotBlank()) {
-                    signedDelete(
+                    ocoTxJournal.updateStep(txId, "OLD_CANCEL_SENT")
+                    signedRecoveryDelete(
                         "/api/v3/orderList",
                         "symbol=" + stored.symbol +
                             "&orderListId=" + stored.ocoListId
                     )
                     ocoCancelled = true
+                    ocoTxJournal.updateStep(txId, "OLD_CANCEL_CONFIRMED")
                 } else if (stored.ocoListClientId.isNotBlank()) {
-                    signedDelete(
+                    ocoTxJournal.updateStep(txId, "OLD_CANCEL_SENT")
+                    signedRecoveryDelete(
                         "/api/v3/orderList",
                         "symbol=" + stored.symbol +
                             "&listClientOrderId=" +
                             stored.ocoListClientId
                     )
                     ocoCancelled = true
+                    ocoTxJournal.updateStep(txId, "OLD_CANCEL_CONFIRMED")
                 } else {
+                    ocoTxJournal.markFailed(txId, "managed OCO identifier missing")
                     setReconcileRequired(
                         "Williams trailing update: managed OCO identifier missing for " +
                             stored.symbol
@@ -2484,6 +2645,7 @@ private class NativeEngine(
                         stored.entry)
                         .coerceIn(0.001, 0.08)
 
+                ocoTxJournal.updateStep(txId, "NEW_OCO_SENT")
                 val protection =
                     createProtection(
                         symbol = stored.symbol,
@@ -2505,6 +2667,18 @@ private class NativeEngine(
                         )
                 }
                 savePersistedState()
+                ocoTxJournal.markCompleted(txId)
+            } catch (x: UnknownNetworkOutcomeException) {
+                ocoTxJournal.markIncident(
+                    txId,
+                    "OCO replacement network outcome unknown: " +
+                        (x.message ?: "unknown")
+                )
+                setReconcileRequired(
+                    "OCO replacement outcome unknown for " +
+                        stored.symbol
+                )
+                return
             } catch (x: Exception) {
                 if (ocoCancelled) {
                     // OCO cancellation + replacement is not atomic. If the
@@ -2527,7 +2701,8 @@ private class NativeEngine(
                         require(qty >= rules.minQty) {
                             "Emergency SELL quantity below Binance minimum"
                         }
-                        val sell = signedPost(
+                        ocoTxJournal.updateStep(txId, "EMERGENCY_SL_SENT")
+                        val sell = signedRecoveryPost(
                             "/api/v3/order",
                             "symbol=" + stored.symbol +
                                 "&side=SELL&type=MARKET&quantity=" +
@@ -2563,11 +2738,17 @@ private class NativeEngine(
                             },
                             "Emergency exit after failed OCO replacement"
                         )
+                        ocoTxJournal.markCompleted(txId)
                         true
                     }.getOrElse {
                         setReconcileRequired(
                             "OCO replacement failed and emergency SELL failed for " +
                                 stored.symbol + ": " +
+                                (it.message ?: it.javaClass.simpleName)
+                        )
+                        ocoTxJournal.markIncident(
+                            txId,
+                            "Emergency recovery mutation failed: " +
                                 (it.message ?: it.javaClass.simpleName)
                         )
                         false
@@ -3429,7 +3610,12 @@ private class NativeEngine(
     private fun signedPost(
         path: String,
         params: String
-    ): JSONObject = signedRequest("POST", path, params)
+    ): JSONObject = signedRequest(
+        "POST",
+        path,
+        params,
+        AdmissionScope.NORMAL_EXECUTION
+    )
 
     /**
      * Binance cancel-replace is not truly transactional. STOP_ON_FAILURE
@@ -4327,7 +4513,7 @@ private class NativeEngine(
 
                         if (emergency.isFailure) {
                             runCatching {
-                                signedPost(
+                                signedRecoveryPost(
                                     "/api/v3/order",
                                     "symbol=" + candidate.symbol +
                                         "&side=SELL&type=MARKET" +
@@ -4546,7 +4732,7 @@ private class NativeEngine(
             // Cancel only the bot-owned OCO. Never cancel unrelated
             // orders that happen to belong to the same symbol.
             if (stored.ocoListId.isNotBlank()) {
-                signedDelete(
+                signedRecoveryDelete(
                     "/api/v3/orderList",
                     "symbol=" + symbol +
                         "&orderListId=" + stored.ocoListId
@@ -4606,7 +4792,7 @@ private class NativeEngine(
             }
 
             val sell =
-                signedPost(
+                signedRecoveryPost(
                     "/api/v3/order",
                     "symbol=" + symbol +
                         "&side=SELL&type=MARKET" +
@@ -4677,7 +4863,12 @@ private class NativeEngine(
     private fun signedDelete(
         path: String,
         params: String
-    ): JSONObject = signedRequest("DELETE", path, params)
+    ): JSONObject = signedRequest(
+        "DELETE",
+        path,
+        params,
+        AdmissionScope.NORMAL_EXECUTION
+    )
 
     private fun analyseBase(
         symbol: String,
