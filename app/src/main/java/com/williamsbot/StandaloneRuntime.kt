@@ -598,6 +598,10 @@ private class NativeEngine(
     @Volatile private var restLastTickerPrice = 0.0
     @Volatile private var restProbeRunning = false
     private var restProbeThread: Thread? = null
+    @Volatile private var lastRestReconcileMs = 0L
+    @Volatile private var runtimeGeneration = 0L
+    @Volatile private var lastSelfHealMs = 0L
+    @Volatile private var selfHealCount = 0
 
     @Volatile private var scannerState = "NOT_RUN"
     @Volatile private var scannerError: String? = null
@@ -702,16 +706,34 @@ private class NativeEngine(
             } else 0.0
         }
 
+    private fun marketDataFresh(maxAgeMs: Long = 30_000L): Boolean =
+        restMarketReady &&
+            restLastSuccessMs > 0L &&
+            System.currentTimeMillis() - restLastSuccessMs <= maxAgeMs
+
     private fun executionReady(): Boolean =
         running &&
             !paused &&
             !reconcileRequired &&
             !killLatched &&
-            restMarketReady &&
+            marketDataFresh() &&
             restAccountReady &&
             historyReady &&
             stateMachine.executionAllowed() &&
             !equityCircuitBreaker.isTripped()
+
+    private fun executionBlockers(): List<String> =
+        buildList {
+            if (!running) add("runtime_not_running")
+            if (paused) add("paused")
+            if (reconcileRequired) add("reconcile_required")
+            if (killLatched) add("kill_switch_latched")
+            if (!marketDataFresh()) add("rest_market_stale_or_not_ready")
+            if (!restAccountReady) add("rest_account_not_ready")
+            if (!historyReady) add("history_not_ready")
+            if (!stateMachine.executionAllowed()) add("fsm_not_execution_allowed")
+            if (equityCircuitBreaker.isTripped()) add("equity_circuit_breaker")
+        }
 
     private fun stateName(): String =
         when (stateMachine.state) {
@@ -722,9 +744,9 @@ private class NativeEngine(
             TradingState.OPEN_UNPROTECTED,
             TradingState.PROTECTED,
             TradingState.EXIT_PENDING -> "OPEN"
-            TradingState.READY_FLAT,
-            TradingState.STOPPED,
-            TradingState.INITIALIZING -> "FLAT"
+            TradingState.READY_FLAT -> "READY_FLAT"
+            TradingState.STOPPED -> "STOPPED"
+            TradingState.INITIALIZING -> "INITIALIZING"
         }
 
     private fun savePersistedState() {
@@ -953,16 +975,38 @@ private class NativeEngine(
             "API Key and API Secret are required"
         }
 
+        val oldKey = key()
+        val oldSecret = secret()
         prefs.edit()
             .putString("api_key", newKey)
             .putString("api_secret", newSecret)
-            .apply()
+            .commit()
 
-        return JSONObject()
-            .put("configured", true)
-            .put("testnet", true)
-            .put("standalone", true)
-            .put("read_back_verified", key() == newKey && secret() == newSecret)
+        return try {
+            val account = signedAccount()
+            require(account.optString("accountType", "SPOT").equals("SPOT", true)) {
+                "Configured Binance account is not Spot"
+            }
+            restAccountReady = account.has("balances")
+            restLastError = null
+            JSONObject()
+                .put("configured", true)
+                .put("testnet", true)
+                .put("standalone", true)
+                .put("validation", "PASS")
+                .put("read_back_verified", key() == newKey && secret() == newSecret)
+        } catch (x: Exception) {
+            prefs.edit()
+                .putString("api_key", oldKey)
+                .putString("api_secret", oldSecret)
+                .commit()
+            restAccountReady = false
+            throw IllegalStateException(
+                "Binance credentials validation failed: " +
+                    (x.message ?: x.javaClass.simpleName),
+                x
+            )
+        }
     }
 
     fun clear(): JSONObject {
@@ -1018,6 +1062,7 @@ private class NativeEngine(
             "RECONCILE_REQUIRED must be resolved before START"
         }
 
+        val generation = ++runtimeGeneration
         prefs.edit()
             .putBoolean("auto_run", true)
             .apply()
@@ -1027,6 +1072,10 @@ private class NativeEngine(
         historyReady = false
         historyState = "LOADING"
         historyLastError = null
+        scannerState = "WAITING_FOR_HISTORY"
+        scannerError = null
+        scanRunId = ""
+        scanProgressSymbols = 0
 
         try {
             recoverPendingEntries()
@@ -1057,20 +1106,20 @@ private class NativeEngine(
 
         running = true
         paused = false
-        warmCoreHistoryAsync()
+        warmCoreHistoryAsync(generation)
         startMarketDataStream()
         userStream.start()
 
         worker = Thread {
-            while (running) {
+            while (running && generation == runtimeGeneration) {
                 if (!paused) {
                     try {
                         if (!historyReady) {
                             if (!historyWarmupRunning) {
-                                warmCoreHistoryAsync()
+                                warmCoreHistoryAsync(generation)
                             }
                         } else if (
-                            restMarketReady &&
+                            marketDataFresh() &&
                             !reconcileRequired &&
                             !killLatched
                         ) {
@@ -1088,6 +1137,19 @@ private class NativeEngine(
                                 )
                             }
                             checkAutomaticCircuitBreaker()
+                            if (
+                                !userStreamConnected &&
+                                positionList().isNotEmpty() &&
+                                System.currentTimeMillis() - lastRestReconcileMs >= 60_000L
+                            ) {
+                                runCatching {
+                                    lastRestReconcileMs = System.currentTimeMillis()
+                                    reconcilePositionsWithExchange()
+                                }.onFailure {
+                                    lastError = "REST recovery: " +
+                                        (it.message ?: it.javaClass.simpleName)
+                                }
+                            }
                             requestScan()
                         }
                     } catch (x: Exception) {
@@ -1098,7 +1160,7 @@ private class NativeEngine(
                 }
 
                 try {
-                    Thread.sleep(15_000L)
+                    Thread.sleep(10_000L)
                 } catch (_: InterruptedException) {
                     break
                 }
@@ -1110,10 +1172,14 @@ private class NativeEngine(
 
         return JSONObject()
             .put("started", true)
-            .put("interval_seconds", 15)
+            .put("startup_state", "LOADING_HISTORY")
+            .put("execution_ready", executionReady())
+            .put("execution_blockers", JSONArray(executionBlockers()))
+            .put("interval_seconds", 10)
     }
 
     fun stop(): JSONObject {
+        ++runtimeGeneration
         running = false
         paused = false
         marketSocket?.close(1000, "Williams stopped")
@@ -1126,9 +1192,15 @@ private class NativeEngine(
             .apply()
         worker?.interrupt()
         worker = null
+        scanning = false
         scannerState = "STOPPED"
+        scannerError = null
+        historyReady = false
+        historyWarmupRunning = false
+        historyState = "STOPPED"
+        historyLastError = null
 
-        return JSONObject().put("stopped", true)
+        return JSONObject().put("stopped", true).put("state", "STOPPED")
     }
 
     @Synchronized
@@ -1499,6 +1571,7 @@ private class NativeEngine(
                 )
             }.joinToString("/")
 
+    @Synchronized
     private fun startMarketDataStream() {
         if (marketSocket != null) return
         val request = Request.Builder().url(wsStreamUrl()).build()
@@ -1779,8 +1852,8 @@ private class NativeEngine(
             .put("wave", waveInfo(candles, frame).path)
     }
 
-    private fun warmCoreHistoryAsync() {
-        if (historyWarmupRunning || !running) return
+    private fun warmCoreHistoryAsync(generation: Long = runtimeGeneration) {
+        if (historyWarmupRunning || !running || generation != runtimeGeneration) return
         historyWarmupRunning = true
         historyReady = false
         historyState = "LOADING"
@@ -1791,9 +1864,10 @@ private class NativeEngine(
                 val tasks = mutableListOf<Pair<String, java.util.concurrent.Future<Boolean>>>()
                 for (symbol in coreSymbols) {
                     for (frame in startupFrames) {
-                        if (!running) return@Thread
+                        if (!running || generation != runtimeGeneration) return@Thread
                         val label = symbol + ":" + frame
                         val future = historyBackfillExecutor.submit(Callable {
+                            if (!running || generation != runtimeGeneration) return@Callable false
                             var recent = emptyList<CandleN>()
                             var failure: Throwable? = null
                             for (attempt in 0 until 3) {
@@ -1816,6 +1890,7 @@ private class NativeEngine(
                                 }
                             }
 
+                            if (!running || generation != runtimeGeneration) return@Callable false
                             val persistedCount = historyStore.count(symbol, frame).toInt()
                             val ok = recent.size >= minStartupHistoryCandles &&
                                 persistedCount >= minStartupHistoryCandles
@@ -1841,8 +1916,9 @@ private class NativeEngine(
                 var allReady = true
                 tasks.forEach { (label, future) ->
                     val ok = runCatching {
-                        future.get(35L, TimeUnit.SECONDS)
+                        future.get(25L, TimeUnit.SECONDS)
                     }.getOrElse {
+                        future.cancel(true)
                         historyLastError = label + " task timeout/error: " +
                             (it.message ?: it.javaClass.simpleName)
                         false
@@ -1850,12 +1926,17 @@ private class NativeEngine(
                     if (!ok) allReady = false
                 }
 
-                historyReady = allReady && running
-                historyState = if (historyReady && running) "READY" else "WAITING_RETRY"
-                if (historyReady && running) {
-                    for (symbol in coreSymbols) {
-                        historyBackfillExecutor.execute {
-                            runCatching { fetchFullHistory(symbol, "1h") }
+                if (generation != runtimeGeneration || !running) return@Thread
+
+                historyReady = allReady
+                historyState = if (historyReady) "READY" else "WAITING_RETRY"
+                if (historyReady) {
+                    // Deep history is bounded and sequential on mobile. It is
+                    // a cache warmer, never a prerequisite for first scan.
+                    historyBackfillExecutor.execute {
+                        for (symbol in coreSymbols) {
+                            if (!running || generation != runtimeGeneration) break
+                            runCatching { fetchFullHistory(symbol, "1h", 6) }
                                 .onFailure {
                                     lastError = "background history " + symbol + ": " +
                                         (it.message ?: it.javaClass.simpleName)
@@ -1864,10 +1945,12 @@ private class NativeEngine(
                     }
                 }
             } catch (x: Exception) {
-                historyReady = false
-                historyState = "WAITING_RETRY"
-                historyLastError = x.message ?: x.javaClass.simpleName
-                lastError = "history warmup: " + historyLastError
+                if (generation == runtimeGeneration) {
+                    historyReady = false
+                    historyState = "WAITING_RETRY"
+                    historyLastError = x.message ?: x.javaClass.simpleName
+                    lastError = "history warmup: " + historyLastError
+                }
             } finally {
                 historyWarmupRunning = false
             }
@@ -2090,15 +2173,20 @@ private class NativeEngine(
             .takeLast(limit)
     }
 
-    private fun fetchFullHistory(symbol: String, frame: String = "1h"): List<CandleN> {
+    private fun fetchFullHistory(
+        symbol: String,
+        frame: String = "1h",
+        maxPages: Int = 6
+    ): List<CandleN> {
         val normalizedSymbol = symbol.uppercase()
 
         if (!historyStore.isComplete(normalizedSymbol, frame)) {
             var endTime = System.currentTimeMillis()
             var page = 0
             var reachedHistoryBeginning = false
+            val pageLimit = maxPages.coerceIn(1, 100)
             try {
-                while (page++ < 10000) {
+                while (page++ < pageLimit) {
                     val body = getBody(
                         "/api/v3/klines?symbol=" + normalizedSymbol +
                             "&interval=" + frame +
@@ -2156,17 +2244,12 @@ private class NativeEngine(
                     endTime = oldest - 1L
                 }
 
-                if (!reachedHistoryBeginning) {
-                    throw IllegalStateException(
-                        "Historical download page limit reached before beginning: " +
-                            normalizedSymbol + ":" + frame
+                if (reachedHistoryBeginning) {
+                    historyStore.markComplete(
+                        normalizedSymbol,
+                        frame
                     )
                 }
-
-                historyStore.markComplete(
-                    normalizedSymbol,
-                    frame
-                )
             } catch (x: Exception) {
                 historyStore.setError(
                     normalizedSymbol,
@@ -2267,6 +2350,13 @@ private class NativeEngine(
         return Triple(coreSymbols.toList(), volumes, spreads)
     }
 
+    private fun markScanProgress() {
+        synchronized(this) {
+            scanProgressSymbols += 1
+            scanLastProgressAt = System.currentTimeMillis()
+        }
+    }
+
     private fun requestScan() {
         // Scanner requires REST market data + history only. WebSockets are
         // realtime acceleration and diagnostics, not a hard scanner dependency.
@@ -2360,12 +2450,10 @@ private class NativeEngine(
                             spread = spreads[symbol] ?: 0.0,
                             volume = volumes[symbol] ?: 0.0
                         )
-                        scanProgressSymbols += 1
-                        scanLastProgressAt = System.currentTimeMillis()
+                        markScanProgress()
                         result
                     } catch (x: Exception) {
-                        scanProgressSymbols += 1
-                        scanLastProgressAt = System.currentTimeMillis()
+                        markScanProgress()
                         scannerError = symbol + ": " +
                             (x.message ?: x.javaClass.simpleName)
                         null
@@ -2377,8 +2465,12 @@ private class NativeEngine(
         val preliminary = mutableListOf<BaseAnalysis>()
         futures.forEach { future ->
             runCatching {
-                future.get()
-            }.getOrNull()?.let {
+                future.get(30L, TimeUnit.SECONDS)
+            }.getOrElse {
+                future.cancel(true)
+                scannerError = scannerError ?: "scanner task timeout: " + (it.message ?: it.javaClass.simpleName)
+                null
+            }.let {
                 if (it is BaseAnalysis) {
                     preliminary.add(it)
                 }
@@ -4073,15 +4165,12 @@ private class NativeEngine(
         if (killLatched) {
             error("KILL_SWITCH_LATCHED")
         }
-        if (!marketSocketConnected) {
-            error("MARKET_WS_NOT_READY")
+        require(marketDataFresh()) {
+            "REST market data is not fresh enough for execution"
         }
-        if (!userStreamConnected) {
-            error("USER_DATA_STREAM_NOT_READY")
-        }
-        if (userStreamSyncRequired) {
-            error("USER_DATA_STREAM_SYNC_REQUIRED")
-        }
+        // WebSockets are accelerators. REST + exchange-side OCO remain the
+        // authoritative safety path when a stream is degraded. The worker
+        // performs periodic REST reconciliation while user WS is unavailable.
         require(
             if (gated) {
                 stateMachine.state == TradingState.ENTRY_PENDING
@@ -5918,6 +6007,12 @@ private class NativeEngine(
             .put("version", BuildConfig.VERSION_NAME)
             .put("cached", true)
             .put("scanning", scanning)
+            .put("scanner_state", scannerState)
+            .put("scanner_error", scannerError ?: JSONObject.NULL)
+            .put("run_id", scanRunId)
+            .put("progress_symbols", scanProgressSymbols)
+            .put("progress_total", scanSymbols.size)
+            .put("last_progress_at", scanLastProgressAt)
             .put("last_error", lastError ?: JSONObject.NULL)
             .put("last_scan_at", lastScanAt)
             .put("last_scan_duration_ms", lastScanDurationMs)
@@ -6401,19 +6496,13 @@ private class NativeEngine(
             .put("configuration_sanitized", settings())
             .put("tests", tests)
             .put("self_tests", tests)
-            .put("diagnostic_contract_version", 5)
+            .put("diagnostic_contract_version", 6)
             .put("execution_gate", JSONObject()
                 .put("ready", executionReady())
-                .put("reasons", JSONArray().apply {
-                    if (!running) put("runtime_not_running")
-                    if (paused) put("paused")
-                    if (reconcileRequired) put("reconcile_required")
-                    if (killLatched) put("kill_switch_latched")
-                    if (!restMarketReady) put("rest_market_not_ready")
-                    if (!restAccountReady) put("rest_account_not_ready")
-                    if (!historyReady) put("history_not_ready")
-                    if (!marketSocketConnected) put("market_ws_degraded")
-                    if (!userStreamConnected || userStreamSyncRequired) put("user_ws_degraded")
+                .put("reasons", JSONArray(executionBlockers()))
+                .put("degraded_channels", JSONArray().apply {
+                    if (!marketSocketConnected) put("market_ws")
+                    if (!userStreamConnected || userStreamSyncRequired) put("user_ws")
                 }))
             .put("watchdog", JSONObject()
                 .put("scanner_stalled", scanning && scanLastProgressAt > 0L &&
@@ -6422,6 +6511,69 @@ private class NativeEngine(
                     if (scanLastProgressAt == 0L) 0L else System.currentTimeMillis() - scanLastProgressAt)
                 .put("history_state", historyState)
                 .put("history_last_error", historyLastError ?: JSONObject.NULL))
+    }
+
+    fun selfHeal(): JSONObject {
+        val before = status(fast = true)
+        val actions = JSONArray()
+        val reasons = JSONArray(executionBlockers())
+
+        if (killLatched || reconcileRequired) {
+            actions.put("blocked_by_safety_barrier")
+            return JSONObject()
+                .put("changed", false)
+                .put("safe_only", true)
+                .put("actions", actions)
+                .put("execution_ready", executionReady())
+                .put("execution_blockers", reasons)
+                .put("before", before)
+                .put("after", before)
+        }
+
+        lastSelfHealMs = System.currentTimeMillis()
+        selfHealCount++
+
+        if (running) {
+            if (!historyReady && !historyWarmupRunning) {
+                historyState = "RECOVERY_REQUESTED"
+                warmCoreHistoryAsync(runtimeGeneration)
+                actions.put("history_reload_requested")
+            }
+            if (marketSocket == null || !marketSocketConnected) {
+                startMarketDataStream()
+                actions.put("market_ws_reconnect_requested")
+            }
+            if (!userStreamConnected) {
+                userStream.start()
+                actions.put("user_ws_reconnect_requested")
+            }
+            if (historyReady && !scanning) {
+                requestScan()
+                actions.put("scanner_reconnect_requested")
+            }
+            if (
+                !userStreamConnected &&
+                positionList().isNotEmpty() &&
+                System.currentTimeMillis() - lastRestReconcileMs >= 60_000L
+            ) {
+                lastRestReconcileMs = System.currentTimeMillis()
+                runCatching { reconcilePositionsWithExchange() }
+                    .onSuccess { actions.put("rest_reconciliation") }
+                    .onFailure { actions.put("rest_reconciliation_failed") }
+            }
+        } else {
+            actions.put("runtime_not_started")
+        }
+
+        val after = status(fast = true)
+        return JSONObject()
+            .put("changed", actions.length() > 0)
+            .put("safe_only", true)
+            .put("actions", actions)
+            .put("execution_ready", executionReady())
+            .put("execution_blockers", JSONArray(executionBlockers()))
+            .put("before", before)
+            .put("after", after)
     }
 
     fun settings(): JSONObject =
@@ -6454,7 +6606,7 @@ private class NativeEngine(
             .put("htf_interval", "4h")
             .put("strategy_name", "Williams Profitunity Conservative")
             .put("standalone", true)
-            .put("execution_enabled", !reconcileRequired)
+            .put("execution_enabled", executionReady())
             .put("max_scan_symbols", maxScanSymbols)
             .put("scanner_universe", scannerUniverseLabel)
             .put("liquidity_preselect", maxScanSymbols)
