@@ -137,7 +137,8 @@ private data class PositionState(
     var signalType: String = "",
     var campaignState: String = "OPEN_INITIAL",
     var stopSource: String = "INITIAL_SIGNAL",
-    var additions: Int = 0
+    var additions: Int = 0,
+    var protectiveOrderId: String = ""
 )
 
 private data class PendingEntry(
@@ -710,7 +711,9 @@ private class NativeEngine(
                 pendingEntries.isNotEmpty() -> TradingState.ENTRY_PENDING
                 positions.isEmpty() -> TradingState.STOPPED
                 positions.values.all {
-                    it.ocoListId.isNotBlank() || it.ocoListClientId.isNotBlank()
+                    it.ocoListId.isNotBlank() ||
+                        it.ocoListClientId.isNotBlank() ||
+                        it.protectiveOrderId.isNotBlank()
                 } -> TradingState.PROTECTED
                 else -> TradingState.OPEN_UNPROTECTED
             },
@@ -812,6 +815,7 @@ private class NativeEngine(
                     .put("campaign_state", it.campaignState)
                     .put("stop_source", it.stopSource)
                     .put("additions", it.additions)
+                    .put("protective_order_id", it.protectiveOrderId)
             )
         }
 
@@ -873,7 +877,8 @@ private class NativeEngine(
                         signalType = item.optString("signal_type", ""),
                         campaignState = item.optString("campaign_state", "OPEN_INITIAL"),
                         stopSource = item.optString("stop_source", "INITIAL_SIGNAL"),
-                        additions = item.optInt("additions", 0)
+                        additions = item.optInt("additions", 0),
+                        protectiveOrderId = item.optString("protective_order_id", "")
                     )
                 }
             }
