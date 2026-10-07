@@ -34,8 +34,8 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.floor
 
-@SuppressLint("StaticFieldLeak")
 object StandaloneRuntime {
+    @SuppressLint("StaticFieldLeak")
     private var server: StandaloneServer? = null
 
     fun start(context: Context) {
@@ -2257,8 +2257,15 @@ private class NativeEngine(
                     !paused &&
                     !reconcileRequired &&
                     !killLatched &&
-                    stateMachine.state == TradingState.READY_FLAT &&
-                    positionList().isEmpty() &&
+                    stateMachine.canAdmitEntry(
+                        openPositions = positionList().size,
+                        maxOpenPositions = maxOpenPositions,
+                        hasPendingEntry = synchronized(pendingEntries) {
+                            pendingEntries.isNotEmpty()
+                        },
+                        reconciliationRequired = reconcileRequired,
+                        killLatched = killLatched
+                    ) &&
                     candidate.signal &&
                     candidate.score >= 70.0 &&
                     executionGate.tryReserve(candidate.symbol)
@@ -2305,7 +2312,11 @@ private class NativeEngine(
                         stateMachine.state == TradingState.ENTRY_PENDING
                     ) {
                         stateMachine.transition(
-                            TradingState.READY_FLAT,
+                            if (positionList().isEmpty()) {
+                                TradingState.READY_FLAT
+                            } else {
+                                TradingState.PROTECTED
+                            },
                             "ExecutionResult failure: " +
                                 (result.error ?: "unknown execution failure")
                         )
@@ -3859,7 +3870,8 @@ private class NativeEngine(
 
         val effectiveRiskDistance =
             stopDistance +
-                feeBufferPerSidePct * 2.0
+                feeBufferPerSidePct * 2.0 +
+                maxSlippagePct
 
         val riskQuote =
             usdtFree * allocationRiskPct
@@ -4307,16 +4319,28 @@ private class NativeEngine(
                 rules.tick
             ).toDouble()
 
+        val takeLimit =
+            fmtPrice(
+                take - rules.tick,
+                rules.tick
+            ).toDouble()
+
         val stopLimit =
             fmtPrice(
                 stop * 0.999,
                 rules.tick
             ).toDouble()
 
-        if (stop >= entry || take <= entry) {
+        if (
+            stop >= entry ||
+            take <= entry ||
+            takeLimit <= entry ||
+            takeLimit <= stop
+        ) {
             error("Invalid TP/SL relationship")
         }
 
+        validateLimitPrice(symbol, "SELL", takeLimit, rules)
         validateLimitPrice(symbol, "SELL", take, rules)
         validateLimitPrice(symbol, "SELL", stop, rules)
         validateLimitPrice(symbol, "SELL", stopLimit, rules)
@@ -4349,7 +4373,7 @@ private class NativeEngine(
                     "&aboveType=TAKE_PROFIT_LIMIT" +
                     "&abovePrice=" +
                     fmtPrice(
-                        take,
+                        takeLimit,
                         rules.tick
                     ) +
                     "&aboveStopPrice=" +
@@ -4393,7 +4417,8 @@ private class NativeEngine(
             take = take,
             riskPct =
                 actualStopDistance +
-                    feeBufferPerSidePct * 2.0,
+                    feeBufferPerSidePct * 2.0 +
+                    maxSlippagePct,
             ocoClientId = actualOcoClientId,
             ocoListId = actualOcoListId
         )
