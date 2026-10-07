@@ -85,3 +85,21 @@ def test_environment_secrets_are_gitignored():
     assert "keystore.properties" in ignore
     assert "data/binance_credentials.enc" in ignore
     assert "data/credential_master.key" in ignore
+
+
+
+def test_android_does_not_register_local_foreground_trading_runtime():
+    manifest = _read(ANDROID / "AndroidManifest.xml")
+    main = _read(ANDROID / "java/com/williamsbot/MainActivity.kt")
+
+    assert "WilliamsForegroundService" not in manifest
+    assert "FOREGROUND_SERVICE" not in manifest
+    assert "ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" not in main
+
+
+def test_chart_refresh_binds_symbol_and_timeframe():
+    main = _read(ANDROID / "java/com/williamsbot/MainActivity.kt")
+
+    assert "LaunchedEffect(selectedPositionSymbol, selectedChartInterval)" in main
+    assert "/api/v1/market/klines?symbol=" in main
+    assert "&interval=" in main
