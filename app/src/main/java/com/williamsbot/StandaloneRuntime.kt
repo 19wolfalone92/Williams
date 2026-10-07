@@ -3000,7 +3000,8 @@ private class NativeEngine(
             take = take,
             riskPct =
                 ((entry - stop) / entry).coerceIn(0.0, 1.0) +
-                    feeBufferPerSidePct * 2.0,
+                    feeBufferPerSidePct * 2.0 +
+                    maxSlippagePct,
             ocoClientId = clientId,
             ocoListId = listId
         )
