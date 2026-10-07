@@ -577,6 +577,34 @@ class MultiPositionTrader:
     # Protection
     # ------------------------------------------------------------------
 
+    def _authoritative_execution(self, symbol, order):
+        """Accumulate Binance fills, recovering fill-level commissions when needed."""
+        payload = dict(order or {})
+        fills = list(payload.get("fills") or [])
+        order_id = payload.get("orderId")
+        if not fills and order_id is not None and hasattr(self.client, "my_trades"):
+            try:
+                rows = self.client.my_trades(symbol, order_id=order_id, limit=1000)
+                fills = [
+                    {
+                        "price": row.get("price", "0"),
+                        "qty": row.get("qty", row.get("executedQty", "0")),
+                        "commission": row.get("commission", "0"),
+                        "commissionAsset": row.get("commissionAsset", ""),
+                    }
+                    for row in (rows or [])
+                ]
+                if fills:
+                    payload["fills"] = fills
+            except Exception as exc:
+                self.db.log_event(
+                    "WARNING",
+                    "fill_commission_lookup_failed",
+                    f"{symbol}: myTrades lookup unavailable; using order-level fill data",
+                    {"order_id": order_id, "error": str(exc)},
+                )
+        return accumulate_order(payload, base_asset=symbol[:-4] if symbol.endswith("USDT") else "")
+
     def _emergency_market_sell(self, symbol, qty, trade_id, reason):
         """Close a just-filled/unprotected Spot position if protection is already breached."""
         if self.dry_run:
@@ -614,7 +642,7 @@ class MultiPositionTrader:
                 f"{symbol}: emergency SELL is not fully filled"
             )
 
-        execution = accumulate_order(confirmed)
+        execution = self._authoritative_execution(symbol, confirmed)
         executed_qty = float(execution.executed_qty)
         exit_quote = float(execution.quote_qty)
         exit_price = (
@@ -868,12 +896,9 @@ class MultiPositionTrader:
                     order.get("status", "")
                 ).upper()
 
-                qty = float(
-                    order.get("executedQty", 0) or 0
-                )
-                spent = float(
-                    order.get("cummulativeQuoteQty", 0) or 0
-                )
+                execution = self._authoritative_execution(symbol, order)
+                qty = float(execution.net_base_qty)
+                spent = float(execution.quote_qty)
 
                 # A terminal order may still contain a real partial fill.
                 # Never clear the durable entry intent and leave the bought
@@ -926,7 +951,7 @@ class MultiPositionTrader:
                             order.get("orderId")
                         ),
                         entry_client_order_id=client_id,
-                        fees=0,
+                        fees=float(execution.fee_quote_equivalent),
                     )
                     trade = self.db.open_trade(symbol)
                     trade_id = int(trade["id"])
@@ -1021,11 +1046,23 @@ class MultiPositionTrader:
             ),
             None,
         )
-        bought_qty = float(
-            entry_order.get("executedQty", 0) or 0
-        ) if entry_order else float(
-            trade.get("quantity") or 0
+        persisted_qty = float(trade.get("quantity") or 0.0)
+        gross_qty = (
+            float(entry_order.get("executedQty", 0) or 0)
+            if entry_order else 0.0
         )
+        if persisted_qty > 0:
+            if gross_qty > 0 and persisted_qty > gross_qty + max(
+                float(os.getenv("MIN_RECOVERY_QTY", "0.000001")),
+                gross_qty * self.balance_tolerance_pct,
+            ):
+                raise RuntimeError(
+                    f"{symbol}: persisted managed quantity exceeds Binance BUY fill "
+                    f"(managed={persisted_qty:.12g}, gross={gross_qty:.12g})"
+                )
+            bought_qty = persisted_qty
+        else:
+            bought_qty = gross_qty
         if bought_qty <= 0:
             raise RuntimeError(
                 f"{symbol}: managed trade has no authoritative entry fill"
@@ -1218,7 +1255,7 @@ class MultiPositionTrader:
                 trade.get("exit_order_list_id") or ""
             )
             and not str(order.get("clientOrderId", "")).startswith(
-                (self.OCO_PREFIX, self.EMERGENCY_PREFIX)
+                (self.OCO_PREFIX, self.EMERGENCY_PREFIX, self.MANUAL_PREFIX)
             )
         ]
         if unknown_sells:
