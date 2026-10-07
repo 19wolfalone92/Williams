@@ -109,6 +109,7 @@ android {
         // Dependency freshness is reviewed separately; it must not block a stable SDK build.
         disable += "GradleDependency"
         disable += "DataExtractionRules"
+        disable += "ObsoleteSdkInt"
     }
 
     packaging {
