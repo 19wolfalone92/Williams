@@ -764,6 +764,9 @@ class MarketScanner:
                 continue
 
             log.warning("Wave analysis failed for %s: %s", candidate.symbol, exc)
+            if candidate.signal and os.getenv("NO_TRADE_WHEN_UNCERTAIN", "true").lower() == "true":
+                blocked_symbols.add(candidate.symbol)
+                continue
             neutral = replace(
                 candidate,
                 htf_confirmed=(
