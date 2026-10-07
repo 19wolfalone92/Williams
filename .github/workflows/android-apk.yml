@@ -1,4 +1,5 @@
 name: Build Android APK
+# Deep Spot validation v2: current main after all root-cause fixes.
 
 on:
   push:
