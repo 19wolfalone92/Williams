@@ -932,7 +932,7 @@ fun WilliamsApp(context: Context) {
                     command("/api/v1/control/kill")
                 },
                 onScan = { refresh(true) },
-                onSettings = { tab = 4 },
+                onSettings = { tab = 5 },
                 onRecoverDashboard = { command("/api/v1/control/recover") }
             )
 
