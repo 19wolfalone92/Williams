@@ -132,7 +132,15 @@ def _latest_super_ao(
         except (TypeError, ValueError):
             streak = 0
         # The book's third same-colour bar is the specific signal bar.
-        if streak == 3:
+        # Williams' Super AO is a continuation signal inside an established
+        # structure, so retain the existing valid fractal/Balance-Line gate.
+        fractal_gate_col = "long_fractal_outside" if side == "LONG" else "short_fractal_outside"
+        gate_i = max(0, i - 1)
+        gate_ok = (
+            fractal_gate_col not in ind.columns
+            or bool(ind.iloc[gate_i].get(fractal_gate_col, False))
+        )
+        if streak == 3 and gate_ok:
             trigger_base = float(row["high"] if side == "LONG" else row["low"])
             protective = float(row["low"] if side == "LONG" else row["high"])
             return i, trigger_base, protective
