@@ -361,6 +361,7 @@ def test_active_oco_two_legs_represent_one_quantity(tmp_path):
                     "executedQty": "0",
                     "price": "104",
                     "stopPrice": "104",
+                    "time": 2000,
                 },
                 {
                     "symbol": "BTCUSDT",
@@ -374,6 +375,7 @@ def test_active_oco_two_legs_represent_one_quantity(tmp_path):
                     "executedQty": "0",
                     "price": "97.5",
                     "stopPrice": "98",
+                    "time": 2000,
                 },
             ]
 
