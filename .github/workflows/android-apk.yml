@@ -1,4 +1,5 @@
 name: Build Android APK
+# Deep Spot validation: backend-authoritative trading, portfolio, WS recovery.
 
 on:
   push:
