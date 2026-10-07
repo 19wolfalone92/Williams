@@ -3405,7 +3405,13 @@ private class NativeEngine(
                     "/api/v3/openOrderList",
                     ""
                 )
-            }.getOrNull()
+            }.getOrElse {
+                throw IllegalStateException(
+                    "Cannot verify managed open order lists: " +
+                        (it.message ?: it.javaClass.simpleName),
+                    it
+                )
+            }
 
         val updated = mutableListOf<PositionState>()
         val minRecoveryQty = 0.000001
@@ -3997,7 +4003,13 @@ private class NativeEngine(
                 ?: if (response.has("symbol")) {
                     JSONArray().put(response)
                 } else JSONArray()
-        }.getOrElse { JSONArray() }
+        }.getOrElse {
+            throw IllegalStateException(
+                "Cannot verify open orders for " + symbol + ": " +
+                    (it.message ?: it.javaClass.simpleName),
+                it
+            )
+        }
 
         val openLists = runCatching {
             signedGet("/api/v3/openOrderList", "")
@@ -4007,7 +4019,13 @@ private class NativeEngine(
                         ?: it.optJSONArray("orderLists")
                         ?: JSONArray()
                 }
-        }.getOrElse { JSONArray() }
+        }.getOrElse {
+            throw IllegalStateException(
+                "Cannot verify open order lists: " +
+                    (it.message ?: it.javaClass.simpleName),
+                it
+            )
+        }
 
         require(openOrders.length() + 2 <= rules.maxNumOrders) {
             "Binance MAX_NUM_ORDERS would be exceeded"
