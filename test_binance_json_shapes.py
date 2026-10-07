@@ -190,3 +190,43 @@ def test_order_rate_limits_are_learned_from_exchange_info(monkeypatch):
     assert client.last_used_weight_1m == 123
     assert client.last_order_count_10s == 49
     assert client.last_order_count_1m == 401
+
+
+def test_ticker_prices_requires_array(monkeypatch):
+    client = make_client()
+    monkeypatch.setattr(
+        client,
+        "_request",
+        lambda *args, **kwargs: {"BTCUSDT": "1"},
+    )
+    with pytest.raises(BinanceAPIError, match="expected array"):
+        client.ticker_prices()
+
+
+def test_oco_quantizes_both_sell_stop_legs(monkeypatch):
+    client = make_client()
+    monkeypatch.setattr(
+        client,
+        "_symbol_tick_size",
+        lambda symbol: __import__("decimal").Decimal("0.1"),
+    )
+    captured = {}
+
+    def fake_request(method, path, params=None, signed=False):
+        captured["params"] = params
+        return {"orderListId": 1, "orderReports": []}
+
+    monkeypatch.setattr(client, "_request", fake_request)
+    result = client.create_oco_sell(
+        "BTCUSDT",
+        "1",
+        "105.27",
+        "95.03",
+        "94.96",
+        "WILLV4_OCO_TEST",
+    )
+    assert result["orderListId"] == 1
+    assert captured["params"]["aboveStopPrice"] == "105.2"
+    assert captured["params"]["abovePrice"] == "105.1"
+    assert captured["params"]["belowStopPrice"] == "95.0"
+    assert captured["params"]["belowPrice"] == "94.9"
