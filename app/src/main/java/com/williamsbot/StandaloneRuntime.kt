@@ -65,9 +65,9 @@ object StandaloneRuntime {
         return server!!.clearCredentials()
     }
 
-    fun status(context: Context): JSONObject {
+    fun status(context: Context, fast: Boolean = false): JSONObject {
         start(context)
-        return server!!.status()
+        return server!!.status(fast = fast)
     }
 
     fun startTrading() {
