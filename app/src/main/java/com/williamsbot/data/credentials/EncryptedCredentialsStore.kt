@@ -1,5 +1,6 @@
 package com.williamsbot.data.credentials
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
@@ -8,6 +9,7 @@ import com.williamsbot.domain.credentials.CredentialState
 import com.williamsbot.domain.credentials.CredentialsStore
 import com.williamsbot.domain.credentials.StoredCredentials
 
+@SuppressLint("UseKtx")
 class EncryptedCredentialsStore(
     private val prefs: SharedPreferences
 ) : CredentialsStore {
