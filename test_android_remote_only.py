@@ -103,3 +103,12 @@ def test_chart_refresh_binds_symbol_and_timeframe():
     assert "LaunchedEffect(selectedPositionSymbol, selectedChartInterval)" in main
     assert "/api/v1/market/klines?symbol=" in main
     assert "&interval=" in main
+
+
+
+def test_debug_android_manifest_does_not_allow_cleartext():
+    debug_manifest = _read(ROOT / "app/src/debug/AndroidManifest.xml")
+    debug_network = _read(ROOT / "app/src/debug/res/xml/network_security_config.xml")
+
+    assert 'usesCleartextTraffic="true"' not in debug_manifest
+    assert 'cleartextTrafficPermitted="true"' not in debug_network
