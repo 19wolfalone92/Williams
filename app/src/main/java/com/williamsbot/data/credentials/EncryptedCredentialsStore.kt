@@ -139,6 +139,33 @@ class EncryptedCredentialsStore(
         return false
     }
 
+    override fun markUnverified(): Boolean {
+        return try {
+            val committed = prefs.edit()
+                .putBoolean(KEY_VERIFIED_MARKER, false)
+                .commit()
+
+            if (!committed) {
+                currentState = evaluateCurrentState()
+                false
+            } else {
+                val readBack = runCatching {
+                    prefs.getBoolean(KEY_VERIFIED_MARKER, true)
+                }.getOrElse {
+                    currentState = evaluateCurrentState()
+                    return false
+                }
+
+                currentState = evaluateCurrentState()
+                !readBack && currentState == CredentialState.SAVED_UNVERIFIED
+            }
+        } catch (_: Throwable) {
+            currentState = runCatching { evaluateCurrentState() }
+                .getOrDefault(CredentialState.SAVED_UNVERIFIED)
+            false
+        }
+    }
+
     private fun evaluateCurrentState(): CredentialState {
         val apiKey = prefs.getString(KEY_API_KEY, null)
         val apiSecret = prefs.getString(KEY_API_SECRET, null)
