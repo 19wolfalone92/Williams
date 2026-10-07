@@ -1,47 +1,144 @@
 package com.williamsbot
 
 /**
- * Atomic admission gate between scanner proposals and Binance execution.
+ * Runtime admission barrier for Binance mutations.
  *
- * The gate owns both the open/closed lifecycle and per-symbol reservation.
- * close() and tryAdmit() share the same monitor, so their ordering has a
- * well-defined linearization point. An admitted operation may remain
- * in-flight after close(); close() prevents only new admissions.
- * This class is the runtime admission barrier; callers must not split the
- * admission check from the network side effect.
+ * NORMAL_EXECUTION is the only scope that can admit new-entry/regular
+ * mutations. PROTECTIVE_RECOVERY is deliberately independent so risk-reducing
+ * actions remain available while normal trading is halted.
+ *
+ * Admission and per-symbol reservation have one linearization point. The
+ * network operation itself runs after admission while the reservation remains
+ * owned by that caller; close() therefore blocks future admissions without
+ * creating a close-vs-dispatch race.
  */
+enum class AdmissionScope {
+    NORMAL_EXECUTION,
+    PROTECTIVE_RECOVERY
+}
+
+sealed class AdmissionResult<out T> {
+    data class Admitted<T>(val value: T) : AdmissionResult<T>()
+    data class Rejected(val reason: GateCloseReason) : AdmissionResult<Nothing>()
+}
+
+enum class GateCloseReason {
+    NONE,
+    INIT,
+    RECONCILE_REQUIRED,
+    USER_STREAM_DISCONNECTED,
+    REST_RECONCILIATION_PENDING,
+    UNKNOWN_CANCEL_OUTCOME,
+    RECONCILE_REQUIRED_UNPROTECTED_POSITION,
+    KILL_SWITCH
+}
+
 class ExecutionGate {
     private val reservedSymbols = LinkedHashSet<String>()
-    private var open = true
+
+    @Volatile
+    private var normalOpen = true
+
+    @Volatile
+    private var recoveryOpen = true
+
+    @Volatile
+    private var currentReason: GateCloseReason = GateCloseReason.NONE
 
     @Synchronized
-    fun tryAdmit(symbol: String): Boolean {
-        val normalized = symbol.uppercase()
-        if (normalized.isBlank() || !open) return false
+    fun tryAdmit(
+        symbol: String,
+        scope: AdmissionScope = AdmissionScope.NORMAL_EXECUTION
+    ): Boolean {
+        val normalized = symbol.trim().uppercase()
+        if (normalized.isBlank()) return false
+
+        val permitted = when (scope) {
+            AdmissionScope.NORMAL_EXECUTION -> normalOpen
+            AdmissionScope.PROTECTIVE_RECOVERY -> recoveryOpen
+        }
+        if (!permitted) return false
+
         return reservedSymbols.add(normalized)
     }
 
     @Synchronized
-    fun close() {
-        open = false
-    }
-
-    @Synchronized
-    fun open() {
-        open = true
-    }
-
-    @Synchronized
-    fun isOpen(): Boolean = open
-
-    @Synchronized
     fun release(symbol: String) {
-        reservedSymbols.remove(symbol.uppercase())
+        reservedSymbols.remove(symbol.trim().uppercase())
     }
+
+    /**
+     * Admission covers the complete caller-supplied mutation. The reservation
+     * is held until block returns, so two mutations for the same symbol cannot
+     * overlap even if they originate on different worker threads.
+     */
+    fun <T> executeWithAdmission(
+        symbol: String,
+        scope: AdmissionScope = AdmissionScope.NORMAL_EXECUTION,
+        block: () -> T
+    ): AdmissionResult<T> {
+        val admitted = synchronized(this) {
+            val permitted = when (scope) {
+                AdmissionScope.NORMAL_EXECUTION -> normalOpen
+                AdmissionScope.PROTECTIVE_RECOVERY -> recoveryOpen
+            }
+            if (!permitted) {
+                return@synchronized false
+            }
+            val normalized = symbol.trim().uppercase()
+            normalized.isNotBlank() && reservedSymbols.add(normalized)
+        }
+
+        if (!admitted) {
+            return AdmissionResult.Rejected(currentReason)
+        }
+
+        return try {
+            AdmissionResult.Admitted(block())
+        } finally {
+            release(symbol)
+        }
+    }
+
+    @Synchronized
+    fun closeNormalExecution(reason: GateCloseReason) {
+        normalOpen = false
+        currentReason = reason
+    }
+
+    @Synchronized
+    fun closeAll(reason: GateCloseReason) {
+        normalOpen = false
+        recoveryOpen = false
+        currentReason = reason
+    }
+
+    @Synchronized
+    fun openAll() {
+        normalOpen = true
+        recoveryOpen = true
+        currentReason = GateCloseReason.NONE
+    }
+
+    // Backwards-compatible aliases used by the existing runtime.
+    fun close() = closeNormalExecution(GateCloseReason.RECONCILE_REQUIRED)
+    fun open() = openAll()
+
+    @Synchronized
+    fun isOpen(): Boolean = normalOpen
+
+    @Synchronized
+    fun isNormalOpen(): Boolean = normalOpen
+
+    @Synchronized
+    fun isRecoveryOpen(): Boolean = recoveryOpen
+
+    @Synchronized
+    fun closeReason(): GateCloseReason = currentReason
 
     @Synchronized
     fun isReserved(symbol: String): Boolean =
-        reservedSymbols.contains(symbol.uppercase())
+        reservedSymbols.contains(symbol.trim().uppercase())
 
     @Synchronized
     fun reservedCount(): Int = reservedSymbols.size
