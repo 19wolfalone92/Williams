@@ -404,6 +404,9 @@ private class StandaloneServer(private val context: Context) {
             method == "GET" && path == "/api/v1/settings" ->
                 x.settings().toString()
 
+            method == "GET" && path == "/api/v1/diagnostics" ->
+                x.diagnostics().toString()
+
             method == "POST" && path == "/api/v1/config/binance" ->
                 x.configure(JSONObject(body)).toString()
 
@@ -5914,6 +5917,14 @@ private class NativeEngine(
                     }
                 )
         )
+
+    fun diagnostics(): JSONObject =
+        JSONObject()
+            .put("runtime", "standalone")
+            .put("device_local_api", "http://127.0.0.1:18080")
+            .put("binance_testnet", true)
+            .put("status", status())
+            .put("settings", settings())
 
     fun settings(): JSONObject =
         JSONObject()
