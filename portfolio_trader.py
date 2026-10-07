@@ -50,7 +50,7 @@ class MultiPositionTrader:
             )
         self.max_open_positions = max(
             0,
-            int(os.getenv("MAX_OPEN_POSITIONS", "1")),
+            int(os.getenv("MAX_OPEN_POSITIONS", "5")),
         )
         self.max_total_risk_pct = min(
             0.01,
@@ -63,7 +63,7 @@ class MultiPositionTrader:
             0.005,
             max(
                 0.0,
-                float(os.getenv("MAX_RISK_PER_TRADE_PCT", "0.005")),
+                float(os.getenv("MAX_RISK_PER_TRADE_PCT", os.getenv("RISK_PER_TRADE_PCT", "0.005"))),
             ),
         )
         self.dry_run = (
@@ -336,12 +336,16 @@ class MultiPositionTrader:
             for f in rows[0].get("filters", [])
         }
 
-    def _normalize_qty(self, symbol, qty):
+    def _normalize_qty(self, symbol, qty, *, market=False):
+        """Normalize quantity using the Binance filter for the exact order type.
+
+        MARKET orders use MARKET_LOT_SIZE; normal/OCO orders use LOT_SIZE.
+        """
         filters = self._filters(symbol)
-        f = (
-            filters.get("LOT_SIZE")
-            or filters.get("MARKET_LOT_SIZE")
-        )
+        if market:
+            f = filters.get("MARKET_LOT_SIZE") or filters.get("LOT_SIZE")
+        else:
+            f = filters.get("LOT_SIZE") or filters.get("MARKET_LOT_SIZE")
         step = f["stepSize"] if f else "0.000001"
         min_qty = float(f.get("minQty", 0)) if f else 0.0
         value = self.client.decimal_floor(qty, step)
@@ -682,7 +686,7 @@ class MultiPositionTrader:
         symbol = str(symbol).upper()
         account = self.client.account()
         free_qty = self._asset_balance(symbol, account=account)
-        sell_qty = self._normalize_qty(symbol, min(float(qty), free_qty))
+        sell_qty = self._normalize_qty(symbol, min(float(qty), free_qty), market=True)
         if sell_qty <= 0:
             raise RuntimeError(
                 f"{symbol}: emergency exit quantity below Binance LOT_SIZE"
@@ -1605,6 +1609,7 @@ class MultiPositionTrader:
             sell_qty = self._normalize_qty(
                 symbol,
                 min(float(trade["quantity"]), free_qty),
+                market=True,
             )
             if sell_qty <= 0:
                 raise RuntimeError(
