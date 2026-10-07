@@ -5284,6 +5284,19 @@ private class NativeEngine(
         val atrAbs =
             atrAbs(candles)
 
+        val campaignRules = runCatching { symbolFilters(symbol) }.getOrNull()
+        val campaignTick = campaignRules?.tick ?: 0.0
+        val campaignSignals = if (campaignEngineEnabled && campaignTick > 0.0) {
+            longCampaignSignals(
+                symbol = symbol,
+                candles = candles,
+                frame = campaignExecutionTimeframe,
+                tick = campaignTick
+            )
+        } else {
+            emptyList()
+        }
+
         val alligator = alligator(closes)
         val bullish =
             alligator.lips > alligator.teeth &&
@@ -5351,10 +5364,16 @@ private class NativeEngine(
                 volumeScore
 
         var strictSignal =
-            bullish &&
-                aoPositive &&
-                breakout &&
-                atrPct in 0.0..0.08
+            if (campaignEngineEnabled) {
+                campaignSignals.isNotEmpty() &&
+                    atrPct in 0.0..0.08 &&
+                    spread <= maxSpreadPct
+            } else {
+                bullish &&
+                    aoPositive &&
+                    breakout &&
+                    atrPct in 0.0..0.08
+            }
 
         if (preliminaryWave.position == 3) {
             score += 5.0
@@ -5385,6 +5404,10 @@ private class NativeEngine(
 
         val reason =
             when {
+                campaignEngineEnabled && campaignSignals.isNotEmpty() ->
+                    "Williams campaign: " +
+                        campaignSignals.joinToString("+") { it.type } +
+                        "; conditional entry"
                 strictSignal ->
                     "Alligator + AO + подтверждённый Fractal breakout"
                 preliminaryWave.position == 5 ->
@@ -5409,7 +5432,9 @@ private class NativeEngine(
             breakoutDistancePct = breakoutDistance,
             obi = obi,
             tradeFlowImbalance = flowImbalance,
-            reason = reason
+            reason = reason,
+            campaignSignals = campaignSignals,
+            campaignReady = campaignEngineEnabled && campaignSignals.isNotEmpty()
         )
     }
 
