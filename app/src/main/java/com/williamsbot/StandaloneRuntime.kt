@@ -507,9 +507,15 @@ private class NativeEngine(
     // Deep-analysis universe: five core USDT pairs only.
     private val coreSymbols = listOf("BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT")
     private val analysisFrames = listOf("1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w", "1M")
+    // Startup only needs the frames that directly participate in execution.
+    // The complete 15-TF matrix is analysis metadata, not a startup blocker.
+    private val startupFrames = listOf("5m", "15m", "1h", "4h", "1d")
     private val maxScanSymbols = 5
     private val waveTopN = 10
     private val scanExecutor = Executors.newFixedThreadPool(12)
+    private val historyBackfillExecutor = Executors.newFixedThreadPool(2) { runnable ->
+        Thread(runnable, "williams-history-backfill").apply { isDaemon = true }
+    }
     // Market WebSocket callbacks must stay lightweight. Indicator/Williams
     // calculations are deliberately moved off the OkHttp WebSocket callback
     // thread so a burst of kline events cannot delay depth/aggTrade handling.
@@ -1743,18 +1749,25 @@ private class NativeEngine(
         if (historyWarmupRunning) return
         historyWarmupRunning = true
         historyReady = false
+
         Thread {
             try {
                 var recentReady = true
+
+                // Warm only the execution-critical matrix. Do not make startup
+                // depend on 75 REST calls or on historical backfill.
                 for (symbol in coreSymbols) {
-                    for (frame in analysisFrames) {
+                    for (frame in startupFrames) {
                         if (!running) return@Thread
+
                         val recent = runCatching {
                             fetchCandles(symbol, frame, 150)
                         }.getOrElse {
                             recentReady = false
-                            lastError = "recent history " + symbol + ":" + frame +
-                                " failed: " + (it.message ?: it.javaClass.simpleName)
+                            lastError =
+                                "history " + symbol + ":" + frame +
+                                    " failed: " +
+                                    (it.message ?: it.javaClass.simpleName)
                             emptyList()
                         }
 
@@ -1767,40 +1780,39 @@ private class NativeEngine(
                                 buildIndicatorSnapshot(recent, symbol, frame)
                         } else {
                             recentReady = false
+                            lastError =
+                                "Недостаточно свечей " + symbol + ":" +
+                                    frame + " (" + recent.size + "/40)"
                         }
                     }
                 }
 
-                // Execution only needs a valid recent analysis window. Full
-                // historical backfill is deliberately decoupled from the
-                // startup gate and continues in the background.
+                // The base 1h series is the execution minimum. Other startup
+                // frames provide MTF context; all five must be available.
                 historyReady = recentReady
 
                 if (historyReady && running) {
-                    Thread {
-                        for (symbol in coreSymbols) {
-                            for (frame in analysisFrames) {
-                                if (!running) return@Thread
-                                runCatching {
-                                    fetchFullHistory(symbol, frame)
-                                }.onFailure {
-                                    lastError = "background history " +
-                                        symbol + ":" + frame + ": " +
+                    // Full history is valuable for analysis but MUST NEVER
+                    // block START or the scanner. Limit the backfill to the
+                    // base 1h series and run only two symbols concurrently to
+                    // stay below Binance rate limits.
+                    for (symbol in coreSymbols) {
+                        historyBackfillExecutor.execute {
+                            runCatching {
+                                fetchFullHistory(symbol, "1h")
+                            }.onFailure {
+                                lastError =
+                                    "background history " + symbol + ": " +
                                         (it.message ?: it.javaClass.simpleName)
-                                }
                             }
                         }
-                    }.apply {
-                        isDaemon = true
-                        name = "williams-history-backfill"
-                        start()
                     }
                 }
             } catch (x: Exception) {
                 historyReady = false
                 lastError =
                     "history warmup: " +
-                    (x.message ?: x.javaClass.simpleName)
+                        (x.message ?: x.javaClass.simpleName)
             } finally {
                 historyWarmupRunning = false
             }
@@ -2169,18 +2181,9 @@ private class NativeEngine(
     }
 
     private fun performScan() {
-        if (
-            key().isNotBlank() &&
-            secret().isNotBlank()
-        ) {
-            runCatching { recover() }
-                .onFailure {
-                    setReconcileRequired(
-                        it.message ?: "recovery failed"
-                    )
-                }
-        }
-
+        // Exchange reconciliation is performed at START/reconnect. Repeating
+        // it for every scanner pass serializes the scanner behind signed REST
+        // calls and was a major source of apparent hangs.
         if (reconcileRequired) return
 
         // Update MFE/MAE from live marks before ranking new entries.
@@ -4753,7 +4756,7 @@ private class NativeEngine(
                 breakoutDistancePct = 0.0,
                 obi = null,
                 tradeFlowImbalance = null,
-                reason = "Недостаточно свечей"
+                reason = "Недостаточно свечей: " + candles.size + "/40"
             )
         }
 
@@ -4913,18 +4916,13 @@ private class NativeEngine(
         // The higher timeframe supplies the market context; a lower timeframe
         // supplies the actual entry trigger. A child Wave 3 is therefore
         // allowed inside a parent Wave 3 OR a parent Wave 5.
-        val mtfFrames = analysisFrames
+        // MTF enrichment reads the already-warmed execution cache. The
+        // scanner must never trigger full-history reconstruction itself.
+        val mtfFrames = listOf("5m", "15m", "30m", "1h", "4h", "1d")
         for (frame in mtfFrames) {
-            runCatching { fetchCandles(symbol, frame, 300) }
+            runCatching { fetchCandles(symbol, frame, 150) }
                 .getOrNull()?.takeIf { it.size >= 40 }
                 ?.let { frames.add(waveInfo(it, frame)) }
-        }
-
-        // Full-history reconstruction is retained for the base degree;
-        // realtime streams provide the current candle for every degree.
-        val history = runCatching { fetchFullHistory(symbol, "1h") }.getOrNull()
-        if (!history.isNullOrEmpty()) {
-            frames.add(waveInfo(history, "1hHISTORY"))
         }
 
         val setup = baseCandidate.wave
@@ -6147,6 +6145,8 @@ private class NativeEngine(
             .put("core_symbols", coreSymbols.joinToString(","))
             .put("full_history_wave_analysis", true)
             .put("full_history_base_timeframe", "1h")
+            .put("startup_history_frames", startupFrames.joinToString(","))
+            .put("testnet_live_execution", true)
             .put("risk_per_trade_pct", maxRiskPerTradePct)
             .put("max_daily_loss_pct", 0.03)
             .put("max_trades_per_day", 0)
