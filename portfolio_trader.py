@@ -1564,7 +1564,40 @@ class MultiPositionTrader:
         return results
 
     def recover(self):
-        """Startup/full recovery. No new entry is allowed until it is clean."""
+        """Startup/full recovery. Campaign mode never routes through legacy OCO recovery."""
+        if self.campaign_engine_enabled:
+            pending = self.campaign_execution.reconcile_pending_entries()
+            active = self.campaign_execution.reconcile_active_campaigns()
+            repaired = self._repair_stale_reconcile_states()
+            unresolved = self.unresolved_symbols()
+            pending_keys = self._pending_entries()
+            ok = not unresolved and not pending_keys
+            canonical_state = self._sync_legacy_state()
+            results = pending + active
+            results.extend(
+                {"symbol": symbol, "state": "FLAT", "stale_reconcile_cleared": True}
+                for symbol in repaired
+            )
+            self.db.log_event(
+                "INFO" if ok else "ERROR",
+                "campaign_recovery_complete",
+                "Campaign exchange/SQLite reconciliation complete",
+                {
+                    "open_positions": len(self.open_trades()),
+                    "open_campaigns": len(self.db.open_campaigns()),
+                    "unresolved_symbols": unresolved,
+                    "pending_entries": [x[0] for x in pending_keys],
+                },
+            )
+            return {
+                "ok": ok,
+                "results": results,
+                "open_positions": len(self.open_trades()),
+                "open_campaigns": len(self.db.open_campaigns()),
+                "unresolved_symbols": unresolved,
+                "state": canonical_state,
+            }
+
         results = self.reconcile_open_positions()
         repaired = self._repair_stale_reconcile_states()
         unresolved = self.unresolved_symbols()
