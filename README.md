@@ -50,9 +50,13 @@
 
 REST остаётся обязательным reconciliation-слоем: WebSocket не используется как единственный источник истины для финансового состояния.
 
-### Android 4.22
-- Android работает как remote cockpit: торговый процесс и Binance execution выполняются на backend/VPS;
-- Android подключается к backend по HTTPS/WSS и не является 24/7 торговым процессом;
+### Android 4.22 — canonical Gate 0.5 runtime
+- The Android application is a UI client **and** the host process for the embedded autonomous `NativeEngine` runtime;
+- `MainActivity` owns presentation only. It must not own trading safety, execution state, order tracking, OCO protection or persistence;
+- `TradingForegroundService -> StandaloneRuntime -> NativeEngine` owns runtime state transitions, Binance execution, protective orders, reconciliation and SQLite persistence independently of the Activity lifecycle;
+- Activity/task termination must therefore not be treated as a trading-engine shutdown;
+- Normal execution is admitted only after market/user WebSocket health, history readiness and REST reconciliation are all satisfied;
+- `RECONCILE_REQUIRED` closes normal execution while keeping narrowly-scoped protective recovery operations available;
 - одновременно допускается несколько позиций; каждая имеет максимум 0,5% риска, а суммарный открытый защитный риск не превышает 1%;
 - отдельный SELL/OCO protection для каждой открытой позиции;
 - зашифрованный переносимый backup с восстановлением на другом телефоне;
@@ -147,13 +151,15 @@ Release-подпись не хранится в проекте: создайте
 - Для рабочего цикла используется liquidity preselection Top-50, чтобы не перегружать Binance REST; все строгие сигналы внутри выбранных 50 проходят MTF/Wave-проверку, watch-only кандидаты ограничиваются Wave Top-N.
 - Исполнение выбирает несколько лучших кандидатов, когда они одновременно проходят сигналы и риск-бюджет: каждая новая позиция <=0,5%, суммарный зарезервированный риск <=1%. Binance exchangeInfo; L2/flow/quant остаются фильтрами качества и не создают сигнал самостоятельно.
 
-## 24/7 VPS mode
+## Optional 24/7 VPS mode
 
-The intended production architecture is now:
+The repository also contains a separate backend/VPS deployment. That is an alternative deployment mode, not the Android Gate 0.5 canonical runtime.
 
-`Android APK -> HTTPS/WSS -> Caddy -> Williams backend on VPS -> Binance`
+For the Gate 0.5 E2E contract the canonical topology is:
 
-The backend persists encrypted Binance credentials and bot state on the VPS. Docker is configured with `restart: unless-stopped`, and `AUTO_START=true` resumes the bot after a VPS/container restart when credentials are present. See `deploy/README_RU.md`.
+`Android UI -> TradingForegroundService -> NativeEngine -> SQLite/Binance`
+
+The VPS backend remains available for the independent remote/24x7 deployment documented in `deploy/README_RU.md`. Its existence must not be used as evidence that the Android UI owns trading safety.
 
 ## 4.10.0 — запуск без домена
 
@@ -200,3 +206,31 @@ Research backtest now also reports CPCV signal-return stability and adverse late
 HMM/GMM regime models, LightGBM direction, isotonic probability calibration, SHAP explanation and the unified ShadowMLPipeline are implemented as optional research modules. They fail closed when optional dependencies are unavailable and do not have access to Binance credentials or order submission. Funding/OI/liquidation features are normalized through derivatives_features.py and enter the same MarketFeatureVector when an external derivatives provider supplies them.
 
 
+
+
+## Gate 0.5 architectural contract
+
+**Critical Architectural Invariant**
+
+> The UI process must not be treated as the owner of trading safety or execution state.
+> The embedded `NativeEngine` daemon runs independently in its own background scope, owning all state transitions, order tracking, protective OCO legs, reconciliation and persistence directly to SQLite.
+
+### Execution admission
+
+- `NORMAL_EXECUTION`: BUY/new-entry and regular mutations.
+- `PROTECTIVE_RECOVERY`: OCO cancellation/replacement, emergency close and other explicitly risk-reducing mutations.
+- The two scopes share a per-symbol admission reservation; concurrent mutations for the same symbol cannot overlap.
+- Closing normal admission never authorizes a normal BUY. Protective recovery remains available only through its dedicated allow-listed mutation paths.
+- A transport timeout/connection reset is an **unknown outcome**, not a confirmed failure. Mutation retries are therefore forbidden until REST reconciliation determines the authoritative exchange state.
+
+### OCO replacement durability
+
+Every OCO replacement transaction is journaled in SQLite before its first network mutation. A process death between old-OCO cancellation and new protection creation leaves a pending transaction that forces reconciliation on restart.
+
+### User Data Stream invariant
+
+A user-data WebSocket disconnect unconditionally sets the runtime synchronization requirement and closes normal execution. Reconnection does not reopen the gate; REST reconciliation must complete first.
+
+### Gate 0.5 evidence rule
+
+The final status is `PASSED` only when the physical E2E run supplies the commit SHA, APK SHA-256, device/runtime evidence, network mutation trace and all mandatory failure-path artifacts. Green unit tests alone are not sufficient.
