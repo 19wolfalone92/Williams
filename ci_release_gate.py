@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Fast, stdlib-only release gate for the Williams repository."""
+# Autonomous Android runtime contract is validated alongside the Python release gate.
 from __future__ import annotations
 import ast
 from pathlib import Path
