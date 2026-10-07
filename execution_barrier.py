@@ -135,7 +135,6 @@ class ExecutionBarrier:
                 return "campaign_reconcile_required"
 
         return ""
-        return ""
 
     def execute(
         self,
