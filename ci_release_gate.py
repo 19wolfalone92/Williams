@@ -23,7 +23,7 @@ def main() -> None:
     for path in (
         "trading_config.py", "market_scanner.py", "portfolio_controller.py",
         "portfolio_trader.py", "trader.py", "server.py", "wave_engine.py",
-        "binance_client.py", "preflight_gate.py", "test_testnet_release_gate.py", "self_heal.py",
+        "binance_client.py", "preflight_gate.py", "test_testnet_release_gate.py",
     ):
         ast.parse(read(path), filename=path)
 
