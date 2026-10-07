@@ -1060,7 +1060,7 @@ def portfolio():
     locked_equity_usdt = sum(x['locked_value_usdt'] for x in assets)
     total_equity_btc = total_equity_usdt / btc_usdt if btc_usdt and btc_usdt > 0 else None
     for row in assets:
-        row['allocation_pct'] = row['value_usdt'] / total_equity_usdt * 100.0 if total_equity_usdt > 0 else 0.0
+        row['allocation_pct'] = row['value_usdt'] / total_equity_usdt if total_equity_usdt > 0 else 0.0
     multi = state.ensure_multi()
     positions = []
     for trade in multi.open_positions():
@@ -1075,7 +1075,7 @@ def portfolio():
                 'stop_loss': raw.get('stop_price'),
                 'take_profit': raw.get('take_profit_price'),
                 'position_value_usdt': position_value,
-                'allocation_pct': position_value / total_equity_usdt * 100.0 if total_equity_usdt > 0 else 0.0,
+                'allocation_pct': position_value / total_equity_usdt if total_equity_usdt > 0 else 0.0,
                 'unrealized_pnl_usdt': float(raw.get('unrealized_pnl') or 0.0),
                 'unrealized_pnl_pct': float(raw.get('unrealized_pnl_pct') or 0.0),
                 'oco_list_id': raw.get('exit_order_list_id'),
