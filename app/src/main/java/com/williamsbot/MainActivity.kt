@@ -793,7 +793,7 @@ fun WilliamsApp(context: Context) {
 
                     withContext(Dispatchers.Main) {
                         backupMessage =
-                            "Backup восстановлен. Binance state сверено. START не включён."
+                            "Backend-подключение восстановлено. Binance-ключи на телефон не возвращаются."
                         backupPassword = ""
                     }
 
@@ -2471,7 +2471,7 @@ private fun SettingsScreen(
                     }
 
                     Text(
-                        "Зашифрованный backup переносит Binance Testnet credentials на другой телефон. Открытые позиции и ордера в файл не записываются: после восстановления Williams сверяется с Binance.",
+                        "Зашифрованный backup переносит только Backend URL и Mobile API token. Binance API credentials никогда не записываются в backup. Открытые позиции и ордера в файл не записываются.",
                         style = MaterialTheme.typography.bodySmall,
                         color = AppColors.textMuted
                     )
