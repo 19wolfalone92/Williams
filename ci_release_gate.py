@@ -57,10 +57,10 @@ def main() -> None:
     must(trader, "_auto_scan_lock", "trader.py")
 
     server = read("server.py")
-    must(server, "VERSION = '4.22.2'", "server.py")
+    must(server, "VERSION = '4.22.3'", "server.py")
 
     android = read("app/src/main/java/com/williamsbot/MainActivity.kt")
-    must(android, "Williams 4.22.2", "MainActivity.kt")
+    must(android, "Williams 4.22.3", "MainActivity.kt")
     for needle in (
         "Top 50 liquid USDT", "1D / 4H / 1H / 15M",
         '.putString("api_key"', '.putString("api_secret"',
