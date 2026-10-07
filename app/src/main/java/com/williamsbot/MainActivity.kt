@@ -131,17 +131,7 @@ class MainActivity : ComponentActivity() {
             .remove("recovery_pending")
             .remove("local_api_token")
             .apply()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            val power = getSystemService(PowerManager::class.java)
-            if (!power.isIgnoringBatteryOptimizations(packageName)) {
-                runCatching {
-                    startActivity(
-                        Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
-                            .setData(Uri.parse("package:$packageName"))
-                    )
-                }
-            }
-        }
+        // Williams is a remote cockpit; 24/7 execution is handled by the backend.
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(
                 this,
