@@ -1,4 +1,5 @@
 name: Build Android APK
+# Deep Spot validation v3: final current-main safety/build gate.
 
 on:
   push:
