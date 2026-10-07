@@ -741,14 +741,22 @@ private class NativeEngine(
     private fun positionList(): List<PositionState> =
         synchronized(positions) { positions.values.toList() }
 
-    private fun reservedRiskPct(): Double =
-        positionList().sumOf {
+    private fun reservedRiskPct(): Double {
+        val openRisk = positionList().sumOf {
             if (it.riskPct > 0.0) it.riskPct
             else if (it.entry > 0.0) {
-                ((it.entry - it.stop) / it.entry)
-                    .coerceAtLeast(0.0)
+                ((it.entry - it.stop) / it.entry).coerceAtLeast(0.0)
             } else 0.0
         }
+        val pendingRisk = if (campaignEngineEnabled) {
+            synchronized(pendingEntries) {
+                pendingEntries.values.sumOf { it.riskReservedPct }
+            }
+        } else {
+            0.0
+        }
+        return (openRisk + pendingRisk).coerceAtMost(1.0)
+    }
 
     private fun marketDataFresh(maxAgeMs: Long = 30_000L): Boolean =
         restMarketReady &&
@@ -3084,6 +3092,28 @@ private class NativeEngine(
                             .put("fills", acc.fills)
                     })
 
+                if (campaignEngineEnabled && clientId.startsWith("W5_")) {
+                    Thread {
+                        runCatching {
+                            Thread.sleep(120L)
+                            recoverCampaignPendingEntries()
+                            reconcileCampaignPositions()
+                        }.onFailure {
+                            if (!killLatched) {
+                                setReconcileRequired(
+                                    "campaign executionReport reconciliation failed: " +
+                                        (it.message ?: it.javaClass.simpleName)
+                                )
+                            }
+                        }
+                    }.apply {
+                        isDaemon = true
+                        name = "williams-campaign-execution-reconcile"
+                        start()
+                    }
+                    return
+                }
+
                 when {
                     clientId.startsWith("W4B_") &&
                         status == "NEW" ->
@@ -3238,6 +3268,11 @@ private class NativeEngine(
     }
 
     private fun recoverPendingEntries() {
+        if (campaignEngineEnabled) {
+            recoverCampaignPendingEntries()
+            return
+        }
+
         val pending =
             synchronized(pendingEntries) {
                 pendingEntries.values.toList()
@@ -3459,6 +3494,10 @@ private class NativeEngine(
     }
 
     private fun reconcilePositionsWithExchange() {
+        if (campaignEngineEnabled) {
+            reconcileCampaignPositions()
+            return
+        }
         if (positions.isEmpty()) {
             savePersistedState()
             return
