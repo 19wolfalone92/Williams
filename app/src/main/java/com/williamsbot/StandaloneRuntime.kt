@@ -471,6 +471,7 @@ private class NativeEngine(
 ) {
     private val baseUrl = "https://testnet.binance.vision"
     private val historyStore = MarketHistoryStore(context)
+    private val ocoTxJournal = OcoReplacementTxJournal(context)
     private val rateGuard = BinanceRateGuard()
     private val auditStore = TradingAuditStore(context)
     private val executionAccumulator = ExecutionAccumulator()
