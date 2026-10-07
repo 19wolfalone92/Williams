@@ -4818,7 +4818,7 @@ private class NativeEngine(
                         "&orderListId=" + stored.ocoListId
                 )
             } else if (stored.ocoListClientId.isNotBlank()) {
-                signedDelete(
+                signedRecoveryDelete(
                     "/api/v3/orderList",
                     "symbol=" + symbol +
                         "&listClientOrderId=" +
