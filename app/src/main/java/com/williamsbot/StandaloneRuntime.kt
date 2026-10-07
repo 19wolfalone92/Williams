@@ -2651,7 +2651,8 @@ private class NativeEngine(
                         symbol = stored.symbol,
                         qty = stored.qty,
                         entry = stored.entry,
-                        stopDistance = distance
+                        stopDistance = distance,
+                        admissionScope = AdmissionScope.PROTECTIVE_RECOVERY
                     )
 
                 synchronized(positions) {
@@ -4551,7 +4552,8 @@ private class NativeEngine(
         symbol: String,
         qty: Double,
         entry: Double,
-        stopDistance: Double
+        stopDistance: Double,
+        admissionScope: AdmissionScope = AdmissionScope.NORMAL_EXECUTION
     ): Protection {
         val rules = symbolFilters(symbol)
 
@@ -4634,8 +4636,10 @@ private class NativeEngine(
                     .take(28)
 
         val oco =
-            signedPost(
-                "/api/v3/orderList/oco",
+            if (admissionScope == AdmissionScope.PROTECTIVE_RECOVERY) {
+                signedRecoveryPost(
+                    "/api/v3/orderList/oco",
+
                 "symbol=" + symbol +
                     "&side=SELL" +
                     "&quantity=" +
@@ -4670,7 +4674,46 @@ private class NativeEngine(
                     "&newOrderRespType=FULL" +
                     "&listClientOrderId=" +
                     ocoClientId
-            )
+                )
+            } else {
+                signedPost(
+                    "/api/v3/orderList/oco",
+                    "symbol=" + symbol +
+                        "&side=SELL" +
+                        "&quantity=" +
+                        fmtQty(
+                            normalizedQty,
+                            rules.decimals
+                        ) +
+                        "&aboveType=TAKE_PROFIT_LIMIT" +
+                        "&abovePrice=" +
+                        fmtPrice(
+                            takeLimit,
+                            rules.tick
+                        ) +
+                        "&aboveStopPrice=" +
+                        fmtPrice(
+                            take,
+                            rules.tick
+                        ) +
+                        "&aboveTimeInForce=GTC" +
+                        "&belowType=STOP_LOSS_LIMIT" +
+                        "&belowStopPrice=" +
+                        fmtPrice(
+                            stop,
+                            rules.tick
+                        ) +
+                        "&belowPrice=" +
+                        fmtPrice(
+                            stopLimit,
+                            rules.tick
+                        ) +
+                        "&belowTimeInForce=GTC" +
+                        "&newOrderRespType=FULL" +
+                        "&listClientOrderId=" +
+                        ocoClientId
+                )
+            }
 
         val actualStopDistance =
             ((entry - stop) / entry)
