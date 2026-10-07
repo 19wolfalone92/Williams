@@ -55,3 +55,31 @@ def test_binance_client_has_ambiguous_execution_barrier():
     assert "order_safe" in client
     assert "create_oco_sell_safe" in client
     assert "X-MBX-ORDER-COUNT-10S" in client
+
+
+def test_spot_testnet_endpoints_and_no_futures_execution():
+    client = _read(ROOT / "binance_client.py")
+    data = _read(ROOT / "data.py")
+    ws = _read(ROOT / "ws_hub.py")
+
+    assert "https://testnet.binance.vision" in client
+    assert "BASE_URL='https://testnet.binance.vision'" in data
+    assert "wss://stream.testnet.binance.vision" in ws
+    assert "wss://ws-api.testnet.binance.vision/ws-api/v3" in ws
+
+    # Williams trading core is Spot-only. Research files may discuss derivatives,
+    # but executable Binance Futures endpoints must not exist anywhere in Python.
+    for path in ROOT.rglob("*.py"):
+        if any(part in {".git", "__pycache__"} for part in path.parts):
+            continue
+        text = path.read_text(errors="replace")
+        assert "/fapi/" not in text, f"Futures REST endpoint found in {path}"
+        assert "binancefuture.com" not in text, f"Futures Testnet host found in {path}"
+
+
+def test_environment_secrets_are_gitignored():
+    ignore = _read(ROOT / ".gitignore")
+    assert ".env" in ignore
+    assert "keystore.properties" in ignore
+    assert "data/binance_credentials.enc" in ignore
+    assert "data/credential_master.key" in ignore
