@@ -41,6 +41,7 @@ class PreflightCheckService:
     ENTRY_PREFIX = "WILLV4_ENTRY_"
     OCO_PREFIX = "WILLV4_OCO_"
     EMERGENCY_PREFIX = "WILLV4_EMERGENCY_"
+    MANUAL_PREFIX = "WILLV4_MANUAL_"
 
     def __init__(self, client, *, symbols=None, max_open_positions=0, max_offset_ms=None):
         self.client = client
@@ -64,7 +65,7 @@ class PreflightCheckService:
         known, unknown = [], []
         for order in orders or []:
             client_id = str(order.get("clientOrderId") or order.get("origClientOrderId") or "")
-            (known if client_id.startswith((cls.ENTRY_PREFIX, cls.OCO_PREFIX, cls.EMERGENCY_PREFIX)) else unknown).append(order)
+            (known if client_id.startswith((cls.ENTRY_PREFIX, cls.OCO_PREFIX, cls.EMERGENCY_PREFIX, cls.MANUAL_PREFIX)) else unknown).append(order)
         for row in order_lists or []:
             client_id = str(row.get("listClientOrderId") or row.get("origClientOrderId") or "")
             (known if client_id.startswith(cls.OCO_PREFIX) else unknown).append(row)
