@@ -514,6 +514,10 @@ private class NativeEngine(
     // Startup only needs the frames that directly participate in execution.
     // The complete 15-TF matrix is analysis metadata, not a startup blocker.
     private val startupFrames = listOf("15m", "1h", "4h")
+    // Fetch enough closed candles for the scanner's 150-candle working set while
+    // leaving headroom for the currently forming candle.
+    private val startupHistoryLimit = 180
+    private val minStartupHistoryCandles = 150
     private val maxScanSymbols = 5
     private val waveTopN = 5
     private val scanExecutor = Executors.newFixedThreadPool(12)
@@ -1768,7 +1772,7 @@ private class NativeEngine(
                         if (!running) return@Thread
 
                         val recent = runCatching {
-                            fetchCandles(symbol, frame, 120)
+                            fetchCandles(symbol, frame, startupHistoryLimit)
                         }.getOrElse {
                             recentReady = false
                             lastError =
@@ -1779,8 +1783,8 @@ private class NativeEngine(
                         }
 
                         val key = symbol + ":" + frame
-                        if (recent.size >= 40) {
-                            liveCandleCache[key] = recent.toMutableList()
+                        if (recent.size >= minStartupHistoryCandles) {
+                            liveCandleCache[key] = recent.takeLast(startupHistoryLimit).toMutableList()
                             candleCache[key] =
                                 System.currentTimeMillis() to recent
                             indicatorSnapshots[key] =
@@ -1789,7 +1793,8 @@ private class NativeEngine(
                             recentReady = false
                             lastError =
                                 "Недостаточно свечей " + symbol + ":" +
-                                    frame + " (" + recent.size + "/40)"
+                                    frame + " (" + recent.size + "/" +
+                                    minStartupHistoryCandles + ")"
                         }
                     }
                 }
@@ -1835,15 +1840,17 @@ private class NativeEngine(
         frame: String,
         limit: Int = 150
     ): List<CandleN> {
-        val liveKey = symbol.uppercase() + ":" + frame
+        val normalizedSymbol = symbol.uppercase(Locale.US)
+        val liveKey = normalizedSymbol + ":" + frame
         liveCandleCache[liveKey]?.let { live ->
             synchronized(live) {
                 if (live.size >= min(40, limit)) return live.takeLast(limit)
             }
         }
-        val cacheKey = symbol.uppercase() + ":" + frame + ":" + limit
+
+        val cacheKey = normalizedSymbol + ":" + frame + ":" + limit
         val persistent = historyStore.loadRecent(
-            symbol.uppercase(),
+            normalizedSymbol,
             frame,
             limit
         )
@@ -1859,17 +1866,18 @@ private class NativeEngine(
                 )
             }
             candleCache[cacheKey] = System.currentTimeMillis() to result
+            liveCandleCache[liveKey] = result.toMutableList()
             return result
         }
 
         val cached = candleCache[cacheKey]
         val now = System.currentTimeMillis()
-        if (cached != null && now - cached.first < scanCacheTtlMs) return cached.second
+        if (cached != null && now - cached.first < scanCacheTtlMs) {
+            return cached.second
+        }
 
         // Binance REST has a limited set of native intervals. Build the
-        // execution timeframes (including seconds) synthetically from the
-        // smallest reliable market data available instead of sending invalid
-        // intervals such as 5s/2h/25h to Binance.
+        // execution timeframes synthetically only when necessary.
         val nativeFrames = setOf(
             "1m", "3m", "5m", "15m", "30m", "1h",
             "2h", "4h", "6h", "8h", "12h", "1d",
@@ -1882,35 +1890,112 @@ private class NativeEngine(
             else -> "1m"
         }
 
-        val sourceLimit = if (frame == sourceFrame) limit
-        else (limit * (frameSeconds(frame).coerceAtLeast(60L) /
-            frameSeconds(sourceFrame).coerceAtLeast(60L)).toInt() + 20).coerceAtMost(1000)
+        val sourceLimit = if (frame == sourceFrame) {
+            limit
+        } else {
+            (
+                limit *
+                    (
+                        frameSeconds(frame).coerceAtLeast(60L) /
+                            frameSeconds(sourceFrame).coerceAtLeast(60L)
+                    ).toInt() + 20
+                ).coerceAtMost(1000)
+        }
 
         val body = getBody(
-            "/api/v3/klines?symbol=" + symbol.uppercase() +
-                "&interval=" + sourceFrame + "&limit=" + sourceLimit
+            "/api/v3/klines?symbol=" + normalizedSymbol +
+                "&interval=" + sourceFrame +
+                "&limit=" + sourceLimit
         )
         val array = JSONArray(body)
-        val source = List(array.length()) { i ->
+        val source = ArrayList<CandleN>(array.length())
+        val sourcePersistent = ArrayList<MarketHistoryStore.Candle>(array.length())
+        val fetchedAt = System.currentTimeMillis()
+
+        for (i in 0 until array.length()) {
             val row = array.getJSONArray(i)
-            CandleN(
-                row.getLong(0),
-                row.getString(1).toDouble(),
-                row.getString(2).toDouble(),
-                row.getString(3).toDouble(),
-                row.getString(4).toDouble(),
-                row.getString(5).toDouble()
+            val openTime = row.getLong(0)
+            val closeTime = row.getLong(6)
+            // Persist only closed candles. The forming candle belongs to the
+            // websocket/live cache and must never make history look complete.
+            if (closeTime >= fetchedAt) continue
+
+            val open = row.getString(1).toDouble()
+            val high = row.getString(2).toDouble()
+            val low = row.getString(3).toDouble()
+            val close = row.getString(4).toDouble()
+            val volume = row.getString(5).toDouble()
+
+            source += CandleN(
+                openTime,
+                open,
+                high,
+                low,
+                close,
+                volume
+            )
+
+            if (frame == sourceFrame) {
+                sourcePersistent += MarketHistoryStore.Candle(
+                    openTime = openTime,
+                    closeTime = closeTime,
+                    open = open,
+                    high = high,
+                    low = low,
+                    close = close,
+                    volume = volume
+                )
+            }
+        }
+
+        // This is the missing persistence step diagnosed by the Log branch:
+        // REST-fetched candles must enter the same SQLite store used by
+        // history/status/diagnostics, not remain only in RAM.
+        if (sourcePersistent.isNotEmpty()) {
+            historyStore.upsertBatch(
+                normalizedSymbol,
+                frame,
+                sourcePersistent,
+                complete = false
             )
         }
 
         val result = if (frame == sourceFrame) {
-            source
+            source.takeLast(limit)
         } else {
-            aggregateCandles(source, frameSeconds(frame) * 1000L, limit)
+            aggregateCandles(
+                source,
+                frameSeconds(frame) * 1000L,
+                limit
+            )
         }
 
-        candleCache[cacheKey] = now to result
-        return result
+        if (frame != sourceFrame && result.isNotEmpty()) {
+            val bucketMs = frameSeconds(frame) * 1000L
+            historyStore.upsertBatch(
+                normalizedSymbol,
+                frame,
+                result.map {
+                    MarketHistoryStore.Candle(
+                        openTime = it.t,
+                        closeTime = it.t + bucketMs - 1L,
+                        open = it.o,
+                        high = it.h,
+                        low = it.l,
+                        close = it.c,
+                        volume = it.v
+                    )
+                },
+                complete = false
+            )
+        }
+
+        if (result.isNotEmpty()) {
+            liveCandleCache[liveKey] = result.takeLast(limit).toMutableList()
+            candleCache[cacheKey] =
+                now to result.takeLast(limit)
+        }
+        return result.takeLast(limit)
     }
 
     private fun aggregateCandles(
@@ -2137,6 +2222,21 @@ private class NativeEngine(
     }
 
     private fun requestScan() {
+        // Scanner lifecycle is subordinate to market/history/user-stream
+        // readiness. Never expose scanning=true while prerequisites are false.
+        if (
+            !running ||
+            paused ||
+            reconcileRequired ||
+            killLatched ||
+            !historyReady ||
+            !marketSocketConnected ||
+            !userStreamConnected ||
+            userStreamSyncRequired
+        ) {
+            return
+        }
+
         synchronized(this) {
             if (scanning) return
             scanning = true
