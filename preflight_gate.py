@@ -187,6 +187,24 @@ class PreflightCheckService:
                 )
                 return report.as_dict()
             report.passed("api_restrictions")
+            try:
+                trading_status = self.client.api_trading_status()
+                data = trading_status.get("data", {}) if isinstance(trading_status, dict) else {}
+                if bool(data.get("isLocked", False)):
+                    report.fail(
+                        "api_trading_status",
+                        "Binance API trading is currently locked",
+                        planned_recover_time=data.get("plannedRecoverTime"),
+                    )
+                    return report.as_dict()
+                report.passed(
+                    "api_trading_status",
+                    is_locked=False,
+                    planned_recover_time=data.get("plannedRecoverTime", 0),
+                )
+            except Exception as exc:
+                report.fail("api_trading_status", str(exc))
+                return report.as_dict()
 
         if not self._check_account(report):
             return report.as_dict()
