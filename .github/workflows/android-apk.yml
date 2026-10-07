@@ -81,6 +81,7 @@ jobs:
         run: |
           set -euo pipefail
           test -s build/williams-debug.p12
+      # Release gate is the single pre-build contract check for every APK commit.
       - name: Run release contract gate
         run: python3 ci_release_gate.py
       - name: Validate quant Python sources
