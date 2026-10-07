@@ -910,6 +910,7 @@ private class NativeEngine(
             .remove("api_secret")
             .remove("positions_json")
             .remove("pending_entries_json")
+            .putBoolean("auto_run", false)
             .apply()
 
         candidates = JSONArray()
