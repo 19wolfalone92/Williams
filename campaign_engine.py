@@ -69,8 +69,12 @@ class CampaignEngine:
             tags={
                 "initial_risk_pct": float(initial_risk_pct),
                 "entry_trigger": float(signal.trigger_price),
+                "initial_stop_price": float(signal.protective_reference),
                 "signal_reason": signal.reason,
                 "signal_role": signal.role.value,
+                "wave_confidence": float(signal.wave_confidence),
+                "wave_exhaustion_risk": float(signal.wave_exhaustion_risk),
+                "htf_confirmed": bool(signal.htf_confirmed),
             },
         )
         self.db.save_campaign(campaign)
@@ -113,8 +117,12 @@ class CampaignEngine:
             current_signal_type=row.get("current_signal_type") or "",
             position_qty=float(row.get("position_qty") or 0),
             average_entry_price=float(row.get("average_entry_price") or 0),
-            initial_stop_price=float(row.get("initial_stop_price") or 0),
-            current_stop_price=float(row.get("current_stop_price") or 0),
+            initial_stop_price=float(
+                row.get("initial_stop_price") or tags.get("initial_stop_price") or 0
+            ),
+            current_stop_price=float(
+                row.get("current_stop_price") or tags.get("initial_stop_price") or 0
+            ),
             structural_stop_source=row.get("structural_stop_source") or "",
             additions=int(row.get("additions") or 0),
             tranche_index=int(row.get("tranche_index") or 0),
