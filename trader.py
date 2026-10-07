@@ -61,9 +61,11 @@ class Trader:
             'DRY_RUN', 'true'
         ).lower() == 'true'
 
-        raw_symbols = os.getenv('AUTO_SCAN_SYMBOLS', ','.join(self.config.symbols)).strip()
+        # Empty/ALL/AUTO/* means autonomous full Spot/USDT discovery.
+        # Do not fall back to TradingConfig's five-symbol seed list here.
+        raw_symbols = os.getenv('AUTO_SCAN_SYMBOLS', '').strip()
 
-        if raw_symbols.upper() in {'ALL', 'AUTO', '*'}:
+        if not raw_symbols or raw_symbols.upper() in {'ALL', 'AUTO', '*'}:
             self.auto_scan_symbols = []
         else:
             self.auto_scan_symbols = [
@@ -76,6 +78,7 @@ class Trader:
             0, int(os.getenv('AUTO_SCAN_MIN_INTERVAL_SECONDS', '90'))
         )
         self._last_auto_scan_monotonic = 0.0
+        self._auto_scan_lock = False
 
         self.max_open_positions = max(0, int(self.config.max_open_positions))
         self.max_total_risk_pct = min(0.01, max(0.0, float(os.getenv('MAX_TOTAL_RISK_PCT', '0.01'))))
@@ -1239,7 +1242,25 @@ class Trader:
         path. Multiple Spot positions are governed only by the aggregate risk
         budget and per-trade risk cap.
         """
-        if not hasattr(self, '_multi_position_trader'):
+        now = time.monotonic()
+        interval = max(0, int(self.auto_scan_min_interval_seconds))
+        if interval > 0 and self._last_auto_scan_monotonic > 0:
+            elapsed = now - self._last_auto_scan_monotonic
+            if elapsed < interval:
+                return {
+                    'status': 'SCAN_THROTTLED',
+                    'results': [],
+                    'retry_after_seconds': round(interval - elapsed, 1),
+                }
+        if self._auto_scan_lock:
+            return {
+                'status': 'SCAN_IN_PROGRESS',
+                'results': [],
+            }
+        self._auto_scan_lock = True
+        self._last_auto_scan_monotonic = now
+        try:
+            if not hasattr(self, '_multi_position_trader'):
             self._multi_position_trader = MultiPositionTrader(
                 self.client,
                 db=self.db,
@@ -1252,7 +1273,9 @@ class Trader:
                     'reason': 'canonical recovery requires reconciliation',
                     'recovery': recovery,
                 }
-        return self._multi_position_trader.scan_and_execute()
+            return self._multi_position_trader.scan_and_execute()
+        finally:
+            self._auto_scan_lock = False
 
     def process(self):
         if getattr(self, 'auto_scan_enabled', False):
