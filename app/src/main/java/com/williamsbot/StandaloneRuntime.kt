@@ -2957,7 +2957,7 @@ private class NativeEngine(
                         val finalQty = finalOrder.optString("executedQty").toDoubleOrNull() ?: executed
                         val finalQuote = finalOrder.optString("cummulativeQuoteQty").toDoubleOrNull() ?: quote
                         if (finalQty > 0.0) {
-                            createCampaignPositionFromFill(
+                            applyCampaignFill(
                                 intent,
                                 finalOrder,
                                 finalQty,
@@ -2972,7 +2972,7 @@ private class NativeEngine(
                         require(executed > 0.0 && quote > 0.0) {
                             intent.symbol + ": filled campaign BUY has invalid fill"
                         }
-                        createCampaignPositionFromFill(
+                        applyCampaignFill(
                             intent,
                             order,
                             executed,
@@ -2985,7 +2985,7 @@ private class NativeEngine(
                             require(quote > 0.0) {
                                 intent.symbol + ": terminal campaign fill lacks quote"
                             }
-                            createCampaignPositionFromFill(
+                            applyCampaignFill(
                                 intent,
                                 order,
                                 executed,
@@ -3020,6 +3020,127 @@ private class NativeEngine(
         }
     }
 
+    private fun applyCampaignAddOnFill(
+        existing: PositionState,
+        intent: PendingEntry,
+        order: JSONObject,
+        qty: Double,
+        quote: Double
+    ) {
+        val entry = quote / qty
+        val oldQty = existing.qty
+        val newQty = oldQty + qty
+        val newAvg =
+            ((oldQty * existing.entry) + (qty * entry)) / max(newQty, 1e-12)
+
+        require(existing.stop > 0.0 && existing.stop < entry) {
+            existing.symbol + ": add-on cannot be protected by current stop"
+        }
+
+        val provisional = existing.copy(
+            qty = newQty,
+            entry = newAvg,
+            riskPct = existing.riskPct + intent.riskReservedPct,
+            signalId = intent.signalId,
+            signalType = intent.signalType,
+            additions = existing.additions + 1,
+            campaignState = "POSITION_EXPANDING"
+        )
+
+        try {
+            val stopId = existing.protectiveOrderId.toLongOrNull()
+            val protectedId =
+                if (stopId == null) {
+                    createCampaignStop(provisional).optString("orderId", "")
+                } else {
+                    val result = withCampaignMutation(
+                        existing.symbol,
+                        "CAMPAIGN_ADD_ON_PROTECTION_RESIZE"
+                    ) {
+                        val rules = symbolFilters(existing.symbol)
+                        signedCancelReplace(
+                            existing.symbol,
+                            stopId,
+                            "SELL",
+                            "STOP_LOSS",
+                            quantity = fmtQty(
+                                floorStep(newQty, rules.step),
+                                rules.decimals
+                            ),
+                            stopPrice = fmtPrice(
+                                existing.stop,
+                                rules.decimals
+                            ),
+                            newClientOrderId =
+                                "W5S_" + System.nanoTime().toString(16)
+                        )
+                    }
+                    val cancelOk =
+                        result.optString("cancelResult")
+                            .uppercase(Locale.US) == "SUCCESS"
+                    val newOk =
+                        result.optString("newOrderResult")
+                            .uppercase(Locale.US) == "SUCCESS"
+                    require(cancelOk && newOk) {
+                        existing.symbol + ": add-on protection resize ambiguous"
+                    }
+                    result.optJSONObject("newOrderResponse")
+                        ?.optString("orderId", "")
+                        ?: ""
+                }
+
+            require(protectedId.isNotBlank()) {
+                existing.symbol + ": add-on protection has no orderId"
+            }
+
+            synchronized(positions) {
+                positions[existing.symbol] =
+                    provisional.copy(
+                        protectiveOrderId = protectedId,
+                        campaignState = "TREND_ACTIVE"
+                    )
+            }
+            synchronized(pendingEntries) {
+                pendingEntries.remove(existing.symbol)
+            }
+            savePersistedState()
+            stateMachine.force(
+                TradingState.PROTECTED,
+                "Williams campaign add-on filled"
+            )
+        } catch (x: Throwable) {
+            setReconcileRequired(
+                existing.symbol + ": add-on fill protection failed: " +
+                    (x.message ?: x.javaClass.simpleName)
+            )
+        }
+    }
+
+    private fun applyCampaignFill(
+        intent: PendingEntry,
+        order: JSONObject,
+        qty: Double,
+        quote: Double
+    ) {
+        val existing = synchronized(positions) { positions[intent.symbol] }
+        if (existing != null && existing.campaignId == intent.campaignId) {
+            applyCampaignAddOnFill(
+                existing,
+                intent,
+                order,
+                qty,
+                quote
+            )
+        } else {
+            createCampaignPositionFromFill(
+                intent,
+                order,
+                qty,
+                quote
+            )
+        }
+    }
+
     private fun createCampaignPositionFromFill(
         intent: PendingEntry,
         order: JSONObject,
@@ -3041,8 +3162,13 @@ private class NativeEngine(
 
         val existing = synchronized(positions) { positions[intent.symbol] }
         if (existing != null && existing.campaignId == intent.campaignId) {
-            synchronized(pendingEntries) { pendingEntries.remove(intent.symbol) }
-            savePersistedState()
+            applyCampaignAddOnFill(
+                existing,
+                intent,
+                order,
+                qty,
+                quote
+            )
             return
         }
 
@@ -3588,6 +3714,10 @@ private class NativeEngine(
     }
 
     private fun performScan() {
+        if (campaignEngineEnabled) {
+            performCampaignScan()
+            return
+        }
         // Exchange reconciliation is performed at START/reconnect. Repeating
         // it for every scanner pass serializes the scanner behind signed REST
         // calls and was a major source of apparent hangs.
