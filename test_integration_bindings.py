@@ -558,3 +558,56 @@ def test_market_klines_uses_requested_symbol_and_interval(monkeypatch):
     assert payload["symbol"] == "ETHUSDT"
     assert payload["interval"] == "4h"
     assert len(payload["candles"]) == 39
+
+
+
+def test_execution_accumulator_removes_base_asset_commission_from_managed_qty():
+    from execution_accumulator import accumulate_order
+
+    summary = accumulate_order(
+        {
+            "symbol": "BTCUSDT",
+            "side": "BUY",
+            "status": "FILLED",
+            "executedQty": "1.0",
+            "cummulativeQuoteQty": "100",
+            "fills": [
+                {
+                    "price": "100",
+                    "qty": "1.0",
+                    "commission": "0.001",
+                    "commissionAsset": "BTC",
+                }
+            ],
+        },
+        base_asset="BTC",
+    )
+
+    assert abs(float(summary.executed_qty) - 1.0) < 1e-12
+    assert abs(float(summary.net_base_qty) - 0.999) < 1e-12
+    assert abs(float(summary.fee_quote_equivalent) - 0.1) < 1e-12
+
+
+def test_execution_accumulator_keeps_quote_commission_as_quote_fee():
+    from execution_accumulator import accumulate_order
+
+    summary = accumulate_order(
+        {
+            "symbol": "BTCUSDT",
+            "side": "BUY",
+            "status": "FILLED",
+            "fills": [
+                {
+                    "price": "100",
+                    "qty": "1.0",
+                    "commission": "0.1",
+                    "commissionAsset": "USDT",
+                }
+            ],
+        },
+        base_asset="BTC",
+    )
+
+    assert abs(float(summary.fee_quote) - 0.1) < 1e-12
+    assert abs(float(summary.fee_quote_equivalent) - 0.1) < 1e-12
+    assert abs(float(summary.net_base_qty) - 1.0) < 1e-12
