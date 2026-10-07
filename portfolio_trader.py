@@ -1340,7 +1340,7 @@ class MultiPositionTrader:
                     order.get("transactTime", order.get("updateTime", 0)),
                 ) or 0
             )
-            if order_time and entry_time_ms and order_time < entry_time_ms:
+            if not order_time or (entry_time_ms and order_time < entry_time_ms):
                 continue
             client_id = str(order.get("clientOrderId", "") or "")
             list_id = str(order.get("orderListId", "") or "")
@@ -1364,7 +1364,7 @@ class MultiPositionTrader:
                         order.get("transactTime", order.get("updateTime", 0)),
                     ) or 0
                 )
-                if order_time and entry_time_ms and order_time < entry_time_ms:
+                if not order_time or (entry_time_ms and order_time < entry_time_ms):
                     continue
                 list_id = str(order.get("orderListId", "") or "")
                 client_id = str(order.get("clientOrderId", "") or "")
