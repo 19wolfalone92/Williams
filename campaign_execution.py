@@ -9,7 +9,7 @@ import uuid
 
 from binance_client import BinanceAPIError
 from campaign_engine import CampaignEngine
-from campaign_model import CampaignState, PendingOrderRecord, SignalSpec, SignalType
+from campaign_model import CampaignState, PendingOrderRecord, SignalSpec, SignalState, SignalType
 from execution_barrier import ExecutionBarrier, OrderIntent
 
 
@@ -202,7 +202,7 @@ class CampaignExecutionService:
 
         claimed = self.db.try_claim_state(
             f"entry_client_order_id:{signal.symbol}",
-            f"RESERVE_{uuid.uuid4().hex[:12]}",
+            client_id,
         )
         if not claimed:
             raise CampaignExecutionError(
@@ -213,17 +213,14 @@ class CampaignExecutionService:
             signal,
             initial_risk_pct=requested_risk,
         )
+        campaign.tags["signal_role"] = signal.role.value
+        campaign.tags["initial_stop_price"] = stop
         campaign.initial_stop_price = stop
         campaign.current_stop_price = stop
         campaign.pending_risk_quote = risk_quote
         campaign.capital_reserved_quote = qty * trigger
         self.db.save_campaign(campaign)
         self.db.state_set(f"campaign_state:{campaign.campaign_id}", campaign.state.value)
-
-        self.db.state_set(
-            f"entry_client_order_id:{signal.symbol}",
-            client_id,
-        )
 
         intent = OrderIntent.new(
             signal.symbol,
@@ -671,12 +668,13 @@ class CampaignExecutionService:
                 f"{signal.symbol}: add-on trigger already crossed; no market substitution"
             )
 
+        current_stop = float(campaign.current_stop_price or 0.0)
+        protective_reference = float(signal.protective_reference or 0.0)
+        # The add-on must inherit the already-protective campaign stop; a new
+        # signal can never move that stop backward.
         stop = self._normalize_price(
             signal.symbol,
-            min(
-                float(campaign.current_stop_price or signal.protective_reference),
-                float(signal.protective_reference),
-            ),
+            current_stop if current_stop > 0.0 else protective_reference,
         )
         if stop <= 0 or stop >= trigger:
             raise CampaignExecutionError(f"{signal.symbol}: invalid add-on protection reference")
@@ -690,7 +688,13 @@ class CampaignExecutionService:
         qty = self._normalized_entry_qty(signal.symbol, notional, trigger)
         cid = f"{self.ENTRY_PREFIX}ADD_{uuid.uuid4().hex[:16]}"
 
-        self.db.save_campaign_signal(signal, campaign.campaign_id, state="DETECTED")
+        prior = self.db.conn.execute(
+            "SELECT state FROM campaign_signals WHERE campaign_id=? AND signal_id=?",
+            (campaign.campaign_id, signal.signal_id),
+        ).fetchone()
+        if prior and str(prior["state"]).upper() in {"ARMED", "TRIGGERED", "FILLED"}:
+            raise CampaignExecutionError("signal is already active or filled for this campaign")
+        self.db.save_campaign_signal(signal, campaign.campaign_id, state=SignalState.DETECTED.value)
         campaign.tags["last_signal_time_ms"] = int(signal.signal_bar_time_ms)
         campaign.tags["pending_add_signal_id"] = signal.signal_id
         campaign.pending_risk_quote = requested
@@ -794,6 +798,12 @@ class CampaignExecutionService:
         if stop <= 0:
             raise CampaignExecutionError("invalid protective stop")
         qty = self._normalize_qty(campaign.symbol, quantity)
+        nf = self._rules(campaign.symbol).get("NOTIONAL") or self._rules(campaign.symbol).get("MIN_NOTIONAL") or {}
+        min_notional = float(nf.get("minNotional", "0") or 0)
+        if min_notional > 0.0 and qty * stop < min_notional:
+            raise CampaignExecutionError(
+                f"{campaign.symbol}: protective stop notional {qty * stop:.8f} below Binance minimum {min_notional:.8f}"
+            )
         self._check_algo_capacity(campaign.symbol, 1)
         cid = f"{self.STOP_PREFIX}{uuid.uuid4().hex[:20]}"
         intent = OrderIntent.new(
