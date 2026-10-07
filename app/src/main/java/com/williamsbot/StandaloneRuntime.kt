@@ -1888,7 +1888,7 @@ private class NativeEngine(
         val liveKey = normalizedSymbol + ":" + frame
         liveCandleCache[liveKey]?.let { live ->
             synchronized(live) {
-                if (live.size >= min(40, limit)) return live.takeLast(limit)
+                if (live.size >= limit) return live.takeLast(limit)
             }
         }
 
@@ -1898,7 +1898,7 @@ private class NativeEngine(
             frame,
             limit
         )
-        if (persistent.size >= min(40, limit)) {
+        if (persistent.size >= limit) {
             val result = persistent.map {
                 CandleN(
                     it.openTime,
@@ -1916,8 +1916,11 @@ private class NativeEngine(
 
         val cached = candleCache[cacheKey]
         val now = System.currentTimeMillis()
-        if (cached != null && now - cached.first < scanCacheTtlMs) {
-            return cached.second
+        if (cached != null &&
+            cached.second.size >= limit &&
+            now - cached.first < scanCacheTtlMs
+        ) {
+            return cached.second.takeLast(limit)
         }
 
         // Binance REST has a limited set of native intervals. Build the
