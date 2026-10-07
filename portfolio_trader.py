@@ -33,6 +33,7 @@ class MultiPositionTrader:
     ENTRY_PREFIX = "WILLV4_ENTRY_"
     OCO_PREFIX = "WILLV4_OCO_"
     EMERGENCY_PREFIX = "WILLV4_EMERGENCY_"
+    MANUAL_PREFIX = "WILLV4_MANUAL_"
 
     def __init__(self, client, db=None, symbols=None):
         self.client = client
@@ -520,7 +521,7 @@ class MultiPositionTrader:
                 list_id
                 and order_list_id == list_id
             ) or (
-                client_id.startswith((self.OCO_PREFIX, self.EMERGENCY_PREFIX))
+                client_id.startswith((self.OCO_PREFIX, self.EMERGENCY_PREFIX, self.MANUAL_PREFIX))
             ):
                 result.append(order)
 
@@ -616,9 +617,14 @@ class MultiPositionTrader:
             ),
             None,
         )
-        if trade is not None:
+        managed_qty = float(trade.get("quantity") or 0.0) if trade is not None else 0.0
+        tolerance = max(
+            float(os.getenv("MIN_RECOVERY_QTY", "0.000001")),
+            managed_qty * self.balance_tolerance_pct,
+        )
+
+        if trade is not None and executed_qty + tolerance >= managed_qty:
             entry_price = float(trade.get("entry_price") or 0.0)
-            managed_qty = min(executed_qty, float(trade.get("quantity") or executed_qty))
             pnl = (exit_price - entry_price) * managed_qty
             pnl_pct = (exit_price / entry_price - 1.0) if entry_price > 0 else 0.0
             self.db.close_trade(
@@ -629,18 +635,45 @@ class MultiPositionTrader:
                 pnl_pct,
                 reason,
             )
+            self.set_state(symbol, "FLAT")
+            state = "FLAT"
+            residual_qty = 0.0
+        elif trade is not None and executed_qty > 0:
+            residual_qty = max(0.0, managed_qty - executed_qty)
+            self.db.update_trade_quantity(trade_id, residual_qty)
+            self.set_state(symbol, "RECONCILE_REQUIRED")
+            self.db.log_event(
+                "ERROR",
+                "emergency_market_exit_partial",
+                "Emergency SELL partially filled; residual position remains unprotected",
+                {
+                    "symbol": symbol,
+                    "trade_id": trade_id,
+                    "executed_qty": executed_qty,
+                    "managed_qty": managed_qty,
+                    "residual_qty": residual_qty,
+                    "exit_price": exit_price,
+                    "reason": reason,
+                },
+            )
+            state = "RECONCILE_REQUIRED"
+        else:
+            residual_qty = managed_qty
+            self.set_state(symbol, "RECONCILE_REQUIRED")
+            state = "RECONCILE_REQUIRED"
 
-        self.set_state(symbol, "FLAT")
         self.db.log_event(
             "WARNING",
             "emergency_market_exit",
-            "Unprotected managed position closed at market",
+            "Unprotected managed position emergency exit submitted",
             {
                 "symbol": symbol,
                 "trade_id": trade_id,
                 "quantity": executed_qty,
+                "residual_qty": residual_qty,
                 "exit_price": exit_price,
                 "reason": reason,
+                "state": state,
             },
         )
         return {
@@ -648,8 +681,10 @@ class MultiPositionTrader:
             "symbol": symbol,
             "trade_id": trade_id,
             "quantity": executed_qty,
+            "residual_quantity": residual_qty,
             "exit_price": exit_price,
             "reason": reason,
+            "state": state,
         }
 
     def _create_oco(
@@ -1421,7 +1456,7 @@ class MultiPositionTrader:
                 "SELL",
                 "MARKET",
                 quantity=self.client.decimal_format(sell_qty),
-                new_client_order_id=f"{self.ENTRY_PREFIX}MANUAL_SELL_{uuid.uuid4().hex[:16]}",
+                new_client_order_id=f"{self.MANUAL_PREFIX}{uuid.uuid4().hex[:20]}",
             )
             self.db.save_order(sell)
 
@@ -1441,46 +1476,80 @@ class MultiPositionTrader:
                 if quote > 0
                 else float(sell.get("price", 0) or 0)
             )
-            entry_price = float(trade["entry_price"])
-            pnl = (
-                exit_price - entry_price
-            ) * min(
-                executed_qty,
-                float(trade["quantity"]),
-            )
-            pnl_pct = (
-                exit_price / entry_price - 1.0
-                if entry_price else 0.0
+            managed_qty = float(trade["quantity"])
+            tolerance = max(
+                float(os.getenv("MIN_RECOVERY_QTY", "0.000001")),
+                managed_qty * self.balance_tolerance_pct,
             )
 
-            self.db.close_trade(
-                trade["id"],
-                datetime.now(timezone.utc).isoformat(),
-                exit_price,
-                pnl,
-                pnl_pct,
-                "MANUAL_SELL",
-            )
-            self.set_state(symbol, "FLAT")
+            if executed_qty + tolerance >= managed_qty:
+                entry_price = float(trade["entry_price"])
+                pnl = (exit_price - entry_price) * managed_qty
+                pnl_pct = (exit_price / entry_price - 1.0) if entry_price else 0.0
+                self.db.close_trade(
+                    trade["id"],
+                    datetime.now(timezone.utc).isoformat(),
+                    exit_price,
+                    pnl,
+                    pnl_pct,
+                    "MANUAL_SELL",
+                )
+                self.set_state(symbol, "FLAT")
+                self.db.log_event(
+                    "INFO",
+                    "manual_position_closed",
+                    "Managed position manually closed",
+                    {
+                        "symbol": symbol,
+                        "trade_id": trade["id"],
+                        "quantity": executed_qty,
+                        "exit_price": exit_price,
+                    },
+                )
+                return {
+                    "sold": True,
+                    "symbol": symbol,
+                    "trade_id": trade["id"],
+                    "quantity": executed_qty,
+                    "residual_quantity": 0.0,
+                    "exit_price": exit_price,
+                    "pnl": pnl,
+                    "state": "FLAT",
+                }
+
+            residual_qty = max(0.0, managed_qty - executed_qty)
+            self.db.update_trade_quantity(trade["id"], residual_qty)
+            self.set_state(symbol, "EXIT_PENDING")
+            try:
+                self._reconcile_trade(int(trade["id"]))
+            except Exception as exc:
+                self.set_state(symbol, "RECONCILE_REQUIRED")
+                raise RuntimeError(
+                    f"{symbol}: manual SELL partially filled; residual "
+                    f"{residual_qty:.12g} requires reconciliation: {exc}"
+                ) from exc
+
             self.db.log_event(
-                "INFO",
-                "manual_position_closed",
-                "Managed position manually closed",
+                "WARNING",
+                "manual_position_partial_sell",
+                "Managed position partially closed; residual quantity reprotected",
                 {
                     "symbol": symbol,
                     "trade_id": trade["id"],
                     "quantity": executed_qty,
+                    "residual_quantity": residual_qty,
                     "exit_price": exit_price,
                 },
             )
             return {
                 "sold": True,
+                "partial": True,
                 "symbol": symbol,
                 "trade_id": trade["id"],
                 "quantity": executed_qty,
+                "residual_quantity": residual_qty,
                 "exit_price": exit_price,
-                "pnl": pnl,
-                "state": "FLAT",
+                "state": self.state(symbol),
             }
         except Exception as exc:
             self.set_state(symbol, "RECONCILE_REQUIRED")
