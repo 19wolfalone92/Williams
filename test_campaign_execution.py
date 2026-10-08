@@ -1,11 +1,14 @@
 import os
 import tempfile
+import time
+from dataclasses import replace
 from datetime import datetime, timezone
 
 from campaign_engine import CampaignEngine
 from campaign_execution import CampaignExecutionService
 from campaign_model import CampaignState, SignalRole, SignalSpec, SignalType
 from execution_barrier import ExecutionBarrier
+from pending_signal import PendingSignal
 from mock_exchange import MockExchange
 from db import Database
 
@@ -31,7 +34,8 @@ class FakeCache:
         return FakeSnapshot()
 
 
-def signal(kind=SignalType.REVERSAL, role=SignalRole.ENTRY, bar=100, trigger=101):
+def signal(kind=SignalType.REVERSAL, role=SignalRole.ENTRY, bar=None, trigger=101, **kwargs):
+    bar = int(time.time() * 1000) if bar is None else int(bar)
     return SignalSpec.new(
         symbol="BTCUSDT",
         side="BUY",
@@ -41,8 +45,9 @@ def signal(kind=SignalType.REVERSAL, role=SignalRole.ENTRY, bar=100, trigger=101
         signal_bar_time_ms=bar,
         trigger_price=trigger,
         protective_reference=97,
-        context_versions={},
+        context_versions={"5m": 1},
         htf_confirmed=True,
+        **kwargs,
     )
 
 
@@ -162,3 +167,83 @@ def test_stop_replacement_never_lowers_stop():
         assert current > 0
         assert not svc.engine.propose_stop(campaign, current - 1.0, "BAD")
         assert campaign.current_stop_price == current
+
+
+
+def test_pending_signal_expiry_is_anchored_to_original_signal_bar():
+    now = int(time.time() * 1000)
+    bar_time = now - 10 * 60_000
+    spec = replace(signal(bar=bar_time), created_at_ms=now, expires_at_ms=0)
+    pending = PendingSignal.from_spec(spec)
+
+    assert pending.expires_at_ms == bar_time + 2 * 5 * 60_000
+    assert pending.is_expired(now)
+    assert not pending.actionable(now)
+
+
+def test_pending_signal_preserves_explicit_expired_deadline():
+    now = int(time.time() * 1000)
+    spec = signal(bar=now - 60_000, expires_at_ms=now - 1)
+    pending = PendingSignal.from_spec(spec)
+
+    assert pending.expires_at_ms == now - 1
+    assert pending.is_expired(now)
+    assert not pending.actionable(now)
+
+
+def test_pending_signal_expiry_boundary_is_inclusive():
+    now = int(time.time() * 1000)
+    spec = signal(bar=now - 60_000, expires_at_ms=now)
+    pending = PendingSignal.from_spec(spec)
+
+    assert pending.is_expired(now)
+    assert not pending.actionable(now)
+
+
+def test_pending_signal_future_deadline_is_actionable():
+    now = int(time.time() * 1000)
+    spec = signal(bar=now, expires_at_ms=now + 60_000)
+    pending = PendingSignal.from_spec(spec)
+
+    assert not pending.is_expired(now)
+    assert pending.actionable(now)
+
+
+def test_pending_signal_rescan_and_restart_preserve_absolute_expiry():
+    now = int(time.time() * 1000)
+    bar_time = now - 10 * 60_000
+    spec = replace(signal(bar=bar_time), created_at_ms=now, expires_at_ms=0)
+    first = PendingSignal.from_spec(spec)
+    rescanned = PendingSignal.from_spec(replace(spec, created_at_ms=now + 1_000))
+    restored = PendingSignal(**first.to_dict())
+
+    assert rescanned.signal_id == first.signal_id
+    assert rescanned.expires_at_ms == first.expires_at_ms
+    assert restored.expires_at_ms == first.expires_at_ms
+    assert not rescanned.actionable(now + 1_000)
+
+
+def test_expired_signal_is_rejected_before_campaign_creation():
+    now = int(time.time() * 1000)
+    expired = signal(
+        bar=now - 10 * 60_000,
+        expires_at_ms=now - 1,
+    )
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "campaign.sqlite3"))
+        client = MockExchange()
+        svc = service(db, client)
+
+        try:
+            svc.arm_initial_entry(
+                expired,
+                equity_quote=10_000,
+                candidate_risk_pct=0.004,
+            )
+        except Exception as exc:
+            assert "expired" in str(exc).lower()
+        else:
+            raise AssertionError("expired signal was accepted")
+
+        assert client.open_orders("BTCUSDT") == []
+        assert db.conn.execute("SELECT COUNT(*) FROM campaigns").fetchone()[0] == 0
