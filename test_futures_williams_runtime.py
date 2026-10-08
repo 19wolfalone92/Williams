@@ -252,3 +252,29 @@ def test_execution_door_blocks_live_without_allow_live():
         assert "ALLOW_LIVE" in str(exc)
     else:
         raise AssertionError("live execution bypassed ALLOW_LIVE")
+
+
+def test_futures_pre_submit_blocks_entry_when_position_appears_after_signal():
+    runtime = object.__new__(FuturesWilliamsRuntime)
+    campaign = type("C", (), {
+        "campaign_id": "c1",
+        "symbol": "BTCUSDT",
+        "side": "BUY",
+        "state": CampaignState.ENTRY_PENDING,
+    })()
+    runtime.engine = type("E", (), {"load_campaign": lambda self, cid: campaign})()
+    runtime.config = type("Cfg", (), {"allow_long": True, "allow_short": True})()
+    runtime._position = lambda symbol: {"positionAmt": "0.25"}
+    runtime._signed_position_qty = staticmethod(lambda position: float(position["positionAmt"]))
+    intent = type("I", (), {
+        "campaign_id": "c1",
+        "symbol": "BTCUSDT",
+        "side": "BUY",
+        "purpose": "CAMPAIGN_ENTRY",
+    })()
+    try:
+        runtime._futures_pre_submit_checks(intent)
+    except RuntimeError as exc:
+        assert "already exists" in str(exc)
+    else:
+        raise AssertionError("entry was admitted over an existing Futures position")
