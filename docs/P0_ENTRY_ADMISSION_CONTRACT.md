@@ -1,6 +1,6 @@
 # P0 Entry Admission Contract (WMS-CR-1.0)
 
-Status: controlled implementation draft; validation remains in progress.
+Status: controlled implementation draft; validation remains in progress. See `docs/P0_EXECUTION_SCOPE_AND_CLOSURE.md` for market coverage and the deadline architecture analysis.
 
 ## Scope
 
@@ -22,7 +22,11 @@ Any BUY with another or missing purpose is rejected. A caller cannot obtain fewe
 - Non-empty `required_context_versions` mapping, representing the context snapshot on which the signal was admitted; it must include `permission_interval`.
 - Non-empty `permission_interval`, naming the operative timeframe whose current direction permission is authoritative.
 - `campaign_id` for `CAMPAIGN_ENTRY` and `CAMPAIGN_ADD_ON`.
-- Intent creation timestamp within the existing `max_age_ms` policy.
+- Non-empty `intent_id`.
+- Intent creation timestamp as a positive integer, not in the future, within a positive integer `max_age_ms` policy.
+- Exactly one of positive finite `quantity` or `quote_order_quantity`.
+- A client order ID accepted by the current Spot adapter's conservative 1–36 character format check.
+- For the currently approved Campaign Engine Spot path, entry `order_type` is limited to `STOP_LOSS`; `MARKET` remains accepted only for the generic `ENTRY` contract where explicitly used by a tested caller.
 
 ## Admission checks
 
@@ -33,7 +37,10 @@ Any BUY with another or missing purpose is rejected. A caller cannot obtain fewe
 5. Reject a campaign entry without campaign identity.
 6. Run the strategy-specific pre-submit checks already defined by the caller.
 7. Revalidate time-sensitive intent/context conditions immediately before the exchange call. The shared context lock prevents context publication between validation and submission.
-8. Never blindly retry an ambiguous exchange mutation. Reconcile by the durable client order ID first.
+8. The intent must be durably saved before a new entry submission; absent storage or a persistence error blocks the entry.
+9. Revalidate the contract immediately before the exchange call.
+10. Never blindly retry an ambiguous exchange mutation. Reconcile by the durable client order ID first.
+11. Validate context version types, source timestamps, and positive finite price. These checks reject malformed/unavailable data but do not define a maximum age for an already-published context.
 
 An empty `required_context_versions` mapping is never an implicit pass for a new entry.
 
@@ -64,3 +71,16 @@ When `CAMPAIGN_ENGINE=false`, the legacy `MultiPositionTrader` autonomous MARKET
 2. Define a sourced maximum age/freshness policy for already-published higher-timeframe context. P0 enforces exact context version consistency and direction permission but does not invent a universal HTF age threshold.
 3. Confirm whether any approved autonomous entry model outside the three current `SignalType` values exists before allowing another purpose/type.
 4. Decide how to enforce absolute expiry for exchange-hosted conditional orders during process/network downtime; the current exchange order can outlive the signal until cancellation is processed.
+
+
+## Current concrete market adapter
+
+The implemented live-order adapter is Binance Spot. No Futures, margin, or second-exchange execution adapter is established by this contract. Campaign Entry uses exchange-hosted conditional Spot `STOP_LOSS`; campaign protection is a separately managed SELL stop, not native OCO. The legacy Trader's OCO path is not the approved autonomous BUY path and remains fail-closed for new uncontracted entries.
+
+## Mandatory persistence semantics
+
+A new entry is blocked if `save_execution_intent(..., "PENDING")` is unavailable or fails. If the exchange submission appears to have succeeded but the durable `SUBMITTED` status update fails, the outcome is treated as reconciliation-required; the caller must not report an unqualified clean success. Protection, exits, cancellations and reconciliation are not blocked solely because entry-intent persistence is unavailable.
+
+## Freshness boundary
+
+Exact context-version equality does not prove context freshness. The barrier rejects malformed, missing, non-positive, or future candle-close timestamps and invalid prices. A maximum context-age threshold remains unapproved and must not be invented universally; context freshness is not certified until a sourced/approved policy is added.
