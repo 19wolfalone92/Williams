@@ -67,5 +67,5 @@ def test_wm1_does_not_require_green_candle_body(monkeypatch):
     ind["alligator_awake"] = True
     monkeypatch.setattr("williams_intraday_core.calculate_indicators", lambda *_a, **_k: ind)
     from williams_intraday_core import WilliamsIntradayCore
-    decision = WilliamsIntradayCore(IntradayPolicy.from_env({})).evaluate("BTCUSDT", base, tick_size=0.1)
+    decision = WilliamsIntradayCore(IntradayPolicy.from_env({})).evaluate("BTCUSDT", base, h1=base, h4=base, d1=base, tick_size=0.1)
     assert decision.fields["close_upper_half"] is True
