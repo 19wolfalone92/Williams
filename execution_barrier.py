@@ -391,11 +391,18 @@ class ExecutionBarrier:
 
             try:
                 qty = Decimal(qty_text) if qty_text else Decimal("0")
-                trigger = Decimal(
-                    str(intent.risk_decision.williams_decision.trigger_price)
-                )
-            except (InvalidOperation, ValueError):
+                if hasattr(intent, "risk_decision"):
+                    trigger = Decimal(
+                        str(intent.risk_decision.williams_decision.trigger_price)
+                    )
+                else:
+                    ticker = self.client.ticker_price(intent.symbol)
+                    trigger = Decimal(str(ticker.get("price", "0") or "0"))
+            except (InvalidOperation, ValueError, TypeError):
                 return "invalid numeric execution parameters"
+
+            if trigger <= 0 and qty > 0:
+                return "reference market/trigger price unavailable for notional validation"
 
             notional_filter = (
                 filters.get("NOTIONAL")
