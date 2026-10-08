@@ -78,13 +78,13 @@ class TradingConfig:
 
     allow_long: bool = True
     allow_short: bool = False
-    require_htf_confirmation: bool = True
-    no_trade_when_uncertain: bool = True
+    require_htf_confirmation: bool = False
+    no_trade_when_uncertain: bool = False
 
     risk_per_trade_pct: float = 0.0025
     max_total_risk_pct: float = 0.006
     max_daily_loss_pct: float = 0.01
-    max_consecutive_losses: int = 3
+    max_consecutive_losses: int = 2
     cooldown_minutes: int = 30
     max_open_positions: int = 1
 
