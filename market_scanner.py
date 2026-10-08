@@ -133,7 +133,7 @@ class MarketScanner:
         self.client = client
         self.policy = IntradayPolicy.from_env()
         explicit_profile = str(strategy_profile or os.getenv("WILLIAMS_STRATEGY_PROFILE", "")).strip().upper()
-        self.intraday_core_enabled = explicit_profile in {CORE_PROFILE, CONSERVATIVE_PROFILE}
+        self.intraday_core_enabled = explicit_profile in {CORE_PROFILE, CONSERVATIVE_PROFILE} or self.policy.profile in {CORE_PROFILE, CONSERVATIVE_PROFILE}
         self.core = WilliamsIntradayCore(self.policy)
 
         self.interval = _normalize_interval(
