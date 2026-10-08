@@ -113,6 +113,7 @@ class CampaignEngine:
             symbol=row["symbol"],
             side=row["side"],
             execution_timeframe=row["execution_timeframe"],
+            decision_timeframe=row.get("decision_timeframe") or "1h",
             state=CampaignState(row["state"]),
             origin_signal_id=row.get("origin_signal_id") or "",
             current_signal_id=row.get("current_signal_id") or "",
