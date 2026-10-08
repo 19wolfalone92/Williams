@@ -188,7 +188,7 @@ def test_super_ao_event_is_not_reemitted_from_history():
         "ao_green_streak": [0, 1, 2, 3, 4],
         "ao_red_streak": [0, 0, 0, 0, 0],
     })
-    assert WilliamsIntradayCore._ao_event(frame, "LONG") == 4
+    assert WilliamsIntradayCore._ao_event(frame, "LONG") is None
     assert WilliamsIntradayCore._ao_event(frame.iloc[:-1], "LONG") == 3
     assert WilliamsIntradayCore._ao_event(frame.iloc[:3], "LONG") is None
 
