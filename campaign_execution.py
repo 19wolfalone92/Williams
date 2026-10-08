@@ -1070,6 +1070,7 @@ class CampaignExecutionService:
                         if campaign.state in {CampaignState.ADD_ON_PENDING, CampaignState.ADD_ON_ARMING}:
                             campaign.transition(CampaignState.TREND_ACTIVE, reason=reason)
                         self.db.save_campaign(campaign)
+                        self.db.state_set("position_state:" + campaign.symbol, "OPEN")
                         results.append({"campaign_id": campaign.campaign_id, "state": "ADD_ON_CANCELLED", "symbol": campaign.symbol, "reason": reason})
                     else:
                         campaign.exit_reason = reason
@@ -1077,6 +1078,7 @@ class CampaignExecutionService:
                         if campaign.state != CampaignState.CLOSED:
                             campaign.transition(CampaignState.CLOSED, reason=reason)
                         self.db.save_campaign(campaign)
+                        self.db.state_set("position_state:" + campaign.symbol, "FLAT")
                         results.append({"campaign_id": campaign.campaign_id, "state": "CLOSED", "symbol": campaign.symbol, "reason": reason})
             except Exception as exc:
                 self.engine.mark_reconcile_required(campaign, f"EOD pending cancellation failed: {exc}")
