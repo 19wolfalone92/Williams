@@ -490,7 +490,7 @@ class BinanceSpotClient:
                         return tick
         raise BinanceAPIError(f'Binance PRICE_FILTER/tickSize unavailable for {symbol}')
 
-    def create_oco_sell(self,symbol,quantity,take_profit_price,stop_price,stop_limit_price,list_client_order_id=None):
+    def create_oco_sell(self,symbol,quantity,take_profit_price,stop_price,stop_limit_price,list_client_order_id=None,self_trade_prevention_mode=None):
         # For SELL TAKE_PROFIT_LIMIT the limit leg is kept strictly below the
         # trigger and quantized to Binance's actual PRICE_FILTER tickSize.
         tick = self._symbol_tick_size(symbol)
@@ -521,10 +521,12 @@ class BinanceSpotClient:
             'newOrderRespType':'FULL'
         }
         if list_client_order_id:p['listClientOrderId']=list_client_order_id
+        stp = self_trade_prevention_mode or self.self_trade_prevention_mode
+        if stp:p['selfTradePreventionMode']=str(stp).upper()
         return self._request('POST','/api/v3/orderList/oco',p,signed=True)
     def create_oco_sell_safe(
         self, symbol, quantity, take_profit_price, stop_price,
-        stop_limit_price, list_client_order_id
+        stop_limit_price, list_client_order_id, self_trade_prevention_mode=None
     ):
         """Create one OCO and reconcile ambiguous transport failures by list ID."""
         if not list_client_order_id:
@@ -533,6 +535,7 @@ class BinanceSpotClient:
             return self.create_oco_sell(
                 symbol, quantity, take_profit_price, stop_price,
                 stop_limit_price, list_client_order_id,
+                self_trade_prevention_mode=self_trade_prevention_mode,
             )
         except BinanceAPIError as exc:
             if not exc.unknown_execution:
