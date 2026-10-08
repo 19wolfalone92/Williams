@@ -12,7 +12,13 @@ def evaluate_wm2(df:pd.DataFrame,index:int,side:str="LONG")->WM2Result:
     trigger=float(row["high"] if side in {"LONG","BUY"} else row["low"])
     protective=float(row["low"] if side in {"LONG","BUY"} else row["high"])
     return WM2Result(side,valid,index,trigger,protective,streak,"WM2 third AO colour bar" if valid else "not third AO colour bar")
-def latest_wm2(df:pd.DataFrame,side:str="LONG")->WM2Result:
+def latest_wm2(df:pd.DataFrame,side:str="LONG",max_age_bars:int=20)->WM2Result:
     if df.empty:return WM2Result(str(side).upper(),False,reason="empty")
-    r=evaluate_wm2(df,len(df)-1,side)
-    return r
+    start=max(0,len(df)-max(2,int(max_age_bars)))
+    # Preserve the third-colour AO event after the streak continues beyond
+    # three bars; the original WM2 trigger remains a durable H1 event.
+    for i in range(len(df)-1,start-1,-1):
+        r=evaluate_wm2(df,i,side)
+        if r.valid:
+            return r
+    return WM2Result(str(side).upper(),False,reason="no third AO colour bar in window")
