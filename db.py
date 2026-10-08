@@ -398,6 +398,14 @@ class Database:
         ).fetchone()
         return dict(row) if row is not None else None
 
+    def latest_unknown_execution_intent(self):
+        row = self.conn.execute(
+            "SELECT * FROM execution_intents "
+            "WHERE status='UNKNOWN' "
+            "ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+        return dict(row) if row is not None else None
+
     def save_execution_event(self, intent_id, event, payload=None):
         self.conn.execute(
             'INSERT INTO execution_events(intent_id,event,payload_json) VALUES(?,?,?)',
