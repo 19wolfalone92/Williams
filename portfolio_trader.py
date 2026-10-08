@@ -11,7 +11,8 @@ from execution_accumulator import ExecutionSummary, accumulate_order
 from campaign_execution import CampaignExecutionService, CampaignExecutionError
 from campaign_model import SignalSpec, SignalType, SignalRole
 from campaign_monitor import CampaignMonitor
-from execution_barrier import OrderIntent
+from execution_barrier import ExecutionBarrier, OrderIntent
+from market_context import ContextCache
 
 
 POSITION_STATES = {
@@ -89,7 +90,7 @@ class MultiPositionTrader:
         self.max_trades_per_day = max(0, int(os.getenv("MAX_TRADES_PER_DAY", "5")))
         self.max_consecutive_losses = max(0, int(os.getenv("MAX_CONSECUTIVE_LOSSES", "3")))
         self.cooldown_minutes = max(0, int(os.getenv("COOLDOWN_MINUTES", "30")))
-        self.execution_barrier = execution_barrier
+        self.execution_barrier = execution_barrier or ExecutionBarrier(ContextCache(), self.db)
         self.campaign_engine_enabled = (
             os.getenv("CAMPAIGN_ENGINE", "true").lower() == "true"
         )
@@ -119,7 +120,7 @@ class MultiPositionTrader:
         intent = OrderIntent.new(
             str(symbol).upper(), str(side).upper(), str(order_type).upper(),
             required_context_versions=required, purpose=purpose_value,
-            permission_interval=interval if purpose_value.endswith(("_ENTRY", "_ADD_ON")) else "",
+            permission_interval=interval if (purpose_value == "ENTRY" or purpose_value in {"CAMPAIGN_ENTRY", "CAMPAIGN_ADD_ON"}) else "",
             campaign_id=str(campaign_id or ""), signal_id=str(signal_id or ""),
         )
         result = self.execution_barrier.execute(intent, submit)
