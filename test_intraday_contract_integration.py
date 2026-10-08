@@ -178,3 +178,69 @@ def test_signal_activation_time_is_separate_from_formation_time():
     )
     assert spec.signal_bar_time_ms == 100
     assert spec.detected_time_ms == 200
+
+
+def test_super_ao_event_is_not_reemitted_from_history():
+    from williams_intraday_core import WilliamsIntradayCore
+    frame = pd.DataFrame({
+        "ao_green": [False, True, True, True, True],
+        "ao_red": [False, False, False, False, False],
+        "ao_green_streak": [0, 1, 2, 3, 4],
+        "ao_red_streak": [0, 0, 0, 0, 0],
+    })
+    assert WilliamsIntradayCore._ao_event(frame, "LONG") == 4
+    assert WilliamsIntradayCore._ao_event(frame.iloc[:-1], "LONG") == 3
+    assert WilliamsIntradayCore._ao_event(frame.iloc[:3], "LONG") is None
+
+
+def test_fractal_pending_signal_is_not_resurrected_after_trigger_cross():
+    from williams_intraday_core import WilliamsIntradayCore
+    from williams_fractal_engine import FractalObservation
+
+    ind = pd.DataFrame({
+        "high": [100, 101, 110, 102, 111, 105, 104],
+        "low": [99, 98, 99, 100, 103, 101, 100],
+        "close": [99.5, 100, 100, 101, 104, 102, 101],
+        "teeth_shifted": [105.0] * 7,
+    })
+    obs = [FractalObservation("LONG", 2, 4, 110.0, "FIVE")]
+    core = WilliamsIntradayCore(IntradayPolicy.from_env({}))
+    assert core._latest_wm3(ind, "LONG", 0.1, observations=obs) is None
+
+
+def test_fractal_activation_requires_teeth_at_trigger_time():
+    from campaign_model import SignalRole, SignalSpec, SignalType
+    from williams_campaign_backtester import WilliamsCampaignBacktester
+
+    row = pd.Series({"teeth_shifted": 105.0})
+    spec = SignalSpec.new(
+        symbol="BTCUSDT",
+        side="BUY",
+        signal_type=SignalType.FRACTAL,
+        role=SignalRole.ENTRY,
+        timeframe="15m",
+        signal_bar_time_ms=1,
+        trigger_price=101,
+        protective_reference=98,
+        execution_timeframe="5m",
+    )
+    assert WilliamsCampaignBacktester._activation_teeth_ok(row, spec, 106.0) is True
+    assert WilliamsCampaignBacktester._activation_teeth_ok(row, spec, 104.0) is False
+
+
+def test_intraday_risk_environment_cannot_raise_production_ceiling():
+    from williams_intraday_spec import IntradayPolicy
+    import pytest
+
+    with pytest.raises(ValueError):
+        IntradayPolicy.from_env({
+            "WILLIAMS_INITIAL_RISK_PCT": "0.003",
+            "WILLIAMS_CAMPAIGN_RISK_PCT": "0.006",
+            "WILLIAMS_DAILY_LOSS_PCT": "0.01",
+        })
+    with pytest.raises(ValueError):
+        IntradayPolicy.from_env({
+            "WILLIAMS_INITIAL_RISK_PCT": "0.0025",
+            "WILLIAMS_CAMPAIGN_RISK_PCT": "0.006",
+            "WILLIAMS_DAILY_LOSS_PCT": "0.02",
+        })
