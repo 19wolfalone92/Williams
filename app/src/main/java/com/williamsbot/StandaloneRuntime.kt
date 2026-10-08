@@ -2635,10 +2635,108 @@ private class NativeEngine(
         }
     }
 
-    private fun campaignEntryCandidate(candidate: BaseAnalysis): CampaignSignalN? =
+    private fun campaignProof(
+        candidate: BaseAnalysis,
+        signal: CampaignSignalN
+    ): ProofVectorN {
+        val stage = when (signal.type.uppercase(Locale.US)) {
+            "REVERSAL" -> 1
+            "SUPER_AO" -> 2
+            "FRACTAL" -> 3
+            else -> 0
+        }
+
+        // WM1 may be a reversal inside a non-trending senior context; its
+        // context proof is the verified Alligator/mouth location carried by
+        // the signal. WM2/WM3 additionally require the established bullish
+        // senior context from the scanner's Wave/Alligator state.
+        val contextPass =
+            if (stage == 1) {
+                signal.teethAtDetection > 0.0 &&
+                    signal.angulationScore > 0.0
+            } else {
+                candidate.htfCandidate &&
+                    candidate.wave.alligatorBullish
+            }
+
+        val behaviorPass =
+            stage in setOf(1, 2, 3) &&
+                signal.signalBarTimeMs > 0L
+
+        val structurePass =
+            stage == 3 ||
+                (stage == 2 && candidate.campaignSignals.any {
+                    it.type.equals("FRACTAL", ignoreCase = true) &&
+                        it.signalBarTimeMs <= signal.signalBarTimeMs
+                }) ||
+                (stage == 1 && signal.signalBarTimeMs > 0L)
+
+        val locationPass =
+            signal.teethAtDetection > 0.0 &&
+                signal.triggerPrice > signal.teethAtDetection
+
+        val angulationPass =
+            signal.angulationScore > 0.0
+
+        val momentumPass =
+            stage == 2 ||
+                (stage == 3 && (
+                    candidate.wave.aoPositive ||
+                        candidate.wave.confidence > 0.0
+                )) ||
+                candidate.wave.aoPositive
+
+        val invalidationPresent =
+            signal.invalidationPrice > 0.0 &&
+                signal.protectivePrice > 0.0
+
+        return ProofVectorN(
+            contextPass = contextPass,
+            behaviorPass = behaviorPass,
+            structurePass = structurePass,
+            locationPass = locationPass,
+            angulationPass = angulationPass,
+            momentumPass = momentumPass,
+            priceProofPass = false,
+            invalidationPresent = invalidationPresent
+        )
+    }
+
+    private fun proofArmable(
+        signal: CampaignSignalN,
+        proof: ProofVectorN
+    ): Boolean {
+        return when (signal.type.uppercase(Locale.US)) {
+            "REVERSAL" ->
+                proof.contextPass &&
+                    proof.behaviorPass &&
+                    proof.structurePass &&
+                    proof.locationPass &&
+                    proof.angulationPass &&
+                    proof.invalidationPresent
+            "SUPER_AO", "FRACTAL" ->
+                proof.contextPass &&
+                    proof.behaviorPass &&
+                    proof.structurePass &&
+                    proof.locationPass &&
+                    proof.momentumPass &&
+                    proof.invalidationPresent
+            else -> false
+        }
+    }
+
+    private fun campaignEntryCandidate(
+        candidate: BaseAnalysis
+    ): Pair<CampaignSignalN, ProofVectorN>? =
         candidate.campaignSignals
             .sortedBy { it.signalBarTimeMs }
-            .firstOrNull()
+            .asSequence()
+            .map { signal ->
+                signal to campaignProof(candidate, signal)
+            }
+            .firstOrNull { (signal, proof) ->
+                proofArmable(signal, proof)
+            }
 
     private fun submitCampaignEntry(candidate: BaseAnalysis) {
         if (!campaignEngineEnabled || !candidate.campaignReady) return
@@ -2647,7 +2745,13 @@ private class NativeEngine(
         if (synchronized(pendingEntries) { pendingEntries.containsKey(candidate.symbol) }) return
         if (positionList().size >= maxOpenPositions) return
 
-        val signal = campaignEntryCandidate(candidate) ?: return
+        val (signal, proof) = campaignEntryCandidate(candidate) ?: run {
+            auditStore.recordError(
+                "WILLIAMS_PROOF_REJECTED",
+                candidate.symbol + ": no armable WM1/WM2/WM3 ProofVector"
+            )
+            return
+        }
         val equity = estimateManagedEquity()
         val remainingRisk = campaignRemainingRiskPct(equity)
         val riskPct = min(
@@ -2689,6 +2793,15 @@ private class NativeEngine(
             "W5E_" + signal.type + "_" + signal.signalBarTimeMs + "_" +
                 System.nanoTime().toString(16).takeLast(10)
         val campaignId = "W5C_" + System.nanoTime().toString(16)
+
+        val proofScore = proof.diagnosticScore
+        auditStore.recordState(
+            stateMachine.state,
+            TradingState.ENTRY_PENDING,
+            "Williams proof armable: " +
+                "stage=" + signal.type +
+                " score=" + String.format(Locale.US, "%.3f", proofScore)
+        )
 
         val pending = PendingEntry(
             symbol = candidate.symbol,
