@@ -42,11 +42,23 @@ class RiskContract:
     fixed_take_profit:bool=False
     reverse_pyramid_weights:tuple[int,...]=(1,5,4,3,2)
     def validate(self):
-        if not 0<self.initial_risk_pct<=self.campaign_risk_pct: raise ValueError("initial risk must be <= campaign risk")
-        if self.daily_loss_pct<self.campaign_risk_pct: raise ValueError("daily loss budget must cover campaign budget")
-        if self.max_campaigns!=1 or self.leverage!=0 or self.averaging_down or self.fixed_take_profit:
+        if not 0<self.initial_risk_pct<=self.campaign_risk_pct:
+            raise ValueError("initial risk must be >0 and <= campaign risk")
+        # Production Core has a hard engineering ceiling. Environment overrides
+        # may tighten the contract (e.g. conservative mode), but can never
+        # silently raise the small-deposit limits.
+        if self.initial_risk_pct>0.0025:
+            raise ValueError("initial risk exceeds production ceiling 0.25%")
+        if self.campaign_risk_pct>0.006:
+            raise ValueError("campaign risk exceeds production ceiling 0.60%")
+        if self.daily_loss_pct<self.campaign_risk_pct:
+            raise ValueError("daily loss budget must cover campaign budget")
+        if self.daily_loss_pct>0.01:
+            raise ValueError("daily loss exceeds production ceiling 1.00%")
+        if self.max_campaigns!=1 or self.max_full_stopouts>2 or self.leverage!=0 or self.averaging_down or self.fixed_take_profit:
             raise ValueError("invalid small-deposit risk contract")
-        if self.reverse_pyramid_weights!=(1,5,4,3,2): raise ValueError("reverse pyramid must be 1:5:4:3:2")
+        if self.reverse_pyramid_weights!=(1,5,4,3,2):
+            raise ValueError("reverse pyramid must be 1:5:4:3:2")
 
 @dataclass(frozen=True)
 class SessionContract:
