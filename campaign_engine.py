@@ -218,6 +218,63 @@ class CampaignEngine:
         weighted = self.campaign_risk_limit_pct * (weight / total_weight)
         return min(remaining / equity_quote, weighted)
 
+    def _position_risk_quote(
+        self,
+        *,
+        quantity: float,
+        average_entry_price: float,
+        stop_price: float,
+        fee_quote: float = 0.0,
+    ) -> float:
+        """Conservatively mark loss to the active structural stop.
+
+        This is deliberately recomputed from the actual position rather than
+        trusting the originally requested tranche risk.  Moving a LONG stop
+        upward therefore releases risk capacity; adding size consumes only the
+        risk represented by the resulting aggregate position.
+        """
+        qty = max(0.0, float(quantity))
+        entry = max(0.0, float(average_entry_price))
+        stop = max(0.0, float(stop_price))
+        if qty <= 0.0 or entry <= 0.0 or stop <= 0.0:
+            return 0.0
+        if str(getattr(self, "side", "LONG")).upper() == "SHORT":
+            gross = max(0.0, stop - entry) * qty
+        else:
+            gross = max(0.0, entry - stop) * qty
+        fee_per_side = max(0.0, float(__import__("os").getenv("FEE_BUFFER_PER_SIDE_PCT", "0.001")))
+        slippage = max(0.0, float(__import__("os").getenv("RISK_SLIPPAGE_BUFFER_PCT", "0.0015")))
+        notional = entry * qty
+        return gross + max(0.0, float(fee_quote)) + notional * (2.0 * fee_per_side + slippage)
+
+    @staticmethod
+    def _campaign_position_risk(
+        campaign: TradingCampaign,
+        *,
+        fee_quote: float = 0.0,
+    ) -> float:
+        qty = max(0.0, float(campaign.position_qty or 0.0))
+        entry = max(0.0, float(campaign.average_entry_price or 0.0))
+        stop = max(0.0, float(campaign.current_stop_price or 0.0))
+        if qty <= 0.0 or entry <= 0.0 or stop <= 0.0:
+            return 0.0
+        if campaign.side.upper() == "SHORT":
+            gross = max(0.0, stop - entry) * qty
+        else:
+            gross = max(0.0, entry - stop) * qty
+        import os
+        fee_per_side = max(0.0, float(os.getenv("FEE_BUFFER_PER_SIDE_PCT", "0.001")))
+        slippage = max(0.0, float(os.getenv("RISK_SLIPPAGE_BUFFER_PCT", "0.0015")))
+        notional = entry * qty
+        return gross + max(0.0, float(fee_quote)) + notional * (2.0 * fee_per_side + slippage)
+
+    def refresh_open_risk(self, campaign: TradingCampaign, *, fee_quote: float = 0.0) -> float:
+        campaign.open_risk_quote = self._campaign_position_risk(
+            campaign,
+            fee_quote=fee_quote,
+        )
+        return campaign.open_risk_quote
+
     # ------------------------------------------------------------------
     # State decisions
     # ------------------------------------------------------------------
@@ -245,6 +302,8 @@ class CampaignEngine:
     def arm_add_on(self, campaign: TradingCampaign, signal: SignalSpec, *, risk_quote: float, capital_reserved_quote: float) -> TradingCampaign:
         if campaign.position_qty <= 0:
             raise ValueError("add-on requires an open campaign position")
+        if campaign.additions >= 4 or campaign.tranche_index >= 5:
+            raise ValueError("campaign has reached the five-tranche reverse-pyramid limit")
         if signal.side != campaign.side:
             raise ValueError("add-on side does not match campaign")
         if signal.signal_bar_time_ms <= 0:
@@ -253,7 +312,6 @@ class CampaignEngine:
             CampaignState.OPEN_INITIAL,
             CampaignState.TREND_ACTIVE,
             CampaignState.TRAILING,
-            CampaignState.EXHAUSTION_WATCH,
         }:
             raise ValueError(f"Cannot arm add-on from {campaign.state.value}")
 
@@ -321,11 +379,11 @@ class CampaignEngine:
         ) / max(new_qty, 1e-12)
         campaign.position_qty = new_qty
         campaign.additions += 1
-        campaign.tranche_index = min(4, campaign.tranche_index + 1)
-        campaign.open_risk_quote += max(0.0, float(risk_quote))
+        campaign.tranche_index = min(5, campaign.tranche_index + 1)
         campaign.pending_risk_quote = 0.0
         campaign.capital_reserved_quote = 0.0
         campaign.tags["last_add_on_fee_quote"] = float(fee_quote)
+        self.refresh_open_risk(campaign, fee_quote=fee_quote)
         campaign.next_action = "MONITOR_CAMPAIGN"
         campaign.transition(CampaignState.TREND_ACTIVE, reason="add-on filled and position revalued")
         self.db.save_campaign(campaign)
@@ -362,12 +420,12 @@ class CampaignEngine:
         campaign.initial_stop_price = float(initial_stop_price)
         campaign.current_stop_price = float(initial_stop_price)
         campaign.structural_stop_source = "INITIAL_SIGNAL"
-        campaign.open_risk_quote = max(0.0, float(risk_quote))
         campaign.pending_risk_quote = 0.0
         campaign.capital_reserved_quote = 0.0
         campaign.tranche_index = 1
         campaign.next_action = "MONITOR_CAMPAIGN"
         campaign.tags["entry_fee_quote"] = float(fee_quote)
+        self.refresh_open_risk(campaign, fee_quote=fee_quote)
         campaign.transition(CampaignState.OPEN_INITIAL, reason="entry fully filled and hard stop initialized")
         self.db.save_campaign(campaign)
         self.db.log_campaign_event(
@@ -403,6 +461,7 @@ class CampaignEngine:
             return False
         campaign.current_stop_price = float(proposed_stop)
         campaign.structural_stop_source = str(source)
+        self.refresh_open_risk(campaign, fee_quote=float(campaign.tags.get("entry_fee_quote", 0.0) or 0.0))
         if campaign.state in {CampaignState.OPEN_INITIAL, CampaignState.TREND_ACTIVE, CampaignState.EXHAUSTION_WATCH}:
             try:
                 campaign.transition(CampaignState.TRAILING, reason="structural protective stop advanced")
