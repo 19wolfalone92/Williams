@@ -243,6 +243,7 @@ data class Status(
     val p0GatePassed: Boolean = false,
     val p0GateReason: String = "NOT_READY",
     val firstBlocker: String = "",
+    val nextAction: String = "",
     val maxOpenPositionsLocked: Boolean = false,
     val unresolvedSymbols: List<String> = emptyList(),
     val pendingEntrySymbols: List<String> = emptyList()
@@ -1242,7 +1243,7 @@ private fun DiagnosticsScreen(
         item { DiagnosticRow("Scanner", status.scannerState + " • " + status.scannerSymbols + " symbols • " + status.scanDurationMs + " ms") }
         item { DiagnosticRow("Execution", if (status.p0GatePassed) "READY" else "BLOCKED • " + status.p0GateReason) }
         item { DiagnosticRow("First blocker", status.firstBlocker.ifBlank { if (status.executionEnabled) "NONE • execution path is clear" else "NOT_REPORTED" }) }
-        item { DiagnosticRow("Next action", when {
+        item { DiagnosticRow("Next action", status.nextAction.ifBlank { when {
             status.firstBlocker.startsWith("RECONCILE_REQUIRED") -> "RECONCILE / RECOVER"
             status.firstBlocker.startsWith("WAIT_FOR_") -> "WAIT • conditional order is armed"
             status.firstBlocker == "POSITION_UNPROTECTED" -> "ARM PROTECTION"
@@ -3242,6 +3243,7 @@ private fun parseStatus(json: JSONObject): Status {
             }
         ),
         firstBlocker = json.optString("first_blocker", json.optString("p0_gate_reason", "")),
+        nextAction = json.optString("next_action", ""),
         maxOpenPositionsLocked = json.optBoolean(
             "max_open_positions_locked",
             false
