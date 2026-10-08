@@ -46,7 +46,8 @@ class MultiPositionTrader:
         self.client = client
         self.db = db or Database()
         self.intraday_policy = IntradayPolicy.from_env()
-        self.intraday_core_enabled = self.intraday_policy.profile in {"WILLIAMS_INTRADAY_CORE", "WILLIAMS_INTRADAY_CONSERVATIVE"}
+        explicit_profile = str(os.getenv("WILLIAMS_STRATEGY_PROFILE", "")).strip().upper()
+        self.intraday_core_enabled = explicit_profile in {"WILLIAMS_INTRADAY_CORE", "WILLIAMS_INTRADAY_CONSERVATIVE"}
         if symbols is not None:
             self.symbols = [str(x).strip().upper() for x in symbols if str(x).strip()]
         else:
