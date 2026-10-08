@@ -2381,7 +2381,10 @@ class MultiPositionTrader:
             return {"status": "SESSION_BLOCKED", "results": [], "reason": policy.block_reason}
         return None
 
-    def scan_and_execute(self):\n        boundary = self._apply_intraday_boundary()\n        if boundary is not None:\n            return boundary
+    def scan_and_execute(self):
+        boundary = self._apply_intraday_boundary()
+        if boundary is not None:
+            return boundary
         recovery = self.recover()
         if not recovery["ok"]:
             return {
