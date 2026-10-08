@@ -121,6 +121,11 @@ class SignalSpec:
     alligator_bullish: bool = False
     alligator_awake: bool = False
     angulation_score: float = 0.0
+    angulation_valid: bool = False
+    behavior_confirmed: bool = False
+    structure_confirmed: bool = False
+    momentum_confirmed: bool = False
+    mfi_window: str = "UNKNOWN"
     wave_confidence: float = 0.0
     wave_exhaustion_risk: float = 0.0
     htf_confirmed: bool = False
