@@ -17,6 +17,7 @@ from campaign_model import CampaignState, structural_stop_for_long
 from campaign_execution import CampaignExecutionError, CampaignExecutionService
 from strategy import calculate_indicators, config_from_env
 from data import fetch_klines
+from williams_intraday_spec import IntradayPolicy
 
 
 class CampaignMonitor:
@@ -24,6 +25,7 @@ class CampaignMonitor:
         self.client = client
         self.db = db
         self.execution = execution_service
+        self.intraday_policy = IntradayPolicy.from_env()
         self.wave_recheck_seconds = max(
             30,
             int(os.getenv("CAMPAIGN_WAVE_RECHECK_SECONDS", "60")),
@@ -74,17 +76,17 @@ class CampaignMonitor:
 
             engine = MultiTimeframeWaveEngine(
                 self.client,
-                base_interval=campaign.execution_timeframe,
+                base_interval=campaign.decision_timeframe,
                 include_micro=False,
             )
             report = engine.analyse(
                 campaign.symbol,
-                cache={campaign.execution_timeframe: candles},
+                cache={campaign.decision_timeframe: candles},
             )
             campaign.tags["wave_last_sample_ms"] = now
             campaign.wave_position = int(
                 getattr(
-                    report.frames.get(campaign.execution_timeframe),
+                    report.frames.get(campaign.decision_timeframe),
                     "position",
                     getattr(report, "setup_position", 0),
                 )
@@ -113,7 +115,7 @@ class CampaignMonitor:
         candles = self._closed_candles(
             self.client,
             symbol,
-            campaign.execution_timeframe,
+            campaign.decision_timeframe,
             limit=max(40, int(os.getenv("CAMPAIGN_TRAIL_CANDLES", "80"))),
         )
         if len(candles) < 20:
@@ -269,6 +271,36 @@ class CampaignMonitor:
             "exhaustion_reasons": exhaustion_reasons,
             "next_action": campaign.next_action,
         }
+
+    def enforce_session(self) -> list[dict]:
+        now = __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
+        state = self.intraday_policy.session.state(now)
+        if state in {"PRE_SESSION", "ENTRY_WINDOW"}:
+            return []
+        if state == "MANAGE_ONLY":
+            # Pending entries are not allowed after the 18:00 UTC cutoff.
+            return self.execution.cancel_pending_for_eod("NO_NEW_ENTRIES_AFTER_CUTOFF")
+        results = self.execution.cancel_pending_for_eod("EOD_PENDING_CANCELLED")
+        for row in list(self.db.open_campaigns()):
+            campaign = self.execution.engine.load_campaign(str(row["campaign_id"]))
+            if campaign is None or campaign.position_qty <= 0:
+                continue
+            try:
+                results.append({
+                    "campaign_id": campaign.campaign_id,
+                    "symbol": campaign.symbol,
+                    "state": "EOD_FLAT",
+                    "exit": self.execution.exit_market(campaign, reason="EOD_FLAT"),
+                })
+            except Exception as exc:
+                self.execution.engine.mark_reconcile_required(campaign, f"EOD_FLAT failed: {exc}")
+                results.append({
+                    "campaign_id": campaign.campaign_id,
+                    "symbol": campaign.symbol,
+                    "state": "RECONCILE_REQUIRED",
+                    "error": str(exc),
+                })
+        return results
 
     def monitor_all(self) -> list[dict]:
         results = []
