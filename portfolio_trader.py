@@ -2110,6 +2110,14 @@ class MultiPositionTrader:
                 if self.intraday_core_enabled:
                     break
             except CampaignExecutionError as exc:
+                if trace:
+                    trace["execution_feasible"] = False
+                    trace["trade_allowed"] = False
+                    trace["block_reason"] = str(exc)
+                    try:
+                        self.db.save_decision_trace(trace)
+                    except Exception:
+                        pass
                 self.db.log_event(
                     "WARNING",
                     "campaign_entry_not_armed",
@@ -2125,6 +2133,14 @@ class MultiPositionTrader:
                     }
                 )
             except Exception as exc:
+                if trace:
+                    trace["execution_feasible"] = False
+                    trace["trade_allowed"] = False
+                    trace["block_reason"] = str(exc)
+                    try:
+                        self.db.save_decision_trace(trace)
+                    except Exception:
+                        pass
                 self.db.log_event(
                     "ERROR",
                     "campaign_entry_error",
@@ -2481,6 +2497,7 @@ class MultiPositionTrader:
             self.client,
             balance_quote=balance,
             symbols=self.symbols,
+            db=self.db,
         )
         selections = controller.select_portfolio(
             open_risk_quote=self.reserved_risk_quote(),
