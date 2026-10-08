@@ -12,6 +12,8 @@ from binance_client import BinanceAPIError
 from campaign_engine import CampaignEngine
 from campaign_model import CampaignState, PendingOrderRecord, SignalSpec, SignalState, SignalType
 from execution_barrier import ExecutionBarrier, OrderIntent
+from pending_signal import PendingSignal
+from recovery_matrix import RecoveryMatrix
 
 
 class CampaignExecutionError(RuntimeError):
@@ -254,10 +256,12 @@ class CampaignExecutionService:
                 f"{signal.symbol}: another conditional entry is already reserved"
             )
 
+        pending_signal = PendingSignal.from_spec(signal)
         campaign = self.engine.create_campaign(
             signal,
             initial_risk_pct=requested_risk,
         )
+        campaign.tags["pending_signal"] = pending_signal.to_dict()
         campaign.tags["signal_role"] = signal.role.value
         campaign.tags["initial_stop_price"] = stop
         campaign.initial_stop_price = stop
@@ -571,12 +575,24 @@ class CampaignExecutionService:
                     })
                     continue
 
+                recovery = RecoveryMatrix.explain(
+                    lifecycle=campaign.state.value,
+                    exchange_status=status,
+                    executed_qty=executed,
+                )
                 if status == "PARTIALLY_FILLED" and order.get("orderId") is not None:
                     try:
                         self._execute_cancel(
                             campaign,
                             int(order.get("orderId")),
                             "CAMPAIGN_ENTRY_PARTIAL_CANCEL",
+                        )
+                        self.db.log_campaign_event(
+                            campaign.campaign_id,
+                            "ENTRY_PARTIAL_FILL",
+                            order_id=str(order.get("orderId", "")),
+                            reason="recovery matrix: CANCEL_AND_PROTECT",
+                            payload=recovery,
                         )
                     except Exception as exc:
                         self.engine.mark_reconcile_required(
@@ -770,7 +786,7 @@ class CampaignExecutionService:
                     })
                     continue
 
-                if status in {"CANCELED", "EXPIRED", "REJECTED"}:
+                if status in {"CANCELED", "EXPIRED", "REJECTED", "EXPIRED_IN_MATCH"}:
                     if purpose == "ADD_ON" or campaign.state == CampaignState.ADD_ON_PENDING:
                         try:
                             campaign.transition(
