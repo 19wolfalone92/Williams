@@ -12,24 +12,55 @@ from campaign_model import SignalSpec, SignalType
 from domain.contracts import ProofVector
 
 
-PRE_PRICE_FIELDS = (
-    "context_pass",
-    "behavior_pass",
-    "structure_pass",
-    "location_pass",
-    "angulation_pass",
-    "momentum_pass",
-    "invalidation_present",
-)
+# The required evidence differs by Wise-Man stage. WM1 is intentionally the
+# early hypothesis signal and must not be forced to have WM2 momentum proof.
+# WM2/WM3 require momentum/continuation evidence before an add-on is armed.
+PRE_PRICE_FIELDS_BY_STAGE = {
+    1: (
+        "context_pass",
+        "behavior_pass",
+        "structure_pass",
+        "location_pass",
+        "angulation_pass",
+        "invalidation_present",
+    ),
+    2: (
+        "context_pass",
+        "behavior_pass",
+        "structure_pass",
+        "location_pass",
+        "momentum_pass",
+        "invalidation_present",
+    ),
+    3: (
+        "context_pass",
+        "behavior_pass",
+        "structure_pass",
+        "location_pass",
+        "momentum_pass",
+        "invalidation_present",
+    ),
+}
 
 
 @dataclass(frozen=True)
 class ProofEvaluation:
     proof_vector: ProofVector
+    wise_man_stage: int
+
+    @property
+    def required_pre_price_fields(self) -> tuple[str, ...]:
+        return PRE_PRICE_FIELDS_BY_STAGE.get(
+            int(self.wise_man_stage),
+            PRE_PRICE_FIELDS_BY_STAGE[1],
+        )
 
     @property
     def armable(self) -> bool:
-        return all(bool(getattr(self.proof_vector, name)) for name in PRE_PRICE_FIELDS)
+        return all(
+            bool(getattr(self.proof_vector, name))
+            for name in self.required_pre_price_fields
+        )
 
     @property
     def hypothesis_proven(self) -> bool:
@@ -84,7 +115,12 @@ class WilliamsProofEngine:
                 momentum_pass=momentum_pass,
                 price_proof_pass=False,
                 invalidation_present=invalidation_present,
-            )
+            ),
+            wise_man_stage={
+                SignalType.REVERSAL: 1,
+                SignalType.SUPER_AO: 2,
+                SignalType.FRACTAL: 3,
+            }[signal.signal_type],
         )
 
     @staticmethod
@@ -104,5 +140,6 @@ class WilliamsProofEngine:
                 momentum_pass=p.momentum_pass,
                 price_proof_pass=bool(price_proof_pass),
                 invalidation_present=p.invalidation_present,
-            )
+            ),
+            wise_man_stage=evaluation.wise_man_stage,
         )
