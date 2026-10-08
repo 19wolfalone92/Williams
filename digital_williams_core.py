@@ -9,7 +9,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Iterable
 
-from binance_data_contract import BinanceDataContract
 from campaign_model import SignalSpec, SignalType
 from decision_trace import DecisionTrace
 from domain.contracts import SignalDirection, WilliamsDecision
@@ -46,7 +45,8 @@ class DigitalWilliamsCore:
     VERSION = "2.0.0"
 
     def __init__(self) -> None:
-        self.binance = BinanceDataContract()
+        # Pure Williams composition has no exchange/client dependency.
+        pass
 
     @staticmethod
     def _wise_man_stage(signal: SignalSpec) -> int:
@@ -187,7 +187,6 @@ class DigitalWilliamsCore:
                 "no_score_threshold_gate": True,
                 "price_proof_before_conditional_arm": False,
             },
-            "binance_contract": self.binance.to_dict(),
             "execution_contract": {
                 "initial_entry": "BUY_STOP conditional; never convert missed trigger to MARKET",
                 "add_on": "BUY_STOP conditional; same campaign",
