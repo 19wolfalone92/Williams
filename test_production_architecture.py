@@ -178,3 +178,68 @@ def test_execution_barrier_checks_direction_permission_for_campaign_entry():
     assert not result.accepted
     assert "does not allow LONG" in result.reason
     assert calls == []
+
+
+
+def test_execution_barrier_rechecks_expiry_after_slow_pre_submit_validation():
+    cache = ContextCache()
+    cache.publish(context())
+    barrier = ExecutionBarrier(cache)
+    version = cache.snapshot().context("BTCUSDT", "1h").version
+    intent = OrderIntent.new(
+        "BTCUSDT", "BUY", "STOP_LOSS",
+        {"1h": version},
+        signal_id="test-signal",
+        signal_expires_at_ms=int(time.time() * 1000) + 250,
+        permission_interval="1h",
+    )
+    calls = []
+
+    def slow_pre_submit(_snapshot):
+        time.sleep(0.35)
+
+    result = barrier.execute(
+        intent,
+        lambda: calls.append("submitted") or {"status": "NEW"},
+        pre_submit_checks=slow_pre_submit,
+    )
+
+    assert not result.accepted
+    assert "signal expired" in result.reason
+    assert calls == []
+
+
+def test_execution_barrier_rejects_buy_with_unrecognized_purpose():
+    cache = ContextCache()
+    cache.publish(context())
+    barrier = ExecutionBarrier(cache)
+    intent = OrderIntent.new(
+        "BTCUSDT", "BUY", "MARKET",
+        {"1h": 1},
+        purpose="LEGACY_BYPASS",
+    )
+    calls = []
+    result = barrier.execute(intent, lambda: calls.append("submitted") or {"status": "FILLED"})
+
+    assert not result.accepted
+    assert "unsupported entry purpose" in result.reason
+    assert calls == []
+
+
+def test_execution_barrier_keeps_protective_sell_available_without_entry_context():
+    cache = ContextCache()
+    barrier = ExecutionBarrier(cache)
+    intent = OrderIntent.new(
+        "BTCUSDT", "SELL", "STOP_LOSS",
+        {},
+        purpose="CAMPAIGN_PROTECTION",
+        campaign_id="campaign-open",
+    )
+    calls = []
+    result = barrier.execute(
+        intent,
+        lambda: calls.append("protect") or {"status": "NEW"},
+    )
+
+    assert result.accepted
+    assert calls == ["protect"]
