@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
 from market_context import ContextCache, MarketStateSnapshot
+from order_state_machine import OrderState, OrderStateMachine
 
 
 @dataclass(frozen=True)
@@ -144,6 +145,8 @@ class ExecutionBarrier:
         pre_submit_checks: Callable[[MarketStateSnapshot], None] | None = None,
     ) -> ExecutionResult:
         with self.context_cache.execution_lock:
+            order_fsm = OrderStateMachine()
+            order_fsm.transition(OrderState.ADMISSION)
             self._persist(intent, "PENDING")
             if self.db is not None and hasattr(self.db, "save_execution_event"):
                 try:
@@ -153,18 +156,28 @@ class ExecutionBarrier:
             snapshot = self.context_cache.snapshot()
             reason = self._validate(intent, snapshot)
             if reason:
+                try:
+                    order_fsm.transition(OrderState.CANCELED)
+                except ValueError:
+                    order_fsm.state = OrderState.RECONCILE_REQUIRED
                 self._record("WARNING", "execution_blocked", intent, reason)
+                self._persist(intent, "BLOCKED", reason)
                 return ExecutionResult(intent.intent_id, False, reason=reason)
 
             if pre_submit_checks is not None:
                 try:
                     pre_submit_checks(snapshot)
                 except Exception as exc:
+                    try:
+                        order_fsm.transition(OrderState.CANCELED)
+                    except ValueError:
+                        order_fsm.state = OrderState.RECONCILE_REQUIRED
                     reason = f"pre_submit_check_failed: {type(exc).__name__}: {exc}"
                     self._persist(intent, "BLOCKED", reason)
                     self._record("WARNING", "execution_blocked", intent, reason)
                     return ExecutionResult(intent.intent_id, False, reason=reason)
 
+            order_fsm.transition(OrderState.SUBMITTING)
             self._record(
                 "INFO",
                 "execution_admitted",
@@ -183,6 +196,7 @@ class ExecutionBarrier:
             try:
                 response = submit()
             except Exception as exc:
+                order_fsm.state = OrderState.AMBIGUOUS
                 self._persist(intent, "AMBIGUOUS", f"{type(exc).__name__}: {exc}")
                 self._record(
                     "ERROR",
@@ -193,6 +207,43 @@ class ExecutionBarrier:
                 )
                 raise
 
+            if intent.order_type != "CANCEL":
+                status = str(
+                    response.get("status", "")
+                    if isinstance(response, dict)
+                    else ""
+                ).upper()
+                if status:
+                    order_fsm.observe_exchange_status(
+                        status,
+                        float(
+                            response.get("executedQty", 0) or 0
+                            if isinstance(response, dict)
+                            else 0
+                        ),
+                    )
+                elif (
+                    isinstance(response, dict)
+                    and str(response.get("newOrderResult", "")).upper() == "SUCCESS"
+                ):
+                    order_fsm.state = OrderState.OPEN
+                else:
+                    order_fsm.state = OrderState.RECONCILE_REQUIRED
+                    self._persist(
+                        intent,
+                        "AMBIGUOUS",
+                        "exchange response did not contain authoritative order state",
+                    )
+                    self._record(
+                        "ERROR",
+                        "execution_ambiguous",
+                        intent,
+                        "Exchange accepted an operation without authoritative state",
+                        {"response_keys": list(response.keys()) if isinstance(response, dict) else []},
+                    )
+                    raise RuntimeError(
+                        "ExecutionBarrier: exchange response lacks authoritative order state"
+                    )
             self._persist(intent, "SUBMITTED")
             if self.db is not None and hasattr(self.db, "save_execution_event"):
                 try:
