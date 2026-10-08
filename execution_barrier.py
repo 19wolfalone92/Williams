@@ -146,21 +146,29 @@ class ExecutionBarrier:
                 return "invalid entry quantity"
             if not math.isfinite(amount) or amount <= 0:
                 return "entry quantity must be finite and positive"
+            if not isinstance(intent.required_context_versions, Mapping):
+                return "required_context_versions must be a mapping"
             if not intent.required_context_versions:
                 return "missing required_context_versions"
-            if not intent.signal_id:
+            if not isinstance(intent.signal_id, str) or not intent.signal_id.strip():
                 return "missing signal_id"
-            if int(intent.signal_expires_at_ms or 0) <= 0:
-                return "missing absolute signal expiry"
-            if now_ms >= int(intent.signal_expires_at_ms):
+            if (
+                isinstance(intent.signal_expires_at_ms, bool)
+                or not isinstance(intent.signal_expires_at_ms, int)
+                or intent.signal_expires_at_ms <= 0
+            ):
+                return "missing or invalid absolute signal expiry"
+            if now_ms >= intent.signal_expires_at_ms:
                 return "signal expired before execution admission"
-            if not intent.permission_interval:
-                return "missing permission_interval"
+            if not isinstance(intent.permission_interval, str) or not intent.permission_interval.strip():
+                return "missing or invalid permission_interval"
             if str(intent.permission_interval).lower() not in {
                 str(tf).lower() for tf in intent.required_context_versions
             }:
                 return "permission_interval missing from required_context_versions"
-            if purpose.startswith("CAMPAIGN_") and not intent.campaign_id:
+            if purpose.startswith("CAMPAIGN_") and (
+                not isinstance(intent.campaign_id, str) or not intent.campaign_id.strip()
+            ):
                 return "missing campaign_id for campaign entry"
 
         if not isinstance(intent.required_context_versions, Mapping):
