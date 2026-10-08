@@ -839,3 +839,60 @@ def test_durable_unknown_recovery_falls_back_to_latest_unknown_intent(tmp_path):
     )
     assert reconciled.accepted is True
     assert restarted.mutation_locked is False
+
+
+class FakeExchangeClient:
+    def __init__(self, price="100.0"):
+        self.price = price
+
+    def exchange_info(self, symbol):
+        return {
+            "symbols": [{
+                "symbol": symbol,
+                "filters": [
+                    {
+                        "filterType": "PRICE_FILTER",
+                        "minPrice": "0.01",
+                        "maxPrice": "1000000",
+                        "tickSize": "0.01",
+                    },
+                    {
+                        "filterType": "LOT_SIZE",
+                        "minQty": "0.001",
+                        "maxQty": "1000",
+                        "stepSize": "0.001",
+                    },
+                    {
+                        "filterType": "MIN_NOTIONAL",
+                        "minNotional": "10",
+                    },
+                ],
+            }]
+        }
+
+    def ticker_price(self, symbol):
+        return {"symbol": symbol, "price": self.price}
+
+
+def test_execution_barrier_rejects_bad_binance_filter_shape(tmp_path):
+    db = Database(str(tmp_path / "filters.sqlite3"))
+    barrier = ExecutionBarrier(FakeCache(), db, client=FakeExchangeClient("100.0"))
+
+    intent = order_intent("WILL_FILTER_TEST")
+    bad = __import__("dataclasses").replace(
+        intent,
+        quantity="0.0001",
+    )
+    result = barrier.execute(
+        bad,
+        lambda: {
+            "symbol": "BTCUSDT",
+            "side": "BUY",
+            "status": "NEW",
+            "orderId": 123,
+            "clientOrderId": bad.client_order_id,
+            "executedQty": "0",
+        },
+    )
+    assert result.accepted is False
+    assert "minQty" in result.reason
