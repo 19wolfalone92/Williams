@@ -90,3 +90,19 @@ def test_stagnation_is_not_an_immediate_time_stop():
         alligator_not_opening=True,
         no_price_progress=True,
     )
+
+
+def test_session_cutoff_cancels_pending_even_with_active_campaign():
+    from datetime import datetime, timezone
+    from intraday_policy import evaluate_intraday_policy
+    contract = WilliamsIntradayContract()
+    decision = evaluate_intraday_policy(
+        datetime(2026, 10, 8, 18, 30, tzinfo=timezone.utc),
+        contract,
+        active_campaigns=1,
+        daily_loss_pct=0.0,
+        full_stop_outs=0,
+    )
+    assert decision.cancel_pending is True
+    assert decision.force_flat is False
+    assert decision.allow_new_campaign is False
