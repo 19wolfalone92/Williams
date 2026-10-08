@@ -2059,7 +2059,7 @@ class MultiPositionTrader:
                 )
                 eligible = [
                     s for s in specs
-                    if s.signal_bar_time_ms > latest_time
+                    if int(s.detected_time_ms or s.signal_bar_time_ms) > latest_time
                     and (
                         s.signal_type in {SignalType.SUPER_AO, SignalType.FRACTAL}
                         or (
@@ -2072,7 +2072,7 @@ class MultiPositionTrader:
                     continue
                 signal = min(
                     eligible,
-                    key=lambda s: (s.signal_bar_time_ms, s.created_at_ms),
+                    key=lambda s: (int(s.detected_time_ms or s.signal_bar_time_ms), s.created_at_ms),
                 )
                 add_signal = __import__(
                     "dataclasses"
