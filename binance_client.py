@@ -3,6 +3,8 @@ from decimal import Decimal, ROUND_DOWN
 from urllib.parse import urlencode
 import requests
 
+from execution_authority import entry_submission_authorized
+
 class BinanceAPIError(RuntimeError):
     def __init__(self, message, *, unknown_execution=False, status_code=None, payload=None):
         super().__init__(message)
@@ -364,6 +366,10 @@ class BinanceSpotClient:
         The wrapper requires a clientOrderId. POST/5xx/timeout is never blindly
         retried because Binance may already have accepted the order.
         """
+        if str(side).strip().upper() == "BUY" and not entry_submission_authorized():
+            raise BinanceAPIError(
+                "Spot BUY blocked: an active ExecutionBarrier admission scope is required"
+            )
         if not new_client_order_id:
             raise ValueError("order_safe requires new_client_order_id")
 
@@ -419,6 +425,10 @@ class BinanceSpotClient:
         return result
 
     def order(self,symbol,side,type_,quantity=None,quote_order_qty=None,price=None,stop_price=None,time_in_force=None,new_client_order_id=None,strategy_id=None,strategy_type=None,trailing_delta=None):
+        if str(side).strip().upper() == "BUY" and not entry_submission_authorized():
+            raise BinanceAPIError(
+                "Spot BUY blocked: raw order submission requires ExecutionBarrier admission"
+            )
         p={'symbol':symbol,'side':side,'type':type_,'newOrderRespType':'FULL'}
         if quantity is not None:p['quantity']=quantity
         if quote_order_qty is not None:p['quoteOrderQty']=quote_order_qty
