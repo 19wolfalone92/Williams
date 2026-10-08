@@ -1282,13 +1282,30 @@ class FuturesWilliamsRuntime:
         pos_qty = abs(self._signed_position_qty(position))
         qty = self._normalize_qty(symbol, pos_qty)
         if qty <= 0:
-            campaign.position_qty = 0.0
-            campaign.state = CampaignState.CLOSED
-            campaign.reconciliation_state = "CLEAN"
-            campaign.exit_reason = reason
+            try:
+                orders = self.client.all_orders(symbol, limit=1000)
+            except Exception as exc:
+                campaign.mark_reconcile_required(
+                    f"position already flat but exit evidence cannot be read: {exc}"
+                )
+                self.db.save_campaign(campaign)
+                self._set_state(symbol, "RECONCILE_REQUIRED")
+                raise RuntimeError(
+                    f"{symbol}: cannot verify bot-owned exit while position is flat"
+                ) from exc
+            if self._finalize_confirmed_exchange_exit(campaign, orders):
+                campaign.exit_reason = reason
+                self.db.save_campaign(campaign)
+                self._set_state(symbol, "FLAT")
+                return {"state": "CLOSED", "symbol": symbol, "reason": reason}
+            campaign.mark_reconcile_required(
+                "position is flat without attributable campaign exit"
+            )
             self.db.save_campaign(campaign)
-            self._set_state(symbol, "FLAT")
-            return {"state": "ALREADY_FLAT", "symbol": symbol}
+            self._set_state(symbol, "RECONCILE_REQUIRED")
+            raise RuntimeError(
+                f"{symbol}: position is flat without attributable campaign exit"
+            )
 
         if campaign.state != CampaignState.EXIT_SIGNALLED:
             campaign.transition(
