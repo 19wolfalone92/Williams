@@ -1096,19 +1096,8 @@ class FuturesWilliamsRuntime:
         if not new_order_id:
             self._set_state(symbol, "RECONCILE_REQUIRED")
             raise RuntimeError(f"{symbol}: new protective order has no orderId")
-        old_order_id = int(campaign.tags.get("protective_order_id", "0") or 0)
-        if old_order_id > 0 and str(old_order_id) != new_order_id:
-            try:
-                self._cancel(symbol, old_order_id, "CAMPAIGN_OLD_STOP_CANCEL")
-            except Exception as exc:
-                self.db.log_event(
-                    "ERROR",
-                    "futures_old_stop_cancel_failed",
-                    str(exc),
-                    {"symbol": symbol, "old_order_id": old_order_id, "new_order_id": new_order_id},
-                )
-                self._set_state(symbol, "RECONCILE_REQUIRED")
-                raise
+        # Persist the new stop before touching the old one. Recovery can then
+        # prove ownership even if the process crashes during replacement.
         self.db.save_campaign_order(
             PendingOrderRecord(
                 order_id=new_order_id,
@@ -1125,11 +1114,28 @@ class FuturesWilliamsRuntime:
                 campaign_id=campaign.campaign_id,
             )
         )
+        old_order_id = int(campaign.tags.get("protective_order_id", "0") or 0)
         campaign.current_stop_price = proposed
         campaign.structural_stop_source = "3_5_BAR_STRUCTURE"
         campaign.tags["protective_order_id"] = new_order_id
         campaign.tags["protective_order_client_id"] = cid
         self.db.save_campaign(campaign)
+
+        if old_order_id > 0 and str(old_order_id) != new_order_id:
+            try:
+                self._cancel(symbol, old_order_id, "CAMPAIGN_OLD_STOP_CANCEL")
+            except Exception as exc:
+                self.db.log_event(
+                    "ERROR",
+                    "futures_old_stop_cancel_failed",
+                    str(exc),
+                    {"symbol": symbol, "old_order_id": old_order_id, "new_order_id": new_order_id},
+                )
+                self._set_state(symbol, "RECONCILE_REQUIRED")
+                campaign.reconciliation_state = "REQUIRED"
+                campaign.health = "RED"
+                self.db.save_campaign(campaign)
+                raise
         return True
 
 
