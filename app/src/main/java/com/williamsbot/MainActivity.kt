@@ -386,14 +386,11 @@ private class BackendApi(context: Context) {
     fun saveConnection(url: String, token: String) {
         val normalized = url.trim().trimEnd('/')
         require(normalized.isNotBlank()) { "Backend URL не задан" }
-        val localRuntime =
-            normalized.startsWith("http://127.0.0.1:18080") ||
-                normalized.startsWith("http://localhost:18080")
-        if (!normalized.startsWith("https://") && !localRuntime) {
-            error("Удалённый Backend URL должен использовать HTTPS.")
+        require(normalized.startsWith("https://")) {
+            "Williams Futures Backend URL должен использовать HTTPS."
         }
-        if (!localRuntime && token.trim().length < 32) {
-            error("Для удалённого Backend нужен Mobile API Token (минимум 32 символа).")
+        require(token.trim().length >= 32) {
+            "Для удалённого Backend нужен Mobile API Token (минимум 32 символа)."
         }
         securePrefs.edit {
             putString("backend_url", normalized)
@@ -410,10 +407,7 @@ private class BackendApi(context: Context) {
         path: String,
         body: String?
     ): String {
-        val localRuntime =
-            backendUrl.startsWith("http://127.0.0.1:18080") ||
-                backendUrl.startsWith("http://localhost:18080")
-        require(localRuntime || backendUrl.startsWith("https://")) {
+        require(backendUrl.startsWith("https://")) {
             "Укажите HTTPS Backend URL для Williams Futures."
         }
         if (!localRuntime) {
