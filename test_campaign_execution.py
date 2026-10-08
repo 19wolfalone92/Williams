@@ -337,3 +337,89 @@ def test_campaign_engine_true_uses_campaign_executor():
     result = trader.execute([selection])
 
     assert result == [{"action": "CAMPAIGN_PATH", "count": 1}]
+
+
+
+def test_restart_recovers_filled_campaign_after_protection_setup_failure():
+    with tempfile.TemporaryDirectory() as d:
+        db_path = os.path.join(d, "campaign.sqlite3")
+        db = Database(db_path)
+        client = MockExchange()
+        svc = service(db, client)
+        result = svc.arm_initial_entry(
+            signal(trigger=101.0),
+            equity_quote=10_000,
+            candidate_risk_pct=0.004,
+        )
+        client.set_price("BTCUSDT", 101.5)
+
+        def fail_protection(*args, **kwargs):
+            raise TimeoutError("simulated protective stop setup failure")
+
+        svc.create_hard_stop = fail_protection
+        first = svc.reconcile_pending_entries()
+        assert first[0]["state"] == "RECONCILE_REQUIRED"
+        campaign = svc.engine.load_campaign(result["campaign_id"])
+        assert campaign.state == CampaignState.RECONCILE_REQUIRED
+        assert campaign.position_qty == 0
+        assert not [
+            o for o in client.open_orders("BTCUSDT")
+            if o.get("side") == "SELL" and str(o.get("clientOrderId", "")).startswith(svc.STOP_PREFIX)
+        ]
+
+        db_after_restart = Database(db_path)
+        svc_after_restart = service(db_after_restart, client)
+        recovered = svc_after_restart.reconcile_pending_entries()
+        assert recovered[0]["state"] == "OPEN"
+        campaign = svc_after_restart.engine.load_campaign(result["campaign_id"])
+        assert campaign.position_qty > 0
+        assert campaign.state == CampaignState.OPEN_INITIAL
+        stops = [
+            o for o in client.open_orders("BTCUSDT")
+            if o.get("side") == "SELL" and str(o.get("clientOrderId", "")).startswith(svc_after_restart.STOP_PREFIX)
+        ]
+        assert len(stops) == 1
+        assert float(stops[0]["origQty"]) == campaign.position_qty
+
+
+def test_restart_adopts_protective_stop_after_ambiguous_setup_response_without_duplicate():
+    with tempfile.TemporaryDirectory() as d:
+        db_path = os.path.join(d, "campaign.sqlite3")
+        db = Database(db_path)
+        client = MockExchange()
+        svc = service(db, client)
+        result = svc.arm_initial_entry(
+            signal(trigger=101.0),
+            equity_quote=10_000,
+            candidate_risk_pct=0.004,
+        )
+        client.set_price("BTCUSDT", 101.5)
+        original_create = svc.create_hard_stop
+
+        def accept_then_timeout(*args, **kwargs):
+            original_create(*args, **kwargs)
+            raise TimeoutError("response lost after protective stop accepted")
+
+        svc.create_hard_stop = accept_then_timeout
+        first = svc.reconcile_pending_entries()
+        assert first[0]["state"] == "RECONCILE_REQUIRED"
+        stops_before = [
+            o for o in client.open_orders("BTCUSDT")
+            if o.get("side") == "SELL" and str(o.get("clientOrderId", "")).startswith(svc.STOP_PREFIX)
+        ]
+        assert len(stops_before) == 1
+        existing_client_id = stops_before[0]["clientOrderId"]
+
+        db_after_restart = Database(db_path)
+        svc_after_restart = service(db_after_restart, client)
+        recovered = svc_after_restart.reconcile_pending_entries()
+        assert recovered[0]["state"] == "OPEN"
+        campaign = svc_after_restart.engine.load_campaign(result["campaign_id"])
+        assert campaign.position_qty > 0
+        stops_after = [
+            o for o in client.open_orders("BTCUSDT")
+            if o.get("side") == "SELL" and str(o.get("clientOrderId", "")).startswith(svc_after_restart.STOP_PREFIX)
+        ]
+        assert len(stops_after) == 1
+        assert stops_after[0]["clientOrderId"] == existing_client_id
+        assert float(stops_after[0]["origQty"]) == campaign.position_qty
