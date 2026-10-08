@@ -244,7 +244,9 @@ data class Status(
     val p0GateReason: String = "NOT_READY",
     val maxOpenPositionsLocked: Boolean = false,
     val unresolvedSymbols: List<String> = emptyList(),
-    val pendingEntrySymbols: List<String> = emptyList()
+    val pendingEntrySymbols: List<String> = emptyList(),
+    val primaryBlocker: String? = null,
+    val campaigns: List<CampaignView> = emptyList()
 )
 
 data class Candle(
@@ -344,6 +346,20 @@ data class PortfolioSummary(
     val unrealizedPnlUsdt: Double = 0.0,
     val assets: List<PortfolioAsset> = emptyList(),
     val positions: List<PositionView> = emptyList()
+)
+
+data class CampaignView(
+    val campaignId: String,
+    val symbol: String,
+    val state: String,
+    val signalId: String,
+    val signalType: String,
+    val triggerPrice: Double? = null,
+    val currentStop: Double? = null,
+    val riskPct: Double = 0.0,
+    val additions: Int = 0,
+    val health: String = "YELLOW",
+    val nextAction: String = "WAIT"
 )
 
 data class PositionView(
@@ -3067,6 +3083,34 @@ private fun parseStatus(json: JSONObject): Status {
     val first =
         parsed.firstOrNull()
 
+    val campaignArray = json.optJSONArray("campaigns")
+    val parsedCampaigns = buildList {
+        if (campaignArray != null) {
+            for (i in 0 until campaignArray.length()) {
+                val item = campaignArray.optJSONObject(i) ?: continue
+                val symbol = item.optString("symbol", "").trim()
+                if (symbol.isBlank()) continue
+                add(
+                    CampaignView(
+                        campaignId = item.optString("campaign_id", ""),
+                        symbol = symbol,
+                        state = item.optString("state", "UNKNOWN"),
+                        signalId = item.optString("signal_id", ""),
+                        signalType = item.optString("signal_type", ""),
+                        triggerPrice = item.optDouble("trigger_price")
+                            .takeUnless { it.isNaN() || it == 0.0 },
+                        currentStop = item.optDouble("current_stop")
+                            .takeUnless { it.isNaN() || it == 0.0 },
+                        riskPct = item.optDouble("risk_pct", 0.0),
+                        additions = item.optInt("additions", 0),
+                        health = item.optString("health", "YELLOW"),
+                        nextAction = item.optString("next_action", "WAIT")
+                    )
+                )
+            }
+        }
+    }
+
     val legacyQty =
         legacy?.optDouble("quantity")
             ?.takeUnless {
@@ -3242,7 +3286,10 @@ private fun parseStatus(json: JSONObject): Status {
         pendingEntrySymbols = json.optJSONArray("pending_entry_symbols")?.let { array ->
             List(array.length()) { i -> array.optString(i) }
                 .filter { it.isNotBlank() }
-        } ?: emptyList()
+        } ?: emptyList(),
+        primaryBlocker = json.optString("primary_blocker")
+            .takeIf { it.isNotBlank() && it != "null" },
+        campaigns = parsedCampaigns
     )
 }
 
