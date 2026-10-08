@@ -605,7 +605,7 @@ private class NativeEngine(
     // Default supports the portfolio model: up to five independent positions;
     // aggregate risk remains capped separately at 1%.
     private val maxOpenPositions: Int
-        get() = prefs.getInt("max_open_positions", 5).coerceIn(1, 10)
+        get() = prefs.getInt("max_open_positions", 1).coerceIn(1, 10)
     private val campaignEngineEnabled: Boolean
         get() = prefs.getBoolean("campaign_engine_enabled", true)
     private val campaignExecutionTimeframe: String
