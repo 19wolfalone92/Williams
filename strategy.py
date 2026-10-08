@@ -181,16 +181,11 @@ def calculate_indicators(df, cfg):
         x["low"].where(x["bearish_reversal_bar"]).ffill().shift(1)
     )
 
-    # Second Wise Man: Super AO. We use Williams' histogram color definition
-    # (green = current AO above previous AO, red = below), not merely AO > 0.
-    x["long_super_ao_signal"] = (
-        x["super_ao_long"]
-        & x["long_fractal_outside"].shift(1).eq(True)
-    )
-    x["short_super_ao_signal"] = (
-        x["super_ao_short"]
-        & x["short_fractal_outside"].shift(1).eq(True)
-    )
+    # Second Wise Man: Super AO. The third same-colour AO bar is the signal.
+    # A fractal prerequisite is deliberately absent: Williams also describes
+    # Super AO as a possible first presenting signal.
+    x["long_super_ao_signal"] = x["super_ao_long"]
+    x["short_super_ao_signal"] = x["super_ao_short"]
 
     # Conservative execution overlay. The counter-trend Wise-Man signals from
     # the book are retained as diagnostics, but disabled for the long-only
@@ -233,19 +228,18 @@ def calculate_indicators(df, cfg):
     # Strict entry: conservative Williams gate + at least one valid Wise-Man
     # trigger. Fractal breakouts, Super AO continuation and reversal bars are
     # separate triggers; they are not incorrectly ANDed together.
-    min_wise = int(cfg["min_wise_men_confirmations"])
+    # Canonical campaign authority: the first valid presenting Wise-Man is
+    # entry-capable. Multi-Wise-Man confirmation is ranking/diagnostic only.
+    # Alligator/awake state remains a quality overlay, not a simultaneous gate.
     x["long_signal"] = (
-        # Williams' first gate: no downstream Wise-Man signal is actionable
-        # until a confirmed fractal has formed outside the Teeth/balance line.
-        x["long_fractal_outside"]
-        & x["long_bullish"]
-        & x["long_awake"]
-        & x["long_wise_man_count"].ge(min_wise)
+        x["long_wise_reversal_entry"]
+        | x["long_super_ao_signal"]
+        | x["long_fractal_signal"]
     )
     x["short_signal"] = (
-        x["short_bearish"]
-        & x["short_awake"]
-        & x["short_wise_man_count"].ge(min_wise)
+        x["short_wise_reversal_entry"]
+        | x["short_super_ao_signal"]
+        | x["short_fractal_signal"]
     )
 
     def _family(row, side):
