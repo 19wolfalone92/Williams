@@ -123,7 +123,7 @@ def main() -> None:
     must(pending_signal, "class PendingSignal", "pending_signal.py")
     must(pending_signal, "SignalState.SUPERSEDED", "pending_signal.py")
     core = read("williams/core.py")
-    must(core, 'decision_tf="1h"', "williams/core.py")
+    must(core, 'StrategyDecision(str(symbol).upper(),"1h"', "williams/core.py")
     must(core, "core_valid", "williams/core.py")
     must_not(core, "m15", "williams/core.py")
     spec = read("williams/spec.py")
