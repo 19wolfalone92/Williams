@@ -386,9 +386,10 @@ def structural_stop_for_long(
     if recent_lows:
         valid_lows = [float(x) for x in recent_lows if float(x) > 0]
         if valid_lows:
-            # For a LONG trail, the closest valid protection is the highest
-            # recent structural low, not the lowest low in the window.
-            low = max(valid_lows)
+            # Williams' structural trail is placed below the lowest low
+            # of the selected recent 3/5-bar structure. A higher structural
+            # stop may be considered separately only after this base is valid.
+            low = min(valid_lows)
             candidates.append((low - max(0.0, buffer), "3_5_BAR_STRUCTURE"))
     if teeth > 0:
         candidates.append((teeth - max(0.0, buffer), "TEETH"))
