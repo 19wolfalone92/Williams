@@ -52,8 +52,13 @@ class PortfolioController:
             if not candidate.signal:
                 continue
             try:
-                entry_price = float(self.client.ticker_price(candidate.symbol)["price"])
-                atr = entry_price * candidate.atr_pct
+                market_price = float(self.client.ticker_price(candidate.symbol)["price"])
+                entry_price = (
+                    float(getattr(candidate, "entry_trigger_price", 0.0) or 0.0)
+                    if self.intraday_core_enabled and float(getattr(candidate, "entry_trigger_price", 0.0) or 0.0) > 0
+                    else market_price
+                )
+                atr = market_price * candidate.atr_pct
                 info = self.client.exchange_info(candidate.symbol)
                 filters = {f["filterType"]: f for f in info.get("symbols", [{}])[0].get("filters", [])}
                 notional_filter = filters.get("NOTIONAL") or filters.get("MIN_NOTIONAL") or {}
