@@ -419,7 +419,7 @@ class Database:
         args.append(max(1, min(int(limit), 500)))
         rows = self.conn.execute(
             'SELECT * FROM decision_traces' + where +
-            ' ORDER BY created_at DESC LIMIT ?', tuple(args)
+            ' ORDER BY created_at DESC, rowid DESC LIMIT ?', tuple(args)
         ).fetchall()
         result = []
         for row in rows:
