@@ -1214,6 +1214,8 @@ class CampaignExecutionService:
             f"entry_client_order_id:{signal.symbol}",
             cid,
         )
+        if claimed:
+            campaign.tags["pending_add_client_id"] = cid
         if not claimed:
             campaign.pending_risk_quote = 0.0
             campaign.capital_reserved_quote = 0.0
@@ -1238,7 +1240,7 @@ class CampaignExecutionService:
             quantity=self.client.decimal_format(qty),
             client_order_id=cid,
             purpose="CAMPAIGN_ADD_ON",
-            permission_interval=signal.timeframe,
+            permission_interval=(signal.execution_timeframe or self.policy.timeframes.execution_tf),
             campaign_id=campaign.campaign_id,
             signal_id=signal.signal_id,
             risk_quote=requested,
