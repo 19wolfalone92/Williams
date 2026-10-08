@@ -40,7 +40,7 @@ def _row_time_ms(row: pd.Series) -> int:
         return int(idx) if isinstance(idx, (int, float)) else 0
 
 
-def _angulation(ind: pd.DataFrame, index: int, *, window: int = 5) -> tuple[float, bool]:
+def _angulation(ind: pd.DataFrame, index: int, *, window: int = 5, side: str | None = None) -> tuple[float, bool]:
     """Approximate increasing separation of price from the Alligator Jaw."""
     if index < 1 or "jaw_shifted" not in ind.columns:
         return 0.0, False
@@ -70,7 +70,12 @@ def _angulation(ind: pd.DataFrame, index: int, *, window: int = 5) -> tuple[floa
         abs(float(jaw.iloc[-1])),
         1e-9,
     )
-    score = max(bull_delta, bear_delta) / base * 100.0
+    directional_delta = (
+        bull_delta if str(side or "").upper() == "LONG"
+        else bear_delta if str(side or "").upper() == "SHORT"
+        else max(bull_delta, bear_delta)
+    )
+    score = max(directional_delta, 0.0) / base * 100.0
 
     # Also require positive regression slope on the separation itself.
     k = len(rows)
@@ -85,10 +90,15 @@ def _angulation(ind: pd.DataFrame, index: int, *, window: int = 5) -> tuple[floa
 
     bull_slope = slope(bullish_distance)
     bear_slope = slope(bearish_distance)
-    valid = (
-        (bull_delta > 0 and bull_slope > 0)
-        or (bear_delta > 0 and bear_slope > 0)
-    )
+    if str(side or "").upper() == "LONG":
+        valid = bull_delta > 0 and bull_slope > 0
+    elif str(side or "").upper() == "SHORT":
+        valid = bear_delta > 0 and bear_slope > 0
+    else:
+        valid = (
+            (bull_delta > 0 and bull_slope > 0)
+            or (bear_delta > 0 and bear_slope > 0)
+        )
     return float(max(score, 0.0)), bool(valid)
 
 
@@ -105,7 +115,7 @@ def _latest_reversal(
     for i in range(len(ind) - 1, start - 1, -1):
         if bool(ind.iloc[i].get(column, False)):
             row = ind.iloc[i]
-            score, valid = _angulation(ind, i)
+            score, valid = _angulation(ind, i, side=side)
             if not valid:
                 continue
             extreme = float(row["low"] if side == "LONG" else row["high"])
@@ -210,7 +220,7 @@ def extract_long_signal_specs(
         trigger = trigger_base + tick
         if current_close < trigger:
             row = ind.iloc[i]
-            score, _ = _angulation(ind, i)
+            score, _ = _angulation(ind, i, side="LONG")
             specs.append(
                 SignalSpec.new(
                     symbol=symbol,
