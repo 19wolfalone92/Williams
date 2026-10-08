@@ -716,6 +716,17 @@ class CampaignExecutionService:
                         })
                         continue
 
+                    if campaign.state == CampaignState.RECONCILE_REQUIRED and campaign.position_qty <= 0:
+                        # The exchange order is authoritative and has executed,
+                        # but a prior protection/setup failure occurred before
+                        # the local position fill was committed. Re-enter the
+                        # explicit entry recovery path; never submit a new BUY.
+                        campaign.transition(
+                            CampaignState.ENTRY_PENDING,
+                            reason="recover authoritative filled entry before protection",
+                        )
+                        self.db.save_campaign(campaign)
+
                     if campaign.state == CampaignState.ENTRY_PENDING:
                         self.engine.mark_triggered(
                             campaign,
@@ -750,11 +761,44 @@ class CampaignExecutionService:
                             f"{symbol}: campaign has no initial structural stop"
                         )
 
-                    protection = self.create_hard_stop(
-                        campaign,
-                        quantity=executed,
-                        stop_price=stop,
-                    )
+                    # Recovery is idempotent: if the exchange accepted a
+                    # protective stop but the response/persistence was lost,
+                    # adopt the unique existing managed stop instead of placing
+                    # a duplicate. Multiple candidates are ambiguous and fail closed.
+                    managed_stops = [
+                        row for row in self.client.open_orders(symbol)
+                        if str(row.get("side", "")).upper() == "SELL"
+                        and str(row.get("clientOrderId", "")).startswith(self.STOP_PREFIX)
+                        and str(row.get("type", "")).upper() in {"STOP_LOSS", "STOP_LOSS_LIMIT"}
+                    ]
+                    if len(managed_stops) > 1:
+                        raise CampaignExecutionError(
+                            f"{symbol}: multiple managed protective stops during entry recovery"
+                        )
+                    if managed_stops:
+                        existing_stop = managed_stops[0]
+                        existing_qty = float(existing_stop.get("origQty", 0) or 0)
+                        existing_price = float(existing_stop.get("stopPrice", 0) or 0)
+                        if (
+                            abs(existing_qty - executed) > max(1e-9, executed * 1e-6)
+                            or abs(existing_price - stop) > max(1e-9, stop * 1e-6)
+                            or not existing_stop.get("orderId")
+                        ):
+                            raise CampaignExecutionError(
+                                f"{symbol}: existing managed stop does not match recovered fill/protection"
+                            )
+                        protection = {
+                            "order_id": existing_stop.get("orderId"),
+                            "client_order_id": existing_stop.get("clientOrderId"),
+                            "stop_price": existing_price,
+                            "quantity": existing_qty,
+                        }
+                    else:
+                        protection = self.create_hard_stop(
+                            campaign,
+                            quantity=executed,
+                            stop_price=stop,
+                        )
                     campaign.tags["protective_order_id"] = protection.get(
                         "order_id", ""
                     )
