@@ -130,3 +130,46 @@ class DiagnosticManager:
         if extra:
             payload["runtime_snapshot"] = self.redact(extra)
         return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
+
+    def persist_report(
+        self,
+        incident: Incident,
+        *,
+        directory: str | None = None,
+        extra: dict[str, Any] | None = None,
+    ) -> str:
+        """Persist a redacted diagnostic report and return its absolute path."""
+        directory = directory or os.getenv(
+            "WILLIAMS_ERROR_REPORT_DIR",
+            "diagnostics",
+        )
+        os.makedirs(directory, exist_ok=True)
+        stamp = int(time.time() * 1000)
+        path = os.path.abspath(
+            os.path.join(
+                directory,
+                f"Williams_Error_Report_{stamp}_{incident.incident_id[:10]}.json",
+            )
+        )
+        payload = self.report_json(incident, extra=extra)
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(payload)
+            handle.write("\n")
+        return path
+
+    def create_williams_error_report(
+        self,
+        *,
+        component: str,
+        error: BaseException,
+        severity: str = "CRITICAL",
+        metadata: dict[str, Any] | None = None,
+    ) -> tuple[Incident, str]:
+        """Classify and durably persist a Williams_Error_Report."""
+        incident = self.classify(component, error)
+        incident.severity = str(severity).upper()
+        if metadata:
+            incident.metadata.update(self.redact(metadata))
+        self.record(incident)
+        path = self.persist_report(incident, extra=metadata)
+        return incident, path
