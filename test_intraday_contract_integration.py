@@ -85,7 +85,7 @@ def test_core_wm1_does_not_require_bullish_alligator_or_positive_ao(monkeypatch)
     ind["bearish_alligator"] = True
     ind["alligator_awake"] = True
     monkeypatch.setattr("williams_intraday_core.calculate_indicators", lambda *_args, **_kwargs: ind)
-    decision = WilliamsIntradayCore(IntradayPolicy.from_env({})).evaluate("BTCUSDT", base, tick_size=0.1)
+    decision = WilliamsIntradayCore(IntradayPolicy.from_env({})).evaluate("BTCUSDT", base, h1=base, h4=base, d1=base, tick_size=0.1)
     assert decision.wm1 is True
     assert any(s.signal_type == SignalType.REVERSAL for s in decision.signal_specs)
     assert all(s.execution_timeframe == "5m" for s in decision.signal_specs)
