@@ -1169,23 +1169,45 @@ class CampaignExecutionService:
             risk_quote=requested,
             capital_reserved_quote=qty * trigger,
         )
-        order = self._submit(
-            intent,
-            lambda: self.client.order_safe(
-                signal.symbol,
-                "BUY",
-                "STOP_LOSS",
-                quantity=self.client.decimal_format(qty),
-                stop_price=self.client.decimal_format(trigger),
-                new_client_order_id=cid,
-            ),
-            lambda _snapshot: (
-                (_ for _ in ()).throw(CampaignExecutionError(
+        def check_add_on(snapshot):
+            if pending_signal.is_expired():
+                raise CampaignExecutionError(
                     f"{signal.symbol}: add-on signal expired before order submission"
-                )) if pending_signal.is_expired() else
-                self._validate_add_on_submission(signal.symbol, qty, trigger)
-            ),
-        )
+                )
+            self._validate_add_on_submission(signal.symbol, qty, trigger)
+
+        try:
+            order = self._submit(
+                intent,
+                lambda: self.client.order_safe(
+                    signal.symbol,
+                    "BUY",
+                    "STOP_LOSS",
+                    quantity=self.client.decimal_format(qty),
+                    stop_price=self.client.decimal_format(trigger),
+                    new_client_order_id=cid,
+                ),
+                check_add_on,
+            )
+        except Exception as exc:
+            if "ExecutionBarrier blocked" in str(exc):
+                self.db.set_campaign_signal_state(
+                    signal.signal_id,
+                    SignalState.EXPIRED.value if pending_signal.is_expired() else SignalState.INVALIDATED.value,
+                )
+                campaign.pending_risk_quote = 0.0
+                campaign.capital_reserved_quote = 0.0
+                if campaign.state == CampaignState.ADD_ON_PENDING:
+                    campaign.transition(
+                        CampaignState.TREND_ACTIVE,
+                        reason="add-on admission rejected before exchange submission",
+                    )
+                self.db.state_delete(f"entry_client_order_id:{signal.symbol}")
+                self.db.save_campaign(campaign)
+            else:
+                self.engine.mark_reconcile_required(campaign, str(exc))
+                self.db.save_campaign(campaign)
+            raise
         self.db.save_campaign_order(
             PendingOrderRecord(
                 order_id=str(order.get("orderId", "") or ""),
