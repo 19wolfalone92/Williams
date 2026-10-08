@@ -1,0 +1,269 @@
+name: Williams Campaign Surgery
+on:
+  push:
+    branches:
+      - feat/campaign-engine-hardening
+permissions:
+  contents: write
+jobs:
+  repair:
+    if: ${{ !contains(github.event.head_commit.message, '[surgery]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply guarded source surgery
+        shell: python
+        run: |
+          from pathlib import Path
+          import ast
+          import re
+
+          path = Path("campaign_execution.py")
+          src = path.read_text(encoding="utf-8")
+          original = src
+
+          def count_one(haystack, needle, label):
+              n = haystack.count(needle)
+              if n != 1:
+                  raise SystemExit(f"{label}: expected one match, found {n}")
+
+          # Collapse the capacity area to one canonical implementation.
+          start = src.index("    def _check_algo_capacity(")
+          end = src.index("    def _submit(", start)
+          new_capacity = '''    def _validate_percent_price(self, symbol: str, side: str, price: float) -> None:
+              """Check Binance PERCENT_PRICE(_BY_SIDE) when avgPrice is available."""
+              avg_price_fn = getattr(self.client, "avg_price", None)
+              if avg_price_fn is None:
+                  return
+              try:
+                  ref = float(avg_price_fn(symbol).get("price", 0) or 0)
+              except Exception:
+                  return
+              if ref <= 0:
+                  return
+
+              filters = self._rules(symbol)
+              by_side = filters.get("PERCENT_PRICE_BY_SIDE") or {}
+              generic = filters.get("PERCENT_PRICE") or {}
+              side = str(side).upper()
+              if by_side:
+                  if side == "BUY":
+                      lower = ref * float(by_side.get("bidMultiplierDown", 0) or 0)
+                      upper = ref * float(by_side.get("bidMultiplierUp", 0) or 0)
+                  else:
+                      lower = ref * float(by_side.get("askMultiplierDown", 0) or 0)
+                      upper = ref * float(by_side.get("askMultiplierUp", 0) or 0)
+              else:
+                  lower = ref * float(generic.get("multiplierDown", 0) or 0)
+                  upper = ref * float(generic.get("multiplierUp", 0) or 0)
+              if lower > 0 and price < lower:
+                  raise CampaignExecutionError(
+                      f"{symbol}: price {price:.12g} below Binance percent-price lower bound {lower:.12g}"
+                  )
+              if upper > 0 and price > upper:
+                  raise CampaignExecutionError(
+                      f"{symbol}: price {price:.12g} above Binance percent-price upper bound {upper:.12g}"
+                  )
+
+          def _check_algo_capacity(self, symbol: str, additional: int = 1) -> None:
+              filters = self._rules(symbol)
+              open_orders = self.client.open_orders(symbol)
+              max_orders = int((filters.get("MAX_NUM_ORDERS") or {}).get("maxNumOrders", 10**9))
+              max_algo = int((filters.get("MAX_NUM_ALGO_ORDERS") or {}).get("maxNumAlgoOrders", 10**9))
+              if len(open_orders) + additional > max_orders:
+                  raise CampaignExecutionError(f"{symbol}: MAX_NUM_ORDERS would be exceeded")
+              algo_open = sum(
+                  1
+                  for row in open_orders
+                  if str(row.get("type", "")).upper()
+                  in {"STOP_LOSS", "STOP_LOSS_LIMIT", "TAKE_PROFIT", "TAKE_PROFIT_LIMIT"}
+              )
+              if algo_open + additional > max_algo:
+                  raise CampaignExecutionError(f"{symbol}: MAX_NUM_ALGO_ORDERS would be exceeded")
+
+              exchange_max_orders = int(
+                  (filters.get("EXCHANGE_MAX_NUM_ORDERS") or {}).get("maxNumOrders", 10**9)
+              )
+              exchange_max_algo = int(
+                  (filters.get("EXCHANGE_MAX_NUM_ALGO_ORDERS") or {}).get("maxNumAlgoOrders", 10**9)
+              )
+              if exchange_max_orders < 10**9 or exchange_max_algo < 10**9:
+                  all_open = self.client.open_orders()
+                  if exchange_max_orders < 10**9 and len(all_open) + additional > exchange_max_orders:
+                      raise CampaignExecutionError("EXCHANGE_MAX_NUM_ORDERS would be exceeded")
+                  if exchange_max_algo < 10**9:
+                      algo_all = sum(
+                          1
+                          for row in all_open
+                          if str(row.get("type", "")).upper()
+                          in {"STOP_LOSS", "STOP_LOSS_LIMIT", "TAKE_PROFIT", "TAKE_PROFIT_LIMIT"}
+                      )
+                      if algo_all + additional > exchange_max_algo:
+                          raise CampaignExecutionError("EXCHANGE_MAX_NUM_ALGO_ORDERS would be exceeded")
+
+          '''
+          src = src[:start] + new_capacity + src[end:]
+
+          def replace_once(old, new, label):
+              count_one(src, old, label)
+              return new
+
+          src = src.replace(
+              '''        campaign.tags["signal_role"] = signal.role.value
+              campaign.tags["initial_stop_price"] = stop
+              ''',
+              '''        campaign.tags["signal_role"] = signal.role.value
+              campaign.tags["signal_bar_time_ms"] = int(signal.signal_bar_time_ms)
+              campaign.tags["last_signal_time_ms"] = int(signal.signal_bar_time_ms)
+              campaign.tags["initial_stop_price"] = stop
+              ''',
+              1,
+          )
+
+          src = src.replace(
+              '''            purpose="CAMPAIGN_ADD_ON",
+              campaign_id=campaign.campaign_id,
+              ''',
+              '''            purpose="CAMPAIGN_ADD_ON",
+              permission_interval=signal.timeframe,
+              campaign_id=campaign.campaign_id,
+              ''',
+              1,
+          )
+
+          old_partial = re.compile(
+              r'''(?ms)^                    cancel = getattr(self.client, "cancel_order", None)
+                    if cancel is None:
+                        raise CampaignExecutionError(
+                            f"{symbol}: partial conditional BUY cannot be safely cancelled"
+                        )
+                    try:
+                        cancel(symbol, order_id=order.get("orderId"))
+                    except Exception as exc:
+                        self.engine.mark_reconcile_required(
+                            campaign,
+                            f"partial conditional BUY cancel ambiguous: {exc}",
+                        )
+                        raise
+'''
+          )
+          new_partial = '''                    try:
+                        self._execute_cancel(
+                            campaign,
+                            int(order.get("orderId")),
+                            "CAMPAIGN_PARTIAL_ENTRY_CANCEL",
+                        )
+                    except Exception as exc:
+                        self.engine.mark_reconcile_required(
+                            campaign,
+                            f"partial conditional BUY cancel ambiguous: {exc}",
+                        )
+                        raise
+'''
+          src, partial_n = old_partial.subn(new_partial, src, count=1)
+          if partial_n != 1:
+              raise SystemExit(f"partial_cancel_gate: expected one match, found {partial_n}")
+
+          old_stop = '''        self._check_algo_capacity(campaign.symbol, 1)
+              cid = f"{self.STOP_PREFIX}{uuid.uuid4().hex[:20]}"
+          '''
+          new_stop = '''        market = self._current_price(campaign.symbol)
+              if stop >= market:
+                  raise CampaignExecutionError(
+                      f"{campaign.symbol}: protective stop {stop:.12g} is not below current market {market:.12g}"
+                  )
+              self._validate_percent_price(campaign.symbol, "SELL", stop)
+              self._check_algo_capacity(campaign.symbol, 1)
+              cid = f"{self.STOP_PREFIX}{uuid.uuid4().hex[:20]}"
+          '''
+          if src.count(old_stop) != 1:
+              raise SystemExit(f"hard_stop_guard: expected one match, found {src.count(old_stop)}")
+          src = src.replace(old_stop, new_stop, 1)
+
+          old_cancel = '''        return self._submit(
+            intent,
+            lambda: self.client.cancel_order(
+                campaign.symbol,
+                order_id=order_id,
+            ),
+            lambda _snapshot: None,
+        )
+'''
+          new_cancel = '''        result = self._submit(
+            intent,
+            lambda: self.client.cancel_order(
+                campaign.symbol,
+                order_id=order_id,
+            ),
+            lambda _snapshot: None,
+        )
+        verified = self.client.get_order(
+            campaign.symbol,
+            order_id=order_id,
+        )
+        terminal = str(verified.get("status", "")).upper()
+        if terminal not in {"CANCELED", "EXPIRED", "REJECTED"}:
+            raise CampaignExecutionError(
+                f"{campaign.symbol}: cancel verification returned non-terminal status "
+                f"{terminal or "UNKNOWN"}"
+            )
+        return result
+'''
+          if src.count(old_cancel) != 1:
+              raise SystemExit(f"cancel_verification: expected one match, found {src.count(old_cancel)}")
+          src = src.replace(old_cancel, new_cancel, 1)
+
+          old_equity = '''    def _current_equity_quote(self) -> float:
+        account = self.client.account()
+        equity = 0.0
+        for row in account.get("balances", []):
+            if str(row.get("asset", "")).upper() == "USDT":
+                equity += float(row.get("free", 0) or 0) + float(row.get("locked", 0) or 0)
+        return max(equity, 0.0)
+'''
+          new_equity = '''    def _current_equity_quote(self) -> float:
+        account = self.client.account()
+        equity = 0.0
+        for row in account.get("balances", []):
+            if str(row.get("asset", "")).upper() == "USDT":
+                equity += (
+                    float(row.get("free", 0) or 0)
+                    + float(row.get("locked", 0) or 0)
+                )
+
+        for row in self.db.open_campaigns():
+            symbol = str(row.get("symbol", "")).upper()
+            qty = float(row.get("position_qty", 0) or 0)
+            if qty <= 0 or not symbol:
+                continue
+            try:
+                mark = self._current_price(symbol)
+            except Exception:
+                continue
+            if mark > 0:
+                equity += qty * mark
+        return max(equity, 0.0)
+'''
+          if src.count(old_equity) != 1:
+              raise SystemExit(f"campaign_equity: expected one match, found {src.count(old_equity)}")
+          src = src.replace(old_equity, new_equity, 1)
+
+          ast.parse(src)
+          if src == original:
+              raise SystemExit("surgery produced no source changes")
+          path.write_text(src, encoding="utf-8")
+
+      - name: Validate repaired Python
+        run: |
+          python -m compileall -q .
+          python -m pytest -q test_campaign_engine.py test_campaign_execution.py test_execution_architecture.py
+
+      - name: Commit source surgery
+        run: |
+          git config user.name "williams-surgery"
+          git config user.email "williams-surgery@users.noreply.github.com"
+          git add campaign_execution.py
+          git commit -m "Harden campaign execution invariants [surgery]"
+          git push origin HEAD:feat/campaign-engine-hardening
