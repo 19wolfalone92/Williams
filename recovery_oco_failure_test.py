@@ -41,13 +41,6 @@ class FakeClient:
     def ticker_price(self, symbol):
         return {"symbol": symbol, "price": "10000.0"}
 
-    def book_ticker(self, symbol):
-        return {
-            "symbol": symbol,
-            "bidPrice": "9999.5",
-            "askPrice": "10000.5",
-        }
-
     def exchange_info(self,symbol):
         return {
             "symbols": [{
