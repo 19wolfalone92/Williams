@@ -68,11 +68,11 @@ def test_campaign_keeps_h1_decision_and_m15_execution(tmp_path):
 
 def test_core_wm1_does_not_require_bullish_alligator_or_positive_ao(monkeypatch):
     base = _h1_frame([
-        (100, 106, 99, 105),
-        (100, 104, 98, 103),
-        (100, 103, 97, 101),
-        (100, 102, 96, 99),
-        (94.5, 96, 94, 95),
+        (101, 103, 99, 100),
+        (97, 99, 95, 96),
+        (96, 98, 94, 95),
+        (95, 97, 93, 94),
+        (93, 95, 90, 92),
     ])
     ind = base.copy()
     ind["jaw_shifted"] = 100.0
