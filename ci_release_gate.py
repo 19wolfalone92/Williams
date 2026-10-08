@@ -124,7 +124,7 @@ def main() -> None:
     client = read("binance_futures_client.py")
     for needle in (
         "/fapi/v1/order",
-        "/fapi/v1/account",
+        "/fapi/v2/account",
         "positionAmt",
         "reduceOnly",
         "STOP_MARKET",
