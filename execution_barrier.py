@@ -6,6 +6,7 @@ on ambiguous exchange outcomes until authoritative reconciliation completes.
 """
 from __future__ import annotations
 
+import json
 import re
 import time
 import uuid
