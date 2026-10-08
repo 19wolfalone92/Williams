@@ -67,19 +67,20 @@ def test_campaign_keeps_h1_decision_and_m15_execution(tmp_path):
 
 
 def test_core_wm1_does_not_require_bullish_alligator_or_positive_ao(monkeypatch):
-    base = _h1_frame([
-        (101, 103, 99, 100),
-        (97, 99, 95, 96),
-        (96, 98, 94, 95),
-        (95, 97, 93, 94),
-        (93, 95, 90, 92),
+    base = _h1_frame([(100, 101, 99, 100)] * 59 + [
+        (101, 103, 99, 99),
+        (98, 100, 95, 97),
+        (97, 99, 94, 96),
+        (96, 98, 93, 95),
+        (95, 97, 92, 94),
+        (91, 94, 90, 93),
     ])
     ind = base.copy()
     ind["jaw_shifted"] = 100.0
     ind["teeth_shifted"] = 100.0
     ind["lips_shifted"] = 100.0
-    ind["ao"] = [-5.0, -4.0, -3.0, -2.0, -3.0]
-    ind["ao_green_streak"] = [0, 0, 0, 0, 0]
+    ind["ao"] = [-5.0] * 59 + [-5.0, -4.0, -3.0, -2.0, -3.0, -4.0]
+    ind["ao_green_streak"] = [0] * 65
     ind["bullish_alligator"] = False
     ind["bearish_alligator"] = True
     ind["alligator_awake"] = True
