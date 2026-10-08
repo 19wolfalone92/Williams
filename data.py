@@ -9,6 +9,13 @@ BASE_URL = (
     else 'https://api.binance.com'
 )
 
+
+def market_data_base_url():
+    """Return the market-data endpoint without changing execution safety defaults."""
+    if os.getenv("WILLIAMS_RESEARCH_MAINNET", "false").lower() == "true":
+        return "https://api.binance.com"
+    return BASE_URL
+
 def _normalize_interval(value):
     text = str(value or "").strip()
     return "1M" if text == "1M" else text.lower()
@@ -42,7 +49,7 @@ def fetch_klines(client_or_symbol, symbol_or_interval, interval=None, limit=200,
     while True:
         p=dict(params)
         if cursor is not None:p['startTime']=cursor
-        r=requests.get(BASE_URL+'/api/v3/klines',params=p,timeout=20);r.raise_for_status();batch=r.json()
+        r=requests.get(market_data_base_url()+'/api/v3/klines',params=p,timeout=20);r.raise_for_status();batch=r.json()
         if not batch:break
         rows.extend(batch)
         if len(batch)<1000:break
