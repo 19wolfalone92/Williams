@@ -60,7 +60,7 @@ class CampaignEngine:
         policy = IntradayPolicy.from_env()
         if self.enforce_intraday_contract:
             if signal.timeframe.lower() != policy.timeframes.decision_tf:
-                raise ValueError("intraday campaign strategy timeframe must be H1")
+                raise ValueError("intraday campaign strategy timeframe must be the configured decision timeframe")
             if (signal.execution_timeframe or policy.timeframes.execution_tf).lower() != policy.timeframes.execution_tf:
                 raise ValueError("intraday campaign execution timeframe must be M15")
         campaign = TradingCampaign(
