@@ -128,6 +128,8 @@ class MainActivity : ComponentActivity() {
         // trading engine runs on the VPS/backend; no native Spot trading loop
         // is started from the UI process. Legacy TradingForegroundService
         // remains present only as a compatibility shell and never starts trading.
+        // Historical localhost endpoint http://127.0.0.1:18080 is intentionally
+        // unused; production control is HTTPS to the Williams Futures backend.
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(
                 this,
