@@ -563,11 +563,52 @@ class CampaignEngine:
         row = self.db.get_campaign(campaign_id)
         if row is None:
             return {"found": False, "campaign_id": campaign_id}
-        signals = self.db.active_campaign_signals(campaign_id)
+
+        state = str(row.get("state", "UNKNOWN")).upper()
+        tags = {}
+        try:
+            tags = json.loads(row.get("tags_json") or "{}")
+        except Exception:
+            tags = {}
+        qty = float(row.get("position_qty") or 0.0)
+        stop = float(row.get("current_stop_price") or 0.0)
+        first_blocker = ""
+        next_action = str(row.get("next_action") or "WAIT")
+
+        if state == CampaignState.RECONCILE_REQUIRED.value:
+            first_blocker = "RECONCILE_REQUIRED: " + str(tags.get("reconcile_reason") or "exchange state is not reconciled")
+            next_action = "RECONCILE"
+        elif state == CampaignState.ENTRY_PENDING.value:
+            if not tags.get("pending_order_id") and not tags.get("pending_order_client_id"):
+                first_blocker = "ENTRY_PENDING_WITHOUT_EXCHANGE_ID"
+                next_action = "RECONCILE"
+            else:
+                first_blocker = "WAIT_FOR_ENTRY_TRIGGER"
+                next_action = "WAIT_FOR_TRIGGER"
+        elif state == CampaignState.ADD_ON_PENDING.value:
+            if not tags.get("pending_order_id") and not tags.get("pending_order_client_id"):
+                first_blocker = "ADD_ON_PENDING_WITHOUT_EXCHANGE_ID"
+                next_action = "RECONCILE"
+            else:
+                first_blocker = "WAIT_FOR_ADD_ON_TRIGGER"
+                next_action = "WAIT_FOR_TRIGGER"
+        elif qty > 0.0 and stop <= 0.0:
+            first_blocker = "POSITION_UNPROTECTED"
+            next_action = "ARM_PROTECTION"
+        elif state == CampaignState.EXIT_PENDING.value:
+            first_blocker = "WAIT_FOR_EXIT_FILL"
+            next_action = "WAIT_FOR_EXIT"
+        elif state == CampaignState.EXHAUSTION_WATCH.value:
+            first_blocker = "EXHAUSTION_WATCH_ACTIVE"
+            next_action = "WAIT_FOR_EXIT_SIGNAL"
+
         return {
             "found": True,
             "campaign": row,
-            "active_signals": signals,
+            "active_signals": self.db.active_campaign_signals(campaign_id),
             "portfolio_reserved_risk_quote": self.portfolio_reserved_risk_quote(),
             "portfolio_reserved_capital_quote": self.portfolio_reserved_capital_quote(),
+            "first_blocker": first_blocker,
+            "next_action": next_action,
+            "reconcile_required": state == CampaignState.RECONCILE_REQUIRED.value,
         }
