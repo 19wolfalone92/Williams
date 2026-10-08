@@ -182,3 +182,17 @@ def test_pending_signal_rejects_illegal_backward_transition():
         pass
     else:
         raise AssertionError("illegal PendingSignal rollback was accepted")
+
+
+def test_portfolio_risk_capacity_is_enforced_before_new_campaign():
+    runtime = object.__new__(FuturesWilliamsRuntime)
+    runtime.max_total_risk_pct = 0.01
+    runtime.engine = type("E", (), {
+        "portfolio_reserved_risk_quote": lambda self: 75.0,
+    })()
+    assert math.isclose(
+        runtime._portfolio_available_risk_pct(10000.0),
+        0.0025,
+        rel_tol=0.0,
+        abs_tol=1e-12,
+    )
