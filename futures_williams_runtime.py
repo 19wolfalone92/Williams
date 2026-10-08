@@ -697,6 +697,17 @@ class FuturesWilliamsRuntime:
     def _client_id(self, prefix):
         return f"WILLF_{prefix}_{uuid.uuid4().hex[:20]}"
 
+    @staticmethod
+    def _set_pending_signal_state(campaign, state, *, filled_quantity=None):
+        pending = campaign.tags.get("pending_signal")
+        if not isinstance(pending, dict):
+            return
+        pending["state"] = state.value if isinstance(state, SignalState) else str(state)
+        if filled_quantity is not None:
+            pending["filled_quantity"] = float(filled_quantity)
+        pending["updated_at_ms"] = int(time.time() * 1000)
+        campaign.tags["pending_signal"] = pending
+
     def _initial_risk_pct(self):
         campaign_cap = float(os.getenv("MAX_RISK_PER_TRADE_PCT", "0.005"))
         return max(0.0, campaign_cap * 1.0 / 15.0)
@@ -1295,6 +1306,9 @@ class FuturesWilliamsRuntime:
                     purpose = str(purpose_row["purpose"] if purpose_row else "ENTRY").upper()
                     signal_id = str(purpose_row["signal_id"] if purpose_row else campaign.current_signal_id)
 
+                    self._set_pending_signal_state(
+                        campaign, SignalState.FILLED, filled_quantity=executed
+                    )
                     if purpose == "ADD_ON" or campaign.state == CampaignState.ADD_ON_PENDING:
                         expected_delta = float(executed)
                         old_qty = float(campaign.position_qty)
@@ -1382,6 +1396,7 @@ class FuturesWilliamsRuntime:
                     continue
 
                 if status in {"CANCELED", "EXPIRED", "REJECTED"}:
+                    self._set_pending_signal_state(campaign, SignalState.CANCELLED)
                     self.db.set_campaign_signal_state(campaign.current_signal_id, SignalState.CANCELLED.value)
                     campaign.pending_risk_quote = 0.0
                     campaign.capital_reserved_quote = 0.0
@@ -1396,6 +1411,7 @@ class FuturesWilliamsRuntime:
                     results.append({"symbol": symbol, "campaign_id": campaign.campaign_id, "state": campaign.state.value, "order_status": status})
                     continue
 
+                self._set_pending_signal_state(campaign, SignalState.RECONCILE_REQUIRED)
                 self._set_state(symbol, "RECONCILE_REQUIRED")
                 results.append({"symbol": symbol, "state": "RECONCILE_REQUIRED", "order_status": status})
             except Exception as exc:
