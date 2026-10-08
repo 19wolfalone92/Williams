@@ -754,10 +754,14 @@ class FuturesWilliamsRuntime:
         campaign = self.engine.create_campaign(signal, initial_risk_pct=self._initial_risk_pct())
         campaign.initial_stop_price = stop
         campaign.current_stop_price = stop
+        campaign.tags["signal_bar_time_ms"] = int(signal.signal_bar_time_ms)
+        campaign.tags["last_signal_time_ms"] = int(signal.signal_bar_time_ms)
         campaign.pending_risk_quote = risk_quote
         campaign.capital_reserved_quote = notional / max(1, int(os.getenv("FUTURES_LEVERAGE", "2")))
         campaign.tags["pending_order_quantity"] = qty
         campaign.tags["pending_order_trigger"] = trigger
+        campaign.tags["last_signal_time_ms"] = int(signal.signal_bar_time_ms)
+        campaign.tags["signal_bar_time_ms"] = int(signal.signal_bar_time_ms)
         campaign.tags["pending_order_stop"] = stop
         campaign.tags["pending_order_client_id"] = self._client_id("ENTRY")
         self.db.save_campaign(campaign)
@@ -1472,15 +1476,18 @@ class FuturesWilliamsRuntime:
         opposite = "SELL" if campaign.side == "BUY" else "BUY"
         current = float(self.client.ticker_price(campaign.symbol).get("price", 0) or 0)
         for candidate in candidates:
-            signal = candidate.signal
-            if signal.symbol != campaign.symbol or signal.side != opposite:
-                continue
-            if signal.signal_bar_time_ms <= int(campaign.tags.get("last_signal_time_ms", 0) or 0):
-                continue
-            if opposite == "BUY" and current >= signal.trigger_price:
-                return True
-            if opposite == "SELL" and current <= signal.trigger_price:
-                return True
+            signals = list(getattr(candidate, "all_signals", ()) or ())
+            if not signals:
+                signals = [candidate.signal]
+            for signal in signals:
+                if signal.symbol != campaign.symbol or signal.side != opposite:
+                    continue
+                if signal.signal_bar_time_ms <= int(campaign.tags.get("last_signal_time_ms", 0) or 0):
+                    continue
+                if opposite == "BUY" and current >= signal.trigger_price:
+                    return True
+                if opposite == "SELL" and current <= signal.trigger_price:
+                    return True
         return False
 
     def process(self):
@@ -1513,14 +1520,17 @@ class FuturesWilliamsRuntime:
             eligible = []
             allow_reversal = os.getenv("CAMPAIGN_ALLOW_REVERSAL_ADD", "false").lower() == "true"
             for candidate in symbol_candidates:
-                signal = candidate.signal
-                if signal.side != campaign.side:
-                    continue
-                if signal.signal_bar_time_ms <= latest:
-                    continue
-                if signal.signal_type == SignalType.REVERSAL and not allow_reversal:
-                    continue
-                eligible.append(signal)
+                signals = list(getattr(candidate, "all_signals", ()) or ())
+                if not signals:
+                    signals = [candidate.signal]
+                for signal in signals:
+                    if signal.side != campaign.side:
+                        continue
+                    if signal.signal_bar_time_ms <= latest:
+                        continue
+                    if signal.signal_type == SignalType.REVERSAL and not allow_reversal:
+                        continue
+                    eligible.append(signal)
 
             if eligible and symbol not in pending_symbols:
                 signal = min(eligible, key=lambda s: (s.signal_bar_time_ms, s.created_at_ms))
