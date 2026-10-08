@@ -1329,6 +1329,54 @@ class FuturesWilliamsRuntime:
                 order = self.client.get_order(symbol, orig_client_order_id=cid)
                 status = str(order.get("status", "")).upper()
                 executed = float(order.get("executedQty", order.get("cumQty", 0)) or 0)
+
+                pending = campaign.tags.get("pending_signal") or {}
+                signal_payload = pending.get("signal") if isinstance(pending, dict) else {}
+                expires_at_ms = int(
+                    (signal_payload or {}).get("expires_at_ms", 0) or 0
+                )
+                if (
+                    status in {"NEW", "PENDING_NEW"}
+                    and executed <= 0
+                    and expires_at_ms > 0
+                    and int(time.time() * 1000) >= expires_at_ms
+                ):
+                    order_id = order.get("orderId")
+                    if order_id is None:
+                        self._set_pending_signal_state(campaign, SignalState.RECONCILE_REQUIRED)
+                        self._set_state(symbol, "RECONCILE_REQUIRED")
+                        raise RuntimeError("expired pending order has no exchange orderId")
+                    try:
+                        self._cancel(symbol, order_id, "CAMPAIGN_SIGNAL_EXPIRED")
+                    except Exception as exc:
+                        self._set_pending_signal_state(campaign, SignalState.RECONCILE_REQUIRED)
+                        self._set_state(symbol, "RECONCILE_REQUIRED")
+                        raise RuntimeError(
+                            f"{symbol}: expired conditional order cancellation ambiguous: {exc}"
+                        ) from exc
+                    self._set_pending_signal_state(campaign, SignalState.EXPIRED)
+                    self.db.set_campaign_signal_state(
+                        campaign.current_signal_id, SignalState.EXPIRED.value
+                    )
+                    campaign.pending_risk_quote = 0.0
+                    campaign.capital_reserved_quote = 0.0
+                    campaign.tags.pop("pending_order_id", None)
+                    self.db.state_delete(f"entry_client_order_id:{symbol}")
+                    campaign.state = (
+                        CampaignState.TREND_ACTIVE
+                        if campaign.position_qty > 0
+                        else CampaignState.CLOSED
+                    )
+                    self._set_state(symbol, "OPEN" if campaign.position_qty > 0 else "FLAT")
+                    self.db.save_campaign(campaign)
+                    results.append({
+                        "symbol": symbol,
+                        "campaign_id": campaign.campaign_id,
+                        "state": campaign.state.value,
+                        "reason": "SIGNAL_EXPIRED",
+                        "order_status": "CANCELLED",
+                    })
+                    continue
                 avg = float(order.get("avgPrice", 0) or 0)
                 if status in {"NEW", "PENDING_NEW"} and executed <= 0:
                     results.append({"symbol": symbol, "state": "ENTRY_PENDING", "order_status": status})
