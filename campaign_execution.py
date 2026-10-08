@@ -1195,7 +1195,15 @@ class CampaignExecutionService:
                         order_id=int(protective_id),
                     )
                     status = str(current.get("status", "")).upper()
-                    if status not in {"CANCELED", "EXPIRED", "FILLED", "REJECTED"}:
+                    if status == "FILLED":
+                        self.engine.mark_reconcile_required(
+                            campaign,
+                            "protective stop filled while exit was being prepared",
+                        )
+                        raise CampaignExecutionError(
+                            f"{symbol}: protective stop filled; campaign must reconcile before exit"
+                        )
+                    if status not in {"CANCELED", "EXPIRED", "REJECTED"}:
                         raise
                 except Exception:
                     self.engine.mark_reconcile_required(
@@ -1233,7 +1241,20 @@ class CampaignExecutionService:
             ),
             0.0,
         )
-        qty = self._normalize_qty(symbol, free_qty)
+        expected_qty = max(0.0, float(campaign.position_qty))
+        tolerance = max(
+            float(os.getenv("MIN_RECOVERY_QTY", "0.000001")),
+            expected_qty * float(os.getenv("BALANCE_TOLERANCE_PCT", "0.005")),
+        )
+        if free_qty + tolerance < expected_qty:
+            self.engine.mark_reconcile_required(
+                campaign,
+                f"campaign exit inventory below expected: expected={expected_qty:.12g} actual={free_qty:.12g}",
+            )
+            raise CampaignExecutionError(
+                f"{symbol}: campaign inventory below expected before exit"
+            )
+        qty = self._normalize_qty(symbol, min(expected_qty, free_qty))
         if qty <= 0:
             raise CampaignExecutionError(
                 f"{symbol}: no free campaign inventory after protection cancel"
@@ -1383,7 +1404,7 @@ class CampaignExecutionService:
         new_result = str(result.get("newOrderResult", "")).upper()
         # Any non-success or transport ambiguity must be reconciled before
         # another mutation; cancelReplace is not atomic.
-        if cancel_result not in {"SUCCESS", "NOT_FOUND"} or new_result not in {"SUCCESS", ""}:
+        if cancel_result != "SUCCESS" or new_result != "SUCCESS":
             campaign.mark_reconcile_required(
                 f"cancelReplace ambiguous: cancel={cancel_result} new={new_result}"
             )
