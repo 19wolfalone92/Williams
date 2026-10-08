@@ -1027,6 +1027,52 @@ class CampaignExecutionService:
                 })
         return results
 
+    def supersede_pending_fractal(self, campaign, new_signal: SignalSpec) -> dict[str, Any]:
+        """Replace an untouched pending Fractal entry with a newer Fractal."""
+        if campaign is None or campaign.position_qty > 0:
+            raise CampaignExecutionError("only an untouched pending initial fractal may be superseded")
+        if campaign.state not in {CampaignState.ENTRY_PENDING, CampaignState.ENTRY_ARMING}:
+            raise CampaignExecutionError("campaign is not pending")
+        if str(campaign.current_signal_type).upper() != SignalType.FRACTAL.value:
+            raise CampaignExecutionError("only a pending Fractal may be superseded")
+        old_signal_id = campaign.current_signal_id
+        client_id = str(campaign.tags.get("pending_order_client_id", "") or "")
+        if not client_id:
+            raise CampaignExecutionError("pending Fractal has no client order identity")
+        order = self.client.get_order(campaign.symbol, orig_client_order_id=client_id)
+        status = str(order.get("status", "")).upper()
+        if status == "FILLED" or float(order.get("executedQty", 0) or 0) > 0:
+            raise CampaignExecutionError("pending Fractal already has execution; reconciliation owns the state")
+        if status in {"NEW", "PENDING_NEW", "PARTIALLY_FILLED"} and order.get("orderId") is not None:
+            self._execute_cancel(campaign, int(order["orderId"]), "CAMPAIGN_FRACTAL_SUPERSEDE")
+        self.db.set_campaign_signal_state(old_signal_id, SignalState.REPLACED.value)
+        self.db.save_campaign_signal(
+            new_signal,
+            campaign.campaign_id,
+            state=SignalState.ARMED.value,
+            supersedes_signal_id=old_signal_id,
+        )
+        campaign.current_signal_id = new_signal.signal_id
+        campaign.current_signal_type = new_signal.signal_type.value
+        campaign.tags["supersedes_signal_id"] = old_signal_id
+        campaign.tags["superseded_by_signal_id"] = new_signal.signal_id
+        campaign.tags["pending_order_client_id"] = ""
+        campaign.pending_risk_quote = 0.0
+        campaign.capital_reserved_quote = 0.0
+        campaign.next_action = "REARM_SUPERSEDING_FRACTAL"
+        self.engine.transition_signal_detected(campaign, new_signal)
+        self.db.save_campaign(campaign)
+        self.db.state_delete("entry_client_order_id:" + campaign.symbol)
+        self.db.state_set("position_state:" + campaign.symbol, "FLAT")
+        self.db.log_campaign_event(
+            campaign.campaign_id,
+            CampaignEventType.ENTRY_REPLACED.value,
+            signal_id=new_signal.signal_id,
+            reason="newer H1 Fractal superseded pending older Fractal",
+            payload={"supersedes_signal_id": old_signal_id},
+        )
+        return {"campaign_id": campaign.campaign_id, "old_signal_id": old_signal_id, "new_signal_id": new_signal.signal_id}
+    
     def cancel_pending_for_eod(self, reason: str = "EOD_PENDING_CANCELLED") -> list[dict[str, Any]]:
         """Cancel every managed conditional BUY when the entry window closes."""
         results = []
