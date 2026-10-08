@@ -33,10 +33,11 @@ def main() -> None:
         "williams/intraday_policy.py", "williams/risk_policy.py",
         "williams/execution_economics.py", "williams/spec.py",
         "williams/core.py", "williams/backtester.py", "williams/golden_scenarios.py",
-        "test_intraday_core_contract.py", "WILLIAMS_INTRADAY_STRATEGY_SPEC_1.0.md",
+        "test_intraday_core_contract.py",
     ):
         ast.parse(read(path), filename=path)
 
+    read("WILLIAMS_INTRADAY_STRATEGY_SPEC_1.0.md")
     env = read(".env.example")
     for needle in (
         "TESTNET=true", "ALLOW_LIVE=false", "WILLIAMS_MODE=INTRADAY_CORE",
