@@ -71,6 +71,36 @@ def calculate_indicators(df, cfg):
 
     # Accelerator/Decelerator: AO minus its 5-period SMA.
     x["ac"] = x["ao"] - x["ao"].rolling(cfg["ac_period"]).mean()
+    # RSI is a secondary Profitunity market-chaos diagnostic. It is not
+    # an autonomous order trigger; campaign policy may use it as context.
+    delta = x["close"].diff()
+    gain = delta.clip(lower=0.0)
+    loss = -delta.clip(upper=0.0)
+    avg_gain = gain.ewm(
+        alpha=1.0 / max(int(cfg["rsi_period"]), 1),
+        adjust=False,
+        min_periods=int(cfg["rsi_period"]),
+    ).mean()
+    avg_loss = loss.ewm(
+        alpha=1.0 / max(int(cfg["rsi_period"]), 1),
+        adjust=False,
+        min_periods=int(cfg["rsi_period"]),
+    ).mean()
+    rs = avg_gain / avg_loss.replace(0, np.nan)
+    x["rsi"] = 100.0 - (100.0 / (1.0 + rs))
+    x["rsi"] = x["rsi"].fillna(50.0)
+
+    # Binance klines expose number-of-trades. Profitunity's original MFI
+    # uses tick volume; where trade-count data exists it is a closer market
+    # microstructure proxy than base-asset volume, while preserving a clear
+    # fallback for older cached datasets.
+    trade_count = pd.to_numeric(
+        x.get("trades", pd.Series(np.nan, index=x.index)),
+        errors="coerce",
+    )
+    tick_volume = trade_count.where(trade_count > 0, x["volume"])
+    x["tick_volume_proxy"] = tick_volume
+
 
     # Fractals. The center must be strictly higher/lower than the two bars
     # on each side; equality therefore does not create a false fractal.
@@ -289,8 +319,11 @@ def calculate_indicators(df, cfg):
     # it is deliberately diagnostic only.
     volume = pd.to_numeric(x.get("volume", pd.Series(np.nan, index=x.index)), errors="coerce")
     x["volume"] = volume
-    x["mfi_proxy"] = (x["high"] - x["low"]) / volume.replace(0, np.nan)
-    x["volume_up"] = volume > volume.shift(1)
+    x["mfi_proxy"] = (
+        (x["high"] - x["low"]) /
+        x["tick_volume_proxy"].replace(0, np.nan)
+    )
+    x["volume_up"] = x["tick_volume_proxy"] > x["tick_volume_proxy"].shift(1)
     x["volume_down"] = volume < volume.shift(1)
     x["mfi_up"] = x["mfi_proxy"] > x["mfi_proxy"].shift(1)
     x["mfi_down"] = x["mfi_proxy"] < x["mfi_proxy"].shift(1)
@@ -311,6 +344,7 @@ def config_from_env(env=os.environ):
         "ao_fast": int(env.get("AO_FAST", "5")),
         "ao_slow": int(env.get("AO_SLOW", "34")),
         "ac_period": int(env.get("AC_PERIOD", "5")),
+        "rsi_period": int(env.get("RSI_PERIOD", "14")),
         "fractal_left": int(env.get("FRACTAL_LEFT", "2")),
         "fractal_right": int(env.get("FRACTAL_RIGHT", "2")),
         "super_ao_bars": int(env.get("SUPER_AO_BARS", "3")),
