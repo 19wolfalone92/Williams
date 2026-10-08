@@ -514,3 +514,32 @@ def test_expired_entry_cancel_timeout_fails_closed_and_keeps_order_for_reconcili
         assert db.state_get("entry_client_order_id:BTCUSDT") == result["client_order_id"]
         assert len(client.open_orders("BTCUSDT")) == 1
         assert svc.engine.load_campaign(result["campaign_id"]).state == CampaignState.RECONCILE_REQUIRED
+
+
+
+def test_entry_intent_persists_deadline_trigger_context_and_client_id():
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "campaign.sqlite3"))
+        client = MockExchange()
+        svc = service(db, client)
+        spec = signal(trigger=101.0)
+        result = svc.arm_initial_entry(
+            spec,
+            equity_quote=10_000,
+            candidate_risk_pct=0.004,
+        )
+        row = db.conn.execute(
+            "SELECT * FROM execution_intents WHERE client_order_id=?",
+            (result["client_order_id"],),
+        ).fetchone()
+        assert row is not None
+        assert row["signal_id"] == spec.signal_id
+        assert int(row["signal_expires_at_ms"]) == int(
+            svc.engine.load_campaign(result["campaign_id"]).tags["pending_signal_expires_at_ms"]
+        )
+        assert row["permission_interval"] == spec.timeframe
+        assert row["campaign_id"] == result["campaign_id"]
+        assert float(row["trigger_price"]) == result["trigger_price"]
+        assert float(row["invalidation_level"]) == result["structural_stop"]
+        assert row["quantity"]
+        assert row["required_context_versions_json"] == '{"5m": 1}'
