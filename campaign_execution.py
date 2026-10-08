@@ -12,6 +12,7 @@ from binance_client import BinanceAPIError
 from campaign_engine import CampaignEngine
 from campaign_model import CampaignState, PendingOrderRecord, SignalSpec, SignalState, SignalType
 from decision_trace import DecisionTrace
+from domain.contracts import RiskDecision, SignalDirection
 from execution_barrier import ExecutionBarrier, OrderIntent
 
 
@@ -197,9 +198,16 @@ class CampaignExecutionService:
         equity_quote: float,
         candidate_risk_pct: float,
         capital_fraction: float = 0.25,
+        risk_decision: RiskDecision | None = None,
     ) -> dict[str, Any]:
         if signal.side != "BUY":
             raise CampaignExecutionError("Current Spot campaign executor only arms LONG entries")
+        if risk_decision is not None:
+            decision = risk_decision.williams_decision
+            if decision.symbol != signal.symbol.upper():
+                raise CampaignExecutionError("RiskDecision symbol does not match entry signal")
+            if decision.direction is not SignalDirection.LONG:
+                raise CampaignExecutionError("Spot campaign initial entry requires LONG RiskDecision")
 
         reserved = self.engine.portfolio_reserved_risk_quote()
         capacity = max(0.0, float(equity_quote) * self.engine.portfolio_risk_limit_pct)
@@ -209,6 +217,17 @@ class CampaignExecutionService:
             self.engine.initial_risk_pct(),
             remaining_risk / max(float(equity_quote), 1e-12),
         )
+        canonical_quantity_limit = 0.0
+        if risk_decision is not None:
+            requested_risk = min(
+                requested_risk,
+                float(risk_decision.allocated_r_multiple)
+                * float(self.engine.campaign_risk_limit_pct),
+            )
+            canonical_quantity_limit = max(
+                0.0,
+                float(risk_decision.calculated_quantity),
+            )
         if requested_risk <= 0:
             raise CampaignExecutionError("No portfolio risk capacity for campaign entry")
 
@@ -243,6 +262,8 @@ class CampaignExecutionService:
             float(equity_quote) * capital_fraction,
             risk_quote / max(effective_loss_fraction, 1e-12),
         )
+        if canonical_quantity_limit > 0:
+            notional = min(notional, canonical_quantity_limit * trigger)
         qty = self._normalized_entry_qty(signal.symbol, notional, trigger)
         client_id = f"{self.ENTRY_PREFIX}{uuid.uuid4().hex[:20]}"
 
@@ -276,10 +297,21 @@ class CampaignExecutionService:
         self.engine.arm_entry(campaign, signal)
         self.db.state_set(f"campaign_state:{campaign.campaign_id}", campaign.state.value)
 
-        intent = OrderIntent.new(
-            signal.symbol,
-            "BUY",
-            "STOP_LOSS",
+        if risk_decision is None:
+            raise CampaignExecutionError("canonical RiskDecision is required for campaign entry")
+        canonical_intent = __import__(
+            "domain.contracts",
+            fromlist=["ExecutionIntent"],
+        ).ExecutionIntent(
+            risk_decision=risk_decision,
+            order_type="STOP_LOSS",
+            client_order_id=client_id,
+            recv_window=int(getattr(self.client, "recv_window", 5000) or 5000),
+            time_in_force="GTC",
+            reduce_only=False,
+        )
+        intent = OrderIntent.from_canonical(
+            canonical_intent,
             required_context_versions=dict(signal.context_versions),
             hypothesis_id=f"WILLIAMS_{signal.signal_type.value}",
             invalidation_level=stop,
