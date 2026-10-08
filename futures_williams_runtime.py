@@ -368,6 +368,15 @@ class FuturesWilliamsRuntime:
             for row in rows
         ]
 
+    def _pending_exits(self):
+        rows = self.db.conn.execute(
+            "SELECT key,value FROM bot_state WHERE key LIKE 'exit_client_order_id:%'"
+        ).fetchall()
+        return [
+            (str(row["key"]).split(":", 1)[1].upper(), str(row["value"]))
+            for row in rows
+        ]
+
     def _equity(self) -> float:
         account = self.client.account()
         try:
@@ -1263,16 +1272,57 @@ class FuturesWilliamsRuntime:
 
 
     def _exit_market(self, campaign, reason):
-        """Reduce the position first; cancel the protective stop afterwards."""
+        """Durable reduce-only market exit; protection is cancelled only after flat."""
         symbol = campaign.symbol
+        existing_exit = str(campaign.tags.get("pending_exit_client_id", "") or "")
+        if campaign.state in {CampaignState.EXIT_SIGNALLED, CampaignState.EXIT_PENDING} and existing_exit:
+            raise RuntimeError(f"{symbol}: exit already pending ({existing_exit})")
+
         position = self._position(symbol)
         pos_qty = abs(self._signed_position_qty(position))
         qty = self._normalize_qty(symbol, pos_qty)
         if qty <= 0:
+            campaign.position_qty = 0.0
+            campaign.state = CampaignState.CLOSED
+            campaign.reconciliation_state = "CLEAN"
+            campaign.exit_reason = reason
+            self.db.save_campaign(campaign)
+            self._set_state(symbol, "FLAT")
             return {"state": "ALREADY_FLAT", "symbol": symbol}
+
+        if campaign.state != CampaignState.EXIT_SIGNALLED:
+            campaign.transition(
+                CampaignState.EXIT_SIGNALLED,
+                reason=f"exit signalled: {reason}",
+            )
 
         side = "SELL" if campaign.side == "BUY" else "BUY"
         cid = self._client_id("EXIT")
+        campaign.tags["pending_exit_client_id"] = cid
+        campaign.tags["pending_exit_reason"] = reason
+        campaign.tags["pending_exit_quantity"] = qty
+        campaign.next_action = "SUBMIT_EXIT"
+        campaign.transition(
+            CampaignState.EXIT_PENDING,
+            reason="reduce-only market exit admitted",
+        )
+        self.db.state_set(f"exit_client_order_id:{symbol}", cid)
+        self.db.save_campaign_order(
+            PendingOrderRecord(
+                order_id="",
+                client_order_id=cid,
+                symbol=symbol,
+                side=side,
+                order_type="MARKET",
+                purpose="CAMPAIGN_EXIT",
+                status="INTENT_PENDING",
+                quantity=qty,
+                signal_id=campaign.current_signal_id,
+                campaign_id=campaign.campaign_id,
+            )
+        )
+        self.db.save_campaign(campaign)
+
         intent = OrderIntent.new(
             symbol,
             side,
@@ -1284,86 +1334,273 @@ class FuturesWilliamsRuntime:
             campaign_id=campaign.campaign_id,
             signal_id=campaign.current_signal_id,
         )
-        result = self._submit(
-            intent,
-            lambda: self.client.order_safe(
-                symbol,
-                side,
-                "MARKET",
-                quantity=self.client.decimal_format(qty),
-                new_client_order_id=cid,
-                reduce_only=True,
-            ),
-            lambda _snapshot: None,
-        )
-        self.db.save_order(result)
+        try:
+            result = self._submit(
+                intent,
+                lambda: self.client.order_safe(
+                    symbol,
+                    side,
+                    "MARKET",
+                    quantity=self.client.decimal_format(qty),
+                    new_client_order_id=cid,
+                    reduce_only=True,
+                ),
+                lambda _snapshot: None,
+            )
+            self.db.save_campaign_order(
+                PendingOrderRecord(
+                    order_id=str(result.get("orderId", "")),
+                    client_order_id=cid,
+                    symbol=symbol,
+                    side=side,
+                    order_type="MARKET",
+                    purpose="CAMPAIGN_EXIT",
+                    status=str(result.get("status", "NEW")),
+                    quantity=qty,
+                    signal_id=campaign.current_signal_id,
+                    campaign_id=campaign.campaign_id,
+                )
+            )
+            self.db.save_order(result)
 
-        verify = self._position(symbol)
-        remaining = abs(self._signed_position_qty(verify))
-        if remaining > max(float(os.getenv("MIN_RECOVERY_QTY", "0.000001")), qty * 0.01):
+            verify = self._position(symbol)
+            remaining = abs(self._signed_position_qty(verify))
+            if remaining > max(float(os.getenv("MIN_RECOVERY_QTY", "0.000001")), qty * 0.01):
+                self._set_state(symbol, "RECONCILE_REQUIRED")
+                raise RuntimeError(
+                    f"{symbol}: Futures exit left residual position {remaining}"
+                )
+
+            protective = int(campaign.tags.get("protective_order_id", "0") or 0)
+            if protective > 0:
+                try:
+                    self._cancel(symbol, protective, "CAMPAIGN_PROTECTION_CANCEL")
+                except Exception as exc:
+                    self._set_state(symbol, "RECONCILE_REQUIRED")
+                    raise RuntimeError(
+                        f"{symbol}: protective order cancellation ambiguous after flat: {exc}"
+                    ) from exc
+
+            position_price = float(
+                result.get("avgPrice", 0) or result.get("price", 0) or 0
+            )
+            if position_price <= 0:
+                try:
+                    fills = self.client.my_trades(
+                        symbol, order_id=result.get("orderId"), limit=1000
+                    ) or []
+                except Exception:
+                    fills = []
+                qty_fill = sum(float(x.get("qty", 0) or 0) for x in fills)
+                quote_fill = sum(
+                    float(x.get("qty", 0) or 0) * float(x.get("price", 0) or 0)
+                    for x in fills
+                )
+                position_price = (
+                    quote_fill / qty_fill if qty_fill > 0 and quote_fill > 0 else 0.0
+                )
+            if position_price <= 0:
+                position_price = float(
+                    self.client.ticker_price(symbol).get("price", 0) or 0
+                )
+
+            trade = self.db.open_trade(symbol)
+            if trade is not None:
+                entry = float(
+                    campaign.average_entry_price or trade.get("entry_price") or 0
+                )
+                qty_trade = float(
+                    campaign.position_qty or trade.get("quantity") or 0
+                )
+                pnl_pct = (
+                    (
+                        position_price / entry - 1.0
+                        if campaign.side == "BUY"
+                        else entry / position_price - 1.0
+                    )
+                    if entry > 0 and position_price > 0
+                    else 0.0
+                )
+                pnl = (
+                    (position_price - entry) * qty_trade
+                    if campaign.side == "BUY"
+                    else (entry - position_price) * qty_trade
+                )
+                self.db.close_trade(
+                    trade["id"],
+                    datetime.now(timezone.utc).isoformat(),
+                    position_price,
+                    pnl,
+                    pnl_pct,
+                    reason,
+                    fees=float(trade.get("fees") or 0),
+                )
+
+            campaign.position_qty = 0.0
+            campaign.open_risk_quote = 0.0
+            campaign.pending_risk_quote = 0.0
+            campaign.capital_reserved_quote = 0.0
+            campaign.exit_reason = reason
+            campaign.next_action = "WAIT"
+            campaign.state = CampaignState.CLOSED
+            campaign.reconciliation_state = "CLEAN"
+            campaign.tags.pop("pending_exit_client_id", None)
+            campaign.tags.pop("pending_exit_order_id", None)
+            self.db.save_campaign(campaign)
+            self.db.state_delete(f"exit_client_order_id:{symbol}")
+            self.db.state_delete(f"entry_client_order_id:{symbol}")
+            self._set_state(symbol, "FLAT")
+            return {
+                "state": "CLOSED",
+                "symbol": symbol,
+                "exit_price": position_price,
+                "reason": reason,
+            }
+        except Exception:
             self._set_state(symbol, "RECONCILE_REQUIRED")
-            raise RuntimeError(f"{symbol}: Futures exit left residual position {remaining}")
+            campaign.reconciliation_state = "REQUIRED"
+            campaign.health = "RED"
+            self.db.save_campaign(campaign)
+            raise
 
-        protective = int(campaign.tags.get("protective_order_id", "0") or 0)
-        if protective > 0:
+
+    def _reconcile_pending_exits(self):
+        results = []
+        for symbol, cid in list(self._pending_exits()):
             try:
-                self._cancel(symbol, protective, "CAMPAIGN_PROTECTION_CANCEL")
+                row = self.db.conn.execute(
+                    "SELECT campaign_id FROM campaign_orders WHERE client_order_id=? "
+                    "ORDER BY id DESC LIMIT 1",
+                    (cid,),
+                ).fetchone()
+                campaign = (
+                    self.engine.load_campaign(str(row["campaign_id"]))
+                    if row else None
+                )
+                if campaign is None:
+                    for item in self.db.open_campaigns():
+                        if str(item["symbol"]).upper() != symbol:
+                            continue
+                        candidate = self.engine.load_campaign(item["campaign_id"])
+                        if candidate and candidate.tags.get("pending_exit_client_id") == cid:
+                            campaign = candidate
+                            break
+                if campaign is None:
+                    self._set_state(symbol, "RECONCILE_REQUIRED")
+                    results.append({
+                        "symbol": symbol,
+                        "state": "RECONCILE_REQUIRED",
+                        "reason": "pending exit has no campaign",
+                    })
+                    continue
+
+                order = self.client.get_order(symbol, orig_client_order_id=cid)
+                status = str(order.get("status", "")).upper()
+                if row is None:
+                    self.db.save_campaign_order(
+                        PendingOrderRecord(
+                            order_id=str(order.get("orderId", "")),
+                            client_order_id=cid,
+                            symbol=symbol,
+                            side="SELL" if campaign.side == "BUY" else "BUY",
+                            order_type="MARKET",
+                            purpose="CAMPAIGN_EXIT",
+                            status=status,
+                            quantity=float(order.get("origQty", 0) or 0),
+                            signal_id=campaign.current_signal_id,
+                            campaign_id=campaign.campaign_id,
+                        )
+                    )
+
+                executed = float(
+                    order.get("executedQty", order.get("cumQty", 0)) or 0
+                )
+                position = self._position(symbol)
+                remaining = abs(self._signed_position_qty(position))
+
+                if status in {"NEW", "PENDING_NEW", "PARTIALLY_FILLED"}:
+                    results.append({
+                        "symbol": symbol,
+                        "campaign_id": campaign.campaign_id,
+                        "state": "EXIT_PENDING",
+                        "order_status": status,
+                        "executed_quantity": executed,
+                        "remaining_position": remaining,
+                    })
+                    continue
+
+                if status == "FILLED":
+                    if remaining > max(
+                        float(os.getenv("MIN_RECOVERY_QTY", "0.000001")),
+                        float(order.get("origQty", 0) or 0) * 0.01,
+                    ):
+                        self._set_state(symbol, "RECONCILE_REQUIRED")
+                        campaign.mark_reconcile_required(
+                            "exit order filled but position remains"
+                        )
+                        self.db.save_campaign(campaign)
+                        results.append({
+                            "symbol": symbol,
+                            "state": "RECONCILE_REQUIRED",
+                            "reason": "exit filled but residual position remains",
+                        })
+                        continue
+                    if self._finalize_confirmed_exchange_exit(
+                        campaign, [order]
+                    ):
+                        self.db.state_delete(f"exit_client_order_id:{symbol}")
+                        campaign.tags.pop("pending_exit_client_id", None)
+                        campaign.tags.pop("pending_exit_order_id", None)
+                        self.db.save_campaign(campaign)
+                        continue
+                    campaign.mark_reconcile_required(
+                        "filled exit cannot be durably attributed"
+                    )
+                    self.db.save_campaign(campaign)
+                    self._set_state(symbol, "RECONCILE_REQUIRED")
+                    continue
+
+                if status in {"CANCELED", "EXPIRED", "REJECTED"}:
+                    if remaining > max(
+                        float(os.getenv("MIN_RECOVERY_QTY", "0.000001")), 0.0
+                    ):
+                        if campaign.state == CampaignState.EXIT_PENDING:
+                            campaign.transition(
+                                CampaignState.TREND_ACTIVE,
+                                reason=f"exit order {status.lower()} without fill",
+                            )
+                        campaign.tags.pop("pending_exit_client_id", None)
+                        campaign.tags.pop("pending_exit_order_id", None)
+                        self.db.state_delete(f"exit_client_order_id:{symbol}")
+                        self._set_state(symbol, "OPEN")
+                        self.db.save_campaign(campaign)
+                        results.append({
+                            "symbol": symbol,
+                            "campaign_id": campaign.campaign_id,
+                            "state": "TREND_ACTIVE",
+                            "order_status": status,
+                        })
+                    else:
+                        campaign.mark_reconcile_required(
+                            f"exit order {status.lower()} while position is flat"
+                        )
+                        self.db.save_campaign(campaign)
+                        self._set_state(symbol, "RECONCILE_REQUIRED")
+                    continue
+
+                campaign.mark_reconcile_required(
+                    f"unknown exit order state {status!r}"
+                )
+                self.db.save_campaign(campaign)
+                self._set_state(symbol, "RECONCILE_REQUIRED")
             except Exception as exc:
                 self._set_state(symbol, "RECONCILE_REQUIRED")
-                raise RuntimeError(f"{symbol}: protective order cancellation ambiguous after flat: {exc}") from exc
-
-        position_price = float(result.get("avgPrice", 0) or result.get("price", 0) or 0)
-        if position_price <= 0:
-            try:
-                fills = self.client.my_trades(symbol, order_id=result.get("orderId"), limit=1000) or []
-            except Exception:
-                fills = []
-            qty_fill = sum(float(x.get("qty", 0) or 0) for x in fills)
-            quote_fill = sum(
-                float(x.get("qty", 0) or 0) * float(x.get("price", 0) or 0)
-                for x in fills
-            )
-            position_price = quote_fill / qty_fill if qty_fill > 0 and quote_fill > 0 else 0.0
-        if position_price <= 0:
-            position_price = float(
-                self.client.ticker_price(symbol).get("price", 0) or 0
-            )
-
-        trade = self.db.open_trade(symbol)
-        if trade is not None:
-            entry = float(campaign.average_entry_price or trade.get("entry_price") or 0)
-            qty_trade = float(campaign.position_qty or trade.get("quantity") or 0)
-            pnl_pct = (
-                (position_price / entry - 1.0) if campaign.side == "BUY"
-                else (entry / position_price - 1.0)
-            ) if entry > 0 and position_price > 0 else 0.0
-            pnl = (
-                (position_price - entry) * qty_trade
-                if campaign.side == "BUY"
-                else (entry - position_price) * qty_trade
-            )
-            self.db.close_trade(
-                trade["id"],
-                datetime.now(timezone.utc).isoformat(),
-                position_price,
-                pnl,
-                pnl_pct,
-                reason,
-                fees=float(trade.get("fees") or 0),
-            )
-
-        campaign.position_qty = 0.0
-        campaign.open_risk_quote = 0.0
-        campaign.pending_risk_quote = 0.0
-        campaign.capital_reserved_quote = 0.0
-        campaign.exit_reason = reason
-        campaign.next_action = "WAIT"
-        campaign.state = CampaignState.CLOSED
-        campaign.reconciliation_state = "CLEAN"
-        self.db.save_campaign(campaign)
-        self.db.state_delete(f"entry_client_order_id:{symbol}")
-        self._set_state(symbol, "FLAT")
-        return {"state": "CLOSED", "symbol": symbol, "exit_price": position_price, "reason": reason}
+                results.append({
+                    "symbol": symbol,
+                    "state": "RECONCILE_REQUIRED",
+                    "error": str(exc),
+                })
+        return results
 
 
     def _reconcile_pending(self):
@@ -1713,11 +1950,15 @@ class FuturesWilliamsRuntime:
 
     def recover(self):
         results = self._reconcile_pending()
+        exit_results = self._reconcile_pending_exits()
+        results.extend(exit_results)
         unresolved = self.unresolved_symbols()
 
         for row in self.db.open_campaigns():
             campaign = self.engine.load_campaign(row["campaign_id"])
             if campaign is None or campaign.position_qty <= 0:
+                continue
+            if campaign.state in {CampaignState.EXIT_SIGNALLED, CampaignState.EXIT_PENDING}:
                 continue
             symbol = campaign.symbol
             position = self._position(symbol)
@@ -1763,7 +2004,9 @@ class FuturesWilliamsRuntime:
                 self._set_state(symbol, "RECONCILE_REQUIRED")
                 self.db.log_event("ERROR", "futures_recovery_error", str(exc), {"symbol": symbol})
         return {
-            "ok": not self.unresolved_symbols() and not self._pending_entries(),
+            "ok": not self.unresolved_symbols()
+            and not self._pending_entries()
+            and not self._pending_exits(),
             "results": results,
             "open_positions": len(self.open_positions()),
             "unresolved_symbols": self.unresolved_symbols(),
