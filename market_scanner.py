@@ -416,7 +416,14 @@ class MarketScanner:
         spread_pct = self._spread(symbol)
 
         specs = list(decision.signal_specs)
-        first = specs[0] if specs else None
+        # Spot execution is LONG-only. Keep the complete strategy truth in
+        # decision.signal_specs, but expose an executable entry only when a
+        # BUY signal exists so a SELL context can never leak into Spot order
+        # parameters or CampaignEngine selection.
+        executable_specs = [spec for spec in specs if str(spec.side).upper() == "BUY"]
+        first = executable_specs[0] if executable_specs else None
+        if first is None:
+            return None
         risk_pct = self.policy.initial_risk_for(
             quality=decision.quality,
             h4_context=decision.h4_context,
