@@ -437,7 +437,6 @@ class CampaignExecutionService:
             hypothesis_id=f"WILLIAMS_{signal.signal_type.value}",
             invalidation_level=stop,
             quantity=self.client.decimal_format(qty),
-            client_order_id=client_id,
             purpose="CAMPAIGN_ENTRY",
             permission_interval=signal.timeframe,
             campaign_id=campaign.campaign_id,
