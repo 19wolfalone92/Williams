@@ -35,6 +35,7 @@ class StopEngine:
         wave_invalidation: float = 0.0,
         current_price: float = 0.0,
         buffer: float | None = None,
+        tighten_to_context: bool = False,
     ) -> StopProposal:
         proposed, source = structural_stop_for_long(
             signal_type=signal_type,
@@ -43,6 +44,7 @@ class StopEngine:
             teeth=float(teeth),
             wave_invalidation=float(wave_invalidation),
             buffer=self.buffer if buffer is None else max(0.0, float(buffer)),
+            tighten_to_context=bool(tighten_to_context),
         )
         if current_stop > 0 and not stop_only_reduces_risk("LONG", current_stop, proposed):
             return StopProposal(
