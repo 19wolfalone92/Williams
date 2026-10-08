@@ -3756,6 +3756,24 @@ private class NativeEngine(
     private fun performCampaignScan() {
         if (reconcileRequired) return
 
+        when (intradaySessionState()) {
+            "FORCE_FLAT" -> {
+                forceFlatIntraday("END_OF_DAY")
+                return
+            }
+            "PRE_OPEN" -> {
+                if (positionList().isNotEmpty() || synchronized(pendingEntries) { pendingEntries.isNotEmpty() }) {
+                    forceFlatIntraday("PRE_OPEN_CARRYOVER")
+                }
+                return
+            }
+            "NO_NEW_ENTRIES" -> {
+                cancelPendingCampaignEntries("NO_NEW_ENTRIES")
+                // Existing positions remain managed by the H1 structural trail.
+                return
+            }
+        }
+
         for (open in positionList()) {
             runCatching {
                 TradeJournal.updateExcursion(
@@ -3794,8 +3812,8 @@ private class NativeEngine(
                     try {
                         val candles = fetchCandles(
                             symbol,
-                            campaignExecutionTimeframe,
-                            150
+                            interval,
+                            180
                         )
                         val result = analyseBase(
                             symbol = symbol,
