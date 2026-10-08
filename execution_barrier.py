@@ -6,6 +6,7 @@ on ambiguous exchange outcomes until authoritative reconciliation completes.
 """
 from __future__ import annotations
 
+import re
 import time
 import uuid
 from dataclasses import dataclass
@@ -311,7 +312,11 @@ class ExecutionBarrier:
             )
 
         cid = str(response.get("clientOrderId", "") or "").strip()
-        if cid and cid != str(intent.client_order_id).strip():
+        if (
+            intent.order_type.upper() != "CANCEL"
+            and cid
+            and cid != str(intent.client_order_id).strip()
+        ):
             return (
                 f"exchange response clientOrderId mismatch: "
                 f"expected={intent.client_order_id} actual={cid}"
@@ -530,6 +535,71 @@ class ExecutionBarrier:
             )
             return ExecutionResult(intent.intent_id, True, response=response)
 
+    def persisted_unknown_intent(self) -> OrderIntent | None:
+        """Reconstruct the currently locked mutation from durable DB state."""
+        if not self.mutation_locked:
+            return None
+        if self.db is None or not hasattr(self.db, "execution_intent_by_client_order_id"):
+            return None
+
+        match = re.search(
+            r"client_order_id=([^:\s]+)",
+            self.mutation_lock_reason,
+        )
+        if not match:
+            return None
+        cid = match.group(1)
+        row = self.db.execution_intent_by_client_order_id(cid)
+        if not row:
+            return None
+
+        try:
+            versions = json.loads(
+                row.get("required_context_versions_json") or "{}"
+            )
+        except Exception:
+            versions = {}
+
+        return OrderIntent(
+            intent_id=str(row["intent_id"]),
+            symbol=str(row["symbol"]).upper(),
+            side=str(row["side"]).upper(),
+            order_type=str(row["order_type"]).upper(),
+            required_context_versions=dict(versions),
+            hypothesis_id=str(row.get("hypothesis_id") or ""),
+            invalidation_level=float(row.get("invalidation_level") or 0.0),
+            quantity=str(row.get("quantity") or ""),
+            quote_order_quantity=str(row.get("quote_order_quantity") or ""),
+            client_order_id=str(row.get("client_order_id") or ""),
+            purpose=str(row.get("purpose") or "ENTRY"),
+            campaign_id=str(row.get("campaign_id") or ""),
+            signal_id=str(row.get("signal_id") or ""),
+            recv_window=int(row.get("recv_window") or 5000),
+            time_in_force=str(row.get("time_in_force") or "GTC"),
+            reduce_only=bool(row.get("reduce_only") or 0),
+            related_order_id=str(row.get("related_order_id") or ""),
+            related_order_list_id=str(row.get("related_order_list_id") or ""),
+            created_at_ms=0,
+            max_age_ms=0,
+        )
+
+    def reconcile_persisted_unknown(
+        self,
+        query: Callable[[OrderIntent], Any],
+    ) -> ExecutionResult:
+        """Resolve the durable UNKNOWN state without issuing a mutation."""
+        intent = self.persisted_unknown_intent()
+        if intent is None:
+            return ExecutionResult(
+                "",
+                False,
+                reason="no persisted UNKNOWN execution intent is available",
+            )
+        return self.reconcile(
+            intent,
+            lambda: query(intent),
+        )
+
     def reconcile(
         self,
         intent: OrderIntent,
@@ -607,6 +677,46 @@ class ExecutionBarrier:
                     )
 
                 status = self._authoritative_status(response)
+                if intent.order_type.upper() == "CANCEL":
+                    if status in {
+                        "CANCELED",
+                        "EXPIRED",
+                        "FILLED",
+                        "REJECTED",
+                    }:
+                        self._unlock_mutations()
+                        self._persist(intent, "RECONCILED", status)
+                        self._record(
+                            "INFO",
+                            "execution_reconciled",
+                            intent,
+                            "Target order is no longer open after ambiguous cancel; mutation lock released",
+                            {"status": status},
+                        )
+                        return ExecutionResult(
+                            intent.intent_id,
+                            True,
+                            response=response,
+                            reason=status,
+                        )
+                    reason = (
+                        "ambiguous cancel remains unresolved: target order is still active"
+                    )
+                    self._persist(intent, "RECONCILIATION_PENDING", reason)
+                    self._record(
+                        "WARNING",
+                        "execution_reconcile_pending",
+                        intent,
+                        reason,
+                        {"status": status},
+                    )
+                    return ExecutionResult(
+                        intent.intent_id,
+                        False,
+                        response=response,
+                        reason=reason,
+                    )
+
                 if status in {
                     "PENDING_NEW",
                     "NEW",
