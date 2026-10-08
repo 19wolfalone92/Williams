@@ -5874,10 +5874,12 @@ private class NativeEngine(
 
         try {
             val buy =
-                signedPost(
-                    "/api/v3/order",
-                    buyParams
-                )
+                withCampaignMutation(candidate.symbol, "LEGACY_PROTECTED_BUY") {
+                    signedPost(
+                        "/api/v3/order",
+                        buyParams
+                    )
+                }
 
             val qty =
                 buy.optString("executedQty")
