@@ -114,7 +114,8 @@ def calculate_indicators(df, cfg):
         x.get("trades", pd.Series(np.nan, index=x.index)),
         errors="coerce",
     )
-    tick_volume = trade_count.where(trade_count > 0, x["volume"])
+    base_volume = pd.to_numeric(x.get("volume", pd.Series(0.0, index=x.index)), errors="coerce").fillna(0.0)
+    tick_volume = trade_count.where(trade_count > 0, base_volume)
     x["tick_volume_proxy"] = tick_volume
 
 
