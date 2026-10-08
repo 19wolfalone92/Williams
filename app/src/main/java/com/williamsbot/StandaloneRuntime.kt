@@ -2635,15 +2635,25 @@ private class NativeEngine(
         }
     }
 
-    private fun withCampaignMutation(
+    private fun <T> withCampaignMutation(
         symbol: String,
         purpose: String,
-        block: () -> JSONObject
-    ): JSONObject {
-        if (!running) error("Runtime is not running")
-        if (paused) error("Runtime is paused")
-        if (reconcileRequired) error("RECONCILE_REQUIRED")
-        if (killLatched) error("KILL_SWITCH_LATCHED")
+        allowRecovery: Boolean = false,
+        allowSafetyOverride: Boolean = false,
+        block: () -> T
+    ): T {
+        if (!running && !allowRecovery && !allowSafetyOverride) {
+            error("Runtime is not running")
+        }
+        if (paused && !allowRecovery && !allowSafetyOverride) {
+            error("Runtime is paused")
+        }
+        if (reconcileRequired && !allowRecovery && !allowSafetyOverride) {
+            error("RECONCILE_REQUIRED")
+        }
+        if (killLatched && !allowSafetyOverride) {
+            error("KILL_SWITCH_LATCHED")
+        }
         if (prefs.getBoolean("execution_mutation_lock", false)) {
             error("EXECUTION_MUTATION_LOCKED: REST reconciliation required")
         }
@@ -2674,8 +2684,6 @@ private class NativeEngine(
             result
         } catch (x: Throwable) {
             // Never clear the durable mutation lock after an ambiguous mutation.
-            // The caller will move the runtime into RECONCILE_REQUIRED; restart
-            // will also restore the lock from SharedPreferences.
             lastError =
                 "EXECUTION_MUTATION_UNKNOWN: " +
                     (x.message ?: x.javaClass.simpleName)
@@ -4230,19 +4238,29 @@ private class NativeEngine(
             var ocoCancelled = false
             try {
                 if (stored.ocoListId.isNotBlank()) {
-                    signedDelete(
-                        "/api/v3/orderList",
-                        "symbol=" + stored.symbol +
-                            "&orderListId=" + stored.ocoListId
-                    )
+                    withCampaignMutation(
+                        stored.symbol,
+                        "CAMPAIGN_TRAIL_CANCEL_PROTECTION"
+                    ) {
+                        signedDelete(
+                            "/api/v3/orderList",
+                            "symbol=" + stored.symbol +
+                                "&orderListId=" + stored.ocoListId
+                        )
+                    }
                     ocoCancelled = true
                 } else if (stored.ocoListClientId.isNotBlank()) {
-                    signedDelete(
-                        "/api/v3/orderList",
-                        "symbol=" + stored.symbol +
-                            "&listClientOrderId=" +
-                            stored.ocoListClientId
-                    )
+                    withCampaignMutation(
+                        stored.symbol,
+                        "CAMPAIGN_TRAIL_CANCEL_PROTECTION"
+                    ) {
+                        signedDelete(
+                            "/api/v3/orderList",
+                            "symbol=" + stored.symbol +
+                                "&listClientOrderId=" +
+                                stored.ocoListClientId
+                        )
+                    }
                     ocoCancelled = true
                 } else {
                     setReconcileRequired(
