@@ -129,6 +129,7 @@ class SignalSpec:
     created_at_ms: int = field(default_factory=lambda: int(time.time() * 1000))
     expires_at_ms: int = 0
     source_candle_index: int = -1
+    execution_timeframe: str = "15m"
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -224,6 +225,7 @@ class TradingCampaign:
     symbol: str
     side: str
     execution_timeframe: str
+    decision_timeframe: str = "1h"
     state: CampaignState = CampaignState.SIGNAL_DETECTED
     origin_signal_id: str = ""
     current_signal_id: str = ""
