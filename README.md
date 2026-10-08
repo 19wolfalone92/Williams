@@ -114,6 +114,111 @@ Recovery suite включает 10 сценариев:
 - timeout после BUY восстанавливается по clientOrderId;
 - Entry связан с точным OCO list.
 
+# Williams Binance USDⓈ-M Futures Bot + Android Remote Cockpit
+
+Production-oriented, Testnet-first Williams campaign runtime for Binance USDⓈ-M Futures. The active execution core is bidirectional LONG/SHORT, campaign-based, SQLite-persistent and fail-closed under uncertain exchange state.
+
+## Active architecture in 4.24.0
+
+### Williams trading core
+
+The execution authority is:
+
+`closed candles → Williams signals → first-presenting Wise Man → PendingSignal → CampaignEngine → Risk → ExecutionBarrier → Binance Futures → reconciliation`
+
+Canonical Wise-Man triggers are implemented in `williams_signals.py`:
+
+- WM1 reversal: conditional BUY/SELL STOP beyond the reversal-bar extreme, with direction-specific angulation validation.
+- Super AO: three consecutive same-colour AO bars; it may be the first presenting entry.
+- Fractal: confirmed five-bar fractal breakout, with Teeth validity.
+- LONG and SHORT use mirrored trigger, protection and exit semantics.
+- Later valid Wise Men become campaign add-ons rather than independent campaigns.
+
+The reverse-pyramid allocation is normalized to the historical Williams 1:5:4:3:2 sequence and applied as risk-budget weights rather than literal contract counts.
+
+### Campaign and state safety
+
+Every active campaign is durable in SQLite.
+
+`PendingSignal` tracks:
+
+`DETECTED → VALIDATED → ARMED → TRIGGERED/FILLED`
+
+with terminal or fail-safe states including `SUPERSEDED`, `EXPIRED`, `CANCELLED` and `RECONCILE_REQUIRED`.
+
+Order mutations use one Futures execution door. Unknown/ambiguous exchange outcomes are reconciled by client order id instead of blind retry.
+
+### Risk
+
+Risk is bounded at multiple levels:
+
+- initial campaign risk = campaign cap × 1/15;
+- add-ons follow 1:5:4:3:2 weights but cannot exceed campaign cap;
+- aggregate `MAX_TOTAL_RISK_PCT` is enforced before sizing each new campaign/add-on;
+- sizing is based on loss to the structural stop plus bounded fee/slippage reserve;
+- leverage changes margin efficiency, not the intended loss budget;
+- liquidation-buffer checks can fail-safe flatten a position when a structural stop cannot safely protect it.
+
+The default environment is `DRY_RUN=true`, `TESTNET=true`, `ALLOW_LIVE=false`, `FUTURES_LEVERAGE=2`, `FUTURES_MARGIN_TYPE=ISOLATED` and `FUTURES_FORCE_ONE_WAY=true`.
+
+### Protection and exit
+
+The campaign has no fixed strategic take-profit.
+
+For LONG, the structural trail is the lowest low of the selected last 3/5 closed bars, moved only in the favorable direction. For SHORT, it is the highest high of the selected last 3/5 closed bars, again only tightening risk.
+
+Protection replacement is recovery-safe:
+
+`create new protective STOP_MARKET → persist durable ownership → cancel old stop`
+
+All protection orders are reduce-only and sized to the actual Futures position.
+
+After a market exit, the position must first be verified flat; only then is the protective order cancelled.
+
+### Futures account safety
+
+Startup performs a Futures-specific preflight:
+
+- credentials/account reachability;
+- TESTNET/LIVE permission contract;
+- Single-Asset/Multi-Assets mode validation;
+- One-Way/Hedge mode validation;
+- foreign-position rejection;
+- foreign-open-order rejection;
+- exchange symbol/filter availability.
+
+When `DRY_RUN=true`, account-mode mutations are not performed.
+
+## Android
+
+Android 4.24.0 is a remote cockpit, not a trading engine.
+
+The phone:
+
+- talks to the backend over HTTPS;
+- stores the backend URL and mobile token using encrypted Android storage;
+- never starts `StandaloneRuntime`;
+- keeps the legacy foreground service only as a compatibility shell;
+- does not place Binance orders locally.
+
+The authoritative trading process is the Futures backend/VPS.
+
+## Release and testing
+
+The release contract is Futures-native. It validates:
+
+- Python syntax and active Futures runtime files;
+- bidirectional Williams signal extraction;
+- PendingSignal lifecycle;
+- execution-door safety;
+- Futures Demo endpoint contract;
+- reduce-only STOP_MARKET protection;
+- crash/reconciliation invariants;
+- Android remote-only behavior;
+- APK build/signing workflow.
+
+Authenticated Futures Demo validation is explicitly opt-in through `WILLIAMS_TESTNET_E2E=1`; the default release tests do not submit trading orders.
+
 ## Backtester
 
 ```bash
