@@ -115,13 +115,20 @@ class WilliamsIntradayCore:
         if len(ind)<5:return None
         teeth_now=float(ind.iloc[-1].get("teeth_shifted",0) or 0)
         obs=self.fractals.detect(ind,side=side,teeth_series=ind.get("teeth_shifted"))
-        for o in sorted((z for z in obs if z.confirmation_index<len(ind)),
-                        key=lambda z:(z.confirmation_index,z.center_index),reverse=True):
-            trigger=float(o.level)+(tick if side=="LONG" else -tick)
-            teeth_ok=trigger>teeth_now if side=="LONG" else trigger<teeth_now
-            price_ok=trigger>float(ind.iloc[-1]["close"]) if side=="LONG" else trigger<float(ind.iloc[-1]["close"])
-            if teeth_ok and price_ok:return o
-        return None
+        active=sorted(
+            (z for z in obs if z.confirmation_index<len(ind)),
+            key=lambda z:(z.confirmation_index,z.center_index),
+            reverse=True,
+        )
+        # Newer fractal supersedes an older same-direction pending fractal.
+        # Never fall back to a superseded fractal after the newest one has
+        # already crossed or failed its trigger-time Teeth condition.
+        if not active:return None
+        o=active[0]
+        trigger=float(o.level)+(tick if side=="LONG" else -tick)
+        teeth_ok=trigger>teeth_now if side=="LONG" else trigger<teeth_now
+        price_ok=trigger>float(ind.iloc[-1]["close"]) if side=="LONG" else trigger<float(ind.iloc[-1]["close"])
+        return o if teeth_ok and price_ok else None
 
     @staticmethod
     def _mouth_metrics(row,side):
