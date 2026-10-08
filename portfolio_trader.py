@@ -11,6 +11,8 @@ from execution_accumulator import ExecutionSummary, accumulate_order
 from campaign_execution import CampaignExecutionService, CampaignExecutionError
 from campaign_model import SignalSpec, SignalType, SignalRole
 from campaign_monitor import CampaignMonitor
+from intraday_contract import WilliamsIntradayContract
+from intraday_policy import evaluate_intraday_policy
 
 
 POSITION_STATES = {
@@ -45,7 +47,7 @@ class MultiPositionTrader:
         if symbols is not None:
             self.symbols = [str(x).strip().upper() for x in symbols if str(x).strip()]
         else:
-            raw_symbols = os.getenv("AUTO_SCAN_SYMBOLS", "ALL").strip()
+            raw_symbols = os.getenv("AUTO_SCAN_SYMBOLS", "BTCUSDT,ETHUSDT").strip()
             self.symbols = (
                 []
                 if raw_symbols.upper() in {"ALL", "AUTO", "*"}
@@ -53,20 +55,20 @@ class MultiPositionTrader:
             )
         self.max_open_positions = max(
             0,
-            int(os.getenv("MAX_OPEN_POSITIONS", "5")),
+            int(os.getenv("MAX_OPEN_CAMPAIGNS", "1")),
         )
         self.max_total_risk_pct = min(
             0.01,
             max(
                 0.0,
-                float(os.getenv("MAX_TOTAL_RISK_PCT", "0.01")),
+                float(os.getenv("MAX_CAMPAIGN_RISK_PCT", "0.006")),
             ),
         )
         self.max_risk_per_trade_pct = min(
             0.005,
             max(
                 0.0,
-                float(os.getenv("MAX_RISK_PER_TRADE_PCT", os.getenv("RISK_PER_TRADE_PCT", "0.005"))),
+                float(os.getenv("MAX_RISK_PER_TRADE_PCT", os.getenv("WILLIAMS_INITIAL_RISK_PCT", "0.0025"))),
             ),
         )
         self.dry_run = (
@@ -84,9 +86,9 @@ class MultiPositionTrader:
         self.l2_guard = L2SlippageGuard(
             float(os.getenv("MAX_L2_SLIPPAGE_PCT", os.getenv("MAX_SPREAD_PCT", "0.0015")))
         )
-        self.equity_breaker = EquityCircuitBreaker(float(os.getenv("MAX_DAILY_LOSS_PCT", "0.03")))
+        self.equity_breaker = EquityCircuitBreaker(float(os.getenv("WILLIAMS_MAX_DAILY_LOSS_PCT", "0.01")))
         self.max_trades_per_day = max(0, int(os.getenv("MAX_TRADES_PER_DAY", "5")))
-        self.max_consecutive_losses = max(0, int(os.getenv("MAX_CONSECUTIVE_LOSSES", "3")))
+        self.max_consecutive_losses = max(0, int(os.getenv("MAX_CONSECUTIVE_LOSSES", "2")))
         self.cooldown_minutes = max(0, int(os.getenv("COOLDOWN_MINUTES", "30")))
         self.execution_barrier = execution_barrier
         self.campaign_engine_enabled = (
