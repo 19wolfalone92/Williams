@@ -32,7 +32,7 @@ class Trader:
     def __init__(self, api_key=None, api_secret=None, testnet=None, context_cache=None):
         self.config = TradingConfig.from_env()
         self.context_cache = context_cache or ContextCache()
-        self.symbol=os.getenv('SYMBOL',self.config.symbols[0]).upper(); self.interval=os.getenv('INTERVAL','1h')
+        self.symbol=os.getenv('SYMBOL',self.config.symbols[0]).upper(); self.interval=(self.config.execution_timeframe if os.getenv('WILLIAMS_STRATEGY_PROFILE','WILLIAMS_INTRADAY_CORE').upper() in {'WILLIAMS_INTRADAY_CORE','WILLIAMS_INTRADAY_CONSERVATIVE'} else os.getenv('INTERVAL','1h'))
         self.position_fraction=float(os.getenv('POSITION_FRACTION','0.25')); self.stop_pct=float(os.getenv('STOP_LOSS_PCT','0.02')); self.target_pct=float(os.getenv('TAKE_PROFIT_PCT','0.04'))
         self.poll_seconds=int(os.getenv('POLL_SECONDS','20'))
         self.risk_per_trade_pct=self.config.risk_per_trade_pct; self.max_daily_loss_pct=self.config.max_daily_loss_pct
