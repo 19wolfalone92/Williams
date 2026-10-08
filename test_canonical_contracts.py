@@ -802,3 +802,40 @@ def test_execution_barrier_blocks_ambiguous_mutation_after_restart(tmp_path):
     )
     assert blocked.accepted is False
     assert "MUTATION_LOCKED_RECONCILIATION_REQUIRED" in blocked.reason
+
+
+def test_durable_unknown_recovery_falls_back_to_latest_unknown_intent(tmp_path):
+    db = Database(str(tmp_path / "fallback-unknown.sqlite3"))
+    barrier = ExecutionBarrier(FakeCache(), db)
+    intent = order_intent("WILL_UNKNOWN_FALLBACK")
+
+    # Response contains no authoritative order status. The barrier must lock,
+    # but this particular branch historically did not include the client ID in
+    # the lock reason. Recovery must therefore consult durable UNKNOWN records.
+    with pytest.raises(ExecutionAmbiguousError):
+        barrier.execute(
+            intent,
+            lambda: {
+                "symbol": "BTCUSDT",
+                "side": "BUY",
+                "clientOrderId": "WILL_UNKNOWN_FALLBACK",
+            },
+        )
+
+    restarted = ExecutionBarrier(FakeCache(), db)
+    restored = restarted.persisted_unknown_intent()
+    assert restored is not None
+    assert restored.client_order_id == "WILL_UNKNOWN_FALLBACK"
+
+    reconciled = restarted.reconcile_persisted_unknown(
+        lambda restored_intent: {
+            "symbol": restored_intent.symbol,
+            "side": restored_intent.side,
+            "status": "CANCELED",
+            "orderId": 17,
+            "clientOrderId": restored_intent.client_order_id,
+            "executedQty": "0",
+        }
+    )
+    assert reconciled.accepted is True
+    assert restarted.mutation_locked is False
