@@ -6,7 +6,7 @@ from contextlib import contextmanager
 
 
 class Database:
-    SCHEMA_VERSION = 6
+    SCHEMA_VERSION = 7
 
     def __init__(self, path=None):
         path = path or os.getenv('WILLIAMS_DB_PATH') or 'data/trader.sqlite3'
@@ -261,6 +261,7 @@ class Database:
             ON campaign_events(campaign_id, id);
         ''')
         self._migrate_trade_columns()
+        self._migrate_execution_intent_columns()
         self.state_set('schema_version', self.SCHEMA_VERSION)
         self.state_set('position_state', self.state_get('position_state', 'FLAT'))
         self.conn.commit()
@@ -282,6 +283,31 @@ class Database:
             if name not in columns:
                 self.conn.execute(
                     f'ALTER TABLE trades ADD COLUMN {name} {sql_type}'
+                )
+
+    def _migrate_execution_intent_columns(self):
+        """Add durable admission fields to existing execution intent records."""
+        columns = {
+            row['name']
+            for row in self.conn.execute(
+                'PRAGMA table_info(execution_intents)'
+            ).fetchall()
+        }
+        additions = {
+            'signal_id': 'TEXT',
+            'signal_expires_at_ms': 'INTEGER',
+            'permission_interval': 'TEXT',
+            'campaign_id': 'TEXT',
+            'created_at_ms': 'INTEGER',
+            'max_age_ms': 'INTEGER',
+            'trigger_price': 'REAL',
+            'quantity': 'TEXT',
+            'quote_order_quantity': 'TEXT',
+        }
+        for name, sql_type in additions.items():
+            if name not in columns:
+                self.conn.execute(
+                    f'ALTER TABLE execution_intents ADD COLUMN {name} {sql_type}'
                 )
 
     def state_get(self, key, default=None):
@@ -327,8 +353,10 @@ class Database:
         self.conn.execute(
             '''INSERT OR REPLACE INTO execution_intents(
                 intent_id,symbol,side,order_type,purpose,
-                required_context_versions_json,hypothesis_id,invalidation_level,status,reason,client_order_id
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?)''',
+                required_context_versions_json,hypothesis_id,invalidation_level,status,reason,
+                client_order_id,signal_id,signal_expires_at_ms,permission_interval,campaign_id,
+                created_at_ms,max_age_ms,trigger_price,quantity,quote_order_quantity
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
             (
                 intent.intent_id,
                 intent.symbol,
@@ -341,6 +369,15 @@ class Database:
                 status,
                 reason,
                 getattr(intent, 'client_order_id', ''),
+                getattr(intent, 'signal_id', ''),
+                getattr(intent, 'signal_expires_at_ms', 0),
+                getattr(intent, 'permission_interval', ''),
+                getattr(intent, 'campaign_id', ''),
+                getattr(intent, 'created_at_ms', 0),
+                getattr(intent, 'max_age_ms', 0),
+                float(getattr(intent, 'trigger_price', 0.0) or 0.0),
+                str(getattr(intent, 'quantity', '') or ''),
+                str(getattr(intent, 'quote_order_quantity', '') or ''),
             ),
         )
         if not self._transaction_active:
