@@ -900,6 +900,14 @@ class Database:
                 data.get("exit_reason",""),json.dumps(data.get("tags",{}),default=str,sort_keys=True),
             ),
         )
+        # Keep the execution barrier's durable campaign-state mirror in
+        # lockstep with the canonical campaign row. This is deliberately done
+        # for every save, including RECONCILE_REQUIRED, so a stale mirror can
+        # never reopen an unsafe mutation path.
+        self.state_set(
+            f"campaign_state:{data['campaign_id']}",
+            data["state"],
+        )
         if not self._transaction_active:
             self.conn.commit()
 
