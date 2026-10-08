@@ -6,7 +6,7 @@ from contextlib import contextmanager
 
 
 class Database:
-    SCHEMA_VERSION = 6
+    SCHEMA_VERSION = 7
 
     def __init__(self, path=None):
         path = path or os.getenv('WILLIAMS_DB_PATH') or 'data/trader.sqlite3'
@@ -149,6 +149,7 @@ class Database:
             symbol TEXT NOT NULL,
             side TEXT NOT NULL,
             execution_timeframe TEXT NOT NULL,
+            decision_timeframe TEXT NOT NULL DEFAULT "1h",
             state TEXT NOT NULL,
             origin_signal_id TEXT,
             current_signal_id TEXT,
@@ -260,10 +261,16 @@ class Database:
         CREATE INDEX IF NOT EXISTS idx_campaign_events_campaign
             ON campaign_events(campaign_id, id);
         ''')
+        self._migrate_campaign_columns()
         self._migrate_trade_columns()
         self.state_set('schema_version', self.SCHEMA_VERSION)
         self.state_set('position_state', self.state_get('position_state', 'FLAT'))
         self.conn.commit()
+
+    def _migrate_campaign_columns(self):
+        columns = {row["name"] for row in self.conn.execute("PRAGMA table_info(campaigns)").fetchall()}
+        if "decision_timeframe" not in columns:
+            self.conn.execute('ALTER TABLE campaigns ADD COLUMN decision_timeframe TEXT NOT NULL DEFAULT "1h"')
 
     def _migrate_trade_columns(self):
         columns = {
@@ -863,7 +870,7 @@ class Database:
         data = campaign.to_dict() if hasattr(campaign, "to_dict") else dict(campaign)
         self.conn.execute(
             """INSERT INTO campaigns(
-                campaign_id,updated_at,symbol,side,execution_timeframe,state,
+                campaign_id,updated_at,symbol,side,execution_timeframe,decision_timeframe,state,
                 origin_signal_id,current_signal_id,current_signal_type,
                 position_qty,average_entry_price,initial_stop_price,current_stop_price,
                 structural_stop_source,additions,tranche_index,realized_pnl_quote,
@@ -873,7 +880,7 @@ class Database:
             ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(campaign_id) DO UPDATE SET
                 updated_at=CURRENT_TIMESTAMP,symbol=excluded.symbol,side=excluded.side,
-                execution_timeframe=excluded.execution_timeframe,state=excluded.state,
+                execution_timeframe=excluded.execution_timeframe,decision_timeframe=excluded.decision_timeframe,state=excluded.state,
                 origin_signal_id=excluded.origin_signal_id,current_signal_id=excluded.current_signal_id,
                 current_signal_type=excluded.current_signal_type,position_qty=excluded.position_qty,
                 average_entry_price=excluded.average_entry_price,initial_stop_price=excluded.initial_stop_price,
@@ -887,7 +894,7 @@ class Database:
                 tags_json=excluded.tags_json""",
             (
                 data["campaign_id"], datetime.now(timezone.utc).isoformat(), data["symbol"], data["side"],
-                data["execution_timeframe"], data["state"], data.get("origin_signal_id",""),
+                data["execution_timeframe"], data.get("decision_timeframe","1h"), data["state"], data.get("origin_signal_id",""),
                 data.get("current_signal_id",""), data.get("current_signal_type",""),
                 float(data.get("position_qty",0) or 0), float(data.get("average_entry_price",0) or 0),
                 float(data.get("initial_stop_price",0) or 0), float(data.get("current_stop_price",0) or 0),
