@@ -37,8 +37,18 @@ def _bar_ms(timeframe: str) -> int:
 
 
 def default_expiry_ms(signal: SignalSpec) -> int:
-    if signal.expires_at_ms > signal.created_at_ms:
-        return signal.expires_at_ms
+    """Return the signal's absolute expiry without extending it on rescans.
+
+    An explicit positive deadline is authoritative even when already expired.
+    For legacy SignalSpec values without a deadline, derive it only from the
+    originating signal bar. A missing origin timestamp fails closed (0).
+    """
+    if int(signal.expires_at_ms or 0) > 0:
+        return int(signal.expires_at_ms)
+
+    signal_bar_time_ms = int(signal.signal_bar_time_ms or 0)
+    if signal_bar_time_ms <= 0:
+        return 0
 
     if signal.signal_type.value == "REVERSAL":
         bars = max(1, int(os.getenv("WILLIAMS_PENDING_REVERSAL_BARS", "2")))
@@ -47,10 +57,7 @@ def default_expiry_ms(signal: SignalSpec) -> int:
     else:
         bars = max(1, int(os.getenv("WILLIAMS_PENDING_FRACTAL_BARS", "8")))
 
-    return max(
-        signal.created_at_ms + _bar_ms(signal.timeframe) * bars,
-        signal.signal_bar_time_ms + _bar_ms(signal.timeframe) * bars,
-    )
+    return signal_bar_time_ms + _bar_ms(signal.timeframe) * bars
 
 
 @dataclass(frozen=True)
@@ -98,7 +105,8 @@ class PendingSignal:
 
     def is_expired(self, now_ms: int | None = None) -> bool:
         now = int(now_ms if now_ms is not None else time.time() * 1000)
-        return self.expires_at_ms > 0 and now >= self.expires_at_ms
+        # Unknown expiry is not an implicit permission to trade.
+        return self.expires_at_ms <= 0 or now >= self.expires_at_ms
 
     def actionable(self, now_ms: int | None = None) -> bool:
         return (
