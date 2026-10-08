@@ -196,3 +196,17 @@ def test_portfolio_risk_capacity_is_enforced_before_new_campaign():
         rel_tol=0.0,
         abs_tol=1e-12,
     )
+
+
+def test_liquidation_guard_violation_uses_fail_safe_flatten():
+    runtime = object.__new__(FuturesWilliamsRuntime)
+    calls = []
+    runtime._set_state = lambda symbol, state: calls.append(("state", symbol, state))
+    runtime._exit_market = lambda campaign, reason: calls.append(("exit", reason)) or {
+        "state": "CLOSED", "symbol": campaign.symbol
+    }
+    campaign = type("C", (), {"symbol": "BTCUSDT"})()
+    result = runtime._fail_safe_flatten(campaign, "LIQUIDATION_GUARD_TEST")
+    assert result["state"] == "CLOSED"
+    assert ("state", "BTCUSDT", "RECONCILE_REQUIRED") in calls
+    assert ("exit", "LIQUIDATION_GUARD_TEST") in calls
