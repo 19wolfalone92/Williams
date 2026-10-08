@@ -123,7 +123,7 @@ class CampaignExecutionService:
             raise CampaignExecutionError(f"{symbol}: PRICE_FILTER.tickSize unavailable")
         return self._floor(price, tick)
 
-    def _check_buy_position_capacity(self, symbol: str, quantity: float) -> None:
+    def _check_buy_position_capacity(self, symbol: str, quantity: float, *, exclude_order_id: int | None = None) -> None:
         filters = self._rules(symbol)
         max_position_filter = filters.get("MAX_POSITION") or {}
         max_position = float(
@@ -158,6 +158,10 @@ class CampaignExecutionService:
             )
             for o in open_orders
             if str(o.get("side", "")).upper() == "BUY"
+            and (
+                exclude_order_id is None
+                or str(o.get("orderId", "")) != str(exclude_order_id)
+            )
         )
         tolerance = max(1e-12, max_position * 1e-9)
         if base_total + pending_buy_qty + float(quantity) > max_position + tolerance:
@@ -516,7 +520,11 @@ class CampaignExecutionService:
             if now >= trigger:
                 raise CampaignExecutionError("replacement trigger crossed during final validation")
             self._check_algo_capacity(new_signal.symbol, additional=1)
-            self._check_buy_position_capacity(new_signal.symbol, qty)
+            self._check_buy_position_capacity(
+                new_signal.symbol,
+                qty,
+                exclude_order_id=old_order_id,
+            )
 
         try:
             result = self._submit(
