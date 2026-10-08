@@ -203,10 +203,14 @@ class CampaignRiskPlan:
 
     @property
     def reserved_risk_pct(self) -> float:
-        return (
-            float(self.current_open_risk_quote)
-            + float(self.current_pending_risk_quote)
-        )
+        """Reserved risk expressed as a fraction of portfolio equity.
+
+        The stored fields are quote amounts; this helper is retained for
+        compatibility and therefore returns their sum in quote units only when
+        callers explicitly treat it as such. New code should use the quote
+        fields directly.
+        """
+        return float(self.current_open_risk_quote) + float(self.current_pending_risk_quote)
 
     def next_weight(self) -> int:
         idx = min(max(int(self.tranche_index), 0), len(self.reverse_pyramid_weights) - 1)
