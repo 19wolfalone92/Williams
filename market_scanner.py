@@ -47,7 +47,7 @@ class Candidate:
     decision_trace: dict = field(default_factory=dict)
 
     # Human-readable state
-    setup_state: str
+    setup_state: str = "NONE"
     reason: str = ""
     wise_man_count: int = 0
     signal_family: str = "NONE"
@@ -146,10 +146,8 @@ class MarketScanner:
             else self._load_symbols()
         )
 
-        self.scan_all_usdt = (
-            os.getenv("SCAN_ALL_USDT", "true").lower() == "true"
-        )  # dynamically discover Spot/USDT pairs
-        self.scan_max_symbols = max(0, int(os.getenv("SCAN_MAX_SYMBOLS", "0")))
+        self.scan_all_usdt = False if self.core_mode else (os.getenv("SCAN_ALL_USDT", "true").lower() == "true")
+        self.scan_max_symbols = 2 if self.core_mode else max(0, int(os.getenv("SCAN_MAX_SYMBOLS", "0")))
         self.exclude_leveraged_tokens = (
             os.getenv("EXCLUDE_LEVERAGED_TOKENS", "true").lower() == "true"
         )
@@ -173,12 +171,10 @@ class MarketScanner:
         self.atr_period = int(os.getenv("ATR_PERIOD", "14"))
         self.max_atr_pct = float(os.getenv("MAX_ATR_PCT", "0.08"))
         self.max_spread_pct = float(os.getenv("MAX_SPREAD_PCT", "0.0015"))
-        self.require_htf_confirmation = (
-            os.getenv("REQUIRE_HTF_CONFIRMATION", "true").lower() == "true"
-        )
-        self.min_risk_reward = float(os.getenv("MIN_RISK_REWARD", "1.5"))
+        self.require_htf_confirmation = False if self.core_mode else (os.getenv("REQUIRE_HTF_CONFIRMATION", "true").lower() == "true")
+        self.min_risk_reward = 0.0 if self.core_mode else float(os.getenv("MIN_RISK_REWARD", "1.5"))
         self.stop_pct = float(os.getenv("STOP_LOSS_PCT", "0.02"))
-        self.target_pct = float(os.getenv("TAKE_PROFIT_PCT", "0.04"))
+        self.target_pct = 0.0 if self.core_mode else float(os.getenv("TAKE_PROFIT_PCT", "0.04"))
         self.min_rr = self.min_risk_reward
         self.htf_interval = _normalize_interval(os.getenv("HTF_INTERVAL", "4h"))
 
