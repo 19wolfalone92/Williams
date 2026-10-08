@@ -41,7 +41,7 @@ _AUTHORITATIVE = {
 }
 
 _ALLOWED = {
-    OrderState.NEW: {OrderState.PENDING_NEW, OrderState.UNKNOWN},
+    OrderState.NEW: _AUTHORITATIVE | {OrderState.UNKNOWN},
     OrderState.PENDING_NEW: _AUTHORITATIVE | {OrderState.UNKNOWN},
     OrderState.PARTIALLY_FILLED: {
         OrderState.PARTIALLY_FILLED,
