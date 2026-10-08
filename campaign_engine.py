@@ -375,7 +375,6 @@ class CampaignEngine:
             CampaignState.OPEN_INITIAL,
             CampaignState.TREND_ACTIVE,
             CampaignState.TRAILING,
-            CampaignState.EXHAUSTION_WATCH,
         }:
             raise ValueError(f"Cannot arm add-on from {campaign.state.value}")
 
@@ -615,6 +614,24 @@ class CampaignEngine:
             campaign.campaign_id,
             CampaignEventType.EXIT_SIGNAL.value,
             reason=reason,
+        )
+        return campaign
+
+    def mark_fault(self, campaign: TradingCampaign, reason: str) -> TradingCampaign:
+        """Enter the canonical FAULT interrupt after an unresolvable mismatch."""
+        fsm = self._canonical_fsm(campaign)
+        fsm.fault(reason)
+        campaign.tags["canonical_campaign_state"] = fsm.state.value
+        campaign.reconciliation_state = "FAULT"
+        campaign.health = "RED"
+        campaign.next_action = "MANUAL_INTERVENTION"
+        campaign.tags["fault_reason"] = str(reason)
+        self.db.save_campaign(campaign)
+        self.db.log_campaign_event(
+            campaign.campaign_id,
+            "FAULT",
+            level="CRITICAL",
+            reason=str(reason),
         )
         return campaign
 
