@@ -72,3 +72,60 @@ def test_market_context_persistence(tmp_path: Path):
     ).fetchone()
     assert row["version"] == 3
     assert '"long_probability": 0.7' in row["context_json"]
+
+
+def test_campaign_barrier_checks_campaign_permission_context():
+    import threading
+    from execution_barrier import ExecutionBarrier, OrderIntent
+
+    class Cache:
+        def __init__(self):
+            self.execution_lock = threading.RLock()
+        def snapshot(self):
+            class C:
+                version = 1
+                allow_long = False
+                allow_short = False
+            class S:
+                def context(self, symbol, interval):
+                    return C()
+            return S()
+
+    barrier = ExecutionBarrier(Cache())
+    intent = OrderIntent.new(
+        "BTCUSDT", "BUY", "STOP_LOSS", {"5m": 1},
+        purpose="CAMPAIGN_ENTRY", permission_interval="5m", campaign_id="c1",
+    )
+    result = barrier.execute(intent, lambda: {"ok": True})
+    assert not result.accepted
+    assert "does not allow LONG" in result.reason
+
+
+def test_campaign_barrier_checks_per_symbol_reconcile_state(tmp_path):
+    from execution_barrier import ExecutionBarrier, OrderIntent
+    import threading
+
+    db = Database(str(tmp_path / "state.sqlite3"))
+    db.state_set("position_state:BTCUSDT", "RECONCILE_REQUIRED")
+
+    class Cache:
+        def __init__(self):
+            self.execution_lock = threading.RLock()
+        def snapshot(self):
+            class C:
+                version = 1
+                allow_long = True
+                allow_short = False
+            class S:
+                def context(self, symbol, interval):
+                    return C()
+            return S()
+
+    barrier = ExecutionBarrier(Cache(), db)
+    intent = OrderIntent.new(
+        "BTCUSDT", "BUY", "STOP_LOSS", {"5m": 1},
+        purpose="CAMPAIGN_ENTRY", permission_interval="5m", campaign_id="c1",
+    )
+    result = barrier.execute(intent, lambda: {"ok": True})
+    assert not result.accepted
+    assert "reconcile" in result.reason.lower()
