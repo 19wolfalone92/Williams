@@ -210,7 +210,7 @@ class MarketScanner:
             if getattr(self, "core_mode", False):
                 return [x for x in requested if x in {"BTCUSDT", "ETHUSDT"}]
             return requested
-        return ["BTCUSDT", "ETHUSDT"] if self.core_mode else []
+        return ["BTCUSDT", "ETHUSDT"] if bool(getattr(self, "core_mode", False)) else []
     def _atr(df, period):
         prev = df["close"].shift(1)
         tr = pd.concat(
