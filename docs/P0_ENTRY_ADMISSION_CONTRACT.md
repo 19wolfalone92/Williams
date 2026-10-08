@@ -24,7 +24,8 @@ Any BUY with another or missing purpose is rejected. A caller cannot obtain fewe
 - `campaign_id` for `CAMPAIGN_ENTRY` and `CAMPAIGN_ADD_ON`.
 - Non-empty `intent_id`.
 - Intent creation timestamp as a positive integer, not in the future, within a positive integer `max_age_ms` policy.
-- Exactly one of positive finite `quantity` or `quote_order_quantity`.
+- Exactly one of positive finite `quantity` or `quote_order_quantity`; current `STOP_LOSS` entry requires base `quantity`.
+- For a conditional `STOP_LOSS` entry, explicit positive finite `trigger_price` must be above the positive `invalidation_level`. The trigger cannot remain implicit only inside a submit closure.
 - A client order ID accepted by the current Spot adapter's conservative 1–36 character format check.
 - For the currently approved Campaign Engine Spot path, entry `order_type` is limited to `STOP_LOSS`; `MARKET` remains accepted only for the generic `ENTRY` contract where explicitly used by a tested caller.
 
