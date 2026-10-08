@@ -400,6 +400,9 @@ def test_execution_barrier_rejects_missing_or_malformed_contract_fields():
         ({"permission_interval": ""}, "permission_interval"),
         ({"campaign_id": ""}, "campaign_id"),
         ({"quantity": "-1"}, "quantity"),
+        ({"trigger_price": 0.0}, "trigger_price"),
+        ({"invalidation_level": 102.0}, "trigger_price"),
+        ({"quantity": "", "quote_order_quantity": "100"}, "base quantity"),
     ]
     for changes, expected in cases:
         intent = __import__("dataclasses").replace(valid, **changes)
