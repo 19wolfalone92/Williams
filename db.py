@@ -281,6 +281,8 @@ class Database:
             'reduce_only': 'INTEGER DEFAULT 0',
             'campaign_id': 'TEXT',
             'signal_id': 'TEXT',
+            'related_order_id': 'TEXT',
+            'related_order_list_id': 'TEXT',
         }
         for name, sql_type in additions.items():
             if name not in columns:
@@ -352,8 +354,9 @@ class Database:
                 intent_id,symbol,side,order_type,purpose,
                 required_context_versions_json,hypothesis_id,invalidation_level,
                 status,reason,client_order_id,quantity,quote_order_quantity,
-                recv_window,time_in_force,reduce_only,campaign_id,signal_id
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                recv_window,time_in_force,reduce_only,campaign_id,signal_id,
+                related_order_id,related_order_list_id
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
             (
                 intent.intent_id,
                 intent.symbol,
@@ -373,6 +376,8 @@ class Database:
                 1 if bool(getattr(intent, 'reduce_only', False)) else 0,
                 getattr(intent, 'campaign_id', ''),
                 getattr(intent, 'signal_id', ''),
+                getattr(intent, 'related_order_id', ''),
+                getattr(intent, 'related_order_list_id', ''),
             ),
         )
         if not self._transaction_active:
