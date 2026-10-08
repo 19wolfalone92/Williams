@@ -514,7 +514,9 @@ class ExecutionBarrier:
         pre_submit_checks: Callable[[MarketStateSnapshot], None] | None = None,
     ) -> ExecutionResult:
         with self.context_cache.execution_lock:
-            order_fsm = OrderStateMachine()
+            order_fsm = OrderStateMachine(
+                initial=OrderState.PENDING_NEW
+            )
             self._persist(intent, "PENDING")
             if self.db is not None and hasattr(self.db, "save_execution_event"):
                 try:
@@ -548,7 +550,6 @@ class ExecutionBarrier:
                 self._record("ERROR", "execution_idempotency_block", intent, reason)
                 return ExecutionResult(intent.intent_id, False, reason=reason)
 
-            order_fsm.transition(OrderState.PENDING_NEW)
             self._record(
                 "INFO",
                 "execution_admitted",
