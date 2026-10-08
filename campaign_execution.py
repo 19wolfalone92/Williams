@@ -1060,7 +1060,7 @@ class CampaignExecutionService:
         campaign.pending_risk_quote = 0.0
         campaign.capital_reserved_quote = 0.0
         campaign.next_action = "REARM_SUPERSEDING_FRACTAL"
-        self.engine.transition_signal_detected(campaign, new_signal)
+        campaign.transition(CampaignState.SIGNAL_DETECTED, reason="pending Fractal superseded by newer H1 Fractal")
         self.db.save_campaign(campaign)
         self.db.state_delete("entry_client_order_id:" + campaign.symbol)
         self.db.state_set("position_state:" + campaign.symbol, "FLAT")
