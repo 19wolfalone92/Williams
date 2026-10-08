@@ -40,6 +40,8 @@ class MultiPositionTrader:
     MANUAL_PREFIX = "WILLV4_MANUAL_"
 
     def __init__(self, client, db=None, symbols=None, execution_barrier=None):
+        if os.getenv("BINANCE_MARKET", "spot").strip().lower() != "spot":
+            raise RuntimeError("Spot MultiPositionTrader is disabled in Futures mode; use FuturesWilliamsRuntime")
         self.client = client
         self.db = db or Database()
         if symbols is not None:
