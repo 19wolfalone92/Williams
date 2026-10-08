@@ -554,6 +554,53 @@ class CampaignExecutionService:
                 self.engine.mark_reconcile_required(campaign, message)
             raise
 
+    def _record_price_proof(
+        self,
+        campaign,
+        *,
+        observed_price: float,
+        order_id: str = "",
+        stage: str = "ENTRY",
+    ) -> None:
+        """Persist the final market proof without mutating the source contract."""
+        observed = float(observed_price)
+        decision_payload = campaign.tags.get("canonical_williams_decision")
+        if not isinstance(decision_payload, dict):
+            campaign.tags["canonical_price_proof"] = {
+                "passed": False,
+                "observed_price": observed,
+                "reason": "canonical WilliamsDecision snapshot unavailable",
+                "order_id": str(order_id),
+                "stage": stage,
+            }
+            return
+
+        trigger = float(decision_payload.get("trigger_price", 0.0) or 0.0)
+        direction = str(decision_payload.get("direction", "") or "").upper()
+        crossed = (
+            direction == "LONG" and observed >= trigger
+        ) or (
+            direction == "SHORT" and observed <= trigger
+        )
+        if not crossed:
+            raise CampaignExecutionError(
+                f"{campaign.symbol}: authoritative fill price {observed:.12g} "
+                f"does not prove trigger {trigger:.12g} for {direction}"
+            )
+
+        updated_decision = dict(decision_payload)
+        proof = dict(updated_decision.get("proof_vector", {}) or {})
+        proof["price_proof_pass"] = True
+        updated_decision["proof_vector"] = proof
+        campaign.tags["canonical_williams_decision"] = updated_decision
+        campaign.tags["canonical_price_proof"] = {
+            "passed": True,
+            "observed_price": observed,
+            "trigger_price": trigger,
+            "order_id": str(order_id),
+            "stage": stage,
+        }
+
     def _find_campaign_by_pending_client_id(self, client_id: str):
         row = self.db.conn.execute(
             "SELECT campaign_id FROM campaign_orders WHERE client_order_id=? "
@@ -754,6 +801,12 @@ class CampaignExecutionService:
                                 "order_id", ""
                             )
 
+                        self._record_price_proof(
+                            campaign,
+                            observed_price=avg,
+                            order_id=str(order.get("orderId", "")),
+                            stage="ADD_ON",
+                        )
                         self.engine.record_add_on_fill(
                             campaign,
                             quantity=executed,
@@ -844,6 +897,12 @@ class CampaignExecutionService:
                         "order_id", ""
                     )
 
+                    self._record_price_proof(
+                        campaign,
+                        observed_price=avg,
+                        order_id=str(order.get("orderId", "")),
+                        stage="ENTRY",
+                    )
                     self.engine.record_initial_fill(
                         campaign,
                         quantity=executed,
