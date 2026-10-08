@@ -1023,22 +1023,23 @@ class FuturesWilliamsRuntime:
         return result
 
     def _replace_protection(self, campaign, proposed):
+        """Place the new reduce-only stop before removing the old stop."""
         current = float(campaign.current_stop_price or 0)
         if not stop_only_reduces_risk(campaign.side, current, proposed):
             return False
-        order_id = int(campaign.tags.get("protective_order_id", "0") or 0)
-        if order_id <= 0:
-            self._protect(campaign)
-            return True
+        symbol = campaign.symbol
         proposed = self._normalize_price(
-            campaign.symbol,
+            symbol,
             proposed,
             upward=campaign.side == "SELL",
         )
+        qty = self._normalize_qty(symbol, abs(float(campaign.position_qty)))
+        if qty <= 0:
+            raise RuntimeError("cannot replace protection for empty position")
         side = "SELL" if campaign.side == "BUY" else "BUY"
         cid = self._client_id("STOP")
         intent = OrderIntent.new(
-            campaign.symbol,
+            symbol,
             side,
             "STOP_MARKET",
             required_context_versions={},
@@ -1049,44 +1050,61 @@ class FuturesWilliamsRuntime:
         )
         result = self._submit(
             intent,
-            lambda: self.client.cancel_replace(
-                campaign.symbol,
-                order_id,
+            lambda: self.client.order_safe(
+                symbol,
                 side,
                 "STOP_MARKET",
-                quantity=self.client.decimal_format(
-                    self._normalize_qty(campaign.symbol, abs(float(campaign.position_qty)))
-                ),
+                quantity=self.client.decimal_format(qty),
                 stop_price=self.client.decimal_format(proposed),
                 new_client_order_id=cid,
+                reduce_only=True,
             ),
             lambda _snapshot: None,
         )
+        new_order_id = str(result.get("orderId", ""))
+        if not new_order_id:
+            self._set_state(symbol, "RECONCILE_REQUIRED")
+            raise RuntimeError(f"{symbol}: new protective order has no orderId")
+        old_order_id = int(campaign.tags.get("protective_order_id", "0") or 0)
+        if old_order_id > 0 and str(old_order_id) != new_order_id:
+            try:
+                self._cancel(symbol, old_order_id, "CAMPAIGN_OLD_STOP_CANCEL")
+            except Exception as exc:
+                self.db.log_event(
+                    "ERROR",
+                    "futures_old_stop_cancel_failed",
+                    str(exc),
+                    {"symbol": symbol, "old_order_id": old_order_id, "new_order_id": new_order_id},
+                )
+                self._set_state(symbol, "RECONCILE_REQUIRED")
+                raise
+        self.db.save_campaign_order(
+            PendingOrderRecord(
+                order_id=new_order_id,
+                client_order_id=cid,
+                symbol=symbol,
+                side=side,
+                order_type="STOP_MARKET",
+                purpose="PROTECTION",
+                status=str(result.get("status", "NEW")),
+                stop_price=proposed,
+                quantity=qty,
+                risk_quote=campaign.open_risk_quote,
+                signal_id=campaign.current_signal_id,
+                campaign_id=campaign.campaign_id,
+            )
+        )
         campaign.current_stop_price = proposed
         campaign.structural_stop_source = "3_5_BAR_STRUCTURE"
-        campaign.tags["protective_order_id"] = str(
-            (result.get("newOrderResponse") or {}).get("orderId", "")
-        )
+        campaign.tags["protective_order_id"] = new_order_id
+        campaign.tags["protective_order_client_id"] = cid
         self.db.save_campaign(campaign)
         return True
 
-    def _exit_market(self, campaign, reason):
-        symbol = campaign.symbol
-        protective = int(campaign.tags.get("protective_order_id", "0") or 0)
-        if protective > 0:
-            try:
-                self._cancel(symbol, protective, "CAMPAIGN_PROTECTION_CANCEL")
-            except Exception as exc:
-                status = ""
-                try:
-                    status = str(
-                        self.client.get_order(symbol, order_id=protective).get("status", "")
-                    ).upper()
-                except Exception:
-                    pass
-                if status not in {"CANCELED", "EXPIRED", "FILLED"}:
-                    raise RuntimeError(f"{symbol}: protection cancellation ambiguous: {exc}")
 
+    def _exit_market(self, campaign, reason):
+        """Reduce the position first; cancel the protective stop afterwards."""
+        symbol = campaign.symbol
         position = self._position(symbol)
         pos_qty = abs(self._signed_position_qty(position))
         qty = self._normalize_qty(symbol, pos_qty)
@@ -1126,11 +1144,31 @@ class FuturesWilliamsRuntime:
             self._set_state(symbol, "RECONCILE_REQUIRED")
             raise RuntimeError(f"{symbol}: Futures exit left residual position {remaining}")
 
+        protective = int(campaign.tags.get("protective_order_id", "0") or 0)
+        if protective > 0:
+            try:
+                self._cancel(symbol, protective, "CAMPAIGN_PROTECTION_CANCEL")
+            except Exception as exc:
+                self._set_state(symbol, "RECONCILE_REQUIRED")
+                raise RuntimeError(f"{symbol}: protective order cancellation ambiguous after flat: {exc}") from exc
+
         position_price = float(result.get("avgPrice", 0) or result.get("price", 0) or 0)
+        if position_price <= 0:
+            try:
+                fills = self.client.my_trades(symbol, order_id=result.get("orderId"), limit=1000) or []
+            except Exception:
+                fills = []
+            qty_fill = sum(float(x.get("qty", 0) or 0) for x in fills)
+            quote_fill = sum(
+                float(x.get("qty", 0) or 0) * float(x.get("price", 0) or 0)
+                for x in fills
+            )
+            position_price = quote_fill / qty_fill if qty_fill > 0 and quote_fill > 0 else 0.0
         if position_price <= 0:
             position_price = float(
                 self.client.ticker_price(symbol).get("price", 0) or 0
             )
+
         trade = self.db.open_trade(symbol)
         if trade is not None:
             entry = float(trade.get("entry_price") or campaign.average_entry_price or 0)
@@ -1139,8 +1177,6 @@ class FuturesWilliamsRuntime:
                 (position_price / entry - 1.0) if campaign.side == "BUY"
                 else (entry / position_price - 1.0)
             ) if entry > 0 and position_price > 0 else 0.0
-            # Futures realized PnL is authoritative in userTrades; use the
-            # position delta here as the local fallback for immediate closure.
             pnl = (
                 (position_price - entry) * qty_trade
                 if campaign.side == "BUY"
@@ -1168,6 +1204,7 @@ class FuturesWilliamsRuntime:
         self.db.state_delete(f"entry_client_order_id:{symbol}")
         self._set_state(symbol, "FLAT")
         return {"state": "CLOSED", "symbol": symbol, "exit_price": position_price, "reason": reason}
+
 
     def _reconcile_pending(self):
         results = []
