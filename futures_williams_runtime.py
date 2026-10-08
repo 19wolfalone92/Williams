@@ -55,6 +55,31 @@ class FuturesCandidate:
     htf_confirmed: bool
     score: float
 
+    def to_dict(self) -> dict:
+        return {
+            "symbol": self.symbol,
+            "side": self.side,
+            "signal": self.signal.to_dict(),
+            "signal_type": self.signal.signal_type.value,
+            "signal_bar_time_ms": int(self.signal.signal_bar_time_ms),
+            "trigger_price": float(self.signal.trigger_price),
+            "protective_reference": float(self.signal.protective_reference),
+            "score": float(self.score),
+            "atr_pct": float(self.atr_pct),
+            "spread_pct": float(self.spread_pct),
+            "htf_confirmed": bool(self.htf_confirmed),
+            "wise_men": [
+                {
+                    "signal_id": s.signal_id,
+                    "signal_type": s.signal_type.value,
+                    "side": s.side,
+                    "signal_bar_time_ms": int(s.signal_bar_time_ms),
+                    "trigger_price": float(s.trigger_price),
+                }
+                for s in self.all_signals
+            ],
+        }
+
 
 class FuturesWilliamsScanner:
     def __init__(self, client, *, interval: str, htf_interval: str = "1h"):
