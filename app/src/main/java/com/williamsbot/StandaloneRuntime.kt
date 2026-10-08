@@ -3051,10 +3051,17 @@ private class NativeEngine(
             existing.symbol + ": add-on cannot be protected by current stop"
         }
 
+        val equity = estimateManagedEquity().coerceAtLeast(0.0)
+        val grossRisk = newQty * max(0.0, newAvg - existing.stop)
+        val costReserve = newQty * newAvg * (2.0 * feeBufferPerSidePct + maxSlippagePct)
+        val recalculatedRiskPct =
+            if (equity > 0.0) (grossRisk + costReserve) / equity
+            else existing.riskPct + intent.riskReservedPct
+
         val provisional = existing.copy(
             qty = newQty,
             entry = newAvg,
-            riskPct = existing.riskPct + intent.riskReservedPct,
+            riskPct = recalculatedRiskPct,
             signalId = intent.signalId,
             signalType = intent.signalType,
             additions = existing.additions + 1,
@@ -3192,7 +3199,12 @@ private class NativeEngine(
             entry = entry,
             stop = stop,
             take = 0.0,
-            riskPct = intent.riskReservedPct,
+            riskPct = run {
+                val equity = estimateManagedEquity().coerceAtLeast(0.0)
+                val grossRisk = qty * max(0.0, entry - stop)
+                val costReserve = qty * entry * (2.0 * feeBufferPerSidePct + maxSlippagePct)
+                if (equity > 0.0) (grossRisk + costReserve) / equity else intent.riskReservedPct
+            },
             entryOrderId = order.optString("orderId", ""),
             entryClientOrderId = intent.clientOrderId,
             openedAt = order.optLong("transactTime", System.currentTimeMillis()),
