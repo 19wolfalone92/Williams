@@ -1281,7 +1281,6 @@ class CampaignExecutionService:
             hypothesis_id=f"WILLIAMS_ADD_{signal.signal_type.value}",
             invalidation_level=stop,
             quantity=self.client.decimal_format(qty),
-            client_order_id=cid,
             purpose="CAMPAIGN_ADD_ON",
             campaign_id=campaign.campaign_id,
             signal_id=signal.signal_id,
