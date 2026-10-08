@@ -29,21 +29,51 @@ class CampaignExecutionService:
         self.client = client
         self.db = db
         env_profile = str(os.getenv("WILLIAMS_STRATEGY_PROFILE", "")).strip().upper()
-        self.strategy_profile = str(strategy_profile or env_profile).strip().upper()
         self.policy = IntradayPolicy.from_env()
-        self.intraday_core_enabled = self.strategy_profile in {"WILLIAMS_INTRADAY_CORE", "WILLIAMS_INTRADAY_CONSERVATIVE", "WILLIAMS_CORE_INTRADAY", "WILLIAMS_CORE_INTRADAY_CONSERVATIVE"}
+        self.strategy_profile = str(strategy_profile or env_profile or self.policy.profile).strip().upper()
+        self.intraday_core_enabled = self.strategy_profile in {
+            "WILLIAMS_INTRADAY_CORE", "WILLIAMS_INTRADAY_CONSERVATIVE",
+            "WILLIAMS_CORE_INTRADAY", "WILLIAMS_CORE_INTRADAY_CONSERVATIVE",
+        }
         self.economics = ExecutionEconomicsGate(
             fee_pct=float(os.getenv("FEE_BUFFER_PER_SIDE_PCT", "0.001")),
             slippage_pct=float(os.getenv("RISK_SLIPPAGE_BUFFER_PCT", "0.0015")),
             spread_pct_limit=float(os.getenv("MAX_SPREAD_PCT", "0.0015")),
         )
         self.barrier = execution_barrier
+        if self.intraday_core_enabled:
+            configured_total = max(0.0, float(os.getenv("MAX_TOTAL_RISK_PCT", str(self.policy.risk.campaign_risk_pct))))
+            portfolio_risk_limit = min(self.policy.risk.campaign_risk_pct, configured_total)
+            # Campaign risk is a separate budget from per-trade risk. The
+            # generic MAX_RISK_PER_TRADE_PCT variable must never shrink the
+            # canonical Core campaign ceiling accidentally.
+            configured_campaign = max(
+                0.0,
+                float(os.getenv("WILLIAMS_CAMPAIGN_RISK_PCT", str(self.policy.risk.campaign_risk_pct))),
+            )
+            campaign_risk_limit = min(self.policy.risk.campaign_risk_pct, configured_campaign)
+            initial_fraction = (
+                self.policy.risk.initial_risk_pct
+                / max(self.policy.risk.campaign_risk_pct, 1e-12)
+            )
+        else:
+            portfolio_risk_limit = min(
+                0.01,
+                max(0.0, float(os.getenv("MAX_TOTAL_RISK_PCT", "0.01"))),
+            )
+            campaign_risk_limit = min(
+                0.006,
+                max(0.0, float(os.getenv("MAX_RISK_PER_TRADE_PCT", "0.005"))),
+            )
+            initial_fraction = float(os.getenv("CAMPAIGN_INITIAL_RISK_FRACTION", "0.40"))
         self.engine = CampaignEngine(
             db,
-            portfolio_risk_limit_pct=float(os.getenv("MAX_TOTAL_RISK_PCT", str(self.policy.risk.campaign_risk_pct if self.intraday_core_enabled else 0.01))),
-            campaign_risk_limit_pct=float(os.getenv("MAX_RISK_PER_TRADE_PCT", str(self.policy.risk.campaign_risk_pct if self.intraday_core_enabled else 0.005))),
+            portfolio_risk_limit_pct=portfolio_risk_limit,
+            campaign_risk_limit_pct=campaign_risk_limit,
             initial_risk_fraction_of_campaign=float(
-                os.getenv("CAMPAIGN_INITIAL_RISK_FRACTION", str((self.policy.risk.initial_risk_pct / max(self.policy.risk.campaign_risk_pct, 1e-12)) if self.intraday_core_enabled else "0.40"))
+                os.getenv("CAMPAIGN_INITIAL_RISK_FRACTION", str(initial_fraction))
+                if not self.intraday_core_enabled
+                else initial_fraction
             ),
             enforce_intraday_contract=self.intraday_core_enabled,
         )
