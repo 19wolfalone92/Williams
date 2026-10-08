@@ -5,9 +5,10 @@ This module identifies a signal bar/formation and computes the conditional
 price at which the market must prove the idea.
 
 The angulation implementation is an engineering approximation of the book's
-visual rule: price must be moving away from the Alligator/Jaw more steeply
-than the Alligator itself.  It is reported explicitly as an approximation and
-never presented as an author-certified formula.
+visual geometry: the reversal must sit outside the mouth and the separation
+between price and the Jaw must be increasing rather than merely parallel.
+It is reported explicitly as an approximation and never presented as an
+author-certified formula.
 """
 
 from __future__ import annotations
@@ -131,16 +132,11 @@ def _latest_super_ao(
             streak = int(row.get(streak_col, 0) or 0)
         except (TypeError, ValueError):
             streak = 0
-        # The book's third same-colour bar is the specific signal bar.
-        # Williams' Super AO is a continuation signal inside an established
-        # structure, so retain the existing valid fractal/Balance-Line gate.
-        fractal_gate_col = "long_fractal_outside" if side == "LONG" else "short_fractal_outside"
-        gate_i = max(0, i - 1)
-        gate_ok = (
-            fractal_gate_col not in ind.columns
-            or bool(ind.iloc[gate_i].get(fractal_gate_col, False))
-        )
-        if streak == 3 and gate_ok:
+        # The book treats the third same-colour AO bar as its own action
+        # source. Do not impose a prior-fractal gate here: the sequence may
+        # legitimately begin with Super AO, and a later fractal can then add
+        # to the same campaign.
+        if streak == 3:
             trigger_base = float(row["high"] if side == "LONG" else row["low"])
             protective = float(row["low"] if side == "LONG" else row["high"])
             return i, trigger_base, protective
