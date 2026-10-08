@@ -698,13 +698,12 @@ class CampaignExecutionService:
                     continue
 
                 if status == "PARTIALLY_FILLED" and order.get("orderId") is not None:
-                    cancel = getattr(self.client, "cancel_order", None)
-                    if cancel is None:
-                        raise CampaignExecutionError(
-                            f"{symbol}: partial conditional BUY cannot be safely cancelled"
-                        )
                     try:
-                        cancel(symbol, order_id=order.get("orderId"))
+                        self._execute_cancel(
+                            campaign,
+                            int(order.get("orderId")),
+                            "CAMPAIGN_PARTIAL_ENTRY_CANCEL",
+                        )
                     except Exception as exc:
                         self.engine.mark_reconcile_required(
                             campaign,
