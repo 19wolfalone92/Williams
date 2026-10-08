@@ -16,6 +16,7 @@ from market_context import ContextCache
 from mtf_context_service import MultiTimeframeContextService
 from feature_store import FeatureStore
 from binance_client import BinanceSpotClient
+from binance_data_contract import BinanceDataContract
 from digital_williams_core import DigitalWilliamsCore
 from diagnostics import DiagnosticManager
 
@@ -29,6 +30,7 @@ context_cache = ContextCache()
 mtf_service = MultiTimeframeContextService(context_cache)
 quant_store = FeatureStore()
 digital_williams = DigitalWilliamsCore()
+binance_data_contract = BinanceDataContract()
 
 
 class MetricsRegistry:
@@ -722,7 +724,9 @@ def health():
 @app.get('/api/v1/williams/core', dependencies=[Depends(auth)])
 def williams_core_contract():
     """Public, credential-free description of the canonical Digital Williams core."""
-    return digital_williams.contract()
+    contract = digital_williams.contract()
+    contract["binance_contract"] = binance_data_contract.to_dict()
+    return contract
 
 
 @app.get('/api/v1/diagnostics/incidents', dependencies=[Depends(auth)])
