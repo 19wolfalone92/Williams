@@ -12,6 +12,7 @@ from binance_client import BinanceAPIError
 from campaign_engine import CampaignEngine
 from campaign_model import CampaignState, PendingOrderRecord, SignalSpec, SignalState, SignalType
 from decision_trace import DecisionTrace
+from domain.contracts import RiskDecision, SignalDirection
 from execution_barrier import ExecutionBarrier, OrderIntent
 
 
@@ -197,9 +198,20 @@ class CampaignExecutionService:
         equity_quote: float,
         candidate_risk_pct: float,
         capital_fraction: float = 0.25,
+        risk_decision: RiskDecision | None = None,
     ) -> dict[str, Any]:
         if signal.side != "BUY":
             raise CampaignExecutionError("Current Spot campaign executor only arms LONG entries")
+        if risk_decision is None:
+            raise CampaignExecutionError("canonical RiskDecision is required for campaign entry")
+        if risk_decision is None:
+            raise CampaignExecutionError("canonical RiskDecision is required for campaign add-on")
+        if risk_decision is not None:
+            decision = risk_decision.williams_decision
+            if decision.symbol != signal.symbol.upper():
+                raise CampaignExecutionError("RiskDecision symbol does not match entry signal")
+            if decision.direction is not SignalDirection.LONG:
+                raise CampaignExecutionError("Spot campaign initial entry requires LONG RiskDecision")
 
         reserved = self.engine.portfolio_reserved_risk_quote()
         capacity = max(0.0, float(equity_quote) * self.engine.portfolio_risk_limit_pct)
@@ -209,6 +221,17 @@ class CampaignExecutionService:
             self.engine.initial_risk_pct(),
             remaining_risk / max(float(equity_quote), 1e-12),
         )
+        canonical_quantity_limit = 0.0
+        if risk_decision is not None:
+            requested_risk = min(
+                requested_risk,
+                float(risk_decision.allocated_r_multiple)
+                * float(self.engine.campaign_risk_limit_pct),
+            )
+            canonical_quantity_limit = max(
+                0.0,
+                float(risk_decision.calculated_quantity),
+            )
         if requested_risk <= 0:
             raise CampaignExecutionError("No portfolio risk capacity for campaign entry")
 
@@ -243,6 +266,8 @@ class CampaignExecutionService:
             float(equity_quote) * capital_fraction,
             risk_quote / max(effective_loss_fraction, 1e-12),
         )
+        if canonical_quantity_limit > 0:
+            notional = min(notional, canonical_quantity_limit * trigger)
         qty = self._normalized_entry_qty(signal.symbol, notional, trigger)
         client_id = f"{self.ENTRY_PREFIX}{uuid.uuid4().hex[:20]}"
 
@@ -260,7 +285,15 @@ class CampaignExecutionService:
             initial_risk_pct=requested_risk,
         )
         campaign.tags["signal_role"] = signal.role.value
-        campaign.tags["decision_trace"] = DecisionTrace.from_signal(signal).to_dict()
+        campaign.tags["canonical_williams_decision"] = (
+            risk_decision.williams_decision.to_dict()
+        )
+        campaign.tags["canonical_risk_decision"] = risk_decision.to_dict()
+        campaign.tags["decision_trace"] = DecisionTrace.from_signal(
+            signal,
+            proof_vector=risk_decision.williams_decision.proof_vector.to_dict(),
+            system_versions={"risk_engine": "canonical"},
+        ).to_dict()
         campaign.tags["pending_signal_expires_at_ms"] = int(signal.expires_at_ms or 0)
         campaign.tags["initial_stop_price"] = stop
         campaign.initial_stop_price = stop
@@ -276,10 +309,19 @@ class CampaignExecutionService:
         self.engine.arm_entry(campaign, signal)
         self.db.state_set(f"campaign_state:{campaign.campaign_id}", campaign.state.value)
 
-        intent = OrderIntent.new(
-            signal.symbol,
-            "BUY",
-            "STOP_LOSS",
+        canonical_intent = __import__(
+            "domain.contracts",
+            fromlist=["ExecutionIntent"],
+        ).ExecutionIntent(
+            risk_decision=risk_decision,
+            order_type="STOP_LOSS",
+            client_order_id=client_id,
+            recv_window=int(getattr(self.client, "recv_window", 5000) or 5000),
+            time_in_force="GTC",
+            reduce_only=False,
+        )
+        intent = OrderIntent.from_canonical(
+            canonical_intent,
             required_context_versions=dict(signal.context_versions),
             hypothesis_id=f"WILLIAMS_{signal.signal_type.value}",
             invalidation_level=stop,
@@ -346,6 +388,7 @@ class CampaignExecutionService:
                     quantity=self.client.decimal_format(qty),
                     stop_price=self.client.decimal_format(trigger),
                     new_client_order_id=client_id,
+                    reconcile_unknown=False,
                 ),
                 check,
             )
@@ -417,8 +460,52 @@ class CampaignExecutionService:
                 return self.engine.load_campaign(str(item["campaign_id"]))
         return None
 
+    def reconcile_execution_barrier_unknown(self) -> dict[str, Any] | None:
+        """Clear or retain the durable P0 mutation lock via read-only REST reconciliation."""
+        if self.barrier is None or not self.barrier.mutation_locked:
+            return None
+
+        def lookup(intent: OrderIntent):
+            order_type = intent.order_type.upper()
+            if order_type == "CANCEL":
+                if not intent.related_order_id:
+                    raise CampaignExecutionError(
+                        "ambiguous CANCEL has no durable target order id"
+                    )
+                return self.client.get_order(
+                    intent.symbol,
+                    order_id=int(intent.related_order_id),
+                )
+            return self.client.get_order(
+                intent.symbol,
+                orig_client_order_id=intent.client_order_id,
+            )
+
+        result = self.barrier.reconcile_persisted_unknown(lookup)
+        payload = {
+            "accepted": bool(result.accepted),
+            "intent_id": result.intent_id,
+            "reason": result.reason,
+        }
+        if result.response is not None:
+            payload["response"] = result.response
+
+        if not result.accepted and self.barrier.mutation_locked:
+            # A global UNKNOWN must block all later campaign mutations. Do not
+            # continue scanning or attempting protection changes.
+            self.db.state_set("position_state", "RECONCILE_REQUIRED")
+        return payload
+
     def reconcile_pending_entries(self) -> list[dict[str, Any]]:
         """Adopt conditional BUYs after triggers, partial fills, restart or crash."""
+        barrier_recovery = self.reconcile_execution_barrier_unknown()
+        if (
+            barrier_recovery is not None
+            and self.barrier is not None
+            and self.barrier.mutation_locked
+        ):
+            return [barrier_recovery]
+
         rows = self.db.conn.execute(
             "SELECT key,value FROM bot_state "
             "WHERE key LIKE 'entry_client_order_id:%' "
@@ -774,6 +861,11 @@ class CampaignExecutionService:
 
     def reconcile_active_campaigns(self) -> list[dict[str, Any]]:
         """Rebuild active campaign protection without invoking the legacy OCO path."""
+        if self.barrier is not None and self.barrier.mutation_locked:
+            return [{
+                "state": "RECONCILE_REQUIRED",
+                "reason": "ExecutionBarrier mutation lock remains active",
+            }]
         results = []
         campaigns = self.db.open_campaigns()
         for row in campaigns:
@@ -943,7 +1035,15 @@ class CampaignExecutionService:
         *,
         equity_quote: float,
         candidate_risk_pct: float,
+        risk_decision: RiskDecision | None = None,
     ) -> dict[str, Any]:
+        if risk_decision is not None:
+            decision = risk_decision.williams_decision
+            if decision.symbol != signal.symbol.upper():
+                raise CampaignExecutionError("RiskDecision symbol does not match add-on signal")
+            if decision.direction is not SignalDirection.LONG:
+                raise CampaignExecutionError("Spot campaign add-on requires LONG RiskDecision")
+
         campaign = self._active_campaign_for_symbol(signal.symbol)
         if campaign is None or campaign.position_qty <= 0:
             raise CampaignExecutionError(f"{signal.symbol}: no active campaign for add-on")
@@ -962,6 +1062,18 @@ class CampaignExecutionService:
                 float(os.getenv("CAMPAIGN_ADD_RISK_MAX_PCT", "0.002")),
             ),
         )
+        canonical_quantity_limit = 0.0
+        if risk_decision is not None:
+            requested = min(
+                requested,
+                float(equity_quote)
+                * float(risk_decision.allocated_r_multiple)
+                * float(self.engine.campaign_risk_limit_pct),
+            )
+            canonical_quantity_limit = max(
+                0.0,
+                float(risk_decision.calculated_quantity),
+            )
         if requested <= 0:
             raise CampaignExecutionError("campaign risk budget exhausted")
 
@@ -989,6 +1101,8 @@ class CampaignExecutionService:
             equity_quote * float(os.getenv("CAMPAIGN_ADD_CAPITAL_FRACTION", "0.25")),
             requested / max(effective_loss_fraction, 1e-12),
         )
+        if canonical_quantity_limit > 0:
+            notional = min(notional, canonical_quantity_limit * trigger)
         qty = self._normalized_entry_qty(signal.symbol, notional, trigger)
         cid = f"{self.ENTRY_PREFIX}ADD_{uuid.uuid4().hex[:16]}"
 
@@ -1030,10 +1144,21 @@ class CampaignExecutionService:
             raise CampaignExecutionError(
                 f"{signal.symbol}: another pending conditional order exists"
             )
-        intent = OrderIntent.new(
-            signal.symbol,
-            "BUY",
-            "STOP_LOSS",
+        if risk_decision is None:
+            raise CampaignExecutionError("canonical RiskDecision is required for campaign add-on")
+        canonical_intent = __import__(
+            "domain.contracts",
+            fromlist=["ExecutionIntent"],
+        ).ExecutionIntent(
+            risk_decision=risk_decision,
+            order_type="STOP_LOSS",
+            client_order_id=cid,
+            recv_window=int(getattr(self.client, "recv_window", 5000) or 5000),
+            time_in_force="GTC",
+            reduce_only=False,
+        )
+        intent = OrderIntent.from_canonical(
+            canonical_intent,
             required_context_versions=dict(signal.context_versions),
             hypothesis_id=f"WILLIAMS_ADD_{signal.signal_type.value}",
             invalidation_level=stop,
@@ -1054,6 +1179,7 @@ class CampaignExecutionService:
                 quantity=self.client.decimal_format(qty),
                 stop_price=self.client.decimal_format(trigger),
                 new_client_order_id=cid,
+reconcile_unknown=False,
             ),
             lambda _snapshot: self._validate_add_on_submission(
                 signal.symbol,
@@ -1130,6 +1256,7 @@ class CampaignExecutionService:
                 quantity=self.client.decimal_format(qty),
                 stop_price=self.client.decimal_format(stop),
                 new_client_order_id=cid,
+reconcile_unknown=False,
             ),
             lambda _snapshot: self._check_algo_capacity(campaign.symbol, 1),
         )
@@ -1166,6 +1293,7 @@ class CampaignExecutionService:
             purpose=purpose,
             campaign_id=campaign.campaign_id,
             signal_id=campaign.current_signal_id,
+            related_order_id=str(order_id),
         )
         return self._submit(
             intent,
@@ -1267,6 +1395,7 @@ class CampaignExecutionService:
                 "MARKET",
                 quantity=self.client.decimal_format(qty),
                 new_client_order_id=cid,
+reconcile_unknown=False,
             ),
             lambda _snapshot: self._check_algo_capacity(symbol, 0),
         )
@@ -1292,7 +1421,8 @@ class CampaignExecutionService:
             )
         )
         exit_price = quote / executed
-        remaining = max(0.0, float(campaign.position_qty) - executed)
+        original_position_qty = float(campaign.position_qty)
+        remaining = max(0.0, original_position_qty - executed)
         self.db.log_campaign_event(
             campaign.campaign_id,
             "EXIT_SUBMITTED",
@@ -1316,6 +1446,14 @@ class CampaignExecutionService:
             campaign.next_action = "WAIT"
             campaign.transition(CampaignState.EXIT_PENDING, reason=reason)
             campaign.transition(CampaignState.CLOSED, reason="exit fill complete")
+            self.engine._canonical_set(
+                campaign,
+                __import__(
+                    "campaign_order_fsm",
+                    fromlist=["CampaignOrderState"],
+                ).CampaignOrderState.CLOSED,
+                reason="authoritative campaign exit fill complete",
+            )
             self.db.save_campaign(campaign)
             trade = self.db.open_trade(symbol)
             if trade is not None:
@@ -1341,13 +1479,69 @@ class CampaignExecutionService:
                 "reason": reason,
             }
 
+        try:
+            residual_protection = self.create_hard_stop(
+                campaign,
+                quantity=remaining,
+                stop_price=float(campaign.current_stop_price or 0.0),
+            )
+        except Exception as exc:
+            campaign.position_qty = remaining
+            self.engine.mark_reconcile_required(
+                campaign,
+                f"partial exit left residual without confirmed protection: {exc}",
+            )
+            self.db.state_set(f"position_state:{symbol}", "RECONCILE_REQUIRED")
+            raise CampaignExecutionError(
+                f"{symbol}: partial exit residual cannot be re-protected safely"
+            ) from exc
+
         campaign.position_qty = remaining
-        self.db.save_campaign(campaign)
-        campaign.state = CampaignState.RECONCILE_REQUIRED
-        self.db.state_set(f"position_state:{symbol}", "RECONCILE_REQUIRED")
-        raise CampaignExecutionError(
-            f"{symbol}: campaign exit partially filled; residual {remaining:.12g} requires reconciliation"
+        if original_position_qty > 0:
+            campaign.open_risk_quote = (
+                float(campaign.open_risk_quote)
+                * remaining
+                / original_position_qty
+            )
+        campaign.pending_risk_quote = 0.0
+        campaign.capital_reserved_quote = 0.0
+        campaign.tags["protective_order_id"] = residual_protection.get("order_id", "")
+        campaign.next_action = "MONITOR_RESIDUAL"
+        campaign.reconciliation_state = "CLEAN"
+        campaign.transition(
+            CampaignState.EXIT_PENDING,
+            reason="partial exit filled; residual protected",
         )
+        self.engine._canonical_set(
+            campaign,
+            __import__(
+                "campaign_order_fsm",
+                fromlist=["CampaignOrderState"],
+            ).CampaignOrderState.EXIT_PARTIAL,
+            reason="partial exit filled; residual protected",
+        )
+        self.db.save_campaign(campaign)
+        self.db.state_set(f"position_state:{symbol}", "OPEN")
+        self.db.log_campaign_event(
+            campaign.campaign_id,
+            "EXIT_PARTIAL_FILL",
+            order_id=str(order.get("orderId", "")),
+            reason="residual re-protected",
+            payload={
+                "executed": executed,
+                "remaining": remaining,
+                "residual_protective_order_id": residual_protection.get("order_id", ""),
+            },
+        )
+        return {
+            "campaign_id": campaign.campaign_id,
+            "symbol": symbol,
+            "state": "EXIT_PARTIAL",
+            "quantity": executed,
+            "remaining_quantity": remaining,
+            "exit_price": exit_price,
+            "reason": reason,
+        }
 
     def replace_structural_stop(
         self,
@@ -1372,6 +1566,7 @@ class CampaignExecutionService:
             purpose="CAMPAIGN_TRAIL",
             campaign_id=campaign.campaign_id,
             signal_id=campaign.current_signal_id,
+            related_order_id=str(existing_order_id),
         )
         result = self._submit(
             intent,
@@ -1383,6 +1578,7 @@ class CampaignExecutionService:
                 quantity=self.client.decimal_format(quantity),
                 stop_price=self.client.decimal_format(new_stop),
                 new_client_order_id=cid,
+reconcile_unknown=False,
             ),
             lambda _snapshot: self._check_algo_capacity(campaign.symbol, 0),
         )

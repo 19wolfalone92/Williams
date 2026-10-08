@@ -358,7 +358,7 @@ class BinanceSpotClient:
     def order_safe(self, symbol, side, type_, *, quantity=None, quote_order_qty=None,
                    price=None, stop_price=None, time_in_force=None,
                    new_client_order_id=None, strategy_id=None, strategy_type=None,
-                   trailing_delta=None):
+                   trailing_delta=None, reconcile_unknown=True):
         """Place one order and reconcile ambiguous transport failures first.
 
         The wrapper requires a clientOrderId. POST/5xx/timeout is never blindly
@@ -382,6 +382,8 @@ class BinanceSpotClient:
             )
         except BinanceAPIError as exc:
             if not exc.unknown_execution:
+                raise
+            if not reconcile_unknown:
                 raise
             try:
                 existing = self.get_order(

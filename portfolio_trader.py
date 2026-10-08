@@ -12,6 +12,8 @@ from campaign_execution import CampaignExecutionService, CampaignExecutionError
 from campaign_model import SignalSpec, SignalType, SignalRole
 from campaign_monitor import CampaignMonitor
 from order_identity import is_entry_id, is_exit_id, is_managed_order
+from digital_williams_core import DigitalWilliamsCore
+from risk_engine import CanonicalRiskEngine, RiskPolicy
 
 
 POSITION_STATES = {
@@ -104,6 +106,24 @@ class MultiPositionTrader:
             self.client,
             self.db,
             self.campaign_execution,
+        )
+        self.williams_core = DigitalWilliamsCore()
+        self.canonical_risk_engine = CanonicalRiskEngine(
+            RiskPolicy(
+                campaign_risk_fraction=max(
+                    1e-9,
+                    float(os.getenv("MAX_RISK_PER_TRADE_PCT", "0.005")),
+                ),
+                max_position_fraction=float(
+                    os.getenv("MAX_POSITION_FRACTION", "0.25")
+                ),
+                max_allowed_slippage=float(
+                    os.getenv("RISK_SLIPPAGE_BUFFER_PCT", "0.0015")
+                ),
+                fee_buffer_per_side=float(
+                    os.getenv("FEE_BUFFER_PER_SIDE_PCT", "0.001")
+                ),
+            )
         )
 
     # ------------------------------------------------------------------
@@ -1988,6 +2008,82 @@ class MultiPositionTrader:
                     "dataclasses"
                 ).replace(signal, role=SignalRole.ADD_ON)
 
+                canonical = self.williams_core.evaluate_signal(
+                    add_signal,
+                    campaign_id=campaign.campaign_id,
+                )
+                if canonical.action != "ARM_ADD_ON":
+                    self.db.log_event(
+                        "INFO",
+                        "canonical_add_on_blocked",
+                        "Digital Williams ProofEngine rejected add-on before campaign mutation",
+                        {
+                            "symbol": symbol,
+                            "signal_id": add_signal.signal_id,
+                            "action": canonical.action,
+                            "vetoes": list(canonical.vetoes),
+                            "proof": (
+                                canonical.decision.proof_vector.to_dict()
+                                if canonical.decision is not None
+                                else {}
+                            ),
+                        },
+                    )
+                    results.append(
+                        {
+                            "symbol": symbol,
+                            "campaign": True,
+                            "action": "WAIT_ADD_ON",
+                            "canonical_vetoes": list(canonical.vetoes),
+                        }
+                    )
+                    continue
+                remaining_campaign_risk = max(
+                    0.0,
+                    float(equity) * float(self.campaign_execution.engine.campaign_risk_limit_pct)
+                    - float(campaign.open_risk_quote or 0.0)
+                    - float(campaign.pending_risk_quote or 0.0),
+                )
+                requested_add_risk = min(
+                    float(equity)
+                    * min(
+                        self.max_risk_per_trade_pct,
+                        max(
+                            0.0,
+                            float(selection.risk.risk_pct) / 100.0,
+                        ),
+                        float(os.getenv("CAMPAIGN_ADD_RISK_MAX_PCT", "0.002")),
+                    ),
+                    remaining_campaign_risk,
+                )
+                risk_decision = self.canonical_risk_engine.approve(
+                    canonical.decision,
+                    equity_quote=equity,
+                    remaining_campaign_risk_quote=requested_add_risk,
+                )
+                if not risk_decision.approved:
+                    self.db.log_event(
+                        "INFO",
+                        "canonical_add_on_risk_blocked",
+                        "RiskPolicy rejected canonical add-on decision",
+                        {
+                            "symbol": symbol,
+                            "signal_id": add_signal.signal_id,
+                            "reason": risk_decision.rejection_reason,
+                            "proof": canonical.decision.proof_vector.to_dict(),
+                        },
+                    )
+                    results.append(
+                        {
+                            "symbol": symbol,
+                            "campaign": True,
+                            "action": "WAIT_ADD_ON",
+                            "canonical_risk_rejection": risk_decision.rejection_reason,
+                        }
+                    )
+                    continue
+
+
                 try:
                     result = self.campaign_execution.arm_add_on(
                         add_signal,
@@ -1996,6 +2092,7 @@ class MultiPositionTrader:
                             self.max_risk_per_trade_pct,
                             max(0.0, float(selection.risk.risk_pct) / 100.0),
                         ),
+                        risk_decision=risk_decision,
                     )
                     results.append(
                         {
@@ -2032,6 +2129,76 @@ class MultiPositionTrader:
             if signal is None:
                 continue
 
+            canonical = self.williams_core.evaluate_signal(
+                signal,
+                campaign_id="",
+            )
+            if canonical.action != "ARM_ENTRY":
+                self.db.log_event(
+                    "INFO",
+                    "canonical_entry_blocked",
+                    "Digital Williams ProofEngine rejected initial campaign before execution mutation",
+                    {
+                        "symbol": symbol,
+                        "signal_id": signal.signal_id,
+                        "action": canonical.action,
+                        "vetoes": list(canonical.vetoes),
+                        "proof": (
+                            canonical.decision.proof_vector.to_dict()
+                            if canonical.decision is not None
+                            else {}
+                        ),
+                    },
+                )
+                results.append(
+                    {
+                        "symbol": symbol,
+                        "campaign": True,
+                        "action": "WAIT",
+                        "canonical_vetoes": list(canonical.vetoes),
+                    }
+                )
+                continue
+            requested_initial_risk = min(
+                self.max_risk_per_trade_pct,
+                max(
+                    0.0,
+                    float(selection.risk.risk_pct) / 100.0,
+                ),
+                max(
+                    0.0,
+                    float(self.campaign_execution.engine.remaining_portfolio_risk_quote(equity))
+                    / max(float(equity), 1e-12),
+                ),
+            )
+            risk_decision = self.canonical_risk_engine.approve(
+                canonical.decision,
+                equity_quote=equity,
+                remaining_campaign_risk_quote=float(equity) * requested_initial_risk,
+            )
+            if not risk_decision.approved:
+                self.db.log_event(
+                    "INFO",
+                    "canonical_entry_risk_blocked",
+                    "RiskPolicy rejected canonical initial campaign decision",
+                    {
+                        "symbol": symbol,
+                        "signal_id": signal.signal_id,
+                        "reason": risk_decision.rejection_reason,
+                        "proof": canonical.decision.proof_vector.to_dict(),
+                    },
+                )
+                results.append(
+                    {
+                        "symbol": symbol,
+                        "campaign": True,
+                        "action": "WAIT",
+                        "canonical_risk_rejection": risk_decision.rejection_reason,
+                    }
+                )
+                continue
+
+
             try:
                 result = self.campaign_execution.arm_initial_entry(
                     signal,
@@ -2040,6 +2207,7 @@ class MultiPositionTrader:
                         self.max_risk_per_trade_pct,
                         max(0.0, float(selection.risk.risk_pct) / 100.0),
                     ),
+                    risk_decision=risk_decision,
                 )
                 results.append(
                     {
