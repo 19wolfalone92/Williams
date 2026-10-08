@@ -75,15 +75,51 @@ class DigitalWilliamsCore:
             return "HTF_CONFIRMED"
         return "UNKNOWN"
 
-    def select_initial(self, signals: Iterable[SignalSpec]) -> SignalSpec | None:
+    def select_initial(
+        self,
+        signals: Iterable[SignalSpec],
+        *,
+        now_ms: int | None = None,
+    ) -> SignalSpec | None:
         candidates = [
             s for s in signals
             if s.side == "BUY"
             and s.role.value == "ENTRY"
             and s.trigger_price > 0
         ]
+        armable = []
+        for signal in candidates:
+            pending = PendingSignal.from_spec(signal)
+            evaluation = WilliamsProofEngine.evaluate(signal)
+            if pending.actionable(now_ms) and evaluation.armable:
+                armable.append(signal)
         return min(
-            candidates,
+            armable,
+            key=lambda s: (s.signal_bar_time_ms, s.created_at_ms),
+            default=None,
+        )
+
+    def select_armable(
+        self,
+        signals: Iterable[SignalSpec],
+        *,
+        role: str,
+        now_ms: int | None = None,
+    ) -> SignalSpec | None:
+        candidates = [
+            s for s in signals
+            if s.side == "BUY"
+            and s.role.value == str(role)
+            and s.trigger_price > 0
+        ]
+        armable = []
+        for signal in candidates:
+            pending = PendingSignal.from_spec(signal)
+            evaluation = WilliamsProofEngine.evaluate(signal)
+            if pending.actionable(now_ms) and evaluation.armable:
+                armable.append(signal)
+        return min(
+            armable,
             key=lambda s: (s.signal_bar_time_ms, s.created_at_ms),
             default=None,
         )
@@ -160,7 +196,7 @@ class DigitalWilliamsCore:
         campaign_id: str = "",
         now_ms: int | None = None,
     ) -> CoreComposition:
-        signal = self.select_initial(signals)
+        signal = self.select_initial(signals, now_ms=now_ms)
         if signal is None:
             return CoreComposition(None, None, None, None, "WAIT", ())
         return self.evaluate_signal(
@@ -190,7 +226,7 @@ class DigitalWilliamsCore:
             "core_version": self.VERSION,
             "contracts_version": "2.0.0",
             "sequence": [
-                "BEHAVIOR", "CONTEXT", "STRUCTURE", "LOCATION",
+                "CONTEXT", "BEHAVIOR", "STRUCTURE", "LOCATION",
                 "MOMENTUM", "PRICE_PROOF", "ENTRY", "ADD",
                 "CAMPAIGN", "EXHAUSTION", "EXIT",
             ],
