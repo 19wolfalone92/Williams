@@ -412,8 +412,6 @@ class MarketScanner:
         if price <= 0 or atr <= 0:
             return None
         spread_pct = self._spread(symbol)
-        if spread_pct > self.max_spread_pct:
-            return None
 
         specs = list(decision.signal_specs)
         first = specs[0] if specs else None
