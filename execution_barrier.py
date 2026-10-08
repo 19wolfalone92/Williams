@@ -117,6 +117,10 @@ class ExecutionBarrier:
                 return "signal expired before execution admission"
             if not intent.permission_interval:
                 return "missing permission_interval"
+            if str(intent.permission_interval).lower() not in {
+                str(tf).lower() for tf in intent.required_context_versions
+            }:
+                return "permission_interval missing from required_context_versions"
             if purpose.startswith("CAMPAIGN_") and not intent.campaign_id:
                 return "missing campaign_id for campaign entry"
 
