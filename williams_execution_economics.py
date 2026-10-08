@@ -10,7 +10,7 @@ class EconomicDecision:
 class ExecutionEconomicsGate:
     def __init__(self,*,fee_pct=.001,slippage_pct=.0015,spread_pct_limit=.0015,cost_multiple=1.5):
         self.fee_pct=float(fee_pct);self.slippage_pct=float(slippage_pct);self.spread_pct_limit=float(spread_pct_limit);self.cost_multiple=max(1,float(cost_multiple))
-    def evaluate(self,*,equity_quote,entry_price,stop_price,risk_pct,spread_pct,min_qty=0,qty_step=0,min_notional=0,expected_edge_pct=0):
+    def evaluate(self,*,equity_quote,entry_price,stop_price,risk_pct,spread_pct,min_qty=0,qty_step=0,min_notional=0,expected_edge_pct=0,available_quote=None):
         equity=float(equity_quote);entry=float(entry_price);stop=float(stop_price);spread=float(spread_pct)
         if equity<=0:return self._blocked(equity,"EQUITY_UNAVAILABLE")
         if entry<=0 or stop<=0 or stop>=entry:return self._blocked(equity,"STRUCTURAL_STOP_INVALID")
@@ -22,6 +22,7 @@ class ExecutionEconomicsGate:
         notional=qty*entry
         if qty<=0 or qty<min_qty:return self._blocked(equity,"MIN_QTY_INCOMPATIBLE")
         if notional<min_notional:return self._blocked(equity,"MIN_NOTIONAL_INCOMPATIBLE")
+        if available_quote is not None and notional>float(available_quote)+max(0.01,float(available_quote)*1e-9):return self._blocked(equity,"AVAILABLE_BALANCE_INSUFFICIENT")
         if expected_edge_pct>0 and expected_edge_pct<=cost*self.cost_multiple:
             return EconomicDecision(False,"EXPECTED_EDGE_TOO_SMALL_FOR_COSTS",equity,risk,dist,cost,qty,notional,expected_edge_pct)
         return EconomicDecision(True,"",equity,risk,dist,cost,qty,notional,expected_edge_pct)
