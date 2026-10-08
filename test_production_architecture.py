@@ -226,9 +226,13 @@ def test_execution_barrier_rejects_buy_with_unrecognized_purpose():
     assert calls == []
 
 
-def test_execution_barrier_keeps_protective_sell_available_without_entry_context():
+def test_execution_barrier_keeps_protective_sell_available_during_reconciliation():
+    class ReconcileDB:
+        def state_get(self, key, default=None):
+            return "RECONCILE_REQUIRED" if key == "position_state" else default
+
     cache = ContextCache()
-    barrier = ExecutionBarrier(cache)
+    barrier = ExecutionBarrier(cache, ReconcileDB())
     intent = OrderIntent.new(
         "BTCUSDT", "SELL", "STOP_LOSS",
         {},
@@ -243,3 +247,30 @@ def test_execution_barrier_keeps_protective_sell_available_without_entry_context
 
     assert result.accepted
     assert calls == ["protect"]
+
+
+def test_execution_barrier_blocks_new_entry_during_reconciliation():
+    class ReconcileDB:
+        def state_get(self, key, default=None):
+            return "RECONCILE_REQUIRED" if key == "position_state" else default
+
+    cache = ContextCache()
+    cache.publish(context())
+    barrier = ExecutionBarrier(cache, ReconcileDB())
+    version = cache.snapshot().context("BTCUSDT", "1h").version
+    intent = OrderIntent.new(
+        "BTCUSDT", "BUY", "STOP_LOSS",
+        {"1h": version},
+        signal_id="signal-1",
+        signal_expires_at_ms=int(time.time() * 1000) + 60_000,
+        permission_interval="1h",
+    )
+    calls = []
+    result = barrier.execute(
+        intent,
+        lambda: calls.append("entry") or {"status": "NEW"},
+    )
+
+    assert not result.accepted
+    assert result.reason == "RECONCILE_REQUIRED"
+    assert calls == []
