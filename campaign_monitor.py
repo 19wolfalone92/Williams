@@ -318,6 +318,8 @@ class CampaignMonitor:
             campaign = self.execution.engine.load_campaign(str(row["campaign_id"]))
             if campaign is None or campaign.position_qty <= 0:
                 continue
+            if campaign.state in {CampaignState.EXIT_SIGNALLED, CampaignState.EXIT_PENDING, CampaignState.RECONCILE_REQUIRED}:
+                continue
             try:
                 results.append({
                     "campaign_id": campaign.campaign_id,
@@ -348,6 +350,9 @@ class CampaignMonitor:
                     CampaignState.ADD_ON_PENDING,
                     CampaignState.ADD_ON_ARMING,
                     CampaignState.SIGNAL_DETECTED,
+                    CampaignState.EXIT_SIGNALLED,
+                    CampaignState.EXIT_PENDING,
+                    CampaignState.RECONCILE_REQUIRED,
                 }:
                     continue
                 results.append(self.manage_campaign(campaign))
