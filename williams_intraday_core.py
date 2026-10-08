@@ -48,7 +48,7 @@ class WilliamsIntradayCore:
   ind=calculate_indicators(x,config_from_env());cur=ind.iloc[-1];prev=ind.iloc[-2]
   tms=self._time_ms(cur);h4c=self._h4_context(h4);d1s=self._d1_state(d1)
   vals=[float(cur.get(k,0) or 0) for k in ("jaw_shifted","teeth_shifted","lips_shifted")];mouth=[v for v in vals if v>0]
-  close=float(cur.get("close",0) or 0);high=float(cur.get("high",0) or 0);low=float(cur.get("low",0) or 0)
+  close=float(cur.get("close",0) or 0);open_price=float(cur.get("open",close) or close);high=float(cur.get("high",0) or 0);low=float(cur.get("low",0) or 0)
   if len(mouth)==3:
    if close>max(mouth):ag="BULLISH"
    elif close<min(mouth):ag="BEARISH"
@@ -58,7 +58,8 @@ class WilliamsIntradayCore:
   prev_lows=[float(v) for v in ind["low"].iloc[-3:-1].tolist()]; lower=bool(prev_lows and low<min(prev_lows))
   rng=high-low;loc=(close-low)/rng if rng>0 else 0
   outside=bool(mouth) and low<min(mouth)
-  reversal=lower and loc>=.5 and outside
+  bullish_bar=close>open_price
+  reversal=lower and bullish_bar and loc>=.5 and outside
   ang=measure_side_angulation(ind,len(ind)-1,"LONG",window=5)
   ao=float(cur.get("ao",0) or 0);prev_ao=float(prev.get("ao",0) or 0);green=int(cur.get("ao_green_streak",0) or 0)
   ao_down=ao<=0 or ao<prev_ao
@@ -75,7 +76,7 @@ class WilliamsIntradayCore:
    specs.append(SignalSpec.new(symbol=symbol,side="BUY",signal_type=SignalType.FRACTAL,role=SignalRole.ENTRY,timeframe="1h",signal_bar_time_ms=self._time_ms(center),trigger_price=latest.level+tick,protective_reference=max(0,float(center["low"])-tick),invalidation_price=max(0,float(center["low"])-tick),teeth_at_detection=teeth,alligator_bullish=bool(cur.get("bullish_alligator",False)),alligator_awake=bool(cur.get("alligator_awake",False)),reason=f"WM3: {latest.formation} fractal; Teeth checked dynamically at trigger",source_candle_index=latest.center_index,execution_timeframe="15m"))
   priority={"REVERSAL":0,"SUPER_AO":1,"FRACTAL":2};specs.sort(key=lambda s:(s.signal_bar_time_ms,priority[s.signal_type.value]));usable=[s for s in specs if s.signal_type!=SignalType.FRACTAL or self.policy.wm3_first_allowed]
   first=usable[0].signal_type.value if usable else "";q=self._quality(usable,ang,ag,h4c)
-  return StrategyDecision(symbol,tms,"1h","15m","5m",h4c,d1s,ag,wm1,wm2,wm3,bool(usable),q,first,tuple(usable),ang.to_dict(),"BEARISH_OR_FALLING_AO" if ao_down else "NOT_BEARISH","Williams Core valid" if usable else "No H1 Wise Man condition",{"lower_low":lower,"close_upper_half":loc>=.5,"outside_mouth":outside,"ao":ao,"ao_previous":prev_ao,"ao_green_streak":green,"teeth_at_trigger":teeth,"fractal_count":len(obs)})
+  return StrategyDecision(symbol,tms,"1h","15m","5m",h4c,d1s,ag,wm1,wm2,wm3,bool(usable),q,first,tuple(usable),ang.to_dict(),"BEARISH_OR_FALLING_AO" if ao_down else "NOT_BEARISH","Williams Core valid" if usable else "No H1 Wise Man condition",{"lower_low":lower,"close_upper_half":loc>=.5,"bullish_reversal_bar":bullish_bar,"outside_mouth":outside,"ao":ao,"ao_previous":prev_ao,"ao_green_streak":green,"teeth_at_trigger":teeth,"fractal_count":len(obs)})
  @staticmethod
  def _quality(specs,ang,ag,h4c):
   if not specs:return "D"
