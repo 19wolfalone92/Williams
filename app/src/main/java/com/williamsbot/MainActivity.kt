@@ -1256,6 +1256,8 @@ private fun DiagnosticsScreen(
         item { DiagnosticRow("User WS", if (status.userWsConnected && !status.userStreamSyncRequired) "CONNECTED" else "DEGRADED • REST reconciliation") }
         item { DiagnosticRow("Scanner", status.scannerState + " • " + status.scannerSymbols + " symbols • " + status.scanDurationMs + " ms") }
         item { DiagnosticRow("Execution", if (status.p0GatePassed) "READY" else "BLOCKED • " + status.p0GateReason) }
+        item { DiagnosticRow("Primary blocker", status.primaryBlocker ?: "NONE") }
+        item { CampaignDiagnosticsCard(status) }
         status.error?.let { item { DiagnosticRow("Last error", it) } }
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1424,6 +1426,10 @@ private fun DashboardScreen(
                 refreshing = refreshing,
                 onScan = onScan
             )
+        }
+
+        item {
+            CampaignSummaryCard(status)
         }
 
         item {
@@ -1651,6 +1657,79 @@ private fun BestCandidateCard(best: Candidate?) {
                         color = AppColors.violet
                     )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CampaignSummaryCard(status: Status) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = AppColors.surface)
+    ) {
+        Column(
+            Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Filled.Timeline, contentDescription = null, tint = AppColors.primary)
+                Spacer(Modifier.width(8.dp))
+                Text("Trading Campaigns", style = MaterialTheme.typography.titleMedium)
+            }
+            if (status.campaigns.isEmpty()) {
+                Text(
+                    "No active campaign",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AppColors.textMuted
+                )
+            } else {
+                status.campaigns.take(3).forEach { c ->
+                    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        Text(
+                            c.symbol + " • " + c.state,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            (if (c.signalType.isBlank()) "SIGNAL" else c.signalType) +
+                                " • risk " + fmt(c.riskPct * 100, 2) + "%" +
+                                (c.triggerPrice?.let { " • trigger " + fmt(it, 2) } ?: ""),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = AppColors.textMuted
+                        )
+                        Text(
+                            "NEXT: " + c.nextAction + " • " + c.health,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (c.health == "RED") AppColors.red else AppColors.textMuted
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CampaignDiagnosticsCard(status: Status) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = AppColors.surface)
+    ) {
+        Column(
+            Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text("Campaign Diagnostics", style = MaterialTheme.typography.titleMedium)
+            status.campaigns.take(5).forEach { c ->
+                InfoRow("Campaign " + c.campaignId.ifBlank { "—" }, c.symbol + " • " + c.state)
+                InfoRow("Signal", c.signalType.ifBlank { "UNKNOWN" })
+                c.triggerPrice?.let { InfoRow("Trigger", fmt(it, 6)) }
+                c.currentStop?.let { InfoRow("Stop", fmt(it, 6)) }
+                InfoRow("Risk", fmt(c.riskPct * 100, 3) + "%")
+                InfoRow("Next", c.nextAction)
+            }
+            if (status.campaigns.isEmpty()) {
+                Text("No pending or active campaign.", color = AppColors.textMuted)
             }
         }
     }
