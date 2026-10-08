@@ -348,7 +348,11 @@ class WilliamsIntradayCore:
         return StrategyDecision(
             symbol=symbol,decision_time_ms=tms,decision_tf=policy.timeframes.decision_tf,execution_tf=policy.timeframes.execution_tf,
             macro_tf=policy.timeframes.macro_tf,permission_tf=policy.timeframes.permission_tf,context_tf=policy.timeframes.context_tf,
-            h4_context=h4c,d1_state=d1s,context_state=context,wm1=wm1_long,wm2=ao_idx is not None,wm3=latest is not None,
+            h4_context=h4c,d1_state=d1s,context_state=context,
+            wm1=wm1_long or wm1_short,
+            wm2=(ao_long_idx is not None and long_continuation_allowed)
+                or (ao_short_idx is not None and short_continuation_allowed),
+            wm3=latest_long is not None or latest_short is not None,
             core_valid=bool(specs),quality=quality,first_signal_type=first.signal_type.value if first else "",
             signal_specs=tuple(specs),
             angulation=(long_ang.to_dict() if wm1_long else short_ang.to_dict() if wm1_short else long_ang.to_dict()),
