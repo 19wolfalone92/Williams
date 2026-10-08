@@ -380,7 +380,12 @@ class CampaignExecutionService:
         if canonical_quantity_limit > 0:
             notional = min(notional, canonical_quantity_limit * trigger)
         qty = self._normalized_entry_qty(signal.symbol, notional, trigger)
-        client_id = f"{self.ENTRY_PREFIX}{uuid.uuid4().hex[:20]}"
+        client_id = deterministic_client_order_id(
+            "ENTRY",
+            campaign.campaign_id,
+            "WM1",
+            signal.signal_id,
+        )
 
         claimed = self.db.try_claim_state(
             f"entry_client_order_id:{signal.symbol}",
@@ -1214,7 +1219,12 @@ class CampaignExecutionService:
         if canonical_quantity_limit > 0:
             notional = min(notional, canonical_quantity_limit * trigger)
         qty = self._normalized_entry_qty(signal.symbol, notional, trigger)
-        cid = f"{self.ENTRY_PREFIX}ADD_{uuid.uuid4().hex[:16]}"
+        cid = deterministic_client_order_id(
+            "ADD",
+            campaign.campaign_id,
+            signal.signal_id,
+            "WM2_WM3",
+        )
 
         prior = self.db.conn.execute(
             "SELECT state FROM campaign_signals WHERE campaign_id=? AND signal_id=?",
@@ -1350,7 +1360,13 @@ reconcile_unknown=False,
                 f"{campaign.symbol}: protective stop notional {qty * stop:.8f} below Binance minimum {min_notional:.8f}"
             )
         self._check_algo_capacity(campaign.symbol, 1)
-        cid = f"{self.STOP_PREFIX}{uuid.uuid4().hex[:20]}"
+        cid = deterministic_client_order_id(
+            "STOP",
+            campaign.campaign_id,
+            signal.current_signal_id if hasattr(signal, "current_signal_id") else campaign.current_signal_id,
+            stop,
+            quantity,
+        )
         intent = OrderIntent.new(
             campaign.symbol,
             "SELL",
@@ -1406,7 +1422,12 @@ reconcile_unknown=False,
             "SELL",
             "CANCEL",
             required_context_versions={},
-            client_order_id=f"{self.STOP_PREFIX}CANCEL_{uuid.uuid4().hex[:14]}",
+            client_order_id=deterministic_client_order_id(
+                "CANCEL",
+                campaign.campaign_id,
+                order_id,
+                purpose,
+            ),
             purpose=purpose,
             campaign_id=campaign.campaign_id,
             signal_id=campaign.current_signal_id,
@@ -1511,7 +1532,12 @@ reconcile_unknown=False,
                 f"{symbol}: no free campaign inventory after protection cancel"
             )
 
-        cid = f"{self.EXIT_PREFIX}{uuid.uuid4().hex[:20]}"
+        cid = deterministic_client_order_id(
+            "EXIT",
+            campaign.campaign_id,
+            reason,
+            qty,
+        )
         intent = OrderIntent.new(
             symbol,
             "SELL",
@@ -1690,7 +1716,13 @@ reconcile_unknown=False,
         if not campaign.current_stop_price <= proposed_stop:
             raise CampaignExecutionError("structural stop would loosen LONG risk")
         new_stop = self._normalize_price(campaign.symbol, proposed_stop)
-        cid = f"{self.STOP_PREFIX}{uuid.uuid4().hex[:20]}"
+        cid = deterministic_client_order_id(
+            "STOP_REPLACE",
+            campaign.campaign_id,
+            existing_order_id,
+            new_stop,
+            quantity,
+        )
         intent = OrderIntent.new(
             campaign.symbol,
             "SELL",
