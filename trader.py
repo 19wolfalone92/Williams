@@ -1002,6 +1002,13 @@ class Trader:
             )
         if not self.client.testnet and os.getenv('ALLOW_LIVE', 'false').lower() != 'true':
             raise RuntimeError('BUY blocked: LIVE trading requires ALLOW_LIVE=true.')
+        # This legacy method accepts only a quote amount, not a durable
+        # Williams SignalSpec. It cannot prove signal identity, absolute expiry,
+        # or the signal's context dependencies; fail closed before DB mutation.
+        raise RuntimeError(
+            'BUY blocked: legacy Trader.market_buy lacks a Williams signal/expiry contract; '
+            'autonomous entries must use CampaignExecutionService'
+        )
         # Legacy single-symbol entry path: portfolio admission is risk-based.
         # MultiPositionTrader is the authoritative auto-scan executor.
         if (not self.client.testnet) and (self.preflight_report is None or not self.preflight_report.get('ready')):
