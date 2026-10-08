@@ -127,6 +127,8 @@ class SignalSpec:
     wave_confidence: float = 0.0
     wave_exhaustion_risk: float = 0.0
     htf_confirmed: bool = False
+    point_zero_confirmed: bool = False
+    point_zero_score: int = 0
     context_versions: Mapping[str, int] = field(default_factory=dict)
     reason: str = ""
     created_at_ms: int = field(default_factory=lambda: int(time.time() * 1000))
