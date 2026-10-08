@@ -13,7 +13,7 @@ from campaign_model import SignalSpec, SignalType
 from decision_trace import DecisionTrace
 from domain.contracts import SignalDirection, WilliamsDecision
 from pending_signal import PendingSignal, should_replace
-from proof_engine import WilliamsProofEngine
+from proof_engine import ProofEvaluation, WilliamsProofEngine, price_proof
 from why_not_engine import WhyNotEngine
 
 
@@ -262,3 +262,18 @@ class DigitalWilliamsCore:
                 ],
             },
         }
+
+
+    def prove_price(self, decision: WilliamsDecision, *, market_price: float) -> WilliamsDecision:
+        """Attach the final price-proof bit without changing any prior evidence."""
+        evaluation = price_proof(decision, market_price=market_price)
+        return WilliamsDecision(
+            timestamp=decision.timestamp,
+            symbol=decision.symbol,
+            direction=decision.direction,
+            wise_man_stage=decision.wise_man_stage,
+            trigger_price=decision.trigger_price,
+            invalidation_price=decision.invalidation_price,
+            proof_vector=evaluation.proof_vector,
+            context_regime=decision.context_regime,
+        )
