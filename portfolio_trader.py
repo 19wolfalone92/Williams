@@ -983,13 +983,21 @@ class MultiPositionTrader:
         self.set_state(symbol, "EXIT_PENDING")
 
         create_oco = getattr(self.client, "create_oco_sell_safe", None) or self.client.create_oco_sell
-        result = create_oco(
+        result = self._barrier_legacy_mutation(
             symbol,
-            self.client.decimal_format(qty),
-            self.client.decimal_format(tp),
-            self.client.decimal_format(sl),
-            self.client.decimal_format(sl_limit),
-            client_id,
+            "SELL",
+            "OCO",
+            "LEGACY_PROTECTION",
+            lambda: create_oco(
+                symbol,
+                self.client.decimal_format(qty),
+                self.client.decimal_format(tp),
+                self.client.decimal_format(sl),
+                self.client.decimal_format(sl_limit),
+                client_id,
+            ),
+            client_order_id=client_id,
+            quantity=self.client.decimal_format(qty),
         )
 
         for leg in result.get("orderReports", []):
@@ -1705,10 +1713,31 @@ class MultiPositionTrader:
             if list_id or list_client:
                 cancel = getattr(self.client, "cancel_oco", None)
                 if cancel is not None:
-                    if list_id:
-                        cancel(symbol, order_list_id=list_id)
-                    else:
-                        cancel(symbol, list_client_order_id=list_client)
+                    cancel_intent = __import__("execution_barrier").OrderIntent.new(
+                        symbol,
+                        "SELL",
+                        "CANCEL_OCO",
+                        {},
+                        purpose="MANUAL_CANCEL_PROTECTION",
+                        permission_interval=str(os.getenv("INTERVAL", "1h")).lower(),
+                        client_order_id=list_client,
+                    )
+                    # Cancellation uses the same P0 door, but no entry permission
+                    # context is consulted for this non-entry mutation.
+                    if self.execution_barrier is None:
+                        raise RuntimeError("ExecutionBarrier is required for OCO cancellation")
+                    cancel_result = self.execution_barrier.execute(
+                        cancel_intent,
+                        lambda: (
+                            cancel(symbol, order_list_id=list_id)
+                            if list_id
+                            else cancel(symbol, list_client_order_id=list_client)
+                        ),
+                    )
+                    if not cancel_result.accepted:
+                        raise RuntimeError(
+                            f"ExecutionBarrier blocked MANUAL_CANCEL_PROTECTION: {cancel_result.reason}"
+                        )
 
             account = self.client.account()
             free_qty = self._asset_balance(
