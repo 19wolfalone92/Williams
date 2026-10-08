@@ -44,31 +44,35 @@ class MultiPositionTrader:
     def __init__(self, client, db=None, symbols=None, execution_barrier=None):
         self.client = client
         self.db = db or Database()
+        self.williams_mode = str(os.getenv("WILLIAMS_MODE", "INTRADAY_CORE")).upper()
+        self.core_mode = self.williams_mode == "INTRADAY_CORE"
+        allowed_core = {"BTCUSDT", "ETHUSDT"}
         if symbols is not None:
-            self.symbols = [str(x).strip().upper() for x in symbols if str(x).strip()]
+            requested_symbols = [str(x).strip().upper() for x in symbols if str(x).strip()]
+            self.symbols = [x for x in requested_symbols if x in allowed_core] if self.core_mode else requested_symbols
         else:
-            raw_symbols = os.getenv("AUTO_SCAN_SYMBOLS", "ALL").strip()
-            self.symbols = (
-                []
-                if raw_symbols.upper() in {"ALL", "AUTO", "*"}
-                else [x.strip().upper() for x in raw_symbols.split(",") if x.strip()]
-            )
+            raw_symbols = os.getenv("AUTO_SCAN_SYMBOLS", "BTCUSDT,ETHUSDT" if self.core_mode else "ALL").strip()
+            if raw_symbols.upper() in {"ALL", "AUTO", "*"}:
+                self.symbols = sorted(allowed_core) if self.core_mode else []
+            else:
+                requested_symbols = [x.strip().upper() for x in raw_symbols.split(",") if x.strip()]
+                self.symbols = [x for x in requested_symbols if x in allowed_core] if self.core_mode else requested_symbols
         self.max_open_positions = max(
             0,
-            int(os.getenv("MAX_OPEN_POSITIONS", "5")),
+            1 if self.core_mode else int(os.getenv("MAX_OPEN_POSITIONS", "5")),
         )
         self.max_total_risk_pct = min(
-            0.01,
+            0.006 if self.core_mode else 0.01,
             max(
                 0.0,
-                float(os.getenv("MAX_TOTAL_RISK_PCT", "0.01")),
+                float(os.getenv("MAX_TOTAL_RISK_PCT", "0.006" if self.core_mode else "0.01")),
             ),
         )
         self.max_risk_per_trade_pct = min(
-            0.005,
+            0.0025 if self.core_mode else 0.005,
             max(
                 0.0,
-                float(os.getenv("MAX_RISK_PER_TRADE_PCT", os.getenv("RISK_PER_TRADE_PCT", "0.005"))),
+                float(os.getenv("MAX_RISK_PER_TRADE_PCT", os.getenv("RISK_PER_TRADE_PCT", "0.0025" if self.core_mode else "0.005"))),
             ),
         )
         self.dry_run = (
@@ -86,9 +90,9 @@ class MultiPositionTrader:
         self.l2_guard = L2SlippageGuard(
             float(os.getenv("MAX_L2_SLIPPAGE_PCT", os.getenv("MAX_SPREAD_PCT", "0.0015")))
         )
-        self.equity_breaker = EquityCircuitBreaker(float(os.getenv("MAX_DAILY_LOSS_PCT", "0.03")))
+        self.equity_breaker = EquityCircuitBreaker(float(os.getenv("MAX_DAILY_LOSS_PCT", "0.01" if self.core_mode else "0.03")))
         self.max_trades_per_day = max(0, int(os.getenv("MAX_TRADES_PER_DAY", "5")))
-        self.max_consecutive_losses = max(0, int(os.getenv("MAX_CONSECUTIVE_LOSSES", "3")))
+        self.max_consecutive_losses = max(0, int(os.getenv("MAX_CONSECUTIVE_LOSSES", "2" if self.core_mode else "3")))
         self.cooldown_minutes = max(0, int(os.getenv("COOLDOWN_MINUTES", "30")))
         self.execution_barrier = execution_barrier or ExecutionBarrier(ContextCache(), self.db)
         self.campaign_engine_enabled = (
