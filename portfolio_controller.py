@@ -27,6 +27,7 @@ class PortfolioController:
         self.max_open_positions = 1 if self.core_mode else max(0, int(os.getenv("MAX_OPEN_POSITIONS", "5")))
         self.max_total_risk_pct = min(0.006 if self.core_mode else 0.01, max(0.0, float(os.getenv("MAX_TOTAL_RISK_PCT", "0.006" if self.core_mode else "0.01"))))
         self.max_risk_per_trade_pct = min(0.0025 if self.core_mode else 0.005, max(0.0, float(os.getenv("MAX_RISK_PER_TRADE_PCT", os.getenv("RISK_PER_TRADE_PCT", "0.0025" if self.core_mode else "0.005")))))
+        self.core_mode = bool(getattr(self, "core_mode", False))
         self.min_risk_allocation_pct = min(
             self.max_risk_per_trade_pct,
             max(0.0, float(os.getenv("MIN_RISK_ALLOCATION_PCT", "0.001"))),
@@ -64,7 +65,7 @@ class PortfolioController:
             if not candidate.signal:
                 continue
             try:
-                if self.core_mode and not self.intraday_policy.allows_new_campaign(now):
+                if bool(getattr(self, "core_mode", False)) and not self.intraday_policy.allows_new_campaign(now):
                     continue
                 if self.core_mode and bool(os.getenv("H4_ADVERSE_BLOCKS", "false").lower() == "true") and candidate.htf_context_state == "ADVERSE":
                     continue
