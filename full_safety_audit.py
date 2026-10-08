@@ -487,10 +487,10 @@ native_runtime = ROOT / "app" / "src" / "main" / "java" / "com" / "williamsbot" 
 native = read_text(native_runtime)
 
 if native:
-    if re.search(r"private\s+val\s+maxOpenPositions\s*=\s*1\b", native):
-        finding("FAIL", "Android runtime still hard-locks maxOpenPositions=1")
+    if re.search(r"private\s+val\s+maxOpenPositions\s*:\s*Int\s*=\s*1\b", native):
+        finding("PASS", "Android runtime enforces canonical single-campaign Core")
     elif re.search(r"private\s+val\s+maxOpenPositions\s*=\s*0\b", native):
-        finding("PASS", "Android runtime uses risk-budgeted multi-position mode")
+        finding("WARN", "Android runtime uses a dynamic non-Core position mode")
     else:
         finding("WARN", "Could not prove Android multi-position default from source")
 
