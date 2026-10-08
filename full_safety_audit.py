@@ -515,7 +515,7 @@ if native:
         line_no = native[:pos].count("\n") + 1
         line_start = native.rfind("\n", 0, pos) + 1
         line = native[line_start:native.find("\n", pos)]
-        if "private fun signedPost" in line or "private fun signedDelete" in line:
+        if re.search(r"private\s+fun\s+signed(Post|Delete|CancelReplace)\s*\(", line):
             continue
         helper_start = native.rfind("private fun signedCancelReplace", 0, pos)
         helper_end = native.find("\n    private fun ", helper_start + 10) if helper_start >= 0 else -1
