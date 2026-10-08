@@ -274,3 +274,28 @@ def test_execution_barrier_blocks_new_entry_during_reconciliation():
     assert not result.accepted
     assert result.reason == "RECONCILE_REQUIRED"
     assert calls == []
+
+
+
+def test_execution_barrier_requires_permission_interval_version_dependency():
+    cache = ContextCache()
+    cache.publish(context(interval="1h"))
+    cache.publish(context(interval="4h"))
+    barrier = ExecutionBarrier(cache)
+    version = cache.snapshot().context("BTCUSDT", "4h").version
+    intent = OrderIntent.new(
+        "BTCUSDT", "BUY", "STOP_LOSS",
+        {"4h": version},
+        signal_id="signal-1",
+        signal_expires_at_ms=int(time.time() * 1000) + 60_000,
+        permission_interval="1h",
+    )
+    calls = []
+    result = barrier.execute(
+        intent,
+        lambda: calls.append("entry") or {"status": "NEW"},
+    )
+
+    assert not result.accepted
+    assert result.reason == "permission_interval missing from required_context_versions"
+    assert calls == []
