@@ -1822,24 +1822,6 @@ class FuturesWilliamsRuntime:
                                 "flatten": result,
                             })
                             continue
-                        try:
-                            if int(campaign.tags.get("protective_order_id", "0") or 0) > 0:
-                                pass  # replacement above already established protection
-                            else:
-                                self._protect(campaign)
-                        except Exception as exc:
-                            result = self._fail_safe_flatten(
-                                campaign, "PROTECTION_FAILURE_AFTER_ADD_ON"
-                            )
-                            results.append({
-                                "symbol": symbol,
-                                "campaign_id": campaign.campaign_id,
-                                "state": campaign.state.value,
-                                "reason": "PROTECTION_FAILURE_AFTER_ADD_ON",
-                                "error": str(exc),
-                                "flatten": result,
-                            })
-                            continue
                         self.db.set_campaign_signal_state(signal_id, SignalState.FILLED.value)
                         self._set_state(symbol, "OPEN")
                         campaign.transition(CampaignState.TREND_ACTIVE, reason="add-on filled and fully reprotected")
