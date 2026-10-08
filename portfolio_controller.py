@@ -137,8 +137,8 @@ class PortfolioController:
         # admit at most one new campaign/position under the intraday contract.
         remaining_slots = (
             max(0, self.max_open_positions - int(open_positions))
-            if self.max_open_positions > 0
-            else (1 if self.intraday_core_enabled else len(analysed))
+            if self.intraday_core_enabled or not campaign_mode
+            else len(analysed)
         )
 
         for base in analysed:
