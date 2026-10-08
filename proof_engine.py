@@ -6,8 +6,6 @@ fully price-proven trade.  It never uses a numeric score as a trade gate.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable
-
 from campaign_model import SignalSpec, SignalType
 from domain.contracts import ProofVector
 
@@ -70,7 +68,7 @@ class ProofEvaluation:
     def missing_pre_price_proof(self) -> tuple[str, ...]:
         return tuple(
             name
-            for name in PRE_PRICE_FIELDS
+            for name in self.required_pre_price_fields
             if not bool(getattr(self.proof_vector, name))
         )
 
