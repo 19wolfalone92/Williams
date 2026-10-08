@@ -286,6 +286,16 @@ class CampaignExecutionService:
         if signal.side != "BUY":
             raise CampaignExecutionError("Current Spot campaign executor only arms LONG entries")
 
+        if self.intraday_core_enabled:
+            # One active campaign is a hard Core invariant. PortfolioController
+            # enforces the same rule at selection time; this second boundary
+            # closes races and direct-service bypasses across symbols.
+            active = self.db.open_campaigns()
+            if active:
+                raise CampaignExecutionError(
+                    "Core campaign limit reached: one active campaign is already open"
+                )
+
         reserved = self.engine.portfolio_reserved_risk_quote()
         capacity = max(0.0, float(equity_quote) * self.engine.portfolio_risk_limit_pct)
         remaining_risk = max(0.0, capacity - reserved)
