@@ -187,9 +187,9 @@ def calculate_indicators(df, cfg):
     x["long_super_ao_signal"] = x["super_ao_long"]
     x["short_super_ao_signal"] = x["super_ao_short"]
 
-    # Conservative execution overlay. The counter-trend Wise-Man signals from
-    # the book are retained as diagnostics, but disabled for the long-only
-    # autonomous entry path unless explicitly enabled.
+    # Legacy diagnostic overlay. Exact armability and trigger semantics are
+    # owned by williams_signals.py; these fields remain only for compatibility
+    # with indicator/status consumers and never authorize an order.
     countertrend = bool(cfg["allow_countertrend_wise_man"])
     x["long_wise_reversal_entry"] = (
         x["last_bullish_reversal_high"].notna()
@@ -225,19 +225,16 @@ def calculate_indicators(df, cfg):
     x["short_ac_negative"] = x["ac"] < 0
     x["short_fractal_ready"] = x["last_down_level"].notna()
 
-    # Strict entry: conservative Williams gate + at least one valid Wise-Man
-    # trigger. Fractal breakouts, Super AO continuation and reversal bars are
-    # separate triggers; they are not incorrectly ANDed together.
-    # Canonical campaign authority: the first valid presenting Wise-Man is
-    # entry-capable. Multi-Wise-Man confirmation is ranking/diagnostic only.
-    # Alligator/awake state remains a quality overlay, not a simultaneous gate.
+    # Indicator-level campaign candidates. This is deliberately not the
+    # authoritative execution decision: williams_signals.py applies trigger
+    # prices, angulation, Teeth validity and signal chronology.
     x["long_signal"] = (
-        x["long_wise_reversal_entry"]
+        x["long_reversal_signal"]
         | x["long_super_ao_signal"]
         | x["long_fractal_signal"]
     )
     x["short_signal"] = (
-        x["short_wise_reversal_entry"]
+        x["short_reversal_signal"]
         | x["short_super_ao_signal"]
         | x["short_fractal_signal"]
     )
