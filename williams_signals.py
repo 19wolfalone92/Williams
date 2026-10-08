@@ -25,6 +25,32 @@ def _tick_buffer(tick_size: float, ticks: int = 1) -> float:
     return max(float(tick_size), 0.0) * max(int(ticks), 1)
 
 
+def _timeframe_ms(timeframe: str) -> int:
+    """Convert the Binance-style operative timeframe to milliseconds."""
+    value = str(timeframe or "").strip()
+    if not value:
+        return 0
+    unit = value[-1]
+    try:
+        number = int(value[:-1])
+    except (TypeError, ValueError):
+        return 0
+    multipliers = {
+        "m": 60_000,
+        "h": 3_600_000,
+        "d": 86_400_000,
+        "w": 604_800_000,
+    }
+    return number * multipliers.get(unit, 0)
+
+
+def _expiry(signal_bar_time_ms: int, timeframe: str, max_age_bars: int) -> int:
+    step = _timeframe_ms(timeframe)
+    if signal_bar_time_ms <= 0 or step <= 0:
+        return 0
+    return int(signal_bar_time_ms + max(1, int(max_age_bars)) * step)
+
+
 def _row_time_ms(row: pd.Series) -> int:
     for key in ("open_time_ms", "time_ms", "timestamp", "time", "open_time"):
         value = row.get(key)
@@ -243,6 +269,7 @@ def extract_long_signal_specs(
                     context_versions=versions,
                     reason="WM1 bullish reversal + increasing angulation; BUY STOP above signal bar",
                     source_candle_index=i,
+                    expires_at_ms=_expiry(_row_time_ms(row), timeframe, max_reversal_age_bars),
                 )
             )
 
@@ -273,6 +300,7 @@ def extract_long_signal_specs(
                     context_versions=versions,
                     reason="WM2 Super AO: third green AO bar; BUY STOP above corresponding price bar",
                     source_candle_index=i,
+                    expires_at_ms=_expiry(_row_time_ms(row), timeframe, 20),
                 )
             )
 
@@ -306,6 +334,7 @@ def extract_long_signal_specs(
                     context_versions=versions,
                     reason="WM3 buy fractal; trigger only while price/trigger remains above Teeth",
                     source_candle_index=center_i,
+                    expires_at_ms=_expiry(_row_time_ms(row), timeframe, 80),
                 )
             )
 
@@ -373,6 +402,7 @@ def extract_short_signal_specs(
                     context_versions=versions,
                     reason="WM1 bearish reversal + increasing angulation; SELL STOP below signal bar",
                     source_candle_index=i,
+                    expires_at_ms=_expiry(_row_time_ms(row), timeframe, 20),
                 )
             )
 
@@ -403,6 +433,7 @@ def extract_short_signal_specs(
                     context_versions=versions,
                     reason="WM2 Super AO: third red AO bar; SELL STOP below corresponding price bar",
                     source_candle_index=i,
+                    expires_at_ms=_expiry(_row_time_ms(row), timeframe, 20),
                 )
             )
 
@@ -434,6 +465,7 @@ def extract_short_signal_specs(
                     context_versions=versions,
                     reason="WM3 sell fractal; trigger only while price/trigger remains below Teeth",
                     source_candle_index=center_i,
+                    expires_at_ms=_expiry(_row_time_ms(row), timeframe, 80),
                 )
             )
 
