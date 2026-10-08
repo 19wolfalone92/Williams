@@ -55,6 +55,7 @@ def main() -> None:
     trader = read("trader.py")
     must(trader, "os.getenv('AUTO_SCAN_SYMBOLS', '').strip()", "trader.py")
     must(trader, "SCAN_THROTTLED", "trader.py")
+    must(trader, 'os.getenv("CAMPAIGN_ENGINE", "true")', "trader.py")
     must(trader, "_auto_scan_lock", "trader.py")
 
     server = read("server.py")
@@ -77,6 +78,8 @@ def main() -> None:
     must(runtime, "private val maxSlippagePct = 0.0015", "StandaloneRuntime.kt")
     must(runtime, "control/self-heal", "StandaloneRuntime.kt")
     must(runtime, "activeHistoryTasks", "StandaloneRuntime.kt")
+    must(runtime, "campaignEngineEnabled", "StandaloneRuntime.kt")
+    must(runtime, 'type=STOP_LOSS', "StandaloneRuntime.kt")
 
     remote = read("test_android_remote_only.py")
     for needle in (
