@@ -38,7 +38,7 @@ class Trader:
         self.position_fraction=float(os.getenv('POSITION_FRACTION','0.25')); self.stop_pct=float(os.getenv('STOP_LOSS_PCT','0.02')); self.target_pct=float(os.getenv('TAKE_PROFIT_PCT','0.04'))
         self.poll_seconds=int(os.getenv('POLL_SECONDS','20'))
         self.risk_per_trade_pct=self.config.risk_per_trade_pct; self.max_daily_loss_pct=self.config.max_daily_loss_pct
-        self.max_trades_day=int(os.getenv('MAX_TRADES_PER_DAY','5')); self.max_consecutive_losses=int(os.getenv('MAX_CONSECUTIVE_LOSSES','3')); self.cooldown_minutes=int(os.getenv('COOLDOWN_MINUTES','30'))
+        self.max_trades_day=int(os.getenv('MAX_TRADES_PER_DAY','0' if self.strategy_profile in {'WILLIAMS_INTRADAY_CORE','WILLIAMS_INTRADAY_CONSERVATIVE'} else '5')); self.max_consecutive_losses=int(os.getenv('MAX_CONSECUTIVE_LOSSES','2' if self.strategy_profile in {'WILLIAMS_INTRADAY_CORE','WILLIAMS_INTRADAY_CONSERVATIVE'} else '3')); self.cooldown_minutes=int(os.getenv('COOLDOWN_MINUTES','30'))
         self.min_risk_reward=self.config.min_risk_reward; self.atr_period=self.config.atr_period; self.max_atr_pct=self.config.max_atr_pct
         self.max_spread_pct=self.config.max_spread_pct; self.require_htf_confirmation=self.config.require_htf_confirmation; self.htf_interval=os.getenv('HTF_INTERVAL','4h')
         self.db=Database(
