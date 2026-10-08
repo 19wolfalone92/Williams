@@ -736,10 +736,17 @@ private class NativeEngine(
         restoreExecutionAccumulators()
         val interruptedGateSymbol =
             prefs.getString("execution_gate_symbol", "") ?: ""
-        if (interruptedGateSymbol.isNotBlank()) {
+        val mutationLockActive =
+            prefs.getBoolean("execution_mutation_lock", false)
+        if (interruptedGateSymbol.isNotBlank() || mutationLockActive) {
             reconcileRequired = true
+            val symbol = if (interruptedGateSymbol.isNotBlank()) {
+                interruptedGateSymbol
+            } else {
+                prefs.getString("execution_mutation_symbol", "") ?: ""
+            }
             lastError =
-                "Execution gate interrupted for " + interruptedGateSymbol +
+                "Execution mutation interrupted for " + symbol +
                     "; REST reconciliation required"
         }
         stateMachine.force(
@@ -982,6 +989,20 @@ private class NativeEngine(
             .apply()
         lastError = "RECONCILE_REQUIRED: " + reason
         stop()
+    }
+
+    private fun mutationLockActive(): Boolean =
+        prefs.getBoolean("execution_mutation_lock", false)
+
+    private fun clearMutationLock() {
+        prefs.edit()
+            .putBoolean("execution_mutation_lock", false)
+            .remove("execution_mutation_symbol")
+            .remove("execution_mutation_purpose")
+            .remove("execution_mutation_started_ms")
+            .remove("execution_gate_symbol")
+            .remove("execution_gate_purpose")
+            .apply()
     }
 
     private fun clearReconcileRequired() {
@@ -1445,12 +1466,18 @@ private class NativeEngine(
         }
 
         return try {
-            clearReconcileRequired()
             recoverPendingEntries()
             reconcilePositionsWithExchange()
 
+            val recovered = !reconcileRequired &&
+                mutationLockActive().not()
+            if (recovered) {
+                clearReconcileRequired()
+                clearMutationLock()
+            }
+
             JSONObject()
-                .put("recovered", !reconcileRequired)
+                .put("recovered", recovered)
                 .put("state", stateName())
                 .put(
                     "execution_enabled",
@@ -2617,21 +2644,44 @@ private class NativeEngine(
         if (paused) error("Runtime is paused")
         if (reconcileRequired) error("RECONCILE_REQUIRED")
         if (killLatched) error("KILL_SWITCH_LATCHED")
+        if (prefs.getBoolean("execution_mutation_lock", false)) {
+            error("EXECUTION_MUTATION_LOCKED: REST reconciliation required")
+        }
+
         require(executionGate.tryReserve(symbol)) {
             "Campaign execution already reserved for " + symbol
         }
+
         prefs.edit()
             .putString("execution_gate_symbol", symbol)
             .putString("execution_gate_purpose", purpose)
+            .putBoolean("execution_mutation_lock", true)
+            .putString("execution_mutation_symbol", symbol)
+            .putString("execution_mutation_purpose", purpose)
+            .putLong("execution_mutation_started_ms", System.currentTimeMillis())
             .apply()
+
         return try {
-            block()
-        } finally {
-            executionGate.release(symbol)
+            val result = block()
             prefs.edit()
+                .putBoolean("execution_mutation_lock", false)
+                .remove("execution_mutation_symbol")
+                .remove("execution_mutation_purpose")
+                .remove("execution_mutation_started_ms")
                 .remove("execution_gate_symbol")
                 .remove("execution_gate_purpose")
                 .apply()
+            result
+        } catch (x: Throwable) {
+            // Never clear the durable mutation lock after an ambiguous mutation.
+            // The caller will move the runtime into RECONCILE_REQUIRED; restart
+            // will also restore the lock from SharedPreferences.
+            lastError =
+                "EXECUTION_MUTATION_UNKNOWN: " +
+                    (x.message ?: x.javaClass.simpleName)
+            throw x
+        } finally {
+            executionGate.release(symbol)
         }
     }
 
