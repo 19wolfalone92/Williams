@@ -7,6 +7,24 @@ from market_context import ContextCache, TFMarketContext, WaveHypothesis
 from wise_men import WiseMenPhase, WiseMenStateMachine
 
 
+class IntentDB:
+    def __init__(self):
+        self.intents = {}
+        self.state = {}
+
+    def save_execution_intent(self, intent, status, reason=""):
+        self.intents[intent.intent_id] = (status, reason, intent.client_order_id)
+
+    def save_execution_event(self, *args, **kwargs):
+        return None
+
+    def log_event(self, *args, **kwargs):
+        return None
+
+    def state_get(self, key, default=None):
+        return self.state.get(key, default)
+
+
 def context(symbol="BTCUSDT", interval="1h", allow_long=True, allow_short=False):
     return TFMarketContext(
         symbol=symbol,
@@ -41,12 +59,14 @@ def test_copy_on_write_versions_and_immutable_snapshot():
 def test_execution_barrier_rejects_stale_context():
     cache = ContextCache()
     cache.publish(context())
-    barrier = ExecutionBarrier(cache)
+    barrier = ExecutionBarrier(cache, IntentDB())
     snap = cache.snapshot()
     cache.publish(context())
     intent = OrderIntent.new(
         "BTCUSDT", "BUY", "MARKET",
         required_context_versions={"1h": snap.context("BTCUSDT", "1h").version},
+        client_order_id="WTEST_123456789",
+        quantity="1",
         signal_id="test-signal",
         signal_expires_at_ms=int(time.time() * 1000) + 60_000,
         permission_interval="1h",
@@ -146,6 +166,8 @@ def test_execution_barrier_rejects_empty_context_dependencies_for_campaign_entry
         {},
         purpose="CAMPAIGN_ENTRY",
         campaign_id="campaign-1",
+        client_order_id="WTEST_123456789",
+        quantity="1",
         signal_id="signal-1",
         signal_expires_at_ms=int(time.time() * 1000) + 60_000,
         permission_interval="1h",
@@ -217,6 +239,11 @@ def test_execution_barrier_rejects_buy_with_unrecognized_purpose():
         "BTCUSDT", "BUY", "MARKET",
         {"1h": 1},
         purpose="LEGACY_BYPASS",
+        client_order_id="WTEST_123456789",
+        quantity="1",
+        signal_id="signal-legacy",
+        signal_expires_at_ms=int(time.time() * 1000) + 60_000,
+        permission_interval="1h",
     )
     calls = []
     result = barrier.execute(intent, lambda: calls.append("submitted") or {"status": "FILLED"})
@@ -227,7 +254,9 @@ def test_execution_barrier_rejects_buy_with_unrecognized_purpose():
 
 
 def test_execution_barrier_keeps_protective_sell_available_during_reconciliation():
-    class ReconcileDB:
+    class ReconcileDB(IntentDB):
+        def __init__(self):
+            super().__init__()
         def state_get(self, key, default=None):
             return "RECONCILE_REQUIRED" if key == "position_state" else default
 
