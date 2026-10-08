@@ -307,7 +307,7 @@ class ExecutionBarrier:
                 )
                 raise
 
-            if intent.order_type != "CANCEL":
+            if str(intent.order_type).strip().upper() != "CANCEL":
                 status = str(
                     response.get("status", "")
                     if isinstance(response, dict)
@@ -344,44 +344,7 @@ class ExecutionBarrier:
                     raise RuntimeError(
                         "ExecutionBarrier: exchange response lacks authoritative order state"
                     )
-            if intent.order_type != "CANCEL":
-                status = str(
-                    response.get("status", "")
-                    if isinstance(response, dict)
-                    else ""
-                ).upper()
-                if status:
-                    order_fsm.observe_exchange_status(
-                        status,
-                        float(
-                            response.get("executedQty", 0) or 0
-                            if isinstance(response, dict)
-                            else 0
-                        ),
-                    )
-                elif (
-                    isinstance(response, dict)
-                    and str(response.get("newOrderResult", "")).upper() == "SUCCESS"
-                ):
-                    order_fsm.state = OrderState.OPEN
-                else:
-                    order_fsm.state = OrderState.RECONCILE_REQUIRED
-                    self._persist(
-                        intent,
-                        "AMBIGUOUS",
-                        "exchange response did not contain authoritative order state",
-                    )
-                    self._record(
-                        "ERROR",
-                        "execution_ambiguous",
-                        intent,
-                        "Exchange accepted an operation without authoritative state",
-                        {"response_keys": list(response.keys()) if isinstance(response, dict) else []},
-                    )
-                    raise RuntimeError(
-                        "ExecutionBarrier: exchange response lacks authoritative order state"
-                    )
-            if not self._persist(intent, "SUBMITTED"):
+            if not self._persist(intent, "SUBMITTED") and purpose in entry_purposes:
                 reason = "exchange submission response received but durable status update failed; reconciliation required"
                 self._record("ERROR", "execution_ambiguous", intent, reason)
                 raise RuntimeError(reason)
