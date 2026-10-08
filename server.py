@@ -1056,6 +1056,23 @@ def status():
     }
 
 
+@app.get('/api/v1/strategy/decision-traces', dependencies=[Depends(auth)])
+def decision_traces(symbol: Optional[str] = None, limit: int = 100):
+    """Return durable Williams Core DecisionTrace records for diagnostics."""
+    db = Database()
+    try:
+        return {
+            "symbol": symbol.upper() if symbol else None,
+            "limit": max(1, min(int(limit), 500)),
+            "traces": db.recent_decision_traces(symbol=symbol, limit=limit),
+        }
+    finally:
+        try:
+            db.conn.close()
+        except Exception:
+            pass
+
+
 @app.get('/api/v1/portfolio', dependencies=[Depends(auth)])
 def portfolio():
     """Authoritative Binance Spot portfolio snapshot with USDT/BTC valuation."""
