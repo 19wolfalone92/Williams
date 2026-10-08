@@ -82,6 +82,8 @@ class CampaignEngine:
                 "initial_stop_price": float(signal.protective_reference),
                 "signal_reason": signal.reason,
                 "signal_role": signal.role.value,
+                "signal_bar_time_ms": int(signal.signal_bar_time_ms),
+                "last_signal_time_ms": int(signal.signal_bar_time_ms),
                 "wave_confidence": float(signal.wave_confidence),
                 "wave_exhaustion_risk": float(signal.wave_exhaustion_risk),
                 "htf_confirmed": bool(signal.htf_confirmed),
@@ -365,6 +367,8 @@ class CampaignEngine:
         # A new signal becomes an add-on, never a second independent campaign.
         campaign.current_signal_id = signal.signal_id
         campaign.current_signal_type = signal.signal_type.value
+        campaign.tags["signal_bar_time_ms"] = int(signal.signal_bar_time_ms)
+        campaign.tags["last_signal_time_ms"] = int(signal.signal_bar_time_ms)
         campaign.pending_risk_quote = max(0.0, float(risk_quote))
         campaign.capital_reserved_quote = max(0.0, float(capital_reserved_quote))
         campaign.next_action = "SUBMIT_ADD_ON"
