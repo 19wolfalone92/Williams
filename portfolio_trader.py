@@ -61,14 +61,14 @@ class MultiPositionTrader:
             int(os.getenv("MAX_OPEN_POSITIONS", str(self.intraday_policy.risk.max_campaigns if self.intraday_core_enabled else 5))),
         )
         self.max_total_risk_pct = min(
-            0.01,
+            0.006 if self.intraday_core_enabled else 0.01,
             max(
                 0.0,
-                float(os.getenv("MAX_TOTAL_RISK_PCT", "0.01")),
+                float(os.getenv("MAX_TOTAL_RISK_PCT", str(self.intraday_policy.risk.campaign_risk_pct if self.intraday_core_enabled else 0.01))),
             ),
         )
         self.max_risk_per_trade_pct = min(
-            0.005,
+            0.0025 if self.intraday_core_enabled else 0.005,
             max(
                 0.0,
                 float(os.getenv("MAX_RISK_PER_TRADE_PCT", os.getenv("RISK_PER_TRADE_PCT", str(self.intraday_policy.risk.initial_risk_pct)))),
