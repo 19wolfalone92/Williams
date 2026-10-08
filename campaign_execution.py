@@ -1097,7 +1097,25 @@ class CampaignExecutionService:
                 ) if client_id else {}
                 status = str(order.get("status", "")).upper()
                 oid = order.get("orderId")
-                if status in {"NEW", "PARTIALLY_FILLED", "PENDING_NEW"} and oid is not None:
+                if status == "PARTIALLY_FILLED":
+                    if oid is not None:
+                        self._execute_cancel(campaign, int(oid), "CAMPAIGN_EOD_CANCEL_PARTIAL")
+                    self.engine.mark_reconcile_required(
+                        campaign,
+                        "EOD pending order was partially filled; inventory must be reconciled before flat confirmation",
+                    )
+                    results.append({
+                        "campaign_id": campaign.campaign_id,
+                        "state": "RECONCILE_REQUIRED",
+                        "symbol": campaign.symbol,
+                        "reason": "PARTIALLY_FILLED",
+                    })
+                    continue
+                if status in {"NEW", "PENDING_NEW"}:
+                    if oid is None:
+                        self.engine.mark_reconcile_required(campaign, "EOD pending order has no exchange order id")
+                        results.append({"campaign_id": campaign.campaign_id, "state": "RECONCILE_REQUIRED", "symbol": campaign.symbol})
+                        continue
                     self._execute_cancel(campaign, int(oid), "CAMPAIGN_EOD_CANCEL")
                     status = "CANCELED"
                 elif status == "FILLED":
