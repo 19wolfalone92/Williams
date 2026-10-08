@@ -12,7 +12,7 @@ load_dotenv()
 
 def main():
     runtime = FuturesWilliamsRuntime()
-    runtime.recover()
+    runtime.setup()
     while True:
         runtime.process()
         time.sleep(runtime.poll_seconds)
