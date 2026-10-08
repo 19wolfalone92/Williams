@@ -684,3 +684,34 @@ def test_order_intent_canonical_adapter_preserves_signal_identity():
     )
     assert order_intent.signal_id == signal.signal_id
     assert order_intent.campaign_id == "C1"
+
+
+def test_campaign_fault_is_terminal_and_cannot_reenter_reconciliation():
+    from campaign_order_fsm import CampaignOrderState, CampaignOrderStateMachine
+
+    fsm = CampaignOrderStateMachine(CampaignOrderState.CAMPAIGN_ACTIVE)
+    fsm.fault("unresolvable mismatch")
+    assert fsm.state is CampaignOrderState.FAULT
+
+    with pytest.raises(ValueError):
+        fsm.transition(CampaignOrderState.RECONCILIATION_REQUIRED)
+
+    assert not __import__("campaign_order_fsm").campaign_order_transition_allowed(
+        CampaignOrderState.FAULT,
+        CampaignOrderState.RECONCILIATION_REQUIRED,
+    )
+
+
+def test_order_reconciliation_accepts_filled_after_missed_user_stream_event():
+    from order_state_machine import OrderState, OrderStateMachine
+
+    fsm = OrderStateMachine(OrderState.NEW)
+    assert fsm.observe_exchange_status("FILLED", executed_qty=1.0) is OrderState.FILLED
+    assert fsm.terminal is True
+
+
+def test_order_reconciliation_accepts_cancel_after_missed_user_stream_event():
+    from order_state_machine import OrderState, OrderStateMachine
+
+    fsm = OrderStateMachine(OrderState.NEW)
+    assert fsm.observe_exchange_status("CANCELED", executed_qty=0.0) is OrderState.CANCELED
