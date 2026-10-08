@@ -267,3 +267,58 @@ def test_legacy_autonomous_mode_fails_closed_without_entry_door():
     assert len(result) == 1
     assert result[0]["action"] == "ENTRY_BLOCKED"
     assert "ExecutionBarrier" in result[0]["reason"]
+
+
+
+def test_duplicate_signal_id_cannot_create_second_campaign_or_order():
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "campaign.sqlite3"))
+        client = MockExchange()
+        svc = service(db, client)
+        spec = signal()
+
+        first = svc.arm_initial_entry(
+            spec,
+            equity_quote=10_000,
+            candidate_risk_pct=0.004,
+        )
+        try:
+            svc.arm_initial_entry(
+                spec,
+                equity_quote=10_000,
+                candidate_risk_pct=0.004,
+            )
+        except Exception as exc:
+            assert "already reserved" in str(exc)
+        else:
+            raise AssertionError("duplicate signal created a second campaign")
+
+        assert len(client.open_orders("BTCUSDT")) == 1
+        assert db.conn.execute("SELECT COUNT(*) FROM campaigns").fetchone()[0] == 1
+        assert first["signal_id"] == spec.signal_id
+
+
+def test_expired_persisted_conditional_entry_is_cancelled_on_recovery():
+    now = int(time.time() * 1000)
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "campaign.sqlite3"))
+        client = MockExchange()
+        svc = service(db, client)
+        spec = signal(bar=now, expires_at_ms=now + 10 * 60_000)
+        result = svc.arm_initial_entry(
+            spec,
+            equity_quote=10_000,
+            candidate_risk_pct=0.004,
+        )
+
+        campaign = svc.engine.load_campaign(result["campaign_id"])
+        assert campaign is not None
+        campaign.tags["pending_signal_expires_at_ms"] = now - 1
+        campaign.tags["pending_signal"]["expires_at_ms"] = now - 1
+        db.save_campaign(campaign)
+
+        recovered = svc.reconcile_pending_entries()
+
+        assert recovered[0]["state"] == "EXPIRED"
+        assert client.open_orders("BTCUSDT") == []
+        assert svc.engine.load_campaign(result["campaign_id"]).state == CampaignState.CLOSED
