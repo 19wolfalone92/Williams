@@ -190,3 +190,31 @@ def test_stop_replacement_rechecks_normalized_price_and_never_sends_lower_stop()
             if str(o.get("clientOrderId","")).startswith(svc.STOP_PREFIX)
         ]
         assert all(float(o.get("stopPrice", 0) or 0) >= current for o in managed)
+
+
+def test_pending_entry_expires_and_releases_reservations(monkeypatch):
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "campaign.sqlite3"))
+        client = MockExchange()
+        svc = service(db, client)
+        monkeypatch.setenv("CAMPAIGN_PENDING_MAX_AGE_MINUTES", "1")
+        spec = signal(trigger=101.0)
+        result = svc.arm_initial_entry(
+            spec,
+            equity_quote=10_000,
+            candidate_risk_pct=0.004,
+        )
+        campaign = svc.engine.load_campaign(result["campaign_id"])
+        assert campaign is not None
+        campaign.created_at_ms = 1
+        campaign.tags["signal_created_at_ms"] = 1
+        db.save_campaign(campaign)
+
+        rows = svc.reconcile_pending_entries()
+        campaign = svc.engine.load_campaign(result["campaign_id"])
+        assert campaign is not None
+        assert campaign.state.value == "CLOSED"
+        assert campaign.pending_risk_quote == 0.0
+        assert campaign.capital_reserved_quote == 0.0
+        order = client.get_order("BTCUSDT", orig_client_order_id=result["client_order_id"])
+        assert str(order["status"]).upper() == "CANCELED"
