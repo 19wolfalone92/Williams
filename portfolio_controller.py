@@ -4,6 +4,8 @@ from typing import Optional
 
 from market_scanner import MarketScanner, Candidate
 from risk_engine import RiskEngine, RiskAnalysis
+from williams.execution_economics import ExecutionFeasibilityGate
+from williams.intraday_policy import IntradayPolicy
 
 
 @dataclass
@@ -19,10 +21,12 @@ class PortfolioController:
 
     def __init__(self, client, balance_quote: float, symbols=None, interval=None):
         self.client = client
-        self.interval = interval or os.getenv("INTERVAL", "1h")
-        self.max_open_positions = max(0, int(os.getenv("MAX_OPEN_POSITIONS", "5")))
-        self.max_total_risk_pct = min(0.01, max(0.0, float(os.getenv("MAX_TOTAL_RISK_PCT", "0.01"))))
-        self.max_risk_per_trade_pct = min(0.005, max(0.0, float(os.getenv("MAX_RISK_PER_TRADE_PCT", os.getenv("RISK_PER_TRADE_PCT", "0.005")))))
+        self.mode = str(os.getenv("WILLIAMS_MODE", "INTRADAY_CORE")).upper()
+        self.core_mode = self.mode == "INTRADAY_CORE"
+        self.interval = "1h" if self.core_mode else (interval or os.getenv("INTERVAL", "1h"))
+        self.max_open_positions = 1 if self.core_mode else max(0, int(os.getenv("MAX_OPEN_POSITIONS", "5")))
+        self.max_total_risk_pct = min(0.006 if self.core_mode else 0.01, max(0.0, float(os.getenv("MAX_TOTAL_RISK_PCT", "0.006" if self.core_mode else "0.01"))))
+        self.max_risk_per_trade_pct = min(0.0025 if self.core_mode else 0.005, max(0.0, float(os.getenv("MAX_RISK_PER_TRADE_PCT", os.getenv("RISK_PER_TRADE_PCT", "0.0025" if self.core_mode else "0.005")))))
         self.min_risk_allocation_pct = min(
             self.max_risk_per_trade_pct,
             max(0.0, float(os.getenv("MIN_RISK_ALLOCATION_PCT", "0.001"))),
@@ -37,23 +41,53 @@ class PortfolioController:
             balance_quote=float(balance_quote),
             risk_per_trade_pct=self.max_risk_per_trade_pct,
             max_position_fraction=float(os.getenv("POSITION_FRACTION", "0.25")),
-            max_daily_loss_pct=float(os.getenv("MAX_DAILY_LOSS_PCT", "0.03")),
-            min_rr=float(os.getenv("MIN_RISK_REWARD", "1.5")),
+            max_daily_loss_pct=float(os.getenv("MAX_DAILY_LOSS_PCT", "0.01" if self.core_mode else "0.03")),
+            min_rr=0.0 if self.core_mode else float(os.getenv("MIN_RISK_REWARD", "1.5")),
             max_atr_pct=float(os.getenv("MAX_ATR_PCT", "0.08")),
+        )
+        self.economics_gate = ExecutionFeasibilityGate(
+            fee_per_side_pct=float(os.getenv("FEE_BUFFER_PER_SIDE_PCT", "0.001")),
+            slippage_pct=float(os.getenv("RISK_SLIPPAGE_BUFFER_PCT", "0.0015")),
+            max_spread_pct=float(os.getenv("MAX_SPREAD_PCT", "0.0015")),
+        )
+        self.intraday_policy = IntradayPolicy(
+            session_start_utc=os.getenv("TRADING_SESSION_START_UTC", "08:00"),
+            no_new_entries_utc=os.getenv("NO_NEW_ENTRIES_UTC", "18:00"),
+            flat_time_utc=os.getenv("MANDATORY_FLAT_UTC", "20:00"),
         )
 
     def _analyse_candidates(self, candidates):
         analysed = []
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
         for candidate in candidates:
             if not candidate.signal:
                 continue
             try:
-                entry_price = float(self.client.ticker_price(candidate.symbol)["price"])
-                atr = entry_price * candidate.atr_pct
+                if self.core_mode and not self.intraday_policy.allows_new_campaign(now):
+                    continue
+                if self.core_mode and bool(os.getenv("H4_ADVERSE_BLOCKS", "false").lower() == "true") and candidate.htf_context_state == "ADVERSE":
+                    continue
+                raw_specs = list(getattr(candidate, "campaign_signal_specs", []) or [])
+                if not raw_specs:
+                    continue
+                chosen = raw_specs[0]
+                entry_price = float(chosen.get("trigger_price", 0.0) or 0.0)
+                stop_price = float(chosen.get("protective_reference", 0.0) or 0.0)
+                if entry_price <= 0 or stop_price <= 0 or stop_price >= entry_price:
+                    continue
+                atr = max(entry_price * float(candidate.atr_pct), abs(entry_price - stop_price))
                 info = self.client.exchange_info(candidate.symbol)
                 filters = {f["filterType"]: f for f in info.get("symbols", [{}])[0].get("filters", [])}
                 notional_filter = filters.get("NOTIONAL") or filters.get("MIN_NOTIONAL") or {}
                 min_notional = float(notional_filter.get("minNotional", 0) or 0)
+                quality_risk = self.max_risk_per_trade_pct
+                family = str(chosen.get("signal_type", "")).upper()
+                if self.core_mode:
+                    if family == "REVERSAL":
+                        quality_risk = 0.0025 if candidate.htf_context_state == "SUPPORTIVE" else 0.001875
+                    else:
+                        quality_risk = 0.00125
                 risk = self.risk_engine.analyse(
                     symbol=candidate.symbol,
                     entry_price=entry_price,
@@ -63,17 +97,31 @@ class PortfolioController:
                     htf_confirmed=candidate.htf_confirmed,
                     spread_pct=candidate.spread_pct,
                     max_spread_pct=self.scanner.max_spread_pct,
-                    invalidation_price=float(getattr(candidate, "wave_invalidation_price", 0.0) or 0.0),
+                    invalidation_price=stop_price,
+                    risk_pct_override=quality_risk,
+                    target_atr_multiplier=0.0 if self.core_mode else 4.0,
                 )
-                if risk.allowed:
+                economics = self.economics_gate.evaluate(
+                    entry=entry_price,
+                    stop=stop_price,
+                    spread_pct=candidate.spread_pct,
+                    estimated_slippage_pct=float(os.getenv("MAX_L2_SLIPPAGE_PCT", "0.0015")),
+                    minimum_notional_ok=(min_notional <= 0 or risk.position_quote >= min_notional),
+                    balance_ok=(float(self.risk_engine.balance) >= float(risk.position_quote)),
+                    time_to_eod_ok=self.intraday_policy.allows_new_campaign(now) if self.core_mode else True,
+                )
+                if risk.allowed and economics.feasible:
                     analysed.append(Selection(
                         candidate=candidate,
                         risk=risk,
                         action="BUY_ALLOWED",
-                        reason="STRICT_SIGNAL + risk checks passed",
+                        reason=f"H1 Core VALID + economics OK ({family})",
                     ))
+                else:
+                    candidate.execution_feasible = bool(economics.feasible)
+                    candidate.block_reason = ";".join(economics.reasons) if economics.reasons else risk.reason
             except Exception as exc:
-                print(f"[PORTFOLIO] {candidate.symbol}: risk analysis failed: {exc}")
+                print(f"[PORTFOLIO] {candidate.symbol}: risk/economics analysis failed: {exc}")
         return analysed
 
     @staticmethod
