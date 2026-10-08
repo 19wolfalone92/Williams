@@ -2380,9 +2380,6 @@ class MultiPositionTrader:
         return None
 
     def scan_and_execute(self):
-        boundary = self._apply_intraday_boundary()
-        if boundary is not None:
-            return boundary
         recovery = self.recover()
         if not recovery["ok"]:
             return {
@@ -2411,6 +2408,10 @@ class MultiPositionTrader:
                     "results": [],
                     "reason": "campaign reconciliation required",
                 }
+
+        boundary = self._apply_intraday_boundary()
+        if boundary is not None:
+            return boundary
 
         allowed, risk_reason = self._daily_entry_guard()
         if not allowed:
