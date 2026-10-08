@@ -6,7 +6,10 @@ the M15 bar and never creates an independent signal.
 """
 from __future__ import annotations
 from dataclasses import asdict, dataclass
+from bisect import bisect_right
 import pandas as pd
+
+from strategy import calculate_indicators, config_from_env
 
 from campaign_model import SignalType
 from williams_intraday_core import WilliamsIntradayCore
@@ -96,6 +99,42 @@ class WilliamsCampaignBacktester:
         return None,0.0
 
     @staticmethod
+    def _state_timeline(core, frame, interval):
+        if frame is None or len(frame) < 40:
+            return [], []
+        closed=core._closed(frame)
+        if closed is None or len(closed) < 40:
+            return [], []
+        cfg=config_from_env()
+        ind=calculate_indicators(closed,cfg)
+        if "close_time" in closed.columns:
+            times=list(pd.to_datetime(closed["close_time"],utc=True))
+        else:
+            durations={
+                "1h":pd.Timedelta(hours=1),
+                "4h":pd.Timedelta(hours=4),
+                "1d":pd.Timedelta(days=1),
+            }
+            duration=durations.get(str(interval).lower(),pd.Timedelta(0))
+            times=[
+                pd.Timestamp(x).tz_localize("UTC")
+                if pd.Timestamp(x).tzinfo is None
+                else pd.Timestamp(x).tz_convert("UTC")
+                for x in ind.index
+            ]
+            if duration:
+                times=[x+duration for x in times]
+        states=[core._state_from_row(row,cfg) for _,row in ind.iterrows()]
+        return times,states
+
+    @staticmethod
+    def _state_at(times,states,now):
+        if not times:
+            return "UNKNOWN"
+        pos=bisect_right(times,now)-1
+        return states[pos] if pos>=0 else "UNKNOWN"
+
+    @staticmethod
     def _weighted_add_risk_pct(equity,used_risk,campaign_cap,tranche_index):
         if equity<=0:return 0.0
         weights=(1,5,4,3,2)
@@ -118,6 +157,19 @@ class WilliamsCampaignBacktester:
         h4=h4.sort_index() if h4 is not None else None
         d1=d1.sort_index() if d1 is not None else None
         m5=m5.sort_index() if m5 is not None else None
+
+        # Precompute immutable research inputs once. The strategy core itself
+        # consumes these exact series, so the backtester does not maintain a
+        # parallel signal definition and avoids O(N^2) indicator recomputation.
+        m15_ind=calculate_indicators(m15,config_from_env())
+        fractals_long=self.core.fractals.detect(
+            m15_ind,
+            side="LONG",
+            teeth_series=m15_ind.get("teeth_shifted"),
+        )
+        h1_times,h1_states=self._state_timeline(self.core,h1,"1h")
+        h4_times,h4_states=self._state_timeline(self.core,h4,"4h")
+        d1_times,d1_states=self._state_timeline(self.core,d1,"1d")
 
         position=None
         pending=None
@@ -328,13 +380,24 @@ class WilliamsCampaignBacktester:
                         proposed=max(proposed,float(bar["low"])-tick_size)
                     position["stop"]=max(position["stop"],proposed)
 
-            decision=self.core.evaluate(
+            h1_state=self._state_at(h1_times,h1_states,now)
+            h4_state=self._state_at(h4_times,h4_states,now)
+            d1_state=self._state_at(d1_times,d1_states,now)
+            h4_context=(
+                "SUPPORTIVE" if h4_state=="BULLISH"
+                else "ADVERSE" if h4_state=="BEARISH"
+                else "NEUTRAL" if h4_state!="UNKNOWN"
+                else "UNKNOWN"
+            )
+            decision=self.core.evaluate_precomputed(
                 symbol,
                 m15.iloc[:i+1],
-                h1=self._context_slice(h1,now,pd.Timedelta(hours=1)),
-                h4=self._context_slice(h4,now,pd.Timedelta(hours=4)),
-                d1=self._context_slice(d1,now,pd.Timedelta(days=1)),
+                m15_ind.iloc[:i+1],
+                h4_context=h4_context,
+                d1_state=d1_state,
+                context_state=h1_state,
                 tick_size=tick_size,
+                fractals_long=fractals_long,
             )
 
             if (
