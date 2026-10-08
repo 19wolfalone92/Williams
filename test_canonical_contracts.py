@@ -208,6 +208,10 @@ def test_core_returns_canonical_decision_without_exposing_exchange():
         angulation_score=1.0,
         htf_confirmed=True,
         source_candle_index=10,
+        behavior_confirmed=True,
+        structure_confirmed=True,
+        angulation_valid=True,
+        momentum_confirmed=False,
     )
     result = DigitalWilliamsCore().compose([signal], now_ms=150)
     assert isinstance(result, CoreComposition)
@@ -301,6 +305,10 @@ def test_wm2_requires_momentum_before_add_on_arm():
         htf_confirmed=True,
         source_candle_index=10,
         wave_confidence=0.0,
+        behavior_confirmed=True,
+        structure_confirmed=True,
+        angulation_valid=True,
+        momentum_confirmed=True,
     )
     evaluation = WilliamsProofEngine.evaluate(signal)
     assert evaluation.proof_vector.momentum_pass is True
