@@ -18,8 +18,9 @@ class Selection:
 class PortfolioController:
     """Portfolio-level candidate selection and risk allocation."""
 
-    def __init__(self, client, balance_quote: float, symbols=None, interval=None):
+    def __init__(self, client, balance_quote: float, symbols=None, interval=None, db=None):
         self.client = client
+        self.db = db
         self.policy = IntradayPolicy.from_env()
         self.intraday_core_enabled = self.policy.profile in {"WILLIAMS_INTRADAY_CORE", "WILLIAMS_INTRADAY_CONSERVATIVE"}
         self.interval = "1h" if self.intraday_core_enabled else (interval or os.getenv("INTERVAL", "1h"))
@@ -75,6 +76,15 @@ class PortfolioController:
                         max_spread_pct=self.scanner.max_spread_pct,
                         invalidation_price=float(getattr(candidate, "wave_invalidation_price", 0.0) or 0.0),
                     )
+                trace = dict(getattr(candidate, "decision_trace", {}) or {})
+                if trace:
+                    trace["risk_feasible"] = bool(getattr(risk, "allowed", False))
+                    trace["block_reason"] = "" if risk.allowed else str(risk.reason)
+                    if self.db is not None and hasattr(self.db, "save_decision_trace"):
+                        try:
+                            self.db.save_decision_trace(trace)
+                        except Exception:
+                            pass
                 if risk.allowed:
                     analysed.append(Selection(
                         candidate=candidate,
