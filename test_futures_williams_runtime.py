@@ -278,3 +278,20 @@ def test_futures_pre_submit_blocks_entry_when_position_appears_after_signal():
         assert "already exists" in str(exc)
     else:
         raise AssertionError("entry was admitted over an existing Futures position")
+
+
+def test_short_fractal_requires_valid_teeth_context():
+    ind = pd.DataFrame({
+        "confirmed_down_level": [100.0, 99.0, 98.0],
+        "fractal_down": [False, True, False],
+        "close": [99.5, 98.5, 97.5],
+        "low": [99.0, 98.0, 97.0],
+        "high": [100.0, 99.0, 98.5],
+        "teeth_shifted": [0.0, 0.0, 0.0],
+    })
+    assert extract_short_signal_specs(
+        "BTCUSDT",
+        ind,
+        timeframe="5m",
+        tick_size=0.1,
+    ) == []
