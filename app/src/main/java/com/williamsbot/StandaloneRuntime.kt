@@ -6691,16 +6691,10 @@ private class NativeEngine(
         spread: Double,
         volume: Double
     ): BaseAnalysis {
-        val workCandles =
-            if (campaignEngineEnabled &&
-                campaignExecutionTimeframe != interval
-            ) {
-                runCatching {
-                    fetchCandles(symbol, campaignExecutionTimeframe, 150)
-                }.getOrElse { candles }
-            } else {
-                candles
-            }
+        // H1 is the sole Williams Decision stream. The execution TF is
+        // fetched separately by the trigger/replay layer and never replaces H1
+        // candles for signal construction.
+        val workCandles = candles
         val i = workCandles.lastIndex
         if (i < 40) {
             return BaseAnalysis(
@@ -6807,14 +6801,15 @@ private class NativeEngine(
 
         var strictSignal =
             if (campaignEngineEnabled) {
+                // Williams Core truth is H1 campaign signals only. H4/Wave/OBI
+                // are advisory context and cannot invalidate a valid Core signal.
                 campaignSignals.isNotEmpty() &&
                     atrPct in 0.0..0.08 &&
                     spread <= maxSpreadPct
             } else {
-                bullish &&
-                    aoPositive &&
-                    breakout &&
-                    atrPct in 0.0..0.08
+                campaignSignals.isNotEmpty() &&
+                    atrPct in 0.0..0.08 &&
+                    spread <= maxSpreadPct
             }
 
         if (preliminaryWave.position == 3) {
@@ -6830,7 +6825,7 @@ private class NativeEngine(
         val flowImbalance = tradeFlowImbalance(symbol)
         if (obi != null) {
             score += (obi * 5.0).coerceIn(-5.0, 5.0)
-            if (strictSignal && obi <= -0.80) strictSignal = false
+            // OBI is ranking/diagnostic only; it never invalidates Williams Core.
         }
         if (flowImbalance != null) {
             score += (flowImbalance * 4.0).coerceIn(-4.0, 4.0)
