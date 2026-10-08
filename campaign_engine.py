@@ -657,6 +657,7 @@ class CampaignEngine:
             },
         )
         campaign.tags["williams_error_report_path"] = report_path
+        self.db.save_campaign(campaign)
         self.db.log_campaign_event(
             campaign.campaign_id,
             "FAULT",
