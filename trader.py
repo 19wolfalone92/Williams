@@ -53,9 +53,12 @@ class Trader:
         self.filters={}; self.base_asset=self.quote_asset=None; self.recovered=False
         self.symbol_rules = None
         self.preflight_report = None
-        self.auto_scan_enabled = os.getenv(
-            'AUTO_SCAN_ENABLED', 'true'
-        ).lower() == 'true'
+        profile = os.getenv('WILLIAMS_STRATEGY_PROFILE', 'WILLIAMS_INTRADAY_CORE').strip().upper()
+        self.auto_scan_enabled = (
+            True
+            if profile in {'WILLIAMS_INTRADAY_CORE', 'WILLIAMS_INTRADAY_CONSERVATIVE'}
+            else os.getenv('AUTO_SCAN_ENABLED', 'true').lower() == 'true'
+        )
 
         self.dry_run = os.getenv(
             'DRY_RUN', 'true'
@@ -1280,8 +1283,8 @@ class Trader:
 
     def process(self):
         if getattr(self, 'auto_scan_enabled', False):
-            # Canonical Spot portfolio runtime. Multiple simultaneous positions
-            # are allowed only while aggregate protected risk remains <= 1%.
+            # Canonical Spot portfolio runtime. Intraday Core hard-limits this
+            # mode to one active campaign and the configured campaign-risk cap.
             result = self._auto_scan_process()
             if result:
                 self.db.log_event(
