@@ -101,8 +101,7 @@ class ExecutionBarrier:
             purpose = intent.purpose.upper()
             context_required = (
                 purpose == "ENTRY"
-                or purpose.endswith("_ENTRY")
-                or purpose.endswith("_ADD_ON")
+                or purpose in {"CAMPAIGN_ENTRY", "CAMPAIGN_ADD_ON"}
             )
             if context_required:
                 return "missing required_context_versions"
