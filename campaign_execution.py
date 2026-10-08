@@ -1168,6 +1168,59 @@ class CampaignExecutionService:
             lambda _snapshot: None,
         )
 
+    def cancel_pending_entry(self, campaign, *, reason: str) -> dict[str, Any]:
+        """Cancel a still-pending campaign entry and release its reservation."""
+        if campaign is None:
+            raise CampaignExecutionError("missing campaign")
+        if campaign.state not in {
+            CampaignState.ENTRY_PENDING,
+            CampaignState.ENTRY_ARMING,
+            CampaignState.SIGNAL_DETECTED,
+        }:
+            return {"status": "SKIP", "reason": "campaign is not entry-pending"}
+
+        order_id = str(campaign.tags.get("pending_order_id", "") or "")
+        if order_id:
+            try:
+                self._execute_cancel(campaign, int(order_id), "CAMPAIGN_PENDING_ENTRY_CANCEL")
+            except Exception as exc:
+                try:
+                    current = self.client.get_order(campaign.symbol, order_id=int(order_id))
+                    status = str(current.get("status", "")).upper()
+                    if status not in {"CANCELED", "EXPIRED", "REJECTED"}:
+                        self.engine.mark_reconcile_required(
+                            campaign,
+                            f"cannot cancel pending entry before {reason}: {exc}",
+                        )
+                        raise CampaignExecutionError(str(exc)) from exc
+                except CampaignExecutionError:
+                    raise
+                except Exception as exc2:
+                    self.engine.mark_reconcile_required(
+                        campaign,
+                        f"cannot verify pending entry cancellation: {exc2}",
+                    )
+                    raise CampaignExecutionError(str(exc2)) from exc2
+
+        self.db.set_campaign_signal_state(
+            campaign.current_signal_id,
+            SignalState.CANCELLED.value,
+        )
+        self.db.state_delete(f"entry_client_order_id:{campaign.symbol}")
+        campaign.pending_risk_quote = 0.0
+        campaign.capital_reserved_quote = 0.0
+        campaign.next_action = "WAIT"
+        campaign.exit_reason = str(reason)
+        campaign.transition(CampaignState.CLOSED, reason=reason)
+        self.db.save_campaign(campaign)
+        self.db.log_campaign_event(
+            campaign.campaign_id,
+            "ENTRY_CANCELLED",
+            reason=reason,
+            order_id=order_id or None,
+        )
+        return {"status": "CANCELLED", "campaign_id": campaign.campaign_id, "order_id": order_id}
+
     def exit_market(
         self,
         campaign,
