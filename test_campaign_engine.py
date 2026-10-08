@@ -52,7 +52,7 @@ def test_stop_never_loosens_long_risk():
     assert not stop_only_reduces_risk("LONG", 100.0, 99.9)
 
 
-def test_structural_stop_prefers_closest_valid_higher_stop():
+def test_structural_stop_uses_lowest_recent_3_5_bar_structure_by_default():
     stop, source = structural_stop_for_long(
         signal_type=SignalType.REVERSAL,
         signal_bar_low=97.0,
@@ -61,7 +61,7 @@ def test_structural_stop_prefers_closest_valid_higher_stop():
         wave_invalidation=96.0,
         buffer=0.1,
     )
-    assert stop == 98.9
+    assert stop == 97.9
     assert source == "3_5_BAR_STRUCTURE"
 
 
@@ -98,3 +98,33 @@ def test_portfolio_risk_includes_pending_campaign():
         db.save_campaign(campaign)
         assert engine.portfolio_reserved_risk_quote() == 40.0
         assert engine.portfolio_reserved_capital_quote() == 500.0
+
+def test_reconcile_required_does_not_release_reserved_risk_or_capital():
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "w.sqlite3"))
+        engine = CampaignEngine(db)
+        signal = make_signal()
+        campaign = engine.create_campaign(signal, initial_risk_pct=0.004)
+        campaign.pending_risk_quote = 40.0
+        campaign.capital_reserved_quote = 500.0
+        campaign.state = CampaignState.RECONCILE_REQUIRED
+        db.save_campaign(campaign)
+        assert engine.portfolio_reserved_risk_quote() == 40.0
+        assert engine.portfolio_reserved_capital_quote() == 500.0
+
+
+def test_actual_open_risk_falls_when_structural_stop_advances():
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "w.sqlite3"))
+        engine = CampaignEngine(db)
+        signal = make_signal()
+        campaign = engine.create_campaign(signal, initial_risk_pct=0.002)
+        engine.arm_entry(campaign, signal)
+        campaign = engine.mark_triggered(campaign, signal.signal_id, "10")
+        campaign = engine.record_initial_fill(
+            campaign, quantity=1.0, average_entry_price=101.0,
+            initial_stop_price=97.0, fill_order_id="10", risk_quote=2.0,
+        )
+        first = campaign.open_risk_quote
+        assert engine.propose_stop(campaign, 99.0, "3_5_BAR_STRUCTURE")
+        assert campaign.open_risk_quote < first

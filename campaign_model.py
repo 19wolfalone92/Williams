@@ -203,10 +203,14 @@ class CampaignRiskPlan:
 
     @property
     def reserved_risk_pct(self) -> float:
-        return (
-            float(self.current_open_risk_quote)
-            + float(self.current_pending_risk_quote)
-        )
+        """Reserved risk expressed as a fraction of portfolio equity.
+
+        The stored fields are quote amounts; this helper is retained for
+        compatibility and therefore returns their sum in quote units only when
+        callers explicitly treat it as such. New code should use the quote
+        fields directly.
+        """
+        return float(self.current_open_risk_quote) + float(self.current_pending_risk_quote)
 
     def next_weight(self) -> int:
         idx = min(max(int(self.tranche_index), 0), len(self.reverse_pyramid_weights) - 1)
@@ -369,6 +373,7 @@ def structural_stop_for_long(
     teeth: float,
     wave_invalidation: float = 0.0,
     buffer: float = 0.0,
+    tighten_to_context: bool = False,
 ) -> tuple[float, str]:
     """Return a long structural stop and its source.
 
@@ -382,13 +387,14 @@ def structural_stop_for_long(
     if recent_lows:
         valid_lows = [float(x) for x in recent_lows if float(x) > 0]
         if valid_lows:
-            # For a LONG trail, the closest valid protection is the highest
-            # recent structural low, not the lowest low in the window.
-            low = max(valid_lows)
+            # Williams' structural trail is placed below the lowest low
+            # of the selected recent 3/5-bar structure. A higher structural
+            # stop may be considered separately only after this base is valid.
+            low = min(valid_lows)
             candidates.append((low - max(0.0, buffer), "3_5_BAR_STRUCTURE"))
-    if teeth > 0:
+    if tighten_to_context and teeth > 0:
         candidates.append((teeth - max(0.0, buffer), "TEETH"))
-    if wave_invalidation > 0:
+    if tighten_to_context and wave_invalidation > 0:
         candidates.append((wave_invalidation - max(0.0, buffer), "WAVE_INVALIDATION"))
     if not candidates:
         return 0.0, "UNAVAILABLE"

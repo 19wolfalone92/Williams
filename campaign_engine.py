@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import Any, Iterable
 import json
+import os
 import time
 import uuid
 
@@ -322,8 +323,8 @@ class CampaignEngine:
         campaign.position_qty = new_qty
         campaign.additions += 1
         campaign.tranche_index = min(4, campaign.tranche_index + 1)
-        campaign.open_risk_quote += max(0.0, float(risk_quote))
         campaign.pending_risk_quote = 0.0
+        self.recalculate_open_risk(campaign)
         campaign.capital_reserved_quote = 0.0
         campaign.tags["last_add_on_fee_quote"] = float(fee_quote)
         campaign.next_action = "MONITOR_CAMPAIGN"
@@ -362,8 +363,8 @@ class CampaignEngine:
         campaign.initial_stop_price = float(initial_stop_price)
         campaign.current_stop_price = float(initial_stop_price)
         campaign.structural_stop_source = "INITIAL_SIGNAL"
-        campaign.open_risk_quote = max(0.0, float(risk_quote))
         campaign.pending_risk_quote = 0.0
+        self.recalculate_open_risk(campaign, equity_quote=float(risk_quote) / max(float(self.initial_risk_pct()), 1e-12) if risk_quote > 0 else 0.0)
         campaign.capital_reserved_quote = 0.0
         campaign.tranche_index = 1
         campaign.next_action = "MONITOR_CAMPAIGN"
@@ -389,6 +390,38 @@ class CampaignEngine:
         )
         return campaign
 
+    def recalculate_open_risk(self, campaign: TradingCampaign, *, equity_quote: float = 0.0) -> float:
+        """Recompute current position risk from actual quantity/entry/stop.
+
+        A better structural stop reduces reserved risk; an adverse stop move is
+        rejected before reaching this method. This keeps risk reservations
+        tied to exchange-truth position state rather than stale tranche values.
+        """
+        equity = float(equity_quote)
+        if equity <= 0:
+            try:
+                account = self.db.state_get("equity_quote", "")
+                equity = float(account or 0.0)
+            except Exception:
+                equity = 0.0
+        qty = max(0.0, float(campaign.position_qty))
+        entry = max(0.0, float(campaign.average_entry_price))
+        stop = max(0.0, float(campaign.current_stop_price))
+        if qty <= 0 or entry <= 0 or stop <= 0:
+            campaign.open_risk_quote = 0.0
+            return 0.0
+        side = str(campaign.side).upper()
+        gross = qty * (
+            max(0.0, entry - stop) if side in {"BUY", "LONG"} else max(0.0, stop - entry)
+        )
+        fee_buffer = max(0.0, float(os.getenv("FEE_BUFFER_PER_SIDE_PCT", "0.001")))
+        slippage = max(0.0, float(os.getenv("RISK_SLIPPAGE_BUFFER_PCT", "0.0015")))
+        reserved = gross + (qty * entry * (2.0 * fee_buffer + slippage))
+        campaign.open_risk_quote = max(0.0, float(reserved))
+        if equity > 0:
+            campaign.tags["open_risk_pct"] = campaign.open_risk_quote / equity
+        return campaign.open_risk_quote
+
     def propose_stop(self, campaign: TradingCampaign, proposed_stop: float, source: str) -> bool:
         if proposed_stop <= 0:
             return False
@@ -403,6 +436,7 @@ class CampaignEngine:
             return False
         campaign.current_stop_price = float(proposed_stop)
         campaign.structural_stop_source = str(source)
+        self.recalculate_open_risk(campaign)
         if campaign.state in {CampaignState.OPEN_INITIAL, CampaignState.TREND_ACTIVE, CampaignState.EXHAUSTION_WATCH}:
             try:
                 campaign.transition(CampaignState.TRAILING, reason="structural protective stop advanced")

@@ -95,7 +95,22 @@ class ExecutionBarrier:
         # require at least one live snapshot; the campaign pre-submit validator
         # is responsible for the exact strategy/risk re-check.
         if not intent.required_context_versions:
-            if not intent.purpose.upper().startswith("CAMPAIGN_"):
+            purpose = intent.purpose.upper()
+            # Entry/add-on mutations require explicit context versions. Non-entry
+            # exits/cancellations may be admitted without a version dependency,
+            # provided their caller still enters this barrier.
+            if (
+                not purpose.startswith("CAMPAIGN_")
+                and purpose not in {
+                    "EMERGENCY_EXIT",
+                    "MANUAL_SELL",
+                    "LEGACY_ENTRY",
+                    "LEGACY_PROTECTION",
+                    "MANUAL_CANCEL_PROTECTION",
+                    "CAMPAIGN_ENTRY_EXPIRE",
+                    "CAMPAIGN_PROTECTION_CANCEL",
+                }
+            ):
                 return "missing required_context_versions"
         for tf, required in intent.required_context_versions.items():
             ctx = snapshot.context(intent.symbol, tf)
@@ -111,8 +126,12 @@ class ExecutionBarrier:
         # All declared TFs are version dependencies, but the permission
         # decision belongs to one operative/entry timeframe. Higher TFs provide
         # structural context and must not be required to emit a duplicate trigger.
-        if intent.purpose.upper() == "ENTRY":
-            permission_tf = (intent.permission_interval or "").lower()
+        if intent.purpose.upper() in {
+            "ENTRY",
+            "CAMPAIGN_ENTRY",
+            "CAMPAIGN_ADD_ON",
+        }:
+            permission_tf = (intent.permission_interval or "5m").lower()
             permission_ctx = snapshot.context(intent.symbol, permission_tf) if permission_tf else None
             if permission_ctx is None:
                 return f"missing permission context {intent.symbol} {permission_tf}"
@@ -125,12 +144,20 @@ class ExecutionBarrier:
             state = str(self.db.state_get("position_state", "FLAT"))
             if state == "RECONCILE_REQUIRED":
                 return "RECONCILE_REQUIRED"
+            local_symbol_state = str(
+                self.db.state_get(
+                    f"position_state:{intent.symbol}",
+                    "FLAT"
+                )
+            ).upper()
+            if local_symbol_state == "RECONCILE_REQUIRED":
+                return "symbol_reconcile_required"
             campaign_state = str(
                 self.db.state_get(
                     f"campaign_state:{intent.campaign_id}",
                     "CLEAN"
                 )
-            ) if intent.campaign_id else "CLEAN"
+            ).upper() if intent.campaign_id else "CLEAN"
             if campaign_state == "RECONCILE_REQUIRED":
                 return "campaign_reconcile_required"
 

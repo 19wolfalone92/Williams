@@ -2812,13 +2812,20 @@ private class NativeEngine(
         require(newId.isNotBlank()) {
             "Campaign protective replacement returned no orderId"
         }
+        val equity = estimateManagedEquity().coerceAtLeast(0.0)
+        val effectiveRiskQuote =
+            position.qty * max(0.0, position.entry - stop) +
+                position.qty * position.entry * (2.0 * feeBufferPerSidePct + maxSlippagePct)
+        val effectiveRiskPct =
+            if (equity > 0.0) effectiveRiskQuote / equity else position.riskPct
         synchronized(positions) {
             positions[position.symbol] =
                 position.copy(
                     stop = stop,
                     stopSource = "3_5_BAR_STRUCTURE",
                     protectiveOrderId = newId,
-                    campaignState = "TRAILING"
+                    campaignState = "TRAILING",
+                    riskPct = effectiveRiskPct
                 )
         }
         savePersistedState()
@@ -3044,10 +3051,17 @@ private class NativeEngine(
             existing.symbol + ": add-on cannot be protected by current stop"
         }
 
+        val equity = estimateManagedEquity().coerceAtLeast(0.0)
+        val grossRisk = newQty * max(0.0, newAvg - existing.stop)
+        val costReserve = newQty * newAvg * (2.0 * feeBufferPerSidePct + maxSlippagePct)
+        val recalculatedRiskPct =
+            if (equity > 0.0) (grossRisk + costReserve) / equity
+            else existing.riskPct + intent.riskReservedPct
+
         val provisional = existing.copy(
             qty = newQty,
             entry = newAvg,
-            riskPct = existing.riskPct + intent.riskReservedPct,
+            riskPct = recalculatedRiskPct,
             signalId = intent.signalId,
             signalType = intent.signalType,
             additions = existing.additions + 1,
@@ -3185,7 +3199,12 @@ private class NativeEngine(
             entry = entry,
             stop = stop,
             take = 0.0,
-            riskPct = intent.riskReservedPct,
+            riskPct = run {
+                val equity = estimateManagedEquity().coerceAtLeast(0.0)
+                val grossRisk = qty * max(0.0, entry - stop)
+                val costReserve = qty * entry * (2.0 * feeBufferPerSidePct + maxSlippagePct)
+                if (equity > 0.0) (grossRisk + costReserve) / equity else intent.riskReservedPct
+            },
             entryOrderId = order.optString("orderId", ""),
             entryClientOrderId = intent.clientOrderId,
             openedAt = order.optLong("transactTime", System.currentTimeMillis()),
@@ -3502,8 +3521,16 @@ private class NativeEngine(
             2 -> 0.75
             else -> 0.5
         }
+        val historicalWeight = when (position.additions) {
+            0 -> 5.0
+            1 -> 4.0
+            2 -> 3.0
+            else -> 2.0
+        }
+        val totalWeight = 1.0 + 5.0 + 4.0 + 3.0 + 2.0
+        val weightedCap = campaignRiskLimitPct * (historicalWeight / totalWeight)
         val riskPct = min(
-            campaignAddRiskCapPct * trancheBias,
+            min(campaignAddRiskCapPct * trancheBias, weightedCap),
             min(remainingCampaign, remainingPortfolio)
         )
         if (riskPct <= 0.0 || equity <= 0.0) return
@@ -6490,32 +6517,27 @@ private class NativeEngine(
             }
         }
 
-        // WM2: three consecutive rising AO histogram bars, with the previously
-        // valid buy-fractal/Balance-Line context still present.
+        // WM2: the Second Wise Man is the third consecutive rising AO
+        // bar. A fractal is a separate Wise Man and is not a mandatory gate.
         var streak = 0
         for (i in candles.lastIndex downTo 35) {
             val a = ao(candles, i)
             val p = ao(candles, i - 1)
             if (a > p) streak++ else break
             if (streak == 3) {
-                val priorFractalValid = lastValidFractalLevel(i - 1)?.let { (center, level) ->
-                    teethS[center + 2].isFinite() && level > teethS[center + 2]
-                } ?: false
-                if (priorFractalValid) {
-                    val trigger = candles[i].h + tick
-                    if (candles[current].c < trigger) {
-                        out += CampaignSignalN(
-                            signalId = campaignSignalId(symbol, frame, "SUPER_AO", candles[i].t),
-                            type = "SUPER_AO",
-                            role = "ENTRY",
-                            signalBarTimeMs = candles[i].t,
-                            triggerPrice = trigger,
-                            protectivePrice = candles[i].l - tick,
-                            teethAtDetection = teethS[i].takeIf { it.isFinite() } ?: 0.0,
-                            invalidationPrice = candles[i].l - tick,
-                            reason = "WM2 Super AO: third rising AO bar; conditional trigger above price bar"
-                        )
-                    }
+                val trigger = candles[i].h + tick
+                if (candles[current].c < trigger) {
+                    out += CampaignSignalN(
+                        signalId = campaignSignalId(symbol, frame, "SUPER_AO", candles[i].t),
+                        type = "SUPER_AO",
+                        role = "ENTRY",
+                        signalBarTimeMs = candles[i].t,
+                        triggerPrice = trigger,
+                        protectivePrice = candles[i].l - tick,
+                        teethAtDetection = teethS[i].takeIf { it.isFinite() } ?: 0.0,
+                        invalidationPrice = candles[i].l - tick,
+                        reason = "WM2 Super AO: third rising AO bar; conditional trigger above price bar"
+                    )
                 }
                 break
             }
@@ -7747,6 +7769,52 @@ private class NativeEngine(
 
         val dailyGuard = dailyTradeGuard()
 
+        val campaignSummary = JSONArray().apply {
+            positionList().forEach { p ->
+                put(
+                    JSONObject()
+                        .put("campaign_id", p.campaignId)
+                        .put("symbol", p.symbol)
+                        .put("state", p.campaignState)
+                        .put("signal_id", p.signalId)
+                        .put("signal_type", p.signalType)
+                        .put("trigger_price", JSONObject.NULL)
+                        .put("current_stop", p.stop)
+                        .put("risk_pct", p.riskPct)
+                        .put("additions", p.additions)
+                        .put("health", if (p.protectiveOrderId.isNotBlank()) "GREEN" else "RED")
+                        .put("next_action",
+                            when {
+                                p.protectiveOrderId.isBlank() -> "RESTORE_PROTECTION"
+                                p.campaignState == "TRAILING" -> "WAIT_STRUCTURAL_UPDATE"
+                                else -> "MONITOR_CAMPAIGN"
+                            })
+                )
+            }
+            synchronized(pendingEntries) {
+                pendingEntries.values.forEach { p ->
+                    put(
+                        JSONObject()
+                            .put("campaign_id", p.campaignId)
+                            .put("symbol", p.symbol)
+                            .put("state", "ENTRY_PENDING")
+                            .put("signal_id", p.signalId)
+                            .put("signal_type", p.signalType)
+                            .put("trigger_price", p.triggerPrice)
+                            .put("current_stop", p.protectivePrice)
+                            .put("risk_pct", p.riskReservedPct)
+                            .put("capital_reserved_quote", p.capitalReservedQuote)
+                            .put("additions", 0)
+                            .put("health", if (executionReady()) "GREEN" else "YELLOW")
+                            .put("next_action", "WAIT_FOR_TRIGGER")
+                    )
+                }
+            }
+        }
+
+        val blockers = executionBlockers()
+        val primaryBlocker = blockers.firstOrNull()
+
         return JSONObject()
             .put("version", BuildConfig.VERSION_NAME)
             .put("symbol", primarySymbol)
@@ -7870,6 +7938,10 @@ private class NativeEngine(
             .put("rest_last_latency_ms", restLastLatencyMs)
             .put("rest_last_error", restLastError ?: JSONObject.NULL)
             .put("rest_ticker_price", if (restLastTickerPrice > 0.0) restLastTickerPrice else JSONObject.NULL)
+            .put("campaigns", campaignSummary)
+            .put("campaign_count", campaignSummary.length())
+            .put("primary_blocker", primaryBlocker ?: JSONObject.NULL)
+            .put("first_blocker", primaryBlocker ?: JSONObject.NULL)
     }
 
     fun historyStatus(): JSONObject =
@@ -8253,8 +8325,8 @@ private class NativeEngine(
             .put("symbol", primarySymbol)
             .put("interval", interval)
             .put("position_fraction", 0.95)
-            .put("stop_loss_pct", 0.02)
-            .put("take_profit_pct", 0.04)
+            .put("stop_loss_pct", if (campaignEngineEnabled) 0.0 else 0.02)
+            .put("take_profit_pct", if (campaignEngineEnabled) 0.0 else 0.04)
             .put("poll_seconds", 10)
             .put("scan_mode", "adaptive_parallel_cached")
             .put("wave_timeframes", analysisFrames.joinToString(","))

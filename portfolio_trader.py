@@ -8,8 +8,10 @@ from db import Database
 from equity_breaker import EquityCircuitBreaker
 from l2_slippage import L2SlippageGuard
 from execution_accumulator import ExecutionSummary, accumulate_order
+from execution_barrier import ExecutionBarrier
+from market_context import ContextCache
 from campaign_execution import CampaignExecutionService, CampaignExecutionError
-from campaign_model import SignalSpec, SignalType, SignalRole
+from campaign_model import CampaignState, SignalSpec, SignalType, SignalRole
 from campaign_monitor import CampaignMonitor
 
 
@@ -88,7 +90,10 @@ class MultiPositionTrader:
         self.max_trades_per_day = max(0, int(os.getenv("MAX_TRADES_PER_DAY", "5")))
         self.max_consecutive_losses = max(0, int(os.getenv("MAX_CONSECUTIVE_LOSSES", "3")))
         self.cooldown_minutes = max(0, int(os.getenv("COOLDOWN_MINUTES", "30")))
-        self.execution_barrier = execution_barrier
+        # All production entry points pass the canonical barrier. A local
+        # context-backed barrier is created only for legacy/unit construction,
+        # preserving the single mutation door without introducing a Binance bypass.
+        self.execution_barrier = execution_barrier or ExecutionBarrier(ContextCache(), self.db)
         self.campaign_engine_enabled = (
             os.getenv("CAMPAIGN_ENGINE", "true").lower() == "true"
         )
@@ -699,6 +704,37 @@ class MultiPositionTrader:
             summary.fee_quote_equivalent + extra_fee_quote,
         )
 
+    def _barrier_legacy_mutation(
+        self,
+        symbol,
+        side,
+        order_type,
+        purpose,
+        submit,
+        *,
+        client_order_id="",
+        quantity="",
+        quote_order_quantity="",
+    ):
+        """Route legacy/manual mutations through the canonical P0 barrier."""
+        if self.execution_barrier is None:
+            raise RuntimeError("ExecutionBarrier is required for all Binance mutations")
+        intent = __import__("execution_barrier").OrderIntent.new(
+            str(symbol).upper(),
+            str(side).upper(),
+            str(order_type).upper(),
+            {},
+            purpose=str(purpose).upper(),
+            permission_interval=str(os.getenv("INTERVAL", "1h")).lower(),
+            quantity=str(quantity or ""),
+            quote_order_quantity=str(quote_order_quantity or ""),
+            client_order_id=str(client_order_id or ""),
+        )
+        result = self.execution_barrier.execute(intent, submit)
+        if not result.accepted:
+            raise RuntimeError(f"ExecutionBarrier blocked {purpose}: {result.reason}")
+        return result.response
+
     # ------------------------------------------------------------------
     # Protection
     # ------------------------------------------------------------------
@@ -720,12 +756,20 @@ class MultiPositionTrader:
             )
 
         client_id = f"{self.EMERGENCY_PREFIX}{uuid.uuid4().hex[:16]}"
-        sell = self.client.order_safe(
+        sell = self._barrier_legacy_mutation(
             symbol,
             "SELL",
             "MARKET",
+            "EMERGENCY_EXIT",
+            lambda: self.client.order_safe(
+                symbol,
+                "SELL",
+                "MARKET",
+                quantity=self.client.decimal_format(sell_qty),
+                new_client_order_id=client_id,
+            ),
+            client_order_id=client_id,
             quantity=self.client.decimal_format(sell_qty),
-            new_client_order_id=client_id,
         )
         self.db.save_order(sell)
 
@@ -934,13 +978,21 @@ class MultiPositionTrader:
         self.set_state(symbol, "EXIT_PENDING")
 
         create_oco = getattr(self.client, "create_oco_sell_safe", None) or self.client.create_oco_sell
-        result = create_oco(
+        result = self._barrier_legacy_mutation(
             symbol,
-            self.client.decimal_format(qty),
-            self.client.decimal_format(tp),
-            self.client.decimal_format(sl),
-            self.client.decimal_format(sl_limit),
-            client_id,
+            "SELL",
+            "OCO",
+            "LEGACY_PROTECTION",
+            lambda: create_oco(
+                symbol,
+                self.client.decimal_format(qty),
+                self.client.decimal_format(tp),
+                self.client.decimal_format(sl),
+                self.client.decimal_format(sl_limit),
+                client_id,
+            ),
+            client_order_id=client_id,
+            quantity=self.client.decimal_format(qty),
         )
 
         for leg in result.get("orderReports", []):
@@ -1656,10 +1708,27 @@ class MultiPositionTrader:
             if list_id or list_client:
                 cancel = getattr(self.client, "cancel_oco", None)
                 if cancel is not None:
-                    if list_id:
-                        cancel(symbol, order_list_id=list_id)
-                    else:
-                        cancel(symbol, list_client_order_id=list_client)
+                    cancel_intent = __import__("execution_barrier").OrderIntent.new(
+                        symbol,
+                        "SELL",
+                        "CANCEL_OCO",
+                        {},
+                        purpose="MANUAL_CANCEL_PROTECTION",
+                        permission_interval=str(os.getenv("INTERVAL", "1h")).lower(),
+                        client_order_id=list_client,
+                    )
+                    cancel_result = self.execution_barrier.execute(
+                        cancel_intent,
+                        lambda: (
+                            cancel(symbol, order_list_id=list_id)
+                            if list_id
+                            else cancel(symbol, list_client_order_id=list_client)
+                        ),
+                    )
+                    if not cancel_result.accepted:
+                        raise RuntimeError(
+                            f"ExecutionBarrier blocked MANUAL_CANCEL_PROTECTION: {cancel_result.reason}"
+                        )
 
             account = self.client.account()
             free_qty = self._asset_balance(
@@ -1676,12 +1745,21 @@ class MultiPositionTrader:
                     f"{symbol}: managed quantity is no longer available"
                 )
 
-            sell = self.client.order_safe(
+            manual_client_id = f"{self.MANUAL_PREFIX}{uuid.uuid4().hex[:20]}"
+            sell = self._barrier_legacy_mutation(
                 symbol,
                 "SELL",
                 "MARKET",
+                "MANUAL_SELL",
+                lambda: self.client.order_safe(
+                    symbol,
+                    "SELL",
+                    "MARKET",
+                    quantity=self.client.decimal_format(sell_qty),
+                    new_client_order_id=manual_client_id,
+                ),
+                client_order_id=manual_client_id,
                 quantity=self.client.decimal_format(sell_qty),
-                new_client_order_id=f"{self.MANUAL_PREFIX}{uuid.uuid4().hex[:20]}",
             )
             self.db.save_order(sell)
 
@@ -1950,10 +2028,64 @@ class MultiPositionTrader:
             if not specs:
                 continue
             symbol = str(selection.candidate.symbol).upper()
-            if symbol in pending:
-                continue
-
             campaign = self.campaign_execution._active_campaign_for_symbol(symbol)
+
+            # A pending campaign may be superseded by a newer, materially
+            # different signal. Replacement is explicit and bounded; we never
+            # stack multiple pending BUYs for one symbol.
+            if symbol in pending and campaign is not None and campaign.position_qty <= 0:
+                latest_time = int(
+                    campaign.tags.get("signal_bar_time_ms", 0)
+                    or campaign.tags.get("pending_order_trigger", 0)
+                    or 0
+                )
+                candidates_for_replace = [
+                    x for x in specs
+                    if x.signal_bar_time_ms > latest_time
+                ]
+                if os.getenv("CAMPAIGN_PENDING_REPLACE", "true").lower() == "true" and candidates_for_replace:
+                    replacement = max(
+                        candidates_for_replace,
+                        key=lambda x: (x.signal_bar_time_ms, x.created_at_ms),
+                    )
+                    try:
+                        result = self.campaign_execution.replace_pending_entry(
+                            campaign,
+                            replacement,
+                            equity_quote=equity,
+                            candidate_risk_pct=min(
+                                self.max_risk_per_trade_pct,
+                                max(0.0, float(selection.risk.risk_pct) / 100.0),
+                            ),
+                        )
+                        results.append({
+                            "symbol": symbol,
+                            "campaign": True,
+                            "action": "ENTRY_REPLACED",
+                            **result,
+                        })
+                    except CampaignExecutionError as exc:
+                        self.db.log_event(
+                            "WARNING",
+                            "campaign_entry_not_replaced",
+                            str(exc),
+                            {"symbol": symbol, "signal_id": replacement.signal_id},
+                        )
+                        if campaign.state == CampaignState.RECONCILE_REQUIRED:
+                            results.append({
+                                "symbol": symbol,
+                                "campaign": True,
+                                "action": "RECONCILE_REQUIRED",
+                                "error": str(exc),
+                            })
+                        else:
+                            results.append({
+                                "symbol": symbol,
+                                "campaign": True,
+                                "action": "WAIT_PENDING",
+                                "error": str(exc),
+                            })
+                continue
 
             # Active campaign: later WM2/WM3 signals are add-ons. A new
             # reversal is not auto-added by default because it can represent
@@ -2215,12 +2347,20 @@ class MultiPositionTrader:
                     float(quote),
                 )
 
-                order = self.client.order_safe(
+                order = self._barrier_legacy_mutation(
                     symbol,
                     "BUY",
                     "MARKET",
-                    quote_order_qty=self.client.decimal_format(quote),
-                    new_client_order_id=client_id,
+                    "LEGACY_ENTRY",
+                    lambda: self.client.order_safe(
+                        symbol,
+                        "BUY",
+                        "MARKET",
+                        quote_order_qty=self.client.decimal_format(quote),
+                        new_client_order_id=client_id,
+                    ),
+                    client_order_id=client_id,
+                    quote_order_quantity=self.client.decimal_format(quote),
                 )
                 self.db.save_order(order)
 

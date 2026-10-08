@@ -13,10 +13,11 @@ from __future__ import annotations
 import os
 import time
 
-from campaign_model import CampaignState, structural_stop_for_long
+from campaign_model import CampaignState, SignalType
 from campaign_execution import CampaignExecutionError, CampaignExecutionService
 from strategy import calculate_indicators, config_from_env
 from data import fetch_klines
+from stop_engine import StopEngine
 
 
 class CampaignMonitor:
@@ -28,6 +29,7 @@ class CampaignMonitor:
             30,
             int(os.getenv("CAMPAIGN_WAVE_RECHECK_SECONDS", "60")),
         )
+        self.stop_engine = StopEngine(buffer=0.0)
 
     @staticmethod
     def _tick(client, symbol: str) -> float:
@@ -148,25 +150,26 @@ class CampaignMonitor:
             ),
         )
         recent_lows = [float(x) for x in candles["low"].tail(trail_window).tolist() if float(x) > 0]
-        proposed, source = structural_stop_for_long(
-            signal_type=__import__("campaign_model").SignalType(
-                str(campaign.current_signal_type or "FRACTAL")
-                if str(campaign.current_signal_type or "FRACTAL") in {"REVERSAL", "SUPER_AO", "FRACTAL"}
-                else "FRACTAL"
-            ),
+        try:
+            signal_type = SignalType(str(campaign.current_signal_type or "FRACTAL"))
+        except ValueError:
+            signal_type = SignalType.FRACTAL
+
+        proposed_obj = self.stop_engine.propose_long(
+            signal_type=signal_type,
+            current_stop=float(campaign.current_stop_price or 0.0),
             signal_bar_low=float(campaign.initial_stop_price or 0.0) + tick,
             recent_lows=recent_lows,
-            teeth=0.0,
-            wave_invalidation=0.0,
-            buffer=tick,
+            teeth=teeth if os.getenv("CAMPAIGN_TRAIL_TO_TEETH", "false").lower() == "true" else 0.0,
+            wave_invalidation=float(campaign.tags.get("wave_invalidation_price", 0.0) or 0.0),
+            current_price=current_price,
+            tighten_to_context=(
+                os.getenv("CAMPAIGN_TRAIL_TO_TEETH", "false").lower() == "true"
+                or os.getenv("CAMPAIGN_TRAIL_TO_WAVE", "false").lower() == "true"
+            ),
         )
-
-        # Structural 3/5-bar protection is the primary Williams trail.
-        # Teeth tightening is optional and OFF by default to avoid turning a
-        # context line into an implicit fixed exit rule.
-        if os.getenv("CAMPAIGN_TRAIL_TO_TEETH", "false").lower() == "true" and teeth > 0:
-            proposed = max(proposed, teeth - tick)
-            source = "TEETH"
+        proposed = proposed_obj.price
+        source = proposed_obj.source
 
         current_stop = float(campaign.current_stop_price or 0.0)
         stop_moved = False
