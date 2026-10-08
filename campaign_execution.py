@@ -1315,7 +1315,6 @@ class CampaignExecutionService:
             "STOP_LOSS",
             required_context_versions={},
             invalidation_level=stop,
-            trigger_price=trigger,
             quantity=self.client.decimal_format(qty),
             client_order_id=cid,
             purpose="CAMPAIGN_PROTECTION",
