@@ -14,6 +14,7 @@ from campaign_model import CampaignState, PendingOrderRecord, SignalSpec, Signal
 from execution_barrier import ExecutionBarrier, OrderIntent
 from pending_signal import PendingSignal
 from recovery_matrix import RecoveryMatrix
+from williams.execution_economics import ExecutionFeasibilityGate
 
 
 class CampaignExecutionError(RuntimeError):
@@ -29,12 +30,18 @@ class CampaignExecutionService:
         self.client = client
         self.db = db
         self.barrier = execution_barrier
+        self.core_mode = str(os.getenv("WILLIAMS_MODE", "INTRADAY_CORE")).upper() == "INTRADAY_CORE"
+        self.economics_gate = ExecutionFeasibilityGate(
+            fee_per_side_pct=float(os.getenv("FEE_BUFFER_PER_SIDE_PCT", "0.001")),
+            slippage_pct=float(os.getenv("RISK_SLIPPAGE_BUFFER_PCT", "0.0015")),
+            max_spread_pct=float(os.getenv("MAX_SPREAD_PCT", "0.0015")),
+        )
         self.engine = CampaignEngine(
             db,
-            portfolio_risk_limit_pct=float(os.getenv("MAX_TOTAL_RISK_PCT", "0.01")),
-            campaign_risk_limit_pct=float(os.getenv("MAX_RISK_PER_TRADE_PCT", "0.005")),
+            portfolio_risk_limit_pct=float(os.getenv("MAX_TOTAL_RISK_PCT", "0.006")),
+            campaign_risk_limit_pct=float(os.getenv("MAX_RISK_PER_TRADE_PCT", "0.0025" if self.core_mode else "0.005")),
             initial_risk_fraction_of_campaign=float(
-                os.getenv("CAMPAIGN_INITIAL_RISK_FRACTION", "0.40")
+                os.getenv("CAMPAIGN_INITIAL_RISK_FRACTION", "0.4166666667")
             ),
         )
 
