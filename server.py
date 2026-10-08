@@ -666,7 +666,7 @@ def _next_action_for_blocker(blocker: str, *, execution_enabled: bool) -> str:
         return 'WAIT FOR TRIGGER'
     if 'POSITION_UNPROTECTED' in value:
         return 'ARM PROTECTION'
-    if 'RISK_CAPACITY' in value or 'RISK' in value and not execution_enabled:
+    if ('RISK_CAPACITY' in value or 'RISK' in value) and not execution_enabled:
         return 'RESOLVE RISK BLOCKER'
     if 'PAUSED' in value or 'RUNTIME_EXECUTION_DISABLED' in value:
         return 'RESUME / ENABLE EXECUTION'
