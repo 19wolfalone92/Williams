@@ -3769,8 +3769,8 @@ private class NativeEngine(
             }
             "NO_NEW_ENTRIES" -> {
                 cancelPendingCampaignEntries("NO_NEW_ENTRIES")
-                // Existing positions remain managed by the H1 structural trail.
-                return
+                // Existing positions continue through the H1 structural
+                // management path below; no new campaign/add-on is armed.
             }
         }
 
