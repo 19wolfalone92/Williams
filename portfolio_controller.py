@@ -4,6 +4,7 @@ from typing import Optional
 
 from market_scanner import MarketScanner, Candidate
 from risk_engine import RiskEngine, RiskAnalysis
+from williams_intraday_spec import IntradayPolicy
 
 
 @dataclass
@@ -19,10 +20,12 @@ class PortfolioController:
 
     def __init__(self, client, balance_quote: float, symbols=None, interval=None):
         self.client = client
-        self.interval = interval or os.getenv("INTERVAL", "1h")
-        self.max_open_positions = max(0, int(os.getenv("MAX_OPEN_POSITIONS", "5")))
-        self.max_total_risk_pct = min(0.01, max(0.0, float(os.getenv("MAX_TOTAL_RISK_PCT", "0.01"))))
-        self.max_risk_per_trade_pct = min(0.005, max(0.0, float(os.getenv("MAX_RISK_PER_TRADE_PCT", os.getenv("RISK_PER_TRADE_PCT", "0.005")))))
+        self.policy = IntradayPolicy.from_env()
+        self.intraday_core_enabled = self.policy.profile in {"WILLIAMS_INTRADAY_CORE", "WILLIAMS_INTRADAY_CONSERVATIVE"}
+        self.interval = "1h" if self.intraday_core_enabled else (interval or os.getenv("INTERVAL", "1h"))
+        self.max_open_positions = max(0, int(os.getenv("MAX_OPEN_POSITIONS", str(self.policy.risk.max_campaigns if self.intraday_core_enabled else 5))))
+        self.max_total_risk_pct = min(0.006, max(0.0, float(os.getenv("MAX_TOTAL_RISK_PCT", str(self.policy.risk.campaign_risk_pct))))
+        self.max_risk_per_trade_pct = min(0.0025, max(0.0, float(os.getenv("MAX_RISK_PER_TRADE_PCT", os.getenv("RISK_PER_TRADE_PCT", str(self.policy.risk.initial_risk_pct))))))
         self.min_risk_allocation_pct = min(
             self.max_risk_per_trade_pct,
             max(0.0, float(os.getenv("MIN_RISK_ALLOCATION_PCT", "0.001"))),
@@ -37,7 +40,7 @@ class PortfolioController:
             balance_quote=float(balance_quote),
             risk_per_trade_pct=self.max_risk_per_trade_pct,
             max_position_fraction=float(os.getenv("POSITION_FRACTION", "0.25")),
-            max_daily_loss_pct=float(os.getenv("MAX_DAILY_LOSS_PCT", "0.03")),
+            max_daily_loss_pct=float(os.getenv("MAX_DAILY_LOSS_PCT", str(self.policy.risk.daily_loss_pct))),
             min_rr=float(os.getenv("MIN_RISK_REWARD", "1.5")),
             max_atr_pct=float(os.getenv("MAX_ATR_PCT", "0.08")),
         )
@@ -54,17 +57,24 @@ class PortfolioController:
                 filters = {f["filterType"]: f for f in info.get("symbols", [{}])[0].get("filters", [])}
                 notional_filter = filters.get("NOTIONAL") or filters.get("MIN_NOTIONAL") or {}
                 min_notional = float(notional_filter.get("minNotional", 0) or 0)
-                risk = self.risk_engine.analyse(
-                    symbol=candidate.symbol,
-                    entry_price=entry_price,
-                    atr=atr,
-                    min_notional=min_notional,
-                    signal_strength=candidate.signal_strength,
-                    htf_confirmed=candidate.htf_confirmed,
-                    spread_pct=candidate.spread_pct,
-                    max_spread_pct=self.scanner.max_spread_pct,
-                    invalidation_price=float(getattr(candidate, "wave_invalidation_price", 0.0) or 0.0),
-                )
+                if self.intraday_core_enabled:
+                    risk = self.risk_engine.analyse_structural_stop(
+                        symbol=candidate.symbol,
+                        entry_price=entry_price,
+                        stop_price=float(getattr(candidate, "entry_protective_reference", 0.0) or 0.0),
+                        risk_pct_override=min(self.max_risk_per_trade_pct, max(0.0, float(candidate.risk_pct) / 100.0)),
+                        spread_pct=candidate.spread_pct,
+                        max_spread_pct=self.scanner.max_spread_pct,
+                        min_notional=min_notional,
+                    )
+                else:
+                    risk = self.risk_engine.analyse(
+                        symbol=candidate.symbol, entry_price=entry_price, atr=atr,
+                        min_notional=min_notional, signal_strength=candidate.signal_strength,
+                        htf_confirmed=candidate.htf_confirmed, spread_pct=candidate.spread_pct,
+                        max_spread_pct=self.scanner.max_spread_pct,
+                        invalidation_price=float(getattr(candidate, "wave_invalidation_price", 0.0) or 0.0),
+                    )
                 if risk.allowed:
                     analysed.append(Selection(
                         candidate=candidate,
@@ -126,18 +136,25 @@ class PortfolioController:
             filters = {f["filterType"]: f for f in info.get("symbols", [{}])[0].get("filters", [])}
             nf = filters.get("NOTIONAL") or filters.get("MIN_NOTIONAL") or {}
             min_notional = float(nf.get("minNotional", 0) or 0)
-            r = self.risk_engine.analyse(
-                symbol=base.candidate.symbol,
-                entry_price=base.risk.entry_price,
-                atr=base.risk.entry_price * base.candidate.atr_pct,
-                min_notional=min_notional,
-                signal_strength=base.candidate.signal_strength,
-                htf_confirmed=base.candidate.htf_confirmed,
-                spread_pct=base.candidate.spread_pct,
-                max_spread_pct=self.scanner.max_spread_pct,
-                invalidation_price=float(getattr(base.candidate, "wave_invalidation_price", 0.0) or 0.0),
-                risk_pct_override=allocation_pct,
-            )
+            if self.intraday_core_enabled:
+                r = self.risk_engine.analyse_structural_stop(
+                    symbol=base.candidate.symbol,
+                    entry_price=base.risk.entry_price,
+                    stop_price=float(getattr(base.candidate, "entry_protective_reference", 0.0) or 0.0),
+                    spread_pct=base.candidate.spread_pct,
+                    max_spread_pct=self.scanner.max_spread_pct,
+                    min_notional=min_notional,
+                    risk_pct_override=allocation_pct,
+                )
+            else:
+                r = self.risk_engine.analyse(
+                    symbol=base.candidate.symbol, entry_price=base.risk.entry_price,
+                    atr=base.risk.entry_price * base.candidate.atr_pct, min_notional=min_notional,
+                    signal_strength=base.candidate.signal_strength, htf_confirmed=base.candidate.htf_confirmed,
+                    spread_pct=base.candidate.spread_pct, max_spread_pct=self.scanner.max_spread_pct,
+                    invalidation_price=float(getattr(base.candidate, "wave_invalidation_price", 0.0) or 0.0),
+                    risk_pct_override=allocation_pct,
+                )
             if not r.allowed:
                 continue
 
