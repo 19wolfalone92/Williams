@@ -8,6 +8,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
+from execution_authority import entry_submission_scope
 from market_context import ContextCache, MarketStateSnapshot
 from order_state_machine import OrderState, OrderStateMachine
 
@@ -139,6 +140,8 @@ class ExecutionBarrier:
             return f"BUY intent has unsupported entry purpose {purpose or '<empty>'}"
 
         if purpose in entry_purposes:
+            if side != "BUY":
+                return "entry purpose requires BUY for the current Spot-only execution model"
             if not re.fullmatch(r"[A-Za-z0-9_.:/-]{1,36}", client_order_id):
                 return "missing or invalid client_order_id"
             if purpose in {"CAMPAIGN_ENTRY", "CAMPAIGN_ADD_ON"} and order_type != "STOP_LOSS":
@@ -330,7 +333,11 @@ class ExecutionBarrier:
                 },
             )
             try:
-                response = submit()
+                if purpose in entry_purposes:
+                    with entry_submission_scope():
+                        response = submit()
+                else:
+                    response = submit()
             except Exception as exc:
                 order_fsm.state = OrderState.AMBIGUOUS
                 order_fsm.state = OrderState.AMBIGUOUS
