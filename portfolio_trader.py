@@ -1708,24 +1708,15 @@ class MultiPositionTrader:
             if list_id or list_client:
                 cancel = getattr(self.client, "cancel_oco", None)
                 if cancel is not None:
-                    tf = str(os.getenv("INTERVAL", "1h")).lower()
-                    if self.execution_barrier is None:
-                        raise RuntimeError("ExecutionBarrier is required for OCO cancellation")
-                    snap = self.execution_barrier.context_cache.snapshot()
-                    ctx = snap.context(symbol, tf)
-                    if ctx is None:
-                        raise RuntimeError(f"{symbol}: execution context unavailable for OCO cancellation")
                     cancel_intent = __import__("execution_barrier").OrderIntent.new(
                         symbol,
                         "SELL",
                         "CANCEL_OCO",
-                        {tf: int(ctx.version)},
+                        {},
                         purpose="MANUAL_CANCEL_PROTECTION",
-                        permission_interval=tf,
+                        permission_interval=str(os.getenv("INTERVAL", "1h")).lower(),
                         client_order_id=list_client,
                     )
-                    # Cancellation uses the same P0 door, but no entry permission
-                    # context is consulted for this non-entry mutation.
                     cancel_result = self.execution_barrier.execute(
                         cancel_intent,
                         lambda: (
