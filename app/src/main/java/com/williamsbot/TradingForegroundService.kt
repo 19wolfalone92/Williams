@@ -42,7 +42,7 @@ class TradingForegroundService : Service() {
                 .setSmallIcon(R.drawable.ic_launcher)
                 .setContentTitle("Williams Trader")
                 .setContentText(
-                    "Binance Testnet: торговый двигатель активен"
+                    "Remote Futures cockpit: backend engine"
                 )
                 .setOngoing(true)
                 .setCategory(
