@@ -135,11 +135,18 @@ class PortfolioController:
         # Core campaign mode does not mean "many concurrent campaigns".
         # Add-ons belong to CampaignEngine; PortfolioController is allowed to
         # admit at most one new campaign/position under the intraday contract.
-        remaining_slots = (
-            max(0, self.max_open_positions - int(open_positions))
-            if self.intraday_core_enabled or not campaign_mode
-            else len(analysed)
-        )
+        if self.intraday_core_enabled:
+            remaining_slots = max(
+                0, self.max_open_positions - int(open_positions)
+            )
+        elif campaign_mode:
+            remaining_slots = len(analysed)
+        elif self.max_open_positions > 0:
+            remaining_slots = max(
+                0, self.max_open_positions - int(open_positions)
+            )
+        else:
+            remaining_slots = len(analysed)
 
         for base in analysed:
             if remaining_pct <= 0 or remaining_slots <= 0:
