@@ -877,7 +877,7 @@ class Database:
                 unrealized_pnl_quote,open_risk_quote,pending_risk_quote,
                 capital_reserved_quote,wave_context_json,health,next_action,
                 reconciliation_state,exit_reason,tags_json
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(campaign_id) DO UPDATE SET
                 updated_at=CURRENT_TIMESTAMP,symbol=excluded.symbol,side=excluded.side,
                 execution_timeframe=excluded.execution_timeframe,decision_timeframe=excluded.decision_timeframe,state=excluded.state,
