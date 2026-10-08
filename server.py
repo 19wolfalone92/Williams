@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect, Response
 from pydantic import BaseModel
 from db import Database
+from williams_intraday_spec import IntradayPolicy
 from trader import Trader
 from portfolio_trader import MultiPositionTrader
 from data import fetch_klines
@@ -712,6 +713,25 @@ def health():
         'ok': True,
         'service': 'williams-binance-bot',
         'version': VERSION,
+        'strategy_contract': {
+            'name': 'WILLIAMS_INTRADAY_CORE_1.0',
+            'profile': IntradayPolicy.from_env().profile,
+            'macro_tf': '1d',
+            'context_tf': '4h',
+            'decision_tf': '1h',
+            'execution_tf': '15m',
+            'micro_tf': '5m',
+            'airbag_tf': '1d',
+            'initial_risk_pct': IntradayPolicy.from_env().risk.initial_risk_pct,
+            'campaign_risk_pct': IntradayPolicy.from_env().risk.campaign_risk_pct,
+            'daily_loss_pct': IntradayPolicy.from_env().risk.daily_loss_pct,
+            'max_campaigns': IntradayPolicy.from_env().risk.max_campaigns,
+            'max_full_stopouts': IntradayPolicy.from_env().risk.max_full_stopouts,
+            'fixed_take_profit': IntradayPolicy.from_env().risk.fixed_take_profit,
+            'averaging_down': IntradayPolicy.from_env().risk.averaging_down,
+            'reverse_pyramid_weights': list(IntradayPolicy.from_env().risk.reverse_pyramid_weights),
+            'session_state': IntradayPolicy.from_env().session.state(),
+        },
         'execution_state_contract': {
             'version': 1,
             'state': execution_state,
