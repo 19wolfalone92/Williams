@@ -10,8 +10,8 @@ from dataclasses import dataclass
 from typing import Mapping, Sequence
 
 
-DEFAULT_SYMBOLS = ("BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT")
-DEFAULT_STRUCTURAL_TFS = ("1d", "4h", "1h", "15m")
+DEFAULT_SYMBOLS = ("BTCUSDT", "ETHUSDT")
+DEFAULT_STRUCTURAL_TFS = ("1d", "4h", "1h", "15m", "5m")
 
 
 def _bool(env: Mapping[str, str], key: str, default: bool) -> bool:
@@ -74,7 +74,7 @@ def _tf_chain(execution: str, env: Mapping[str, str]) -> tuple[str, ...]:
 class TradingConfig:
     symbols: tuple[str, ...] = DEFAULT_SYMBOLS
     structural_timeframes: tuple[str, ...] = DEFAULT_STRUCTURAL_TFS
-    execution_timeframe: str = "5m"
+    decision_timeframe: str = "1h"\n    execution_timeframe: str = "15m"\n    micro_timeframe: str = "5m"
 
     allow_long: bool = True
     allow_short: bool = False
@@ -115,12 +115,12 @@ class TradingConfig:
         if str(source.get("AUTO_SCAN_SYMBOLS", "")).strip():
             symbols = _csv(source, "AUTO_SCAN_SYMBOLS", symbols)
 
-        max_positions = max(0, _int(source, "MAX_OPEN_POSITIONS", 5))
+        max_positions = max(1, _int(source, "MAX_OPEN_POSITIONS", 1))
         risk_key = "MAX_RISK_PER_TRADE_PCT" if "MAX_RISK_PER_TRADE_PCT" in source else "RISK_PER_TRADE_PCT"
-        risk = max(0.0, min(0.005, _float(source, risk_key, 0.005)))
-        total_risk = max(0.0, min(0.01, _float(source, "MAX_TOTAL_RISK_PCT", 0.01)))
+        risk = max(0.0, min(0.0025, _float(source, risk_key, 0.0025)))
+        total_risk = max(0.0, min(0.006, _float(source, "MAX_TOTAL_RISK_PCT", 0.006)))
 
-        execution_timeframe = str(source.get("EXECUTION_TIMEFRAME", "5m")).lower()
+        decision_timeframe = str(source.get("DECISION_TIMEFRAME", "1h")).lower()\n        execution_timeframe = str(source.get("EXECUTION_TIMEFRAME", "15m")).lower()\n        micro_timeframe = str(source.get("MICRO_TIMEFRAME", "5m")).lower()
 
         return cls(
             symbols=symbols,
@@ -132,8 +132,8 @@ class TradingConfig:
             no_trade_when_uncertain=_bool(source, "NO_TRADE_WHEN_UNCERTAIN", True),
             risk_per_trade_pct=risk,
             max_total_risk_pct=max(total_risk, risk),
-            max_daily_loss_pct=max(0.0, _float(source, "MAX_DAILY_LOSS_PCT", 0.03)),
-            max_consecutive_losses=max(0, _int(source, "MAX_CONSECUTIVE_LOSSES", 3)),
+            max_daily_loss_pct=max(0.0, _float(source, "MAX_DAILY_LOSS_PCT", 0.01)),
+            max_consecutive_losses=max(0, _int(source, "MAX_CONSECUTIVE_LOSSES", 2)),
             cooldown_minutes=max(0, _int(source, "COOLDOWN_MINUTES", 30)),
             max_open_positions=max_positions,
             min_risk_reward=max(0.0, _float(source, "MIN_RISK_REWARD", 1.5)),
