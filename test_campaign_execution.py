@@ -238,3 +238,36 @@ def test_partial_fill_cancel_creates_canonical_cancel_intent():
         assert row is not None
         assert row["purpose"] == "CAMPAIGN_ENTRY_PARTIAL_CANCEL"
         assert row["status"] == "SUBMITTED"
+
+
+def test_canonical_campaign_reconcile_state_blocks_even_if_mirror_is_stale():
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "canonical-reconcile.sqlite3"))
+        engine = CampaignEngine(db)
+        spec = signal(trigger=101.0)
+        campaign = engine.create_campaign(spec, initial_risk_pct=0.002)
+        # Simulate a stale mirror from an older runtime.
+        db.state_set(f"campaign_state:{campaign.campaign_id}", "ENTRY_PENDING")
+        campaign.state = CampaignState.RECONCILE_REQUIRED
+        db.conn.execute(
+            "UPDATE campaigns SET state='RECONCILE_REQUIRED' WHERE campaign_id=?",
+            (campaign.campaign_id,),
+        )
+        db.conn.commit()
+
+        from execution_barrier import OrderIntent
+        intent = OrderIntent.new(
+            "BTCUSDT",
+            "BUY",
+            "STOP_LOSS",
+            {},
+            purpose="CAMPAIGN_ENTRY",
+            permission_interval="5m",
+            campaign_id=campaign.campaign_id,
+        )
+        result = ExecutionBarrier(FakeCache(), db).execute(
+            intent,
+            lambda: {"orderId": "must-not-submit"},
+        )
+        assert result.accepted is False
+        assert "reconcile" in result.reason.lower()
