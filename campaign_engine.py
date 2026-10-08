@@ -160,9 +160,23 @@ class CampaignEngine:
         ]
         if not candidates:
             return None
-        # Book model: first available valid signal starts the campaign.  We
-        # therefore order primarily by signal-bar time, not by a score.
-        return min(candidates, key=lambda s: (s.signal_bar_time_ms, s.created_at_ms))
+        # Canonical campaign policy: prefer the classic Wise Men order
+        # (WM1 -> WM2 -> WM3) when several signals are simultaneously valid.
+        # A Fractal may still start a campaign when it is the only valid
+        # opportunity, as Williams explicitly allows.
+        priority = {
+            SignalType.REVERSAL: 0,   # WM1
+            SignalType.SUPER_AO: 1,   # WM2
+            SignalType.FRACTAL: 2,    # WM3
+        }
+        return max(
+            candidates,
+            key=lambda s: (
+                -priority.get(s.signal_type, 99),
+                s.signal_bar_time_ms,
+                s.created_at_ms,
+            ),
+        )
 
     @staticmethod
     def should_replace_pending(old: SignalSpec, new: SignalSpec, *, min_ticks: int = 1, tick_size: float = 0.0) -> bool:
