@@ -547,6 +547,33 @@ def test_active_oco_partial_fill_keeps_second_leg_as_shared_protection(tmp_path)
 
 
 
+def test_autonomous_execute_blocks_legacy_order_bypass(monkeypatch, tmp_path):
+    monkeypatch.setenv("CAMPAIGN_ENGINE", "false")
+    db = Database(str(tmp_path / "no-bypass.sqlite3"))
+    client = FakeBinance()
+    trader = MultiPositionTrader(client, db=db, symbols=[])
+
+    class Candidate:
+        symbol = "BTCUSDT"
+
+    class Selection:
+        candidate = Candidate()
+        risk = type(
+            "Risk",
+            (),
+            {
+                "risk_pct": 0.5,
+                "stop_distance_pct": 1.0,
+                "take_profit_pct": 2.0,
+            },
+        )()
+
+    result = trader.execute([Selection()])
+    assert len(result) == 1
+    assert result[0]["action"] == "BLOCKED_CANONICAL_ONLY"
+    assert getattr(client, "order_safe_calls", 0) == 0
+
+
 def test_market_klines_uses_requested_symbol_and_interval(monkeypatch):
     import pandas as pd
     import server
