@@ -328,3 +328,12 @@ def test_proof_diagnostic_score_never_replaces_missing_gate():
     assert proof.diagnostic_score == 7 / 8
     assert proof.is_fully_proven is False
     assert WhyNotEngine.explain_full(proof) == ("price_proof_not_triggered",)
+
+
+def test_williams_core_has_no_binance_dependency():
+    import inspect
+    import digital_williams_core
+
+    source = inspect.getsource(digital_williams_core)
+    assert "BinanceSpotClient" not in source
+    assert "BinanceDataContract" not in source
