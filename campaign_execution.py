@@ -1056,7 +1056,7 @@ class CampaignExecutionService:
             raise CampaignExecutionError("pending Fractal already has execution; reconciliation owns the state")
         if status in {"NEW", "PENDING_NEW", "PARTIALLY_FILLED"} and order.get("orderId") is not None:
             self._execute_cancel(campaign, int(order["orderId"]), "CAMPAIGN_FRACTAL_SUPERSEDE")
-        self.db.set_campaign_signal_state(old_signal_id, SignalState.REPLACED.value)
+        self.db.replace_campaign_signal(old_signal_id, new_signal.signal_id)
         self.db.set_campaign_signal_state(old_signal_id, SignalState.REPLACED.value)
         campaign.tags["supersedes_signal_id"] = old_signal_id
         campaign.tags["superseded_by_signal_id"] = new_signal.signal_id
