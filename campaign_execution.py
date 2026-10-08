@@ -1231,6 +1231,7 @@ class CampaignExecutionService:
             purpose=purpose,
             campaign_id=campaign.campaign_id,
             signal_id=campaign.current_signal_id,
+            related_order_id=str(order_id),
         )
         return self._submit(
             intent,
@@ -1437,6 +1438,7 @@ class CampaignExecutionService:
             purpose="CAMPAIGN_TRAIL",
             campaign_id=campaign.campaign_id,
             signal_id=campaign.current_signal_id,
+            related_order_id=str(existing_order_id),
         )
         result = self._submit(
             intent,
