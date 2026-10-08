@@ -24,7 +24,7 @@ def test_first_valid_signal_is_chronological_not_family_order(tmp_path):
     assert chosen.signal_type==SignalType.SUPER_AO
 
 
-def test_same_time_prefers_wm1():
+def test_same_time_prefers_wm1(tmp_path):
     from db import Database
     engine=CampaignEngine(Database(str(tmp_path/"x.sqlite3")))
     t=1000
