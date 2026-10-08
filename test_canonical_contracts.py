@@ -529,12 +529,8 @@ def test_persisted_unknown_intent_survives_new_barrier_instance(tmp_path):
     db = Database(str(tmp_path / "persisted-unknown.sqlite3"))
     first = ExecutionBarrier(FakeCache(), db)
     intent = order_intent("WILL_UNKNOWN_PERSISTED")
-    intent = OrderIntent(
-        **{
-            **intent.__dict__,
-            "related_order_id": "991",
-        }
-    )
+    from dataclasses import replace
+    intent = replace(intent, related_order_id="991")
 
     with pytest.raises(ExecutionAmbiguousError):
         first.execute(
