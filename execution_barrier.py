@@ -134,7 +134,9 @@ class ExecutionBarrier:
         if purpose in entry_purposes:
             if not re.fullmatch(r"[A-Za-z0-9_.:/-]{1,36}", client_order_id):
                 return "missing or invalid client_order_id"
-            if order_type not in {"MARKET", "STOP_LOSS"}:
+            if purpose in {"CAMPAIGN_ENTRY", "CAMPAIGN_ADD_ON"} and order_type != "STOP_LOSS":
+                return f"campaign entry order_type must be STOP_LOSS for the current Spot model: {order_type}"
+            if purpose == "ENTRY" and order_type not in {"MARKET", "STOP_LOSS"}:
                 return f"entry order_type is not approved for current Spot execution model: {order_type}"
             quantity = str(intent.quantity or "").strip()
             quote_quantity = str(intent.quote_order_quantity or "").strip()
@@ -194,7 +196,11 @@ class ExecutionBarrier:
                 or ctx.candle_close_time_ms > now_ms
             ):
                 return f"invalid or future context close timestamp for {tf}"
-            if not math.isfinite(float(ctx.price)) or float(ctx.price) <= 0:
+            try:
+                context_price = float(ctx.price)
+            except (TypeError, ValueError):
+                return f"invalid context price for {tf}"
+            if not math.isfinite(context_price) or context_price <= 0:
                 return f"invalid context price for {tf}"
 
         if purpose in entry_purposes:
