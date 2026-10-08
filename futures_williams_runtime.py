@@ -612,9 +612,21 @@ class FuturesWilliamsRuntime:
 
         cid = campaign.tags["pending_order_client_id"]
         if not self.db.try_claim_state(f"entry_client_order_id:{symbol}", cid):
+            campaign.pending_risk_quote = 0.0
+            campaign.capital_reserved_quote = 0.0
+            campaign.state = CampaignState.CLOSED
+            self.db.save_campaign(campaign)
             raise RuntimeError(f"{symbol}: pending entry already exists")
 
-        self.engine.arm_entry(campaign, signal)
+        try:
+            self.engine.arm_entry(campaign, signal)
+        except Exception:
+            self.db.state_delete(f"entry_client_order_id:{symbol}")
+            campaign.pending_risk_quote = 0.0
+            campaign.capital_reserved_quote = 0.0
+            campaign.state = CampaignState.CLOSED
+            self.db.save_campaign(campaign)
+            raise
         self._set_state(symbol, "ENTRY_PENDING")
 
         intent = OrderIntent.new(
@@ -1014,6 +1026,19 @@ class FuturesWilliamsRuntime:
                     avg = quote_sum / executed if executed > 0 else 0
 
                 if executed > 0:
+                    # A conditional order may partially fill and remain open.
+                    # Cancel the remainder before adopting the fill, otherwise
+                    # the same signal could add quantity later outside the durable
+                    # campaign reservation.
+                    if status == "PARTIALLY_FILLED" and order.get("orderId") is not None:
+                        try:
+                            self.client.cancel_order(symbol, order_id=order.get("orderId"))
+                        except Exception as exc:
+                            self._set_state(symbol, "RECONCILE_REQUIRED")
+                            raise RuntimeError(
+                                f"{symbol}: partial conditional order cancellation ambiguous: {exc}"
+                            ) from exc
+
                     position = self._position(symbol)
                     pos_qty = abs(self._signed_position_qty(position))
                     avg = float(position.get("entryPrice", avg) or avg)
@@ -1029,6 +1054,15 @@ class FuturesWilliamsRuntime:
                     signal_id = str(purpose_row["signal_id"] if purpose_row else campaign.current_signal_id)
 
                     if purpose == "ADD_ON" or campaign.state == CampaignState.ADD_ON_PENDING:
+                        expected_delta = float(executed)
+                        old_qty = float(campaign.position_qty)
+                        actual_delta = max(0.0, pos_qty - old_qty)
+                        if actual_delta <= 0 or abs(actual_delta - expected_delta) > max(expected_delta * 0.01, 1e-12):
+                            self._set_state(symbol, "RECONCILE_REQUIRED")
+                            raise RuntimeError(
+                                f"{symbol}: add-on fill/position mismatch: executed={expected_delta:.12g} "
+                                f"old={old_qty:.12g} actual_delta={actual_delta:.12g}"
+                            )
                         if campaign.state == CampaignState.ADD_ON_PENDING:
                             campaign.transition(CampaignState.POSITION_EXPANDING, reason="add-on conditional order filled")
                         old_qty = float(campaign.position_qty)
@@ -1047,6 +1081,12 @@ class FuturesWilliamsRuntime:
                         self._set_state(symbol, "OPEN")
                         campaign.transition(CampaignState.TREND_ACTIVE, reason="add-on filled")
                     else:
+                        if abs(pos_qty - float(executed)) > max(float(executed) * 0.01, 1e-12):
+                            self._set_state(symbol, "RECONCILE_REQUIRED")
+                            raise RuntimeError(
+                                f"{symbol}: initial fill/position mismatch: executed={float(executed):.12g} "
+                                f"position={pos_qty:.12g}"
+                            )
                         if campaign.state == CampaignState.ENTRY_PENDING:
                             campaign.transition(CampaignState.ENTRY_TRIGGERED, reason="entry conditional order filled")
                         stop = float(campaign.initial_stop_price)
@@ -1115,7 +1155,8 @@ class FuturesWilliamsRuntime:
                 self._set_state(symbol, "RECONCILE_REQUIRED")
                 continue
             try:
-                self._liquidation_guard(campaign, position)
+                if not self._liquidation_guard(campaign, position):
+                    raise RuntimeError("liquidation price violates protective-stop safety buffer")
                 orders = self.client.open_orders(symbol)
                 managed = [
                     o for o in orders
@@ -1153,17 +1194,22 @@ class FuturesWilliamsRuntime:
         closed = frame.iloc[:-1].copy() if len(frame) > 1 else frame
         window = max(3, min(5, int(os.getenv("CAMPAIGN_TRAIL_BARS", "5"))))
         tick = self._tick(symbol)
-        if campaign.side == "BUY":
-            recent = [float(x) for x in closed["low"].tail(window) if float(x) > 0]
-            proposed = max(recent) - tick if recent else 0.0
-            if proposed > campaign.current_stop_price and proposed < float(self.client.ticker_price(symbol)["price"]):
-                self._replace_protection(campaign, proposed)
-        else:
-            recent = [float(x) for x in closed["high"].tail(window) if float(x) > 0]
-            proposed = min(recent) + tick if recent else 0.0
+        try:
             current_price = float(self.client.ticker_price(symbol)["price"])
-            if proposed < campaign.current_stop_price and proposed > current_price:
-                self._replace_protection(campaign, proposed)
+            if campaign.side == "BUY":
+                recent = [float(x) for x in closed["low"].tail(window) if float(x) > 0]
+                proposed = max(recent) - tick if recent else 0.0
+                if proposed > campaign.current_stop_price and proposed < current_price:
+                    self._replace_protection(campaign, proposed)
+            else:
+                recent = [float(x) for x in closed["high"].tail(window) if float(x) > 0]
+                proposed = min(recent) + tick if recent else 0.0
+                if proposed < campaign.current_stop_price and proposed > current_price:
+                    self._replace_protection(campaign, proposed)
+        except Exception as exc:
+            self._set_state(symbol, "RECONCILE_REQUIRED")
+            self.db.log_event("ERROR", "futures_trailing_error", str(exc), {"symbol": symbol})
+            raise
         return {"state": campaign.state.value, "current_stop": campaign.current_stop_price}
 
     def _opposite_triggered(self, campaign, candidates):
