@@ -122,3 +122,51 @@ def test_backtester_does_not_use_pre_fill_m5_stop_path():
 def test_conservative_profile_disables_wm3_first():
     policy = IntradayPolicy.from_env({"WILLIAMS_STRATEGY_PROFILE": CONSERVATIVE_PROFILE})
     assert policy.wm3_first_allowed is False
+
+
+def test_decision_trace_is_durable(tmp_path):
+    db = Database(str(tmp_path / "trace.sqlite3"))
+    trace = {
+        "trace_id": "BTCUSDT:1h:123",
+        "symbol": "BTCUSDT",
+        "decision_time_ms": 123,
+        "decision_tf": "1h",
+        "execution_tf": "15m",
+        "micro_tf": "5m",
+        "core_valid": True,
+        "trade_allowed": False,
+        "block_reason": "BLOCKED_BY_EXECUTION_ECONOMICS",
+    }
+    db.save_decision_trace(trace)
+    rows = db.recent_decision_traces("BTCUSDT", limit=5)
+    assert rows[0]["trace_id"] == "BTCUSDT:1h:123"
+    assert rows[0]["trade_allowed"] == 0
+
+
+def test_session_contract_boundaries():
+    from datetime import datetime, timezone
+    from williams_intraday_spec import SessionContract
+    session = SessionContract()
+    def dt(h, m):
+        return datetime(2026, 10, 8, h, m, tzinfo=timezone.utc)
+    assert session.state(dt(7, 59)) == "PRE_SESSION"
+    assert session.state(dt(8, 0)) == "ENTRY_WINDOW"
+    assert session.state(dt(18, 0)) == "MANAGE_ONLY"
+    assert session.state(dt(20, 0)) == "FLAT_REQUIRED"
+
+
+def test_signal_activation_time_is_separate_from_formation_time():
+    from campaign_model import SignalSpec, SignalRole, SignalType
+    spec = SignalSpec.new(
+        symbol="BTCUSDT",
+        side="BUY",
+        signal_type=SignalType.FRACTAL,
+        role=SignalRole.ENTRY,
+        timeframe="1h",
+        signal_bar_time_ms=100,
+        detected_time_ms=200,
+        trigger_price=101,
+        protective_reference=98,
+    )
+    assert spec.signal_bar_time_ms == 100
+    assert spec.detected_time_ms == 200
