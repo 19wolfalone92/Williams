@@ -171,6 +171,27 @@ def calculate_indicators(df, cfg):
     x["long_reversal_signal"] = x["bullish_reversal_bar"]
     x["short_reversal_signal"] = x["bearish_reversal_bar"]
 
+    # WM1 angulation: price must separate from the Alligator mouth rather than
+    # merely remain outside it. This is side-specific and evaluated on H1.
+    long_jaw_sep = (x["jaw_shifted"] - x["low"]).clip(lower=0.0)
+    long_teeth_sep = (x["teeth_shifted"] - x["low"]).clip(lower=0.0)
+    short_jaw_sep = (x["high"] - x["jaw_shifted"]).clip(lower=0.0)
+    short_teeth_sep = (x["high"] - x["teeth_shifted"]).clip(lower=0.0)
+    x["long_angulation_valid"] = (
+        (long_jaw_sep.diff().rolling(3).mean() > 0)
+        & (long_teeth_sep.diff().rolling(3).mean() > 0)
+    ).fillna(False)
+    x["short_angulation_valid"] = (
+        (short_jaw_sep.diff().rolling(3).mean() > 0)
+        & (short_teeth_sep.diff().rolling(3).mean() > 0)
+    ).fillna(False)
+    x["last_long_angulation"] = (
+        x["long_angulation_valid"].where(x["bullish_reversal_bar"]).ffill().shift(1)
+    )
+    x["last_short_angulation"] = (
+        x["short_angulation_valid"].where(x["bearish_reversal_bar"]).ffill().shift(1)
+    )
+
     # The book places a buy/sell stop beyond the reversal bar. Therefore the
     # reversal bar itself is context; the actionable trigger is a later break
     # of that signal bar's extreme.
@@ -195,16 +216,15 @@ def calculate_indicators(df, cfg):
     # Conservative execution overlay. The counter-trend Wise-Man signals from
     # the book are retained as diagnostics, but disabled for the long-only
     # autonomous entry path unless explicitly enabled.
-    countertrend = bool(cfg["allow_countertrend_wise_man"])
     x["long_wise_reversal_entry"] = (
         x["last_bullish_reversal_high"].notna()
         & (x["close"] > x["last_bullish_reversal_high"])
-
+        & x["last_long_angulation"].eq(True)
     )
     x["short_wise_reversal_entry"] = (
         x["last_bearish_reversal_low"].notna()
         & (x["close"] < x["last_bearish_reversal_low"])
-
+        & x["last_short_angulation"].eq(True)
     )
 
     # Canonical Wise-Men count. This is confirmation/ranking information in our
