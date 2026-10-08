@@ -12,7 +12,7 @@ from campaign_execution import CampaignExecutionService, CampaignExecutionError
 from campaign_model import SignalSpec, SignalType, SignalRole
 from campaign_monitor import CampaignMonitor
 from market_context import ContextCache
-from execution_barrier import OrderIntent
+from execution_barrier import ExecutionBarrier, OrderIntent
 from williams_intraday_spec import IntradayPolicy
 from decision_trace import DecisionTrace
 
@@ -48,7 +48,10 @@ class MultiPositionTrader:
         self.db = db or Database()
         self.intraday_policy = IntradayPolicy.from_env()
         explicit_profile = str(strategy_profile or os.getenv("WILLIAMS_STRATEGY_PROFILE", "")).strip().upper()
-        self.intraday_core_enabled = explicit_profile in {"WILLIAMS_INTRADAY_CORE", "WILLIAMS_INTRADAY_CONSERVATIVE"}
+        self.intraday_core_enabled = explicit_profile in {
+            "WILLIAMS_CORE_INTRADAY", "WILLIAMS_CORE_INTRADAY_CONSERVATIVE",
+            "WILLIAMS_INTRADAY_CORE", "WILLIAMS_INTRADAY_CONSERVATIVE",
+        }
         if symbols is not None:
             self.symbols = [str(x).strip().upper() for x in symbols if str(x).strip()]
         else:
@@ -100,7 +103,7 @@ class MultiPositionTrader:
         self.execution_barrier = execution_barrier or ExecutionBarrier(ContextCache(), self.db)
         self.campaign_engine_enabled = (
             True if self.intraday_core_enabled
-            else os.getenv("CAMPAIGN_ENGINE", "false").lower() == "true"
+            else os.getenv("CAMPAIGN_ENGINE", "true").lower() == "true"
         )
         self.campaign_execution = CampaignExecutionService(
             self.client,
@@ -126,10 +129,14 @@ class MultiPositionTrader:
         snapshot = self.execution_barrier.context_cache.snapshot()
         required = snapshot.versions(str(symbol).upper(), [interval])
         purpose_value = str(purpose).upper()
+        permission_required = (
+            purpose_value == "ENTRY"
+            or purpose_value.endswith(("_ENTRY", "_ADD_ON"))
+        )
         intent = OrderIntent.new(
             str(symbol).upper(), str(side).upper(), str(order_type).upper(),
             required_context_versions=required, purpose=purpose_value,
-            permission_interval=interval if purpose_value.endswith(("_ENTRY", "_ADD_ON")) else "",
+            permission_interval=interval if permission_required else "",
             campaign_id=str(campaign_id or ""), signal_id=str(signal_id or ""),
         )
         result = self.execution_barrier.execute(intent, submit)
