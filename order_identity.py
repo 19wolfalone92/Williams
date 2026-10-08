@@ -8,6 +8,8 @@ as foreign.
 from __future__ import annotations
 
 from typing import Any
+import hashlib
+import re
 
 ENTRY_PREFIXES = (
     "WILLV5_ENTRY_",
@@ -30,6 +32,30 @@ EXIT_PREFIXES = (
 )
 
 MANAGED_PREFIXES = ENTRY_PREFIXES + PROTECTION_PREFIXES + EXIT_PREFIXES
+
+
+def deterministic_client_order_id(
+    kind: str,
+    *parts: object,
+    prefix: str = "WILLV5",
+    digest_chars: int = 16,
+) -> str:
+    """Build a stable, compact Binance clientOrderId for one logical mutation.
+
+    The same logical operation produces the same ID across process restarts.
+    A different operation key (stage, target order, stop level, quantity, etc.)
+    produces a different ID. The returned value is intentionally <= 36 chars.
+    """
+    clean_kind = re.sub(r"[^A-Z0-9]", "_", str(kind).upper())[:8] or "ORDER"
+    clean_prefix = re.sub(r"[^A-Z0-9]", "", str(prefix).upper())[:8] or "WILLV5"
+    material = "|".join(str(part) for part in parts)
+    digest = hashlib.sha256(material.encode("utf-8")).hexdigest()[
+        : max(8, min(int(digest_chars), 20))
+    ]
+    value = f"{clean_prefix}_{clean_kind}_{digest}"
+    return value[:36]
+
+
 
 
 def client_order_id(order: dict[str, Any] | None) -> str:
