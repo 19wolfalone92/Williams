@@ -3733,7 +3733,7 @@ private class NativeEngine(
             }
         }
 
-        runCatching { manageWilliamsStops() }
+        // Legacy execution is disabled; campaign manager owns protection.
 
         val universe = loadUniverse()
         scanSymbols = universe.first.toMutableList()
