@@ -63,7 +63,10 @@ def test_backtester_honors_existing_stop_before_same_bar_add_on():
         ts = pd.Timestamp(frame.index[-1])
         specs = (initial,) if ts == signal_time else (add_on,) if ts == m15.index[80] else ()
         return SimpleNamespace(signal_specs=specs, decision_time_ms=int(ts.timestamp() * 1000))
-    bt.core.evaluate = fake_evaluate
+    def fake_precomputed(symbol, frame, _ind, **kwargs):
+        return fake_evaluate(symbol, frame, **kwargs)
+
+    bt.core.evaluate_precomputed = fake_precomputed
 
     m5 = _bars(
         m15.index[81],
@@ -121,7 +124,10 @@ def test_backtester_does_not_create_new_risk_after_entry_window():
             return SimpleNamespace(signal_specs=(late_add,), decision_time_ms=int(ts.timestamp() * 1000))
         return SimpleNamespace(signal_specs=(), decision_time_ms=int(ts.timestamp() * 1000))
 
-    bt.core.evaluate = fake_evaluate
+    def fake_precomputed(symbol, frame, _ind, **kwargs):
+        return fake_evaluate(symbol, frame, **kwargs)
+
+    bt.core.evaluate_precomputed = fake_precomputed
     m15.loc[pd.Timestamp("2026-10-08 10:15", tz="UTC"), ["high","close"]] = [101.5, 101.2]
     m15.loc[late_add_time, ["high","close"]] = [102.0, 101.0]
 
