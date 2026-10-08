@@ -295,3 +295,51 @@ def test_short_fractal_requires_valid_teeth_context():
         timeframe="5m",
         tick_size=0.1,
     ) == []
+
+
+def test_five_magic_bullets_core_math():
+    from magic_bullets import (
+        ao_price_divergence,
+        evaluate_magic_bullets,
+        momentum_change,
+        price_in_target_zone,
+        terminal_squat,
+    )
+
+    assert ao_price_divergence(
+        side="LONG",
+        wave3_price=100,
+        wave5_price=110,
+        wave3_ao=8,
+        wave5_ao=5,
+    )
+    assert ao_price_divergence(
+        side="SHORT",
+        wave3_price=110,
+        wave5_price=100,
+        wave3_ao=-8,
+        wave5_ao=-5,
+    )
+    assert price_in_target_zone(
+        162,
+        side="LONG",
+        wave1_start=100,
+        wave3_end=150,
+        wave4_end=130,
+    )
+    assert terminal_squat(
+        candidate_index=8,
+        terminal_extreme_index=10,
+        squat=True,
+    )
+    assert momentum_change(previous_ao_color="GREEN", current_ao_color="RED")
+
+    state = evaluate_magic_bullets(
+        divergence=True,
+        target_zone_hit=True,
+        terminal_fractal=True,
+        terminal_squat_hit=True,
+        momentum_change_hit=True,
+    )
+    assert state.count == 5
+    assert state.all_five
