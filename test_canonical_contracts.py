@@ -1069,3 +1069,22 @@ def test_canonical_stop_filter_uses_trigger_not_invalidation(tmp_path):
         },
     )
     assert result.accepted is True
+
+
+def test_execution_barrier_starts_order_fsm_in_pending_new(tmp_path):
+    db = Database(str(tmp_path / "pending-new.sqlite3"))
+    barrier = ExecutionBarrier(FakeCache(), db)
+    intent = order_intent("WILL_PENDING_NEW_TEST")
+
+    result = barrier.execute(
+        intent,
+        lambda: {
+            "symbol": "BTCUSDT",
+            "side": "BUY",
+            "status": "NEW",
+            "orderId": 1234,
+            "clientOrderId": intent.client_order_id,
+            "executedQty": "0",
+        },
+    )
+    assert result.accepted is True
