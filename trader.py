@@ -81,8 +81,8 @@ class Trader:
         self._auto_scan_lock = False
 
         self.max_open_positions = max(0, int(self.config.max_open_positions))
-        self.max_total_risk_pct = min(0.01, max(0.0, float(os.getenv('MAX_TOTAL_RISK_PCT', '0.01'))))
-        self.max_risk_per_trade_pct = min(0.005, max(0.0, float(os.getenv('MAX_RISK_PER_TRADE_PCT', '0.005'))))
+        self.max_total_risk_pct = min(0.006, max(0.0, float(os.getenv('MAX_TOTAL_RISK_PCT', str(self.config.max_total_risk_pct)))))
+        self.max_risk_per_trade_pct = min(0.0025, max(0.0, float(os.getenv('MAX_RISK_PER_TRADE_PCT', str(self.config.risk_per_trade_pct)))))
         self.active_symbol = self.symbol
 
         self.db.state_set('active_symbol', self.symbol)
