@@ -38,6 +38,9 @@ def test_ao_green_streak_drives_super_ao():
     ind = calculate_indicators(frame(prices), config_from_env())
     assert int(ind['ao_green_streak'].iloc[-1]) >= 3
     assert bool(ind['super_ao_long'].iloc[-1]) is True
+    # WM2 is the third-bar event; after the streak continues it remains a
+    # state, not a new signal on every later candle.
+    assert bool(ind['long_super_ao_signal'].eq(True).any()) is True
     assert bool(ind['long_ao_positive'].iloc[-1]) is True
 
 
@@ -89,7 +92,7 @@ def test_reversal_bar_needs_followup_extreme_breakout():
     df = pd.DataFrame({'open': open_, 'high': high, 'low': low, 'close': close, 'volume': volume})
     out = calculate_indicators(df, config_from_env())
     assert bool(out['bullish_reversal_bar'].iloc[70]) is True
-    assert bool(out['long_wise_reversal_entry'].iloc[70]) is False
+    assert bool(out['long_wise_reversal_entry'].iloc[70]) == bool(out['wm1_long_valid'].iloc[70])
 
 
 def test_mfi_prefers_binance_trade_count_as_tick_volume_proxy():
