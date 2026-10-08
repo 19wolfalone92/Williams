@@ -1141,11 +1141,17 @@ class CampaignExecutionService:
         portfolio_capacity = float(equity_quote) * self.engine.portfolio_risk_limit_pct
         portfolio_reserved = float(self.db.campaign_risk_reserved_quote())
         portfolio_remaining = max(0.0, portfolio_capacity - portfolio_reserved)
+        weighted_risk_pct = self.engine.next_add_on_risk_pct(
+            campaign_reserved_risk_quote=reserved,
+            equity_quote=float(equity_quote),
+            tranche_index=max(1, int(campaign.tranche_index or 1)),
+        )
         requested = min(
             campaign_remaining,
             portfolio_remaining,
             float(equity_quote) * min(
                 float(candidate_risk_pct),
+                weighted_risk_pct,
                 float(os.getenv("CAMPAIGN_ADD_RISK_MAX_PCT", "0.002")),
             ),
         )
