@@ -163,11 +163,12 @@ def test_signal_activation_time_is_separate_from_formation_time():
         side="BUY",
         signal_type=SignalType.FRACTAL,
         role=SignalRole.ENTRY,
-        timeframe="1h",
+        timeframe="15m",
         signal_bar_time_ms=100,
         detected_time_ms=200,
         trigger_price=101,
         protective_reference=98,
+        execution_timeframe="5m",
     )
     assert spec.signal_bar_time_ms == 100
     assert spec.detected_time_ms == 200
