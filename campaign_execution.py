@@ -280,6 +280,8 @@ class CampaignExecutionService:
             initial_risk_pct=requested_risk,
         )
         campaign.tags["signal_role"] = signal.role.value
+        campaign.tags["signal_created_at_ms"] = int(signal.created_at_ms)
+        campaign.tags["signal_expires_at_ms"] = int(signal.expires_at_ms or 0)
         campaign.tags["signal_bar_time_ms"] = int(signal.signal_bar_time_ms)
         campaign.tags["initial_stop_price"] = stop
         campaign.initial_stop_price = stop
@@ -661,6 +663,11 @@ class CampaignExecutionService:
         ).fetchall()
         results: list[dict[str, Any]] = []
 
+        max_pending_age_ms = max(
+            60_000,
+            int(os.getenv("CAMPAIGN_PENDING_MAX_AGE_MINUTES", "240")) * 60_000,
+        )
+
         for row in rows:
             symbol = str(row["key"]).split(":", 1)[1].upper()
             client_id = str(row["value"])
@@ -716,6 +723,60 @@ class CampaignExecutionService:
                         pass
 
                 if status in {"NEW", "PENDING_NEW"} and executed <= 0:
+                    # A pending setup is not immortal. Once its bounded lifetime
+                    # expires, cancel the conditional order through the same P0
+                    # gate and record EXPIRED rather than rearming stale structure.
+                    signal_created_ms = int(
+                        campaign.tags.get("signal_created_at_ms", 0)
+                        or campaign.created_at_ms
+                        or 0
+                    )
+                    if (
+                        signal_created_ms > 0
+                        and int(time.time() * 1000) - signal_created_ms >= max_pending_age_ms
+                    ):
+                        self.db.set_campaign_signal_state(
+                            signal_id,
+                            SignalState.CANCEL_REQUESTED.value,
+                        )
+                        try:
+                            self._execute_cancel(
+                                campaign,
+                                int(order.get("orderId")),
+                                "CAMPAIGN_ENTRY_EXPIRE",
+                            )
+                        except Exception as exc:
+                            self.engine.mark_reconcile_required(
+                                campaign,
+                                f"expired pending entry cancel ambiguous: {exc}",
+                            )
+                            raise
+                        campaign.state = CampaignState.CLOSED
+                        campaign.next_action = "WAIT"
+                        campaign.pending_risk_quote = 0.0
+                        campaign.capital_reserved_quote = 0.0
+                        self.db.state_delete(f"entry_client_order_id:{symbol}")
+                        self.db.set_campaign_signal_state(
+                            signal_id,
+                            SignalState.EXPIRED.value,
+                        )
+                        self.db.log_campaign_event(
+                            campaign.campaign_id,
+                            CampaignEventType.ENTRY_INVALIDATED.value,
+                            signal_id=signal_id,
+                            order_id=str(order.get("orderId", "")),
+                            reason="pending conditional signal exceeded maximum lifetime",
+                            payload={"max_pending_age_ms": max_pending_age_ms},
+                        )
+                        self.db.save_campaign(campaign)
+                        results.append({
+                            "symbol": symbol,
+                            "campaign_id": campaign.campaign_id,
+                            "state": campaign.state.value,
+                            "order_status": "EXPIRED",
+                        })
+                        continue
+
                     # Still waiting for the conditional trigger.
                     results.append({
                         "symbol": symbol,
