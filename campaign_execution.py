@@ -388,7 +388,7 @@ class CampaignExecutionService:
                     quantity=self.client.decimal_format(qty),
                     stop_price=self.client.decimal_format(trigger),
                     new_client_order_id=client_id,
-                reconcile_unknown=False,
+                    reconcile_unknown=False,
                 ),
                 check,
             )
