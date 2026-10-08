@@ -3859,14 +3859,21 @@ private class NativeEngine(
                 final
                     .asSequence()
                     .filter {
-                        it.signal &&
-                            it.score >= 70.0 &&
+                        it.campaignReady &&
                             !positions.containsKey(it.symbol)
                     }
-                    .sortedByDescending { it.score }
+                    .sortedWith(
+                        compareByDescending<BaseAnalysis> {
+                            it.wave.confidence
+                        }.thenBy {
+                            it.wave.exhaustionRisk
+                        }.thenByDescending {
+                            it.campaignSignals.firstOrNull()?.signalBarTimeMs ?: 0L
+                        }
+                    )
                     .take(slots)
                     .forEach { candidate ->
-                        submitOrderIntent(candidate)
+                        submitCampaignEntry(candidate)
                         if (reconcileRequired) return@forEach
                     }
             }
@@ -3879,86 +3886,10 @@ private class NativeEngine(
      * runs on a separate executor and never blocks the event loop.
      */
     private fun submitOrderIntent(candidate: BaseAnalysis) {
-        error("Legacy order-intent execution is disabled; CampaignEngine is canonical")
-
-        tradingEventLoop.post {
-            val accepted =
-                running &&
-                    !paused &&
-                    !reconcileRequired &&
-                    !killLatched &&
-                    stateMachine.canAdmitEntry(
-                        openPositions = positionList().size,
-                        maxOpenPositions = maxOpenPositions,
-                        hasPendingEntry = synchronized(pendingEntries) {
-                            pendingEntries.isNotEmpty()
-                        },
-                        reconciliationRequired = reconcileRequired,
-                        killLatched = killLatched
-                    ) &&
-                    candidate.signal &&
-                    candidate.score >= 70.0 &&
-                    executionGate.tryReserve(candidate.symbol)
-
-            if (!accepted) return@post
-
-            if (!stateMachine.transition(
-                    TradingState.ENTRY_PENDING,
-                    "BUY intent admitted by ExecutionGate"
-                )) {
-                executionGate.release(candidate.symbol)
-                return@post
-            }
-
-            prefs.edit()
-                .putString("execution_gate_symbol", candidate.symbol)
-                .apply()
-
-            executionExecutor.execute {
-                val result = try {
-                    executeBuyWithProtection(candidate, gated = true)
-                    ExecutionResult(candidate.symbol, true)
-                } catch (x: Throwable) {
-                    ExecutionResult(
-                        candidate.symbol,
-                        false,
-                        x.message ?: x.javaClass.simpleName
-                    )
-                }
-
-                tradingEventLoop.post {
-                    executionGate.release(result.symbol)
-                    prefs.edit()
-                        .remove("execution_gate_symbol")
-                        .apply()
-
-                    if (
-                        !result.success &&
-                        !reconcileRequired &&
-                        positionList().none { it.symbol == result.symbol } &&
-                        synchronized(pendingEntries) {
-                            !pendingEntries.containsKey(result.symbol)
-                        } &&
-                        stateMachine.state == TradingState.ENTRY_PENDING
-                    ) {
-                        stateMachine.transition(
-                            if (positionList().isEmpty()) {
-                                TradingState.READY_FLAT
-                            } else {
-                                TradingState.PROTECTED
-                            },
-                            "ExecutionResult failure: " +
-                                (result.error ?: "unknown execution failure")
-                        )
-                    }
-                    if (!result.success) {
-                        lastError =
-                            "ORDER " + result.symbol + ": " +
-                                (result.error ?: "unknown execution failure")
-                    }
-                }
-            }
-        }
+        auditStore.recordError(
+            "LEGACY_ORDER_PATH_BLOCKED",
+            "submitOrderIntent is disabled; campaign execution is canonical"
+        )
     }
 
     private fun manageWilliamsStops() {
