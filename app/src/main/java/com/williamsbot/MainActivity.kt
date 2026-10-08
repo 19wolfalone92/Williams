@@ -373,12 +373,12 @@ private class BackendApi(context: Context) {
         .build()
 
     val backendUrl: String
-        get() = securePrefs.getString("backend_url", "http://127.0.0.1:18080")
+        get() = securePrefs.getString("backend_url", "")?.trimEnd('/') ?: ""
             ?.trimEnd('/')
             ?: ""
 
     val mobileToken: String
-        get() = securePrefs.getString("mobile_token", "standalone")?.trim() ?: "standalone"
+        get() = securePrefs.getString("mobile_token", "")?.trim() ?: ""
 
     fun saveConnection(url: String, token: String) {
         val normalized = url.trim().trimEnd('/')
@@ -411,7 +411,7 @@ private class BackendApi(context: Context) {
             backendUrl.startsWith("http://127.0.0.1:18080") ||
                 backendUrl.startsWith("http://localhost:18080")
         require(localRuntime || backendUrl.startsWith("https://")) {
-            "Укажите HTTPS Backend URL или используйте автономный Williams Runtime."
+            "Укажите HTTPS Backend URL для Williams Futures."
         }
         if (!localRuntime) {
             require(mobileToken.isNotBlank()) {
