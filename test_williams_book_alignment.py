@@ -90,3 +90,31 @@ def test_reversal_bar_needs_followup_extreme_breakout():
     out = calculate_indicators(df, config_from_env())
     assert bool(out['bullish_reversal_bar'].iloc[70]) is True
     assert bool(out['long_wise_reversal_entry'].iloc[70]) is False
+
+
+def test_angulation_uses_atr_normalized_separation():
+    from williams_signals import _angulation
+
+    ind = pd.DataFrame({
+        "low": [99.5, 99.0, 98.5, 98.0, 97.5],
+        "high": [101.5, 102.0, 103.0, 104.0, 105.0],
+        "close": [101.0, 101.5, 102.0, 103.0, 104.0],
+        "jaw_shifted": [100.0, 100.0, 100.0, 100.0, 100.0],
+    })
+    score, valid = _angulation(ind, 4, window=5)
+    assert score > 0.0
+    assert valid is True
+
+
+def test_angulation_rejects_zero_separation():
+    from williams_signals import _angulation
+
+    ind = pd.DataFrame({
+        "low": [100.0] * 5,
+        "high": [102.0] * 5,
+        "close": [101.0] * 5,
+        "jaw_shifted": [100.0] * 5,
+    })
+    score, valid = _angulation(ind, 4, window=5)
+    assert score == 0.0
+    assert valid is False
