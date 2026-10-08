@@ -6,7 +6,7 @@ from contextlib import contextmanager
 
 
 class Database:
-    SCHEMA_VERSION = 7
+    SCHEMA_VERSION = 8
 
     def __init__(self, path=None):
         path = path or os.getenv('WILLIAMS_DB_PATH') or 'data/trader.sqlite3'
@@ -161,6 +161,26 @@ class Database:
             ON decision_traces(intent_id, created_at);
         CREATE INDEX IF NOT EXISTS idx_decision_traces_campaign
             ON decision_traces(campaign_id, created_at);
+        CREATE TRIGGER IF NOT EXISTS decision_traces_no_update
+        BEFORE UPDATE ON decision_traces
+        BEGIN
+            SELECT RAISE(ABORT, 'decision_traces is append-only');
+        END;
+        CREATE TRIGGER IF NOT EXISTS decision_traces_no_delete
+        BEFORE DELETE ON decision_traces
+        BEGIN
+            SELECT RAISE(ABORT, 'decision_traces is append-only');
+        END;
+        CREATE TRIGGER IF NOT EXISTS campaign_events_no_update
+        BEFORE UPDATE ON campaign_events
+        BEGIN
+            SELECT RAISE(ABORT, 'campaign_events is append-only');
+        END;
+        CREATE TRIGGER IF NOT EXISTS campaign_events_no_delete
+        BEFORE DELETE ON campaign_events
+        BEGIN
+            SELECT RAISE(ABORT, 'campaign_events is append-only');
+        END;
         CREATE TABLE IF NOT EXISTS campaigns(
             campaign_id TEXT PRIMARY KEY,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
