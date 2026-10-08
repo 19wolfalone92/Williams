@@ -346,3 +346,79 @@ def test_execution_barrier_requires_permission_interval_version_dependency():
     assert not result.accepted
     assert result.reason == "permission_interval missing from required_context_versions"
     assert calls == []
+
+
+def _valid_entry_intent(version=1):
+    return OrderIntent.new(
+        "BTCUSDT", "BUY", "STOP_LOSS",
+        {"1h": version},
+        quantity="1",
+        client_order_id="WTEST_CONTRACT_123",
+        purpose="CAMPAIGN_ENTRY",
+        campaign_id="campaign-contract",
+        signal_id="signal-contract",
+        signal_expires_at_ms=int(time.time() * 1000) + 60_000,
+        permission_interval="1h",
+    )
+
+
+def test_execution_barrier_rejects_missing_or_malformed_contract_fields():
+    cache = ContextCache()
+    cache.publish(context())
+    barrier = ExecutionBarrier(cache, IntentDB())
+    valid = _valid_entry_intent()
+    cases = [
+        ({"client_order_id": ""}, "client_order_id"),
+        ({"symbol": ""}, "symbol"),
+        ({"side": "BUYISH"}, "side"),
+        ({"order_type": "MADE_UP"}, "order_type"),
+        ({"created_at_ms": 0}, "created_at_ms"),
+        ({"max_age_ms": 0}, "max_age_ms"),
+        ({"signal_id": ""}, "signal_id"),
+        ({"signal_expires_at_ms": "not-a-time"}, "signal expiry"),
+        ({"permission_interval": ""}, "permission_interval"),
+        ({"campaign_id": ""}, "campaign_id"),
+        ({"quantity": "-1"}, "quantity"),
+    ]
+    for changes, expected in cases:
+        intent = __import__("dataclasses").replace(valid, **changes)
+        calls = []
+        result = barrier.execute(intent, lambda: calls.append("submitted") or {"status": "NEW"})
+        assert not result.accepted, (changes, result)
+        assert expected.lower() in result.reason.lower(), (changes, result.reason)
+        assert calls == [], changes
+
+
+def test_execution_barrier_fails_closed_when_required_intent_persistence_fails():
+    class BrokenDB:
+        def save_execution_intent(self, *args, **kwargs):
+            raise OSError("disk unavailable")
+
+        def log_event(self, *args, **kwargs):
+            return None
+
+    cache = ContextCache()
+    cache.publish(context())
+    barrier = ExecutionBarrier(cache, BrokenDB())
+    calls = []
+    result = barrier.execute(
+        _valid_entry_intent(),
+        lambda: calls.append("submitted") or {"status": "NEW"},
+    )
+    assert not result.accepted
+    assert "persistence failed" in result.reason
+    assert calls == []
+
+
+def test_execution_barrier_fails_closed_without_durable_intent_store():
+    cache = ContextCache()
+    cache.publish(context())
+    barrier = ExecutionBarrier(cache)
+    calls = []
+    result = barrier.execute(
+        _valid_entry_intent(),
+        lambda: calls.append("submitted") or {"status": "NEW"},
+    )
+    assert not result.accepted
+    assert "persistence failed" in result.reason
+    assert calls == []
