@@ -543,6 +543,10 @@ private class NativeEngine(
         Thread(runnable, "williams-execution-io").apply { isDaemon = true }
     }
     
+    // Android production profile is the canonical Williams Intraday Core.
+    // Research/fast modes are not allowed to mutate autonomous Spot execution.
+    private fun coreMode(): Boolean = true
+
     private val primarySymbol = "BTCUSDT"
     private val interval = "1h"
 
