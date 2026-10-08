@@ -29,8 +29,8 @@ class CampaignExecutionService:
         self.client = client
         self.db = db
         self.strategy_profile = (strategy_profile or os.getenv("WILLIAMS_STRATEGY_PROFILE", "")).strip().upper()
-        self.intraday_core_enabled = self.strategy_profile in {"WILLIAMS_INTRADAY_CORE", "WILLIAMS_INTRADAY_CONSERVATIVE"}
         self.policy = IntradayPolicy.from_env()
+        self.intraday_core_enabled = self.strategy_profile in {"WILLIAMS_INTRADAY_CORE", "WILLIAMS_INTRADAY_CONSERVATIVE", "WILLIAMS_CORE_INTRADAY", "WILLIAMS_CORE_INTRADAY_CONSERVATIVE"} or self.policy.profile in {"WILLIAMS_CORE_INTRADAY", "WILLIAMS_CORE_INTRADAY_CONSERVATIVE"}
         self.economics = ExecutionEconomicsGate(
             fee_pct=float(os.getenv("FEE_BUFFER_PER_SIDE_PCT", "0.001")),
             slippage_pct=float(os.getenv("RISK_SLIPPAGE_BUFFER_PCT", "0.0015")),
