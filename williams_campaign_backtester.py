@@ -109,6 +109,24 @@ class WilliamsCampaignBacktester:
         return None,0.0
 
     @staticmethod
+    def _latest_observation_timeline(observations, length):
+        timeline=[tuple() for _ in range(max(0,int(length)))]
+        if not observations:
+            return timeline
+        ordered=sorted(
+            (x for x in observations if getattr(x,"confirmation_index",-1)>=0),
+            key=lambda x:(int(x.confirmation_index),int(x.center_index)),
+        )
+        pos=0
+        latest=None
+        for i in range(len(timeline)):
+            while pos<len(ordered) and int(ordered[pos].confirmation_index)<i:
+                latest=ordered[pos]
+                pos+=1
+            timeline[i]=(latest,) if latest is not None else tuple()
+        return timeline
+
+    @staticmethod
     def _state_timeline(core, frame, interval):
         if frame is None or len(frame) < 40:
             return [], []
@@ -181,6 +199,12 @@ class WilliamsCampaignBacktester:
             m15_ind,
             side="SHORT",
             teeth_series=m15_ind.get("teeth_shifted"),
+        )
+        latest_long_timeline=self._latest_observation_timeline(
+            fractals_long,len(m15_ind)
+        )
+        latest_short_timeline=self._latest_observation_timeline(
+            fractals_short,len(m15_ind)
         )
         h1_times,h1_states=self._state_timeline(self.core,h1,"1h")
         h4_times,h4_states=self._state_timeline(self.core,h4,"4h")
@@ -420,8 +444,8 @@ class WilliamsCampaignBacktester:
                 d1_state=d1_state,
                 context_state=h1_state,
                 tick_size=tick_size,
-                fractals_long=fractals_long,
-                fractals_short=fractals_short,
+                fractals_long=latest_long_timeline[i],
+                fractals_short=latest_short_timeline[i],
             )
 
             if (
