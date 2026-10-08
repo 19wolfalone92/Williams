@@ -85,13 +85,8 @@ def test_backtester_does_not_create_new_risk_after_entry_window():
     from campaign_model import SignalRole, SignalSpec, SignalType
 
     start = pd.Timestamp("2026-10-07 14:15", tz="UTC")
-    m15 = _bars(start, [(100.0, 100.5, 99.5, 100.0)] * 90, "15min")
-    initial_bar = 79
-    signal_time = m15.index[initial_bar]
-    late_bar = 95 - 79
-    m15 = pd.concat(
-        [m15, _bars(pd.Timestamp("2026-10-08 09:15", tz="UTC"), [(100.0, 100.5, 99.5, 100.0)] * 25, "15min")]
-    ).sort_index()
+    m15 = _bars(start, [(100.0, 100.5, 99.5, 100.0)] * 120, "15min")
+    signal_time = m15.index[79]
     initial = SignalSpec.new(
         symbol="BTCUSDT",
         side="BUY",
@@ -103,28 +98,33 @@ def test_backtester_does_not_create_new_risk_after_entry_window():
         protective_reference=99.5,
         execution_timeframe="5m",
     )
+    late_add_time = pd.Timestamp("2026-10-08 18:00", tz="UTC")
     late_add = SignalSpec.new(
         symbol="BTCUSDT",
         side="BUY",
         signal_type=SignalType.SUPER_AO,
         role=SignalRole.ADD_ON,
         timeframe="15m",
-        signal_bar_time_ms=int(pd.Timestamp("2026-10-08 18:00", tz="UTC").timestamp() * 1000),
+        signal_bar_time_ms=int(late_add_time.timestamp() * 1000),
         trigger_price=101.0,
         protective_reference=99.5,
         execution_timeframe="5m",
     )
+
     bt = WilliamsCampaignBacktester(starting_equity=500)
+
     def fake_evaluate(_symbol, frame, **_kwargs):
         ts = pd.Timestamp(frame.index[-1])
         if ts == signal_time:
-            return SimpleNamespace(signal_specs=(initial,), decision_time_ms=int(ts.timestamp()*1000))
-        if ts == pd.Timestamp("2026-10-08 18:00", tz="UTC"):
-            return SimpleNamespace(signal_specs=(late_add,), decision_time_ms=int(ts.timestamp()*1000))
-        return SimpleNamespace(signal_specs=(), decision_time_ms=int(ts.timestamp()*1000))
+            return SimpleNamespace(signal_specs=(initial,), decision_time_ms=int(ts.timestamp() * 1000))
+        if ts == late_add_time:
+            return SimpleNamespace(signal_specs=(late_add,), decision_time_ms=int(ts.timestamp() * 1000))
+        return SimpleNamespace(signal_specs=(), decision_time_ms=int(ts.timestamp() * 1000))
+
     bt.core.evaluate = fake_evaluate
-    m15.loc[pd.Timestamp("2026-10-08 10:15", tz="UTC"), ["high","close"]] = [101.5,101.2]
-    m15.loc[pd.Timestamp("2026-10-08 18:00", tz="UTC"), ["high","close"]] = [102.0,101.0]
+    m15.loc[pd.Timestamp("2026-10-08 10:15", tz="UTC"), ["high","close"]] = [101.5, 101.2]
+    m15.loc[late_add_time, ["high","close"]] = [102.0, 101.0]
+
     out = bt.run("BTCUSDT", None, m15, tick_size=0.01)
     assert len(out["fills"]) == 1
 
