@@ -79,8 +79,23 @@ class WilliamsProofEngine:
     @staticmethod
     def evaluate(signal: SignalSpec) -> ProofEvaluation:
         context_pass = bool(signal.htf_confirmed or signal.alligator_bullish)
-        behavior_pass = bool(signal.reason.strip()) or bool(signal.signal_type)
-        structure_pass = int(signal.source_candle_index) >= 0
+        reason = str(signal.reason or "").strip().lower()
+        behavior_pass = (
+            int(signal.source_candle_index) >= 0
+            and (
+                "reversal" in reason
+                or "super ao" in reason
+                or "fractal" in reason
+            )
+        )
+        structure_pass = (
+            int(signal.source_candle_index) >= 0
+            and signal.signal_type in {
+                SignalType.REVERSAL,
+                SignalType.SUPER_AO,
+                SignalType.FRACTAL,
+            }
+        )
         location_pass = bool(
             float(signal.teeth_at_detection or 0.0) > 0.0
             or signal.alligator_bullish
@@ -97,8 +112,15 @@ class WilliamsProofEngine:
                 float(signal.angulation_score or 0.0) > 0.0
             )
 
-        momentum_pass = bool(
+        momentum_pass = (
             signal.signal_type is SignalType.SUPER_AO
+            or (
+                signal.signal_type is SignalType.FRACTAL
+                and (
+                    float(signal.wave_confidence or 0.0) > 0.0
+                    or bool(signal.alligator_awake)
+                )
+            )
             or float(signal.wave_confidence or 0.0) > 0.0
         )
 
