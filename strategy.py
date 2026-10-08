@@ -213,14 +213,12 @@ def calculate_indicators(df, cfg):
 
     # Second Wise Man: Super AO. We use Williams' histogram color definition
     # (green = current AO above previous AO, red = below), not merely AO > 0.
-    x["long_super_ao_signal"] = (
-        x["super_ao_long"]
-        & x["long_fractal_outside"].shift(1).eq(True)
-    )
-    x["short_super_ao_signal"] = (
-        x["super_ao_short"]
-        & x["short_fractal_outside"].shift(1).eq(True)
-    )
+    # Wise Man 2 is independent of Wise Man 3. The Super AO observation
+    # is defined by the three-bar AO colour sequence itself; execution policy
+    # may later require a Fractal for a specific role, but this indicator layer
+    # must not silently change WM2 semantics.
+    x["long_super_ao_signal"] = x["super_ao_long"]
+    x["short_super_ao_signal"] = x["super_ao_short"]
 
     # Conservative execution overlay. The counter-trend Wise-Man signals from
     # the book are retained as diagnostics, but disabled for the long-only
