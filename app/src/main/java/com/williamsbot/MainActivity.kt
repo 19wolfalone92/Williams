@@ -117,8 +117,8 @@ import java.util.concurrent.TimeUnit
 import kotlin.math.max
 import kotlin.math.min
 
-// Williams 4.24.0 Trading Core production cockpit
-// Autonomous runtime contract: local loopback API is intentional; no VPS required.
+// Williams 4.24.0 remote Futures cockpit.
+// The VPS/backend is authoritative; Android never starts a trading runtime.
 // CI compile-log capture enabled
 // Diagnostic contract v2: runtime self-tests are exposed through /api/v1/diagnostics.
 class MainActivity : ComponentActivity() {
