@@ -2056,6 +2056,7 @@ class MultiPositionTrader:
                     }
                 )
                 pending.add(symbol)
+                open_count += 1
             except CampaignExecutionError as exc:
                 self.db.log_event(
                     "WARNING",
