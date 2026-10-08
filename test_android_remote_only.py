@@ -67,12 +67,12 @@ def test_server_futures_contract_is_present():
     assert "risk_capacity_positions" in server
 
 
-def test_binance_client_has_ambiguous_execution_barrier():
-    client = _read(ROOT / "binance_client.py")
+def test_futures_client_has_ambiguous_execution_reconciliation():
+    client = _read(ROOT / "binance_futures_client.py")
     assert "unknown_execution=True" in client
     assert "order_safe" in client
-    assert "create_oco_sell_safe" in client
-    assert "X-MBX-ORDER-COUNT-10S" in client
+    assert 'orig_client_order_id=new_client_order_id' in client
+    assert '"/fapi/v1/order"' in client
 
 
 def test_active_backend_uses_futures_and_legacy_spot_is_not_authoritative():
