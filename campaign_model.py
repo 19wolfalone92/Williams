@@ -74,6 +74,7 @@ class SignalState(str, Enum):
     EXPIRED = "EXPIRED"
     CANCEL_REQUESTED = "CANCEL_REQUESTED"
     CANCELLED = "CANCELLED"
+    RECONCILE_REQUIRED = "RECONCILE_REQUIRED"
 
 
 class CampaignEventType(str, Enum):
@@ -182,6 +183,33 @@ class PendingSignal:
     updated_at_ms: int = field(default_factory=lambda: int(time.time() * 1000))
 
     def transition(self, state: SignalState) -> None:
+        allowed = {
+            SignalState.DETECTED: {
+                SignalState.VALIDATED, SignalState.INVALIDATED,
+                SignalState.SUPERSEDED, SignalState.EXPIRED,
+            },
+            SignalState.VALIDATED: {
+                SignalState.ARMED, SignalState.INVALIDATED,
+                SignalState.SUPERSEDED, SignalState.EXPIRED,
+            },
+            SignalState.ARMED: {
+                SignalState.TRIGGERED, SignalState.FILLED,
+                SignalState.INVALIDATED, SignalState.EXPIRED,
+                SignalState.CANCEL_REQUESTED, SignalState.CANCELLED,
+                SignalState.SUPERSEDED, SignalState.RECONCILE_REQUIRED,
+            },
+            SignalState.TRIGGERED: {
+                SignalState.FILLED, SignalState.CANCEL_REQUESTED,
+                SignalState.CANCELLED, SignalState.RECONCILE_REQUIRED,
+            },
+            SignalState.CANCEL_REQUESTED: {
+                SignalState.CANCELLED, SignalState.RECONCILE_REQUIRED,
+            },
+        }
+        if state != self.state and state not in allowed.get(self.state, set()):
+            raise ValueError(
+                f"Invalid PendingSignal transition {self.state.value} -> {state.value}"
+            )
         self.state = state
         self.updated_at_ms = int(time.time() * 1000)
 
