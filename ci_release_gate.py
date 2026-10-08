@@ -128,7 +128,7 @@ def main() -> None:
     must_not(core, "m15", "williams/core.py")
     spec = read("williams/spec.py")
     must(spec, "WILLIAMS_INTRADAY_CORE_1_0", "williams/spec.py")
-    must(spec, "wave_can_invalidate=False", "williams/spec.py")
+    must(spec, "wave_can_invalidate:bool=False", "williams/spec.py")
     recovery = read("recovery_matrix.py")
     must(recovery, "EXPIRED_IN_MATCH", "recovery_matrix.py")
     python_ci = read(".github/workflows/python-ci.yml")
