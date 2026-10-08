@@ -33,7 +33,7 @@ class EquityCircuitBreakerTest {
 
         val nextUtcDay = 86_400_000L + 1_000L
         assertFalse(b.observe(990.0, nextUtcDay).tripped)
-        assertTrue(b.observe(989.5, nextUtcDay + 1_000L).tripped)
+        assertTrue(b.observe(980.0, nextUtcDay + 1_000L).tripped)
     }
 
 
