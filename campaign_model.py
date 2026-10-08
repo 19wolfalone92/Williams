@@ -373,6 +373,7 @@ def structural_stop_for_long(
     teeth: float,
     wave_invalidation: float = 0.0,
     buffer: float = 0.0,
+    tighten_to_context: bool = False,
 ) -> tuple[float, str]:
     """Return a long structural stop and its source.
 
@@ -391,9 +392,9 @@ def structural_stop_for_long(
             # stop may be considered separately only after this base is valid.
             low = min(valid_lows)
             candidates.append((low - max(0.0, buffer), "3_5_BAR_STRUCTURE"))
-    if teeth > 0:
+    if tighten_to_context and teeth > 0:
         candidates.append((teeth - max(0.0, buffer), "TEETH"))
-    if wave_invalidation > 0:
+    if tighten_to_context and wave_invalidation > 0:
         candidates.append((wave_invalidation - max(0.0, buffer), "WAVE_INVALIDATION"))
     if not candidates:
         return 0.0, "UNAVAILABLE"
