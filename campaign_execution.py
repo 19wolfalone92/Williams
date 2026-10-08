@@ -449,8 +449,52 @@ class CampaignExecutionService:
                 return self.engine.load_campaign(str(item["campaign_id"]))
         return None
 
+    def reconcile_execution_barrier_unknown(self) -> dict[str, Any] | None:
+        """Clear or retain the durable P0 mutation lock via read-only REST reconciliation."""
+        if self.barrier is None or not self.barrier.mutation_locked:
+            return None
+
+        def lookup(intent: OrderIntent):
+            order_type = intent.order_type.upper()
+            if order_type == "CANCEL":
+                if not intent.related_order_id:
+                    raise CampaignExecutionError(
+                        "ambiguous CANCEL has no durable target order id"
+                    )
+                return self.client.get_order(
+                    intent.symbol,
+                    order_id=int(intent.related_order_id),
+                )
+            return self.client.get_order(
+                intent.symbol,
+                orig_client_order_id=intent.client_order_id,
+            )
+
+        result = self.barrier.reconcile_persisted_unknown(lookup)
+        payload = {
+            "accepted": bool(result.accepted),
+            "intent_id": result.intent_id,
+            "reason": result.reason,
+        }
+        if result.response is not None:
+            payload["response"] = result.response
+
+        if not result.accepted and self.barrier.mutation_locked:
+            # A global UNKNOWN must block all later campaign mutations. Do not
+            # continue scanning or attempting protection changes.
+            self.db.state_set("position_state", "RECONCILE_REQUIRED")
+        return payload
+
     def reconcile_pending_entries(self) -> list[dict[str, Any]]:
         """Adopt conditional BUYs after triggers, partial fills, restart or crash."""
+        barrier_recovery = self.reconcile_execution_barrier_unknown()
+        if (
+            barrier_recovery is not None
+            and self.barrier is not None
+            and self.barrier.mutation_locked
+        ):
+            return [barrier_recovery]
+
         rows = self.db.conn.execute(
             "SELECT key,value FROM bot_state "
             "WHERE key LIKE 'entry_client_order_id:%' "
@@ -806,6 +850,11 @@ class CampaignExecutionService:
 
     def reconcile_active_campaigns(self) -> list[dict[str, Any]]:
         """Rebuild active campaign protection without invoking the legacy OCO path."""
+        if self.barrier is not None and self.barrier.mutation_locked:
+            return [{
+                "state": "RECONCILE_REQUIRED",
+                "reason": "ExecutionBarrier mutation lock remains active",
+            }]
         results = []
         campaigns = self.db.open_campaigns()
         for row in campaigns:
