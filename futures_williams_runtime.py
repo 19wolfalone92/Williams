@@ -28,6 +28,7 @@ from market_context import ContextCache
 from strategy import calculate_indicators, config_from_env
 from williams_signals import extract_long_signal_specs, extract_short_signal_specs
 from campaign_engine import CampaignEngine
+from equity_breaker import EquityCircuitBreaker
 from campaign_model import (
     CampaignState,
     SignalRole,
@@ -299,6 +300,7 @@ class FuturesWilliamsRuntime:
         self.liquidity_preselect = int(os.getenv("FUTURES_SCAN_TOP_N", "40"))
         self._locks: set[str] = set()
         self._initialised_symbols: set[str] = set()
+        self.equity_breaker = EquityCircuitBreaker(self.max_daily_loss_pct)
 
     # Compatibility API used by the existing backend/cockpit.
     def notify(self, message: str):
@@ -359,6 +361,62 @@ class FuturesWilliamsRuntime:
 
     def reserved_risk_quote(self):
         return float(self.engine.portfolio_reserved_risk_quote())
+
+    def _daily_entry_guard(self):
+        """Block new risk after daily loss, loss streak or cooldown limits."""
+        from datetime import datetime, timezone
+        trades_today = int(
+            self.db.conn.execute(
+                "SELECT COUNT(*) FROM trades WHERE entry_time >= date('now')"
+            ).fetchone()[0] or 0
+        )
+        if self.max_trades_day and trades_today >= self.max_trades_day:
+            return False, f"MAX_TRADES_PER_DAY reached: {trades_today}"
+
+        recent = self.db.conn.execute(
+            "SELECT pnl, exit_time FROM trades "
+            "WHERE exit_time IS NOT NULL ORDER BY id DESC LIMIT 20"
+        ).fetchall()
+        losses = 0
+        for row in recent:
+            if float(row["pnl"] or 0) < 0:
+                losses += 1
+            else:
+                break
+        if self.max_consecutive_losses and losses >= self.max_consecutive_losses:
+            return False, f"MAX_CONSECUTIVE_LOSSES reached: {losses}"
+
+        if self.cooldown_minutes and recent and recent[0]["exit_time"]:
+            try:
+                stamp = datetime.fromisoformat(
+                    str(recent[0]["exit_time"]).replace("Z", "+00:00")
+                )
+                elapsed = (datetime.now(timezone.utc) - stamp).total_seconds()
+                if elapsed < self.cooldown_minutes * 60:
+                    return False, (
+                        f"COOLDOWN active: "
+                        f"{self.cooldown_minutes * 60 - elapsed:.0f}s remaining"
+                    )
+            except ValueError:
+                pass
+
+        equity = self._equity()
+        unrealized = 0.0
+        for symbol in {str(x["symbol"]).upper() for x in self.open_trades()}:
+            try:
+                unrealized += float(
+                    self.client.position(symbol).get("unRealizedProfit", 0) or 0
+                )
+            except Exception:
+                return False, f"Risk gate cannot value {symbol} unrealized PnL"
+
+        return self.equity_breaker.check(
+            self.db,
+            equity,
+            None,
+            unrealized,
+            0.0,
+        )
 
     def _filters(self, symbol):
         info = self.client.exchange_info(symbol)
@@ -679,6 +737,10 @@ class FuturesWilliamsRuntime:
         if signal.side == "SELL" and current <= trigger:
             raise RuntimeError("SHORT trigger already crossed")
 
+        entry_ok, entry_reason = self._daily_entry_guard()
+        if not entry_ok:
+            raise RuntimeError(entry_reason)
+
         qty, risk_quote, notional = self._size_from_risk(
             symbol, trigger, stop, self._initial_risk_pct()
         )
@@ -777,6 +839,10 @@ class FuturesWilliamsRuntime:
         current = float(self.client.ticker_price(signal.symbol).get("price", 0) or 0)
         if (signal.side == "BUY" and current >= trigger) or (signal.side == "SELL" and current <= trigger):
             raise RuntimeError("add-on trigger already crossed")
+
+        add_ok, add_reason = self._daily_entry_guard()
+        if not add_ok:
+            raise RuntimeError(add_reason)
 
         stop = self._normalize_price(
             signal.symbol,
