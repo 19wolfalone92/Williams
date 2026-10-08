@@ -1270,6 +1270,8 @@ class FuturesWilliamsRuntime:
         for c in candidates:
             by_symbol.setdefault(c.symbol, []).append(c)
 
+        pending_symbols = {s for s, _ in self._pending_entries()}
+
         for row in list(self.db.open_campaigns()):
             campaign = self.engine.load_campaign(row["campaign_id"])
             if campaign is None or campaign.position_qty <= 0:
@@ -1296,7 +1298,7 @@ class FuturesWilliamsRuntime:
                     continue
                 eligible.append(signal)
 
-            if eligible and not self._pending_entries():
+            if eligible and symbol not in pending_symbols:
                 signal = min(eligible, key=lambda s: (s.signal_bar_time_ms, s.created_at_ms))
                 try:
                     result = self._arm_add_on(campaign, signal)
@@ -1307,14 +1309,13 @@ class FuturesWilliamsRuntime:
             else:
                 self._trail(campaign)
 
-        if not self._pending_entries():
-            active_symbols = {str(r["symbol"]).upper() for r in self.db.open_trades()}
+        active_symbols = {str(r["symbol"]).upper() for r in self.db.open_trades()}
             for candidate in candidates:
                 if candidate.symbol in active_symbols:
                     continue
                 if len(self.open_positions()) >= int(os.getenv("MAX_OPEN_POSITIONS", "5")):
                     break
-                if candidate.symbol in self._locks:
+                if candidate.symbol in pending_symbols or candidate.symbol in self._locks:
                     continue
                 if self.unresolved_symbols():
                     break
@@ -1325,7 +1326,12 @@ class FuturesWilliamsRuntime:
                     self.db.log_event("WARNING", "futures_entry_blocked", str(exc), {"symbol": candidate.symbol})
                 finally:
                     self._locks.discard(candidate.symbol)
-                    active_symbols.add(candidate.symbol)
+                    # Do not mark a symbol active merely because an arm attempt
+                    # failed; recovery/pending state is the authoritative source.
+                    if self.db.open_trade(candidate.symbol) is not None:
+                        active_symbols.add(candidate.symbol)
+                    if any(s == candidate.symbol for s, _ in self._pending_entries()):
+                        pending_symbols.add(candidate.symbol)
 
         self.recover()
 
