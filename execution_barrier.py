@@ -94,32 +94,21 @@ class ExecutionBarrier:
         if not direction:
             return f"unsupported side {intent.side}"
 
-        # Canonical state is the first blocker so diagnostics stay causal.
+        # Canonical state is checked before any exchange mutation.
         if self.db is not None and hasattr(self.db, "state_get"):
-            symbol_state = str(self.db.state_get(f"position_state:{intent.symbol}", "FLAT")).upper()
-            legacy_state = str(self.db.state_get("position_state", "FLAT")).upper()
+            symbol_state = str(
+                self.db.state_get(f"position_state:{intent.symbol}", "FLAT")
+            ).upper()
+            legacy_state = str(
+                self.db.state_get("position_state", "FLAT")
+            ).upper()
             if symbol_state == "RECONCILE_REQUIRED" or legacy_state == "RECONCILE_REQUIRED":
                 return "RECONCILE_REQUIRED"
 
-        purpose = intent.purpose.upper()
-        needs_permission = (
-            purpose == "ENTRY"
-            or purpose in {"CAMPAIGN_ENTRY", "CAMPAIGN_ADD_ON"}
-            or purpose.endswith("_ENTRY")
-            or purpose.endswith("_ADD_ON")
-        )
-        permission_tf = (intent.permission_interval or "").lower()
-        if needs_permission:
-            if not permission_tf:
-                return "missing permission_interval for execution mutation"
-            permission_ctx = snapshot.context(intent.symbol, permission_tf)
-            if permission_ctx is None:
-                return f"missing permission context {intent.symbol} {permission_tf}"
-            if direction == "long" and not permission_ctx.allow_long:
-                return f"context {permission_tf} does not allow LONG"
-            if direction == "short" and not permission_ctx.allow_short:
-                return f"context {permission_tf} does not allow SHORT"
-
+        # Validate the declared context dependencies before validating the
+        # permission decision. This keeps diagnostics causal: a stale declared
+        # dependency is reported as stale context, rather than being masked by
+        # a missing permission field on the same intent.
         for tf, required in intent.required_context_versions.items():
             ctx = snapshot.context(intent.symbol, tf)
             if ctx is None:
@@ -127,15 +116,12 @@ class ExecutionBarrier:
             if int(ctx.version) != int(required):
                 return f"stale context {tf}: required={required} current={ctx.version}"
 
-        # All declared TFs are version dependencies, but the permission
-        # decision belongs to one operative/entry timeframe. Campaign entry
-        # purposes are execution mutations too and must not bypass this gate.
-        campaign_purpose = intent.purpose.upper()
+        purpose = intent.purpose.upper()
         needs_permission = (
-            campaign_purpose == "ENTRY"
-            or campaign_purpose in {"CAMPAIGN_ENTRY", "CAMPAIGN_ADD_ON"}
-            or campaign_purpose.endswith("_ENTRY")
-            or campaign_purpose.endswith("_ADD_ON")
+            purpose == "ENTRY"
+            or purpose in {"CAMPAIGN_ENTRY", "CAMPAIGN_ADD_ON"}
+            or purpose.endswith("_ENTRY")
+            or purpose.endswith("_ADD_ON")
         )
         if needs_permission:
             permission_tf = (intent.permission_interval or "").lower()
@@ -150,36 +136,24 @@ class ExecutionBarrier:
                 return f"context {permission_tf} does not allow SHORT"
 
         if self.db is not None and hasattr(self.db, "state_get"):
-            # Canonical state is per symbol. Keep the legacy aggregate mirror
-            # as a secondary fail-closed barrier for backward compatibility.
-            symbol_state = str(
-                self.db.state_get(
-                    f"position_state:{intent.symbol}",
-                    "FLAT",
-                )
-            ).upper()
-            legacy_state = str(
-                self.db.state_get("position_state", "FLAT")
-            ).upper()
-            if symbol_state == "RECONCILE_REQUIRED" or legacy_state == "RECONCILE_REQUIRED":
-                return "RECONCILE_REQUIRED"
-
-            campaign_state = str(
-                self.db.state_get(
-                    f"campaign_state:{intent.campaign_id}",
-                    "CLEAN"
-                )
-            ).upper() if intent.campaign_id else "CLEAN"
+            campaign_state = (
+                str(self.db.state_get(f"campaign_state:{intent.campaign_id}", "CLEAN")).upper()
+                if intent.campaign_id
+                else "CLEAN"
+            )
             if campaign_state == "RECONCILE_REQUIRED":
                 return "campaign_reconcile_required"
 
-            # Never trust only the mirror: the canonical campaign row is the
-            # durable source of truth. This closes the race where a recovery
-            # path marks the campaign unsafe but a stale bot_state value remains.
+            # Canonical campaign row is the durable source of truth. This
+            # closes the race where a persisted mirror remains stale.
             if intent.campaign_id and hasattr(self.db, "get_campaign"):
                 campaign = self.db.get_campaign(intent.campaign_id)
-                if campaign is not None and str(campaign.get("state", "")).upper() == "RECONCILE_REQUIRED":
+                if (
+                    campaign is not None
+                    and str(campaign.get("state", "")).upper() == "RECONCILE_REQUIRED"
+                ):
                     return "campaign_reconcile_required"
+
             if hasattr(self.db, "open_campaigns"):
                 for campaign in self.db.open_campaigns():
                     if (
@@ -188,8 +162,8 @@ class ExecutionBarrier:
                     ):
                         return "symbol_campaign_reconcile_required"
 
-            # Optional runtime latches are read only when explicitly persisted;
-            # absence preserves unit-test and headless-library compatibility.
+            # Optional runtime latches are fail-closed only when explicitly
+            # persisted; absence preserves headless/unit-test compatibility.
             runtime_enabled = self.db.state_get("runtime_execution_enabled")
             if runtime_enabled is not None and str(runtime_enabled).lower() not in {"1", "true", "yes"}:
                 return "runtime_execution_disabled"
