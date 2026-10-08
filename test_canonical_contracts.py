@@ -896,3 +896,64 @@ def test_execution_barrier_rejects_bad_binance_filter_shape(tmp_path):
     )
     assert result.accepted is False
     assert "minQty" in result.reason
+
+
+def test_execution_barrier_validates_legacy_protective_stop_from_invalidation_level(tmp_path):
+    db = Database(str(tmp_path / "protective-stop.sqlite3"))
+    client = FakeExchangeClient("100.0")
+    barrier = ExecutionBarrier(FakeCache(), db, client=client)
+
+    intent = OrderIntent.new(
+        "BTCUSDT",
+        "SELL",
+        "STOP_LOSS",
+        {},
+        client_order_id="WILLV5_STOP_TEST",
+        purpose="CAMPAIGN_PROTECTION",
+        invalidation_level=98.0,
+        quantity="0.1",
+    )
+    result = barrier.execute(
+        intent,
+        lambda: {
+            "symbol": "BTCUSDT",
+            "side": "SELL",
+            "type": "STOP_LOSS",
+            "status": "NEW",
+            "orderId": 991,
+            "clientOrderId": "WILLV5_STOP_TEST",
+            "executedQty": "0",
+        },
+    )
+    assert result.accepted is True
+
+
+def test_execution_barrier_rejects_protective_stop_above_market(tmp_path):
+    db = Database(str(tmp_path / "protective-stop-invalid.sqlite3"))
+    client = FakeExchangeClient("100.0")
+    barrier = ExecutionBarrier(FakeCache(), db, client=client)
+
+    intent = OrderIntent.new(
+        "BTCUSDT",
+        "SELL",
+        "STOP_LOSS",
+        {},
+        client_order_id="WILLV5_STOP_BAD",
+        purpose="CAMPAIGN_PROTECTION",
+        invalidation_level=101.0,
+        quantity="0.1",
+    )
+    result = barrier.execute(
+        intent,
+        lambda: {
+            "symbol": "BTCUSDT",
+            "side": "SELL",
+            "type": "STOP_LOSS",
+            "status": "NEW",
+            "orderId": 992,
+            "clientOrderId": "WILLV5_STOP_BAD",
+            "executedQty": "0",
+        },
+    )
+    assert result.accepted is False
+    assert "below market" in result.reason
