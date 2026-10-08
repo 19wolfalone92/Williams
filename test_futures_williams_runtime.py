@@ -9,6 +9,20 @@ from futures_williams_runtime import FuturesWilliamsRuntime
 from williams_signals import extract_short_signal_specs, _latest_super_ao
 
 
+def test_super_ao_recovers_original_third_bar_after_scanner_gap():
+    ind = pd.DataFrame({
+        "ao_green_streak": [0, 1, 2, 3, 4, 5],
+        "close": [100, 101, 102, 103, 104, 105],
+        "high": [101, 102, 103, 104, 105, 106],
+        "low": [99, 100, 101, 102, 103, 104],
+    })
+    result = _latest_super_ao(ind, side="LONG")
+    assert result is not None
+    assert result[0] == 3
+    assert result[1] == 104.0
+    assert result[2] == 102.0
+
+
 def test_super_ao_does_not_require_fractal_gate():
     ind = pd.DataFrame({
         "ao_red_streak": [0, 1, 2, 3],
