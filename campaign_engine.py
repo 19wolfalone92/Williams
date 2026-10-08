@@ -73,6 +73,8 @@ class CampaignEngine:
                 "initial_stop_price": float(signal.protective_reference),
                 "signal_reason": signal.reason,
                 "signal_role": signal.role.value,
+                "signal_bar_time_ms": int(signal.signal_bar_time_ms),
+                "last_signal_time_ms": int(signal.signal_bar_time_ms),
                 "wave_confidence": float(signal.wave_confidence),
                 "wave_exhaustion_risk": float(signal.wave_exhaustion_risk),
                 "htf_confirmed": bool(signal.htf_confirmed),
