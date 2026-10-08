@@ -726,15 +726,8 @@ class MarketScanner:
             base_score=round(float(candidate.base_score), 2),
             quant_rank_adjustment=round(float(quant_adjustment), 4),
             quant_score=round(self._clamp(float(final_score), 0.0, 100.0), 2),
-            wave_entry_allowed=bool(
-                (not candidate.signal)
-                or bool(report.entry_allowed)
-            ),
-            wave_block_reason=(
-                report.entry_block_reason
-                if candidate.signal and not report.entry_allowed
-                else ""
-            ),
+            wave_entry_allowed=(True if self.core_mode else bool((not candidate.signal) or bool(report.entry_allowed))),
+            wave_block_reason=("" if self.core_mode else (report.entry_block_reason if candidate.signal and not report.entry_allowed else "")),
             wave_score=round(float(report.wave_score), 2),
             wave_adjustment=round(float(wave_adjustment), 2),
             wave_position=wave_position,
@@ -759,7 +752,7 @@ class MarketScanner:
             wave_scenario_primary=(setup.scenario_primary if setup else ""),
             wave_scenario_alternative=(setup.scenario_alternative if setup else ""),
             wave_operative_interval=report.operative_interval,
-            campaign_ready=bool(candidate.campaign_ready and htf_confirmed),
+            campaign_ready=bool(candidate.campaign_ready),
             entry_signal_type=(
                 enriched_signal_specs[0].get("signal_type", "") if enriched_signal_specs else candidate.entry_signal_type
             ),
