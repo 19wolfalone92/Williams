@@ -13,6 +13,8 @@ from campaign_model import SignalSpec, SignalType, SignalRole
 from campaign_monitor import CampaignMonitor
 from intraday_contract import WilliamsIntradayContract
 from intraday_policy import evaluate_intraday_policy
+from execution_economics import ExecutionEconomics, evaluate_execution_economics
+from decision_trace import DecisionTrace
 
 
 POSITION_STATES = {
@@ -1936,6 +1938,32 @@ class MultiPositionTrader:
                 continue
         return specs
 
+    def _execution_economics_gate(self, selection):
+        candidate = selection.candidate
+        stop_pct = max(0.0, float(getattr(selection.risk, "stop_distance_pct", 0.0) or 0.0)) / 100.0
+        rr = max(1.0, float(getattr(selection.risk, "risk_reward", 1.0) or 1.0))
+        return evaluate_execution_economics(ExecutionEconomics(
+            spread_pct=max(0.0, float(getattr(candidate, "spread_pct", 0.0) or 0.0)),
+            estimated_slippage_pct=max(0.0, float(os.getenv("RISK_SLIPPAGE_BUFFER_PCT", "0.0015"))),
+            entry_fee_pct=max(0.0, float(os.getenv("FEE_BUFFER_PER_SIDE_PCT", "0.001"))),
+            exit_fee_pct=max(0.0, float(os.getenv("FEE_BUFFER_PER_SIDE_PCT", "0.001"))),
+            expected_move_pct=stop_pct * rr,
+        ))
+
+    def _record_decision_trace(self, selection, signal, *, economic_gate, risk_allowed, block_reason=""):
+        trace = DecisionTrace.now(
+            selection.candidate.symbol,
+            trigger_price=float(getattr(signal, "trigger_price", 0.0) or 0.0),
+            initial_stop=float(getattr(signal, "protective_reference", 0.0) or 0.0),
+            williams_valid=signal is not None,
+            risk_allowed=bool(risk_allowed),
+            economic_gate=bool(economic_gate),
+            signal_family=str(getattr(signal, "signal_type", "") or ""),
+        )
+        if block_reason: trace.block(block_reason)
+        else: trace.admit()
+        self.db.log_event("INFO" if trace.trade_allowed else "DEBUG", "decision_trace", trace.to_json(), {"symbol": selection.candidate.symbol})
+        return trace
     def execute_campaign(self, selections):
         if not selections:
             return []
@@ -1992,6 +2020,12 @@ class MultiPositionTrader:
                     "dataclasses"
                 ).replace(signal, role=SignalRole.ADD_ON)
 
+                economics = self._execution_economics_gate(selection)
+                if not economics.feasible:
+                    self._record_decision_trace(selection, add_signal, economic_gate=False, risk_allowed=True, block_reason=economics.block_reason)
+                    results.append({"symbol": symbol, "campaign": True, "action": "BLOCKED_BY_EXECUTION_ECONOMICS", "reason": economics.block_reason})
+                    continue
+                self._record_decision_trace(selection, add_signal, economic_gate=True, risk_allowed=True)
                 try:
                     result = self.campaign_execution.arm_add_on(
                         add_signal,
@@ -2036,6 +2070,13 @@ class MultiPositionTrader:
             if signal is None:
                 continue
 
+            economics = self._execution_economics_gate(selection)
+            requested_risk = min(self.max_risk_per_trade_pct, max(0.0, float(selection.risk.risk_pct) / 100.0))
+            if not economics.feasible:
+                self._record_decision_trace(selection, signal, economic_gate=False, risk_allowed=requested_risk > 0, block_reason=economics.block_reason)
+                results.append({"symbol": symbol, "campaign": True, "action": "BLOCKED_BY_EXECUTION_ECONOMICS", "reason": economics.block_reason})
+                continue
+            self._record_decision_trace(selection, signal, economic_gate=True, risk_allowed=requested_risk > 0)
             try:
                 result = self.campaign_execution.arm_initial_entry(
                     signal,
