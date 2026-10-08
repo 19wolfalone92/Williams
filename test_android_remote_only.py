@@ -23,13 +23,13 @@ def test_android_has_remote_cockpit_runtime():
     assert "StandaloneRuntime.start(this)" not in main
 
 
-def test_android_local_runtime_does_not_require_remote_https():
+def test_android_remote_backend_requires_https():
     main = _read(ANDROID / "java/com/williamsbot/MainActivity.kt")
-    network = _read(ANDROID / "res/xml/network_security_config.xml")
-    assert "http://127.0.0.1:18080" in main
     assert "https://" in main
-    assert "127.0.0.1" in network
-    assert 'cleartextTrafficPermitted="true"' in network
+    assert "127.0.0.1:18080" not in main
+    assert "localhost:18080" not in main
+    assert 'putString("backend_url"' in main
+    assert 'putString("mobile_token"' in main
 
 
 def test_android_does_not_clear_native_binance_credentials_on_start():
@@ -47,10 +47,10 @@ def test_android_does_not_start_native_spot_runtime():
     assert "remote Futures backend" in service
 
 
-def test_android_has_portfolio_local_api():
-    runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
-    assert 'path == "/api/v1/portfolio"' in runtime
-    assert "fun portfolio()" in runtime
+def test_android_does_not_require_native_portfolio_api():
+    main = _read(ANDROID / "java/com/williamsbot/MainActivity.kt")
+    assert "/api/v1/portfolio" in main
+    assert "BackendApi" in main
 
 
 def test_android_never_stores_binance_credentials_in_main_activity():
