@@ -34,7 +34,7 @@ class BinanceFuturesClient:
         self.api_secret = api_secret
         self.testnet = bool(testnet)
         self.base_url = (
-            os.getenv("BINANCE_FUTURES_TESTNET_URL", "https://testnet.binancefuture.com")
+            os.getenv("BINANCE_FUTURES_TESTNET_URL", "https://demo-fapi.binance.com")
             if self.testnet
             else os.getenv("BINANCE_FUTURES_URL", "https://fapi.binance.com")
         )
