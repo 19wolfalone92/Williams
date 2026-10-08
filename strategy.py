@@ -1,6 +1,18 @@
+"""Canonical Williams indicator facade.
+
+All production strategy truth is defined by the williams.* package.  This
+legacy facade retains the dataframe columns used by the scanner/UI and
+Profitunity diagnostics, but it no longer imposes hidden multi-confirmation
+gates on the Core signal.
+"""
+from __future__ import annotations
 import os
 import numpy as np
 import pandas as pd
+from williams.alligator import calculate_alligator
+from williams.ao import calculate_ao
+from williams.fractals import FractalEngine
+from williams.wm1 import evaluate_wm1
 
 
 def smma(series, period):
@@ -12,14 +24,11 @@ def smma(series, period):
         return out
     out.iloc[period - 1] = series.iloc[:period].mean()
     for i in range(period, len(series)):
-        out.iloc[i] = (
-            (out.iloc[i - 1] * (period - 1) + series.iloc[i]) / period
-        )
+        out.iloc[i] = ((out.iloc[i - 1] * (period - 1) + series.iloc[i]) / period)
     return out
 
 
 def _streak(mask):
-    """Return the current consecutive True-run length for every row."""
     values = mask.fillna(False).astype(bool).to_numpy()
     out = np.zeros(len(values), dtype=int)
     n = 0
@@ -30,7 +39,6 @@ def _streak(mask):
 
 
 def _profitunity_window(volume_up, mfi_up):
-    """Classify Williams' four volume/MFI states."""
     result = pd.Series("STABLE", index=volume_up.index, dtype=object)
     result.loc[volume_up & mfi_up] = "GREEN"
     result.loc[~volume_up & ~mfi_up] = "FADING"
@@ -39,295 +47,168 @@ def _profitunity_window(volume_up, mfi_up):
     return result
 
 
+def _time_ms(row, index):
+    for key in ("open_time_ms", "time_ms", "timestamp", "time", "open_time"):
+        value = row.get(key)
+        if value is not None and not pd.isna(value):
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                pass
+    return int(index)
+
+
 def calculate_indicators(df, cfg):
     x = df.copy()
     if x.empty:
         return x
+    median = (x["high"] + x["low"]) / 2.0
 
-    # Binance Spot exposes traded volume rather than the historical
-    # tick-count volume used in Williams' original MFI. Therefore the
-    # market-facilitation field below is explicitly a proxy and is never an
-    # execution requirement by itself.
-    median = (x["high"] + x["low"]) / 2
-
-    # Williams Alligator: 13/8, 8/5, 5/3 smoothed displaced lines.
-    x["jaw"] = smma(median, cfg["jaw"])
-    x["teeth"] = smma(median, cfg["teeth"])
-    x["lips"] = smma(median, cfg["lips"])
-    x["jaw_shifted"] = x["jaw"].shift(cfg["jaw_shift"])
-    x["teeth_shifted"] = x["teeth"].shift(cfg["teeth_shift"])
-    x["lips_shifted"] = x["lips"].shift(cfg["lips_shift"])
-
-    # Awesome Oscillator: SMA(5, median) - SMA(34, median).
-    x["ao"] = median.rolling(cfg["ao_fast"]).mean() - median.rolling(cfg["ao_slow"]).mean()
-    x["ao_green"] = x["ao"] > x["ao"].shift(1)
-    x["ao_red"] = x["ao"] < x["ao"].shift(1)
-    x["ao_green_streak"] = _streak(x["ao_green"])
-    x["ao_red_streak"] = _streak(x["ao_red"])
+    # Canonical Alligator and AO definitions. The package implementation is
+    # the source of truth; the facade exposes the same columns for legacy code.
+    x = calculate_alligator(
+        x,
+        jaw_period=cfg["jaw"],
+        teeth_period=cfg["teeth"],
+        lips_period=cfg["lips"],
+        jaw_shift=cfg["jaw_shift"],
+        teeth_shift=cfg["teeth_shift"],
+        lips_shift=cfg["lips_shift"],
+        min_spread_pct=cfg["min_alligator_spread_pct"],
+    )
+    x = calculate_ao(x, fast=cfg["ao_fast"], slow=cfg["ao_slow"])
     x["super_ao_long"] = x["ao_green_streak"] >= int(cfg["super_ao_bars"])
     x["super_ao_short"] = x["ao_red_streak"] >= int(cfg["super_ao_bars"])
-    x["ao_momentum_rising"] = x["ao_green"]
-    x["ao_momentum_falling"] = x["ao_red"]
+    x["ao_momentum_rising"] = x["ao_green"].astype(bool)
+    x["ao_momentum_falling"] = x["ao_red"].astype(bool)
 
-    # Accelerator/Decelerator: AO minus its 5-period SMA.
+    # Accelerator/Decelerator and secondary diagnostics.
     x["ac"] = x["ao"] - x["ao"].rolling(cfg["ac_period"]).mean()
-    # RSI is a secondary Profitunity market-chaos diagnostic. It is not
-    # an autonomous order trigger; campaign policy may use it as context.
     delta = x["close"].diff()
     gain = delta.clip(lower=0.0)
     loss = -delta.clip(upper=0.0)
-    avg_gain = gain.ewm(
-        alpha=1.0 / max(int(cfg["rsi_period"]), 1),
-        adjust=False,
-        min_periods=int(cfg["rsi_period"]),
-    ).mean()
-    avg_loss = loss.ewm(
-        alpha=1.0 / max(int(cfg["rsi_period"]), 1),
-        adjust=False,
-        min_periods=int(cfg["rsi_period"]),
-    ).mean()
+    avg_gain = gain.ewm(alpha=1.0 / max(int(cfg["rsi_period"]), 1), adjust=False, min_periods=int(cfg["rsi_period"])).mean()
+    avg_loss = loss.ewm(alpha=1.0 / max(int(cfg["rsi_period"]), 1), adjust=False, min_periods=int(cfg["rsi_period"])).mean()
     rs = avg_gain / avg_loss.replace(0, np.nan)
-    x["rsi"] = 100.0 - (100.0 / (1.0 + rs))
-    x["rsi"] = x["rsi"].fillna(50.0)
+    x["rsi"] = (100.0 - (100.0 / (1.0 + rs))).fillna(50.0)
 
-    # Binance klines expose number-of-trades. Profitunity's original MFI
-    # uses tick volume; where trade-count data exists it is a closer market
-    # microstructure proxy than base-asset volume, while preserving a clear
-    # fallback for older cached datasets.
-    trade_count = pd.to_numeric(
-        x.get("trades", pd.Series(np.nan, index=x.index)),
-        errors="coerce",
-    )
+    trade_count = pd.to_numeric(x.get("trades", pd.Series(np.nan, index=x.index)), errors="coerce")
     tick_volume = trade_count.where(trade_count > 0, x["volume"])
     x["tick_volume_proxy"] = tick_volume
 
-
-    # Fractals. The center must be strictly higher/lower than the two bars
-    # on each side; equality therefore does not create a false fractal.
-    left = cfg["fractal_left"]
-    right = cfg["fractal_right"]
+    # Complete Williams fractal engine: ties and overlapping/shared bars are
+    # legal; the metadata carries 5/6/9-bar extension information.
+    fractals = FractalEngine(
+        left=max(2, int(cfg["fractal_left"])),
+        right=max(2, int(cfg["fractal_right"])),
+        max_extension=9,
+    ).detect(x)
     x["fractal_up"] = False
     x["fractal_down"] = False
-    for i in range(left, len(x) - right):
-        if (
-            x["high"].iloc[i] > x["high"].iloc[i-left:i].max()
-            and x["high"].iloc[i] > x["high"].iloc[i+1:i+right+1].max()
-        ):
-            x.iloc[i, x.columns.get_loc("fractal_up")] = True
-        if (
-            x["low"].iloc[i] < x["low"].iloc[i-left:i].min()
-            and x["low"].iloc[i] < x["low"].iloc[i+1:i+right+1].min()
-        ):
-            x.iloc[i, x.columns.get_loc("fractal_down")] = True
+    x["fractal_up_span"] = 0
+    x["fractal_down_span"] = 0
+    for f in fractals:
+        if f.center_index < len(x):
+            col = "fractal_up" if f.side == "UP" else "fractal_down"
+            span_col = "fractal_up_span" if f.side == "UP" else "fractal_down_span"
+            x.iloc[f.center_index, x.columns.get_loc(col)] = True
+            x.iloc[f.center_index, x.columns.get_loc(span_col)] = int(f.span)
 
     x["confirmed_up_level"] = np.nan
     x["confirmed_down_level"] = np.nan
-    for i in range(left + right, len(x)):
-        fi = i - right
-        if bool(x["fractal_up"].iloc[fi]):
-            x.iloc[i, x.columns.get_loc("confirmed_up_level")] = x["high"].iloc[fi]
-        if bool(x["fractal_down"].iloc[fi]):
-            x.iloc[i, x.columns.get_loc("confirmed_down_level")] = x["low"].iloc[fi]
-
+    for f in fractals:
+        if f.confirmation_index >= len(x):
+            continue
+        col = "confirmed_up_level" if f.side == "UP" else "confirmed_down_level"
+        value = f.level
+        x.iloc[f.confirmation_index, x.columns.get_loc(col)] = float(value)
     x["last_up_level"] = x["confirmed_up_level"].ffill()
     x["last_down_level"] = x["confirmed_down_level"].ffill()
 
-    # Alligator direction / awake state.
-    mouth_values = x[["jaw_shifted", "teeth_shifted", "lips_shifted"]]
-    x["bullish_alligator"] = (
-        (x["lips_shifted"] > x["teeth_shifted"])
-        & (x["teeth_shifted"] > x["jaw_shifted"])
-        & (x["close"] > x["lips_shifted"])
-    )
-    x["bearish_alligator"] = (
-        (x["lips_shifted"] < x["teeth_shifted"])
-        & (x["teeth_shifted"] < x["jaw_shifted"])
-        & (x["close"] < x["lips_shifted"])
-    )
-    spread = (
-        mouth_values.max(axis=1) - mouth_values.min(axis=1)
-    ) / x["close"].replace(0, np.nan)
-    x["alligator_spread_pct"] = spread
-    x["alligator_awake"] = spread >= cfg["min_alligator_spread_pct"]
-
-    # Williams' fractal/Balance-Line gate: a buy fractal is only actionable
-    # when its peak is above the red Balance Line (Teeth); sells are mirrored.
-    x["long_fractal_outside"] = (
-        x["last_up_level"].notna()
-        & x["teeth_shifted"].notna()
-        & (x["last_up_level"] > x["teeth_shifted"])
-    )
-    x["short_fractal_outside"] = (
-        x["last_down_level"].notna()
-        & x["teeth_shifted"].notna()
-        & (x["last_down_level"] < x["teeth_shifted"])
-    )
-
-    # Fractal breakout triggers.
+    x["long_fractal_outside"] = x["last_up_level"].notna() & x["teeth_shifted"].notna() & (x["last_up_level"] > x["teeth_shifted"])
+    x["short_fractal_outside"] = x["last_down_level"].notna() & x["teeth_shifted"].notna() & (x["last_down_level"] < x["teeth_shifted"])
     x["long_above_fractal"] = x["long_fractal_outside"] & (x["close"] > x["last_up_level"])
-    x["long_previous_below_fractal"] = (
-        x["long_fractal_outside"]
-        & x["last_up_level"].shift(1).notna()
-        & (x["close"].shift(1) <= x["last_up_level"].shift(1))
-    )
+    x["long_previous_below_fractal"] = x["long_fractal_outside"] & x["last_up_level"].shift(1).notna() & (x["close"].shift(1) <= x["last_up_level"].shift(1))
     x["short_below_fractal"] = x["short_fractal_outside"] & (x["close"] < x["last_down_level"])
-    x["short_previous_above_fractal"] = (
-        x["short_fractal_outside"]
-        & x["last_down_level"].shift(1).notna()
-        & (x["close"].shift(1) >= x["last_down_level"].shift(1))
-    )
+    x["short_previous_above_fractal"] = x["short_fractal_outside"] & x["last_down_level"].shift(1).notna() & (x["close"].shift(1) >= x["last_down_level"].shift(1))
     x["long_fractal_signal"] = x["long_above_fractal"] & x["long_previous_below_fractal"]
     x["short_fractal_signal"] = x["short_below_fractal"] & x["short_previous_above_fractal"]
 
-    # First Wise Man: divergent/reversal bar. The source rule requires a new
-    # extreme and a close in the signal half of the bar. The extra mouth gate
-    # is the conservative spot-market overlay used by this bot.
-    bar_range = (x["high"] - x["low"]).replace(0, np.nan)
-    close_location = (x["close"] - x["low"]) / bar_range
-    prior_low = x["low"].shift(1).rolling(2).min()
-    prior_high = x["high"].shift(1).rolling(2).max()
-    x["bullish_reversal_bar"] = (
-        (x["low"] < prior_low)
-        & (close_location >= 0.50)
-        & x["jaw_shifted"].notna()
-        & (x["low"] < x[["jaw_shifted", "teeth_shifted", "lips_shifted"]].min(axis=1))
-    )
-    x["bearish_reversal_bar"] = (
-        (x["high"] > prior_high)
-        & (close_location <= 0.50)
-        & x["jaw_shifted"].notna()
-        & (x["high"] > x[["jaw_shifted", "teeth_shifted", "lips_shifted"]].max(axis=1))
-    )
-    x["long_reversal_signal"] = x["bullish_reversal_bar"]
-    x["short_reversal_signal"] = x["bearish_reversal_bar"]
+    # Current-bar WM1 truth comes from the side-specific angulation engine.
+    x["bullish_reversal_bar"] = False
+    x["bearish_reversal_bar"] = False
+    x["wm1_long_valid"] = False
+    x["wm1_short_valid"] = False
+    x["wm1_angulation_long"] = 0.0
+    x["wm1_angulation_short"] = 0.0
+    for i in range(len(x)):
+        if i < 2:
+            continue
+        long_r = evaluate_wm1(x, i, "LONG", outside_atr_mult=cfg["wm1_outside_atr_mult"], angulation_window=cfg["wm1_angulation_window"])
+        short_r = evaluate_wm1(x, i, "SHORT", outside_atr_mult=cfg["wm1_outside_atr_mult"], angulation_window=cfg["wm1_angulation_window"])
+        x.iloc[i, x.columns.get_loc("bullish_reversal_bar")] = bool(long_r.extreme and long_r.upper_half)
+        x.iloc[i, x.columns.get_loc("bearish_reversal_bar")] = bool(short_r.extreme and short_r.upper_half)
+        x.iloc[i, x.columns.get_loc("wm1_long_valid")] = bool(long_r.valid)
+        x.iloc[i, x.columns.get_loc("wm1_short_valid")] = bool(short_r.valid)
+        x.iloc[i, x.columns.get_loc("wm1_angulation_long")] = float(long_r.angulation.angular_separation if long_r.angulation else 0.0)
+        x.iloc[i, x.columns.get_loc("wm1_angulation_short")] = float(short_r.angulation.angular_separation if short_r.angulation else 0.0)
+    x["long_reversal_signal"] = x["wm1_long_valid"]
+    x["short_reversal_signal"] = x["wm1_short_valid"]
+    x["last_bullish_reversal_high"] = x["high"].where(x["bullish_reversal_bar"]).ffill().shift(1)
+    x["last_bearish_reversal_low"] = x["low"].where(x["bearish_reversal_bar"]).ffill().shift(1)
 
-    # The book places a buy/sell stop beyond the reversal bar. Therefore the
-    # reversal bar itself is context; the actionable trigger is a later break
-    # of that signal bar's extreme.
-    x["last_bullish_reversal_high"] = (
-        x["high"].where(x["bullish_reversal_bar"]).ffill().shift(1)
-    )
-    x["last_bearish_reversal_low"] = (
-        x["low"].where(x["bearish_reversal_bar"]).ffill().shift(1)
-    )
+    # The legacy breakout columns remain informational only; WM1 validity does
+    # not wait for a fully trending Alligator.
+    x["long_wise_reversal_entry"] = x["wm1_long_valid"]
+    x["short_wise_reversal_entry"] = x["wm1_short_valid"]
+    x["long_super_ao_signal"] = x["ao_green_streak"].eq(3)
+    x["short_super_ao_signal"] = x["ao_red_streak"].eq(3)
 
-    # Second Wise Man: Super AO. We use Williams' histogram color definition
-    # (green = current AO above previous AO, red = below), not merely AO > 0.
-    # Wise Man 2 is independent of Wise Man 3. The Super AO observation
-    # is defined by the three-bar AO colour sequence itself; execution policy
-    # may later require a Fractal for a specific role, but this indicator layer
-    # must not silently change WM2 semantics.
-    x["long_super_ao_signal"] = x["super_ao_long"]
-    x["short_super_ao_signal"] = x["super_ao_short"]
+    # A fractal confirmed on the current bar is a new WM3 observation. Older
+    # fractals remain pending in williams_signals.Persisted PendingSignal.
+    x["wm3_long_current"] = x["confirmed_up_level"].notna() & x["long_fractal_outside"]
+    x["wm3_short_current"] = x["confirmed_down_level"].notna() & x["short_fractal_outside"]
+    x["long_wise_man_count"] = x[["wm1_long_valid", "long_super_ao_signal", "wm3_long_current"]].astype(int).sum(axis=1)
+    x["short_wise_man_count"] = x[["wm1_short_valid", "short_super_ao_signal", "wm3_short_current"]].astype(int).sum(axis=1)
 
-    # Conservative execution overlay. The counter-trend Wise-Man signals from
-    # the book are retained as diagnostics, but disabled for the long-only
-    # autonomous entry path unless explicitly enabled.
-    countertrend = bool(cfg["allow_countertrend_wise_man"])
-    x["long_wise_reversal_entry"] = (
-        x["last_bullish_reversal_high"].notna()
-        & (x["close"] > x["last_bullish_reversal_high"])
-        & (x["bullish_alligator"] | countertrend)
-    )
-    x["short_wise_reversal_entry"] = (
-        x["last_bearish_reversal_low"].notna()
-        & (x["close"] < x["last_bearish_reversal_low"])
-        & (x["bearish_alligator"] | countertrend)
-    )
-
-    # Canonical Wise-Men count. This is confirmation/ranking information in our
-    # one-position system; no pyramiding order is ever emitted by this layer.
-    x["long_wise_man_count"] = (
-        x[["long_wise_reversal_entry", "long_super_ao_signal", "long_fractal_signal"]]
-        .astype(int).sum(axis=1)
-    )
-    x["short_wise_man_count"] = (
-        x[["short_wise_reversal_entry", "short_super_ao_signal", "short_fractal_signal"]]
-        .astype(int).sum(axis=1)
-    )
-
-    # Legacy diagnostics retained for compatibility.
+    # Compatibility fields for UI/legacy scoring. They are not Core gates.
     x["long_bullish"] = x["bullish_alligator"]
-    x["long_awake"] = x["alligator_awake"]
+    x["long_awake"] = x["alligator_state"].isin(["AWAKENING", "TRENDING"])
+    x["alligator_awake"] = x["alligator_state"].isin(["AWAKENING", "TRENDING"])
     x["long_ao_positive"] = x["ao"] > 0
     x["long_ac_positive"] = x["ac"] > 0
     x["long_fractal_ready"] = x["last_up_level"].notna()
     x["short_bearish"] = x["bearish_alligator"]
-    x["short_awake"] = x["alligator_awake"]
+    x["short_awake"] = x["alligator_state"].isin(["AWAKENING", "TRENDING"])
     x["short_ao_negative"] = x["ao"] < 0
     x["short_ac_negative"] = x["ac"] < 0
     x["short_fractal_ready"] = x["last_down_level"].notna()
 
-    # Strict entry: conservative Williams gate + at least one valid Wise-Man
-    # trigger. Fractal breakouts, Super AO continuation and reversal bars are
-    # separate triggers; they are not incorrectly ANDed together.
-    min_wise = int(cfg["min_wise_men_confirmations"])
-    x["long_signal"] = (
-        # Williams' first gate: no downstream Wise-Man signal is actionable
-        # until a confirmed fractal has formed outside the Teeth/balance line.
-        x["long_fractal_outside"]
-        & x["long_bullish"]
-        & x["long_awake"]
-        & x["long_wise_man_count"].ge(min_wise)
-    )
-    x["short_signal"] = (
-        x["short_bearish"]
-        & x["short_awake"]
-        & x["short_wise_man_count"].ge(min_wise)
-    )
+    # Core decision is the current H1 observation only. WM2/WM3 remain
+    # independent of each other and no minimum count is imposed.
+    x["long_signal"] = x[["wm1_long_valid", "long_super_ao_signal", "wm3_long_current"]].any(axis=1)
+    x["short_signal"] = x[["wm1_short_valid", "short_super_ao_signal", "wm3_short_current"]].any(axis=1)
 
     def _family(row, side):
-        cols = [
-            f"{side}_wise_reversal_entry",
-            f"{side}_super_ao_signal",
-            f"{side}_fractal_signal",
-        ]
-        names = ["REVERSAL", "SUPER_AO", "FRACTAL"]
-        hit = [names[i] for i, c in enumerate(cols) if bool(row.get(c, False))]
-        return "+".join(hit) if hit else "NONE"
-
-    x["long_signal_family"] = x.apply(lambda r: _family(r, "long"), axis=1)
-    x["short_signal_family"] = x.apply(lambda r: _family(r, "short"), axis=1)
-
-    # Legacy setup score stays available, but it now includes canonical
-    # Williams trigger readiness rather than pretending AO>0/AC>0 equals all
-    # three Wise Men.
-    long_components = [
-        "long_bullish",
-        "long_awake",
-        "long_fractal_outside",
-        "long_super_ao_signal",
-        "long_fractal_signal",
-        "long_reversal_signal",
-    ]
-    x["long_setup_score"] = (
-        x[long_components].astype(int).sum(axis=1) / len(long_components) * 100.0
-    )
+        cols=[f"wm1_{side}_valid",f"{side}_super_ao_signal",f"wm3_{side}_current"]
+        names=["REVERSAL","SUPER_AO","FRACTAL"]
+        return "+".join(names[i] for i,c in enumerate(cols) if bool(row.get(c,False))) or "NONE"
+    x["long_signal_family"] = x.apply(lambda r:_family(r,"long"),axis=1)
+    x["short_signal_family"] = x.apply(lambda r:_family(r,"short"),axis=1)
+    x["long_setup_score"] = x[["wm1_long_valid","long_super_ao_signal","wm3_long_current"]].astype(int).sum(axis=1) / 3.0 * 100.0
     x["long_wise_man_score"] = x["long_wise_man_count"] / 3.0 * 100.0
+    x["long_breakout_distance_pct"] = np.where(x["last_up_level"].notna() & (x["last_up_level"] > 0),(x["close"] / x["last_up_level"] - 1.0) * 100.0,np.nan)
 
-    # Distance to the confirmed breakout level.
-    x["long_breakout_distance_pct"] = np.where(
-        x["last_up_level"].notna() & (x["last_up_level"] > 0),
-        (x["close"] / x["last_up_level"] - 1.0) * 100.0,
-        np.nan,
-    )
-
-    # Williams Market Facilitation Index proxy and four Profitunity windows.
-    # On Binance Spot, this uses traded base volume rather than tick count, so
-    # it is deliberately diagnostic only.
-    volume = pd.to_numeric(x.get("volume", pd.Series(np.nan, index=x.index)), errors="coerce")
-    x["volume"] = volume
-    x["mfi_proxy"] = (
-        (x["high"] - x["low"]) /
-        x["tick_volume_proxy"].replace(0, np.nan)
-    )
-    x["volume_up"] = x["tick_volume_proxy"] > x["tick_volume_proxy"].shift(1)
-    x["volume_down"] = volume < volume.shift(1)
-    x["mfi_up"] = x["mfi_proxy"] > x["mfi_proxy"].shift(1)
-    x["mfi_down"] = x["mfi_proxy"] < x["mfi_proxy"].shift(1)
-    x["profitunity_window"] = _profitunity_window(x["volume_up"], x["mfi_up"])
-    x["squatting_bar"] = x["profitunity_window"] == "SQUAT"
-
+    volume=pd.to_numeric(x.get("volume",pd.Series(np.nan,index=x.index)),errors="coerce")
+    x["volume"]=volume
+    x["mfi_proxy"]=(x["high"]-x["low"])/x["tick_volume_proxy"].replace(0,np.nan)
+    x["volume_up"]=x["tick_volume_proxy"]>x["tick_volume_proxy"].shift(1)
+    x["volume_down"]=volume<volume.shift(1)
+    x["mfi_up"]=x["mfi_proxy"]>x["mfi_proxy"].shift(1)
+    x["mfi_down"]=x["mfi_proxy"]<x["mfi_proxy"].shift(1)
+    x["profitunity_window"]=_profitunity_window(x["volume_up"],x["mfi_up"])
+    x["squatting_bar"]=x["profitunity_window"]=="SQUAT"
+    x["canonical_decision_tf"]="1h"
     return x
 
 
@@ -343,10 +224,12 @@ def config_from_env(env=os.environ):
         "ao_slow": int(env.get("AO_SLOW", "34")),
         "ac_period": int(env.get("AC_PERIOD", "5")),
         "rsi_period": int(env.get("RSI_PERIOD", "14")),
-        "fractal_left": int(env.get("FRACTAL_LEFT", "2")),
-        "fractal_right": int(env.get("FRACTAL_RIGHT", "2")),
-        "super_ao_bars": int(env.get("SUPER_AO_BARS", "3")),
-        "min_wise_men_confirmations": int(env.get("MIN_WISE_MEN_CONFIRMATIONS", "2")),
-        "allow_countertrend_wise_man": env.get("ALLOW_COUNTERTREND_WISE_MAN", "false").lower() == "true",
+        "fractal_left": max(2, int(env.get("FRACTAL_LEFT", "2"))),
+        "fractal_right": max(2, int(env.get("FRACTAL_RIGHT", "2"))),
+        "super_ao_bars": 3,
+        "min_wise_men_confirmations": 1,
+        "allow_countertrend_wise_man": False,
         "min_alligator_spread_pct": float(env.get("MIN_ALLIGATOR_SPREAD_PCT", "0.001")),
+        "wm1_outside_atr_mult": float(env.get("WM1_OUTSIDE_ATR_MULT", "0.10")),
+        "wm1_angulation_window": max(3, int(env.get("WM1_ANGULATION_WINDOW", "5"))),
     }
