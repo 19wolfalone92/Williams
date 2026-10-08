@@ -860,6 +860,58 @@ def _position_payload(t, trade):
         'mark_price': current or None,
     }
 
+@app.get(
+    '/api/v1/market/klines',
+    dependencies=[Depends(auth)],
+)
+def market_klines(
+    limit: int = 120,
+    symbol: Optional[str] = None,
+    interval: Optional[str] = None,
+):
+    t = state.ensure_trader()
+    target_symbol = str(symbol or t.symbol).strip().upper()
+    raw_interval = str(interval or t.interval).strip()
+    target_interval = "1M" if raw_interval == "1M" else raw_interval.lower()
+    allowed_intervals = {
+        "1m", "3m", "5m", "15m", "30m", "1h", "2h",
+        "4h", "6h", "8h", "12h", "1d", "3d", "1w", "1M",
+    }
+    if target_interval not in allowed_intervals:
+        raise HTTPException(400, f"Unsupported Binance interval: {target_interval}")
+    if not target_symbol.endswith("USDT") or not target_symbol.isalnum():
+        raise HTTPException(400, "Invalid Futures symbol")
+    df = fetch_klines(
+        t.client,
+        target_symbol,
+        target_interval,
+        limit=max(30, min(limit, 250)),
+    )
+    if df is None or df.empty:
+        raise HTTPException(503, "No market data available")
+    closed = df.iloc[:-1].copy() if len(df) > 1 else df.copy()
+    ind = calculate_indicators(closed, config_from_env())
+    rows = []
+    for idx, row in ind.iterrows():
+        rows.append(
+            {
+                "time": idx.isoformat(),
+                "open": float(row.open),
+                "high": float(row.high),
+                "low": float(row.low),
+                "close": float(row.close),
+                "jaw": None if row.jaw_shifted != row.jaw_shifted else float(row.jaw_shifted),
+                "teeth": None if row.teeth_shifted != row.teeth_shifted else float(row.teeth_shifted),
+                "lips": None if row.lips_shifted != row.lips_shifted else float(row.lips_shifted),
+                "ao": None if row.ao != row.ao else float(row.ao),
+                "long_signal": bool(row.long_signal),
+                "short_signal": bool(row.short_signal),
+                "fractal_up": bool(row.fractal_up),
+                "fractal_down": bool(row.fractal_down),
+            }
+        )
+    return {"symbol": target_symbol, "interval": target_interval, "candles": rows}
+
 @app.get('/api/v1/status', dependencies=[Depends(auth)])
 def status():
     t = state.ensure_trader()
