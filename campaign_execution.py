@@ -350,6 +350,31 @@ class CampaignExecutionService:
                 ),
                 check,
             )
+            exchange_status = str(order.get("status", "")).upper()
+            executed_now = float(order.get("executedQty", 0) or 0)
+            if exchange_status in {"CANCELED", "EXPIRED", "REJECTED", "EXPIRED_IN_MATCH"} and executed_now <= 0:
+                # Known terminal no-fill outcomes release the pending reservation
+                # immediately. EXPIRED_IN_MATCH is Binance STP and is not an
+                # unknown execution outcome.
+                campaign.state = CampaignState.CLOSED
+                campaign.pending_risk_quote = 0.0
+                campaign.capital_reserved_quote = 0.0
+                campaign.next_action = "WAIT"
+                self.db.set_campaign_signal_state(
+                    signal.signal_id,
+                    SignalState.CANCELLED.value,
+                )
+                self.db.state_delete(f"entry_client_order_id:{signal.symbol}")
+                self.db.save_campaign(campaign)
+                return {
+                    "campaign_id": campaign.campaign_id,
+                    "signal_id": signal.signal_id,
+                    "client_order_id": client_id,
+                    "order_id": order.get("orderId"),
+                    "state": CampaignState.CLOSED.value,
+                    "order_status": exchange_status,
+                }
+
             self.db.save_campaign_order(
                 PendingOrderRecord(
                     order_id=str(order.get("orderId", "") or ""),
@@ -857,10 +882,25 @@ class CampaignExecutionService:
 
     def _current_equity_quote(self) -> float:
         account = self.client.account()
-        equity = 0.0
-        for row in account.get("balances", []):
-            if str(row.get("asset", "")).upper() == "USDT":
-                equity += float(row.get("free", 0) or 0) + float(row.get("locked", 0) or 0)
+        equity = sum(
+            float(row.get("free", 0) or 0) + float(row.get("locked", 0) or 0)
+            for row in account.get("balances", [])
+            if str(row.get("asset", "")).upper() == "USDT"
+        )
+        # Use the same mark-to-market portfolio base as the legacy trader.
+        # This prevents campaign risk from being calculated on USDT only when
+        # existing Spot positions already hold part of the portfolio.
+        for row in self.db.open_campaigns():
+            qty = float(row.get("position_qty", 0) or 0)
+            symbol = str(row.get("symbol", "")).upper()
+            if qty <= 0 or not symbol:
+                continue
+            try:
+                price = float(self.client.ticker_price(symbol).get("price", 0) or 0)
+            except Exception:
+                price = 0.0
+            if price > 0:
+                equity += qty * price
         return max(equity, 0.0)
 
     def reconcile_active_campaigns(self) -> list[dict[str, Any]]:
