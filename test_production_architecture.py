@@ -291,7 +291,9 @@ def test_execution_barrier_keeps_protective_sell_available_during_reconciliation
 
 
 def test_execution_barrier_blocks_new_entry_during_reconciliation():
-    class ReconcileDB:
+    class ReconcileDB(IntentDB):
+        def __init__(self):
+            super().__init__()
         def state_get(self, key, default=None):
             return "RECONCILE_REQUIRED" if key == "position_state" else default
 
