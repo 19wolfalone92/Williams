@@ -4307,7 +4307,14 @@ private class NativeEngine(
                             .put("fills", acc.fills)
                     })
 
-                if (campaignEngineEnabled && clientId.startsWith("W5_")) {
+                if (
+                    campaignEngineEnabled &&
+                    (
+                        clientId.startsWith("W5E_") ||
+                            clientId.startsWith("W5S_") ||
+                            clientId.startsWith("W5X_")
+                    )
+                ) {
                     Thread {
                         runCatching {
                             Thread.sleep(120L)
