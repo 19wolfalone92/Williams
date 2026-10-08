@@ -74,3 +74,12 @@ def test_core_constructs_m15_signal_specs():
     decision=core.evaluate("BTCUSDT",f,tick_size=.1)
     assert decision.decision_tf=="15m"
     assert decision.execution_tf=="5m"
+
+
+def test_scanner_uses_final_strategy_decision_contract():
+    from pathlib import Path
+    source = Path("market_scanner.py").read_text(encoding="utf-8")
+    assert "decision.micro_tf" not in source
+    assert "decision.alligator_state" not in source
+    assert 'decision.context_state' in source
+    assert 'self.policy.timeframes.execution_tf' in source
