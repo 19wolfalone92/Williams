@@ -715,3 +715,90 @@ def test_order_reconciliation_accepts_cancel_after_missed_user_stream_event():
 
     fsm = OrderStateMachine(OrderState.NEW)
     assert fsm.observe_exchange_status("CANCELED", executed_qty=0.0) is OrderState.CANCELED
+
+
+def test_deterministic_client_order_id_is_stable_and_compact():
+    from order_identity import deterministic_client_order_id
+
+    a = deterministic_client_order_id(
+        "ENTRY",
+        "CAMP-123",
+        "WM1",
+        "BTCUSDT:5m:REVERSAL:1000",
+    )
+    b = deterministic_client_order_id(
+        "ENTRY",
+        "CAMP-123",
+        "WM1",
+        "BTCUSDT:5m:REVERSAL:1000",
+    )
+    c2 = deterministic_client_order_id(
+        "ENTRY",
+        "CAMP-123",
+        "WM1",
+        "BTCUSDT:5m:REVERSAL:1001",
+    )
+    assert a == b
+    assert a != c2
+    assert len(a) <= 36
+    assert a.startswith("WILLV5_ENTRY_")
+
+
+def test_fault_persists_williams_error_report(tmp_path, monkeypatch):
+    from campaign_engine import CampaignEngine
+    from campaign_model import SignalRole, SignalSpec, SignalType
+    from campaign_order_fsm import CampaignOrderState
+    import json
+
+    monkeypatch.setenv("WILLIAMS_ERROR_REPORT_DIR", str(tmp_path / "reports"))
+    db = Database(str(tmp_path / "fault.sqlite3"))
+    engine = CampaignEngine(db)
+    signal = SignalSpec.new(
+        symbol="BTCUSDT",
+        side="BUY",
+        signal_type=SignalType.REVERSAL,
+        role=SignalRole.ENTRY,
+        timeframe="5m",
+        signal_bar_time_ms=1000,
+        trigger_price=101.0,
+        protective_reference=97.0,
+        alligator_bullish=True,
+        alligator_awake=True,
+        angulation_score=1.0,
+        htf_confirmed=True,
+        source_candle_index=10,
+    )
+    campaign = engine.create_campaign(signal, initial_risk_pct=0.002)
+    engine.mark_fault(campaign, "unresolvable exchange/local mismatch")
+    assert engine.canonical_state(campaign) is CampaignOrderState.FAULT
+    path = campaign.tags.get("williams_error_report_path")
+    assert path
+    with open(path, "r", encoding="utf-8") as handle:
+        report = json.load(handle)
+    assert report["severity"] == "CRITICAL"
+    assert report["component"] == "CampaignEngine"
+    assert report["runtime_snapshot"]["campaign_id"] == campaign.campaign_id
+
+
+def test_execution_barrier_blocks_ambiguous_mutation_after_restart(tmp_path):
+    db = Database(str(tmp_path / "restart-lock.sqlite3"))
+    first = ExecutionBarrier(FakeCache(), db)
+    intent = order_intent("WILL_RESTART_UNKNOWN")
+
+    with pytest.raises(ExecutionAmbiguousError):
+        first.execute(
+            intent,
+            lambda: (_ for _ in ()).throw(TimeoutError("transport timeout")),
+        )
+
+    second = ExecutionBarrier(FakeCache(), db)
+    blocked = second.execute(
+        order_intent("WILL_NEW_AFTER_RESTART"),
+        lambda: {
+            "symbol": "BTCUSDT",
+            "status": "NEW",
+            "clientOrderId": "WILL_NEW_AFTER_RESTART",
+        },
+    )
+    assert blocked.accepted is False
+    assert "MUTATION_LOCKED_RECONCILIATION_REQUIRED" in blocked.reason
