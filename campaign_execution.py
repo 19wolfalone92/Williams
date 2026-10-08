@@ -168,6 +168,27 @@ class CampaignExecutionService:
                 return max(0.0, float(row.get("free", 0) or 0))
         return 0.0
 
+    def _update_decision_trace(self, campaign, **updates) -> None:
+        """Best-effort enrichment of the durable strategy decision trace."""
+        trace_id = str(campaign.tags.get("decision_trace_id", "") or "")
+        if not trace_id or not hasattr(self.db, "get_decision_trace"):
+            return
+        try:
+            trace = self.db.get_decision_trace(trace_id)
+            if trace is None:
+                return
+            trace.update(updates)
+            fields = dict(trace.get("fields", {}) or {})
+            fields.update(updates)
+            trace["fields"] = fields
+            self.db.save_decision_trace(trace)
+        except Exception as exc:
+            self.db.log_event(
+                "WARNING",
+                "decision_trace_fill_update_failed",
+                str(exc),
+                {"campaign_id": getattr(campaign, "campaign_id", ""), "trace_id": trace_id},
+            )
     def _current_price(self, symbol: str) -> float:
         row = self.client.ticker_price(symbol)
         price = float(row.get("price", 0) or 0)
@@ -300,6 +321,7 @@ class CampaignExecutionService:
             signal,
             initial_risk_pct=requested_risk,
         )
+        campaign.tags["decision_trace_id"] = f"{signal.symbol}:1h:{int(signal.detected_time_ms or signal.signal_bar_time_ms)}"
         campaign.tags["signal_role"] = signal.role.value
         campaign.tags["initial_stop_price"] = stop
         campaign.initial_stop_price = stop
@@ -1279,6 +1301,7 @@ class CampaignExecutionService:
         if prior and str(prior["state"]).upper() in {"ARMED", "TRIGGERED", "FILLED"}:
             raise CampaignExecutionError("signal is already active or filled for this campaign")
         self.db.save_campaign_signal(signal, campaign.campaign_id, state=SignalState.DETECTED.value)
+        campaign.tags["decision_trace_id"] = f"{signal.symbol}:1h:{int(signal.detected_time_ms or signal.signal_bar_time_ms)}"
         campaign.tags["last_signal_time_ms"] = int(signal.signal_bar_time_ms)
         campaign.tags["pending_add_signal_id"] = signal.signal_id
         campaign.pending_risk_quote = requested
