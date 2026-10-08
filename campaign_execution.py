@@ -601,8 +601,16 @@ class CampaignExecutionService:
                             })
                             continue
 
-                    # Still waiting for a valid, unexpired conditional trigger.
+                    # The exchange has authoritatively confirmed that the
+                    # previously ambiguous conditional entry is still resting.
+                    # Restore the persisted campaign state without submitting again.
                     if status in {"NEW", "PENDING_NEW"} and executed <= 0:
+                        if campaign.state == CampaignState.RECONCILE_REQUIRED:
+                            campaign.transition(
+                                CampaignState.ENTRY_PENDING,
+                                reason="exchange confirms conditional entry is active and unfilled",
+                            )
+                            self.db.save_campaign(campaign)
                         results.append({
                             "symbol": symbol,
                             "campaign_id": campaign.campaign_id,
