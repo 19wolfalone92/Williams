@@ -41,6 +41,10 @@ class Candidate:
     spread_pct: float
 
     htf_confirmed: bool
+    htf_context_state: str = "NEUTRAL"
+    execution_feasible: bool = True
+    block_reason: str = ""
+    decision_trace: dict = field(default_factory=dict)
 
     # Human-readable state
     setup_state: str
@@ -129,7 +133,9 @@ class MarketScanner:
     def __init__(self, client, symbols=None, interval=None):
         self.client = client
 
-        self.interval = _normalize_interval(interval or os.getenv("INTERVAL", "1h"))
+        self.mode = str(os.getenv("WILLIAMS_MODE", "INTRADAY_CORE")).upper()
+        self.core_mode = self.mode == "INTRADAY_CORE"
+        self.interval = "1h" if self.core_mode else _normalize_interval(interval or os.getenv("INTERVAL", "1h"))
 
         # `None` means resolve the configured/default universe. An explicit []
         # remains a genuine empty test universe and does not fall back to all.
