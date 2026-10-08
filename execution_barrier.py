@@ -43,6 +43,8 @@ class OrderIntent:
     recv_window: int = 5_000
     time_in_force: str = "GTC"
     reduce_only: bool = False
+    related_order_id: str = ""
+    related_order_list_id: str = ""
 
     @classmethod
     def new(
