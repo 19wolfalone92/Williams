@@ -155,13 +155,14 @@ class CampaignEngine:
         candidates = [
             s for s in signals
             if s.role == SignalRole.ENTRY
-            and s.side == "BUY"
+            and s.side in {"BUY", "SELL"}
             and s.trigger_price > 0
         ]
         if not candidates:
             return None
-        # Book model: first available valid signal starts the campaign.  We
-        # therefore order primarily by signal-bar time, not by a score.
+        # Williams campaign model: the first valid presenting Wise-Man
+        # starts the campaign, regardless of direction.  Direction is part of
+        # the signal contract; BUY is LONG and SELL is SHORT.
         return min(candidates, key=lambda s: (s.signal_bar_time_ms, s.created_at_ms))
 
     @staticmethod
