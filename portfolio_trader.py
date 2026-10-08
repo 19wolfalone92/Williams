@@ -2539,6 +2539,7 @@ class MultiPositionTrader:
             balance_quote=balance,
             symbols=self.symbols,
             db=self.db,
+            strategy_profile=self.intraday_policy.profile if self.intraday_core_enabled else None,
         )
         selections = controller.select_portfolio(
             open_risk_quote=self.reserved_risk_quote(),
