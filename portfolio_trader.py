@@ -11,6 +11,7 @@ from execution_accumulator import ExecutionSummary, accumulate_order
 from campaign_execution import CampaignExecutionService, CampaignExecutionError
 from campaign_model import SignalSpec, SignalType, SignalRole
 from campaign_monitor import CampaignMonitor
+from market_context import ContextCache
 from execution_barrier import OrderIntent
 from williams_intraday_spec import IntradayPolicy
 from decision_trace import DecisionTrace
@@ -96,10 +97,10 @@ class MultiPositionTrader:
         self.max_trades_per_day = max(0, int(os.getenv("MAX_TRADES_PER_DAY", "0" if self.intraday_core_enabled else "5")))
         self.max_consecutive_losses = max(0, int(os.getenv("MAX_CONSECUTIVE_LOSSES", str(self.intraday_policy.risk.max_full_stopouts if self.intraday_core_enabled else 3))))
         self.cooldown_minutes = max(0, int(os.getenv("COOLDOWN_MINUTES", "30")))
-        self.execution_barrier = execution_barrier
+        self.execution_barrier = execution_barrier or ExecutionBarrier(ContextCache(), self.db)
         self.campaign_engine_enabled = (
             True if self.intraday_core_enabled
-            else os.getenv("CAMPAIGN_ENGINE", "true").lower() == "true"
+            else os.getenv("CAMPAIGN_ENGINE", "false").lower() == "true"
         )
         self.campaign_execution = CampaignExecutionService(
             self.client,
