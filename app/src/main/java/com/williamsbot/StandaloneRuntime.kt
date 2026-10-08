@@ -6042,14 +6042,15 @@ private class NativeEngine(
             .put("pnl_pct", if (positionList().isEmpty()) JSONObject.NULL else livePnlPct)
             .put(
                 "take_profit_price",
-                positionList().firstOrNull()?.take ?: JSONObject.NULL
+                if (campaignEngineEnabled) JSONObject.NULL
+                else positionList().firstOrNull()?.take ?: JSONObject.NULL
             )
             .put(
                 "stop_loss_price",
                 positionList().firstOrNull()?.stop ?: JSONObject.NULL
             )
             .put("stop_loss_pct", 0.02)
-            .put("take_profit_pct", 0.04)
+            .put("take_profit_pct", if (campaignEngineEnabled) 0.0 else 0.04)
             .put("risk_per_trade_pct", maxRiskPerTradePct)
             .put("max_daily_loss_pct", 0.03)
             .put("trades_today", dailyGuard.optInt("trades_today", 0))
