@@ -12,6 +12,7 @@ from campaign_execution import CampaignExecutionService, CampaignExecutionError
 from campaign_model import SignalSpec, SignalType, SignalRole
 from campaign_monitor import CampaignMonitor
 from order_identity import is_entry_id, is_exit_id, is_managed_order
+from digital_williams_core import DigitalWilliamsCore
 
 
 POSITION_STATES = {
@@ -105,6 +106,7 @@ class MultiPositionTrader:
             self.db,
             self.campaign_execution,
         )
+        self.williams_core = DigitalWilliamsCore()
 
     # ------------------------------------------------------------------
     # Durable state
@@ -1988,6 +1990,37 @@ class MultiPositionTrader:
                     "dataclasses"
                 ).replace(signal, role=SignalRole.ADD_ON)
 
+                canonical = self.williams_core.evaluate_signal(
+                    add_signal,
+                    campaign_id=campaign.campaign_id,
+                )
+                if canonical.action != "ARM_ADD_ON":
+                    self.db.log_event(
+                        "INFO",
+                        "canonical_add_on_blocked",
+                        "Digital Williams ProofEngine rejected add-on before campaign mutation",
+                        {
+                            "symbol": symbol,
+                            "signal_id": add_signal.signal_id,
+                            "action": canonical.action,
+                            "vetoes": list(canonical.vetoes),
+                            "proof": (
+                                canonical.decision.proof_vector.to_dict()
+                                if canonical.decision is not None
+                                else {}
+                            ),
+                        },
+                    )
+                    results.append(
+                        {
+                            "symbol": symbol,
+                            "campaign": True,
+                            "action": "WAIT_ADD_ON",
+                            "canonical_vetoes": list(canonical.vetoes),
+                        }
+                    )
+                    continue
+
                 try:
                     result = self.campaign_execution.arm_add_on(
                         add_signal,
@@ -2030,6 +2063,37 @@ class MultiPositionTrader:
 
             signal = self.campaign_execution.engine.choose_initial_signal(specs)
             if signal is None:
+                continue
+
+            canonical = self.williams_core.evaluate_signal(
+                signal,
+                campaign_id="",
+            )
+            if canonical.action != "ARM_ENTRY":
+                self.db.log_event(
+                    "INFO",
+                    "canonical_entry_blocked",
+                    "Digital Williams ProofEngine rejected initial campaign before execution mutation",
+                    {
+                        "symbol": symbol,
+                        "signal_id": signal.signal_id,
+                        "action": canonical.action,
+                        "vetoes": list(canonical.vetoes),
+                        "proof": (
+                            canonical.decision.proof_vector.to_dict()
+                            if canonical.decision is not None
+                            else {}
+                        ),
+                    },
+                )
+                results.append(
+                    {
+                        "symbol": symbol,
+                        "campaign": True,
+                        "action": "WAIT",
+                        "canonical_vetoes": list(canonical.vetoes),
+                    }
+                )
                 continue
 
             try:
