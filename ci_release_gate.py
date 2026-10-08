@@ -29,7 +29,11 @@ def main() -> None:
 
     env = read(".env.example")
     for needle in (
-        "TESTNET=true", "ALLOW_LIVE=false", "MAX_OPEN_POSITIONS=5",
+        "TESTNET=true", "ALLOW_LIVE=false", "MAX_OPEN_POSITIONS=1",
+        "MAX_RISK_PER_TRADE_PCT=0.0025",
+        "MAX_TOTAL_RISK_PCT=0.006",
+        "MAX_DAILY_LOSS_PCT=0.01",
+        "MAX_CONSECUTIVE_LOSSES=2",
         "AUTO_SCAN_SYMBOLS=", "SCAN_ALL_USDT=true", "SCAN_MAX_SYMBOLS=0",
         "LIQUIDITY_PRESELECT=0", "WAVE_FULL_TF_ALL=true",
     ):
