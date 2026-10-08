@@ -1,5 +1,12 @@
+import pytest
 import os
 from pathlib import Path
+
+@pytest.fixture(autouse=True)
+def _legacy_campaign_mode(monkeypatch):
+    monkeypatch.setenv("CAMPAIGN_ENGINE", "false")
+
+
 
 from db import Database
 from portfolio_trader import MultiPositionTrader
