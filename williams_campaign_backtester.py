@@ -107,7 +107,7 @@ class WilliamsCampaignBacktester:
                 continue
             if float(bar["low"]) <= stop:
                 return ts, stop
-        return start, stop
+        return None, 0.0
 
     @staticmethod
     def _weighted_add_risk_pct(equity, used_risk, campaign_cap, tranche_index):
