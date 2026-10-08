@@ -49,6 +49,11 @@ class PortfolioController:
         )
 
     def _analyse_candidates(self, candidates):
+        # Some isolated regression tests construct this class via __new__.
+        # Treat missing optional runtime attributes as legacy/disabled rather
+        # than converting an otherwise valid candidate into a silent exception.
+        self.intraday_core_enabled = bool(getattr(self, "intraday_core_enabled", False))
+        self.db = getattr(self, "db", None)
         analysed = []
         for candidate in candidates:
             if not candidate.signal:
