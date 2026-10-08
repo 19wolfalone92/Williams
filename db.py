@@ -261,9 +261,32 @@ class Database:
             ON campaign_events(campaign_id, id);
         ''')
         self._migrate_trade_columns()
+        self._migrate_execution_intent_columns()
         self.state_set('schema_version', self.SCHEMA_VERSION)
         self.state_set('position_state', self.state_get('position_state', 'FLAT'))
         self.conn.commit()
+
+    def _migrate_execution_intent_columns(self):
+        columns = {
+            row['name']
+            for row in self.conn.execute(
+                'PRAGMA table_info(execution_intents)'
+            ).fetchall()
+        }
+        additions = {
+            'quantity': 'TEXT',
+            'quote_order_quantity': 'TEXT',
+            'recv_window': 'INTEGER DEFAULT 5000',
+            'time_in_force': 'TEXT DEFAULT "GTC"',
+            'reduce_only': 'INTEGER DEFAULT 0',
+            'campaign_id': 'TEXT',
+            'signal_id': 'TEXT',
+        }
+        for name, sql_type in additions.items():
+            if name not in columns:
+                self.conn.execute(
+                    f'ALTER TABLE execution_intents ADD COLUMN {name} {sql_type}'
+                )
 
     def _migrate_trade_columns(self):
         columns = {
@@ -327,8 +350,10 @@ class Database:
         self.conn.execute(
             '''INSERT OR REPLACE INTO execution_intents(
                 intent_id,symbol,side,order_type,purpose,
-                required_context_versions_json,hypothesis_id,invalidation_level,status,reason,client_order_id
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?)''',
+                required_context_versions_json,hypothesis_id,invalidation_level,
+                status,reason,client_order_id,quantity,quote_order_quantity,
+                recv_window,time_in_force,reduce_only,campaign_id,signal_id
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
             (
                 intent.intent_id,
                 intent.symbol,
@@ -341,10 +366,32 @@ class Database:
                 status,
                 reason,
                 getattr(intent, 'client_order_id', ''),
+                getattr(intent, 'quantity', ''),
+                getattr(intent, 'quote_order_quantity', ''),
+                int(getattr(intent, 'recv_window', 5000) or 5000),
+                getattr(intent, 'time_in_force', 'GTC') or 'GTC',
+                1 if bool(getattr(intent, 'reduce_only', False)) else 0,
+                getattr(intent, 'campaign_id', ''),
+                getattr(intent, 'signal_id', ''),
             ),
         )
         if not self._transaction_active:
             self.conn.commit()
+
+    def execution_intent_by_id(self, intent_id):
+        row = self.conn.execute(
+            'SELECT * FROM execution_intents WHERE intent_id=?',
+            (str(intent_id),),
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    def execution_intent_by_client_order_id(self, client_order_id):
+        row = self.conn.execute(
+            'SELECT * FROM execution_intents WHERE client_order_id=? '
+            'ORDER BY created_at DESC LIMIT 1',
+            (str(client_order_id),),
+        ).fetchone()
+        return dict(row) if row is not None else None
 
     def save_execution_event(self, intent_id, event, payload=None):
         self.conn.execute(
