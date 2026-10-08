@@ -54,8 +54,8 @@ class PendingSignal:
 
     def transition(self, state: SignalState) -> "PendingSignal":
         allowed = {
-            SignalState.DETECTED: {SignalState.ARMED, SignalState.INVALIDATED, SignalState.EXPIRED},
-            SignalState.ARMED: {SignalState.TRIGGERED, SignalState.INVALIDATED, SignalState.EXPIRED, SignalState.REPLACEMENT_REQUESTED},
+            SignalState.DETECTED: {SignalState.ARMED, SignalState.INVALIDATED, SignalState.EXPIRED, SignalState.SUPERSEDED},
+            SignalState.ARMED: {SignalState.TRIGGERED, SignalState.INVALIDATED, SignalState.EXPIRED, SignalState.REPLACEMENT_REQUESTED, SignalState.SUPERSEDED},
             SignalState.TRIGGERED: {SignalState.FILLED, SignalState.CANCEL_REQUESTED, SignalState.INVALIDATED},
             SignalState.CANCEL_REQUESTED: {SignalState.CANCELLED, SignalState.TRIGGERED, SignalState.FILLED},
             SignalState.REPLACEMENT_REQUESTED: {SignalState.REPLACED, SignalState.INVALIDATED},
@@ -64,6 +64,7 @@ class PendingSignal:
             SignalState.INVALIDATED: set(),
             SignalState.EXPIRED: set(),
             SignalState.CANCELLED: set(),
+            SignalState.SUPERSEDED: set(),
         }
         if state != self.state and state not in allowed.get(self.state, set()):
             raise ValueError(f"Invalid pending-signal transition {self.state.value} -> {state.value}")
@@ -104,3 +105,23 @@ class PendingSignal:
             "supersedes_signal_id": self.supersedes_signal_id,
         }
         return data
+
+
+def supersede(self, new_signal: SignalSpec) -> "PendingSignal":
+    return PendingSignal(
+        signal_id=self.signal_id,
+        symbol=self.symbol,
+        side=self.side,
+        signal_type=self.signal_type,
+        role=self.role,
+        timeframe=self.timeframe,
+        trigger_price=self.trigger_price,
+        protective_reference=self.protective_reference,
+        signal_bar_time_ms=self.signal_bar_time_ms,
+        state=SignalState.SUPERSEDED,
+        context_versions=dict(self.context_versions),
+        created_at_ms=self.created_at_ms,
+        armed_at_ms=self.armed_at_ms,
+        expires_at_ms=self.expires_at_ms,
+        supersedes_signal_id=str(new_signal.signal_id),
+    )
