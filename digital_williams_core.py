@@ -88,17 +88,13 @@ class DigitalWilliamsCore:
             default=None,
         )
 
-    def compose(
+    def evaluate_signal(
         self,
-        signals: Iterable[SignalSpec],
+        signal: SignalSpec,
         *,
         campaign_id: str = "",
         now_ms: int | None = None,
     ) -> CoreComposition:
-        signal = self.select_initial(signals)
-        if signal is None:
-            return CoreComposition(None, None, None, None, "WAIT", ())
-
         pending = PendingSignal.from_spec(signal, campaign_id=campaign_id)
         actionable = pending.actionable(now_ms)
         evaluation = WilliamsProofEngine.evaluate(signal)
@@ -112,6 +108,11 @@ class DigitalWilliamsCore:
             signal,
             proof_vector=proof.to_dict(),
             why_not=why_not,
+            system_versions={
+                "digital_williams_core": self.VERSION,
+                "proof_engine": "1.0.0",
+                "why_not_engine": "1.0.0",
+            },
         )
 
         invalidation = float(
@@ -136,20 +137,38 @@ class DigitalWilliamsCore:
                 vetoes.insert(0, "pending_signal_expired_or_invalid")
             for reason in vetoes:
                 trace.veto(reason)
-            return CoreComposition(
-                decision,
-                signal,
-                pending,
-                trace,
-                "BLOCK",
-                tuple(dict.fromkeys(vetoes)),
+            action = "BLOCK"
+        else:
+            action = (
+                "ARM_ADD_ON"
+                if signal.role.value == "ADD_ON"
+                else "ARM_ENTRY"
             )
-
-        # ARM_ENTRY is intentionally allowed before price proof. The exchange
-        # order must remain conditional; it is not a market-order substitute.
         return CoreComposition(
-            decision, signal, pending, trace, "ARM_ENTRY", ()
+            decision,
+            signal,
+            pending,
+            trace,
+            action,
+            tuple(dict.fromkeys(why_not if action == "BLOCK" else ())),
         )
+
+    def compose(
+        self,
+        signals: Iterable[SignalSpec],
+        *,
+        campaign_id: str = "",
+        now_ms: int | None = None,
+    ) -> CoreComposition:
+        signal = self.select_initial(signals)
+        if signal is None:
+            return CoreComposition(None, None, None, None, "WAIT", ())
+        return self.evaluate_signal(
+            signal,
+            campaign_id=campaign_id,
+            now_ms=now_ms,
+        )
+
 
     def replace_pending(
         self,
