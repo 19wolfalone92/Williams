@@ -27,6 +27,7 @@ class OrderIntent:
     permission_interval: str = ""
     campaign_id: str = ""
     signal_id: str = ""
+    signal_expires_at_ms: int = 0
     risk_quote: float = 0.0
     capital_reserved_quote: float = 0.0
     created_at_ms: int = 0
@@ -87,18 +88,38 @@ class ExecutionBarrier:
                 pass
 
     def _validate(self, intent: OrderIntent, snapshot: MarketStateSnapshot) -> str:
+        now_ms = int(time.time() * 1000)
+        purpose = str(intent.purpose or "").strip().upper()
+        entry_purposes = {"ENTRY", "CAMPAIGN_ENTRY", "CAMPAIGN_ADD_ON"}
+
         if intent.created_at_ms:
-            age = int(time.time() * 1000) - intent.created_at_ms
-            if age > intent.max_age_ms:
+            age = now_ms - int(intent.created_at_ms)
+            if age > int(intent.max_age_ms):
                 return f"stale intent age={age}ms"
 
-        # Campaign orders may be armed from a freshly constructed signal before
-        # the context service has assigned persistent versions.  They still
-        # require at least one live snapshot; the campaign pre-submit validator
-        # is responsible for the exact strategy/risk re-check.
-        if not intent.required_context_versions:
-            if not intent.purpose.upper().startswith("CAMPAIGN_"):
+        direction = "long" if intent.side == "BUY" else "short" if intent.side == "SELL" else ""
+        if not direction:
+            return f"unsupported side {intent.side}"
+
+        # In Spot, every autonomous BUY is a new entry or add-on. Unknown
+        # purposes must not become an alternate route around entry admission.
+        if intent.side == "BUY" and purpose not in entry_purposes:
+            return f"BUY intent has unsupported entry purpose {purpose or '<empty>'}"
+
+        if purpose in entry_purposes:
+            if not intent.required_context_versions:
                 return "missing required_context_versions"
+            if not intent.signal_id:
+                return "missing signal_id"
+            if int(intent.signal_expires_at_ms or 0) <= 0:
+                return "missing absolute signal expiry"
+            if now_ms >= int(intent.signal_expires_at_ms):
+                return "signal expired before execution admission"
+            if not intent.permission_interval:
+                return "missing permission_interval"
+            if purpose.startswith("CAMPAIGN_") and not intent.campaign_id:
+                return "missing campaign_id for campaign entry"
+
         for tf, required in intent.required_context_versions.items():
             ctx = snapshot.context(intent.symbol, tf)
             if ctx is None:
@@ -106,16 +127,9 @@ class ExecutionBarrier:
             if int(ctx.version) != int(required):
                 return f"stale context {tf}: required={required} current={ctx.version}"
 
-        direction = "long" if intent.side == "BUY" else "short" if intent.side == "SELL" else ""
-        if not direction:
-            return f"unsupported side {intent.side}"
-
-        # All declared TFs are version dependencies, but the permission
-        # decision belongs to one operative/entry timeframe. Higher TFs provide
-        # structural context and must not be required to emit a duplicate trigger.
-        if intent.purpose.upper() == "ENTRY":
+        if purpose in entry_purposes:
             permission_tf = (intent.permission_interval or "").lower()
-            permission_ctx = snapshot.context(intent.symbol, permission_tf) if permission_tf else None
+            permission_ctx = snapshot.context(intent.symbol, permission_tf)
             if permission_ctx is None:
                 return f"missing permission context {intent.symbol} {permission_tf}"
             if direction == "long" and not permission_ctx.allow_long:
