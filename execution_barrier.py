@@ -231,7 +231,12 @@ class ExecutionBarrier:
             return "invalid recvWindow"
 
         if not intent.required_context_versions:
-            if not intent.purpose.upper().startswith("CAMPAIGN_"):
+            allowed_context_free = (
+                intent.purpose.upper().startswith("CAMPAIGN_")
+                or intent.purpose.upper().startswith("MANUAL_")
+                or intent.purpose.upper().startswith("EMERGENCY_")
+            )
+            if not allowed_context_free:
                 return "missing required_context_versions"
 
         for tf, required in intent.required_context_versions.items():
@@ -438,7 +443,14 @@ class ExecutionBarrier:
                     f"ExecutionBarrier UNKNOWN for {intent.client_order_id}; reconciliation required"
                 ) from exc
 
-            if intent.order_type.upper() == "CANCEL":
+            if intent.order_type.upper() in {"CANCEL", "CANCEL_OCO"}:
+                if intent.order_type.upper() == "CANCEL_OCO" and response is None:
+                    reason = "CANCEL_OCO response is not authoritative"
+                    self._lock_mutations(reason)
+                    order_fsm.mark_unknown()
+                    self._persist(intent, "UNKNOWN", reason)
+                    self._record("ERROR", "execution_unknown", intent, reason)
+                    raise ExecutionAmbiguousError(reason)
                 self._persist(intent, "SUBMITTED")
                 self._record("INFO", "execution_submitted", intent, "Cancel mutation accepted")
                 return ExecutionResult(intent.intent_id, True, response=response)
@@ -667,6 +679,42 @@ class ExecutionBarrier:
                 )
 
             if isinstance(response, dict):
+                if intent.order_type.upper() == "CANCEL_OCO":
+                    status = str(
+                        response.get("listStatusType")
+                        or response.get("listOrderStatus")
+                        or response.get("status")
+                        or ""
+                    ).upper()
+                    if status in {"ALL_DONE", "EXECUTING", "EXEC_STARTED"}:
+                        if status == "ALL_DONE":
+                            self._unlock_mutations()
+                            self._persist(intent, "RECONCILED", status)
+                            self._record(
+                                "INFO",
+                                "execution_reconciled",
+                                intent,
+                                "OCO cancellation is authoritatively complete",
+                                {"status": status},
+                            )
+                            return ExecutionResult(
+                                intent.intent_id,
+                                True,
+                                response=response,
+                                reason=status,
+                            )
+                        self._persist(
+                            intent,
+                            "RECONCILIATION_PENDING",
+                            "OCO remains active",
+                        )
+                        return ExecutionResult(
+                            intent.intent_id,
+                            False,
+                            response=response,
+                            reason=f"OCO remains active: {status}",
+                        )
+
                 identity_error = self._verify_response_identity(intent, response)
                 if identity_error:
                     reason = identity_error
