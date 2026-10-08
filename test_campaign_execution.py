@@ -9,6 +9,7 @@ from campaign_execution import CampaignExecutionService
 from campaign_model import CampaignState, SignalRole, SignalSpec, SignalType
 from execution_barrier import ExecutionBarrier
 from pending_signal import PendingSignal
+from portfolio_trader import MultiPositionTrader
 from mock_exchange import MockExchange
 from db import Database
 
@@ -247,3 +248,22 @@ def test_expired_signal_is_rejected_before_campaign_creation():
 
         assert client.open_orders("BTCUSDT") == []
         assert db.conn.execute("SELECT COUNT(*) FROM campaigns").fetchone()[0] == 0
+
+
+
+def test_legacy_autonomous_mode_fails_closed_without_entry_door():
+    from types import SimpleNamespace
+
+    trader = object.__new__(MultiPositionTrader)
+    trader.campaign_engine_enabled = False
+    trader.dry_run = False
+    selection = SimpleNamespace(
+        candidate=SimpleNamespace(symbol="BTCUSDT"),
+        risk=SimpleNamespace(risk_pct=0.4),
+    )
+
+    result = trader.execute([selection])
+
+    assert len(result) == 1
+    assert result[0]["action"] == "ENTRY_BLOCKED"
+    assert "ExecutionBarrier" in result[0]["reason"]
