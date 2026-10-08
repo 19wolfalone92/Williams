@@ -425,6 +425,7 @@ class FuturesWilliamsRuntime:
             report["checks"]["server_time"] = "PASS"
             self.client.ping()
             report["checks"]["api_reachable"] = "PASS"
+
             account = self.client.account()
             report["checks"]["futures_account"] = (
                 "PASS" if account.get("status", "TRADING") == "TRADING" else "FAIL"
@@ -432,10 +433,40 @@ class FuturesWilliamsRuntime:
             if report["checks"]["futures_account"] != "PASS":
                 return report
 
+            # Production Futures runtime uses one-way + single-asset mode.
+            # Both are account-wide settings and must be changed only when
+            # there are no existing positions/orders.
+            try:
+                multi_mode = self.client.get_multi_assets_mode()
+                multi_assets = bool(multi_mode.get("multiAssetsMargin", False))
+            except Exception:
+                multi_assets = False
+            if multi_assets:
+                existing_positions = [
+                    p for p in (self.client.position_risk() or [])
+                    if abs(float(p.get("positionAmt", 0) or 0)) > 0
+                ]
+                existing_orders = self.client.open_orders()
+                if existing_positions or existing_orders:
+                    report["checks"]["multi_assets_mode"] = "FAIL"
+                    report["details"]["reason"] = "Multi-Assets Mode active with existing position/orders"
+                    return report
+                self.client.set_multi_assets_mode_single()
+                multi_assets = bool(
+                    self.client.get_multi_assets_mode().get("multiAssetsMargin", False)
+                )
+            report["checks"]["multi_assets_mode"] = "PASS" if not multi_assets else "FAIL"
+            if multi_assets:
+                return report
+
             mode = self.client.get_position_mode()
             dual = bool(mode.get("dualSidePosition", False))
             if dual:
-                if self.open_positions() or self.client.open_orders():
+                existing_positions = [
+                    p for p in (self.client.position_risk() or [])
+                    if abs(float(p.get("positionAmt", 0) or 0)) > 0
+                ]
+                if existing_positions or self.client.open_orders():
                     report["checks"]["position_mode"] = "FAIL"
                     report["details"]["reason"] = "Hedge Mode active with existing position/orders"
                     return report
@@ -446,14 +477,51 @@ class FuturesWilliamsRuntime:
             if dual:
                 return report
 
+            managed_symbols = {
+                str(x["symbol"]).upper()
+                for x in self.db.open_campaigns()
+                if str(x.get("state", "")).upper() not in {"CLOSED", "FLAT"}
+            }
+            foreign_positions = []
+            for position in self.client.position_risk() or []:
+                amount = abs(float(position.get("positionAmt", 0) or 0))
+                symbol = str(position.get("symbol", "")).upper()
+                if amount > 0 and symbol not in managed_symbols:
+                    foreign_positions.append({
+                        "symbol": symbol,
+                        "positionAmt": position.get("positionAmt"),
+                        "positionSide": position.get("positionSide"),
+                    })
+            if foreign_positions:
+                report["checks"]["foreign_positions"] = "FAIL"
+                report["details"]["foreign_positions"] = foreign_positions
+                return report
+            report["checks"]["foreign_positions"] = "PASS"
+
+            unknown_orders = []
+            for order in self.client.open_orders() or []:
+                cid = str(order.get("clientOrderId", ""))
+                if not cid.startswith("WILLF_"):
+                    unknown_orders.append({
+                        "symbol": order.get("symbol"),
+                        "orderId": order.get("orderId"),
+                        "clientOrderId": cid,
+                        "type": order.get("type"),
+                    })
+            if unknown_orders:
+                report["checks"]["foreign_orders"] = "FAIL"
+                report["details"]["foreign_orders"] = unknown_orders
+                return report
+            report["checks"]["foreign_orders"] = "PASS"
+
             info = self.client.exchange_info(self.symbol)
             if not info.get("symbols"):
                 report["checks"]["exchange_info"] = "FAIL"
                 return report
             report["checks"]["exchange_info"] = "PASS"
             report["checks"]["market_mode"] = "USD_M_FUTURES"
-            report["details"]["leverage"] = int(os.getenv("FUTURES_LEVERAGE", "2"))
-            report["details"]["margin_type"] = os.getenv("FUTURES_MARGIN_TYPE", "ISOLATED")
+            report["details"]["leverage"] = max(1, min(20, int(os.getenv("FUTURES_LEVERAGE", "2"))))
+            report["details"]["margin_type"] = os.getenv("FUTURES_MARGIN_TYPE", "ISOLATED").upper()
             report["details"]["allow_long"] = self.config.allow_long
             report["details"]["allow_short"] = self.config.allow_short
             report["ready"] = True
@@ -1165,6 +1233,86 @@ class FuturesWilliamsRuntime:
                 results.append({"symbol": symbol, "state": "RECONCILE_REQUIRED", "error": str(exc)})
         return results
 
+    def _finalize_confirmed_exchange_exit(self, campaign, orders):
+        """Finalize a flat campaign only when a bot-owned exit fill is proven."""
+        filled = [
+            o for o in (orders or [])
+            if str(o.get("status", "")).upper() == "FILLED"
+            and str(o.get("clientOrderId", "")).startswith(("WILLF_STOP_", "WILLF_EXIT_"))
+        ]
+        if not filled:
+            return False
+        order = max(
+            filled,
+            key=lambda o: int(o.get("updateTime", o.get("time", o.get("transactTime", 0))) or 0),
+        )
+        exit_price = float(order.get("avgPrice", order.get("price", 0)) or 0)
+        if order.get("orderId") is not None:
+            try:
+                trades = self.client.my_trades(
+                    campaign.symbol,
+                    order_id=order.get("orderId"),
+                    limit=1000,
+                ) or []
+            except Exception:
+                trades = []
+            qty = sum(float(t.get("qty", 0) or 0) for t in trades)
+            quote = sum(
+                float(t.get("qty", 0) or 0) * float(t.get("price", 0) or 0)
+                for t in trades
+            )
+            if qty > 0 and quote > 0:
+                exit_price = quote / qty
+        if exit_price <= 0:
+            return False
+
+        trade = self.db.open_trade(campaign.symbol)
+        if trade is not None:
+            entry = float(trade.get("entry_price") or campaign.average_entry_price or 0)
+            managed_qty = float(trade.get("quantity") or campaign.position_qty or 0)
+            pnl = (
+                (exit_price - entry) * managed_qty
+                if campaign.side == "BUY"
+                else (entry - exit_price) * managed_qty
+            )
+            pnl_pct = (
+                (exit_price / entry - 1.0)
+                if campaign.side == "BUY" and entry > 0
+                else (entry / exit_price - 1.0)
+                if campaign.side == "SELL" and entry > 0 and exit_price > 0
+                else 0.0
+            )
+            reason = (
+                "STOP_FILLED"
+                if str(order.get("clientOrderId", "")).startswith("WILLF_STOP_")
+                else "CAMPAIGN_EXIT_FILLED"
+            )
+            self.db.close_trade(
+                trade["id"],
+                datetime.now(timezone.utc).isoformat(),
+                exit_price,
+                pnl,
+                pnl_pct,
+                reason,
+                fees=float(trade.get("fees") or 0),
+            )
+        campaign.position_qty = 0.0
+        campaign.open_risk_quote = 0.0
+        campaign.pending_risk_quote = 0.0
+        campaign.capital_reserved_quote = 0.0
+        campaign.exit_reason = (
+            "STOP_FILLED"
+            if str(order.get("clientOrderId", "")).startswith("WILLF_STOP_")
+            else "CAMPAIGN_EXIT_FILLED"
+        )
+        campaign.next_action = "WAIT"
+        campaign.reconciliation_state = "CLEAN"
+        campaign.state = CampaignState.CLOSED
+        self.db.save_campaign(campaign)
+        self.db.state_delete(f"entry_client_order_id:{campaign.symbol}")
+        self._set_state(campaign.symbol, "FLAT")
+        return True
+
     def recover(self):
         results = self._reconcile_pending()
         unresolved = self.unresolved_symbols()
@@ -1177,6 +1325,9 @@ class FuturesWilliamsRuntime:
             position = self._position(symbol)
             qty = abs(self._signed_position_qty(position))
             if qty <= 0:
+                orders = self.client.all_orders(symbol, limit=1000)
+                if self._finalize_confirmed_exchange_exit(campaign, orders):
+                    continue
                 campaign.state = CampaignState.RECONCILE_REQUIRED
                 self.db.save_campaign(campaign)
                 self._set_state(symbol, "RECONCILE_REQUIRED")
