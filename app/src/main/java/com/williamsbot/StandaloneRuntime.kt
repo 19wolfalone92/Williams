@@ -2736,6 +2736,7 @@ private class NativeEngine(
 
     private fun submitCampaignEntry(candidate: BaseAnalysis) {
         if (!campaignEngineEnabled || !candidate.campaignReady) return
+        if (coreMode() && intradaySessionState() != "OPEN") return
         if (reconcileRequired || paused || killLatched) return
         if (positionList().any { it.symbol == candidate.symbol }) return
         if (synchronized(pendingEntries) { pendingEntries.containsKey(candidate.symbol) }) return
@@ -3616,6 +3617,13 @@ private class NativeEngine(
         }
     }
 
+    private fun candidateRiskCapPct(signal: CampaignSignalN): Double =
+        when (signal.type.uppercase(Locale.US)) {
+            "REVERSAL" -> campaignInitialRiskPct
+            "SUPER_AO", "FRACTAL" -> campaignAddRiskCapPct
+            else -> campaignAddRiskCapPct
+        }
+
     private fun submitCampaignAddOn(
         candidate: BaseAnalysis,
         position: PositionState
@@ -3649,15 +3657,18 @@ private class NativeEngine(
         val remainingPortfolio =
             (maxTotalRiskPct - campaignRiskUsedPct()).coerceAtLeast(0.0)
 
-        val trancheBias = when (position.additions) {
-            0 -> 1.0
-            1 -> 1.0
-            2 -> 0.75
-            else -> 0.5
-        }
+        val reversePyramidWeights = listOf(1.0, 5.0, 4.0, 3.0, 2.0)
+        val addTrancheIndex = (position.additions + 1).coerceIn(1, 4)
+        val weightedRiskPct =
+            campaignRiskLimitPct *
+                (reversePyramidWeights[addTrancheIndex] /
+                    reversePyramidWeights.sum())
         val riskPct = min(
-            campaignAddRiskCapPct * trancheBias,
-            min(remainingCampaign, remainingPortfolio)
+            candidateRiskCapPct(signal),
+            min(
+                weightedRiskPct,
+                min(remainingCampaign, remainingPortfolio)
+            )
         )
         if (riskPct <= 0.0 || equity <= 0.0) return
 
