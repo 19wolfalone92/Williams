@@ -751,6 +751,7 @@ class CampaignExecutionService:
                         self.db.state_delete(f"entry_client_order_id:{symbol}")
                         self.db.state_set(f"position_state:{symbol}", "OPEN")
                         campaign.tags.pop("pending_order_id", None)
+                campaign.tags.pop("pending_order_client_id", None)
                         self.db.save_campaign(campaign)
                         results.append({
                             "symbol": symbol,
@@ -945,6 +946,25 @@ class CampaignExecutionService:
                 continue
             try:
                 pending_id = str(campaign.tags.get("pending_order_id", "") or "").strip()
+                client_id = str(campaign.tags.get("pending_order_client_id", "") or "").strip()
+
+                # Some restart/crash paths persist only the client ID before the
+                # order record exists. Resolve the authoritative Binance order
+                # before attempting cancellation.
+                if not pending_id and client_id:
+                    try:
+                        observed = self.client.get_order(
+                            campaign.symbol,
+                            orig_client_order_id=client_id,
+                        )
+                    except Exception:
+                        observed = {}
+                    pending_id = str(observed.get("orderId", "") or "").strip()
+                    status = str(observed.get("status", "") or "").upper()
+                    if status in {"FILLED", "PARTIALLY_FILLED"} and float(observed.get("executedQty", 0) or 0) > 0:
+                        raise CampaignExecutionError(
+                            f"{campaign.symbol}: pending entry already has executed quantity; reconcile instead of cancel"
+                        )
                 if pending_id:
                     self._execute_cancel(campaign, int(pending_id), reason)
                 signal_id = str(campaign.current_signal_id or campaign.origin_signal_id or "")
