@@ -339,6 +339,28 @@ class MarketScanner:
 
         return list(self.symbols)
 
+    def _htf_context_state(self, symbol):
+        """Classify H4 context without turning it into a BUY/SELL gate."""
+        try:
+            htf = fetch_klines(self.client, symbol, self.htf_interval, limit=160)
+            if len(htf) > 1:
+                htf = htf.iloc[:-1].copy()
+            if len(htf) < 80:
+                return "NEUTRAL"
+            ind = calculate_indicators(htf, config_from_env())
+            last = ind.iloc[-1]
+            if bool(last.get("bullish_alligator", False)) and float(last.get("ao", 0) or 0) > 0:
+                return "SUPPORTIVE"
+            if bool(last.get("bearish_alligator", False)) and float(last.get("ao", 0) or 0) < 0:
+                return "ADVERSE"
+            state = str(last.get("alligator_state", "NEUTRAL") or "NEUTRAL").upper()
+            if state == "SLEEPING":
+                return "NEUTRAL"
+            return "NEUTRAL"
+        except Exception as exc:
+            log.warning("H4 context unavailable for %s: %s", symbol, exc)
+            return "NEUTRAL"
+
     def _htf_confirmation(self, symbol):
         if not self.require_htf_confirmation:
             return True
