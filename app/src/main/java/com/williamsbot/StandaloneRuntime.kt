@@ -6250,7 +6250,8 @@ private class NativeEngine(
                     "&newOrderRespType=FULL" +
                     "&listClientOrderId=" +
                     ocoClientId
-            )
+                )
+            }
 
         val actualStopDistance =
             ((entry - stop) / entry)
