@@ -356,9 +356,6 @@ class WilliamsCampaignBacktester:
                     s for s in decision.signal_specs
                     if s.signal_type in {SignalType.SUPER_AO,SignalType.FRACTAL}
                     and int(s.signal_bar_time_ms)>last_signal_time
-                    and int(s.signal_bar_time_ms)<int(
-                        decision.decision_time_ms or 10**30
-                    )
                 ]
                 if later:
                     pending={
