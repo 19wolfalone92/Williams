@@ -1254,7 +1254,8 @@ class CampaignExecutionService:
             raise CampaignExecutionError(f"{signal.symbol}: no active campaign for add-on")
         if signal.signal_bar_time_ms <= 0:
             raise CampaignExecutionError("add-on signal time is invalid")
-        if signal.signal_bar_time_ms <= int(campaign.tags.get("last_signal_time_ms", 0) or 0):
+        signal_activation_time = int(signal.detected_time_ms or signal.signal_bar_time_ms)
+        if signal_activation_time <= int(campaign.tags.get("last_signal_time_ms", 0) or 0):
             raise CampaignExecutionError("signal is not newer than current campaign signal")
 
         reserved = float(campaign.open_risk_quote or 0) + float(campaign.pending_risk_quote or 0)
@@ -1342,7 +1343,7 @@ class CampaignExecutionService:
             raise CampaignExecutionError("signal is already active or filled for this campaign")
         self.db.save_campaign_signal(signal, campaign.campaign_id, state=SignalState.DETECTED.value)
         campaign.tags["decision_trace_id"] = f"{signal.symbol}:1h:{int(signal.detected_time_ms or signal.signal_bar_time_ms)}"
-        campaign.tags["last_signal_time_ms"] = int(signal.signal_bar_time_ms)
+        campaign.tags["last_signal_time_ms"] = signal_activation_time
         campaign.tags["pending_add_signal_id"] = signal.signal_id
         campaign.pending_risk_quote = requested
         campaign.capital_reserved_quote = qty * trigger
