@@ -75,6 +75,10 @@ class TradingConfig:
     symbols: tuple[str, ...] = DEFAULT_SYMBOLS
     structural_timeframes: tuple[str, ...] = DEFAULT_STRUCTURAL_TFS
     execution_timeframe: str = "5m"
+    market: str = "futures_usdt"
+    futures_leverage: int = 2
+    futures_margin_type: str = "ISOLATED"
+    futures_force_one_way: bool = True
 
     allow_long: bool = True
     allow_short: bool = True
@@ -121,6 +125,15 @@ class TradingConfig:
         total_risk = max(0.0, min(0.01, _float(source, "MAX_TOTAL_RISK_PCT", 0.01)))
 
         execution_timeframe = str(source.get("EXECUTION_TIMEFRAME", "5m")).lower()
+        market = str(source.get("BINANCE_MARKET", "futures_usdt")).strip().lower()
+        if market in {"futures", "usdm", "usd_m", "usd-m"}:
+            market = "futures_usdt"
+        elif market not in {"futures_usdt", "spot"}:
+            market = "futures_usdt"
+        futures_leverage = max(1, min(20, _int(source, "FUTURES_LEVERAGE", 2)))
+        futures_margin_type = str(source.get("FUTURES_MARGIN_TYPE", "ISOLATED")).strip().upper()
+        if futures_margin_type not in {"ISOLATED", "CROSSED"}:
+            futures_margin_type = "ISOLATED"
 
         return cls(
             symbols=symbols,
