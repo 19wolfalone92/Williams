@@ -33,3 +33,5 @@ jobs:
       - name: Run canonical Core tests
         run: |
           python -m pytest -q             test_williams_intraday_core.py             test_williams_campaign_backtester.py             test_williams_final_system.py             test_intraday_contract_integration.py             test_campaign_engine.py             test_campaign_execution.py
+      - name: Run full static safety audit
+        run: python full_safety_audit.py
