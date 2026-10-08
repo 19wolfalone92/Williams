@@ -140,7 +140,7 @@ def test_decision_trace_is_durable(tmp_path):
     }
     db.save_decision_trace(trace)
     rows = db.recent_decision_traces("BTCUSDT", limit=5)
-    assert rows[0]["trace_id"] == "BTCUSDT:1h:123"
+    assert rows[0]["trace_id"] == "BTCUSDT:15m:123"
     assert rows[0]["trade_allowed"] == 0
 
 
