@@ -336,6 +336,18 @@ class Database:
         if not self._transaction_active:
             self.conn.commit()
 
+    def get_decision_trace(self, trace_id):
+        row = self.conn.execute(
+            "SELECT trace_json FROM decision_traces WHERE trace_id=?",
+            (str(trace_id),),
+        ).fetchone()
+        if not row:
+            return None
+        try:
+            return json.loads(row["trace_json"])
+        except Exception:
+            return None
+
     def recent_decision_traces(self, symbol=None, limit=100):
         if symbol:
             rows = self.conn.execute(
