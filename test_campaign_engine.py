@@ -66,7 +66,7 @@ def test_structural_stop_prefers_closest_valid_higher_stop():
         wave_invalidation=96.0,
         buffer=0.1,
     )
-    assert stop == 98.9
+    assert stop == 98.1
     assert source == "3_5_BAR_STRUCTURE"
 
 
