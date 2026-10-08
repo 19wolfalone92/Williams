@@ -25,10 +25,18 @@ class CampaignExecutionService:
     STOP_PREFIX = "WILLV5_STOP_"
     EXIT_PREFIX = "WILLV5_EXIT_"
 
-    def __init__(self, client, db, execution_barrier: ExecutionBarrier | None = None):
+    def __init__(
+        self,
+        client,
+        db,
+        execution_barrier: ExecutionBarrier | None = None,
+        *,
+        require_canonical_risk: bool = False,
+    ):
         self.client = client
         self.db = db
         self.barrier = execution_barrier
+        self.require_canonical_risk = bool(require_canonical_risk)
         self.engine = CampaignEngine(
             db,
             portfolio_risk_limit_pct=float(os.getenv("MAX_TOTAL_RISK_PCT", "0.01")),
@@ -45,6 +53,103 @@ class CampaignExecutionService:
             for row in info.get("symbols", [])
             if isinstance(row, dict)
         }
+
+    def _legacy_risk_decision(
+        self,
+        signal: SignalSpec,
+        *,
+        equity_quote: float,
+        candidate_risk_pct: float,
+    ) -> RiskDecision:
+        """Compatibility adapter for direct legacy callers.
+
+        Production PortfolioTrader enables require_canonical_risk=True, so
+        autonomous campaign admission cannot use this path.
+        """
+        from domain.contracts import ProofVector, WilliamsDecision
+        from risk_engine import CanonicalRiskEngine, RiskPolicy
+
+        side = str(signal.side).upper()
+        direction = (
+            SignalDirection.LONG
+            if side == "BUY"
+            else SignalDirection.SHORT
+            if side == "SELL"
+            else None
+        )
+        if direction is None:
+            raise CampaignExecutionError(
+                f"unsupported legacy signal side: {signal.side}"
+            )
+
+        invalidation = float(
+            signal.invalidation_price
+            or signal.protective_reference
+            or 0.0
+        )
+        decision = WilliamsDecision(
+            timestamp=int(signal.created_at_ms),
+            symbol=signal.symbol,
+            direction=direction,
+            wise_man_stage={
+                SignalType.REVERSAL: 1,
+                SignalType.SUPER_AO: 2,
+                SignalType.FRACTAL: 3,
+            }[signal.signal_type],
+            trigger_price=float(signal.trigger_price),
+            invalidation_price=invalidation,
+            proof_vector=ProofVector(
+                context_pass=bool(signal.htf_confirmed or signal.alligator_bullish),
+                behavior_pass=True,
+                structure_pass=int(signal.source_candle_index) >= 0,
+                location_pass=bool(
+                    float(signal.teeth_at_detection or 0.0) > 0.0
+                    or signal.alligator_bullish
+                ),
+                angulation_pass=bool(
+                    float(signal.angulation_score or 0.0) > 0.0
+                    or signal.alligator_awake
+                ),
+                momentum_pass=bool(
+                    signal.signal_type is SignalType.SUPER_AO
+                    or float(signal.wave_confidence or 0.0) > 0.0
+                ),
+                price_proof_pass=False,
+                invalidation_present=invalidation > 0.0,
+            ),
+            context_regime=(
+                "BULLISH_AWAKE"
+                if signal.alligator_bullish and signal.alligator_awake
+                else "BULLISH"
+                if signal.alligator_bullish
+                else "UNKNOWN"
+            ),
+        )
+        policy = RiskPolicy(
+            campaign_risk_fraction=max(
+                1e-9,
+                min(1.0, float(candidate_risk_pct)),
+            ),
+            max_position_fraction=float(
+                os.getenv("MAX_POSITION_FRACTION", "0.25")
+            ),
+            max_allowed_slippage=float(
+                os.getenv("RISK_SLIPPAGE_BUFFER_PCT", "0.0015")
+            ),
+            fee_buffer_per_side=float(
+                os.getenv("FEE_BUFFER_PER_SIDE_PCT", "0.001")
+            ),
+        )
+        result = CanonicalRiskEngine(policy).approve(
+            decision,
+            equity_quote=float(equity_quote),
+        )
+        if not result.approved:
+            raise CampaignExecutionError(
+                f"legacy risk compatibility adapter rejected signal: "
+                f"{result.rejection_reason}"
+            )
+        return result
 
     def _rules(self, symbol: str) -> dict[str, Any]:
         info = self.client.exchange_info(symbol)
@@ -203,9 +308,15 @@ class CampaignExecutionService:
         if signal.side != "BUY":
             raise CampaignExecutionError("Current Spot campaign executor only arms LONG entries")
         if risk_decision is None:
-            raise CampaignExecutionError("canonical RiskDecision is required for campaign entry")
-        if risk_decision is None:
-            raise CampaignExecutionError("canonical RiskDecision is required for campaign add-on")
+            if self.require_canonical_risk:
+                raise CampaignExecutionError(
+                    "canonical RiskDecision is required for campaign entry"
+                )
+            risk_decision = self._legacy_risk_decision(
+                signal,
+                equity_quote=equity_quote,
+                candidate_risk_pct=candidate_risk_pct,
+            )
         if risk_decision is not None:
             decision = risk_decision.williams_decision
             if decision.symbol != signal.symbol.upper():
@@ -1145,7 +1256,15 @@ class CampaignExecutionService:
                 f"{signal.symbol}: another pending conditional order exists"
             )
         if risk_decision is None:
-            raise CampaignExecutionError("canonical RiskDecision is required for campaign add-on")
+            if self.require_canonical_risk:
+                raise CampaignExecutionError(
+                    "canonical RiskDecision is required for campaign add-on"
+                )
+            risk_decision = self._legacy_risk_decision(
+                signal,
+                equity_quote=equity_quote,
+                candidate_risk_pct=candidate_risk_pct,
+            )
         canonical_intent = __import__(
             "domain.contracts",
             fromlist=["ExecutionIntent"],
