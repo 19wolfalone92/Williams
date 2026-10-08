@@ -498,14 +498,118 @@ class CampaignExecutionService:
                         pass
 
                 if status in {"NEW", "PENDING_NEW"} and executed <= 0:
-                    # Still waiting for the conditional trigger.
-                    results.append({
-                        "symbol": symbol,
-                        "campaign_id": campaign.campaign_id,
-                        "state": "ENTRY_PENDING",
-                        "order_status": status,
-                    })
-                    continue
+                    # Persisted conditional orders do not expire at Binance when
+                    # the Williams signal expires. Cancel them on recovery and
+                    # reconcile the exchange result before clearing local state.
+                    if purpose == "ADD_ON":
+                        expiry_ms = int(campaign.tags.get("pending_add_signal_expires_at_ms", 0) or 0)
+                    else:
+                        pending_payload = campaign.tags.get("pending_signal", {})
+                        expiry_ms = int(
+                            (pending_payload.get("expires_at_ms", 0) if isinstance(pending_payload, dict) else 0)
+                            or campaign.tags.get("pending_signal_expires_at_ms", 0)
+                            or 0
+                        )
+                    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+                    if expiry_ms <= 0 or now_ms >= expiry_ms:
+                        order_id = order.get("orderId")
+                        if order_id is None:
+                            self.engine.mark_reconcile_required(
+                                campaign,
+                                "expired conditional order has no exchange orderId for safe cancellation",
+                            )
+                            self.db.save_campaign(campaign)
+                            results.append({
+                                "symbol": symbol,
+                                "campaign_id": campaign.campaign_id,
+                                "state": "RECONCILE_REQUIRED",
+                                "reason": "expired conditional order cannot be safely cancelled",
+                            })
+                            continue
+                        try:
+                            self.client.cancel_order(symbol, order_id=order_id)
+                            order = self.client.get_order(symbol, order_id=order_id)
+                            status = str(order.get("status", "")).upper()
+                            executed = float(order.get("executedQty", 0) or 0)
+                        except Exception as exc:
+                            self.engine.mark_reconcile_required(
+                                campaign,
+                                f"expired conditional order cancellation ambiguous: {exc}",
+                            )
+                            self.db.save_campaign(campaign)
+                            results.append({
+                                "symbol": symbol,
+                                "campaign_id": campaign.campaign_id,
+                                "state": "RECONCILE_REQUIRED",
+                                "reason": "expired conditional order cancellation ambiguous",
+                            })
+                            continue
+
+                        if status in {"CANCELED", "CANCELLED", "EXPIRED", "REJECTED"} and executed <= 0:
+                            self.db.set_campaign_signal_state(signal_id, SignalState.EXPIRED.value)
+                            campaign.pending_risk_quote = 0.0
+                            campaign.capital_reserved_quote = 0.0
+                            campaign.next_action = "WAIT"
+                            if purpose == "ADD_ON":
+                                if campaign.state == CampaignState.ADD_ON_PENDING:
+                                    campaign.transition(
+                                        CampaignState.TREND_ACTIVE,
+                                        reason="add-on signal expired before trigger",
+                                    )
+                                self.db.state_set(f"position_state:{symbol}", "OPEN")
+                                event = CampaignEventType.ADD_ON_CANCELLED.value
+                            else:
+                                if campaign.state in {
+                                    CampaignState.ENTRY_PENDING,
+                                    CampaignState.SIGNAL_DETECTED,
+                                    CampaignState.ENTRY_ARMING,
+                                }:
+                                    campaign.transition(
+                                        CampaignState.CLOSED,
+                                        reason="initial entry signal expired before trigger",
+                                    )
+                                self.db.state_set(f"position_state:{symbol}", "FLAT")
+                                event = CampaignEventType.ENTRY_INVALIDATED.value
+                            self.db.state_delete(f"entry_client_order_id:{symbol}")
+                            self.db.save_campaign(campaign)
+                            self.db.log_campaign_event(
+                                campaign.campaign_id,
+                                event,
+                                signal_id=signal_id,
+                                reason="absolute signal expiry reached before conditional trigger",
+                                payload={"expires_at_ms": expiry_ms, "order_status": status},
+                            )
+                            results.append({
+                                "symbol": symbol,
+                                "campaign_id": campaign.campaign_id,
+                                "state": "EXPIRED",
+                                "order_status": status,
+                            })
+                            continue
+
+                        if status in {"NEW", "PENDING_NEW"} and executed <= 0:
+                            self.engine.mark_reconcile_required(
+                                campaign,
+                                "exchange still reports expired conditional order as active after cancellation",
+                            )
+                            self.db.save_campaign(campaign)
+                            results.append({
+                                "symbol": symbol,
+                                "campaign_id": campaign.campaign_id,
+                                "state": "RECONCILE_REQUIRED",
+                                "reason": "expired conditional order remains active after cancellation",
+                            })
+                            continue
+
+                    # Still waiting for a valid, unexpired conditional trigger.
+                    if status in {"NEW", "PENDING_NEW"} and executed <= 0:
+                        results.append({
+                            "symbol": symbol,
+                            "campaign_id": campaign.campaign_id,
+                            "state": "ENTRY_PENDING",
+                            "order_status": status,
+                        })
+                        continue
 
                 if status == "PARTIALLY_FILLED" and order.get("orderId") is not None:
                     cancel = getattr(self.client, "cancel_order", None)
