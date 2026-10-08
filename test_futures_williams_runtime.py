@@ -210,3 +210,31 @@ def test_liquidation_guard_violation_uses_fail_safe_flatten():
     assert result["state"] == "CLOSED"
     assert ("state", "BTCUSDT", "RECONCILE_REQUIRED") in calls
     assert ("exit", "LIQUIDATION_GUARD_TEST") in calls
+
+
+def test_execution_door_blocks_dry_run_before_exchange_call():
+    runtime = object.__new__(FuturesWilliamsRuntime)
+    runtime.dry_run = True
+    runtime.config = type("Cfg", (), {"allow_live": False})()
+    runtime.client = type("Client", (), {"testnet": True})()
+    intent = type("Intent", (), {"purpose": "CAMPAIGN_ENTRY"})()
+    try:
+        runtime._submit(intent, lambda: (_ for _ in ()).throw(AssertionError("exchange called")))
+    except RuntimeError as exc:
+        assert "DRY_RUN" in str(exc)
+    else:
+        raise AssertionError("DRY_RUN did not block execution door")
+
+
+def test_execution_door_blocks_live_without_allow_live():
+    runtime = object.__new__(FuturesWilliamsRuntime)
+    runtime.dry_run = False
+    runtime.config = type("Cfg", (), {"allow_live": False})()
+    runtime.client = type("Client", (), {"testnet": False})()
+    intent = type("Intent", (), {"purpose": "CAMPAIGN_ENTRY"})()
+    try:
+        runtime._submit(intent, lambda: (_ for _ in ()).throw(AssertionError("exchange called")))
+    except RuntimeError as exc:
+        assert "ALLOW_LIVE" in str(exc)
+    else:
+        raise AssertionError("live execution bypassed ALLOW_LIVE")
