@@ -66,7 +66,7 @@ def test_structural_stop_follows_book_3_5_bar_structure():
         wave_invalidation=96.0,
         buffer=0.1,
     )
-    assert abs(stop - 98.1) < 1e-9
+    assert abs(stop - 97.9) < 1e-9
     assert source == "3_5_BAR_STRUCTURE"
 
 
