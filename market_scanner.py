@@ -129,10 +129,11 @@ class MarketScanner:
     4. Re-rank using the legacy score plus a bounded wave adjustment.
     """
 
-    def __init__(self, client, symbols=None, interval=None):
+    def __init__(self, client, symbols=None, interval=None, strategy_profile=None):
         self.client = client
         self.policy = IntradayPolicy.from_env()
-        self.intraday_core_enabled = self.policy.profile in {CORE_PROFILE, CONSERVATIVE_PROFILE}
+        explicit_profile = str(strategy_profile or os.getenv("WILLIAMS_STRATEGY_PROFILE", "")).strip().upper()
+        self.intraday_core_enabled = explicit_profile in {CORE_PROFILE, CONSERVATIVE_PROFILE}
         self.core = WilliamsIntradayCore(self.policy)
 
         self.interval = _normalize_interval(
