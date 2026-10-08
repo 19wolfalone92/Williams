@@ -18,15 +18,16 @@ class Selection:
 class PortfolioController:
     """Portfolio-level candidate selection and risk allocation."""
 
-    def __init__(self, client, balance_quote: float, symbols=None, interval=None, db=None):
+    def __init__(self, client, balance_quote: float, symbols=None, interval=None, db=None, strategy_profile=None):
         self.client = client
         self.db = db
+        self.strategy_profile = str(strategy_profile or os.getenv("WILLIAMS_STRATEGY_PROFILE", "")).strip().upper()
         self.policy = IntradayPolicy.from_env()
-        self.intraday_core_enabled = self.policy.profile in {"WILLIAMS_INTRADAY_CORE", "WILLIAMS_INTRADAY_CONSERVATIVE"}
+        self.intraday_core_enabled = self.strategy_profile in {"WILLIAMS_INTRADAY_CORE", "WILLIAMS_INTRADAY_CONSERVATIVE"}
         self.interval = "1h" if self.intraday_core_enabled else (interval or os.getenv("INTERVAL", "1h"))
         self.max_open_positions = max(0, int(os.getenv("MAX_OPEN_POSITIONS", str(self.policy.risk.max_campaigns if self.intraday_core_enabled else 5))))
-        self.max_total_risk_pct = min(0.006, max(0.0, float(os.getenv("MAX_TOTAL_RISK_PCT", str(self.policy.risk.campaign_risk_pct)))))
-        self.max_risk_per_trade_pct = min(0.0025, max(0.0, float(os.getenv("MAX_RISK_PER_TRADE_PCT", os.getenv("RISK_PER_TRADE_PCT", str(self.policy.risk.initial_risk_pct))))))
+        self.max_total_risk_pct = min(0.006 if self.intraday_core_enabled else 0.01, max(0.0, float(os.getenv("MAX_TOTAL_RISK_PCT", str(self.policy.risk.campaign_risk_pct if self.intraday_core_enabled else 0.01)))))
+        self.max_risk_per_trade_pct = min(0.0025 if self.intraday_core_enabled else 0.005, max(0.0, float(os.getenv("MAX_RISK_PER_TRADE_PCT", os.getenv("RISK_PER_TRADE_PCT", str(self.policy.risk.initial_risk_pct if self.intraday_core_enabled else 0.005))))))
         self.min_risk_allocation_pct = min(
             self.max_risk_per_trade_pct,
             max(0.0, float(os.getenv("MIN_RISK_ALLOCATION_PCT", "0.001"))),
@@ -36,12 +37,13 @@ class PortfolioController:
             client=client,
             symbols=(symbols if symbols else None),
             interval=self.interval,
+            strategy_profile=self.strategy_profile if self.intraday_core_enabled else None,
         )
         self.risk_engine = RiskEngine(
             balance_quote=float(balance_quote),
             risk_per_trade_pct=self.max_risk_per_trade_pct,
             max_position_fraction=float(os.getenv("POSITION_FRACTION", "0.25")),
-            max_daily_loss_pct=float(os.getenv("MAX_DAILY_LOSS_PCT", str(self.policy.risk.daily_loss_pct))),
+            max_daily_loss_pct=float(os.getenv("MAX_DAILY_LOSS_PCT", str(self.policy.risk.daily_loss_pct if self.intraday_core_enabled else 0.03))),
             min_rr=float(os.getenv("MIN_RISK_REWARD", "1.5")),
             max_atr_pct=float(os.getenv("MAX_ATR_PCT", "0.08")),
         )
