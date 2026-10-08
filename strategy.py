@@ -199,12 +199,12 @@ def calculate_indicators(df, cfg):
     x["long_wise_reversal_entry"] = (
         x["last_bullish_reversal_high"].notna()
         & (x["close"] > x["last_bullish_reversal_high"])
-        & (x["bullish_alligator"] | countertrend | True)
+
     )
     x["short_wise_reversal_entry"] = (
         x["last_bearish_reversal_low"].notna()
         & (x["close"] < x["last_bearish_reversal_low"])
-        & (x["bearish_alligator"] | countertrend | True)
+
     )
 
     # Canonical Wise-Men count. This is confirmation/ranking information in our
