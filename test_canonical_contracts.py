@@ -957,3 +957,55 @@ def test_execution_barrier_rejects_protective_stop_above_market(tmp_path):
     )
     assert result.accepted is False
     assert "below market" in result.reason
+
+
+def test_campaign_monitor_never_mutates_interrupted_canonical_campaign():
+    from campaign_engine import CampaignEngine
+    from campaign_model import CampaignState, SignalRole, SignalSpec, SignalType
+    from campaign_monitor import CampaignMonitor
+    from campaign_order_fsm import CampaignOrderState
+
+    db = Database(":memory:")
+    engine = CampaignEngine(db)
+    signal = SignalSpec.new(
+        symbol="BTCUSDT",
+        side="BUY",
+        signal_type=SignalType.REVERSAL,
+        role=SignalRole.ENTRY,
+        timeframe="5m",
+        signal_bar_time_ms=1000,
+        trigger_price=101.0,
+        protective_reference=97.0,
+        alligator_bullish=True,
+        alligator_awake=True,
+        angulation_score=1.0,
+        htf_confirmed=True,
+        source_candle_index=10,
+    )
+    campaign = engine.create_campaign(signal, initial_risk_pct=0.002)
+    campaign.position_qty = 0.1
+    campaign.state = CampaignState.TREND_ACTIVE
+    engine.require_reconciliation(campaign, "simulated exchange ambiguity")
+    db.save_campaign(campaign)
+
+    class ExplodingClient:
+        def exchange_info(self, symbol):
+            raise AssertionError("monitor must not query exchange while interrupted")
+        def ticker_price(self, symbol):
+            raise AssertionError("monitor must not query market while interrupted")
+
+    execution = type(
+        "Execution",
+        (),
+        {
+            "engine": engine,
+            "barrier": None,
+        },
+    )()
+    monitor = CampaignMonitor(ExplodingClient(), db, execution)
+    result = monitor.manage_campaign(campaign)
+    assert result["state"] in {
+        CampaignOrderState.RECONCILIATION_REQUIRED.value,
+        CampaignOrderState.FAULT.value,
+    }
+    assert result["action"] == "BLOCKED"
