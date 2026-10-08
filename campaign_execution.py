@@ -1321,7 +1321,7 @@ class CampaignExecutionService:
                 min_notional=float(nf.get("minNotional", 0) or 0),
                 available_quote=self._available_quote(signal.symbol),
             )
-        if not economics.allowed:
+        if self.intraday_core_enabled and not economics.allowed:
             raise CampaignExecutionError(
                 f"{signal.symbol}: BLOCKED_BY_EXECUTION_ECONOMICS:{economics.block_reason}"
             )
