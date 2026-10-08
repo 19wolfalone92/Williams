@@ -1777,18 +1777,32 @@ class FuturesWilliamsRuntime:
                         # The add-on increased exposure: resize the single
                         # reduce-only protective order before exposing the
                         # campaign as fully open again.
-                        protective_id = int(campaign.tags.get("protective_order_id", "0") or 0)
-                        if protective_id > 0:
-                            # Quantity changed even when the structural stop price
-                            # stays unchanged; replace the stop new-first so the
-                            # enlarged campaign is fully protected.
-                            self._replace_protection(
-                                campaign,
-                                float(campaign.current_stop_price),
-                                allow_same_price=True,
+                        try:
+                            protective_id = int(campaign.tags.get("protective_order_id", "0") or 0)
+                            if protective_id > 0:
+                                # Quantity changed even when the structural stop price
+                                # stays unchanged; replace the stop new-first so the
+                                # enlarged campaign is fully protected.
+                                self._replace_protection(
+                                    campaign,
+                                    float(campaign.current_stop_price),
+                                    allow_same_price=True,
+                                )
+                            else:
+                                self._protect(campaign)
+                        except Exception as exc:
+                            result = self._fail_safe_flatten(
+                                campaign, "PROTECTION_FAILURE_AFTER_ADD_ON"
                             )
-                        else:
-                            self._protect(campaign)
+                            results.append({
+                                "symbol": symbol,
+                                "campaign_id": campaign.campaign_id,
+                                "state": campaign.state.value,
+                                "reason": "PROTECTION_FAILURE_AFTER_ADD_ON",
+                                "error": str(exc),
+                                "flatten": result,
+                            })
+                            continue
                         trade = self.db.open_trade(symbol)
                         if trade is not None:
                             self.db.update_trade_position(
@@ -1805,6 +1819,24 @@ class FuturesWilliamsRuntime:
                                 "campaign_id": campaign.campaign_id,
                                 "state": campaign.state.value,
                                 "reason": "LIQUIDATION_GUARD_ADD_ON",
+                                "flatten": result,
+                            })
+                            continue
+                        try:
+                            if int(campaign.tags.get("protective_order_id", "0") or 0) > 0:
+                                pass  # replacement above already established protection
+                            else:
+                                self._protect(campaign)
+                        except Exception as exc:
+                            result = self._fail_safe_flatten(
+                                campaign, "PROTECTION_FAILURE_AFTER_ADD_ON"
+                            )
+                            results.append({
+                                "symbol": symbol,
+                                "campaign_id": campaign.campaign_id,
+                                "state": campaign.state.value,
+                                "reason": "PROTECTION_FAILURE_AFTER_ADD_ON",
+                                "error": str(exc),
                                 "flatten": result,
                             })
                             continue
@@ -1842,7 +1874,21 @@ class FuturesWilliamsRuntime:
                                 "flatten": result,
                             })
                             continue
-                        self._protect(campaign)
+                        try:
+                            self._protect(campaign)
+                        except Exception as exc:
+                            result = self._fail_safe_flatten(
+                                campaign, "PROTECTION_FAILURE_AFTER_ENTRY"
+                            )
+                            results.append({
+                                "symbol": symbol,
+                                "campaign_id": campaign.campaign_id,
+                                "state": campaign.state.value,
+                                "reason": "PROTECTION_FAILURE_AFTER_ENTRY",
+                                "error": str(exc),
+                                "flatten": result,
+                            })
+                            continue
                         self._set_state(symbol, "OPEN")
 
                     self.db.state_delete(f"entry_client_order_id:{symbol}")
