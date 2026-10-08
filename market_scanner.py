@@ -894,7 +894,7 @@ class MarketScanner:
                     log.info("AUTO-SCAN HTF BLOCK: %s strict signal has no bullish HTF confirmation", candidate.symbol)
                     blocked_symbols.add(candidate.symbol)
                     continue
-                if candidate.signal and not enriched_candidate.wave_entry_allowed:
+                if candidate.signal and (not self.core_mode) and not enriched_candidate.wave_entry_allowed:
                     log.info("AUTO-SCAN WAVE BLOCK: %s %s", candidate.symbol, enriched_candidate.wave_block_reason)
                     blocked_symbols.add(candidate.symbol)
                     continue
@@ -902,7 +902,7 @@ class MarketScanner:
                 continue
 
             log.warning("Wave analysis failed for %s: %s", candidate.symbol, exc)
-            if candidate.signal and os.getenv("NO_TRADE_WHEN_UNCERTAIN", "true").lower() == "true":
+            if candidate.signal and (not self.core_mode) and os.getenv("NO_TRADE_WHEN_UNCERTAIN", "true").lower() == "true":
                 blocked_symbols.add(candidate.symbol)
                 continue
             neutral = replace(
