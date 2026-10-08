@@ -167,13 +167,21 @@ def _latest_super_ao(
             streak = int(row.get(streak_col, 0) or 0)
         except (TypeError, ValueError):
             streak = 0
-        # The third same-colour AO bar is the signal bar. Chapter 12 also
-        # permits Super AO to be the first presenting entry signal, so there
-        # is intentionally no prerequisite fractal gate here.
-        if streak == 3:
-            trigger_base = float(row["high"] if side == "LONG" else row["low"])
-            protective = float(row["low"] if side == "LONG" else row["high"])
-            return i, trigger_base, protective
+        # The third same-colour AO bar is the signal bar. If the process
+        # was offline for subsequent same-colour bars, preserve that original
+        # third bar while it remains inside the signal-age window.
+        if streak >= 3:
+            third_i = i - (streak - 3)
+            if third_i < start:
+                continue
+            signal_row = ind.iloc[third_i]
+            trigger_base = float(
+                signal_row["high"] if side == "LONG" else signal_row["low"]
+            )
+            protective = float(
+                signal_row["low"] if side == "LONG" else signal_row["high"]
+            )
+            return third_i, trigger_base, protective
     return None
 
 
