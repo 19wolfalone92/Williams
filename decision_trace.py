@@ -15,8 +15,8 @@ from campaign_model import SignalSpec
 
 
 STAGES = (
-    "BEHAVIOR",
     "CONTEXT",
+    "BEHAVIOR",
     "STRUCTURE",
     "LOCATION",
     "ANGULATION",
