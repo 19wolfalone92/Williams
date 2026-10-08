@@ -92,10 +92,19 @@ class WilliamsCampaignBacktester:
             # crossed before or after an intra-bar fill, so fail conservatively.
             return None,0.0
         after_ts=cls._ts(after) if after is not None else None
+        eligible=[]
         for ts,bar in micro.iterrows():
             ts=cls._ts(ts)
-            if after_ts is not None and ts<=after_ts:continue
-            if float(bar["low"])<=stop:return ts,stop
+            if after_ts is not None and ts<=after_ts:
+                continue
+            eligible.append((ts,bar))
+            if float(bar["low"])<=stop:
+                return ts,stop
+        # If M15 proves the stop was traded but the supplied M5 replay has a
+        # coverage/data gap, fail conservatively rather than allowing a later
+        # add-on to survive on an optimistic reconstruction.
+        if eligible and float(m15_bar["low"])<=stop:
+            return eligible[0][0],stop
         return None,0.0
 
     @staticmethod
@@ -235,6 +244,7 @@ class WilliamsCampaignBacktester:
             # Existing protective stop gets first right of way inside the
             # current bar. This prevents an add-on trigger from being counted
             # before a stop that actually traded earlier in the same bar.
+            closed_this_bar=False
             if position is not None:
                 stop_time,stop_px=self._resolve_stop(
                     bar,
@@ -248,6 +258,7 @@ class WilliamsCampaignBacktester:
                     daily_stopouts+=1
                     position=None
                     pending=None
+                    closed_this_bar=True
 
             # Only after existing protection has survived the bar may a
             # previously armed conditional entry/add-on trigger.
@@ -397,6 +408,9 @@ class WilliamsCampaignBacktester:
                 else "NEUTRAL" if h4_state!="UNKNOWN"
                 else "UNKNOWN"
             )
+            if closed_this_bar:
+                continue
+
             decision=self.core.evaluate_precomputed(
                 symbol,
                 m15.iloc[:i+1],
