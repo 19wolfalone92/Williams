@@ -28,9 +28,10 @@ class CampaignExecutionService:
     def __init__(self, client, db, execution_barrier: ExecutionBarrier | None = None, strategy_profile: str | None = None):
         self.client = client
         self.db = db
-        self.strategy_profile = (strategy_profile or os.getenv("WILLIAMS_STRATEGY_PROFILE", "")).strip().upper()
+        env_profile = str(os.getenv("WILLIAMS_STRATEGY_PROFILE", "")).strip().upper()
+        self.strategy_profile = str(strategy_profile or env_profile).strip().upper()
         self.policy = IntradayPolicy.from_env()
-        self.intraday_core_enabled = self.strategy_profile in {"WILLIAMS_INTRADAY_CORE", "WILLIAMS_INTRADAY_CONSERVATIVE", "WILLIAMS_CORE_INTRADAY", "WILLIAMS_CORE_INTRADAY_CONSERVATIVE"} or self.policy.profile in {"WILLIAMS_CORE_INTRADAY", "WILLIAMS_CORE_INTRADAY_CONSERVATIVE"}
+        self.intraday_core_enabled = self.strategy_profile in {"WILLIAMS_INTRADAY_CORE", "WILLIAMS_INTRADAY_CONSERVATIVE", "WILLIAMS_CORE_INTRADAY", "WILLIAMS_CORE_INTRADAY_CONSERVATIVE"}
         self.economics = ExecutionEconomicsGate(
             fee_pct=float(os.getenv("FEE_BUFFER_PER_SIDE_PCT", "0.001")),
             slippage_pct=float(os.getenv("RISK_SLIPPAGE_BUFFER_PCT", "0.0015")),
