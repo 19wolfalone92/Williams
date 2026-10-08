@@ -74,7 +74,9 @@ def _tf_chain(execution: str, env: Mapping[str, str]) -> tuple[str, ...]:
 class TradingConfig:
     symbols: tuple[str, ...] = DEFAULT_SYMBOLS
     structural_timeframes: tuple[str, ...] = DEFAULT_STRUCTURAL_TFS
-    decision_timeframe: str = "1h"\n    execution_timeframe: str = "15m"\n    micro_timeframe: str = "5m"
+    decision_timeframe: str = "1h"
+    execution_timeframe: str = "15m"
+    micro_timeframe: str = "5m"
 
     allow_long: bool = True
     allow_short: bool = False
