@@ -12,7 +12,7 @@ from williams_intraday_spec import IntradayPolicy, CONSERVATIVE_PROFILE
 
 def _h1_frame(rows):
     idx = pd.date_range("2026-10-08 08:00", periods=len(rows), freq="1h", tz="UTC")
-    return pd.DataFrame(rows, index=idx)
+    return pd.DataFrame(rows, index=idx, columns=["open", "high", "low", "close"])
 
 
 def test_structural_risk_uses_market_stop_not_deposit_stop():
