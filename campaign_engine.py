@@ -53,17 +53,42 @@ class CampaignEngine:
 
     @staticmethod
     def _canonical_fsm(campaign: TradingCampaign) -> CampaignOrderStateMachine:
-        raw = str(
-            campaign.tags.get("canonical_campaign_state", "")
-            or CampaignOrderState.NO_IDEA.value
-        )
-        try:
-            return CampaignOrderStateMachine(CampaignOrderState(raw))
-        except ValueError:
-            fsm = CampaignOrderStateMachine(
+        raw = str(campaign.tags.get("canonical_campaign_state", "") or "")
+        if raw:
+            try:
+                return CampaignOrderStateMachine(CampaignOrderState(raw))
+            except ValueError:
+                return CampaignOrderStateMachine(
+                    CampaignOrderState.RECONCILIATION_REQUIRED
+                )
+
+        # Backward compatibility for campaigns persisted before Canonical FSM
+        # v2.0 existed. Never infer an optimistic active state from thin air:
+        # map only known legacy states and fail closed on anything unknown.
+        legacy_map = {
+            CampaignState.FLAT: CampaignOrderState.NO_IDEA,
+            CampaignState.SIGNAL_DETECTED: CampaignOrderState.SETUP_IDENTIFIED,
+            CampaignState.ENTRY_ARMING: CampaignOrderState.ARMED,
+            CampaignState.ENTRY_PENDING: CampaignOrderState.ENTRY_PENDING,
+            CampaignState.ENTRY_TRIGGERED: CampaignOrderState.TRIGGERED,
+            CampaignState.OPEN_INITIAL: CampaignOrderState.INITIAL_POSITION,
+            CampaignState.ADD_ON_ARMING: CampaignOrderState.EXPANSION_ELIGIBLE,
+            CampaignState.ADD_ON_PENDING: CampaignOrderState.EXPANSION_PENDING,
+            CampaignState.POSITION_EXPANDING: CampaignOrderState.CAMPAIGN_ACTIVE,
+            CampaignState.TREND_ACTIVE: CampaignOrderState.CAMPAIGN_ACTIVE,
+            CampaignState.TRAILING: CampaignOrderState.CAMPAIGN_ACTIVE,
+            CampaignState.EXHAUSTION_WATCH: CampaignOrderState.EXHAUSTION_WARNING,
+            CampaignState.EXIT_SIGNALLED: CampaignOrderState.EXIT_PENDING,
+            CampaignState.EXIT_PENDING: CampaignOrderState.EXIT_PENDING,
+            CampaignState.CLOSED: CampaignOrderState.CLOSED,
+            CampaignState.RECONCILE_REQUIRED: CampaignOrderState.RECONCILIATION_REQUIRED,
+        }
+        mapped = legacy_map.get(campaign.state)
+        if mapped is None:
+            return CampaignOrderStateMachine(
                 CampaignOrderState.RECONCILIATION_REQUIRED
             )
-            return fsm
+        return CampaignOrderStateMachine(mapped)
 
     def _canonical_set(
         self,
