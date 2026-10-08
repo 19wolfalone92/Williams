@@ -152,6 +152,8 @@ class WilliamsIntradayCore:
         close=float(cur.get("close",0) or 0);high=float(cur.get("high",0) or 0);low=float(cur.get("low",0) or 0)
         if min(close,high,low)<=0:return self._empty(symbol,"INVALID_PRICE")
         tms=self._time_ms(cur);h4c=self._h4_permission(h4);d1s=self._d1_state(d1);context=self._state(h1)
+        mtf_context_ready = h4c != "UNKNOWN" and context != "UNKNOWN"
+        continuation_allowed = h4c in {"SUPPORTIVE", "NEUTRAL"} and mtf_context_ready
 
         # WM1: lower/higher extreme + half-bar close + outside mouth + book geometry.
         rng=high-low;loc=(close-low)/rng if rng>0 else 0.0
@@ -181,7 +183,7 @@ class WilliamsIntradayCore:
 
         # WM2: third same-colour AO bar, represented by 2 -> 3 transition; no fractal prerequisite.
         ao_idx=self._ao_event(ind,"LONG")
-        if ao_idx is not None:
+        if ao_idx is not None and continuation_allowed:
             r=ind.iloc[ao_idx];trigger=float(r["high"])+tick
             if trigger>close:
                 stop=max(0.0,float(r["low"])-tick)
@@ -196,7 +198,7 @@ class WilliamsIntradayCore:
 
         # WM3: activation remains valid only while the trigger is beyond Teeth.
         latest=self._latest_wm3(ind,"LONG",tick)
-        if latest is not None and policy.wm3_first_allowed:
+        if latest is not None and policy.wm3_first_allowed and continuation_allowed:
             center=ind.iloc[latest.center_index];trigger=float(latest.level)+tick;stop=max(0.0,float(center["low"])-tick)
             specs.append(SignalSpec.new(
                 symbol=symbol,side="BUY",signal_type=SignalType.FRACTAL,role=SignalRole.ENTRY,
@@ -207,6 +209,8 @@ class WilliamsIntradayCore:
                 reason=f"WM3: {latest.formation} fractal; activation must remain above Teeth",
                 source_candle_index=latest.center_index,execution_timeframe=policy.timeframes.execution_tf,detected_time_ms=tms))
 
+        if not mtf_context_ready:
+            specs=[]
         specs.sort(key=lambda s:(int(s.signal_bar_time_ms),_PRIORITY.get(s.signal_type.value,99),int(s.created_at_ms)))
         first=specs[0] if specs else None
         if first is None:quality="D"
@@ -222,7 +226,7 @@ class WilliamsIntradayCore:
             "ao":ao,"ao_previous":prev_ao,
             "ao_green_streak":int(cur.get("ao_green_streak",0) or 0),"ao_red_streak":int(cur.get("ao_red_streak",0) or 0),
             "zone_color":str(cur.get("zone_color","UNKNOWN") or "UNKNOWN"),"zone_streak":int(cur.get("zone_streak",0) or 0),
-            "h4_context":h4c,"h1_context":context,"d1_state":d1s,"teeth_at_trigger":float(cur.get("teeth_shifted",0) or 0),
+            "h4_context":h4c,"h1_context":context,"d1_state":d1s,"mtf_context_ready":mtf_context_ready,"continuation_allowed":continuation_allowed,"teeth_at_trigger":float(cur.get("teeth_shifted",0) or 0),
         }
         return StrategyDecision(
             symbol=symbol,decision_time_ms=tms,decision_tf=policy.timeframes.decision_tf,execution_tf=policy.timeframes.execution_tf,
@@ -232,7 +236,7 @@ class WilliamsIntradayCore:
             signal_specs=tuple(specs),
             angulation=(long_ang.to_dict() if wm1_long else short_ang.to_dict() if short_ang.valid else long_ang.to_dict()),
             momentum_relation="RED_AO_EXPECTED_FOR_LONG_REVERSAL" if ao_long_red else "NOT_RED_AO",
-            reason="Williams Core signal ready" if specs else "No valid Williams Wise-Man signal",
+            reason="Williams Core signal ready" if specs else ("Missing/invalid H4-H1 context" if not mtf_context_ready else "No valid Williams Wise-Man signal"),
             fields=fields)
 
     @staticmethod
