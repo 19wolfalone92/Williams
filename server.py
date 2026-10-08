@@ -729,7 +729,7 @@ def williams_core_contract():
 def diagnostic_incidents(limit: int = 50):
     t = state.ensure_trader()
     rows = t.db.conn.execute(
-        'SELECT * FROM events WHERE event_name=? ORDER BY id DESC LIMIT ?',
+        'SELECT * FROM events WHERE event=? ORDER BY id DESC LIMIT ?',
         ('diagnostic_incident', max(1, min(limit, 100))),
     ).fetchall()
     return [dict(row) for row in rows]
