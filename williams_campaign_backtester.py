@@ -81,6 +81,22 @@ class WilliamsCampaignBacktester:
             if float(bar["high"])>=trigger:return cls._ts(ts),trigger
         return None,0.0
 
+    @staticmethod
+    def _activation_teeth_ok(ind_row, signal, raw_price):
+        """Validate a fractal at the actual trigger price/time.
+
+        Williams' fractal rule is evaluated where the order is hit, not only
+        where the fractal was formed. The M15 row is the latest closed decision
+        state available while the M5 trigger is being replayed.
+        """
+        if signal.signal_type != SignalType.FRACTAL:
+            return True
+        teeth=float(ind_row.get("teeth_shifted",0) or 0)
+        if teeth <= 0:
+            return False
+        side=str(signal.side).upper()
+        return float(raw_price) > teeth if side=="BUY" else float(raw_price) < teeth
+
     @classmethod
     def _resolve_stop(cls,m15_bar,stop,m5=None,after=None):
         start=cls._ts(m15_bar.name);end=start+pd.Timedelta(minutes=15)
@@ -297,7 +313,7 @@ class WilliamsCampaignBacktester:
                 if trigger_time is not None:
                     fill_price=raw*(1.0+self.slippage_pct)
                     stop=float(position["stop"])
-                    if fill_price>stop:
+                    if fill_price>stop and self._activation_teeth_ok(m15_ind.iloc[i], pending_spec, raw):
                         used_risk=float(position.get("reserved_risk_quote",0.0))
                         risk_pct=self._weighted_add_risk_pct(
                             self.equity,
@@ -360,7 +376,7 @@ class WilliamsCampaignBacktester:
                 if trigger_time is not None:
                     fill_price=raw*(1.0+self.slippage_pct)
                     stop=float(pending_spec.protective_reference)
-                    if stop>0 and fill_price>stop:
+                    if stop>0 and fill_price>stop and self._activation_teeth_ok(m15_ind.iloc[i], pending_spec, raw):
                         risk_quote=self.equity*self.initial_risk
                         loss_per_unit=max(fill_price-stop,1e-12)+(
                             2.0*self.fee_pct*fill_price
