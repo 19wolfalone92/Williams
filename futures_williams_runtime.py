@@ -675,6 +675,16 @@ class FuturesWilliamsRuntime:
             return liq < stop and ((stop - liq) / stop) >= buffer
         return liq > stop and ((liq - stop) / stop) >= buffer
 
+    def _fail_safe_flatten(self, campaign, reason):
+        """Flatten when the structural stop cannot safely sit before liquidation."""
+        symbol = campaign.symbol
+        self._set_state(symbol, "RECONCILE_REQUIRED")
+        try:
+            return self._exit_market(campaign, reason)
+        except Exception:
+            self._set_state(symbol, "RECONCILE_REQUIRED")
+            raise
+
     def _record_trade_if_missing(self, campaign, order, avg, qty):
         symbol = campaign.symbol
         if self.db.open_trade(symbol) is not None:
@@ -1388,8 +1398,17 @@ class FuturesWilliamsRuntime:
                                 campaign.average_entry_price,
                             )
                         if not self._liquidation_guard(campaign, position):
-                            self._set_state(symbol, "RECONCILE_REQUIRED")
-                            raise RuntimeError("liquidation price violates protective-stop safety buffer after add-on")
+                            result = self._fail_safe_flatten(
+                                campaign, "LIQUIDATION_GUARD_ADD_ON"
+                            )
+                            results.append({
+                                "symbol": symbol,
+                                "campaign_id": campaign.campaign_id,
+                                "state": campaign.state.value,
+                                "reason": "LIQUIDATION_GUARD_ADD_ON",
+                                "flatten": result,
+                            })
+                            continue
                         self.db.set_campaign_signal_state(signal_id, SignalState.FILLED.value)
                         self._set_state(symbol, "OPEN")
                         campaign.transition(CampaignState.TREND_ACTIVE, reason="add-on filled and fully reprotected")
@@ -1413,8 +1432,17 @@ class FuturesWilliamsRuntime:
                         self.db.set_campaign_signal_state(signal_id, SignalState.FILLED.value)
                         self._record_trade_if_missing(campaign, order, avg, pos_qty)
                         if not self._liquidation_guard(campaign, position):
-                            self._set_state(symbol, "RECONCILE_REQUIRED")
-                            raise RuntimeError("liquidation price violates protective-stop safety buffer")
+                            result = self._fail_safe_flatten(
+                                campaign, "LIQUIDATION_GUARD_ENTRY"
+                            )
+                            results.append({
+                                "symbol": symbol,
+                                "campaign_id": campaign.campaign_id,
+                                "state": campaign.state.value,
+                                "reason": "LIQUIDATION_GUARD_ENTRY",
+                                "flatten": result,
+                            })
+                            continue
                         self._protect(campaign)
                         self._set_state(symbol, "OPEN")
 
@@ -1571,7 +1599,10 @@ class FuturesWilliamsRuntime:
                 continue
             try:
                 if not self._liquidation_guard(campaign, position):
-                    raise RuntimeError("liquidation price violates protective-stop safety buffer")
+                    self._fail_safe_flatten(
+                        campaign, "LIQUIDATION_GUARD_RECOVERY"
+                    )
+                    continue
                 orders = self.client.open_orders(symbol)
                 managed = [
                     o for o in orders
