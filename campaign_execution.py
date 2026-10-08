@@ -388,6 +388,7 @@ class CampaignExecutionService:
                     quantity=self.client.decimal_format(qty),
                     stop_price=self.client.decimal_format(trigger),
                     new_client_order_id=client_id,
+                reconcile_unknown=False,
                 ),
                 check,
             )
@@ -1178,6 +1179,7 @@ class CampaignExecutionService:
                 quantity=self.client.decimal_format(qty),
                 stop_price=self.client.decimal_format(trigger),
                 new_client_order_id=cid,
+reconcile_unknown=False,
             ),
             lambda _snapshot: self._validate_add_on_submission(
                 signal.symbol,
@@ -1254,6 +1256,7 @@ class CampaignExecutionService:
                 quantity=self.client.decimal_format(qty),
                 stop_price=self.client.decimal_format(stop),
                 new_client_order_id=cid,
+reconcile_unknown=False,
             ),
             lambda _snapshot: self._check_algo_capacity(campaign.symbol, 1),
         )
@@ -1392,6 +1395,7 @@ class CampaignExecutionService:
                 "MARKET",
                 quantity=self.client.decimal_format(qty),
                 new_client_order_id=cid,
+reconcile_unknown=False,
             ),
             lambda _snapshot: self._check_algo_capacity(symbol, 0),
         )
@@ -1574,6 +1578,7 @@ class CampaignExecutionService:
                 quantity=self.client.decimal_format(quantity),
                 stop_price=self.client.decimal_format(new_stop),
                 new_client_order_id=cid,
+reconcile_unknown=False,
             ),
             lambda _snapshot: self._check_algo_capacity(campaign.symbol, 0),
         )
