@@ -41,25 +41,25 @@ def _row_time_ms(row: pd.Series) -> int:
 
 
 def _angulation(ind: pd.DataFrame, index: int, *, window: int = 5) -> tuple[float, bool]:
-    """Approximate increasing separation of price from the Alligator Jaw."""
-    if index < 1 or "jaw_shifted" not in ind.columns:
+    """Approximate increasing separation of price from the Alligator Lips."""
+    if index < 1 or "lips_shifted" not in ind.columns:
         return 0.0, False
 
     start = max(0, index - max(3, int(window)) + 1)
     rows = ind.iloc[start:index + 1].copy()
-    if len(rows) < 3 or rows["jaw_shifted"].isna().all():
+    if len(rows) < 3 or rows["lips_shifted"].isna().all():
         return 0.0, False
 
-    jaw = pd.to_numeric(rows["jaw_shifted"], errors="coerce")
+    lips = pd.to_numeric(rows["lips_shifted"], errors="coerce")
     low = pd.to_numeric(rows["low"], errors="coerce")
     high = pd.to_numeric(rows["high"], errors="coerce")
     close = pd.to_numeric(rows["close"], errors="coerce")
 
-    if low.isna().any() or high.isna().any() or jaw.isna().any():
+    if low.isna().any() or high.isna().any() or lips.isna().any():
         return 0.0, False
 
-    bullish_distance = (jaw - low).clip(lower=0.0)
-    bearish_distance = (high - jaw).clip(lower=0.0)
+    bullish_distance = (lips - low).clip(lower=0.0)
+    bearish_distance = (high - lips).clip(lower=0.0)
 
     # A reversal has to be outside the mouth and the separation must increase.
     bull_delta = float(bullish_distance.iloc[-1] - bullish_distance.iloc[0])
@@ -67,7 +67,7 @@ def _angulation(ind: pd.DataFrame, index: int, *, window: int = 5) -> tuple[floa
 
     base = max(
         abs(float(close.iloc[-1])),
-        abs(float(jaw.iloc[-1])),
+        abs(float(lips.iloc[-1])),
         1e-9,
     )
     score = max(bull_delta, bear_delta) / base * 100.0
