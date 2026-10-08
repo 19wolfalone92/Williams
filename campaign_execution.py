@@ -1458,6 +1458,10 @@ class CampaignExecutionService:
         }
 
     def _execute_cancel(self, campaign, order_id: int, purpose: str) -> dict[str, Any]:
+        is_entry_cancel = purpose in {
+            "CAMPAIGN_ENTRY_EXPIRE",
+            "CAMPAIGN_PARTIAL_ENTRY_CANCEL",
+        }
         intent = OrderIntent.new(
             campaign.symbol,
             "SELL",
@@ -1465,7 +1469,11 @@ class CampaignExecutionService:
             required_context_versions={},
             client_order_id=f"{self.STOP_PREFIX}CANCEL_{uuid.uuid4().hex[:14]}",
             purpose=purpose,
-            campaign_id=campaign.campaign_id,
+            # Cancelling a pending entry strictly reduces exposure, so this
+            # cleanup path must remain executable even if the campaign state
+            # itself is stale/ambiguous. Protective-stop cancellation does not
+            # use this exception.
+            campaign_id="" if is_entry_cancel else campaign.campaign_id,
             signal_id=campaign.current_signal_id,
         )
         return self._submit(
