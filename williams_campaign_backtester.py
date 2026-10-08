@@ -89,16 +89,22 @@ class WilliamsCampaignBacktester:
         return start, trigger
 
     @classmethod
-    def _resolve_stop(cls, m15_bar, stop, m5=None):
+    def _resolve_stop(cls, m15_bar, stop, m5=None, after=None):
         start = cls._ts(m15_bar.name)
         end = start + pd.Timedelta(minutes=15)
         if float(m15_bar["low"]) > stop:
             return None, 0.0
         micro = cls._micro_slice(m5, start, end)
         if micro is None:
+            # With only M15 OHLC the order inside the bar is ambiguous. Do not
+            # manufacture a stop hit on the same bar as a newly created entry.
+            if after is not None and cls._ts(after) >= start:
+                return None, 0.0
             return start, stop
         for ts, bar in micro.iterrows():
             ts = cls._ts(ts)
+            if after is not None and ts <= cls._ts(after):
+                continue
             if float(bar["low"]) <= stop:
                 return ts, stop
         return start, stop
@@ -158,6 +164,7 @@ class WilliamsCampaignBacktester:
 
             for ts, bar in self._bars_between(m15, h1_close, next_h1).iterrows():
                 ts = self._ts(ts)
+                fill_time_this_bar = None
 
                 if pending is not None:
                     spec = pending["spec"]
@@ -201,6 +208,7 @@ class WilliamsCampaignBacktester:
                         fills.append(fill)
                         pending = None
                         last_signal_time = int(spec.signal_bar_time_ms)
+                        fill_time_this_bar = action_time
                         if action_time < ts:
                             # A micro-replay fill already occurred inside this
                             # M15 bar; continue so the same path may also prove
@@ -208,7 +216,7 @@ class WilliamsCampaignBacktester:
                             pass
 
                 if position is not None:
-                    stop_time, stop_px = self._resolve_stop(bar, float(position["stop"]), m5)
+                    stop_time, stop_px = self._resolve_stop(bar, float(position["stop"]), m5, after=fill_time_this_bar)
                     if stop_time is not None:
                         exit_price = stop_px * (1.0 - self.slippage_pct)
                         qty = float(position["qty"])
