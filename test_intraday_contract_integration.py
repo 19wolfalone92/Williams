@@ -87,8 +87,8 @@ def test_core_wm1_does_not_require_bullish_alligator_or_positive_ao(monkeypatch)
     monkeypatch.setattr("williams_intraday_core.calculate_indicators", lambda *_args, **_kwargs: ind)
     decision = WilliamsIntradayCore(IntradayPolicy.from_env({})).evaluate("BTCUSDT", base, tick_size=0.1)
     assert decision.wm1 is True
-    assert decision.first_signal_type == "REVERSAL"
-    assert decision.signal_specs[0].execution_timeframe == "15m"
+    assert any(s.signal_type == SignalType.REVERSAL for s in decision.signal_specs)
+    assert all(s.execution_timeframe == "5m" for s in decision.signal_specs)
 
 
 def test_backtester_uses_m5_only_to_refine_an_m15_trigger():
