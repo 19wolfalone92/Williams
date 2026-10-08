@@ -4421,7 +4421,7 @@ private class NativeEngine(
             }
 
         if (stored == null) {
-            // The OCO may have already closed the position.
+            // The managed stop may already have closed the position.
             recover()
             return JSONObject()
                 .put("sold", false)
@@ -4431,6 +4431,16 @@ private class NativeEngine(
                     "reason",
                     "position_not_found; recovery_checked"
                 )
+        }
+
+        if (stored.campaignId.isNotBlank()) {
+            campaignExitMarket(stored, "MANUAL_SELL")
+            return JSONObject()
+                .put("sold", positionList().none { it.symbol == symbol })
+                .put("symbol", symbol)
+                .put("campaign_id", stored.campaignId)
+                .put("state", stateName())
+                .put("campaign_exit", true)
         }
 
         val rules = symbolFilters(symbol)
