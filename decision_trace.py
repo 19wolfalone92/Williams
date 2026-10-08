@@ -39,9 +39,20 @@ class DecisionTrace:
     stages: dict[str, dict[str, Any]] = field(default_factory=dict)
     vetoes: list[str] = field(default_factory=list)
     final_decision: str = "WAIT"
+    proof_vector: dict[str, Any] = field(default_factory=dict)
+    why_not: tuple[str, ...] = ()
+    system_versions: dict[str, str] = field(default_factory=dict)
 
     @classmethod
-    def from_signal(cls, signal: SignalSpec, *, extras: dict[str, Any] | None = None) -> "DecisionTrace":
+    def from_signal(
+        cls,
+        signal: SignalSpec,
+        *,
+        extras: dict[str, Any] | None = None,
+        proof_vector: dict[str, Any] | None = None,
+        why_not: tuple[str, ...] | list[str] | None = None,
+        system_versions: dict[str, str] | None = None,
+    ) -> "DecisionTrace":
         extras = dict(extras or {})
         now = int(time.time() * 1000)
         trace_id = hashlib.sha256(
@@ -54,6 +65,9 @@ class DecisionTrace:
             timeframe=signal.timeframe,
             signal_id=signal.signal_id,
             created_at_ms=now,
+            proof_vector=dict(proof_vector or {}),
+            why_not=tuple(why_not or ()),
+            system_versions=dict(system_versions or {}),
         )
         trace.record(
             "BEHAVIOR",
@@ -100,9 +114,20 @@ class DecisionTrace:
             raise ValueError(f"unknown DecisionTrace stage: {stage}")
         self.stages[key] = dict(evidence)
 
+    def set_proof(
+        self,
+        proof_vector: dict[str, Any],
+        *,
+        why_not: tuple[str, ...] | list[str] = (),
+    ) -> None:
+        self.proof_vector = dict(proof_vector)
+        self.why_not = tuple(why_not)
+
     def veto(self, reason: str) -> None:
-        self.vetoes.append(str(reason))
+        reason = str(reason)
+        self.vetoes.append(reason)
         self.final_decision = "BLOCKED"
+        self.why_not = tuple(dict.fromkeys((*self.why_not, reason)))
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
