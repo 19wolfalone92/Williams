@@ -30,8 +30,50 @@ jobs:
         run: python -m pip install -r requirements.txt
       - name: Compile Python sources
         run: python -m compileall -q .
-      - name: Run tests
-        run: pytest -q
+      - name: Run deterministic safety and campaign tests
+        run: |
+          set -o pipefail
+          python -m pytest -q \
+            test_production_architecture.py \
+            test_android_remote_only.py \
+            test_l2_slippage.py \
+            test_hypothesis_engine.py \
+            test_market_scanner.py \
+            test_wave_engine.py \
+            test_dynamic_scanner.py \
+            test_portfolio_controller.py \
+            test_multi_position_risk.py \
+            test_multi_position_execution.py \
+            test_portfolio_scanner.py \
+            test_portfolio_scanner_atr.py \
+            test_risk_engine.py \
+            test_strategy_diagnostics.py \
+            test_db_guard.py \
+            test_db_isolation.py \
+            test_atomic_real_db.py \
+            test_atomic_switch_db_failure.py \
+            test_atomic_switch_rollback.py \
+            test_buy_safety.py \
+            test_williams_book_alignment.py \
+            test_book_wave_safety.py \
+            test_trade_journal.py \
+            test_multi_position_lifecycle.py \
+            recovery_test.py \
+            recovery_oco_failure_test.py \
+            test_chaos_hardening.py \
+            test_wave_safety_fields.py \
+            test_binance_market_data.py \
+            test_binance_json_shapes.py \
+            tests/test_quant_layer.py \
+            tests/test_quant_models.py \
+            test_preflight_gate.py \
+            test_execution_architecture.py \
+            test_integration_bindings.py \
+            test_testnet_release_gate.py \
+            test_campaign_engine.py \
+            test_campaign_execution.py \
+            tests/test_campaign_engine.py \
+            2>&1 | tee campaign-pytest-output.txt
 
   android:
     name: Android build and static checks
@@ -40,18 +82,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
       - name: Set up JDK
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "17"
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v5
         with:
+          gradle-version: "8.14.5"
           validate-wrappers: false
       - name: Make Gradle wrapper executable
         run: chmod +x ./gradlew
       - name: Build debug APK and run unit tests
-        run: ./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --stacktrace
+        run: gradle --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --stacktrace
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
