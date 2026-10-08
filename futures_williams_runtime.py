@@ -1022,11 +1022,12 @@ class FuturesWilliamsRuntime:
         self.db.save_campaign(campaign)
         return result
 
-    def _replace_protection(self, campaign, proposed):
+    def _replace_protection(self, campaign, proposed, *, allow_same_price: bool = False):
         """Place the new reduce-only stop before removing the old stop."""
         current = float(campaign.current_stop_price or 0)
         if not stop_only_reduces_risk(campaign.side, current, proposed):
-            return False
+            if not (allow_same_price and abs(float(proposed) - current) <= max(self._tick(campaign.symbol), 1e-12)):
+                return False
         symbol = campaign.symbol
         proposed = self._normalize_price(
             symbol,
@@ -1171,8 +1172,8 @@ class FuturesWilliamsRuntime:
 
         trade = self.db.open_trade(symbol)
         if trade is not None:
-            entry = float(trade.get("entry_price") or campaign.average_entry_price or 0)
-            qty_trade = float(trade.get("quantity") or campaign.position_qty or 0)
+            entry = float(campaign.average_entry_price or trade.get("entry_price") or 0)
+            qty_trade = float(campaign.position_qty or trade.get("quantity") or 0)
             pnl_pct = (
                 (position_price / entry - 1.0) if campaign.side == "BUY"
                 else (entry / position_price - 1.0)
@@ -1307,12 +1308,23 @@ class FuturesWilliamsRuntime:
                         # campaign as fully open again.
                         protective_id = int(campaign.tags.get("protective_order_id", "0") or 0)
                         if protective_id > 0:
+                            # Quantity changed even when the structural stop price
+                            # stays unchanged; replace the stop new-first so the
+                            # enlarged campaign is fully protected.
                             self._replace_protection(
                                 campaign,
                                 float(campaign.current_stop_price),
+                                allow_same_price=True,
                             )
                         else:
                             self._protect(campaign)
+                        trade = self.db.open_trade(symbol)
+                        if trade is not None:
+                            self.db.update_trade_position(
+                                trade["id"],
+                                campaign.position_qty,
+                                campaign.average_entry_price,
+                            )
                         if not self._liquidation_guard(campaign, position):
                             self._set_state(symbol, "RECONCILE_REQUIRED")
                             raise RuntimeError("liquidation price violates protective-stop safety buffer after add-on")
@@ -1374,11 +1386,28 @@ class FuturesWilliamsRuntime:
 
     def _finalize_confirmed_exchange_exit(self, campaign, orders):
         """Finalize a flat campaign only when a bot-owned exit fill is proven."""
-        filled = [
-            o for o in (orders or [])
-            if str(o.get("status", "")).upper() == "FILLED"
-            and str(o.get("clientOrderId", "")).startswith(("WILLF_STOP_", "WILLF_EXIT_"))
-        ]
+        filled = []
+        for o in (orders or []):
+            if str(o.get("status", "")).upper() != "FILLED":
+                continue
+            cid = str(o.get("clientOrderId", ""))
+            if not cid.startswith(("WILLF_STOP_", "WILLF_EXIT_")):
+                continue
+            # Prefix alone is not sufficient proof; tie the exchange order
+            # to this exact campaign using the durable campaign_orders ledger.
+            row = self.db.conn.execute(
+                "SELECT campaign_id,purpose,order_id FROM campaign_orders "
+                "WHERE client_order_id=? ORDER BY id DESC LIMIT 1",
+                (cid,),
+            ).fetchone()
+            if not row or str(row["campaign_id"]) != str(campaign.campaign_id):
+                continue
+            if str(row["purpose"]).upper() not in {"PROTECTION", "CAMPAIGN_TRAIL", "CAMPAIGN_EXIT"}:
+                continue
+            if row["order_id"] is not None and o.get("orderId") is not None:
+                if str(row["order_id"]) != str(o.get("orderId")):
+                    continue
+            filled.append(o)
         if not filled:
             return False
         order = max(
@@ -1407,8 +1436,8 @@ class FuturesWilliamsRuntime:
 
         trade = self.db.open_trade(campaign.symbol)
         if trade is not None:
-            entry = float(trade.get("entry_price") or campaign.average_entry_price or 0)
-            managed_qty = float(trade.get("quantity") or campaign.position_qty or 0)
+            entry = float(campaign.average_entry_price or trade.get("entry_price") or 0)
+            managed_qty = float(campaign.position_qty or trade.get("quantity") or 0)
             pnl = (
                 (exit_price - entry) * managed_qty
                 if campaign.side == "BUY"
@@ -1520,12 +1549,12 @@ class FuturesWilliamsRuntime:
             current_price = float(self.client.ticker_price(symbol)["price"])
             if campaign.side == "BUY":
                 recent = [float(x) for x in closed["low"].tail(window) if float(x) > 0]
-                proposed = max(recent) - tick if recent else 0.0
+                proposed = min(recent) - tick if recent else 0.0
                 if proposed > campaign.current_stop_price and proposed < current_price:
                     self._replace_protection(campaign, proposed)
             else:
                 recent = [float(x) for x in closed["high"].tail(window) if float(x) > 0]
-                proposed = min(recent) + tick if recent else 0.0
+                proposed = max(recent) + tick if recent else 0.0
                 if proposed < campaign.current_stop_price and proposed > current_price:
                     self._replace_protection(campaign, proposed)
         except Exception as exc:
