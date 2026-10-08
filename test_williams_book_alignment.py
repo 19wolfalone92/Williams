@@ -58,7 +58,7 @@ def test_wise_men_columns_are_present_and_signal_is_conservative():
 def test_config_defaults_keep_countertrend_disabled():
     cfg = config_from_env({})
     assert cfg['super_ao_bars'] == 3
-    assert cfg['min_wise_men_confirmations'] == 2
+    assert cfg['min_wise_men_confirmations'] == 1
     assert cfg['allow_countertrend_wise_man'] is False
 
 
@@ -106,15 +106,14 @@ def test_rsi_context_is_present_and_bounded():
     assert out["rsi"].between(0.0, 100.0).all()
 
 
-def test_angulation_uses_lips_reference_not_jaw():
+def test_angulation_uses_canonical_jaw_and_teeth_reference():
     prices = [100.0 + i * 0.25 for i in range(20)]
     df = frame(prices)
     ind = calculate_indicators(df, config_from_env())
-    # The signal extractor must be able to score using Lips even if Jaw is
-    # deliberately made unusable; this prevents regression to the old Jaw-based
-    # approximation.
-    ind["lips_shifted"] = ind["lips_shifted"].fillna(100.0)
-    ind["jaw_shifted"] = float("nan")
+    # Canonical angulation uses Jaw/Teeth geometry. The result must remain
+    # computable from the canonical mouth reference.
+    ind["jaw_shifted"] = ind["jaw_shifted"].fillna(100.0)
+    ind["teeth_shifted"] = ind["teeth_shifted"].fillna(100.0)
     from williams_signals import _angulation
     score, valid = _angulation(ind, len(ind) - 1)
     assert score >= 0.0
