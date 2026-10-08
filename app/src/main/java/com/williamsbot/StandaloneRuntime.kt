@@ -1370,11 +1370,17 @@ private class NativeEngine(
         }
         for (intent in pending) {
             runCatching {
-                signedDelete(
-                    "/api/v3/order",
-                    "symbol=" + intent.symbol +
-                        "&origClientOrderId=" + intent.clientOrderId
-                )
+                withCampaignMutation(
+                    intent.symbol,
+                    "KILL_SWITCH_CANCEL_PENDING",
+                    allowSafetyOverride = true
+                ) {
+                    signedDelete(
+                        "/api/v3/order",
+                        "symbol=" + intent.symbol +
+                            "&origClientOrderId=" + intent.clientOrderId
+                    )
+                }
             }
         }
 
@@ -5973,10 +5979,16 @@ private class NativeEngine(
 
         try {
             val buy =
-                signedPost(
-                    "/api/v3/order",
-                    buyParams
-                )
+                withCampaignMutation(
+                    candidate.symbol,
+                    "LEGACY_PROTECTED_ENTRY",
+                    allowSafetyOverride = true
+                ) {
+                    signedPost(
+                        "/api/v3/order",
+                        buyParams
+                    )
+                }
 
             val qty =
                 buy.optString("executedQty")
@@ -6190,13 +6202,19 @@ private class NativeEngine(
 
                         if (emergency.isFailure) {
                             runCatching {
-                                signedPost(
-                                    "/api/v3/order",
-                                    "symbol=" + candidate.symbol +
-                                        "&side=SELL&type=MARKET" +
-                                        "&quantity=" +
-                                        fmtQty(filled, rules.decimals)
-                                )
+                                withCampaignMutation(
+                                    candidate.symbol,
+                                    "EMERGENCY_UNPROTECTED_EXIT",
+                                    allowSafetyOverride = true
+                                ) {
+                                    signedPost(
+                                        "/api/v3/order",
+                                        "symbol=" + candidate.symbol +
+                                            "&side=SELL&type=MARKET" +
+                                            "&quantity=" +
+                                            fmtQty(filled, rules.decimals)
+                                    )
+                                }
                             }.onFailure {
                                 setReconcileRequired(
                                     "BUY filled without verifiable protection; emergency SELL failed: " +
@@ -6311,8 +6329,13 @@ private class NativeEngine(
                     .take(28)
 
         val oco =
-            signedPost(
-                "/api/v3/orderList/oco",
+            withCampaignMutation(
+                symbol,
+                "CREATE_PROTECTION",
+                allowRecovery = true
+            ) {
+                signedPost(
+                    "/api/v3/orderList/oco",
                 "symbol=" + symbol +
                     "&side=SELL" +
                     "&quantity=" +
@@ -6347,7 +6370,8 @@ private class NativeEngine(
                     "&newOrderRespType=FULL" +
                     "&listClientOrderId=" +
                     ocoClientId
-            )
+                )
+            }
 
         val actualStopDistance =
             ((entry - stop) / entry)
