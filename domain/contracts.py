@@ -64,9 +64,7 @@ class ProofVector:
         ) / 8.0
 
     def to_dict(self) -> dict[str, Any]:
-        data = asdict(self)
-        data["risk_decision"] = self.risk_decision.to_dict()
-        return data
+        return asdict(self)
 
 
 @dataclass(frozen=True, slots=True)
