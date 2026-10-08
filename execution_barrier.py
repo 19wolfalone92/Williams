@@ -137,7 +137,10 @@ class ExecutionBarrier:
             if direction == "short" and not permission_ctx.allow_short:
                 return f"context {permission_tf} does not allow SHORT"
 
-        if self.db is not None and hasattr(self.db, "state_get"):
+        # Reconciliation state blocks additional exposure, not actions
+        # needed to reduce or protect existing exposure. SELL exits, protection,
+        # cancellation and reconciliation must remain reachable.
+        if purpose in entry_purposes and self.db is not None and hasattr(self.db, "state_get"):
             state = str(self.db.state_get("position_state", "FLAT"))
             if state == "RECONCILE_REQUIRED":
                 return "RECONCILE_REQUIRED"
