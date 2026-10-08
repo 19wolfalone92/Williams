@@ -310,6 +310,8 @@ def extract_long_signal_specs(
                     wave_confidence=float(wave_confidence),
                     wave_exhaustion_risk=float(wave_exhaustion_risk),
                     htf_confirmed=bool(htf_confirmed),
+                    point_zero_confirmed=bool(point_zero_confirmed),
+                    point_zero_score=int(point_zero_score),
                     context_versions=versions,
                     reason="WM2 Super AO: third green AO bar; BUY STOP above corresponding price bar",
                     source_candle_index=i,
@@ -390,7 +392,7 @@ def extract_short_signal_specs(
     specs: list[SignalSpec] = []
 
     reversal = _latest_reversal(ind, side="SHORT", max_age_bars=max_reversal_age_bars)
-    if reversal is not None:
+    if reversal is not None and (point_zero_confirmed or not require_point_zero_for_reversal):
         i, trigger_base, protective = reversal
         trigger = trigger_base - tick
         if current_close > trigger:
