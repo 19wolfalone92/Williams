@@ -450,3 +450,193 @@ def test_campaign_engine_reconciliation_interrupt_blocks_normal_state_progressio
     assert engine.canonical_state(campaign) is CampaignOrderState.RECONCILIATION_REQUIRED
     with pytest.raises(ValueError):
         engine.arm_entry(campaign, signal)
+
+
+def _sample_williams_decision():
+    proof = ProofVector(
+        context_pass=True,
+        behavior_pass=True,
+        structure_pass=True,
+        location_pass=True,
+        angulation_pass=True,
+        momentum_pass=False,
+        price_proof_pass=False,
+        invalidation_present=True,
+    )
+    return WilliamsDecision(
+        timestamp=1,
+        symbol="BTCUSDT",
+        direction=SignalDirection.LONG,
+        wise_man_stage=1,
+        trigger_price=101.0,
+        invalidation_price=97.0,
+        proof_vector=proof,
+        context_regime="BULLISH_AWAKE",
+    )
+
+
+def test_canonical_risk_decision_preserves_williams_and_is_bounded():
+    from risk_engine import (
+        CanonicalRiskEngine,
+        RiskPolicy,
+        canonical_risk_preserves_williams_decision,
+    )
+
+    decision = _sample_williams_decision()
+    engine = CanonicalRiskEngine(
+        RiskPolicy(
+            campaign_risk_fraction=0.005,
+            max_position_fraction=0.25,
+            max_allowed_slippage=0.001,
+            fee_buffer_per_side=0.001,
+        )
+    )
+    result = engine.approve(
+        decision,
+        equity_quote=10_000.0,
+        remaining_campaign_risk_quote=20.0,
+    )
+    assert result.approved is True
+    assert result.williams_decision is decision
+    assert canonical_risk_preserves_williams_decision(decision, result) is True
+    assert 0.0 < result.allocated_r_multiple <= 0.4
+    assert result.calculated_quantity > 0
+    assert decision.proof_vector.price_proof_pass is False
+
+
+def test_canonical_risk_engine_rejects_invalid_directional_invalidation():
+    from risk_engine import CanonicalRiskEngine
+
+    decision = WilliamsDecision(
+        timestamp=1,
+        symbol="BTCUSDT",
+        direction=SignalDirection.LONG,
+        wise_man_stage=1,
+        trigger_price=101.0,
+        invalidation_price=102.0,
+        proof_vector=ProofVector(True, True, True, True, True, False, False, True),
+        context_regime="BULLISH",
+    )
+    result = CanonicalRiskEngine().approve(
+        decision,
+        equity_quote=10_000.0,
+    )
+    assert result.approved is False
+    assert "invalidation" in result.rejection_reason
+
+
+def test_persisted_unknown_intent_survives_new_barrier_instance(tmp_path):
+    db = Database(str(tmp_path / "persisted-unknown.sqlite3"))
+    first = ExecutionBarrier(FakeCache(), db)
+    intent = order_intent("WILL_UNKNOWN_PERSISTED")
+    intent = OrderIntent(
+        **{
+            **intent.__dict__,
+            "related_order_id": "991",
+        }
+    )
+
+    with pytest.raises(ExecutionAmbiguousError):
+        first.execute(
+            intent,
+            lambda: (_ for _ in ()).throw(
+                TimeoutError("transport timeout")
+            ),
+        )
+
+    second = ExecutionBarrier(FakeCache(), db)
+    restored = second.persisted_unknown_intent()
+    assert restored is not None
+    assert restored.client_order_id == "WILL_UNKNOWN_PERSISTED"
+    assert restored.related_order_id == "991"
+
+    reconciled = second.reconcile_persisted_unknown(
+        lambda restored_intent: {
+            "symbol": "BTCUSDT",
+            "side": "BUY",
+            "status": "NEW",
+            "orderId": 991,
+            "clientOrderId": restored_intent.client_order_id,
+            "executedQty": "0",
+        }
+    )
+    assert reconciled.accepted is True
+    assert reconciled.reason == "NEW"
+    assert second.mutation_locked is False
+
+
+def test_reconciliation_rejects_wrong_exchange_order_identity(tmp_path):
+    db = Database(str(tmp_path / "identity.sqlite3"))
+    barrier = ExecutionBarrier(FakeCache(), db)
+    intent = order_intent("WILL_UNKNOWN_IDENTITY")
+
+    with pytest.raises(ExecutionAmbiguousError):
+        barrier.execute(
+            intent,
+            lambda: (_ for _ in ()).throw(
+                TimeoutError("transport timeout")
+            ),
+        )
+
+    wrong = barrier.reconcile(
+        intent,
+        lambda: {
+            "symbol": "ETHUSDT",
+            "side": "BUY",
+            "status": "NEW",
+            "orderId": 555,
+            "clientOrderId": "WILL_SOME_OTHER_ORDER",
+        },
+    )
+    assert wrong.accepted is False
+    assert barrier.mutation_locked is True
+    assert "mismatch" in wrong.reason
+
+
+def test_ambiguous_cancel_unlocks_only_after_target_is_terminal(tmp_path):
+    db = Database(str(tmp_path / "cancel-unknown.sqlite3"))
+    barrier = ExecutionBarrier(FakeCache(), db)
+    intent = OrderIntent.new(
+        "BTCUSDT",
+        "SELL",
+        "CANCEL",
+        {},
+        client_order_id="WILL_CANCEL_OPERATION",
+        related_order_id="777",
+        purpose="CAMPAIGN_PROTECTION_CANCEL",
+    )
+
+    with pytest.raises(ExecutionAmbiguousError):
+        barrier.execute(
+            intent,
+            lambda: (_ for _ in ()).throw(
+                TimeoutError("transport timeout")
+            ),
+        )
+
+    still_open = barrier.reconcile(
+        intent,
+        lambda: {
+            "symbol": "BTCUSDT",
+            "side": "SELL",
+            "status": "NEW",
+            "orderId": 777,
+            "clientOrderId": "WILL_STOP_TARGET",
+        },
+    )
+    assert still_open.accepted is False
+    assert barrier.mutation_locked is True
+
+    done = barrier.reconcile(
+        intent,
+        lambda: {
+            "symbol": "BTCUSDT",
+            "side": "SELL",
+            "status": "CANCELED",
+            "orderId": 777,
+            "clientOrderId": "WILL_STOP_TARGET",
+        },
+    )
+    assert done.accepted is True
+    assert done.reason == "CANCELED"
+    assert barrier.mutation_locked is False
