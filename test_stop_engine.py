@@ -26,3 +26,16 @@ def test_stop_engine_rejects_stop_at_or_above_market():
     )
     assert proposal.price == 100.0
     assert proposal.risk_reducing is False
+
+
+def test_stop_engine_uses_lowest_recent_bar_for_structural_trail():
+    engine = StopEngine(buffer=0.1)
+    proposal = engine.propose_long(
+        signal_type=SignalType.FRACTAL,
+        current_stop=97.0,
+        signal_bar_low=96.5,
+        recent_lows=[98.5, 99.0, 99.2],
+        current_price=101.0,
+    )
+    assert abs(proposal.price - 98.4) < 1e-9
+    assert proposal.source == "3_5_BAR_STRUCTURE"
