@@ -50,6 +50,12 @@ def test_binance_client_rejects_direct_buy_calls_outside_barrier():
             quantity="1", stop_price="101",
             new_client_order_id="WTEST_CANCEL_REPLACE_BUY",
         )
+    with pytest.raises(BinanceAPIError, match="ExecutionBarrier"):
+        client._request(
+            "POST", "/api/v3/order",
+            {"symbol": "BTCUSDT", "side": "BUY", "type": "MARKET"},
+            signed=True,
+        )
 
 
 def test_barrier_scoped_buy_is_allowed_and_uses_same_client_order_id():
