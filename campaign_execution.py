@@ -1046,21 +1046,14 @@ class CampaignExecutionService:
         if status in {"NEW", "PENDING_NEW", "PARTIALLY_FILLED"} and order.get("orderId") is not None:
             self._execute_cancel(campaign, int(order["orderId"]), "CAMPAIGN_FRACTAL_SUPERSEDE")
         self.db.set_campaign_signal_state(old_signal_id, SignalState.REPLACED.value)
-        self.db.save_campaign_signal(
-            new_signal,
-            campaign.campaign_id,
-            state=SignalState.ARMED.value,
-            supersedes_signal_id=old_signal_id,
-        )
-        campaign.current_signal_id = new_signal.signal_id
-        campaign.current_signal_type = new_signal.signal_type.value
+        self.db.set_campaign_signal_state(old_signal_id, SignalState.REPLACED.value)
         campaign.tags["supersedes_signal_id"] = old_signal_id
         campaign.tags["superseded_by_signal_id"] = new_signal.signal_id
-        campaign.tags["pending_order_client_id"] = ""
         campaign.pending_risk_quote = 0.0
         campaign.capital_reserved_quote = 0.0
-        campaign.next_action = "REARM_SUPERSEDING_FRACTAL"
-        campaign.transition(CampaignState.SIGNAL_DETECTED, reason="pending Fractal superseded by newer H1 Fractal")
+        campaign.next_action = "SUPERSEDED"
+        campaign.exit_reason = "SUPERSEDED_BY_NEWER_FRACTAL"
+        campaign.transition(CampaignState.CLOSED, reason="pending Fractal superseded by newer H1 Fractal")
         self.db.save_campaign(campaign)
         self.db.state_delete("entry_client_order_id:" + campaign.symbol)
         self.db.state_set("position_state:" + campaign.symbol, "FLAT")
