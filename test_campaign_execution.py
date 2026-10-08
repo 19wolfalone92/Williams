@@ -322,3 +322,18 @@ def test_expired_persisted_conditional_entry_is_cancelled_on_recovery():
         assert recovered[0]["state"] == "EXPIRED"
         assert client.open_orders("BTCUSDT") == []
         assert svc.engine.load_campaign(result["campaign_id"]).state == CampaignState.CLOSED
+
+
+
+def test_campaign_engine_true_uses_campaign_executor():
+    from types import SimpleNamespace
+
+    trader = object.__new__(MultiPositionTrader)
+    trader.campaign_engine_enabled = True
+    trader.dry_run = False
+    trader.execute_campaign = lambda selections: [{"action": "CAMPAIGN_PATH", "count": len(selections)}]
+    selection = SimpleNamespace(candidate=SimpleNamespace(symbol="BTCUSDT"))
+
+    result = trader.execute([selection])
+
+    assert result == [{"action": "CAMPAIGN_PATH", "count": 1}]
