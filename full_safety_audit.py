@@ -499,6 +499,53 @@ if native:
         "Android uses current Spot OCO endpoint"
     )
     finding(
+        "PASS" if "campaignMutationLock" in native else "FAIL",
+        "Android campaign mutations share a global execution lock"
+    )
+
+    # Every concrete signed mutation must be invoked from the canonical
+    # withCampaignMutation() door. The signed* helper definitions themselves
+    # are transport primitives and are excluded from this call-site check.
+    mutation_calls = []
+    for match in re.finditer(
+        r"\b(signedPost|signedDelete|signedCancelReplace)\s*\(",
+        native
+    ):
+        pos = match.start()
+        line_no = native[:pos].count("\n") + 1
+        line_start = native.rfind("\n", 0, pos) + 1
+        line = native[line_start:native.find("\n", pos)]
+        if "private fun signedPost" in line or "private fun signedDelete" in line:
+            continue
+        helper_start = native.rfind("private fun signedCancelReplace", 0, pos)
+        helper_end = native.find("\n    private fun ", helper_start + 10) if helper_start >= 0 else -1
+        if helper_start >= 0 and helper_end >= 0 and helper_start < pos < helper_end:
+            continue
+        wrapped = False
+        for outer in re.finditer(r"\bwithCampaignMutation\s*\(", native[:pos]):
+            brace = native.find("{", outer.end(), pos)
+            if brace < 0:
+                continue
+            depth = native[brace:pos].count("{") - native[brace:pos].count("}")
+            if depth > 0:
+                wrapped = True
+                break
+        mutation_calls.append((line_no, line.strip(), wrapped))
+
+    unwrapped = [item for item in mutation_calls if not item[2]]
+    if unwrapped:
+        for line_no, line, _ in unwrapped:
+            finding(
+                "FAIL",
+                f"Android direct Binance mutation bypasses execution door at "
+                f"StandaloneRuntime.kt:{line_no}: {line}"
+            )
+    else:
+        finding(
+            "PASS",
+            f"Android mutation-door callsite audit passed ({len(mutation_calls)} calls)"
+        )
+    finding(
         "PASS" if 'userDataStream.subscribe.signature' in android_text else "FAIL",
         "Android uses signed User Data Stream subscription"
     )
