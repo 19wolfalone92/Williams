@@ -252,7 +252,7 @@ class CampaignMonitor:
                 exhaustion_reasons.append(
                     f"wave_exhaustion={campaign.wave_exhaustion_risk:.1f}"
                 )
-            setup = report.frames.get(campaign.execution_timeframe)
+            setup = report.frames.get(campaign.decision_timeframe)
             if setup is not None and bool(getattr(setup, "terminal_fractal", False)):
                 exhaustion_reasons.append("terminal_fractal")
             if setup is not None and bool(getattr(setup, "ao_bearish_divergence", False)):
