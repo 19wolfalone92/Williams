@@ -451,12 +451,14 @@ class MarketScanner:
             if tick_size <= 0:
                 return None
 
+            h4_context = self._htf_context_state(symbol) if self.core_mode else "NEUTRAL"
             campaign_specs = extract_long_signal_specs(
                 symbol,
                 indicators,
                 timeframe=self.interval,
                 tick_size=tick_size,
-                htf_confirmed=False,
+                htf_confirmed=(h4_context == "SUPPORTIVE"),
+                h4_context=h4_context,
             )
             setup_state = self._setup_state(last)
             if setup_state == "NONE" and not campaign_specs:
@@ -477,9 +479,17 @@ class MarketScanner:
             if spread_pct > self.max_spread_pct:
                 return None
 
-            rr = self.target_pct / max(self.stop_pct, 1e-9)
-            if rr < self.min_rr:
-                return None
+            rr = 0.0
+            if campaign_specs:
+                trigger0 = float(campaign_specs[0].trigger_price or 0.0)
+                stop0 = float(campaign_specs[0].protective_reference or 0.0)
+                if trigger0 > 0 and stop0 > 0 and abs(trigger0 - stop0) > 0:
+                    # Core has no fixed TP. R:R is therefore diagnostic only.
+                    rr = 0.0
+            elif self.min_rr > 0.0 and self.stop_pct > 0.0:
+                rr = self.target_pct / self.stop_pct
+                if rr < self.min_rr:
+                    return None
 
             legacy_strict_signal = bool(last.get("long_signal", False))
             campaign_signal = bool(campaign_specs)
@@ -493,13 +503,9 @@ class MarketScanner:
             else:
                 signal_strength = 0.5
 
-            risk_pct = self.stop_pct * 100.0
-            risk_score = self._clamp(
-                20.0 * (0.02 / max(self.stop_pct, 0.0001)),
-                0.0,
-                20.0,
-            )
-            rr_score = min(20.0, 20.0 * (rr / 3.0))
+            risk_pct = 0.25 if self.core_mode else self.stop_pct * 100.0
+            risk_score = 10.0 if self.core_mode else self._clamp(20.0 * (0.02 / max(self.stop_pct, 0.0001)), 0.0, 20.0)
+            rr_score = 0.0 if self.core_mode else min(20.0, 20.0 * (rr / 3.0))
             atr_score = max(
                 0.0,
                 10.0 * (1.0 - atr_pct / max(self.max_atr_pct, 1e-9)),
@@ -540,9 +546,8 @@ class MarketScanner:
                 risk_reward=round(rr, 3),
                 atr_pct=round(atr_pct, 6),
                 spread_pct=round(spread_pct, 6),
-                # This is populated authoritatively by Wave Engine. Keep it
-                # false here rather than performing another duplicate HTF call.
-                htf_confirmed=False,
+                htf_confirmed=(h4_context == "SUPPORTIVE"),
+                htf_context_state=h4_context,
                 setup_state=setup_state,
                 reason=reason,
                 wise_man_count=int(last.get("long_wise_man_count", 0) or 0),
