@@ -2793,7 +2793,7 @@ private class NativeEngine(
                     floorStep(position.qty, rules.step),
                     rules.decimals
                 ),
-                stopPrice = fmtPrice(stop, rules.decimals),
+                stopPrice = fmtPrice(stop, rules.tick),
                 newClientOrderId = newClientId
             )
         }
@@ -2939,10 +2939,16 @@ private class NativeEngine(
                             intent.symbol + ": partial campaign entry missing orderId"
                         }
                         try {
-                            signedDelete(
-                                "/api/v3/order",
-                                "symbol=" + intent.symbol + "&orderId=" + orderId
-                            )
+                            withCampaignMutation(
+                                intent.symbol,
+                                "CAMPAIGN_PARTIAL_ENTRY_CANCEL"
+                            ) {
+                                signedDelete(
+                                    "/api/v3/order",
+                                    "symbol=" + intent.symbol + "&orderId=" + orderId
+                                )
+                                JSONObject()
+                            }
                         } catch (cancelError: Throwable) {
                             setReconcileRequired(
                                 intent.symbol + ": partial campaign BUY cancel ambiguous: " +
@@ -3566,7 +3572,7 @@ private class NativeEngine(
                         "symbol=" + candidate.symbol +
                             "&side=BUY&type=STOP_LOSS" +
                             "&quantity=" + fmtQty(qty, rules.decimals) +
-                            "&stopPrice=" + fmtPrice(trigger, rules.decimals) +
+                            "&stopPrice=" + fmtPrice(trigger, rules.tick) +
                             "&newClientOrderId=" + clientId
                     )
                 }
