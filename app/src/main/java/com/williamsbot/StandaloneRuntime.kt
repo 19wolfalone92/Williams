@@ -7769,6 +7769,52 @@ private class NativeEngine(
 
         val dailyGuard = dailyTradeGuard()
 
+        val campaignSummary = JSONArray().apply {
+            positionList().forEach { p ->
+                put(
+                    JSONObject()
+                        .put("campaign_id", p.campaignId)
+                        .put("symbol", p.symbol)
+                        .put("state", p.campaignState)
+                        .put("signal_id", p.signalId)
+                        .put("signal_type", p.signalType)
+                        .put("trigger_price", JSONObject.NULL)
+                        .put("current_stop", p.stop)
+                        .put("risk_pct", p.riskPct)
+                        .put("additions", p.additions)
+                        .put("health", if (p.protectiveOrderId.isNotBlank()) "GREEN" else "RED")
+                        .put("next_action",
+                            when {
+                                p.protectiveOrderId.isBlank() -> "RESTORE_PROTECTION"
+                                p.campaignState == "TRAILING" -> "WAIT_STRUCTURAL_UPDATE"
+                                else -> "MONITOR_CAMPAIGN"
+                            })
+                )
+            }
+            synchronized(pendingEntries) {
+                pendingEntries.values.forEach { p ->
+                    put(
+                        JSONObject()
+                            .put("campaign_id", p.campaignId)
+                            .put("symbol", p.symbol)
+                            .put("state", "ENTRY_PENDING")
+                            .put("signal_id", p.signalId)
+                            .put("signal_type", p.signalType)
+                            .put("trigger_price", p.triggerPrice)
+                            .put("current_stop", p.protectivePrice)
+                            .put("risk_pct", p.riskReservedPct)
+                            .put("capital_reserved_quote", p.capitalReservedQuote)
+                            .put("additions", 0)
+                            .put("health", if (executionReady()) "GREEN" else "YELLOW")
+                            .put("next_action", "WAIT_FOR_TRIGGER")
+                    )
+                }
+            }
+        }
+
+        val blockers = executionBlockers()
+        val primaryBlocker = blockers.firstOrNull()
+
         return JSONObject()
             .put("version", BuildConfig.VERSION_NAME)
             .put("symbol", primarySymbol)
@@ -7892,6 +7938,10 @@ private class NativeEngine(
             .put("rest_last_latency_ms", restLastLatencyMs)
             .put("rest_last_error", restLastError ?: JSONObject.NULL)
             .put("rest_ticker_price", if (restLastTickerPrice > 0.0) restLastTickerPrice else JSONObject.NULL)
+            .put("campaigns", campaignSummary)
+            .put("campaign_count", campaignSummary.length())
+            .put("primary_blocker", primaryBlocker ?: JSONObject.NULL)
+            .put("first_blocker", primaryBlocker ?: JSONObject.NULL)
     }
 
     fun historyStatus(): JSONObject =
