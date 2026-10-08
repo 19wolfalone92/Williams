@@ -13,8 +13,6 @@ from campaign_model import SignalSpec, SignalType, SignalRole
 from campaign_monitor import CampaignMonitor
 from intraday_contract import WilliamsIntradayContract
 from intraday_policy import evaluate_intraday_policy
-from intraday_contract import WilliamsIntradayContract
-from intraday_policy import evaluate_intraday_policy
 
 
 POSITION_STATES = {
