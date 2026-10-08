@@ -399,6 +399,11 @@ class CampaignEngine:
         risk_quote: float,
         fee_quote: float = 0.0,
     ) -> TradingCampaign:
+        if campaign.state == CampaignState.ADD_ON_PENDING:
+            campaign.transition(
+                CampaignState.POSITION_EXPANDING,
+                reason="exchange confirmed conditional add-on fill",
+            )
         if campaign.state != CampaignState.POSITION_EXPANDING:
             raise ValueError(f"Cannot record add-on fill from {campaign.state.value}")
         old_qty = float(campaign.position_qty)
