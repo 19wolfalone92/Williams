@@ -5,17 +5,16 @@ from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect, Response
 from pydantic import BaseModel
 from db import Database
-from trader import Trader
+from futures_williams_runtime import FuturesWilliamsRuntime as Trader
 from portfolio_trader import MultiPositionTrader
 from data import fetch_klines
 from strategy import calculate_indicators, config_from_env
 from ws_hub import WebSocketHub
 from credentials_store import CredentialStore
-from market_scanner import MarketScanner
 from market_context import ContextCache
 from mtf_context_service import MultiTimeframeContextService
 from feature_store import FeatureStore
-from binance_client import BinanceSpotClient
+from binance_futures_client import BinanceFuturesClient
 
 load_dotenv()
 API_TOKEN = os.getenv('MOBILE_API_TOKEN', '').strip()
@@ -139,15 +138,14 @@ class ControlState:
         if not key or not secret:
             raise RuntimeError('Binance API key and secret are required.')
 
-        # Validate the exact Spot credentials before persisting them. This prevents
-        # the backend from storing a broken/expired key and only discovering it
-        # later inside the autonomous trading loop.
-        candidate = BinanceSpotClient(key, secret, testnet=testnet)
+        # Validate USDⓈ-M Futures credentials before persisting them. A valid
+        # Spot key/account is not sufficient for the Futures trading path.
+        candidate = BinanceFuturesClient(key, secret, testnet=testnet)
         try:
             candidate.sync_time()
             account = candidate.account()
-            if str(account.get('accountType', 'SPOT')).upper() not in {'SPOT', ''}:
-                raise RuntimeError('Configured Binance account is not Spot.')
+            if str(account.get('accountType', 'FUTURES')).upper() not in {'FUTURES', 'USD_M_FUTURES'}:
+                raise RuntimeError('Configured Binance account is not USD-M Futures.')
             if not testnet:
                 restrictions = candidate.api_restrictions()
                 if not (
@@ -155,9 +153,7 @@ class ControlState:
                     and bool(restrictions.get('enableSpotAndMarginTrading', False))
                     and not bool(restrictions.get('enableWithdrawals', True))
                 ):
-                    raise RuntimeError(
-                        'Live Spot API key must allow reading + Spot trading and have withdrawals disabled.'
-                    )
+                    raise RuntimeError('Live Futures API key must allow Futures trading, reading, and have withdrawals disabled.')
         except Exception as exc:
             raise RuntimeError(f'Binance credential validation failed: {exc}') from exc
 
@@ -208,12 +204,14 @@ class ControlState:
         with self.lock:
             t = self.ensure_trader()
             if self.scanner is None:
-                self.scanner = MarketScanner(t.client)
+                self.scanner = t.scanner
             return self.scanner
 
     def ensure_multi(self):
         with self.lock:
             t = self.ensure_trader()
+            if getattr(t, 'is_futures_runtime', False):
+                return t
             if not hasattr(t, '_multi_position_trader'):
                 t._multi_position_trader = MultiPositionTrader(
                     t.client,
@@ -818,52 +816,49 @@ async def _ws_sender(client):
 
 def _position_payload(t, trade):
     symbol = str(trade['symbol']).upper()
-    ticker = None
+    position = {}
     try:
-        ticker = float(
-            t.client.ticker_price(symbol)['price']
-        )
+        position = t.client.position(symbol)
+        current = float(position.get('markPrice', 0) or 0)
+        exchange_entry = float(position.get('entryPrice', 0) or 0)
+        qty_signed = float(position.get('positionAmt', 0) or 0)
     except Exception:
-        pass
+        current = 0.0
+        exchange_entry = 0.0
+        qty_signed = 0.0
 
-    entry = float(trade.get('entry_price') or 0.0)
-    qty = float(trade.get('quantity') or 0.0)
-    stop = (
-        float(trade.get('stop_price') or 0.0)
-        or None
-    )
-    take = (
-        float(trade.get('take_profit_price') or 0.0)
-        or None
-    )
+    entry = exchange_entry or float(trade.get('entry_price') or 0.0)
+    qty = abs(qty_signed) or abs(float(trade.get('quantity') or 0.0))
+    side = str(trade.get('side') or ('LONG' if qty_signed >= 0 else 'SHORT')).upper()
+    stop = float(trade.get('stop_price') or 0.0) or None
+    take = None
     pnl = None
     pnl_pct = None
-    if ticker is not None and entry > 0:
-        pnl = (ticker - entry) * qty
-        pnl_pct = ticker / entry - 1.0
+    if current > 0 and entry > 0:
+        if side == 'SHORT':
+            pnl = (entry - current) * qty
+            pnl_pct = entry / current - 1.0
+        else:
+            pnl = (current - entry) * qty
+            pnl_pct = current / entry - 1.0
 
     return {
         'trade_id': int(trade['id']),
         'symbol': symbol,
-        'side': trade.get('side', 'LONG'),
+        'side': side,
         'quantity': qty,
         'entry_price': entry,
-        'current_price': ticker,
+        'current_price': current or None,
         'stop_price': stop,
         'take_profit_price': take,
-        'risk_pct': float(trade.get('risk_pct') or 0.0),
-        'entry_order_id': trade.get('entry_order_id'),
-        'entry_client_order_id': trade.get('entry_client_order_id'),
-        'exit_order_list_id': trade.get('exit_order_list_id'),
-        'exit_order_list_client_id': trade.get(
-            'exit_order_list_client_id'
-        ),
-        'opened_at': trade.get('entry_time'),
         'unrealized_pnl': pnl,
         'unrealized_pnl_pct': pnl_pct,
-        'state': state.ensure_multi().state(symbol),
+        'exit_order_list_id': None,
+        'exit_order_list_client_id': None,
+        'futures_position_amt': qty_signed,
+        'liquidation_price': float(position.get('liquidationPrice', 0) or 0),
+        'mark_price': current or None,
     }
-
 
 @app.get('/api/v1/status', dependencies=[Depends(auth)])
 def status():
@@ -966,7 +961,7 @@ def status():
         'max_risk_per_trade_pct': multi.max_risk_per_trade_pct,
         'unrealized_pnl_quote': total_pnl,
         'stop_loss_pct': t.stop_pct,
-        'take_profit_pct': t.target_pct,
+        'take_profit_pct': 0.0,
         'risk_per_trade_pct': t.risk_per_trade_pct,
         'max_daily_loss_pct': t.max_daily_loss_pct,
         'max_trades_per_day': t.max_trades_day,
@@ -1094,8 +1089,8 @@ def portfolio():
     return {
         'configured': bool(t.client.api_key and t.client.api_secret),
         'testnet': bool(t.client.testnet),
-        'source': 'binance_spot_account',
-        'account_type': 'SPOT',
+        'source': 'binance_usdm_futures_account',
+        'account_type': 'FUTURES',
         'total_equity_usdt': total_equity_usdt,
         'total_equity_btc': total_equity_btc,
         'free_equity_usdt': free_equity_usdt,
@@ -1153,7 +1148,7 @@ def market_klines(
     if target_interval not in allowed_intervals:
         raise HTTPException(400, f"Unsupported Binance interval: {target_interval}")
     if not target_symbol.endswith("USDT") or not target_symbol.isalnum():
-        raise HTTPException(400, "Invalid Spot symbol")
+        raise HTTPException(400, "Invalid Futures symbol")
     df = fetch_klines(
         t.client,
         target_symbol,
@@ -1198,271 +1193,3 @@ def market_klines(
                 'fractal_down': bool(row.fractal_down),
             }
         )
-    return {
-        'symbol': target_symbol,
-        'interval': target_interval,
-        'candles': rows,
-    }
-
-
-@app.get('/api/v1/market/snapshot', dependencies=[Depends(auth)])
-def market_snapshot(symbol: Optional[str] = None, depth: int = 20, trades: int = 20):
-    """Return one coherent read-only Binance market-data snapshot."""
-    t = state.ensure_trader()
-    selected = (symbol or t.symbol).upper().strip()
-    depth_limit = max(5, min(int(depth), 100))
-    trade_limit = max(1, min(int(trades), 100))
-
-    ticker = t.client.ticker_price(selected)
-    book = t.client.book_ticker(selected)
-    day = t.client.ticker_24hr(selected)
-    book_depth = t.client.depth(selected, limit=depth_limit)
-    exchange = t.client.exchange_info(selected)
-    recent = t.client.agg_trades(selected, limit=trade_limit)
-
-    bids = book_depth.get('bids', []) if isinstance(book_depth, dict) else []
-    asks = book_depth.get('asks', []) if isinstance(book_depth, dict) else []
-    bid_qty = sum(float(row[1]) for row in bids if len(row) >= 2)
-    ask_qty = sum(float(row[1]) for row in asks if len(row) >= 2)
-    total_qty = bid_qty + ask_qty
-    imbalance = ((bid_qty - ask_qty) / total_qty) if total_qty > 0 else 0.0
-
-    symbol_info = next((x for x in exchange.get('symbols', []) if x.get('symbol') == selected), {})
-    filters = {x.get('filterType'): x for x in symbol_info.get('filters', [])}
-
-    return {
-        'symbol': selected,
-        'server_time_ms': int(time.time() * 1000),
-        'price': ticker.get('price'),
-        'book': {
-            'bid': book.get('bidPrice'),
-            'ask': book.get('askPrice'),
-            'bid_qty': book.get('bidQty'),
-            'ask_qty': book.get('askQty'),
-        },
-        'depth': {
-            'last_update_id': book_depth.get('lastUpdateId') if isinstance(book_depth, dict) else None,
-            'levels': depth_limit,
-            'bid_qty': bid_qty,
-            'ask_qty': ask_qty,
-            'imbalance': imbalance,
-        },
-        'ticker_24h': day,
-        'filters': filters,
-        'recent_agg_trades': recent,
-    }
-
-
-@app.post('/api/v1/control/start', dependencies=[Depends(auth)])
-def start():
-    return {'started': state.start()}
-
-
-@app.post('/api/v1/control/stop', dependencies=[Depends(auth)])
-def stop():
-    return {'stopped': state.stop()}
-
-
-@app.post('/api/v1/control/pause', dependencies=[Depends(auth)])
-def pause():
-    return {'paused': state.pause()}
-
-
-@app.post('/api/v1/control/resume', dependencies=[Depends(auth)])
-def resume():
-    return {'resumed': state.resume()}
-
-@app.post('/api/v1/control/panic', dependencies=[Depends(auth)])
-def panic():
-    """PANIC STOP: block new entries without closing an existing position."""
-    result = state.pause()
-    try:
-        state.ensure_trader().db.log_event(
-            'ERROR', 'panic_stop',
-            'PANIC STOP activated: new entries paused; current position left intact.',
-            {'action': 'PANIC_STOP'},
-        )
-    except Exception:
-        pass
-    return {'panic_stopped': bool(result), 'trading_stopped': True, 'positions_closed': False}
-
-
-@app.post('/api/v1/control/kill', dependencies=[Depends(auth)])
-def kill():
-    return state.kill()
-
-
-@app.post('/api/v1/control/sell', dependencies=[Depends(auth)])
-def manual_sell(symbol: str):
-    multi = state.ensure_multi()
-    result = multi.manual_sell(symbol)
-    if not result.get('sold') and result.get('state') == 'RECONCILE_REQUIRED':
-        raise HTTPException(409, result.get('error', 'Position requires reconciliation'))
-    return result
-
-
-@app.post('/api/v1/control/recover', dependencies=[Depends(auth)])
-def recover():
-    t = state.ensure_trader()
-    multi = state.ensure_multi()
-
-    # Recovery must use the same canonical state machine as status/health.
-    # Never route the button through the legacy single-symbol recovery only.
-    result = multi.recover()
-    t.recovered = bool(result.get('ok'))
-    execution_state, unresolved_symbols, pending_symbols = _canonical_execution_state(
-        multi,
-        positions=multi.open_positions(),
-    )
-    return {
-        'recovered': bool(result.get('ok')),
-        'state': execution_state,
-        'unresolved_symbols': unresolved_symbols,
-        'pending_entry_symbols': pending_symbols,
-        'details': result,
-    }
-
-
-@app.get('/api/v1/trades', dependencies=[Depends(auth)])
-def trades(limit: int = 50):
-    return [
-        dict(r)
-        for r in db().conn.execute(
-            'SELECT * FROM trades '
-            'ORDER BY id DESC LIMIT ?',
-            (max(1, min(limit, 200)),),
-        ).fetchall()
-    ]
-
-
-@app.get('/api/v1/orders', dependencies=[Depends(auth)])
-def orders(
-    limit: int = 50,
-    symbol: Optional[str] = None,
-):
-    if symbol:
-        return db().recent_orders(
-            symbol.upper(),
-            max(1, min(limit, 200)),
-        )
-    return db().recent_all_orders(
-        max(1, min(limit, 500))
-    )
-
-
-@app.get('/api/v1/logs', dependencies=[Depends(auth)])
-def logs(limit: int = 100):
-    return [
-        dict(r)
-        for r in db().conn.execute(
-            'SELECT * FROM events '
-            'ORDER BY id DESC LIMIT ?',
-            (max(1, min(limit, 300)),),
-        ).fetchall()
-    ]
-
-
-@app.get(
-    '/api/v1/trade-journal',
-    dependencies=[Depends(auth)],
-)
-def trade_journal_endpoint(limit: int = 100):
-    return db().recent_trade_journal(limit)
-
-
-@app.get('/api/v1/insights', dependencies=[Depends(auth)])
-def insights():
-    return db().learning_summary()
-
-
-@app.get(
-    '/api/v1/scanner/diagnostics',
-    dependencies=[Depends(auth)],
-)
-def scanner_diagnostics():
-    scanner = state.ensure_scanner()
-    snap = _scanner_snapshot()
-    snap.update(
-        {
-            "scan_workers": scanner.scan_workers,
-            "wave_top_n": scanner.wave_top_n,
-            "liquidity_preselect": getattr(
-                scanner,
-                "liquidity_preselect",
-                0,
-            ),
-        }
-    )
-    return snap
-
-
-
-@app.get('/api/v1/quant/health', dependencies=[Depends(auth)])
-def quant_health():
-    """Read-only health/status of the Williams quantitative shadow layer."""
-    enabled = os.getenv("FEATURE_STORE_ENABLED", "true").lower() == "true"
-    latest = quant_store.recent(limit=1)
-    shadows = quant_store.recent_shadow(limit=1)
-    shadow_exec = quant_store.recent_shadow_executions(limit=1)
-    return {
-        "enabled": enabled,
-        "schema_version": 1,
-        "feature_store_path": quant_store.path,
-        "latest_feature_timestamp_ms": latest[0].get("timestamp_ms") if latest else None,
-        "latest_shadow": shadows[0] if shadows else None,
-        "latest_shadow_execution": shadow_exec[0] if shadow_exec else None,
-        "production_execution": "UNCHANGED",
-        "ai_order_submission": False,
-    }
-
-
-@app.get('/api/v1/quant/features', dependencies=[Depends(auth)])
-def quant_features(symbol: Optional[str] = None, limit: int = 20):
-    return quant_store.recent(
-        symbol=symbol,
-        limit=max(1, min(limit, 200)),
-    )
-
-
-@app.get('/api/v1/quant/shadow', dependencies=[Depends(auth)])
-def quant_shadow(limit: int = 50):
-    return quant_store.recent_shadow(max(1, min(limit, 200)))
-
-
-@app.get('/api/v1/quant/shadow-execution', dependencies=[Depends(auth)])
-def quant_shadow_execution(limit: int = 50):
-    return quant_store.recent_shadow_executions(max(1, min(limit, 200)))
-
-@app.get('/api/v1/settings', dependencies=[Depends(auth)])
-def settings():
-    t = state.ensure_trader()
-    multi = state.ensure_multi()
-    return {
-        'version': VERSION,
-        'symbol': t.symbol,
-        'interval': t.interval,
-        'position_fraction': t.position_fraction,
-        'stop_loss_pct': t.stop_pct,
-        'take_profit_pct': t.target_pct,
-        'poll_seconds': t.poll_seconds,
-        'risk_per_trade_pct': t.risk_per_trade_pct,
-        'max_daily_loss_pct': t.max_daily_loss_pct,
-        'max_trades_per_day': t.max_trades_day,
-        'max_consecutive_losses': t.max_consecutive_losses,
-        'cooldown_minutes': t.cooldown_minutes,
-        'min_risk_reward': t.min_risk_reward,
-        'atr_period': t.atr_period,
-        'max_atr_pct': t.max_atr_pct,
-        'max_spread_pct': t.max_spread_pct,
-        'require_htf_confirmation': t.require_htf_confirmation,
-        'htf_interval': t.htf_interval,
-        'testnet': t.client.testnet,
-        'alligator': config_from_env(),
-        'strategy_name': 'Williams Profitunity Conservative',
-        'binance_configured': bool(
-            t.client.api_key and t.client.api_secret
-        ),
-        'max_open_positions': multi.max_open_positions,
-        'max_total_risk_pct': multi.max_total_risk_pct,
-        'max_risk_per_trade_pct': multi.max_risk_per_trade_pct,
-    }
