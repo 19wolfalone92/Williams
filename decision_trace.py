@@ -19,6 +19,7 @@ STAGES = (
     "CONTEXT",
     "STRUCTURE",
     "LOCATION",
+    "ANGULATION",
     "MOMENTUM",
     "PRICE_PROOF",
     "ENTRY",
@@ -91,8 +92,11 @@ class DecisionTrace:
             teeth_at_detection=signal.teeth_at_detection,
         )
         trace.record(
-            "MOMENTUM",
+            "ANGULATION",
             angulation_score=signal.angulation_score,
+        )
+        trace.record(
+            "MOMENTUM",
             wave_confidence=signal.wave_confidence,
             wave_exhaustion_risk=signal.wave_exhaustion_risk,
         )
