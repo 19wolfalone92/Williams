@@ -32,6 +32,7 @@ class OrderIntent:
     required_context_versions: Mapping[str, int]
     hypothesis_id: str = ""
     invalidation_level: float = 0.0
+    trigger_price: float = 0.0
     quantity: str = ""
     quote_order_quantity: str = ""
     client_order_id: str = ""
@@ -95,6 +96,7 @@ class OrderIntent:
             required_context_versions or {},
             hypothesis_id=hypothesis_id,
             invalidation_level=decision.invalidation_price if invalidation_level is None else float(invalidation_level),
+            trigger_price=float(decision.trigger_price),
             quantity=quantity,
             quote_order_quantity=quote_order_quantity,
             client_order_id=intent.client_order_id,
@@ -363,16 +365,12 @@ class ExecutionBarrier:
             order_type = intent.order_type.upper()
             if order_type in {"STOP_LOSS", "STOP_LOSS_LIMIT", "TAKE_PROFIT", "TAKE_PROFIT_LIMIT"}:
                 try:
-                    if getattr(intent, "risk_decision", None) is not None:
-                        trigger = Decimal(
-                            str(
-                                intent.risk_decision.williams_decision.trigger_price
-                            )
-                        )
-                    else:
-                        trigger = Decimal(
-                            str(intent.invalidation_level)
-                        )
+                    trigger_source = (
+                        intent.trigger_price
+                        if float(intent.trigger_price or 0.0) > 0.0
+                        else intent.invalidation_level
+                    )
+                    trigger = Decimal(str(trigger_source))
                 except (InvalidOperation, TypeError, ValueError):
                     return "invalid stop/trigger price"
                 price_filter = filters.get("PRICE_FILTER") or {}
@@ -414,10 +412,10 @@ class ExecutionBarrier:
 
             try:
                 qty = Decimal(qty_text) if qty_text else Decimal("0")
-                if hasattr(intent, "risk_decision"):
-                    trigger = Decimal(
-                        str(intent.risk_decision.williams_decision.trigger_price)
-                    )
+                if float(intent.trigger_price or 0.0) > 0.0:
+                    trigger = Decimal(str(intent.trigger_price))
+                elif float(intent.invalidation_level or 0.0) > 0.0:
+                    trigger = Decimal(str(intent.invalidation_level))
                 else:
                     ticker = client.ticker_price(intent.symbol)
                     trigger = Decimal(str(ticker.get("price", "0") or "0"))
