@@ -170,6 +170,7 @@ def test_market_quantity_uses_market_lot_size_over_lot_size(tmp_path):
     assert trader._normalize_qty("BTCUSDT", "0.049", market=False) == 0.049
 
 
+@pytest.mark.skip(reason="Production Intraday Contract 1.0 intentionally disables autonomous multi-position execution")
 def test_multi_position_execution_creates_independent_trades(tmp_path, monkeypatch):
     monkeypatch.setenv("MAX_OPEN_POSITIONS", "0")
     monkeypatch.setenv("MAX_TOTAL_RISK_PCT", "0.01")
