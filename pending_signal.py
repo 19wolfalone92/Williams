@@ -43,7 +43,7 @@ def default_expiry_ms(signal: SignalSpec) -> int:
     For legacy SignalSpec values without a deadline, derive it only from the
     originating signal bar. A missing origin timestamp fails closed (0).
     """
-    if int(signal.expires_at_ms or 0) > 0:
+    if int(signal.expires_at_ms or 0) != 0:
         return int(signal.expires_at_ms)
 
     signal_bar_time_ms = int(signal.signal_bar_time_ms or 0)
