@@ -699,6 +699,47 @@ class MultiPositionTrader:
             summary.fee_quote_equivalent + extra_fee_quote,
         )
 
+    def _barrier_legacy_mutation(
+        self,
+        symbol,
+        side,
+        order_type,
+        purpose,
+        submit,
+        *,
+        client_order_id="",
+        quantity="",
+        quote_order_quantity="",
+    ):
+        """Route legacy/manual mutations through the canonical P0 barrier.
+
+        Legacy execution remains available only as an explicit compatibility
+        path; it is never allowed to POST directly to Binance.
+        """
+        if self.execution_barrier is None:
+            raise RuntimeError("ExecutionBarrier is required for all Binance mutations")
+        tf = str(os.getenv("INTERVAL", "1h")).lower()
+        snapshot = self.execution_barrier.context_cache.snapshot()
+        ctx = snapshot.context(str(symbol).upper(), tf)
+        required = {tf: int(ctx.version)} if ctx is not None else {}
+        if not required:
+            raise RuntimeError(f"{symbol}: no live execution context for legacy mutation")
+        intent = __import__("execution_barrier").OrderIntent.new(
+            str(symbol).upper(),
+            str(side).upper(),
+            str(order_type).upper(),
+            required,
+            purpose=str(purpose).upper(),
+            permission_interval=tf,
+            quantity=str(quantity or ""),
+            quote_order_quantity=str(quote_order_quantity or ""),
+            client_order_id=str(client_order_id or ""),
+        )
+        result = self.execution_barrier.execute(intent, submit)
+        if not result.accepted:
+            raise RuntimeError(f"ExecutionBarrier blocked {purpose}: {result.reason}")
+        return result.response
+
     # ------------------------------------------------------------------
     # Protection
     # ------------------------------------------------------------------
@@ -720,12 +761,20 @@ class MultiPositionTrader:
             )
 
         client_id = f"{self.EMERGENCY_PREFIX}{uuid.uuid4().hex[:16]}"
-        sell = self.client.order_safe(
+        sell = self._barrier_legacy_mutation(
             symbol,
             "SELL",
             "MARKET",
+            "EMERGENCY_EXIT",
+            lambda: self.client.order_safe(
+                symbol,
+                "SELL",
+                "MARKET",
+                quantity=self.client.decimal_format(sell_qty),
+                new_client_order_id=client_id,
+            ),
+            client_order_id=client_id,
             quantity=self.client.decimal_format(sell_qty),
-            new_client_order_id=client_id,
         )
         self.db.save_order(sell)
 
@@ -1676,12 +1725,21 @@ class MultiPositionTrader:
                     f"{symbol}: managed quantity is no longer available"
                 )
 
-            sell = self.client.order_safe(
+            manual_client_id = f"{self.MANUAL_PREFIX}{uuid.uuid4().hex[:20]}"
+            sell = self._barrier_legacy_mutation(
                 symbol,
                 "SELL",
                 "MARKET",
+                "MANUAL_SELL",
+                lambda: self.client.order_safe(
+                    symbol,
+                    "SELL",
+                    "MARKET",
+                    quantity=self.client.decimal_format(sell_qty),
+                    new_client_order_id=manual_client_id,
+                ),
+                client_order_id=manual_client_id,
                 quantity=self.client.decimal_format(sell_qty),
-                new_client_order_id=f"{self.MANUAL_PREFIX}{uuid.uuid4().hex[:20]}",
             )
             self.db.save_order(sell)
 
@@ -2269,12 +2327,20 @@ class MultiPositionTrader:
                     float(quote),
                 )
 
-                order = self.client.order_safe(
+                order = self._barrier_legacy_mutation(
                     symbol,
                     "BUY",
                     "MARKET",
-                    quote_order_qty=self.client.decimal_format(quote),
-                    new_client_order_id=client_id,
+                    "LEGACY_ENTRY",
+                    lambda: self.client.order_safe(
+                        symbol,
+                        "BUY",
+                        "MARKET",
+                        quote_order_qty=self.client.decimal_format(quote),
+                        new_client_order_id=client_id,
+                    ),
+                    client_order_id=client_id,
+                    quote_order_quantity=self.client.decimal_format(quote),
                 )
                 self.db.save_order(order)
 
