@@ -91,6 +91,8 @@ Protection/exit/cancel/reconciliation purposes are not subjected to the autonomo
 
 The current Campaign Engine's protective path uses a separately managed hard SELL stop, not native OCO. The legacy Trader has native OCO creation/recovery code, but its uncontracted autonomous BUY entry is fail-closed. Tests must target the currently enabled Campaign Engine path rather than revive the legacy BUY harness.
 
+The branch also introduces a scoped submission capability in `execution_authority.py`. The production `BinanceSpotClient.order_safe()`, raw `order()`, and `cancel_replace()` reject BUY submissions unless the synchronous call is inside the final ExecutionBarrier submit scope. The barrier opens this scope only after successful entry validation and required pre-submit checks. This is defense-in-depth against accidental direct-call bypasses; code review is still required for any new raw REST mutation path.
+
 The branch now adds recovery for the case where:
 - the conditional BUY is authoritatively found filled;
 - protective-stop setup failed before local fill state was committed;
