@@ -25,9 +25,11 @@ class CampaignExecutionService:
     STOP_PREFIX = "WILLV5_STOP_"
     EXIT_PREFIX = "WILLV5_EXIT_"
 
-    def __init__(self, client, db, execution_barrier: ExecutionBarrier | None = None):
+    def __init__(self, client, db, execution_barrier: ExecutionBarrier | None = None, strategy_profile: str | None = None):
         self.client = client
         self.db = db
+        self.strategy_profile = (strategy_profile or os.getenv("WILLIAMS_STRATEGY_PROFILE", "")).strip().upper()
+        self.intraday_core_enabled = self.strategy_profile in {"WILLIAMS_INTRADAY_CORE", "WILLIAMS_INTRADAY_CONSERVATIVE"}
         self.policy = IntradayPolicy.from_env()
         self.economics = ExecutionEconomicsGate(
             fee_pct=float(os.getenv("FEE_BUFFER_PER_SIDE_PCT", "0.001")),
@@ -40,8 +42,9 @@ class CampaignExecutionService:
             portfolio_risk_limit_pct=float(os.getenv("MAX_TOTAL_RISK_PCT", str(self.policy.risk.campaign_risk_pct))),
             campaign_risk_limit_pct=float(os.getenv("MAX_RISK_PER_TRADE_PCT", str(self.policy.risk.campaign_risk_pct))),
             initial_risk_fraction_of_campaign=float(
-                os.getenv("CAMPAIGN_INITIAL_RISK_FRACTION", str(self.policy.risk.initial_risk_pct / max(self.policy.risk.campaign_risk_pct, 1e-12)))
+                os.getenv("CAMPAIGN_INITIAL_RISK_FRACTION", str((self.policy.risk.initial_risk_pct / max(self.policy.risk.campaign_risk_pct, 1e-12)) if self.intraday_core_enabled else "0.40"))
             ),
+            enforce_intraday_contract=self.intraday_core_enabled,
         )
 
     @staticmethod
@@ -291,17 +294,18 @@ class CampaignExecutionService:
         rules = self._rules(signal.symbol)
         lot = rules.get("LOT_SIZE") or rules.get("MARKET_LOT_SIZE") or {}
         nf = rules.get("NOTIONAL") or rules.get("MIN_NOTIONAL") or {}
-        economics = self.economics.evaluate(
-            equity_quote=float(equity_quote),
-            entry_price=trigger,
-            stop_price=stop,
-            risk_pct=requested_risk,
-            spread_pct=spread_pct,
-            min_qty=float(lot.get("minQty", 0) or 0),
-            qty_step=float(lot.get("stepSize", 0) or 0),
-            min_notional=float(nf.get("minNotional", 0) or 0),
-            available_quote=self._available_quote(signal.symbol),
-        )
+        if self.intraday_core_enabled:
+            economics = self.economics.evaluate(
+                equity_quote=float(equity_quote),
+                entry_price=trigger,
+                stop_price=stop,
+                risk_pct=requested_risk,
+                spread_pct=spread_pct,
+                min_qty=float(lot.get("minQty", 0) or 0),
+                qty_step=float(lot.get("stepSize", 0) or 0),
+                min_notional=float(nf.get("minNotional", 0) or 0),
+                available_quote=self._available_quote(signal.symbol),
+            )
         if not economics.allowed:
             raise CampaignExecutionError(
                 f"{signal.symbol}: BLOCKED_BY_EXECUTION_ECONOMICS:{economics.block_reason}"
@@ -1305,17 +1309,18 @@ class CampaignExecutionService:
         rules = self._rules(signal.symbol)
         lot = rules.get("LOT_SIZE") or rules.get("MARKET_LOT_SIZE") or {}
         nf = rules.get("NOTIONAL") or rules.get("MIN_NOTIONAL") or {}
-        economics = self.economics.evaluate(
-            equity_quote=float(equity_quote),
-            entry_price=trigger,
-            stop_price=stop,
-            risk_pct=requested / max(float(equity_quote), 1e-12),
-            spread_pct=spread_pct,
-            min_qty=float(lot.get("minQty", 0) or 0),
-            qty_step=float(lot.get("stepSize", 0) or 0),
-            min_notional=float(nf.get("minNotional", 0) or 0),
-            available_quote=self._available_quote(signal.symbol),
-        )
+        if self.intraday_core_enabled:
+            economics = self.economics.evaluate(
+                equity_quote=float(equity_quote),
+                entry_price=trigger,
+                stop_price=stop,
+                risk_pct=requested / max(float(equity_quote), 1e-12),
+                spread_pct=spread_pct,
+                min_qty=float(lot.get("minQty", 0) or 0),
+                qty_step=float(lot.get("stepSize", 0) or 0),
+                min_notional=float(nf.get("minNotional", 0) or 0),
+                available_quote=self._available_quote(signal.symbol),
+            )
         if not economics.allowed:
             raise CampaignExecutionError(
                 f"{signal.symbol}: BLOCKED_BY_EXECUTION_ECONOMICS:{economics.block_reason}"
