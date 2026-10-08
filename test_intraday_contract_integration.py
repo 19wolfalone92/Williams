@@ -52,18 +52,18 @@ def test_campaign_keeps_h1_decision_and_m15_execution(tmp_path):
         side="BUY",
         signal_type=SignalType.REVERSAL,
         role=SignalRole.ENTRY,
-        timeframe="1h",
+        timeframe="15m",
         signal_bar_time_ms=1,
         trigger_price=101,
         protective_reference=98,
-        execution_timeframe="15m",
+        execution_timeframe="5m",
     )
     campaign = engine.create_campaign(signal, initial_risk_pct=0.0025)
-    assert campaign.decision_timeframe == "1h"
-    assert campaign.execution_timeframe == "15m"
+    assert campaign.decision_timeframe == "15m"
+    assert campaign.execution_timeframe == "5m"
     row = db.get_campaign(campaign.campaign_id)
-    assert row["decision_timeframe"] == "1h"
-    assert row["execution_timeframe"] == "15m"
+    assert row["decision_timeframe"] == "15m"
+    assert row["execution_timeframe"] == "5m"
 
 
 def test_core_wm1_does_not_require_bullish_alligator_or_positive_ao(monkeypatch):
