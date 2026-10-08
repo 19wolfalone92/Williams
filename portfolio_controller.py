@@ -120,11 +120,7 @@ class PortfolioController:
     def select_portfolio(self, open_risk_quote: float = 0.0, open_positions: int = 0):
         """Return candidates for new campaigns and, in campaign mode, later add-ons."""
         campaign_mode = os.getenv("CAMPAIGN_ENGINE", "false").lower() == "true"
-        if (
-            self.max_open_positions > 0
-            and open_positions >= self.max_open_positions
-            and not campaign_mode
-        ):
+        if self.max_open_positions > 0 and open_positions >= self.max_open_positions:
             return []
         analysed = self._analyse_candidates(self.scanner.scan())
         if not analysed:
@@ -136,14 +132,13 @@ class PortfolioController:
         used_pct = float(open_risk_quote) / balance if balance > 0 else self.max_total_risk_pct
         remaining_pct = max(0.0, self.max_total_risk_pct - used_pct)
         selections = []
+        # Core campaign mode does not mean "many concurrent campaigns".
+        # Add-ons belong to CampaignEngine; PortfolioController is allowed to
+        # admit at most one new campaign/position under the intraday contract.
         remaining_slots = (
-            len(analysed)
-            if campaign_mode
-            else (
-                max(0, self.max_open_positions - int(open_positions))
-                if self.max_open_positions > 0
-                else len(analysed)
-            )
+            max(0, self.max_open_positions - int(open_positions))
+            if self.max_open_positions > 0
+            else (1 if self.intraday_core_enabled else len(analysed))
         )
 
         for base in analysed:
