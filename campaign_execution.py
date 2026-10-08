@@ -441,7 +441,7 @@ class CampaignExecutionService:
                 tags = json.loads(item.get("tags_json") or "{}")
             except Exception:
                 tags = {}
-            if str(tags.get("pending_order_client_id", "")) == str(client_id):
+            if str(tags.get("pending_order_client_id", "")) == str(client_id) or str(tags.get("pending_add_client_id", "")) == str(client_id):
                 return self.engine.load_campaign(str(item["campaign_id"]))
         return None
 
