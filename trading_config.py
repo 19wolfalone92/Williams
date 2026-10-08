@@ -77,6 +77,12 @@ class TradingConfig:
     wm1_outside_atr_mult:float=0.10
     wm1_angulation_window:int=5
     wm3_first_allowed:bool=True
+    wave_lookback:int=220
+    wave_min_bars:int=140
+    wave_micro_enabled:bool=False
+    wave_micro_min_bars:int=40
+    wave_full_tf_all:bool=True
+    max_wave_exhaustion_for_entry:float=80.0
     wave_can_invalidate:bool=False
     quant_can_invalidate:bool=False
     dry_run:bool=True
@@ -104,7 +110,7 @@ class TradingConfig:
             leverage=1.0,averaging_down=False,fixed_take_profit=False,eod_flat=True,
             session_start_utc=str(e.get("TRADING_SESSION_START_UTC","08:00")),no_new_entries_utc=str(e.get("NO_NEW_ENTRIES_UTC","18:00")),mandatory_flat_utc=str(e.get("MANDATORY_FLAT_UTC","20:00")),
             min_risk_reward=0.0 if core else max(0.0,_float(e,"MIN_RISK_REWARD",1.5)),atr_period=max(2,_int(e,"ATR_PERIOD",14)),max_atr_pct=max(0.0,_float(e,"MAX_ATR_PCT",0.08)),max_spread_pct=max(0.0,_float(e,"MAX_SPREAD_PCT",0.0015)),max_l2_slippage_pct=max(0.0,_float(e,"MAX_L2_SLIPPAGE_PCT",0.0015)),
-            wm1_outside_atr_mult=max(0.0,_float(e,"WM1_OUTSIDE_ATR_MULT",0.10)),wm1_angulation_window=max(3,_int(e,"WM1_ANGULATION_WINDOW",5)),wm3_first_allowed=_bool(e,"WM3_FIRST_ALLOWED",True),wave_can_invalidate=False,quant_can_invalidate=False,
+            wm1_outside_atr_mult=max(0.0,_float(e,"WM1_OUTSIDE_ATR_MULT",0.10)),wm1_angulation_window=max(3,_int(e,"WM1_ANGULATION_WINDOW",5)),wm3_first_allowed=_bool(e,"WM3_FIRST_ALLOWED",True),wave_lookback=max(50,_int(e,"WAVE_LOOKBACK",220)),wave_min_bars=max(20,_int(e,"WAVE_MIN_BARS",140)),wave_micro_enabled=_bool(e,"WAVE_MICRO_ENABLED",False),wave_micro_min_bars=max(10,_int(e,"WAVE_MICRO_MIN_BARS",40)),wave_full_tf_all=_bool(e,"WAVE_FULL_TF_ALL",True),max_wave_exhaustion_for_entry=max(0.0,_float(e,"MAX_WAVE_EXHAUSTION_FOR_ENTRY",80.0)),wave_can_invalidate=False,quant_can_invalidate=False,
             dry_run=_bool(e,"DRY_RUN",True),allow_live=_bool(e,"ALLOW_LIVE",False),
         )
 
