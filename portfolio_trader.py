@@ -98,7 +98,8 @@ class MultiPositionTrader:
         self.cooldown_minutes = max(0, int(os.getenv("COOLDOWN_MINUTES", "30")))
         self.execution_barrier = execution_barrier
         self.campaign_engine_enabled = (
-            os.getenv("CAMPAIGN_ENGINE", "true").lower() == "true"
+            True if self.intraday_core_enabled
+            else os.getenv("CAMPAIGN_ENGINE", "true").lower() == "true"
         )
         self.campaign_execution = CampaignExecutionService(
             self.client,
