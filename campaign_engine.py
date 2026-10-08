@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import Any, Iterable
 import json
+import os
 import time
 import uuid
 
@@ -322,8 +323,8 @@ class CampaignEngine:
         campaign.position_qty = new_qty
         campaign.additions += 1
         campaign.tranche_index = min(4, campaign.tranche_index + 1)
-        campaign.open_risk_quote += max(0.0, float(risk_quote))
         campaign.pending_risk_quote = 0.0
+        self.recalculate_open_risk(campaign)
         campaign.capital_reserved_quote = 0.0
         campaign.tags["last_add_on_fee_quote"] = float(fee_quote)
         campaign.next_action = "MONITOR_CAMPAIGN"
@@ -362,8 +363,8 @@ class CampaignEngine:
         campaign.initial_stop_price = float(initial_stop_price)
         campaign.current_stop_price = float(initial_stop_price)
         campaign.structural_stop_source = "INITIAL_SIGNAL"
-        campaign.open_risk_quote = max(0.0, float(risk_quote))
         campaign.pending_risk_quote = 0.0
+        self.recalculate_open_risk(campaign, equity_quote=float(risk_quote) / max(float(self.initial_risk_pct()), 1e-12) if risk_quote > 0 else 0.0)
         campaign.capital_reserved_quote = 0.0
         campaign.tranche_index = 1
         campaign.next_action = "MONITOR_CAMPAIGN"
