@@ -9,7 +9,7 @@ from equity_breaker import EquityCircuitBreaker
 from l2_slippage import L2SlippageGuard
 from execution_accumulator import ExecutionSummary, accumulate_order
 from campaign_execution import CampaignExecutionService, CampaignExecutionError
-from campaign_model import SignalSpec, SignalType, SignalRole
+from campaign_model import CampaignState, SignalSpec, SignalType, SignalRole
 from campaign_monitor import CampaignMonitor
 
 
