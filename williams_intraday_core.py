@@ -335,7 +335,7 @@ class WilliamsIntradayCore:
             stop=float(center["high"])+tick
             specs.append(SignalSpec.new(
                 symbol=symbol,side="SELL",signal_type=SignalType.FRACTAL,role=SignalRole.ENTRY,
-                timeframe=policy.timeframes.decision_tf,signal_bar_time_ms=self._time_ms(center),trigger_price=trigger,
+                timeframe=policy.timeframes.decision_tf,signal_bar_time_ms=tms,trigger_price=trigger,
                 protective_reference=stop,invalidation_price=stop,
                 teeth_at_detection=float(cur.get("teeth_shifted",0) or 0),
                 alligator_bullish=bool(cur.get("bullish_alligator",False)),
