@@ -286,9 +286,14 @@ def test_execution_barrier_keeps_protective_sell_available_during_reconciliation
     barrier = ExecutionBarrier(cache, ReconcileDB())
     intent = OrderIntent.new(
         "BTCUSDT", "SELL", "STOP_LOSS",
-        {},
+        {"1h": 999},
         purpose="CAMPAIGN_PROTECTION",
         campaign_id="campaign-open",
+    )
+    intent = __import__("dataclasses").replace(
+        intent,
+        created_at_ms=int(time.time() * 1000) - 60_000,
+        max_age_ms=1,
     )
     calls = []
     result = barrier.execute(
