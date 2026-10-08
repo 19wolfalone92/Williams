@@ -83,6 +83,8 @@ class OrderIntent:
         invalidation_level: float | None = None,
         risk_quote: float = 0.0,
         capital_reserved_quote: float = 0.0,
+        related_order_id: str = "",
+        related_order_list_id: str = "",
     ) -> "OrderIntent":
         decision = intent.risk_decision.williams_decision
         return cls.new(
@@ -98,14 +100,14 @@ class OrderIntent:
             purpose=purpose,
             permission_interval=permission_interval,
             campaign_id=campaign_id,
-            signal_id="",
+            signal_id=signal_id,
             risk_quote=float(risk_quote),
             capital_reserved_quote=float(capital_reserved_quote),
             recv_window=int(intent.recv_window),
             time_in_force=intent.time_in_force,
             reduce_only=bool(intent.reduce_only),
-            related_order_id="",
-            related_order_list_id="",
+            related_order_id=str(related_order_id or ""),
+            related_order_list_id=str(related_order_list_id or ""),
         )
 
 
