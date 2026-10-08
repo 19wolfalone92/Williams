@@ -104,6 +104,7 @@ class ExecutionBarrier:
                 and purpose not in {
                     "EMERGENCY_EXIT",
                     "MANUAL_SELL",
+                    "LEGACY_ENTRY",
                     "LEGACY_PROTECTION",
                     "MANUAL_CANCEL_PROTECTION",
                 }
