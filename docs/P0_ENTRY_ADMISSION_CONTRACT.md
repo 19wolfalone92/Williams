@@ -80,7 +80,7 @@ The implemented live-order adapter is Binance Spot. No Futures, margin, or secon
 
 ## Direct BUY bypass defense
 
-The current `BinanceSpotClient` rejects BUY calls through `order_safe()`, raw `order()`, and `cancel_replace()` unless the call is made inside the scoped submission capability opened by `ExecutionBarrier` after admission. New order-mutation methods that can submit BUY exposure must enforce the same capability or be routed through the barrier. This is a code-level guard against accidental bypass, not a sandbox against arbitrary code importing internal helpers.
+The current `BinanceSpotClient` rejects BUY calls through `order_safe()`, raw `order()`, and `cancel_replace()` unless the call (including a raw `_request` order-creation mutation) is made inside the scoped submission capability opened by `ExecutionBarrier` after admission. New order-mutation methods that can submit BUY exposure must enforce the same capability or be routed through the barrier. This is a code-level guard against accidental bypass, not a sandbox against arbitrary code importing internal helpers.
 
 ## Mandatory persistence semantics
 
