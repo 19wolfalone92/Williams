@@ -1060,55 +1060,37 @@ def status():
 
 @app.get('/api/v1/portfolio', dependencies=[Depends(auth)])
 def portfolio():
-    """Authoritative Binance Spot portfolio snapshot with USDT/BTC valuation."""
+    """Authoritative Binance USDⓈ-M Futures account and managed campaign snapshot."""
     t = state.ensure_trader()
     account = t.client.account()
-    balances = account.get('balances', []) if isinstance(account, dict) else []
-    ticker_rows = t.client.ticker_prices()
-    prices = {}
-    for row in ticker_rows if isinstance(ticker_rows, list) else []:
-        try:
-            symbol = str(row.get('symbol', '')).upper()
-            price = float(row.get('price', 0) or 0)
-            if symbol and price > 0:
-                prices[symbol] = price
-        except (TypeError, ValueError):
-            continue
-    btc_usdt = prices.get('BTCUSDT')
+    total_wallet = float(account.get('totalWalletBalance', 0) or 0)
+    unrealized_account = float(account.get('totalUnrealizedProfit', 0) or 0)
+    total_margin = float(
+        account.get('totalMarginBalance', total_wallet + unrealized_account)
+        or (total_wallet + unrealized_account)
+    )
+    available_margin = float(account.get('availableBalance', 0) or 0)
+
     assets = []
-    for row in balances:
+    for row in account.get('balances', []) if isinstance(account, dict) else []:
         if not isinstance(row, dict):
             continue
         asset = str(row.get('asset', '')).upper()
-        if not asset:
-            continue
-        try:
-            free = float(row.get('free', 0) or 0)
-            locked = float(row.get('locked', 0) or 0)
-        except (TypeError, ValueError):
-            continue
+        free = float(row.get('free', 0) or 0)
+        locked = float(row.get('locked', 0) or 0)
         total = free + locked
-        if total <= 1e-15:
-            continue
-        price_usdt = 1.0 if asset == 'USDT' else prices.get(asset + 'USDT')
-        if price_usdt is None and btc_usdt:
-            price_btc = prices.get(asset + 'BTC')
-            if price_btc:
-                price_usdt = price_btc * btc_usdt
-        value_usdt = total * price_usdt if price_usdt and price_usdt > 0 else 0.0
-        free_value_usdt = free * price_usdt if price_usdt and price_usdt > 0 else 0.0
-        locked_value_usdt = locked * price_usdt if price_usdt and price_usdt > 0 else 0.0
-        assets.append({
-            'asset': asset, 'free': free, 'locked': locked, 'total': total,
-            'price_usdt': price_usdt, 'value_usdt': value_usdt,
-            'free_value_usdt': free_value_usdt, 'locked_value_usdt': locked_value_usdt,
-        })
-    total_equity_usdt = sum(x['value_usdt'] for x in assets)
-    free_equity_usdt = sum(x['free_value_usdt'] for x in assets)
-    locked_equity_usdt = sum(x['locked_value_usdt'] for x in assets)
-    total_equity_btc = total_equity_usdt / btc_usdt if btc_usdt and btc_usdt > 0 else None
-    for row in assets:
-        row['allocation_pct'] = row['value_usdt'] / total_equity_usdt if total_equity_usdt > 0 else 0.0
+        if asset and total > 1e-15:
+            assets.append({
+                'asset': asset,
+                'free': free,
+                'locked': locked,
+                'total': total,
+                'price_usdt': 1.0 if asset == 'USDT' else None,
+                'value_usdt': total if asset == 'USDT' else 0.0,
+                'free_value_usdt': free if asset == 'USDT' else 0.0,
+                'locked_value_usdt': locked if asset == 'USDT' else 0.0,
+            })
+
     multi = state.ensure_multi()
     positions = []
     for trade in multi.open_positions():
@@ -1121,32 +1103,45 @@ def portfolio():
                 **raw,
                 'avg_entry_price': raw.get('entry_price'),
                 'stop_loss': raw.get('stop_price'),
-                'take_profit': raw.get('take_profit_price'),
+                'take_profit': None,
                 'position_value_usdt': position_value,
-                'allocation_pct': position_value / total_equity_usdt if total_equity_usdt > 0 else 0.0,
+                'allocation_pct': position_value / total_margin if total_margin > 0 else 0.0,
                 'unrealized_pnl_usdt': float(raw.get('unrealized_pnl') or 0.0),
                 'unrealized_pnl_pct': float(raw.get('unrealized_pnl_pct') or 0.0),
-                'oco_list_id': raw.get('exit_order_list_id'),
-                'oco_list_client_id': raw.get('exit_order_list_client_id'),
+                'oco_list_id': None,
+                'oco_list_client_id': None,
             })
         except Exception as exc:
             state.last_error = f'portfolio-position: {exc}'
-    unrealized_pnl_usdt = sum(float(p.get('unrealized_pnl_usdt') or 0.0) for p in positions)
+
+    unrealized_pnl_usdt = sum(
+        float(p.get('unrealized_pnl_usdt') or 0.0) for p in positions
+    )
     realized_pnl_usdt = 0.0
     try:
-        row = db().conn.execute("SELECT COALESCE(SUM(CAST(pnl AS REAL)), 0) AS pnl FROM trades WHERE pnl IS NOT NULL").fetchone()
+        row = db().conn.execute(
+            "SELECT COALESCE(SUM(CAST(pnl AS REAL)), 0) AS pnl "
+            "FROM trades WHERE pnl IS NOT NULL"
+        ).fetchone()
         realized_pnl_usdt = float(row['pnl'] or 0.0) if row else 0.0
     except Exception:
         pass
+
+    for row in assets:
+        row['allocation_pct'] = (
+            row['value_usdt'] / total_margin if total_margin > 0 else 0.0
+        )
+
     return {
         'configured': bool(t.client.api_key and t.client.api_secret),
         'testnet': bool(t.client.testnet),
         'source': 'binance_usdm_futures_account',
         'account_type': 'FUTURES',
-        'total_equity_usdt': total_equity_usdt,
-        'total_equity_btc': total_equity_btc,
-        'free_equity_usdt': free_equity_usdt,
-        'locked_equity_usdt': locked_equity_usdt,
+        'total_wallet_balance_usdt': total_wallet,
+        'total_unrealized_pnl_usdt': unrealized_account,
+        'total_equity_usdt': total_margin,
+        'free_equity_usdt': available_margin,
+        'locked_equity_usdt': max(0.0, total_margin - available_margin),
         'realized_pnl_usdt': realized_pnl_usdt,
         'unrealized_pnl_usdt': unrealized_pnl_usdt,
         'assets': assets,
