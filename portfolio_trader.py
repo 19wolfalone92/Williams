@@ -2206,8 +2206,8 @@ class MultiPositionTrader:
                     candidate_risk_pct=min(
                         self.max_risk_per_trade_pct,
                         max(0.0, float(selection.risk.risk_pct) / 100.0),
-                        risk_decision=risk_decision,
-                ),
+                    ),
+                    risk_decision=risk_decision,
                 )
                 results.append(
                     {
