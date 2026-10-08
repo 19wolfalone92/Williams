@@ -198,7 +198,7 @@ def test_fractal_pending_signal_is_not_resurrected_after_trigger_cross():
     from williams_fractal_engine import FractalObservation
 
     ind = pd.DataFrame({
-        "high": [100, 101, 110, 102, 111, 105, 104],
+        "high": [100, 101, 110, 102, 104, 111, 104],
         "low": [99, 98, 99, 100, 103, 101, 100],
         "close": [99.5, 100, 100, 101, 104, 102, 101],
         "teeth_shifted": [105.0] * 7,
