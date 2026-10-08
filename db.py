@@ -244,6 +244,21 @@ class Database:
             reason TEXT,
             payload_json TEXT
         );
+        CREATE TABLE IF NOT EXISTS decision_traces(
+            trace_id TEXT PRIMARY KEY,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            symbol TEXT NOT NULL,
+            decision_time_ms INTEGER NOT NULL,
+            decision_tf TEXT NOT NULL,
+            execution_tf TEXT NOT NULL,
+            micro_tf TEXT NOT NULL,
+            core_valid INTEGER NOT NULL DEFAULT 0,
+            trade_allowed INTEGER NOT NULL DEFAULT 0,
+            block_reason TEXT,
+            trace_json TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_decision_traces_symbol_time
+            ON decision_traces(symbol, decision_time_ms);
         CREATE INDEX IF NOT EXISTS idx_trade_journal_diagnosis
             ON trade_journal(diagnosis);
         CREATE INDEX IF NOT EXISTS idx_trades_open_symbol
@@ -290,6 +305,42 @@ class Database:
                 self.conn.execute(
                     f'ALTER TABLE trades ADD COLUMN {name} {sql_type}'
                 )
+
+    def save_decision_trace(self, trace):
+        data = trace.to_dict() if hasattr(trace, "to_dict") else dict(trace)
+        self.conn.execute(
+            """INSERT OR REPLACE INTO decision_traces(
+                trace_id,symbol,decision_time_ms,decision_tf,execution_tf,micro_tf,
+                core_valid,trade_allowed,block_reason,trace_json
+            ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+            (
+                str(data["trace_id"]),
+                str(data["symbol"]).upper(),
+                int(data.get("decision_time_ms", 0) or 0),
+                str(data.get("decision_tf", "")),
+                str(data.get("execution_tf", "")),
+                str(data.get("micro_tf", "")),
+                1 if data.get("core_valid") else 0,
+                1 if data.get("trade_allowed") else 0,
+                str(data.get("block_reason", "")),
+                json.dumps(data, sort_keys=True, default=str),
+            ),
+        )
+        if not self._transaction_active:
+            self.conn.commit()
+
+    def recent_decision_traces(self, symbol=None, limit=100):
+        if symbol:
+            rows = self.conn.execute(
+                "SELECT * FROM decision_traces WHERE symbol=? ORDER BY decision_time_ms DESC LIMIT ?",
+                (str(symbol).upper(), max(1, min(int(limit), 500))),
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT * FROM decision_traces ORDER BY decision_time_ms DESC LIMIT ?",
+                (max(1, min(int(limit), 500)),),
+            ).fetchall()
+        return [dict(r) for r in rows]
 
     def state_get(self, key, default=None):
         r = self.conn.execute(
