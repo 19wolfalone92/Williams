@@ -71,6 +71,22 @@ def calculate_indicators(df, cfg):
 
     # Accelerator/Decelerator: AO minus its 5-period SMA.
     x["ac"] = x["ao"] - x["ao"].rolling(cfg["ac_period"]).mean()
+
+    # Profitunity Zone (book): Green when AO and AC both rise, Red when both
+    # fall, Gray when they disagree. This is a management/add-on dimension,
+    # not a universal initial-entry gate.
+    x["zone_green"] = x["ao_green"] & (x["ac"] > x["ac"].shift(1))
+    x["zone_red"] = x["ao_red"] & (x["ac"] < x["ac"].shift(1))
+    x["zone_color"] = np.where(
+        x["zone_green"], "GREEN",
+        np.where(x["zone_red"], "RED", "GRAY")
+    )
+    x["zone_streak"] = _streak(
+        pd.Series(x["zone_color"].eq("GREEN"), index=x.index)
+    )
+    x["zone_red_streak"] = _streak(
+        pd.Series(x["zone_color"].eq("RED"), index=x.index)
+    )
     # RSI is a secondary Profitunity market-chaos diagnostic. It is not
     # an autonomous order trigger; campaign policy may use it as context.
     delta = x["close"].diff()
@@ -258,22 +274,19 @@ def calculate_indicators(df, cfg):
     x["short_ac_negative"] = x["ac"] < 0
     x["short_fractal_ready"] = x["last_down_level"].notna()
 
-    # Strict entry: conservative Williams gate + at least one valid Wise-Man
-    # trigger. Fractal breakouts, Super AO continuation and reversal bars are
-    # separate triggers; they are not incorrectly ANDed together.
-    min_wise = int(cfg["min_wise_men_confirmations"])
+    # Legacy compatibility signal. Canonical Campaign mode must use the
+    # stateful Williams core, where WM1/WM2/WM3 are alternative signal families,
+    # not AND-filters. Keeping this field aligned with that principle prevents
+    # an old caller from reintroducing the historical over-filter.
     x["long_signal"] = (
-        # Williams' first gate: no downstream Wise-Man signal is actionable
-        # until a confirmed fractal has formed outside the Teeth/balance line.
-        x["long_fractal_outside"]
-        & x["long_bullish"]
-        & x["long_awake"]
-        & x["long_wise_man_count"].ge(min_wise)
+        x["long_wise_reversal_entry"]
+        | x["long_super_ao_signal"]
+        | x["long_fractal_signal"]
     )
     x["short_signal"] = (
-        x["short_bearish"]
-        & x["short_awake"]
-        & x["short_wise_man_count"].ge(min_wise)
+        x["short_wise_reversal_entry"]
+        | x["short_super_ao_signal"]
+        | x["short_fractal_signal"]
     )
 
     def _family(row, side):
