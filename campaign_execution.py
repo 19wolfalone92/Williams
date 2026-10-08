@@ -1027,6 +1027,51 @@ class CampaignExecutionService:
                 })
         return results
 
+    def cancel_pending_for_eod(self, reason: str = "EOD_PENDING_CANCELLED") -> list[dict[str, Any]]:
+        """Cancel every managed conditional BUY when the entry window closes."""
+        results = []
+        for row in list(self.db.open_campaigns()):
+            state = str(row.get("state", "")).upper()
+            if state not in {"ENTRY_PENDING", "ENTRY_ARMING", "ADD_ON_PENDING", "ADD_ON_ARMING"}:
+                continue
+            campaign = self.engine.load_campaign(str(row["campaign_id"]))
+            if campaign is None:
+                continue
+            client_id = str(campaign.tags.get("pending_order_client_id", "") or "")
+            if not client_id:
+                client_id = str(campaign.tags.get("pending_add_client_id", "") or "")
+            try:
+                order = self.client.get_order(
+                    campaign.symbol,
+                    orig_client_order_id=client_id,
+                ) if client_id else {}
+                status = str(order.get("status", "")).upper()
+                oid = order.get("orderId")
+                if status in {"NEW", "PARTIALLY_FILLED", "PENDING_NEW"} and oid is not None:
+                    self._execute_cancel(campaign, int(oid), "CAMPAIGN_EOD_CANCEL")
+                    status = "CANCELED"
+                elif status == "FILLED":
+                    # Do not guess. Let normal reconciliation adopt the fill.
+                    results.append({"campaign_id": campaign.campaign_id, "state": "FILLED_DURING_EOD", "symbol": campaign.symbol})
+                    continue
+                elif status in {"", "UNKNOWN"}:
+                    self.engine.mark_reconcile_required(campaign, "EOD cancellation could not verify pending exchange order")
+                    results.append({"campaign_id": campaign.campaign_id, "state": "RECONCILE_REQUIRED", "symbol": campaign.symbol})
+                    continue
+                if status in {"CANCELED", "EXPIRED", "REJECTED"}:
+                    self.db.set_campaign_signal_state(campaign.current_signal_id, SignalState.CANCELLED.value)
+                    campaign.exit_reason = reason
+                    campaign.next_action = "WAIT_NEW_SESSION"
+                    if campaign.state != CampaignState.CLOSED:
+                        campaign.transition(CampaignState.CLOSED, reason=reason)
+                    self.db.save_campaign(campaign)
+                    self.db.state_delete(f"entry_client_order_id:{campaign.symbol}")
+                    results.append({"campaign_id": campaign.campaign_id, "state": "CLOSED", "symbol": campaign.symbol, "reason": reason})
+            except Exception as exc:
+                self.engine.mark_reconcile_required(campaign, f"EOD pending cancellation failed: {exc}")
+                results.append({"campaign_id": campaign.campaign_id, "state": "RECONCILE_REQUIRED", "symbol": campaign.symbol, "error": str(exc)})
+        return results
+
     def _active_campaign_for_symbol(self, symbol: str):
         rows = self.db.conn.execute(
             "SELECT campaign_id FROM campaigns WHERE symbol=? "
@@ -1079,12 +1124,17 @@ class CampaignExecutionService:
         portfolio_capacity = float(equity_quote) * self.engine.portfolio_risk_limit_pct
         portfolio_reserved = float(self.db.campaign_risk_reserved_quote())
         portfolio_remaining = max(0.0, portfolio_capacity - portfolio_reserved)
+        weighted_pct = self.engine.next_add_on_risk_pct(
+            campaign_reserved_risk_quote=reserved,
+            equity_quote=float(equity_quote),
+            tranche_index=int(campaign.tranche_index),
+        )
         requested = min(
             campaign_remaining,
             portfolio_remaining,
             float(equity_quote) * min(
                 float(candidate_risk_pct),
-                float(os.getenv("CAMPAIGN_ADD_RISK_MAX_PCT", "0.002")),
+                weighted_pct,
             ),
         )
         if requested <= 0:
@@ -1115,6 +1165,29 @@ class CampaignExecutionService:
             requested / max(effective_loss_fraction, 1e-12),
         )
         qty = self._normalized_entry_qty(signal.symbol, notional, trigger)
+
+        book = self.client.book_ticker(signal.symbol)
+        bid = float(book.get("bidPrice", 0) or 0)
+        ask = float(book.get("askPrice", 0) or 0)
+        mid = (bid + ask) / 2.0 if bid > 0 and ask > 0 else 0.0
+        spread_pct = (ask - bid) / mid if mid > 0 else 1.0
+        rules = self._rules(signal.symbol)
+        lot = rules.get("LOT_SIZE") or rules.get("MARKET_LOT_SIZE") or {}
+        nf = rules.get("NOTIONAL") or rules.get("MIN_NOTIONAL") or {}
+        economics = self.economics.evaluate(
+            equity_quote=float(equity_quote),
+            entry_price=trigger,
+            stop_price=stop,
+            risk_pct=requested / max(float(equity_quote), 1e-12),
+            spread_pct=spread_pct,
+            min_qty=float(lot.get("minQty", 0) or 0),
+            qty_step=float(lot.get("stepSize", 0) or 0),
+            min_notional=float(nf.get("minNotional", 0) or 0),
+        )
+        if not economics.allowed:
+            raise CampaignExecutionError(
+                f"{signal.symbol}: BLOCKED_BY_EXECUTION_ECONOMICS:{economics.block_reason}"
+            )
         cid = f"{self.ENTRY_PREFIX}ADD_{uuid.uuid4().hex[:16]}"
 
         prior = self.db.conn.execute(
