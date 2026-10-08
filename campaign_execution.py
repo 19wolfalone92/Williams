@@ -275,6 +275,10 @@ class CampaignExecutionService:
         # IMPORTANT: persist ENTRY_PENDING before touching Binance. A fast
         # conditional fill can arrive on the user stream immediately.
         self.engine.arm_entry(campaign, signal)
+        campaign.tags["pending_signal"] = PendingSignal.from_spec(
+            signal, state=SignalState.ARMED
+        ).to_dict()
+        self.db.save_campaign(campaign)
         self.db.state_set(f"campaign_state:{campaign.campaign_id}", campaign.state.value)
 
         intent = OrderIntent.new(
@@ -1161,6 +1165,10 @@ class CampaignExecutionService:
             risk_quote=requested,
             capital_reserved_quote=qty * trigger,
         )
+        campaign.tags["pending_signal"] = PendingSignal.from_spec(
+            signal, state=SignalState.ARMED
+        ).to_dict()
+        self.db.save_campaign(campaign)
         # Reuse the same durable per-symbol pending key. Only one conditional
         # order for a symbol may be waiting at a time; this keeps startup
         # recovery idempotent and avoids a second persistence protocol.
