@@ -205,8 +205,42 @@ private data class CampaignSignalN(
     val protectivePrice: Double,
     val teethAtDetection: Double,
     val invalidationPrice: Double,
+    val angulationScore: Double,
     val reason: String
 )
+
+private data class ProofVectorN(
+    val contextPass: Boolean,
+    val behaviorPass: Boolean,
+    val structurePass: Boolean,
+    val locationPass: Boolean,
+    val angulationPass: Boolean,
+    val momentumPass: Boolean,
+    val priceProofPass: Boolean,
+    val invalidationPresent: Boolean
+) {
+    val fullyProven: Boolean
+        get() = contextPass &&
+            behaviorPass &&
+            structurePass &&
+            locationPass &&
+            angulationPass &&
+            momentumPass &&
+            priceProofPass &&
+            invalidationPresent
+
+    val diagnosticScore: Double
+        get() = listOf(
+            contextPass,
+            behaviorPass,
+            structurePass,
+            locationPass,
+            angulationPass,
+            momentumPass,
+            priceProofPass,
+            invalidationPresent
+        ).count { it } / 8.0
+}
 
 private data class BaseAnalysis(
     val symbol: String,
@@ -6417,6 +6451,7 @@ private class NativeEngine(
                         protectivePrice = candles[i].l - tick,
                         teethAtDetection = teethS[i].takeIf { it.isFinite() } ?: 0.0,
                         invalidationPrice = candles[i].l - tick,
+                        angulationScore = angulationScore(i),
                         reason = "WM1 bullish reversal; waiting above signal-bar high"
                     )
                 }
@@ -6447,6 +6482,7 @@ private class NativeEngine(
                             protectivePrice = candles[i].l - tick,
                             teethAtDetection = teethS[i].takeIf { it.isFinite() } ?: 0.0,
                             invalidationPrice = candles[i].l - tick,
+                            angulationScore = angulationScore(i),
                             reason = "WM2 Super AO: third rising AO bar; conditional trigger above price bar"
                         )
                     }
@@ -6471,6 +6507,7 @@ private class NativeEngine(
                     protectivePrice = candles[fractalCenter].l - tick,
                     teethAtDetection = currentTeeth,
                     invalidationPrice = candles[fractalCenter].l - tick,
+                    angulationScore = angulationScore(fractalCenter),
                     reason = "WM3 confirmed buy fractal; trigger must remain above Teeth"
                 )
             }
