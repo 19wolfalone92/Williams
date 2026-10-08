@@ -15,6 +15,7 @@ import time
 import uuid
 
 from campaign_order_fsm import CampaignOrderState, CampaignOrderStateMachine
+from diagnostics import DiagnosticManager
 from decision_trace import DecisionTrace
 from pending_signal import PendingSignal
 from campaign_model import (
@@ -640,6 +641,23 @@ class CampaignEngine:
         campaign.next_action = "MANUAL_INTERVENTION"
         campaign.tags["fault_reason"] = str(reason)
         self.db.save_campaign(campaign)
+        diagnostic = DiagnosticManager(self.db)
+        _, report_path = diagnostic.create_williams_error_report(
+            component="CampaignEngine",
+            error=RuntimeError(str(reason)),
+            severity="CRITICAL",
+            metadata={
+                "campaign_id": campaign.campaign_id,
+                "symbol": campaign.symbol,
+                "campaign_state": fsm.state.value,
+                "canonical_last_valid_state": campaign.tags.get(
+                    "canonical_last_valid_state",
+                    "",
+                ),
+                "required_action": "MANUAL_RECONCILIATION",
+            },
+        )
+        campaign.tags["williams_error_report_path"] = report_path
         self.db.log_campaign_event(
             campaign.campaign_id,
             "FAULT",
