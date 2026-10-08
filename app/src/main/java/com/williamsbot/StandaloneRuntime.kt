@@ -2812,13 +2812,20 @@ private class NativeEngine(
         require(newId.isNotBlank()) {
             "Campaign protective replacement returned no orderId"
         }
+        val equity = estimateManagedEquity().coerceAtLeast(0.0)
+        val effectiveRiskQuote =
+            position.qty * max(0.0, position.entry - stop) +
+                position.qty * position.entry * (2.0 * feeBufferPerSidePct + maxSlippagePct)
+        val effectiveRiskPct =
+            if (equity > 0.0) effectiveRiskQuote / equity else position.riskPct
         synchronized(positions) {
             positions[position.symbol] =
                 position.copy(
                     stop = stop,
                     stopSource = "3_5_BAR_STRUCTURE",
                     protectiveOrderId = newId,
-                    campaignState = "TRAILING"
+                    campaignState = "TRAILING",
+                    riskPct = effectiveRiskPct
                 )
         }
         savePersistedState()
@@ -3502,8 +3509,16 @@ private class NativeEngine(
             2 -> 0.75
             else -> 0.5
         }
+        val historicalWeight = when (position.additions) {
+            0 -> 5.0
+            1 -> 4.0
+            2 -> 3.0
+            else -> 2.0
+        }
+        val totalWeight = 1.0 + 5.0 + 4.0 + 3.0 + 2.0
+        val weightedCap = campaignRiskLimitPct * (historicalWeight / totalWeight)
         val riskPct = min(
-            campaignAddRiskCapPct * trancheBias,
+            min(campaignAddRiskCapPct * trancheBias, weightedCap),
             min(remainingCampaign, remainingPortfolio)
         )
         if (riskPct <= 0.0 || equity <= 0.0) return
@@ -6490,32 +6505,27 @@ private class NativeEngine(
             }
         }
 
-        // WM2: three consecutive rising AO histogram bars, with the previously
-        // valid buy-fractal/Balance-Line context still present.
+        // WM2: the Second Wise Man is the third consecutive rising AO
+        // bar. A fractal is a separate Wise Man and is not a mandatory gate.
         var streak = 0
         for (i in candles.lastIndex downTo 35) {
             val a = ao(candles, i)
             val p = ao(candles, i - 1)
             if (a > p) streak++ else break
             if (streak == 3) {
-                val priorFractalValid = lastValidFractalLevel(i - 1)?.let { (center, level) ->
-                    teethS[center + 2].isFinite() && level > teethS[center + 2]
-                } ?: false
-                if (priorFractalValid) {
-                    val trigger = candles[i].h + tick
-                    if (candles[current].c < trigger) {
-                        out += CampaignSignalN(
-                            signalId = campaignSignalId(symbol, frame, "SUPER_AO", candles[i].t),
-                            type = "SUPER_AO",
-                            role = "ENTRY",
-                            signalBarTimeMs = candles[i].t,
-                            triggerPrice = trigger,
-                            protectivePrice = candles[i].l - tick,
-                            teethAtDetection = teethS[i].takeIf { it.isFinite() } ?: 0.0,
-                            invalidationPrice = candles[i].l - tick,
-                            reason = "WM2 Super AO: third rising AO bar; conditional trigger above price bar"
-                        )
-                    }
+                val trigger = candles[i].h + tick
+                if (candles[current].c < trigger) {
+                    out += CampaignSignalN(
+                        signalId = campaignSignalId(symbol, frame, "SUPER_AO", candles[i].t),
+                        type = "SUPER_AO",
+                        role = "ENTRY",
+                        signalBarTimeMs = candles[i].t,
+                        triggerPrice = trigger,
+                        protectivePrice = candles[i].l - tick,
+                        teethAtDetection = teethS[i].takeIf { it.isFinite() } ?: 0.0,
+                        invalidationPrice = candles[i].l - tick,
+                        reason = "WM2 Super AO: third rising AO bar; conditional trigger above price bar"
+                    )
                 }
                 break
             }
