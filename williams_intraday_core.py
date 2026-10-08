@@ -104,16 +104,24 @@ class WilliamsIntradayCore:
         return cls._state(frame)
 
     @staticmethod
-    def _ao_event(ind,side,max_age=32):
+    def _ao_event(ind,side):
+        """Return only the current 2->3 Super AO transition.
+
+        A Super AO event is a market event, not a permanently recurring
+        condition. Searching backwards for the last transition allowed an
+        old trigger to be re-emitted days later after price had already
+        invalidated it. The Campaign Engine can keep a valid conditional
+        order alive; Core must not manufacture the same event repeatedly.
+        """
         col="ao_green" if side=="LONG" else "ao_red"
         streak="ao_green_streak" if side=="LONG" else "ao_red_streak"
-        if col not in ind.columns or streak not in ind.columns:return None
-        start=max(0,len(ind)-max(3,int(max_age)))
-        for i in range(len(ind)-1,start-1,-1):
-            if not bool(ind.iloc[i].get(col,False)):continue
-            before=int(ind.iloc[i-1].get(streak,0) or 0) if i>0 else 0
-            if before==2:return i
-        return None
+        if col not in ind.columns or streak not in ind.columns or len(ind)<2:
+            return None
+        i=len(ind)-1
+        if not bool(ind.iloc[i].get(col,False)):
+            return None
+        before=int(ind.iloc[i-1].get(streak,0) or 0)
+        return i if before==2 else None
 
     def _latest_wm3(self,ind,side,tick,observations=None):
         if len(ind)<5:return None
@@ -127,14 +135,26 @@ class WilliamsIntradayCore:
             reverse=True,
         )
         # Newer fractal supersedes an older same-direction pending fractal.
-        # Never fall back to a superseded fractal after the newest one has
-        # already crossed or failed its trigger-time Teeth condition.
         if not active:return None
         o=active[0]
         trigger=float(o.level)+(tick if side=="LONG" else -tick)
         teeth_ok=trigger>teeth_now if side=="LONG" else trigger<teeth_now
+        if not teeth_ok:
+            return None
+
+        # A conditional fractal order remains valid until it is hit or a newer
+        # same-direction fractal replaces it. If price crossed the trigger
+        # earlier (including outside the current entry session), it must not be
+        # resurrected later merely because the current close moved back.
+        post_confirmation=ind.iloc[o.confirmation_index+1:]
+        if len(post_confirmation):
+            if side=="LONG" and float(post_confirmation["high"].max())>=trigger:
+                return None
+            if side=="SHORT" and float(post_confirmation["low"].min())<=trigger:
+                return None
+
         price_ok=trigger>float(ind.iloc[-1]["close"]) if side=="LONG" else trigger<float(ind.iloc[-1]["close"])
-        return o if teeth_ok and price_ok else None
+        return o if price_ok else None
 
     @staticmethod
     def _mouth_metrics(row,side):
@@ -299,7 +319,7 @@ class WilliamsIntradayCore:
             stop=max(0.0,float(center["low"])-tick)
             specs.append(SignalSpec.new(
                 symbol=symbol,side="BUY",signal_type=SignalType.FRACTAL,role=SignalRole.ENTRY,
-                timeframe=policy.timeframes.decision_tf,signal_bar_time_ms=self._time_ms(center),trigger_price=trigger,
+                timeframe=policy.timeframes.decision_tf,signal_bar_time_ms=tms,trigger_price=trigger,
                 protective_reference=stop,invalidation_price=stop,
                 teeth_at_detection=float(cur.get("teeth_shifted",0) or 0),
                 alligator_bullish=bool(cur.get("bullish_alligator",False)),
