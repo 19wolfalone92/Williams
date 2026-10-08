@@ -90,8 +90,8 @@ class WilliamsDecision:
             raise ValueError("WilliamsDecision.symbol is required")
         if int(self.timestamp) < 0:
             raise ValueError("WilliamsDecision.timestamp must be >= 0")
-        if int(self.wise_man_stage) < 0 or int(self.wise_man_stage) > 3:
-            raise ValueError("wise_man_stage must be in [0, 3]")
+        if int(self.wise_man_stage) not in {1, 2, 3}:
+            raise ValueError("wise_man_stage must be 1, 2 or 3")
         if float(self.trigger_price) <= 0:
             raise ValueError("trigger_price must be > 0")
         if float(self.invalidation_price) <= 0:
