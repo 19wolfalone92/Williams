@@ -292,6 +292,13 @@ def extract_long_signal_specs(
                     alligator_bullish=bool(row.get("bullish_alligator", False)),
                     alligator_awake=bool(row.get("alligator_awake", False)),
                     angulation_score=score,
+                    angulation_valid=True,
+                    behavior_confirmed=True,
+                    structure_confirmed=True,
+                    momentum_confirmed=False,
+                    mfi_window=str(
+                        row.get("profitunity_window", "UNKNOWN") or "UNKNOWN"
+                    ).upper(),
                     wave_confidence=float(wave_confidence),
                     wave_exhaustion_risk=float(wave_exhaustion_risk),
                     htf_confirmed=bool(htf_confirmed),
@@ -339,6 +346,15 @@ def extract_long_signal_specs(
                         or current.get("alligator_awake", False)
                     ),
                     angulation_score=float(_angulation(ind, i)[0]),
+                    angulation_valid=bool(_angulation(ind, i)[1]),
+                    behavior_confirmed=True,
+                    structure_confirmed=bool(
+                        ind.iloc[max(0, i - 1)].get("long_fractal_outside", False)
+                    ),
+                    momentum_confirmed=True,
+                    mfi_window=str(
+                        row.get("profitunity_window", "UNKNOWN") or "UNKNOWN"
+                    ).upper(),
                     wave_confidence=float(wave_confidence),
                     wave_exhaustion_risk=float(wave_exhaustion_risk),
                     htf_confirmed=bool(htf_confirmed),
@@ -385,6 +401,16 @@ def extract_long_signal_specs(
                         or ind.iloc[confirmation_i].get("alligator_awake", False)
                     ),
                     angulation_score=float(_angulation(ind, confirmation_i)[0]),
+                    angulation_valid=bool(_angulation(ind, confirmation_i)[1]),
+                    behavior_confirmed=True,
+                    structure_confirmed=True,
+                    momentum_confirmed=bool(
+                        float(wave_confidence) > 0.0
+                        or bool(current.get("ao_momentum_rising", False))
+                    ),
+                    mfi_window=str(
+                        row.get("profitunity_window", "UNKNOWN") or "UNKNOWN"
+                    ).upper(),
                     wave_confidence=float(wave_confidence),
                     wave_exhaustion_risk=float(wave_exhaustion_risk),
                     htf_confirmed=bool(htf_confirmed),
