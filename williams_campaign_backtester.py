@@ -167,6 +167,11 @@ class WilliamsCampaignBacktester:
             side="LONG",
             teeth_series=m15_ind.get("teeth_shifted"),
         )
+        fractals_short=self.core.fractals.detect(
+            m15_ind,
+            side="SHORT",
+            teeth_series=m15_ind.get("teeth_shifted"),
+        )
         h1_times,h1_states=self._state_timeline(self.core,h1,"1h")
         h4_times,h4_states=self._state_timeline(self.core,h4,"4h")
         d1_times,d1_states=self._state_timeline(self.core,d1,"1d")
@@ -401,6 +406,7 @@ class WilliamsCampaignBacktester:
                 context_state=h1_state,
                 tick_size=tick_size,
                 fractals_long=fractals_long,
+                fractals_short=fractals_short,
             )
 
             if (
