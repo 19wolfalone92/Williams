@@ -13,6 +13,18 @@ on:
       - "data.py"
       - "stress_suite.py"
       - ".github/workflows/williams-historical-backtest.yml"
+  pull_request:
+    branches: ["main"]
+    paths:
+      - "run_backtest.py"
+      - "williams_campaign_backtester.py"
+      - "williams_intraday_core.py"
+      - "williams_intraday_spec.py"
+      - "campaign_model.py"
+      - "strategy.py"
+      - "data.py"
+      - "stress_suite.py"
+      - ".github/workflows/williams-historical-backtest.yml"
   workflow_dispatch:
 
 permissions:
