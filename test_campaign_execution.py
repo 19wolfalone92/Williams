@@ -162,3 +162,79 @@ def test_stop_replacement_never_lowers_stop():
         assert current > 0
         assert not svc.engine.propose_stop(campaign, current - 1.0, "BAD")
         assert campaign.current_stop_price == current
+
+
+def test_campaign_permission_denial_is_fail_closed_before_exchange_mutation():
+    class DenyContext(FakeContext):
+        def __init__(self, version=1):
+            super().__init__(version)
+            self.allow_long = False
+
+    class DenySnapshot:
+        def context(self, symbol, interval):
+            return DenyContext(1)
+
+    class DenyCache(FakeCache):
+        def snapshot(self):
+            return DenySnapshot()
+
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "permission.sqlite3"))
+        barrier = ExecutionBarrier(DenyCache(), db)
+        calls = []
+
+        from execution_barrier import OrderIntent
+        intent = OrderIntent.new(
+            "BTCUSDT",
+            "BUY",
+            "STOP_LOSS",
+            {},
+            purpose="CAMPAIGN_ENTRY",
+            permission_interval="5m",
+            campaign_id="campaign-1",
+            client_order_id="WILLV5_ENTRY_TEST",
+        )
+        result = barrier.execute(
+            intent,
+            lambda: calls.append("BINANCE") or {"orderId": "1"},
+        )
+        assert result.accepted is False
+        assert "does not allow LONG" in result.reason
+        assert calls == []
+
+
+def test_reconcile_required_campaign_risk_remains_reserved():
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "risk.sqlite3"))
+        engine = CampaignEngine(db)
+        spec = signal(trigger=101.0)
+        campaign = engine.create_campaign(spec, initial_risk_pct=0.002)
+        campaign.pending_risk_quote = 25.0
+        campaign.state = CampaignState.RECONCILE_REQUIRED
+        db.save_campaign(campaign)
+        assert db.campaign_risk_reserved_quote() == 25.0
+
+
+def test_partial_fill_cancel_creates_canonical_cancel_intent():
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "partial-cancel.sqlite3"))
+        client = MockExchange()
+        client.partial_fill_ratio = 0.4
+        svc = service(db, client)
+
+        result = svc.arm_initial_entry(
+            signal(trigger=101.0),
+            equity_quote=10_000,
+            candidate_risk_pct=0.004,
+        )
+        client.set_price("BTCUSDT", 101.5)
+        svc.reconcile_pending_entries()
+
+        row = db.conn.execute(
+            "SELECT purpose,status FROM execution_intents "
+            "WHERE purpose='CAMPAIGN_ENTRY_PARTIAL_CANCEL' "
+            "ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+        assert row is not None
+        assert row["purpose"] == "CAMPAIGN_ENTRY_PARTIAL_CANCEL"
+        assert row["status"] == "SUBMITTED"
