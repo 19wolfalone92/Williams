@@ -1670,28 +1670,28 @@ class FuturesWilliamsRuntime:
                 self._trail(campaign)
 
         active_symbols = {str(r["symbol"]).upper() for r in self.db.open_trades()}
-            for candidate in candidates:
-                if candidate.symbol in active_symbols:
-                    continue
-                if len(self.open_positions()) >= int(os.getenv("MAX_OPEN_POSITIONS", "5")):
-                    break
-                if candidate.symbol in pending_symbols or candidate.symbol in self._locks:
-                    continue
-                if self.unresolved_symbols():
-                    break
-                self._locks.add(candidate.symbol)
-                try:
-                    self._arm_entry(candidate)
-                except Exception as exc:
-                    self.db.log_event("WARNING", "futures_entry_blocked", str(exc), {"symbol": candidate.symbol})
-                finally:
-                    self._locks.discard(candidate.symbol)
-                    # Do not mark a symbol active merely because an arm attempt
-                    # failed; recovery/pending state is the authoritative source.
-                    if self.db.open_trade(candidate.symbol) is not None:
-                        active_symbols.add(candidate.symbol)
-                    if any(s == candidate.symbol for s, _ in self._pending_entries()):
-                        pending_symbols.add(candidate.symbol)
+        for candidate in candidates:
+            if candidate.symbol in active_symbols:
+                continue
+            if len(self.open_positions()) >= int(os.getenv("MAX_OPEN_POSITIONS", "5")):
+                break
+            if candidate.symbol in pending_symbols or candidate.symbol in self._locks:
+                continue
+            if self.unresolved_symbols():
+                break
+            self._locks.add(candidate.symbol)
+            try:
+                self._arm_entry(candidate)
+            except Exception as exc:
+                self.db.log_event("WARNING", "futures_entry_blocked", str(exc), {"symbol": candidate.symbol})
+            finally:
+                self._locks.discard(candidate.symbol)
+                # Do not mark a symbol active merely because an arm attempt
+                # failed; recovery/pending state is the authoritative source.
+                if self.db.open_trade(candidate.symbol) is not None:
+                    active_symbols.add(candidate.symbol)
+                if any(s == candidate.symbol for s, _ in self._pending_entries()):
+                    pending_symbols.add(candidate.symbol)
 
         self.recover()
 
