@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
 from market_context import ContextCache, MarketStateSnapshot
+from decision_trace import DecisionTrace
+from order_state_machine import OrderStateMachine, OrderLifecycleState
 
 
 @dataclass(frozen=True)
@@ -83,6 +85,21 @@ class ExecutionBarrier:
                 self.db.log_event(level, event, message, raw or {"intent_id": intent.intent_id})
             except Exception:
                 pass
+
+    def _trace(self, intent: OrderIntent, *, stage: str, decision: str, reason: str = "", blocker: str = "", payload=None) -> None:
+        if self.db is None or not hasattr(self.db, "save_decision_trace"):
+            return
+        try:
+            self.db.save_decision_trace(DecisionTrace(
+                intent_id=intent.intent_id, stage=stage, decision=decision,
+                symbol=intent.symbol, purpose=intent.purpose,
+                campaign_id=intent.campaign_id, signal_id=intent.signal_id,
+                reason=reason, blocker=blocker,
+                context_versions=dict(intent.required_context_versions),
+                payload=payload or {},
+            ))
+        except Exception:
+            pass
 
     def _validate(self, intent: OrderIntent, snapshot: MarketStateSnapshot) -> str:
         if intent.created_at_ms:
@@ -207,7 +224,10 @@ class ExecutionBarrier:
         pre_submit_checks: Callable[[MarketStateSnapshot], None] | None = None,
     ) -> ExecutionResult:
         with self.context_cache.execution_lock:
+            state_machine = OrderStateMachine(intent.intent_id)
+            state_machine.transition(OrderLifecycleState.ADMISSION)
             self._persist(intent, "PENDING")
+            self._trace(intent, stage="ADMISSION", decision="STARTED", payload={"state": state_machine.state.value})
             if self.db is not None and hasattr(self.db, "save_execution_event"):
                 try:
                     self.db.save_execution_event(intent.intent_id, "ADMISSION_STARTED", dict(intent.required_context_versions))
@@ -216,6 +236,9 @@ class ExecutionBarrier:
             snapshot = self.context_cache.snapshot()
             reason = self._validate(intent, snapshot)
             if reason:
+                state_machine.mark_blocked(reason)
+                self._trace(intent, stage="VALIDATION", decision="BLOCKED", reason=reason, blocker=reason, payload={"state": state_machine.state.value})
+                self._persist(intent, "BLOCKED", reason)
                 self._record("WARNING", "execution_blocked", intent, reason)
                 return ExecutionResult(intent.intent_id, False, reason=reason)
 
@@ -224,6 +247,8 @@ class ExecutionBarrier:
                     pre_submit_checks(snapshot)
                 except Exception as exc:
                     reason = f"pre_submit_check_failed: {type(exc).__name__}: {exc}"
+                    state_machine.mark_blocked(reason)
+                    self._trace(intent, stage="PRE_SUBMIT", decision="BLOCKED", reason=reason, blocker=reason, payload={"state": state_machine.state.value})
                     self._persist(intent, "BLOCKED", reason)
                     self._record("WARNING", "execution_blocked", intent, reason)
                     return ExecutionResult(intent.intent_id, False, reason=reason)
@@ -243,9 +268,13 @@ class ExecutionBarrier:
                     "client_order_id": intent.client_order_id,
                 },
             )
+            state_machine.mark_submission_pending()
+            self._trace(intent, stage="PRE_SUBMIT", decision="ADMITTED", payload={"state": state_machine.state.value})
             try:
                 response = submit()
             except Exception as exc:
+                state_machine.mark_ambiguous(f"{type(exc).__name__}: {exc}")
+                self._trace(intent, stage="BINANCE_SUBMIT", decision="AMBIGUOUS", reason=str(exc), blocker="EXCHANGE_OUTCOME_UNKNOWN", payload={"state": state_machine.state.value})
                 self._persist(intent, "AMBIGUOUS", f"{type(exc).__name__}: {exc}")
                 self._record(
                     "ERROR",
@@ -266,6 +295,8 @@ class ExecutionBarrier:
                 and response.get("clientOrderId") is None
                 and response.get("orderListId") is None
             ):
+                state_machine.mark_reconcile_required("submission response has no exchange identity")
+                self._trace(intent, stage="BINANCE_ACK", decision="RECONCILE_REQUIRED", reason="submission response has no exchange identity", blocker="MISSING_EXCHANGE_IDENTITY", payload={"state": state_machine.state.value})
                 self._persist(intent, "AMBIGUOUS", "submission response has no exchange identity")
                 self._record(
                     "ERROR",
@@ -278,6 +309,21 @@ class ExecutionBarrier:
                     "Execution mutation response is missing exchange identity; reconciliation required"
                 )
 
+            try:
+                state_machine.transition(OrderLifecycleState.SUBMITTED)
+            except ValueError:
+                pass
+            if isinstance(response, dict) and response.get("status"):
+                try:
+                    state_machine.record_exchange_status(str(response.get("status")))
+                except ValueError:
+                    pass
+            self._trace(intent, stage="BINANCE_ACK", decision="SUBMITTED", payload={
+                "state": state_machine.state.value,
+                "status": response.get("status") if isinstance(response, dict) else "",
+                "order_id": response.get("orderId") if isinstance(response, dict) else None,
+                "order_list_id": response.get("orderListId") if isinstance(response, dict) else None,
+            })
             self._persist(intent, "SUBMITTED")
             if self.db is not None and hasattr(self.db, "save_execution_event"):
                 try:
