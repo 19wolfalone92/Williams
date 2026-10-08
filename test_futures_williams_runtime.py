@@ -265,7 +265,7 @@ def test_futures_pre_submit_blocks_entry_when_position_appears_after_signal():
     runtime.engine = type("E", (), {"load_campaign": lambda self, cid: campaign})()
     runtime.config = type("Cfg", (), {"allow_long": True, "allow_short": True})()
     runtime._position = lambda symbol: {"positionAmt": "0.25"}
-    runtime._signed_position_qty = staticmethod(lambda position: float(position["positionAmt"]))
+    runtime._signed_position_qty = lambda position: float(position["positionAmt"])
     intent = type("I", (), {
         "campaign_id": "c1",
         "symbol": "BTCUSDT",
