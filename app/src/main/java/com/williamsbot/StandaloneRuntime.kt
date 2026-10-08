@@ -138,7 +138,13 @@ private data class PendingEntry(
     val symbol: String,
     val clientOrderId: String,
     val notional: Double,
-    val stopDistance: Double
+    val stopDistance: Double,
+    val triggerPrice: Double = 0.0,
+    val initialStopPrice: Double = 0.0,
+    val signalType: String = "FRACTAL",
+    val campaignId: String = "",
+    val riskPct: Double = 0.0,
+    val createdAt: Long = 0L
 )
 
 private data class ExecutionResult(
@@ -195,7 +201,10 @@ private data class BaseAnalysis(
     val breakoutDistancePct: Double,
     val obi: Double? = null,
     val tradeFlowImbalance: Double? = null,
-    val reason: String
+    val reason: String,
+    val entryTriggerPrice: Double = 0.0,
+    val initialStopPrice: Double = 0.0,
+    val signalType: String = "FRACTAL"
 )
 
 private class StandaloneServer(private val context: Context) {
@@ -702,14 +711,20 @@ private class NativeEngine(
     private fun positionList(): List<PositionState> =
         synchronized(positions) { positions.values.toList() }
 
-    private fun reservedRiskPct(): Double =
-        positionList().sumOf {
+    private fun reservedRiskPct(): Double {
+        val openRisk = positionList().sumOf {
             if (it.riskPct > 0.0) it.riskPct
             else if (it.entry > 0.0) {
-                ((it.entry - it.stop) / it.entry)
-                    .coerceAtLeast(0.0)
+                ((it.entry - it.stop) / it.entry).coerceAtLeast(0.0)
             } else 0.0
         }
+        val pendingRisk = synchronized(pendingEntries) {
+            pendingEntries.values.sumOf {
+                if (it.riskPct > 0.0) it.riskPct else it.stopDistance.coerceAtLeast(0.0)
+            }
+        }
+        return openRisk + pendingRisk
+    }
 
     private fun marketDataFresh(maxAgeMs: Long = 30_000L): Boolean =
         restMarketReady &&
@@ -782,6 +797,12 @@ private class NativeEngine(
                         .put("client_order_id", it.clientOrderId)
                         .put("notional", it.notional)
                         .put("stop_distance", it.stopDistance)
+                        .put("trigger_price", it.triggerPrice)
+                        .put("initial_stop_price", it.initialStopPrice)
+                        .put("signal_type", it.signalType)
+                        .put("campaign_id", it.campaignId)
+                        .put("risk_pct", it.riskPct)
+                        .put("created_at", it.createdAt)
                 )
             }
         }
@@ -846,7 +867,13 @@ private class NativeEngine(
                         stopDistance = item.optDouble(
                             "stop_distance",
                             0.02
-                        )
+                        ),
+                        triggerPrice = item.optDouble("trigger_price", 0.0),
+                        initialStopPrice = item.optDouble("initial_stop_price", 0.0),
+                        signalType = item.optString("signal_type", "FRACTAL"),
+                        campaignId = item.optString("campaign_id", ""),
+                        riskPct = item.optDouble("risk_pct", 0.0),
+                        createdAt = item.optLong("created_at", 0L)
                     )
                 }
             }
@@ -912,6 +939,21 @@ private class NativeEngine(
             .put("open_positions", positionList().size)
             .put("max_open_positions", maxOpenPositions)
             .put("reserved_risk_pct", reservedRiskPct())
+            .put("pending_campaigns", JSONArray().apply {
+                synchronized(pendingEntries) {
+                    pendingEntries.values.forEach {
+                        put(JSONObject()
+                            .put("symbol", it.symbol)
+                            .put("campaign_id", it.campaignId)
+                            .put("signal_type", it.signalType)
+                            .put("state", "ENTRY_PENDING")
+                            .put("trigger_price", it.triggerPrice)
+                            .put("initial_stop", it.initialStopPrice)
+                            .put("risk_pct", it.riskPct)
+                            .put("client_order_id", it.clientOrderId))
+                    }
+                }
+            })
             .put("circuit_breaker_tripped", equityCircuitBreaker.isTripped())
             .put("managed_equity", estimateManagedEquity())
             .put("max_total_risk_pct", maxTotalRiskPct)
@@ -4191,507 +4233,116 @@ private class NativeEngine(
         candidate: BaseAnalysis,
         gated: Boolean = false
     ) {
-        if (positions.containsKey(candidate.symbol)) {
-            return
+        if (positions.containsKey(candidate.symbol)) return
+        if (positionList().size >= maxOpenPositions) error("Maximum open positions reached")
+        if (reconcileRequired) error("RECONCILE_REQUIRED")
+        if (killLatched) error("KILL_SWITCH_LATCHED")
+        require(marketDataFresh()) { "REST market data is not fresh enough for execution" }
+        require(if (gated) stateMachine.state == TradingState.ENTRY_PENDING else stateMachine.state == TradingState.READY_FLAT) {
+            "FSM forbids pending ENTRY from state " + stateMachine.state.name
         }
-        if (positionList().size >= maxOpenPositions) {
-            error("Maximum open positions reached")
-        }
-        if (reconcileRequired) {
-            error("RECONCILE_REQUIRED")
-        }
-        if (killLatched) {
-            error("KILL_SWITCH_LATCHED")
-        }
-        require(marketDataFresh()) {
-            "REST market data is not fresh enough for execution"
-        }
-        // WebSockets are accelerators. REST + exchange-side OCO remain the
-        // authoritative safety path when a stream is degraded. The worker
-        // performs periodic REST reconciliation while user WS is unavailable.
-        require(
-            if (gated) {
-                stateMachine.state == TradingState.ENTRY_PENDING
-            } else {
-                stateMachine.state == TradingState.READY_FLAT
-            }
-        ) {
-            "FSM forbids BUY from state " + stateMachine.state.name
-        }
-        if (
-            reservedRiskPct() >=
-                maxTotalRiskPct - 0.000001
-        ) {
-            error("Portfolio risk budget exhausted")
-        }
-        if (!candidate.signal) {
-            error("signal not confirmed")
-        }
-        if (candidate.score < 70.0) {
-            error("score below entry threshold")
-        }
-        if (candidate.spreadPct > maxSpreadPct) {
-            error("spread too wide")
-        }
-        if (
-            candidate.atrPct <= 0.0 ||
-            candidate.atrPct > 0.08
-        ) {
-            error("ATR outside safety range")
-        }
+        if (reservedRiskPct() >= maxTotalRiskPct - 0.000001) error("Portfolio risk budget exhausted")
+        if (!candidate.signal) error("signal not confirmed")
+        if (candidate.score < 70.0) error("score below entry threshold")
+        if (candidate.spreadPct > maxSpreadPct) error("spread too wide")
+        if (candidate.atrPct <= 0.0 || candidate.atrPct > 0.08) error("ATR outside safety range")
 
-        val rules =
-            symbolFilters(candidate.symbol)
+        val rules = symbolFilters(candidate.symbol)
+        val trigger = candidate.entryTriggerPrice
+        val stop = candidate.initialStopPrice
+        require(trigger > 0.0 && stop > 0.0) { "Williams campaign has no valid pending trigger/stop" }
 
-        if (!rules.ocoAllowed) {
-            error(
-                "OCO is not supported for " +
-                    candidate.symbol
-            )
-        }
+        val currentPrice = JSONObject(getBody("/api/v3/ticker/price?symbol=" + candidate.symbol))
+            .optString("price").toDoubleOrNull() ?: 0.0
+        require(currentPrice > 0.0) { "No current price for " + candidate.symbol }
+        require(trigger > currentPrice + rules.tick) { "Trigger already broken; Williams will not chase the move" }
+        require(stop < trigger) { "Initial stop must be below pending trigger" }
 
         val account = signedAccount()
+        val balances = account.getJSONArray("balances")
         var usdtFree = 0.0
-        val balances =
-            account.getJSONArray("balances")
-
         for (i in 0 until balances.length()) {
             val b = balances.getJSONObject(i)
-            if (b.optString("asset") == "USDT") {
-                usdtFree =
-                    b.optString("free")
-                        .toDoubleOrNull() ?: 0.0
-                break
-            }
+            if (b.optString("asset") == "USDT") usdtFree = b.optString("free").toDoubleOrNull() ?: 0.0
+        }
+        require(usdtFree >= 25.0) { "USDT balance too low" }
+
+        val remainingRiskPct = (maxTotalRiskPct - reservedRiskPct()).coerceAtLeast(0.0)
+        val allocationRiskPct = min(maxRiskPerTradePct, remainingRiskPct)
+        require(allocationRiskPct >= 0.001) { "Remaining portfolio risk budget is too small" }
+
+        val effectiveRiskDistance = ((trigger - stop) / trigger).coerceAtLeast(0.001) + feeBufferPerSidePct * 2.0 + maxSlippagePct
+        val riskQuote = usdtFree * allocationRiskPct
+        val notional = min(usdtFree * 0.25, riskQuote / effectiveRiskDistance)
+        if (rules.minNotional > 0.0) require(notional >= rules.minNotional) {
+            "Notional below Binance minimum: " + rules.minNotional
         }
 
-        if (usdtFree < 25.0) {
-            error("USDT balance too low")
-        }
+        val qty = floorStep(notional / trigger, rules.step)
+        val minQty = max(rules.minQty, rules.marketMinQty)
+        require(qty >= minQty) { "Pending entry quantity below Binance minimum" }
+        if (rules.maxQty.isFinite()) require(qty <= rules.maxQty) { "Pending entry quantity above Binance maximum" }
 
-        val remainingRiskPct =
-            (maxTotalRiskPct -
-                reservedRiskPct())
-                .coerceAtLeast(0.0)
+        val triggerPrice = fmtPrice(trigger, rules.tick).toDouble()
+        val initialStop = fmtPrice(stop, rules.tick).toDouble()
+        require(triggerPrice > currentPrice && initialStop < triggerPrice) { "Rounded Williams trigger/stop is invalid" }
+        validateLimitPrice(candidate.symbol, "BUY", triggerPrice, rules)
 
-        val allocationRiskPct =
-            min(
-                maxRiskPerTradePct,
-                remainingRiskPct
-            )
-
-        if (allocationRiskPct < 0.001) {
-            error(
-                "Remaining portfolio risk budget is too small"
-            )
-        }
-
-        // Williams-style initial protection: structure/Teeth first, ATR as guard.
-        val stopDistance = initialWilliamsStopDistance(candidate)
-
-        val effectiveRiskDistance =
-            stopDistance +
-                feeBufferPerSidePct * 2.0 +
-                maxSlippagePct
-
-        val riskQuote =
-            usdtFree * allocationRiskPct
-
-        val notional =
-            min(
-                usdtFree * 0.25,
-                riskQuote / effectiveRiskDistance
-            )
-
-        if (
-            rules.minNotional > 0.0 &&
-            notional < rules.minNotional
-        ) {
-            error(
-                "Notional below Binance minimum: " +
-                    rules.minNotional
-            )
-        }
-
-        if (notional < 10.0) {
-            error("order notional too small")
-        }
-
-        val (bookVwap, bookSlippage) =
-            estimateMarketBuySlippage(
-                candidate.symbol,
-                notional
-            )
-        require(bookSlippage <= maxSlippagePct) {
-            "Order-book slippage " +
-                "%.4f".format(Locale.US, bookSlippage * 100.0) +
-                "% exceeds configured " +
-                "%.4f".format(Locale.US, maxSlippagePct * 100.0) +
-                "% for " + candidate.symbol
-        }
-
-        val clientOrderId =
-            "W4B_" +
-                java.util.UUID.randomUUID()
-                    .toString()
-                    .replace("-", "")
-                    .take(28)
-
-        if (!gated) {
-            if (!stateMachine.transition(
-                TradingState.ENTRY_PENDING,
-                "BUY intent created"
-            )) {
-                error("FSM rejected BUY intent")
-            }
-        }
+        val campaignId = "C:" + candidate.symbol + ":" + System.currentTimeMillis()
+        val clientOrderId = "W4E_" + java.util.UUID.randomUUID().toString().replace("-", "").take(28)
+        val riskPct = ((triggerPrice - initialStop) / triggerPrice).coerceAtLeast(0.0) + feeBufferPerSidePct * 2.0 + maxSlippagePct
 
         synchronized(pendingEntries) {
-            pendingEntries[candidate.symbol] =
-                PendingEntry(
-                    symbol = candidate.symbol,
-                    clientOrderId = clientOrderId,
-                    notional = notional,
-                    stopDistance = stopDistance
-                )
+            if (pendingEntries.containsKey(candidate.symbol)) error("Campaign entry already pending for " + candidate.symbol)
+            pendingEntries[candidate.symbol] = PendingEntry(
+                symbol = candidate.symbol,
+                clientOrderId = clientOrderId,
+                notional = qty * triggerPrice,
+                stopDistance = ((triggerPrice - initialStop) / triggerPrice).coerceAtLeast(0.0),
+                triggerPrice = triggerPrice,
+                initialStopPrice = initialStop,
+                signalType = candidate.signalType,
+                campaignId = campaignId,
+                riskPct = riskPct,
+                createdAt = System.currentTimeMillis()
+            )
         }
         savePersistedState()
 
-        val baseAsset = candidate.symbol.removeSuffix("USDT")
-        val currentBaseQty = run {
-            var amount = 0.0
-            for (i in 0 until balances.length()) {
-                val row = balances.getJSONObject(i)
-                if (row.optString("asset") == baseAsset) {
-                    amount =
-                        (row.optString("free").toDoubleOrNull() ?: 0.0) +
-                        (row.optString("locked").toDoubleOrNull() ?: 0.0)
-                    break
-                }
-            }
-            amount
-        }
-
-        if (rules.maxPosition.isFinite()) {
-            val referencePrice = runCatching {
-                JSONObject(
-                    getBody("/api/v3/ticker/price?symbol=" + candidate.symbol)
-                ).optString("price").toDoubleOrNull()
-            }.getOrNull() ?: 0.0
-
-            if (referencePrice > 0.0) {
-                val estimatedQty = notional / referencePrice
-                require(
-                    currentBaseQty + estimatedQty <=
-                        rules.maxPosition + rules.step
-                ) {
-                    "Binance MAX_POSITION would be exceeded"
-                }
-            }
-        }
-
-        val buyParams =
-            if (rules.quoteOrderQtyMarketAllowed) {
-                "symbol=" + candidate.symbol +
-                    "&side=BUY&type=MARKET" +
-                    "&quoteOrderQty=" +
-                    ExecutionMath.plain(
-                        ExecutionMath.decimal(notional),
-                        2
-                    ) +
-                    "&newClientOrderId=" +
-                    clientOrderId
-            } else {
-                val ticker =
-                    JSONObject(
-                        getBody(
-                            "/api/v3/ticker/price?symbol=" +
-                                candidate.symbol
-                        )
-                    )
-                val price =
-                    ticker.optString("price")
-                        .toDoubleOrNull()
-                        ?: error(
-                            "No market price for " +
-                                candidate.symbol
-                        )
-                val qty =
-                    floorStep(
-                        notional / price,
-                        rules.step
-                    )
-
-                if (
-                    qty < rules.minQty ||
-                    qty * price < rules.minNotional
-                ) {
-                    error(
-                        "Calculated quantity is below Binance filters"
-                    )
-                }
-
-                "symbol=" + candidate.symbol +
-                    "&side=BUY&type=MARKET" +
-                    "&quantity=" +
-                    fmtQty(
-                        qty,
-                        rules.decimals
-                    ) +
-                    "&newClientOrderId=" +
-                    clientOrderId
-            }
-
         try {
-            val buy =
-                signedPost(
-                    "/api/v3/order",
-                    buyParams
-                )
-
-            val qty =
-                buy.optString("executedQty")
-                    .toDoubleOrNull() ?: 0.0
-            val quote =
-                buy.optString(
-                    "cummulativeQuoteQty"
-                ).toDoubleOrNull() ?: 0.0
-
-            if (qty <= 0.0 || quote <= 0.0) {
-                error("BUY returned no fill")
-            }
-
-            val entry = quote / qty
-
-            val ask =
-                runCatching {
-                    JSONObject(
-                        getBody(
-                            "/api/v3/ticker/bookTicker?symbol=" +
-                                candidate.symbol
-                        )
-                    )
-                }.getOrNull()
-                    ?.optString("askPrice")
-                    ?.toDoubleOrNull()
-                    ?: 0.0
-
-            if (
-                ask > 0.0 &&
-                entry >
-                    ask * (1.0 + maxSlippagePct)
-            ) {
-                error(
-                    "Slippage exceeds " +
-                        (maxSlippagePct * 100.0) +
-                        "% for " +
-                        candidate.symbol
-                )
-            }
-
-            val protection =
-                createProtection(
-                    symbol = candidate.symbol,
-                    qty = qty,
-                    entry = entry,
-                    stopDistance = stopDistance
-                )
-
-            val journalSnapshot =
-                JSONObject()
-                    .put("symbol", candidate.symbol)
-                    .put("score", candidate.score)
-                    .put("signal", candidate.signal)
-                    .put("breakout_distance_pct", candidate.breakoutDistancePct)
-                    .put("risk_pct", candidate.riskPct)
-                    .put("risk_reward", candidate.riskReward)
-                    .put("atr_pct", candidate.atrPct)
-                    .put("spread_pct", candidate.spreadPct)
-                    .put("htf_confirmed", candidate.htfCandidate)
-                    .put("reason", candidate.reason)
-                    .put("wave_position", candidate.wave.position)
-                    .put("wave_phase", candidate.wave.phase)
-                    .put("wave_confidence", candidate.wave.confidence)
-                    .put("wave_exhaustion_risk", candidate.wave.exhaustionRisk)
-                    .put("wave_path", candidate.wave.path)
-                    .put("entry_timeframe", candidate.wave.entryFrame)
-                    .put("entry_wave", candidate.wave.entryWave)
-                    .put("parent_timeframe", candidate.wave.parentFrame)
-                    .put("parent_wave", candidate.wave.parentWave)
-                    .put("entry_wave_confidence", candidate.wave.entryConfidence)
-                    .put("nested_w3_parent_w5", candidate.wave.nestedW3ParentW5)
-                    .put("wave_alligator_bullish", candidate.wave.alligatorBullish)
-                    .put("wave_ao_positive", candidate.wave.aoPositive)
-                    .put("obi", candidate.obi)
-                    .put("trade_flow_imbalance", candidate.tradeFlowImbalance)
-            TradeJournal.recordEntry(
-                prefs = prefs,
-                symbol = candidate.symbol,
-                entry = entry,
-                qty = protection.qty,
-                stop = protection.stop,
-                take = protection.take,
-                riskPct = protection.riskPct,
-                notional = notional,
-                candidate = journalSnapshot
+            val pendingOrder = signedPost(
+                "/api/v3/order",
+                "symbol=" + candidate.symbol +
+                    "&side=BUY&type=STOP_LOSS" +
+                    "&quantity=" + fmtQty(qty, rules.decimals) +
+                    "&stopPrice=" + fmtPrice(triggerPrice, rules.tick) +
+                    "&newOrderRespType=FULL" +
+                    "&newClientOrderId=" + clientOrderId
             )
-
-            synchronized(positions) {
-                positions[candidate.symbol] =
-                    PositionState(
-                        symbol = candidate.symbol,
-                        qty = protection.qty,
-                        entry = entry,
-                        stop = protection.stop,
-                        take = protection.take,
-                        riskPct = protection.riskPct,
-                        ocoListClientId =
-                            protection.ocoClientId,
-                        ocoListId = protection.ocoListId,
-                        entryOrderId = buy.optString(
-                            "orderId"
-                        ),
-                        entryClientOrderId = clientOrderId,
-                        openedAt = buy.optLong(
-                            "transactTime",
-                            System.currentTimeMillis()
-                        )
-                    )
-            }
-
-            synchronized(pendingEntries) {
-                pendingEntries.remove(
-                    candidate.symbol
-                )
-            }
-            stateMachine.force(
-                TradingState.PROTECTED,
-                "BUY filled and OCO created"
-            )
-            savePersistedState()
-
-            lastOrder =
-                JSONObject()
-                    .put("buy", buy)
-                    .put(
-                        "risk_pct",
-                        protection.riskPct
-                    )
-                    .put(
-                        "notional_usdt",
-                        notional
-                    )
-                    .put(
-                        "stop_price",
-                        protection.stop
-                    )
-                    .put(
-                        "take_profit",
-                        protection.take
-                    )
-                    .put(
-                        "oco_list_client_id",
-                        protection.ocoClientId
-                    )
+            val status = pendingOrder.optString("status").uppercase(Locale.US)
+            require(status in setOf("NEW", "PARTIALLY_FILLED", "FILLED")) { "Pending entry rejected: " + status }
+            lastOrder = JSONObject()
+                .put("campaign_id", campaignId)
+                .put("signal_type", candidate.signalType)
+                .put("entry_trigger", triggerPrice)
+                .put("initial_stop", initialStop)
+                .put("risk_pct", riskPct)
+                .put("order", pendingOrder)
+            if (status == "FILLED" || status == "PARTIALLY_FILLED") recoverPendingEntries()
         } catch (x: Exception) {
-            val pending =
-                synchronized(pendingEntries) {
-                    pendingEntries[candidate.symbol]
-                }
-
             val order = runCatching {
-                signedGet(
-                    "/api/v3/order",
-                    "symbol=" + candidate.symbol +
-                        "&origClientOrderId=" +
-                        (pending?.clientOrderId ?: clientOrderId)
-                )
+                signedGet("/api/v3/order", "symbol=" + candidate.symbol + "&origClientOrderId=" + clientOrderId)
             }.getOrNull()
-
-            if (order?.optString("status") == "FILLED") {
-                val filled =
-                    order.optString("executedQty").toDoubleOrNull() ?: 0.0
-                val quote =
-                    order.optString("cummulativeQuoteQty").toDoubleOrNull() ?: 0.0
-
-                if (filled > 0.0) {
-                    val entryPrice =
-                        if (quote > 0.0) quote / filled
-                        else candidate.candles.lastOrNull()?.c ?: 0.0
-
-                    synchronized(positions) {
-                        positions[candidate.symbol] =
-                            PositionState(
-                                symbol = candidate.symbol,
-                                qty = filled,
-                                entry = entryPrice,
-                                stop = entryPrice * (1.0 - (pending?.stopDistance ?: 0.02)),
-                                take = entryPrice * (1.0 + (pending?.stopDistance ?: 0.02) * 4.0),
-                                riskPct = pending?.stopDistance ?: 0.02,
-                                entryOrderId = order.optString("orderId"),
-                                entryClientOrderId =
-                                    pending?.clientOrderId ?: clientOrderId,
-                                openedAt = order.optLong(
-                                    "transactTime",
-                                    System.currentTimeMillis()
-                                )
-                            )
-                    }
-
-                    stateMachine.force(
-                        TradingState.OPEN_UNPROTECTED,
-                        "BUY transport outcome unknown; REST proved FILLED"
-                    )
-                    synchronized(pendingEntries) {
-                        pendingEntries.remove(candidate.symbol)
-                    }
+            when (order?.optString("status")?.uppercase(Locale.US)) {
+                "NEW", "PARTIALLY_FILLED", "FILLED" -> if (order.optString("status").equals("FILLED", true)) recoverPendingEntries()
+                "CANCELED", "EXPIRED", "REJECTED" -> {
+                    synchronized(pendingEntries) { pendingEntries.remove(candidate.symbol) }
                     savePersistedState()
-
-                    val protectionResult = runCatching {
-                        reconcilePositionsWithExchange()
-                    }
-
-                    if (protectionResult.isFailure) {
-                        // Never assume the failed protection request was harmless.
-                        // Reconcile again immediately; only emergency-close if the
-                        // exchange still cannot prove protection.
-                        val emergency = runCatching {
-                            reconcilePositionsWithExchange()
-                        }
-
-                        if (emergency.isFailure) {
-                            runCatching {
-                                signedPost(
-                                    "/api/v3/order",
-                                    "symbol=" + candidate.symbol +
-                                        "&side=SELL&type=MARKET" +
-                                        "&quantity=" +
-                                        fmtQty(filled, rules.decimals)
-                                )
-                            }.onFailure {
-                                setReconcileRequired(
-                                    "BUY filled without verifiable protection; emergency SELL failed: " +
-                                        (it.message ?: it.javaClass.simpleName)
-                                )
-                            }
-                        }
-                    }
+                    throw IllegalStateException("Pending Williams entry was rejected: " + order.optString("status"))
                 }
-            } else {
-                synchronized(pendingEntries) {
-                    pendingEntries.remove(candidate.symbol)
-                }
-                stateMachine.transition(
-                    TradingState.READY_FLAT,
-                    "BUY not filled / terminal after transport error"
-                )
-                savePersistedState()
+                else -> setReconcileRequired("Pending Williams entry outcome unknown for " + candidate.symbol + ": " + (x.message ?: x.javaClass.simpleName))
             }
-
-            throw IllegalStateException(
-                "Protected BUY failed: " +
-                    (x.message ?: x.javaClass.simpleName)
-            )
+            throw IllegalStateException("Pending Williams entry failed: " + (x.message ?: x.javaClass.simpleName))
         }
     }
 
@@ -5169,7 +4820,17 @@ private class NativeEngine(
             breakoutDistancePct = breakoutDistance,
             obi = obi,
             tradeFlowImbalance = flowImbalance,
-            reason = reason
+            reason = reason,
+            entryTriggerPrice = if (fractalHigh != null && finalSignal && pendingFractalSetup) {
+                val tick = symbolFilters(symbol).tick
+                fmtPrice((fractalHigh ?: closes[i]) + tick, tick).toDouble()
+            } else 0.0,
+            initialStopPrice = if (fractalHigh != null && finalSignal && pendingFractalSetup) {
+                val swing = latestConfirmedDownFractal(candles, i)?.let { candles[it].l }
+                val tick = symbolFilters(symbol).tick
+                fmtPrice(min(swing ?: (closes[i] - atrAbs * 2.0), alligator.teeth) - atrAbs * 0.15, tick).toDouble()
+            } else 0.0,
+            signalType = if (pendingFractalSetup) "FRACTAL" else "BREAKOUT"
         )
     }
 
@@ -5337,11 +4998,24 @@ private class NativeEngine(
 
         // Entry is no longer tied to the 1h candle's breakout. We enter on the
         // lower-TF Wave 3 after higher-TF context confirms the direction.
-        val finalSignal =
+        val pendingFractalSetup =
             entrySignal &&
+                fractalHigh != null &&
+                externalFractal &&
                 baseCandidate.atrPct <= 0.08 &&
                 baseCandidate.spreadPct <= 0.0015 &&
-                baseCandidate.riskReward >= 1.5
+                baseCandidate.riskReward >= 1.5 &&
+                closes[i] < (fractalHigh ?: Double.POSITIVE_INFINITY)
+
+        val finalSignal =
+            pendingFractalSetup ||
+                (
+                    entrySignal &&
+                        baseCandidate.atrPct <= 0.08 &&
+                        baseCandidate.spreadPct <= 0.0015 &&
+                        baseCandidate.riskReward >= 1.5 &&
+                        closes[i] > (fractalHigh ?: Double.POSITIVE_INFINITY)
+                )
 
         if (!finalSignal && baseCandidate.signal) {
             score = min(score, 84.0)
@@ -5446,7 +5120,10 @@ private class NativeEngine(
             .put("setup_state", setupState)
             .put("reason", candidate.reason)
             .put("wise_man_count", wiseManCount(candidate))
-            .put("signal_family", "ALLIGATOR_AO_FRACTAL")
+            .put("signal_family", candidate.signalType)
+            .put("entry_trigger_price", candidate.entryTriggerPrice)
+            .put("initial_stop_price", candidate.initialStopPrice)
+            .put("campaign_mode", "PENDING_TRIGGER")
             .put("wave_score", displayWaveScore)
             .put("wave_position", wave.position)
             .put("wave_phase", wave.phase)
