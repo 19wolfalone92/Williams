@@ -13,6 +13,27 @@ def test_conservative_policy():
  p=IntradayPolicy.from_env({"WILLIAMS_STRATEGY_PROFILE":CONSERVATIVE_PROFILE})
  assert not p.wm3_first_allowed and p.risk.initial_risk_pct==.002 and p.initial_risk_for(quality="A",h4_context="ADVERSE")==.001
 
+def test_trading_config_applies_canonical_core_overlay():
+    from trading_config import TradingConfig
+
+    cfg = TradingConfig.from_env({
+        "WILLIAMS_STRATEGY_PROFILE": "WILLIAMS_CORE_INTRADAY",
+        "MAX_OPEN_POSITIONS": "5",
+        "MAX_RISK_PER_TRADE_PCT": "0.005",
+        "MAX_TOTAL_RISK_PCT": "0.01",
+        "MAX_DAILY_LOSS_PCT": "0.03",
+        "MAX_CONSECUTIVE_LOSSES": "3",
+    })
+
+    assert cfg.execution_timeframe == "5m"
+    assert cfg.max_open_positions == 1
+    assert cfg.risk_per_trade_pct == 0.0025
+    assert cfg.max_total_risk_pct == 0.006
+    assert cfg.max_daily_loss_pct == 0.01
+    assert cfg.max_consecutive_losses == 2
+    assert cfg.require_htf_confirmation is True
+    assert cfg.no_trade_when_uncertain is True
+
 def test_side_specific_angulation():
  frame=pd.DataFrame({"close":[95,94,93,92,90],"jaw_shifted":[100,100,100,100,100]})
  assert measure_side_angulation(frame,4,"LONG").valid is True
