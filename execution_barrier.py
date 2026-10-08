@@ -274,6 +274,27 @@ class ExecutionBarrier:
             return ""
         return str(response.get("status", "") or "").upper().strip()
 
+    @staticmethod
+    def _known_order_status(status: str) -> bool:
+        return str(status or "").upper().strip() in {
+            "PENDING_NEW",
+            "NEW",
+            "PARTIALLY_FILLED",
+            "FILLED",
+            "CANCELED",
+            "EXPIRED",
+            "REJECTED",
+        }
+
+    @staticmethod
+    def _positive_order_status(status: str) -> bool:
+        return str(status or "").upper().strip() in {
+            "PENDING_NEW",
+            "NEW",
+            "PARTIALLY_FILLED",
+            "FILLED",
+        }
+
     def execute(
         self,
         intent: OrderIntent,
@@ -370,13 +391,17 @@ class ExecutionBarrier:
                 self._record("INFO", "execution_submitted", intent, "Cancel mutation accepted")
                 return ExecutionResult(intent.intent_id, True, response=response)
 
-            if intent.order_type.upper() == "CANCEL_REPLACE":
-                if not isinstance(response, dict):
-                    status_ok = False
-                else:
-                    cancel_result = str(response.get("cancelResult", "")).upper()
-                    new_result = str(response.get("newOrderResult", "")).upper()
-                    status_ok = cancel_result in {"SUCCESS", "FAILURE"} and new_result in {"SUCCESS", "FAILURE"}
+            # Existing campaign code labels cancel/replace orders by purpose,
+            # while Binance identifies the operation through response fields.
+            if isinstance(response, dict) and (
+                "cancelResult" in response or "newOrderResult" in response
+            ):
+                cancel_result = str(response.get("cancelResult", "")).upper()
+                new_result = str(response.get("newOrderResult", "")).upper()
+                status_ok = (
+                    cancel_result in {"SUCCESS", "FAILURE", "NOT_FOUND"}
+                    and new_result in {"SUCCESS", "FAILURE", "NOT_FOUND", ""}
+                )
                 if not status_ok:
                     reason = "cancelReplace response is not authoritative"
                     self._lock_mutations(reason)
@@ -384,9 +409,16 @@ class ExecutionBarrier:
                     self._persist(intent, "UNKNOWN", reason)
                     self._record("ERROR", "execution_unknown", intent, reason)
                     raise ExecutionAmbiguousError(reason)
+            elif intent.order_type.upper() == "CANCEL_REPLACE":
+                reason = "cancelReplace response is not authoritative"
+                self._lock_mutations(reason)
+                order_fsm.mark_unknown()
+                self._persist(intent, "UNKNOWN", reason)
+                self._record("ERROR", "execution_unknown", intent, reason)
+                raise ExecutionAmbiguousError(reason)
             else:
                 status = self._authoritative_status(response)
-                if not status:
+                if not status or not self._known_order_status(status):
                     reason = "exchange response lacks authoritative order status"
                     self._lock_mutations(reason)
                     order_fsm.mark_unknown()
@@ -412,6 +444,21 @@ class ExecutionBarrier:
                     self._persist(intent, "UNKNOWN", reason)
                     self._record("ERROR", "execution_unknown", intent, reason)
                     raise ExecutionAmbiguousError(reason)
+                if not self._positive_order_status(status):
+                    self._release_client_order_id(intent)
+                    self._persist(intent, status, f"exchange returned terminal status {status}")
+                    self._record(
+                        "WARNING",
+                        "execution_terminal_without_admission",
+                        intent,
+                        f"Exchange returned terminal status {status}",
+                    )
+                    return ExecutionResult(
+                        intent.intent_id,
+                        False,
+                        response=response,
+                        reason=f"exchange returned terminal status {status}",
+                    )
 
             self._persist(intent, "SUBMITTED")
             if self.db is not None and hasattr(self.db, "save_execution_event"):
@@ -492,7 +539,15 @@ class ExecutionBarrier:
 
             if isinstance(response, dict):
                 status = self._authoritative_status(response)
-                if status or {"cancelResult", "newOrderResult"} <= set(response):
+                if status in {
+                    "PENDING_NEW",
+                    "NEW",
+                    "PARTIALLY_FILLED",
+                    "FILLED",
+                    "CANCELED",
+                    "EXPIRED",
+                    "REJECTED",
+                } or {"cancelResult", "newOrderResult"} <= set(response):
                     self._unlock_mutations()
                     self._persist(intent, "RECONCILED", status or "CANCEL_REPLACE_RESULT")
                     self._record(
