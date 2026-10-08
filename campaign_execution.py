@@ -1060,13 +1060,24 @@ class CampaignExecutionService:
                     continue
                 if status in {"CANCELED", "EXPIRED", "REJECTED"}:
                     self.db.set_campaign_signal_state(campaign.current_signal_id, SignalState.CANCELLED.value)
-                    campaign.exit_reason = reason
-                    campaign.next_action = "WAIT_NEW_SESSION"
-                    if campaign.state != CampaignState.CLOSED:
-                        campaign.transition(CampaignState.CLOSED, reason=reason)
-                    self.db.save_campaign(campaign)
+                    campaign.pending_risk_quote = 0.0
+                    campaign.capital_reserved_quote = 0.0
                     self.db.state_delete(f"entry_client_order_id:{campaign.symbol}")
-                    results.append({"campaign_id": campaign.campaign_id, "state": "CLOSED", "symbol": campaign.symbol, "reason": reason})
+                    if campaign.position_qty > 0:
+                        # Cancelling a pending ADD_ON must not terminate the
+                        # already-open H1 campaign.
+                        campaign.next_action = "MONITOR_CAMPAIGN"
+                        if campaign.state in {CampaignState.ADD_ON_PENDING, CampaignState.ADD_ON_ARMING}:
+                            campaign.transition(CampaignState.TREND_ACTIVE, reason=reason)
+                        self.db.save_campaign(campaign)
+                        results.append({"campaign_id": campaign.campaign_id, "state": "ADD_ON_CANCELLED", "symbol": campaign.symbol, "reason": reason})
+                    else:
+                        campaign.exit_reason = reason
+                        campaign.next_action = "WAIT_NEW_SESSION"
+                        if campaign.state != CampaignState.CLOSED:
+                            campaign.transition(CampaignState.CLOSED, reason=reason)
+                        self.db.save_campaign(campaign)
+                        results.append({"campaign_id": campaign.campaign_id, "state": "CLOSED", "symbol": campaign.symbol, "reason": reason})
             except Exception as exc:
                 self.engine.mark_reconcile_required(campaign, f"EOD pending cancellation failed: {exc}")
                 results.append({"campaign_id": campaign.campaign_id, "state": "RECONCILE_REQUIRED", "symbol": campaign.symbol, "error": str(exc)})
