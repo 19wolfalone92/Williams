@@ -14,6 +14,7 @@ import json
 import time
 import uuid
 
+from campaign_order_fsm import CampaignOrderState, CampaignOrderStateMachine
 from decision_trace import DecisionTrace
 from pending_signal import PendingSignal
 from campaign_model import (
@@ -45,6 +46,73 @@ class CampaignEngine:
             0.05,
             min(1.0, float(initial_risk_fraction_of_campaign)),
         )
+
+    # ------------------------------------------------------------------
+    # Canonical campaign FSM
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _canonical_fsm(campaign: TradingCampaign) -> CampaignOrderStateMachine:
+        raw = str(
+            campaign.tags.get("canonical_campaign_state", "")
+            or CampaignOrderState.NO_IDEA.value
+        )
+        try:
+            return CampaignOrderStateMachine(CampaignOrderState(raw))
+        except ValueError:
+            fsm = CampaignOrderStateMachine(
+                CampaignOrderState.RECONCILIATION_REQUIRED
+            )
+            return fsm
+
+    def _canonical_set(
+        self,
+        campaign: TradingCampaign,
+        target: CampaignOrderState,
+        *,
+        reason: str = "",
+        allow_from_interrupt: bool = False,
+    ) -> None:
+        fsm = self._canonical_fsm(campaign)
+        if fsm.interrupted:
+            if not allow_from_interrupt:
+                raise ValueError(
+                    f"canonical campaign state is interrupted: {fsm.state.value}"
+                )
+            fsm.reconcile_to(target)
+        else:
+            fsm.transition(target)
+        campaign.tags["canonical_campaign_state"] = fsm.state.value
+        if reason:
+            campaign.tags["canonical_transition_reason"] = str(reason)
+
+    def canonical_state(self, campaign: TradingCampaign) -> CampaignOrderState:
+        return self._canonical_fsm(campaign).state
+
+    def require_reconciliation(
+        self,
+        campaign: TradingCampaign,
+        reason: str,
+    ) -> TradingCampaign:
+        fsm = self._canonical_fsm(campaign)
+        fsm.require_reconciliation(reason)
+        campaign.tags["canonical_campaign_state"] = fsm.state.value
+        campaign.tags["canonical_reconciliation_reason"] = str(reason)
+        return campaign
+
+    def recover_canonical_state(
+        self,
+        campaign: TradingCampaign,
+        target: CampaignOrderState,
+    ) -> TradingCampaign:
+        self._canonical_set(
+            campaign,
+            target,
+            reason="authoritative reconciliation completed",
+            allow_from_interrupt=True,
+        )
+        self.db.save_campaign(campaign)
+        return campaign
 
     # ------------------------------------------------------------------
     # Campaign identity / persistence
@@ -80,6 +148,7 @@ class CampaignEngine:
                 "htf_confirmed": bool(signal.htf_confirmed),
                 "pending_signal": PendingSignal.from_spec(signal).to_dict(),
                 "decision_trace": DecisionTrace.from_signal(signal).to_dict(),
+                "canonical_campaign_state": CampaignOrderState.SETUP_IDENTIFIED.value,
             },
         )
         self.db.save_campaign(campaign)
@@ -248,7 +317,17 @@ class CampaignEngine:
         campaign.next_action = "SUBMIT_CONDITIONAL_ENTRY"
         if campaign.state == CampaignState.SIGNAL_DETECTED:
             campaign.transition(CampaignState.ENTRY_ARMING, reason="valid Williams entry signal")
+        self._canonical_set(
+            campaign,
+            CampaignOrderState.ARMED,
+            reason="canonical Williams proof is armable",
+        )
         campaign.transition(CampaignState.ENTRY_PENDING, reason="conditional entry admitted")
+        self._canonical_set(
+            campaign,
+            CampaignOrderState.ENTRY_PENDING,
+            reason="conditional entry admitted",
+        )
         self.db.set_campaign_signal_state(signal.signal_id, SignalState.ARMED.value)
         self.db.save_campaign(campaign)
         self.db.log_campaign_event(
@@ -284,6 +363,21 @@ class CampaignEngine:
         campaign.next_action = "SUBMIT_ADD_ON"
         campaign.transition(CampaignState.ADD_ON_ARMING, reason=f"{signal.signal_type.value} confirmation")
         campaign.transition(CampaignState.ADD_ON_PENDING, reason="conditional add-on admitted")
+        self._canonical_set(
+            campaign,
+            CampaignOrderState.MOMENTUM_CONFIRMED,
+            reason=f"{signal.signal_type.value} confirmation",
+        )
+        self._canonical_set(
+            campaign,
+            CampaignOrderState.EXPANSION_ELIGIBLE,
+            reason="campaign expansion became eligible",
+        )
+        self._canonical_set(
+            campaign,
+            CampaignOrderState.EXPANSION_PENDING,
+            reason="conditional add-on admitted",
+        )
         self.db.save_campaign_signal(signal, campaign.campaign_id, state=SignalState.ARMED.value)
         self.db.save_campaign(campaign)
         event = (
@@ -306,6 +400,11 @@ class CampaignEngine:
         if campaign.state != CampaignState.ENTRY_PENDING:
             raise ValueError(f"Cannot trigger entry from {campaign.state.value}")
         campaign.transition(CampaignState.ENTRY_TRIGGERED, reason="exchange conditional order triggered")
+        self._canonical_set(
+            campaign,
+            CampaignOrderState.TRIGGERED,
+            reason="exchange conditional order triggered",
+        )
         campaign.next_action = "VERIFY_FILL"
         self.db.set_campaign_signal_state(signal_id, SignalState.TRIGGERED.value)
         self.db.save_campaign(campaign)
@@ -346,6 +445,11 @@ class CampaignEngine:
         campaign.tags["last_add_on_fee_quote"] = float(fee_quote)
         campaign.next_action = "MONITOR_CAMPAIGN"
         campaign.transition(CampaignState.TREND_ACTIVE, reason="add-on filled and position revalued")
+        self._canonical_set(
+            campaign,
+            CampaignOrderState.CAMPAIGN_ACTIVE,
+            reason="add-on filled and position revalued",
+        )
         self.db.save_campaign(campaign)
         self.db.log_campaign_event(
             campaign.campaign_id,
@@ -387,6 +491,16 @@ class CampaignEngine:
         campaign.next_action = "MONITOR_CAMPAIGN"
         campaign.tags["entry_fee_quote"] = float(fee_quote)
         campaign.transition(CampaignState.OPEN_INITIAL, reason="entry fully filled and hard stop initialized")
+        self._canonical_set(
+            campaign,
+            CampaignOrderState.INITIAL_POSITION,
+            reason="entry filled",
+        )
+        self._canonical_set(
+            campaign,
+            CampaignOrderState.PROTECTED,
+            reason="hard protective stop initialized",
+        )
         self.db.save_campaign(campaign)
         self.db.log_campaign_event(
             campaign.campaign_id,
@@ -444,6 +558,11 @@ class CampaignEngine:
         }:
             return campaign
         campaign.transition(CampaignState.EXHAUSTION_WATCH, reason="; ".join(reasons))
+        self._canonical_set(
+            campaign,
+            CampaignOrderState.EXHAUSTION_WARNING,
+            reason="; ".join(reasons),
+        )
         campaign.next_action = "WATCH_EXIT"
         campaign.tags["exhaustion_reasons"] = list(reasons)
         self.db.save_campaign(campaign)
@@ -459,6 +578,11 @@ class CampaignEngine:
             return campaign
         if campaign.state != CampaignState.EXIT_SIGNALLED:
             campaign.transition(CampaignState.EXIT_SIGNALLED, reason=reason)
+        self._canonical_set(
+            campaign,
+            CampaignOrderState.EXIT_PENDING,
+            reason=reason,
+        )
         campaign.exit_reason = str(reason)
         campaign.next_action = "SUBMIT_EXIT"
         self.db.save_campaign(campaign)
@@ -471,6 +595,7 @@ class CampaignEngine:
 
     def mark_reconcile_required(self, campaign: TradingCampaign, reason: str) -> TradingCampaign:
         campaign.mark_reconcile_required(reason)
+        self.require_reconciliation(campaign, reason)
         campaign.next_action = "RECONCILE"
         self.db.save_campaign(campaign)
         self.db.log_campaign_event(
