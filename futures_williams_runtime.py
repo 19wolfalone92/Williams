@@ -193,8 +193,9 @@ class FuturesWilliamsScanner:
             # Campaign entry is the first valid presenting Wise Man. Do not
             # require multiple simultaneous Wise-Men confirmations.
             signal = min(signal_pool, key=lambda s: (s.signal_bar_time_ms, s.created_at_ms))
-            if os.getenv("REQUIRE_HTF_CONFIRMATION", "true").lower() == "true" and not htf_ok:
-                continue
+            # Keep both-direction signals visible to the campaign
+            # manager. HTF confirmation is an initial-entry gate, not an
+            # exit/add-on visibility gate.
             age_bonus = max(
                 0.0,
                 20.0 - max(0, int((int(time.time() * 1000) - signal.signal_bar_time_ms) / 60000))
@@ -728,6 +729,12 @@ class FuturesWilliamsRuntime:
         else:
             if stop <= trigger:
                 raise RuntimeError("SHORT protective stop is not above entry trigger")
+
+        if (
+            self.config.require_htf_confirmation
+            and not candidate.htf_confirmed
+        ):
+            raise RuntimeError("HTF confirmation gate blocked initial campaign")
 
         current = float(self.client.ticker_price(symbol).get("price", 0) or 0)
         if current <= 0:
