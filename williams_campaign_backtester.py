@@ -130,19 +130,29 @@ class WilliamsCampaignBacktester:
         fills = []
         trades = []
         last_signal_time = 0
+        current_day = None
+        daily_start_equity = self.equity
+        daily_stopouts = 0
 
         for i in range(60, len(h1)):
             h1_slice = h1.iloc[:i + 1]
             h1_close = self._ts(h1_slice.index[-1])
             next_h1 = self._ts(h1.index[i + 1]) if i + 1 < len(h1) else None
             session = self.policy.session.state(h1_close.to_pydatetime())
+            day = h1_close.date()
+            if current_day != day:
+                current_day = day
+                daily_start_equity = self.equity
+                daily_stopouts = 0
+            daily_loss_pct = (self.equity / max(daily_start_equity, 1e-12) - 1.0)
+            risk_day_blocked = daily_loss_pct <= -self.policy.risk.daily_loss_pct or daily_stopouts >= self.policy.risk.max_full_stopouts
 
             if session in {"MANAGE_ONLY", "FLAT_REQUIRED"} and position is None:
                 pending = None
 
             decision = self.core.evaluate(symbol, h1_slice, h4=h4, d1=d1, tick_size=tick_size)
 
-            if position is None and pending is None and session == "ENTRY_WINDOW":
+            if position is None and pending is None and session == "ENTRY_WINDOW" and not risk_day_blocked:
                 candidates = list(decision.signal_specs)
                 chosen = next((x for x in candidates if x.signal_type == SignalType.REVERSAL), None)
                 if chosen is None:
@@ -225,6 +235,7 @@ class WilliamsCampaignBacktester:
                             - (position["entry_price"] * qty + exit_price * qty) * self.fee_pct
                         )
                         self.equity += pnl
+                        daily_stopouts += 1
                         trades.append(asdict(SimTrade(
                             symbol, position["entry_time"], position["entry_price"],
                             stop_time, exit_price, qty, pnl, "STRUCTURAL_STOP", list(position["fills"])
@@ -263,4 +274,5 @@ class WilliamsCampaignBacktester:
             "trades": trades,
             "fills": fills,
             "open_position": position is not None,
+            "risk_stopped": daily_stopouts >= self.policy.risk.max_full_stopouts,
         }
