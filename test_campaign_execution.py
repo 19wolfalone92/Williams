@@ -271,3 +271,51 @@ def test_canonical_campaign_reconcile_state_blocks_even_if_mirror_is_stale():
         )
         assert result.accepted is False
         assert "reconcile" in result.reason.lower()
+
+
+def test_add_on_respects_aggregate_portfolio_risk_not_only_campaign_cap():
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "aggregate-risk.sqlite3"))
+        client = MockExchange()
+        svc = service(db, client)
+
+        initial = signal(trigger=101.0)
+        campaign = svc.engine.create_campaign(initial, initial_risk_pct=0.002)
+        campaign.state = CampaignState.OPEN_INITIAL
+        campaign.position_qty = 1.0
+        campaign.average_entry_price = 100.0
+        campaign.current_stop_price = 90.0
+        campaign.open_risk_quote = 20.0
+        db.save_campaign(campaign)
+
+        other = SignalSpec.new(
+            symbol="ETHUSDT",
+            side="BUY",
+            signal_type=SignalType.FRACTAL,
+            role=SignalRole.ENTRY,
+            timeframe="5m",
+            signal_bar_time_ms=200,
+            trigger_price=11.0,
+            protective_reference=9.0,
+        )
+        other_campaign = svc.engine.create_campaign(other, initial_risk_pct=0.002)
+        other_campaign.pending_risk_quote = 90.0
+        other_campaign.state = CampaignState.ENTRY_PENDING
+        db.save_campaign(other_campaign)
+
+        addon = signal(
+            kind=SignalType.SUPER_AO,
+            role=SignalRole.ADD_ON,
+            bar=300,
+            trigger=102.0,
+        )
+        try:
+            svc.arm_add_on(
+                addon,
+                equity_quote=10_000.0,
+                candidate_risk_pct=0.004,
+            )
+        except Exception as exc:
+            assert "risk budget exhausted" in str(exc).lower()
+        else:
+            raise AssertionError("add-on escaped aggregate portfolio risk cap")
