@@ -21,6 +21,7 @@ class OrderIntent:
     required_context_versions: Mapping[str, int]
     hypothesis_id: str = ""
     invalidation_level: float = 0.0
+    trigger_price: float = 0.0
     quantity: str = ""
     quote_order_quantity: str = ""
     client_order_id: str = ""
@@ -108,10 +109,16 @@ class ExecutionBarrier:
             return "missing intent_id"
         if not re.fullmatch(r"[A-Z0-9]{5,32}", symbol):
             return "invalid symbol format"
+        if intent.symbol != symbol:
+            return "symbol must be canonical uppercase"
         if side not in {"BUY", "SELL"}:
             return f"unsupported side {side or '<empty>'}"
+        if intent.side != side:
+            return "side must be canonical uppercase"
         if order_type not in allowed_order_types and order_type != "CANCEL":
             return f"unsupported order_type {order_type or '<empty>'}"
+        if str(intent.order_type).strip() != order_type:
+            return "order_type must be canonical uppercase"
         if isinstance(intent.created_at_ms, bool) or not isinstance(intent.created_at_ms, int) or intent.created_at_ms <= 0:
             return "invalid or missing created_at_ms"
         if isinstance(intent.max_age_ms, bool) or not isinstance(intent.max_age_ms, int) or intent.max_age_ms <= 0:
@@ -142,12 +149,28 @@ class ExecutionBarrier:
             quote_quantity = str(intent.quote_order_quantity or "").strip()
             if bool(quantity) == bool(quote_quantity):
                 return "entry requires exactly one of quantity or quote_order_quantity"
+            if order_type == "STOP_LOSS" and (not quantity or quote_quantity):
+                return "STOP_LOSS entry requires base quantity, not quote_order_quantity"
             try:
                 amount = float(quantity if quantity else quote_quantity)
             except (TypeError, ValueError):
                 return "invalid entry quantity"
             if not math.isfinite(amount) or amount <= 0:
                 return "entry quantity must be finite and positive"
+            if order_type == "STOP_LOSS":
+                try:
+                    trigger_price = float(intent.trigger_price)
+                    invalidation_level = float(intent.invalidation_level)
+                except (TypeError, ValueError):
+                    return "STOP_LOSS entry trigger/invalidation levels are invalid"
+                if (
+                    not math.isfinite(trigger_price)
+                    or not math.isfinite(invalidation_level)
+                    or trigger_price <= 0
+                    or invalidation_level <= 0
+                    or trigger_price <= invalidation_level
+                ):
+                    return "STOP_LOSS entry requires trigger_price above positive invalidation_level"
             if not isinstance(intent.required_context_versions, Mapping):
                 return "required_context_versions must be a mapping"
             if not intent.required_context_versions:
