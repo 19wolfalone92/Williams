@@ -393,6 +393,218 @@ class CampaignExecutionService:
                 self.engine.mark_reconcile_required(campaign, message)
             raise
 
+    def replace_pending_entry(
+        self,
+        campaign,
+        new_signal: SignalSpec,
+        *,
+        equity_quote: float,
+        candidate_risk_pct: float,
+    ) -> dict[str, Any]:
+        """Replace a still-pending conditional entry only when a newer signal materially supersedes it."""
+        if campaign.state != CampaignState.ENTRY_PENDING:
+            raise CampaignExecutionError("pending replacement requires ENTRY_PENDING")
+        if new_signal.side != campaign.side:
+            raise CampaignExecutionError("replacement signal side mismatch")
+
+        old_signal_id = str(campaign.current_signal_id or "")
+        old_time = int(campaign.tags.get("signal_bar_time_ms", 0) or 0)
+        old_trigger = float(campaign.tags.get("pending_order_trigger", 0.0) or 0.0)
+        old_order_id = int(campaign.tags.get("pending_order_id", 0) or 0)
+        if old_order_id <= 0:
+            raise CampaignExecutionError("pending campaign has no authoritative Binance order id")
+        if new_signal.signal_bar_time_ms <= old_time:
+            raise CampaignExecutionError("replacement signal is not newer")
+
+        trigger = self._normalize_price(new_signal.symbol, new_signal.trigger_price)
+        tick = float(self._rules(new_signal.symbol).get("PRICE_FILTER", {}).get("tickSize", "0") or 0)
+        min_ticks = max(1, int(os.getenv("REPLACE_MIN_TICKS", "5")))
+        min_pct = max(0.0, float(os.getenv("REPLACE_MIN_PCT", "0.001")))
+        materially_changed = (
+            old_trigger <= 0.0
+            or abs(trigger - old_trigger) >= max(tick * min_ticks, old_trigger * min_pct)
+            or new_signal.signal_type.value != str(campaign.current_signal_type)
+        )
+        if not materially_changed:
+            raise CampaignExecutionError("new signal does not materially supersede pending trigger")
+
+        current = self._current_price(new_signal.symbol)
+        if trigger <= current:
+            raise CampaignExecutionError("replacement trigger already crossed; no market substitution")
+
+        stop = self._normalize_price(
+            new_signal.symbol,
+            float(new_signal.protective_reference) - max(tick, 1e-12),
+        )
+        if stop <= 0 or stop >= trigger:
+            raise CampaignExecutionError("replacement structural stop is invalid")
+
+        existing_risk = float(campaign.pending_risk_quote or 0.0)
+        requested_risk = min(
+            existing_risk / max(float(equity_quote), 1e-12) if existing_risk > 0 else float(candidate_risk_pct),
+            float(candidate_risk_pct),
+            self.engine.initial_risk_pct(),
+        )
+        capacity = self.engine.remaining_portfolio_risk_quote(float(equity_quote))
+        if capacity <= 0:
+            raise CampaignExecutionError("portfolio risk capacity exhausted before replacement")
+
+        risk_quote = min(
+            existing_risk if existing_risk > 0 else float(equity_quote) * requested_risk,
+            float(equity_quote) * capacity / max(float(self.engine.portfolio_risk_limit_pct), 1e-12)
+        )
+        risk_quote = min(risk_quote, float(equity_quote) * requested_risk)
+        if risk_quote <= 0:
+            raise CampaignExecutionError("replacement risk reservation is zero")
+
+        effective_loss = (
+            (trigger - stop) / trigger
+            + 2.0 * float(os.getenv("FEE_BUFFER_PER_SIDE_PCT", "0.001"))
+            + float(os.getenv("RISK_SLIPPAGE_BUFFER_PCT", "0.0015"))
+        )
+        notional = min(
+            float(equity_quote) * float(os.getenv("CAMPAIGN_INITIAL_CAPITAL_FRACTION", "0.25")),
+            risk_quote / max(effective_loss, 1e-12),
+        )
+        qty = self._normalized_entry_qty(new_signal.symbol, notional, trigger)
+
+        old_order = self.client.get_order(new_signal.symbol, order_id=old_order_id)
+        old_status = str(old_order.get("status", "")).upper()
+        if old_status not in {"NEW", "PENDING_NEW"}:
+            raise CampaignExecutionError(
+                f"pending replacement requires active old order, got {old_status}"
+            )
+
+        new_client_id = f"{self.ENTRY_PREFIX}{uuid.uuid4().hex[:20]}"
+        intent = OrderIntent.new(
+            new_signal.symbol,
+            "BUY",
+            "STOP_LOSS",
+            required_context_versions=dict(new_signal.context_versions),
+            hypothesis_id=f"WILLIAMS_{new_signal.signal_type.value}",
+            invalidation_level=stop,
+            quantity=self.client.decimal_format(qty),
+            client_order_id=new_client_id,
+            purpose="CAMPAIGN_ENTRY",
+            permission_interval=new_signal.timeframe,
+            campaign_id=campaign.campaign_id,
+            signal_id=new_signal.signal_id,
+            risk_quote=risk_quote,
+            capital_reserved_quote=qty * trigger,
+        )
+
+        def check(snapshot):
+            now = self._current_price(new_signal.symbol)
+            if now >= trigger:
+                raise CampaignExecutionError("replacement trigger crossed during final validation")
+            self._check_algo_capacity(new_signal.symbol, additional=1)
+            self._check_buy_position_capacity(new_signal.symbol, qty)
+
+        try:
+            result = self._submit(
+                intent,
+                lambda: self.client.cancel_replace(
+                    new_signal.symbol,
+                    old_order_id,
+                    "BUY",
+                    "STOP_LOSS",
+                    quantity=self.client.decimal_format(qty),
+                    stop_price=self.client.decimal_format(trigger),
+                    new_client_order_id=new_client_id,
+                ),
+                check,
+            )
+        except Exception as exc:
+            self.engine.mark_reconcile_required(
+                campaign,
+                f"pending entry cancelReplace submission ambiguous: {exc}",
+            )
+            raise
+
+        cancel_result = str(result.get("cancelResult", "")).upper()
+        new_result = str(result.get("newOrderResult", "")).upper()
+        if cancel_result != "SUCCESS" or new_result != "SUCCESS":
+            self.engine.mark_reconcile_required(
+                campaign,
+                f"pending entry cancelReplace ambiguous: cancel={cancel_result} new={new_result}",
+            )
+            raise CampaignExecutionError("pending entry replacement requires reconciliation")
+
+        new_response = result.get("newOrderResponse") or {}
+        new_order_id = str(new_response.get("orderId", "") or "")
+        if not new_order_id:
+            self.engine.mark_reconcile_required(
+                campaign,
+                "pending entry replacement succeeded without authoritative new order id",
+            )
+            raise CampaignExecutionError("replacement response missing order id")
+
+        self.db.set_campaign_signal_state(
+            old_signal_id,
+            SignalState.REPLACED.value,
+        )
+        self.db.save_campaign_signal(
+            new_signal,
+            campaign.campaign_id,
+            state=SignalState.ARMED.value,
+            supersedes_signal_id=old_signal_id,
+        )
+        campaign.current_signal_id = new_signal.signal_id
+        campaign.current_signal_type = new_signal.signal_type.value
+        campaign.tags["signal_bar_time_ms"] = int(new_signal.signal_bar_time_ms)
+        campaign.tags["pending_order_id"] = new_order_id
+        campaign.tags["pending_order_client_id"] = new_client_id
+        campaign.tags["pending_order_trigger"] = trigger
+        campaign.tags["pending_order_quantity"] = qty
+        campaign.tags["initial_stop_price"] = stop
+        campaign.initial_stop_price = stop
+        campaign.current_stop_price = stop
+        campaign.pending_risk_quote = risk_quote
+        campaign.capital_reserved_quote = qty * trigger
+        self.db.save_campaign_order(
+            PendingOrderRecord(
+                order_id=new_order_id,
+                client_order_id=new_client_id,
+                symbol=new_signal.symbol,
+                side="BUY",
+                order_type="STOP_LOSS",
+                purpose="ENTRY",
+                status=str(new_response.get("status", "NEW")),
+                stop_price=trigger,
+                quantity=qty,
+                risk_quote=risk_quote,
+                capital_reserved_quote=qty * trigger,
+                signal_id=new_signal.signal_id,
+                campaign_id=campaign.campaign_id,
+            )
+        )
+        self.db.save_campaign(campaign)
+        self.db.log_campaign_event(
+            campaign.campaign_id,
+            CampaignEventType.ENTRY_REPLACED.value,
+            signal_id=new_signal.signal_id,
+            order_id=new_order_id,
+            reason="newer material Williams signal superseded pending entry",
+            payload={
+                "old_signal_id": old_signal_id,
+                "old_order_id": old_order_id,
+                "old_trigger": old_trigger,
+                "new_trigger": trigger,
+            },
+        )
+        return {
+            "campaign_id": campaign.campaign_id,
+            "old_signal_id": old_signal_id,
+            "signal_id": new_signal.signal_id,
+            "old_order_id": old_order_id,
+            "order_id": new_order_id,
+            "trigger_price": trigger,
+            "structural_stop": stop,
+            "quantity": qty,
+            "risk_quote": risk_quote,
+            "action": "ENTRY_REPLACED",
+        }
+
     def _find_campaign_by_pending_client_id(self, client_id: str):
         row = self.db.conn.execute(
             "SELECT campaign_id FROM campaign_orders WHERE client_order_id=? "
