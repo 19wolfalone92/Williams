@@ -281,6 +281,17 @@ class BinanceFuturesClient:
             "positionSide": "BOTH",
         }
 
+    def get_multi_assets_mode(self):
+        return self._request("GET", "/fapi/v1/multiAssetsMargin", signed=True)
+
+    def set_multi_assets_mode_single(self):
+        return self._request(
+            "POST",
+            "/fapi/v1/multiAssetsMargin",
+            {"multiAssetsMargin": "false"},
+            signed=True,
+        )
+
     def set_position_mode_one_way(self):
         return self._request(
             "POST",
