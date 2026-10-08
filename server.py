@@ -536,18 +536,16 @@ def _heartbeat_loop():
             multi = state.ensure_multi()
             positions = multi.open_positions()
             account = t.client.account()
-            usdt = next(
-                (float(b.get('free', 0) or 0) + float(b.get('locked', 0) or 0)
-                 for b in account.get('balances', []) if b.get('asset') == 'USDT'),
-                0.0,
-            )
+            equity = float(account.get('totalWalletBalance', 0) or 0)
+            available = float(account.get('availableBalance', 0) or 0)
             t.notify(
                 'WILLIAMS HEARTBEAT\\n'
                 f'state={_canonical_execution_state(multi)[0]}\\n'
                 f'positions={len(positions)}\\n'
-                f'USDT≈{usdt:.2f}\\n'
+                f'equity≈{equity:.2f} USDT\\n'
+                f'available≈{available:.2f} USDT\\n'
                 f'testnet={t.client.testnet}\\n'
-                f'ws={hub.snapshot().get("ws_connected")}'
+                f'market=USD_M_FUTURES'
             )
         except Exception as exc:
             try:
@@ -1031,8 +1029,9 @@ def status():
         'server_time': datetime.now(
             timezone.utc
         ).isoformat(),
-        'market_context': mtf_service.symbol_snapshot(t.symbol),
-        'market_context_status': mtf_service.snapshot_status(),
+        'market_mode': 'USD_M_FUTURES',
+        'futures_leverage': int(os.getenv('FUTURES_LEVERAGE', '2')),
+        'futures_margin_type': os.getenv('FUTURES_MARGIN_TYPE', 'ISOLATED').upper(),
         'scanner_scanning': bool(_scanner_snapshot()['scanning']),
         'scanner_symbols': int(_scanner_snapshot()['symbols_scanned']),
         'scanner_duration_ms': int(_scanner_snapshot()['duration_ms']),
