@@ -48,7 +48,7 @@ The current code defaults remain unchanged pending methodology review:
 
 These are existing implementation defaults, not claimed as author-certified universal Williams rules. Their methodological validity remains an open decision.
 
-A persisted conditional entry that remains untriggered after expiry must be cancelled and the exchange response reconciled. Missing expiry in an old persisted campaign is not treated as permission to keep the order armed.
+A persisted conditional entry that remains untriggered after expiry must be cancelled and the exchange response reconciled. Missing expiry in an old persisted campaign is not treated as permission to keep the order armed. This is best-effort while the process is running or on recovery: an exchange-hosted conditional order can still trigger while the bot is offline. Strict no-fill-after-expiry semantics require a separately approved design for server-side expiry or client-managed trigger submission; P0 does not claim that property is solved.
 
 ## Williams Core preservation
 
@@ -63,3 +63,4 @@ When `CAMPAIGN_ENGINE=false`, the legacy `MultiPositionTrader` autonomous MARKET
 1. Confirm the signal-lifetime defaults per model against the complete approved Master Specification and primary Williams materials.
 2. Define a sourced maximum age/freshness policy for already-published higher-timeframe context. P0 enforces exact context version consistency and direction permission but does not invent a universal HTF age threshold.
 3. Confirm whether any approved autonomous entry model outside the three current `SignalType` values exists before allowing another purpose/type.
+4. Decide how to enforce absolute expiry for exchange-hosted conditional orders during process/network downtime; the current exchange order can outlive the signal until cancellation is processed.
