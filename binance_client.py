@@ -4,9 +4,10 @@ from urllib.parse import urlencode
 import requests
 
 class BinanceAPIError(RuntimeError):
-    def __init__(self, message, *, unknown_execution=False, status_code=None, payload=None):
+    def __init__(self, message, *, unknown_execution=False, terminal=False, status_code=None, payload=None):
         super().__init__(message)
         self.unknown_execution = bool(unknown_execution)
+        self.terminal = bool(terminal)
         self.status_code = status_code
         self.payload = payload
 
@@ -24,6 +25,9 @@ class BinanceSpotClient:
         self.order_limit_10s=50
         self.order_limit_1m=1200
         self.rate_limit_pause_until=0.0
+        self.self_trade_prevention_mode = str(__import__('os').getenv('BINANCE_STP_MODE', '') or '').strip().upper()
+        if self.self_trade_prevention_mode and self.self_trade_prevention_mode not in {'NONE', 'EXPIRE_TAKER', 'EXPIRE_MAKER', 'EXPIRE_BOTH'}:
+            raise ValueError(f"Unsupported BINANCE_STP_MODE: {self.self_trade_prevention_mode}")
     def _request(self, method, path, params=None, signed=False):
         """
         Execute a Binance REST request.
@@ -358,7 +362,7 @@ class BinanceSpotClient:
     def order_safe(self, symbol, side, type_, *, quantity=None, quote_order_qty=None,
                    price=None, stop_price=None, time_in_force=None,
                    new_client_order_id=None, strategy_id=None, strategy_type=None,
-                   trailing_delta=None):
+                   trailing_delta=None, self_trade_prevention_mode=None):
         """Place one order and reconcile ambiguous transport failures first.
 
         The wrapper requires a clientOrderId. POST/5xx/timeout is never blindly
@@ -379,6 +383,7 @@ class BinanceSpotClient:
                 strategy_id=strategy_id,
                 strategy_type=strategy_type,
                 trailing_delta=trailing_delta,
+                self_trade_prevention_mode=self_trade_prevention_mode,
             )
         except BinanceAPIError as exc:
             if not exc.unknown_execution:
@@ -404,21 +409,27 @@ class BinanceSpotClient:
                 "PENDING_CANCEL", "PENDING_NEW",
             }:
                 return existing
+            if status in {"CANCELED", "EXPIRED", "REJECTED", "EXPIRED_IN_MATCH"}:
+                raise BinanceAPIError(
+                    f"Existing Binance order is terminal after ambiguous submission: {status}",
+                    terminal=True,
+                    payload=existing,
+                ) from exc
             raise BinanceAPIError(
-                f"Existing Binance order is terminal after ambiguous submission: "
-                f"{status or 'UNKNOWN'}",
+                f"Existing Binance order has unknown terminal state: {status or 'UNKNOWN'}",
                 payload=existing,
             ) from exc
 
         status = str(result.get("status", "")).upper()
-        if status in {"REJECTED", "EXPIRED", "CANCELED"}:
+        if status in {"REJECTED", "EXPIRED", "CANCELED", "EXPIRED_IN_MATCH"}:
             raise BinanceAPIError(
                 f"Binance order returned terminal failure: {status}",
+                terminal=True,
                 payload=result,
             )
         return result
 
-    def order(self,symbol,side,type_,quantity=None,quote_order_qty=None,price=None,stop_price=None,time_in_force=None,new_client_order_id=None,strategy_id=None,strategy_type=None,trailing_delta=None):
+    def order(self,symbol,side,type_,quantity=None,quote_order_qty=None,price=None,stop_price=None,time_in_force=None,new_client_order_id=None,strategy_id=None,strategy_type=None,trailing_delta=None,self_trade_prevention_mode=None):
         p={'symbol':symbol,'side':side,'type':type_,'newOrderRespType':'FULL'}
         if quantity is not None:p['quantity']=quantity
         if quote_order_qty is not None:p['quoteOrderQty']=quote_order_qty
@@ -429,13 +440,15 @@ class BinanceSpotClient:
         if strategy_id is not None:p['strategyId']=int(strategy_id)
         if strategy_type is not None:p['strategyType']=int(strategy_type)
         if trailing_delta is not None:p['trailingDelta']=int(trailing_delta)
+        stp = self_trade_prevention_mode or self.self_trade_prevention_mode
+        if stp:p['selfTradePreventionMode']=str(stp).upper()
         return self._request('POST','/api/v3/order',p,signed=True)
     def get_order(self,symbol,order_id=None,orig_client_order_id=None):
         p={'symbol':symbol}
         if order_id is not None:p['orderId']=order_id
         if orig_client_order_id is not None:p['origClientOrderId']=orig_client_order_id
         return self._request('GET','/api/v3/order',p,signed=True)
-    def cancel_replace(self, symbol, cancel_order_id, side, type_, *, quantity=None, price=None, stop_price=None, time_in_force=None, new_client_order_id=None):
+    def cancel_replace(self, symbol, cancel_order_id, side, type_, *, quantity=None, price=None, stop_price=None, time_in_force=None, new_client_order_id=None, self_trade_prevention_mode=None):
         """Safer single-order cancel/replace using STOP_ON_FAILURE.
 
         Binance documents cancel-replace as non-transactional: a successful
@@ -455,6 +468,8 @@ class BinanceSpotClient:
         if stop_price is not None: p['stopPrice']=stop_price
         if time_in_force is not None: p['timeInForce']=time_in_force
         if new_client_order_id: p['newClientOrderId']=new_client_order_id
+        stp = self_trade_prevention_mode or self.self_trade_prevention_mode
+        if stp: p['selfTradePreventionMode']=str(stp).upper()
         return self._request('POST','/api/v3/order/cancelReplace',p,signed=True)
 
     def cancel_order(self,symbol,order_id=None,orig_client_order_id=None):
@@ -475,7 +490,7 @@ class BinanceSpotClient:
                         return tick
         raise BinanceAPIError(f'Binance PRICE_FILTER/tickSize unavailable for {symbol}')
 
-    def create_oco_sell(self,symbol,quantity,take_profit_price,stop_price,stop_limit_price,list_client_order_id=None):
+    def create_oco_sell(self,symbol,quantity,take_profit_price,stop_price,stop_limit_price,list_client_order_id=None,self_trade_prevention_mode=None):
         # For SELL TAKE_PROFIT_LIMIT the limit leg is kept strictly below the
         # trigger and quantized to Binance's actual PRICE_FILTER tickSize.
         tick = self._symbol_tick_size(symbol)
@@ -506,10 +521,12 @@ class BinanceSpotClient:
             'newOrderRespType':'FULL'
         }
         if list_client_order_id:p['listClientOrderId']=list_client_order_id
+        stp = self_trade_prevention_mode or self.self_trade_prevention_mode
+        if stp:p['selfTradePreventionMode']=str(stp).upper()
         return self._request('POST','/api/v3/orderList/oco',p,signed=True)
     def create_oco_sell_safe(
         self, symbol, quantity, take_profit_price, stop_price,
-        stop_limit_price, list_client_order_id
+        stop_limit_price, list_client_order_id, self_trade_prevention_mode=None
     ):
         """Create one OCO and reconcile ambiguous transport failures by list ID."""
         if not list_client_order_id:
@@ -518,6 +535,7 @@ class BinanceSpotClient:
             return self.create_oco_sell(
                 symbol, quantity, take_profit_price, stop_price,
                 stop_limit_price, list_client_order_id,
+                self_trade_prevention_mode=self_trade_prevention_mode,
             )
         except BinanceAPIError as exc:
             if not exc.unknown_execution:

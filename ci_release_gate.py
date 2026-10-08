@@ -23,25 +23,40 @@ def main() -> None:
     for path in (
         "trading_config.py", "market_scanner.py", "portfolio_controller.py",
         "portfolio_trader.py", "trader.py", "server.py", "wave_engine.py",
+        "execution_barrier.py", "order_state_machine.py", "pending_signal.py",
+        "decision_trace.py", "recovery_matrix.py", "stop_engine.py",
         "binance_client.py", "preflight_gate.py", "test_testnet_release_gate.py",
+        "williams/__init__.py", "williams/timeframe.py", "williams/alligator.py",
+        "williams/fractals.py", "williams/ao.py", "williams/wm1.py", "williams/wm2.py",
+        "williams/wm3.py", "williams/pending.py", "williams/decision.py",
+        "williams/campaign.py", "williams/allocation.py", "williams/exits.py",
+        "williams/intraday_policy.py", "williams/risk_policy.py",
+        "williams/execution_economics.py", "williams/spec.py",
+        "williams/core.py", "williams/backtester.py", "williams/golden_scenarios.py",
+        "test_intraday_core_contract.py",
     ):
         ast.parse(read(path), filename=path)
 
+    read("WILLIAMS_INTRADAY_STRATEGY_SPEC_1.0.md")
     env = read(".env.example")
     for needle in (
-        "TESTNET=true", "ALLOW_LIVE=false", "MAX_OPEN_POSITIONS=5",
-        "AUTO_SCAN_SYMBOLS=", "SCAN_ALL_USDT=true", "SCAN_MAX_SYMBOLS=0",
-        "LIQUIDITY_PRESELECT=0", "WAVE_FULL_TF_ALL=true",
+        "TESTNET=true", "ALLOW_LIVE=false", "WILLIAMS_MODE=INTRADAY_CORE",
+        "MAX_OPEN_POSITIONS=1", "MAX_TOTAL_RISK_PCT=0.006",
+        "MAX_RISK_PER_TRADE_PCT=0.0025", "AUTO_SCAN_SYMBOLS=",
+        "SCAN_ALL_USDT=false", "WAVE_FULL_TF_ALL=true",
+        "EXECUTION_TIMEFRAME=15m", "TRADING_SESSION_START_UTC=08:00",
+        "NO_NEW_ENTRIES_UTC=18:00", "MANDATORY_FLAT_UTC=20:00",
     ):
         must(env, needle, ".env.example")
 
     cfg = read("trading_config.py")
-    must(cfg, "max_open_positions: int = 5", "trading_config.py")
-    must(cfg, 'MAX_OPEN_POSITIONS", 5', "trading_config.py")
-    must(cfg, '{"ALL", "AUTO", "*"}', "trading_config.py")
-    must(cfg, 'risk_key = "MAX_RISK_PER_TRADE_PCT"', "trading_config.py")
-    must(cfg, 'min(0.005', "trading_config.py")
-    must(cfg, 'min(0.01', "trading_config.py")
+    must(cfg, "max_open_positions:int=1", "trading_config.py")
+    must(cfg, '"INTRADAY_CORE"', "trading_config.py")
+    must(cfg, '"1h"', "trading_config.py")
+    must(cfg, '"15m"', "trading_config.py")
+    must(cfg, "0.0025", "trading_config.py")
+    must(cfg, "0.006", "trading_config.py")
+    must(cfg, "0.01", "trading_config.py")
 
     scanner = read("market_scanner.py")
     for needle in (
@@ -62,6 +77,16 @@ def main() -> None:
     server = read("server.py")
     must(server, f"VERSION = '{EXPECTED_VERSION}'", "server.py")
 
+    scenarios = read("williams/golden_scenarios.py")
+    must(scenarios, "GOLDEN_SCENARIOS", "williams/golden_scenarios.py")
+    must(scenarios, "range(1, 26)", "williams/golden_scenarios.py")
+    contract = read("WILLIAMS_INTRADAY_STRATEGY_SPEC_1.0.md")
+    must(contract, "H1", "intraday strategy spec")
+    must(contract, "M15", "intraday strategy spec")
+    must(contract, "M5", "intraday strategy spec")
+    must(contract, "0.60% Equity", "intraday strategy spec")
+    must(contract, "08:00–20:00 UTC", "intraday strategy spec")
+
     android = read("app/src/main/java/com/williamsbot/MainActivity.kt")
     must(android, f"Williams {EXPECTED_VERSION}", "MainActivity.kt")
     for needle in (
@@ -73,9 +98,9 @@ def main() -> None:
     must(android, "http://127.0.0.1:18080", "MainActivity.kt")
     gradle = read("app/build.gradle.kts")
     must(gradle, f'versionName = "{EXPECTED_VERSION}"', "app/build.gradle.kts")
-    must(android, "val maxOpenPositions: Int = 5", "MainActivity.kt")
+    must(android, "val maxOpenPositions: Int = 1", "MainActivity.kt")
     runtime = read("app/src/main/java/com/williamsbot/StandaloneRuntime.kt")
-    must(runtime, 'prefs.getInt("max_open_positions", 5)', "StandaloneRuntime.kt")
+    must(runtime, 'prefs.getInt("max_open_positions", 1)', "StandaloneRuntime.kt")
     must(runtime, "private val maxSlippagePct = 0.0015", "StandaloneRuntime.kt")
     must(runtime, "control/self-heal", "StandaloneRuntime.kt")
     must(runtime, "activeHistoryTasks", "StandaloneRuntime.kt")
@@ -101,7 +126,25 @@ def main() -> None:
     must(android_ci, "gradle --no-daemon :app:lintDebug", "android workflow")
     must_not(android_ci, "./gradlew --no-daemon :app:", "android workflow")
 
+    execution_barrier = read("execution_barrier.py")
+    must(execution_barrier, "class ExecutionBarrier", "execution_barrier.py")
+    must(execution_barrier, "OrderStateMachine", "execution_barrier.py")
+    must(execution_barrier, "DecisionTrace", "execution_barrier.py")
+    must(execution_barrier, "RECONCILE_REQUIRED", "execution_barrier.py")
+    pending_signal = read("pending_signal.py")
+    must(pending_signal, "class PendingSignal", "pending_signal.py")
+    must(pending_signal, "SignalState.SUPERSEDED", "pending_signal.py")
+    core = read("williams/core.py")
+    must(core, 'StrategyDecision(str(symbol).upper(),"1h"', "williams/core.py")
+    must(core, "core_valid", "williams/core.py")
+    must_not(core, "m15", "williams/core.py")
+    spec = read("williams/spec.py")
+    must(spec, "WILLIAMS_INTRADAY_CORE_1_0", "williams/spec.py")
+    must(spec, "wave_can_invalidate:bool=False", "williams/spec.py")
+    recovery = read("recovery_matrix.py")
+    must(recovery, "EXPIRED_IN_MATCH", "recovery_matrix.py")
     python_ci = read(".github/workflows/python-ci.yml")
+    must(python_ci, "test_execution_components.py", "python workflow")
     must(python_ci, "python3 ci_release_gate.py", "python workflow")
     must(python_ci, "group: backend-ci-${{ github.ref }}-${{ github.sha }}", "python workflow")
 

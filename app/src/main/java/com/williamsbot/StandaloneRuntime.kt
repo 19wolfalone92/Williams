@@ -25,6 +25,7 @@ import java.nio.charset.StandardCharsets
 import java.util.Locale
 import java.util.ArrayDeque
 import java.util.Calendar
+import java.util.TimeZone
 import java.util.concurrent.Callable
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -139,6 +140,8 @@ private data class PositionState(
     var campaignState: String = "OPEN_INITIAL",
     var stopSource: String = "INITIAL_SIGNAL",
     var additions: Int = 0,
+    var wm2Added: Boolean = false,
+    var fractalAdditions: Int = 0,
     var protectiveOrderId: String = ""
 )
 
@@ -534,24 +537,31 @@ private class NativeEngine(
     )
     private val tradingEventLoop = TradingEventLoop()
     private val executionGate = ExecutionGate()
+    // All Binance mutations share one lock because portfolio/campaign risk
+    // reservations are global, not symbol-local.
+    private val campaignMutationLock = Any()
     private val executionExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "williams-execution-io").apply { isDaemon = true }
     }
     
+    // Android production profile is the canonical Williams Intraday Core.
+    // Research/fast modes are not allowed to mutate autonomous Spot execution.
+    private fun coreMode(): Boolean = true
+
     private val primarySymbol = "BTCUSDT"
     private val interval = "1h"
 
     // Deep-analysis universe: five core USDT pairs only.
-    private val coreSymbols = listOf("BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT")
+    private val coreSymbols = listOf("BTCUSDT", "ETHUSDT")
     private val analysisFrames = listOf("1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w", "1M")
     // Startup only needs the frames that directly participate in execution.
     // The complete 15-TF matrix is analysis metadata, not a startup blocker.
-    private val startupFrames = listOf("15m", "1h", "4h")
+    private val startupFrames = listOf("15m", "1h", "4h", "1d")
     // Fetch enough closed candles for the scanner's 150-candle working set while
     // leaving headroom for the currently forming candle.
     private val startupHistoryLimit = 180
     private val minStartupHistoryCandles = 150
-    private val maxScanSymbols = 5
+    private val maxScanSymbols = 2
     private val waveTopN = 5
     private val scanExecutor = Executors.newFixedThreadPool(12)
     private val historyBackfillExecutor = Executors.newFixedThreadPool(6) { runnable ->
@@ -579,7 +589,7 @@ private class NativeEngine(
 
     private val scanCacheTtlMs = 12_000L
     private val deepWatchTopN = 10
-    private val scannerUniverseLabel = "CORE_5_BTC_ETH_BNB_SOL_XRP"
+    private val scannerUniverseLabel = "CORE_2_BTC_ETH"
 
     @Volatile
     private var running = false
@@ -605,21 +615,21 @@ private class NativeEngine(
     // Default supports the portfolio model: up to five independent positions;
     // aggregate risk remains capped separately at 1%.
     private val maxOpenPositions: Int
-        get() = prefs.getInt("max_open_positions", 5).coerceIn(1, 10)
+        get() = prefs.getInt("max_open_positions", 1).coerceIn(1, 1)
     private val campaignEngineEnabled: Boolean
         get() = prefs.getBoolean("campaign_engine_enabled", true)
     private val campaignExecutionTimeframe: String
-        get() = prefs.getString("campaign_execution_timeframe", "5m") ?: "5m"
-    private val campaignRiskLimitPct = 0.005
-    private val campaignInitialRiskPct = 0.002
+        get() = prefs.getString("campaign_execution_timeframe", "15m") ?: "15m"
+    private val campaignRiskLimitPct = 0.006
+    private val campaignInitialRiskPct = 0.0025
     private val campaignAddRiskCapPct = 0.002
     private val campaignTrailBars: Int
         get() = prefs.getInt("campaign_trail_bars", 5).coerceIn(3, 5)
-    private val maxTotalRiskPct = 0.01
-    private val maxRiskPerTradePct = 0.005
+    private val maxTotalRiskPct = 0.006
+    private val maxRiskPerTradePct = 0.0025
     private val maxSpreadPct = 0.0015
     private val maxSlippagePct = 0.0015
-    private val equityCircuitBreaker = EquityCircuitBreaker(maxDrawdownPct = 0.05)
+    private val equityCircuitBreaker = EquityCircuitBreaker(maxDrawdownPct = 0.01)
     @Volatile private var lastEquityCheckMs = 0L
     @Volatile private var circuitBreakerTripInProgress = false
     private val feeBufferPerSidePct = 0.001
@@ -824,6 +834,8 @@ private class NativeEngine(
                     .put("campaign_state", it.campaignState)
                     .put("stop_source", it.stopSource)
                     .put("additions", it.additions)
+                    .put("wm2_added", it.wm2Added)
+                    .put("fractal_additions", it.fractalAdditions)
                     .put("protective_order_id", it.protectiveOrderId)
             )
         }
@@ -887,6 +899,8 @@ private class NativeEngine(
                         campaignState = item.optString("campaign_state", "OPEN_INITIAL"),
                         stopSource = item.optString("stop_source", "INITIAL_SIGNAL"),
                         additions = item.optInt("additions", 0),
+                        wm2Added = item.optBoolean("wm2_added", false),
+                        fractalAdditions = item.optInt("fractal_additions", 0),
                         protectiveOrderId = item.optString("protective_order_id", "")
                     )
                 }
@@ -1312,11 +1326,17 @@ private class NativeEngine(
         }
         for (intent in pending) {
             runCatching {
-                signedDelete(
-                    "/api/v3/order",
-                    "symbol=" + intent.symbol +
-                        "&origClientOrderId=" + intent.clientOrderId
-                )
+                withCampaignMutation(
+                    intent.symbol,
+                    "KILL_CANCEL_PENDING",
+                    safetyOverride = true
+                ) {
+                    signedDelete(
+                        "/api/v3/order",
+                        "symbol=" + intent.symbol +
+                            "&origClientOrderId=" + intent.clientOrderId
+                    )
+                }
             }
         }
 
@@ -1562,7 +1582,9 @@ private class NativeEngine(
                     params.ifBlank { null },
                     lastBody
                 )
-                if (response.isSuccessful) return JSONObject(lastBody)
+                if (response.isSuccessful) {
+                    return JSONObject(lastBody)
+                }
                 if (attempt == 0 && lastBody.contains("-1021")) {
                     runCatching { syncServerTime() }
                     return@use
@@ -2511,10 +2533,109 @@ private class NativeEngine(
         }
     }
 
+    private fun intradaySessionState(nowMs: Long = System.currentTimeMillis()): String {
+        val cal = Calendar.getInstance(TimeZone.getTimeZone("UTC"))
+        cal.timeInMillis = nowMs
+        val minutes = cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE)
+        return when {
+            minutes < 8 * 60 -> "PRE_OPEN"
+            minutes >= 20 * 60 -> "FORCE_FLAT"
+            minutes >= 18 * 60 -> "NO_NEW_ENTRIES"
+            else -> "OPEN"
+        }
+    }
+
+    private fun cancelPendingCampaignEntries(reason: String): List<JSONObject> {
+        val pending = synchronized(pendingEntries) { pendingEntries.values.toList() }
+        val results = mutableListOf<JSONObject>()
+        for (entry in pending) {
+            try {
+                val open = signedGet("/api/v3/openOrders", "symbol=" + entry.symbol)
+                val rows = open.optJSONArray("orders")
+                    ?: if (open.has("symbol")) JSONArray().put(open) else JSONArray()
+                val order = (0 until rows.length())
+                    .mapNotNull { rows.optJSONObject(it) }
+                    .firstOrNull {
+                        it.optString("clientOrderId", "") == entry.clientOrderId
+                    }
+                if (order != null) {
+                    val orderId = order.optString("orderId", "")
+                    require(orderId.isNotBlank()) {
+                        entry.symbol + ": pending campaign order has no orderId"
+                    }
+                    withCampaignMutation(entry.symbol, "CAMPAIGN_PENDING_CANCEL") {
+                        signedDelete(
+                            "/api/v3/order",
+                            "symbol=" + entry.symbol + "&orderId=" + orderId
+                        )
+                        JSONObject()
+                    }
+                }
+
+                synchronized(pendingEntries) {
+                    pendingEntries.remove(entry.symbol)
+                }
+                savePersistedState()
+                results += JSONObject()
+                    .put("symbol", entry.symbol)
+                    .put("campaign_id", entry.campaignId)
+                    .put("signal_id", entry.signalId)
+                    .put("action", "PENDING_CANCELLED")
+                    .put("reason", reason)
+            } catch (x: Throwable) {
+                setReconcileRequired(
+                    entry.symbol + ": pending cancellation ambiguous: " +
+                        (x.message ?: x.javaClass.simpleName)
+                )
+                results += JSONObject()
+                    .put("symbol", entry.symbol)
+                    .put("campaign_id", entry.campaignId)
+                    .put("signal_id", entry.signalId)
+                    .put("action", "RECONCILE_REQUIRED")
+                    .put("error", x.message ?: x.javaClass.simpleName)
+            }
+        }
+        return results
+    }
+
+    private fun forceFlatIntraday(reason: String): List<JSONObject> {
+        val out = mutableListOf<JSONObject>()
+        out += cancelPendingCampaignEntries(reason + "_PENDING_CANCEL")
+        val active = positionList().toList()
+        for (position in active) {
+            runCatching {
+                campaignExitMarket(position, reason)
+            }.onFailure {
+                setReconcileRequired(
+                    position.symbol + ": intraday force-flat failed: " +
+                        (it.message ?: it.javaClass.simpleName)
+                )
+            }
+            out += JSONObject()
+                .put("symbol", position.symbol)
+                .put("campaign_id", position.campaignId)
+                .put("action", "FORCE_FLAT_REQUESTED")
+                .put("reason", reason)
+        }
+        return out
+    }
+
     private fun campaignPendingRiskPct(): Double =
         synchronized(pendingEntries) {
             pendingEntries.values.sumOf { it.riskReservedPct }
         }
+
+    private fun campaignPositionRiskPct(position: PositionState): Double {
+        val equity = estimateManagedEquity()
+        if (equity <= 0.0 || position.qty <= 0.0 || position.entry <= 0.0 || position.stop <= 0.0) {
+            return 0.0
+        }
+        val gross = ((position.entry - position.stop).coerceAtLeast(0.0) * position.qty)
+        val notional = position.entry * position.qty
+        val buffered = gross +
+            notional * (2.0 * feeBufferPerSidePct + maxSlippagePct)
+        return (buffered / equity).coerceAtLeast(0.0)
+    }
 
     private fun campaignRiskUsedPct(): Double =
         (
@@ -2600,11 +2721,23 @@ private class NativeEngine(
 
     private fun campaignEntryCandidate(candidate: BaseAnalysis): CampaignSignalN? =
         candidate.campaignSignals
-            .sortedBy { it.signalBarTimeMs }
+            .filter { it.role.equals("ENTRY", ignoreCase = true) }
+            .sortedWith(
+                compareByDescending<CampaignSignalN> { it.signalBarTimeMs }
+                    .thenBy {
+                        when (it.type.uppercase(Locale.US)) {
+                            "REVERSAL" -> 0
+                            "SUPER_AO" -> 1
+                            "FRACTAL" -> 2
+                            else -> 99
+                        }
+                    }
+            )
             .firstOrNull()
 
     private fun submitCampaignEntry(candidate: BaseAnalysis) {
         if (!campaignEngineEnabled || !candidate.campaignReady) return
+        if (coreMode() && intradaySessionState() != "OPEN") return
         if (reconcileRequired || paused || killLatched) return
         if (positionList().any { it.symbol == candidate.symbol }) return
         if (synchronized(pendingEntries) { pendingEntries.containsKey(candidate.symbol) }) return
@@ -2772,11 +2905,14 @@ private class NativeEngine(
                 )
             )
             synchronized(positions) {
+                val updated = position.copy(
+                    stop = stop,
+                    stopSource = "3_5_BAR_STRUCTURE",
+                    protectiveOrderId = created.optString("orderId", "")
+                )
                 positions[position.symbol] =
-                    position.copy(
-                        stop = stop,
-                        stopSource = "3_5_BAR_STRUCTURE",
-                        protectiveOrderId = created.optString("orderId", "")
+                    updated.copy(
+                        riskPct = campaignPositionRiskPct(updated)
                     )
             }
             savePersistedState()
@@ -2818,6 +2954,7 @@ private class NativeEngine(
                     stop = stop,
                     stopSource = "3_5_BAR_STRUCTURE",
                     protectiveOrderId = newId,
+                    riskPct = campaignPositionRiskPct(position.copy(stop = stop)),
                     campaignState = "TRAILING"
                 )
         }
@@ -2987,7 +3124,7 @@ private class NativeEngine(
                         )
                     }
 
-                    status in setOf("CANCELED", "EXPIRED", "REJECTED") -> {
+                    status in setOf("CANCELED", "EXPIRED", "REJECTED", "EXPIRED_IN_MATCH") -> {
                         if (executed > 0.0) {
                             require(quote > 0.0) {
                                 intent.symbol + ": terminal campaign fill lacks quote"
@@ -3044,14 +3181,20 @@ private class NativeEngine(
             existing.symbol + ": add-on cannot be protected by current stop"
         }
 
-        val provisional = existing.copy(
+        val provisionalBase = existing.copy(
             qty = newQty,
             entry = newAvg,
-            riskPct = existing.riskPct + intent.riskReservedPct,
+            riskPct = 0.0,
             signalId = intent.signalId,
             signalType = intent.signalType,
             additions = existing.additions + 1,
+            wm2Added = existing.wm2Added || intent.signalType.equals("SUPER_AO", ignoreCase = true),
+            fractalAdditions = existing.fractalAdditions +
+                if (intent.signalType.equals("FRACTAL", ignoreCase = true)) 1 else 0,
             campaignState = "POSITION_EXPANDING"
+        )
+        val provisional = provisionalBase.copy(
+            riskPct = campaignPositionRiskPct(provisionalBase)
         )
 
         try {
@@ -3179,13 +3322,13 @@ private class NativeEngine(
             return
         }
 
-        val provisional = PositionState(
+        val provisionalBase = PositionState(
             symbol = intent.symbol,
             qty = qty,
             entry = entry,
             stop = stop,
             take = 0.0,
-            riskPct = intent.riskReservedPct,
+            riskPct = 0.0,
             entryOrderId = order.optString("orderId", ""),
             entryClientOrderId = intent.clientOrderId,
             openedAt = order.optLong("transactTime", System.currentTimeMillis()),
@@ -3193,7 +3336,12 @@ private class NativeEngine(
             signalId = intent.signalId,
             signalType = intent.signalType,
             campaignState = "OPEN_INITIAL",
-            stopSource = "INITIAL_SIGNAL"
+            stopSource = "INITIAL_SIGNAL",
+            wm2Added = intent.signalType.equals("SUPER_AO", ignoreCase = true),
+            fractalAdditions = if (intent.signalType.equals("FRACTAL", ignoreCase = true)) 1 else 0
+        )
+        val provisional = provisionalBase.copy(
+            riskPct = campaignPositionRiskPct(provisionalBase)
         )
 
         try {
@@ -3470,6 +3618,13 @@ private class NativeEngine(
         }
     }
 
+    private fun candidateRiskCapPct(signal: CampaignSignalN): Double =
+        when (signal.type.uppercase(Locale.US)) {
+            "REVERSAL" -> campaignInitialRiskPct
+            "SUPER_AO", "FRACTAL" -> campaignAddRiskCapPct
+            else -> campaignAddRiskCapPct
+        }
+
     private fun submitCampaignAddOn(
         candidate: BaseAnalysis,
         position: PositionState
@@ -3484,11 +3639,27 @@ private class NativeEngine(
                 it.type in setOf("SUPER_AO", "FRACTAL") &&
                     it.signalBarTimeMs > latestSignalTime
             }
-            .sortedBy { it.signalBarTimeMs }
+            .sortedWith(
+                compareByDescending<CampaignSignalN> { it.signalBarTimeMs }
+                    .thenBy {
+                        when (it.type.uppercase(Locale.US)) {
+                            "SUPER_AO" -> 0
+                            "FRACTAL" -> 1
+                            else -> 99
+                        }
+                    }
+            )
             .firstOrNull()
             ?: return
 
         if (synchronized(pendingEntries) { pendingEntries.containsKey(candidate.symbol) }) return
+        if (position.additions >= 4) return
+
+        when (signal.type.uppercase(Locale.US)) {
+            "SUPER_AO" -> if (position.wm2Added) return
+            "FRACTAL" -> if (position.fractalAdditions >= 3) return
+            else -> return
+        }
 
         val equity = estimateManagedEquity()
         val remainingCampaign =
@@ -3496,15 +3667,18 @@ private class NativeEngine(
         val remainingPortfolio =
             (maxTotalRiskPct - campaignRiskUsedPct()).coerceAtLeast(0.0)
 
-        val trancheBias = when (position.additions) {
-            0 -> 1.0
-            1 -> 1.0
-            2 -> 0.75
-            else -> 0.5
-        }
+        val reversePyramidWeights = listOf(1.0, 5.0, 4.0, 3.0, 2.0)
+        val addTrancheIndex = (position.additions + 1).coerceIn(1, 4)
+        val weightedRiskPct =
+            campaignRiskLimitPct *
+                (reversePyramidWeights[addTrancheIndex] /
+                    reversePyramidWeights.sum())
         val riskPct = min(
-            campaignAddRiskCapPct * trancheBias,
-            min(remainingCampaign, remainingPortfolio)
+            candidateRiskCapPct(signal),
+            min(
+                weightedRiskPct,
+                min(remainingCampaign, remainingPortfolio)
+            )
         )
         if (riskPct <= 0.0 || equity <= 0.0) return
 
@@ -3603,6 +3777,24 @@ private class NativeEngine(
     private fun performCampaignScan() {
         if (reconcileRequired) return
 
+        when (intradaySessionState()) {
+            "FORCE_FLAT" -> {
+                forceFlatIntraday("END_OF_DAY")
+                return
+            }
+            "PRE_OPEN" -> {
+                if (positionList().isNotEmpty() || synchronized(pendingEntries) { pendingEntries.isNotEmpty() }) {
+                    forceFlatIntraday("PRE_OPEN_CARRYOVER")
+                }
+                return
+            }
+            "NO_NEW_ENTRIES" -> {
+                cancelPendingCampaignEntries("NO_NEW_ENTRIES")
+                // Existing positions continue through the H1 structural
+                // management path below; no new campaign/add-on is armed.
+            }
+        }
+
         for (open in positionList()) {
             runCatching {
                 TradeJournal.updateExcursion(
@@ -3641,8 +3833,8 @@ private class NativeEngine(
                     try {
                         val candles = fetchCandles(
                             symbol,
-                            campaignExecutionTimeframe,
-                            150
+                            interval,
+                            180
                         )
                         val result = analyseBase(
                             symbol = symbol,
@@ -4070,19 +4262,29 @@ private class NativeEngine(
             var ocoCancelled = false
             try {
                 if (stored.ocoListId.isNotBlank()) {
-                    signedDelete(
-                        "/api/v3/orderList",
-                        "symbol=" + stored.symbol +
-                            "&orderListId=" + stored.ocoListId
-                    )
+                    withCampaignMutation(
+                        stored.symbol,
+                        "CAMPAIGN_TRAIL_CANCEL_OCO"
+                    ) {
+                        signedDelete(
+                            "/api/v3/orderList",
+                            "symbol=" + stored.symbol +
+                                "&orderListId=" + stored.ocoListId
+                        )
+                    }
                     ocoCancelled = true
                 } else if (stored.ocoListClientId.isNotBlank()) {
-                    signedDelete(
-                        "/api/v3/orderList",
-                        "symbol=" + stored.symbol +
-                            "&listClientOrderId=" +
-                            stored.ocoListClientId
-                    )
+                    withCampaignMutation(
+                        stored.symbol,
+                        "CAMPAIGN_TRAIL_CANCEL_OCO"
+                    ) {
+                        signedDelete(
+                            "/api/v3/orderList",
+                            "symbol=" + stored.symbol +
+                                "&listClientOrderId=" +
+                                stored.ocoListClientId
+                        )
+                    }
                     ocoCancelled = true
                 } else {
                     setReconcileRequired(
@@ -4140,12 +4342,18 @@ private class NativeEngine(
                         require(qty >= rules.minQty) {
                             "Emergency SELL quantity below Binance minimum"
                         }
-                        val sell = signedPost(
-                            "/api/v3/order",
-                            "symbol=" + stored.symbol +
-                                "&side=SELL&type=MARKET&quantity=" +
-                                fmtQty(qty, rules.decimals)
-                        )
+                        val sell = withCampaignMutation(
+                            stored.symbol,
+                            "CAMPAIGN_EMERGENCY_UNPROTECTED_EXIT",
+                            safetyOverride = true
+                        ) {
+                            signedPost(
+                                "/api/v3/order",
+                                "symbol=" + stored.symbol +
+                                    "&side=SELL&type=MARKET&quantity=" +
+                                    fmtQty(qty, rules.decimals)
+                            )
+                        }
                         val exitPrice = sell.optString("cummulativeQuoteQty")
                             .toDoubleOrNull()
                             ?.let { q -> if (qty > 0.0) q / qty else 0.0 }
@@ -5790,10 +5998,12 @@ private class NativeEngine(
 
         try {
             val buy =
-                signedPost(
-                    "/api/v3/order",
-                    buyParams
-                )
+                withCampaignMutation(candidate.symbol, "LEGACY_PROTECTED_BUY") {
+                    signedPost(
+                        "/api/v3/order",
+                        buyParams
+                    )
+                }
 
             val qty =
                 buy.optString("executedQty")
@@ -6007,13 +6217,19 @@ private class NativeEngine(
 
                         if (emergency.isFailure) {
                             runCatching {
-                                signedPost(
-                                    "/api/v3/order",
-                                    "symbol=" + candidate.symbol +
-                                        "&side=SELL&type=MARKET" +
-                                        "&quantity=" +
-                                        fmtQty(filled, rules.decimals)
-                                )
+                                withCampaignMutation(
+                                    candidate.symbol,
+                                    "CAMPAIGN_EMERGENCY_UNPROTECTED_EXIT",
+                                    safetyOverride = true
+                                ) {
+                                    signedPost(
+                                        "/api/v3/order",
+                                        "symbol=" + candidate.symbol +
+                                            "&side=SELL&type=MARKET" +
+                                            "&quantity=" +
+                                            fmtQty(filled, rules.decimals)
+                                    )
+                                }
                             }.onFailure {
                                 setReconcileRequired(
                                     "BUY filled without verifiable protection; emergency SELL failed: " +
@@ -6128,8 +6344,9 @@ private class NativeEngine(
                     .take(28)
 
         val oco =
-            signedPost(
-                "/api/v3/orderList/oco",
+            withCampaignMutation(symbol, "LEGACY_PROTECTION_OCO") {
+                signedPost(
+                    "/api/v3/orderList/oco",
                 "symbol=" + symbol +
                     "&side=SELL" +
                     "&quantity=" +
@@ -6164,7 +6381,8 @@ private class NativeEngine(
                     "&newOrderRespType=FULL" +
                     "&listClientOrderId=" +
                     ocoClientId
-            )
+                )
+            }
 
         val actualStopDistance =
             ((entry - stop) / entry)
@@ -6236,18 +6454,28 @@ private class NativeEngine(
             // Cancel only the bot-owned OCO. Never cancel unrelated
             // orders that happen to belong to the same symbol.
             if (stored.ocoListId.isNotBlank()) {
-                signedDelete(
-                    "/api/v3/orderList",
-                    "symbol=" + symbol +
-                        "&orderListId=" + stored.ocoListId
-                )
+                withCampaignMutation(
+                    symbol,
+                    "CAMPAIGN_MANUAL_EXIT_CANCEL_OCO"
+                ) {
+                    signedDelete(
+                        "/api/v3/orderList",
+                        "symbol=" + symbol +
+                            "&orderListId=" + stored.ocoListId
+                    )
+                }
             } else if (stored.ocoListClientId.isNotBlank()) {
-                signedDelete(
-                    "/api/v3/orderList",
-                    "symbol=" + symbol +
-                        "&listClientOrderId=" +
-                        stored.ocoListClientId
-                )
+                withCampaignMutation(
+                    symbol,
+                    "CAMPAIGN_MANUAL_EXIT_CANCEL_OCO"
+                ) {
+                    signedDelete(
+                        "/api/v3/orderList",
+                        "symbol=" + symbol +
+                            "&listClientOrderId=" +
+                            stored.ocoListClientId
+                    )
+                }
             } else {
                 setReconcileRequired(
                     "Manual SELL refused: missing managed OCO identifier for " +
@@ -6296,16 +6524,18 @@ private class NativeEngine(
             }
 
             val sell =
-                signedPost(
-                    "/api/v3/order",
-                    "symbol=" + symbol +
-                        "&side=SELL&type=MARKET" +
-                        "&quantity=" +
-                        fmtQty(
-                            qty,
-                            rules.decimals
-                        )
-                )
+                withCampaignMutation(symbol, "CAMPAIGN_MANUAL_EXIT") {
+                    signedPost(
+                        "/api/v3/order",
+                        "symbol=" + symbol +
+                            "&side=SELL&type=MARKET" +
+                            "&quantity=" +
+                            fmtQty(
+                                qty,
+                                rules.decimals
+                            )
+                    )
+                }
 
             val exitPrice =
                 sell.optString("cummulativeQuoteQty")
@@ -6387,7 +6617,9 @@ private class NativeEngine(
         frame: String,
         tick: Double
     ): List<CampaignSignalN> {
-        if (candles.size < 45 || tick <= 0.0) return emptyList()
+        // Production invariant: frame is H1. M15/M5 are execution/replay
+        // streams and may never create a Williams signal.
+        if (frame.lowercase(Locale.US) != "1h" || candles.size < 50 || tick <= 0.0) return emptyList()
 
         val medians = candles.map { (it.h + it.l) / 2.0 }
         val jaw = smma(medians, 13)
@@ -6397,154 +6629,191 @@ private class NativeEngine(
         val teethS = shiftedSeries(teeth, 5)
         val lipsS = shiftedSeries(lips, 3)
 
-        fun bullishAlligator(i: Int): Boolean =
+        fun validMouth(i: Int): Boolean =
             i in candles.indices &&
                 jawS[i].isFinite() &&
                 teethS[i].isFinite() &&
-                lipsS[i].isFinite() &&
-                lipsS[i] > teethS[i] &&
-                teethS[i] > jawS[i] &&
-                candles[i].c > lipsS[i]
+                lipsS[i].isFinite()
+
+        fun aoAt(i: Int): Double {
+            if (i < 34) return Double.NaN
+            val fastStart = i - 4
+            val slowStart = i - 33
+            val fast = medians.subList(fastStart, i + 1).average()
+            val slow = medians.subList(slowStart, i + 1).average()
+            return fast - slow
+        }
+
+        fun trueRangeAt(i: Int): Double {
+            if (i <= 0) return candles[i].h - candles[i].l
+            return maxOf(
+                candles[i].h - candles[i].l,
+                kotlin.math.abs(candles[i].h - candles[i - 1].c),
+                kotlin.math.abs(candles[i].l - candles[i - 1].c)
+            )
+        }
+
+        fun atrAt(i: Int): Double {
+            val start = maxOf(1, i - 13)
+            var sum = 0.0
+            var count = 0
+            for (j in start..i) {
+                sum += trueRangeAt(j)
+                count++
+            }
+            return if (count > 0) sum / count else 0.0
+        }
+
+        fun sideAngulationValid(i: Int): Boolean {
+            val start = maxOf(0, i - 4)
+            if (i - start < 2 || !validMouth(start) || !validMouth(i)) return false
+            val refStart = (jawS[start] + teethS[start]) / 2.0
+            val refNow = (jawS[i] + teethS[i]) / 2.0
+            val priceStart = candles[start].l
+            val priceNow = candles[i].l
+            val initialDistance = refStart - priceStart
+            val finalDistance = refNow - priceNow
+            val refSlope = (refNow - refStart) / (i - start).toDouble()
+            val priceSlope = (priceNow - priceStart) / (i - start).toDouble()
+            val angularSeparation = refSlope - priceSlope
+            return refStart.isFinite() &&
+                refNow.isFinite() &&
+                initialDistance > 0.0 &&
+                finalDistance > 0.0 &&
+                finalDistance > initialDistance &&
+                angularSeparation > 0.0
+        }
 
         fun upFractal(i: Int): Boolean {
             if (i < 2 || i + 2 >= candles.size) return false
-            return candles[i].h > candles[i - 1].h &&
-                candles[i].h > candles[i - 2].h &&
-                candles[i].h > candles[i + 1].h &&
-                candles[i].h > candles[i + 2].h
-        }
-
-        fun downFractal(i: Int): Boolean {
-            if (i < 2 || i + 2 >= candles.size) return false
-            return candles[i].l < candles[i - 1].l &&
-                candles[i].l < candles[i - 2].l &&
-                candles[i].l < candles[i + 1].l &&
-                candles[i].l < candles[i + 2].l
+            val level = candles[i].h
+            val left = listOf(candles[i - 2].h, candles[i - 1].h)
+            val right = listOf(candles[i + 1].h, candles[i + 2].h)
+            return level.isFinite() &&
+                level >= left.maxOrNull()!! &&
+                level >= right.maxOrNull()!! &&
+                (
+                    left.any { it < level } ||
+                        right.any { it < level }
+                    )
         }
 
         fun latestUpFractal(centerLimit: Int): Int? {
-            for (i in centerLimit downTo 2) {
+            val limit = minOf(centerLimit, candles.lastIndex - 2)
+            for (i in limit downTo 2) {
                 if (upFractal(i)) return i
             }
             return null
         }
 
-        fun latestDownFractal(centerLimit: Int): Int? {
-            for (i in centerLimit downTo 2) {
-                if (downFractal(i)) return i
-            }
-            return null
-        }
-
-        fun angulationScore(i: Int): Double {
-            val start = max(0, i - 4)
-            if (i - start < 2 || !jawS[i].isFinite()) return 0.0
-            val now = max(0.0, jawS[i] - candles[i].l)
-            val then = if (jawS[start].isFinite()) {
-                max(0.0, jawS[start] - candles[start].l)
-            } else 0.0
-            return max(0.0, now - then) / max(candles[i].c, 1e-9) * 100.0
-        }
-
-        fun lastValidFractalLevel(at: Int): Pair<Int, Double>? {
-            val center = latestUpFractal(max(2, at - 2)) ?: return null
-            return center to candles[center].h
-        }
-
         val current = candles.lastIndex
         val out = mutableListOf<CampaignSignalN>()
 
-        // WM1: bullish reversal bar. It is the context bar; execution waits
-        // for a break above its high. Countertrend WM1 is intentionally allowed.
-        val reversalStart = max(2, candles.lastIndex - 20)
-        for (i in candles.lastIndex downTo reversalStart) {
-            val priorLow = min(candles[i - 1].l, candles[i - 2].l)
-            val range = max(candles[i].h - candles[i].l, 1e-12)
+        // WM1: H1 bullish reversal. It is deliberately allowed before a fully
+        // trending Alligator and while AO still reflects bearish/down momentum.
+        val reversalStart = maxOf(2, current - 20)
+        for (i in current downTo reversalStart) {
+            if (!validMouth(i)) continue
+            val priorLow = minOf(candles[i - 1].l, candles[i - 2].l)
+            val range = candles[i].h - candles[i].l
+            if (range <= 0.0) continue
             val closeLocation = (candles[i].c - candles[i].l) / range
-            val belowMouth =
-                jawS[i].isFinite() &&
-                    teethS[i].isFinite() &&
-                    lipsS[i].isFinite() &&
-                    candles[i].l < min(jawS[i], min(teethS[i], lipsS[i]))
-            if (
+            val currentMouth = minOf(jawS[i], minOf(teethS[i], lipsS[i]))
+            val atr = atrAt(i)
+            val outsideMouth = candles[i].l < currentMouth - atr * 0.10
+            val marketMovingDown = candles[i - 1].c < candles[i - 2].c
+            val aoNow = aoAt(i)
+            val aoPrev = if (i > 34) aoAt(i - 1) else Double.NaN
+            val aoRelation = aoNow.isFinite() && (
+                aoNow <= 0.0 ||
+                    (aoPrev.isFinite() && aoNow < aoPrev)
+                )
+            val valid =
                 candles[i].l < priorLow &&
-                closeLocation >= 0.50 &&
-                belowMouth &&
-                angulationScore(i) > 0.0
-            ) {
+                    marketMovingDown &&
+                    closeLocation >= 0.50 &&
+                    outsideMouth &&
+                    sideAngulationValid(i) &&
+                    aoRelation
+            if (valid) {
                 val trigger = candles[i].h + tick
                 if (candles[current].c < trigger) {
                     out += CampaignSignalN(
-                        signalId = campaignSignalId(symbol, frame, "REVERSAL", candles[i].t),
+                        signalId = campaignSignalId(symbol, "1h", "REVERSAL", candles[i].t),
                         type = "REVERSAL",
                         role = "ENTRY",
                         signalBarTimeMs = candles[i].t,
                         triggerPrice = trigger,
                         protectivePrice = candles[i].l - tick,
-                        teethAtDetection = teethS[i].takeIf { it.isFinite() } ?: 0.0,
+                        teethAtDetection = teethS[i],
                         invalidationPrice = candles[i].l - tick,
-                        reason = "WM1 bullish reversal; waiting above signal-bar high"
+                        reason = "WM1 H1 reversal; upper-half close + outside mouth + side-specific angulation"
                     )
                 }
                 break
             }
         }
 
-        // WM2: three consecutive rising AO histogram bars, with the previously
-        // valid buy-fractal/Balance-Line context still present.
+        // WM2: exact third green AO bar on H1. No Fractal or Alligator-trend
+        // gate is allowed to change its semantic truth.
         var streak = 0
-        for (i in candles.lastIndex downTo 35) {
-            val a = ao(candles, i)
-            val p = ao(candles, i - 1)
-            if (a > p) streak++ else break
+        for (i in current downTo 34) {
+            val aoNow = aoAt(i)
+            val aoPrev = aoAt(i - 1)
+            if (!aoNow.isFinite() || !aoPrev.isFinite() || aoNow <= aoPrev) break
+            streak++
             if (streak == 3) {
-                val priorFractalValid = lastValidFractalLevel(i - 1)?.let { (center, level) ->
-                    teethS[center + 2].isFinite() && level > teethS[center + 2]
-                } ?: false
-                if (priorFractalValid) {
-                    val trigger = candles[i].h + tick
-                    if (candles[current].c < trigger) {
-                        out += CampaignSignalN(
-                            signalId = campaignSignalId(symbol, frame, "SUPER_AO", candles[i].t),
-                            type = "SUPER_AO",
-                            role = "ENTRY",
-                            signalBarTimeMs = candles[i].t,
-                            triggerPrice = trigger,
-                            protectivePrice = candles[i].l - tick,
-                            teethAtDetection = teethS[i].takeIf { it.isFinite() } ?: 0.0,
-                            invalidationPrice = candles[i].l - tick,
-                            reason = "WM2 Super AO: third rising AO bar; conditional trigger above price bar"
-                        )
-                    }
+                val trigger = candles[i].h + tick
+                if (candles[current].c < trigger) {
+                    out += CampaignSignalN(
+                        signalId = campaignSignalId(symbol, "1h", "SUPER_AO", candles[i].t),
+                        type = "SUPER_AO",
+                        role = "ENTRY",
+                        signalBarTimeMs = candles[i].t,
+                        triggerPrice = trigger,
+                        protectivePrice = candles[i].l - tick,
+                        teethAtDetection = teethS[i].takeIf { it.isFinite() } ?: 0.0,
+                        invalidationPrice = candles[i].l - tick,
+                        reason = "WM2 H1: third consecutive green AO bar"
+                    )
                 }
                 break
             }
         }
 
-        // WM3: most recent confirmed buy fractal. The signal is persistent,
-        // but the trigger is armable only while it remains above current Teeth.
-        val fractalCenter = latestUpFractal(candles.lastIndex - 2)
-        if (fractalCenter != null) {
+        // WM3: persistent H1 fractal. Teeth is evaluated again at trigger
+        // time by recovery/execution; formation-time Teeth is diagnostic only.
+        val fractalCenter = latestUpFractal(current - 2)
+        if (fractalCenter != null && validMouth(current)) {
             val trigger = candles[fractalCenter].h + tick
-            val currentTeeth = teethS[current].takeIf { it.isFinite() } ?: 0.0
-            if (candles[current].c < trigger && trigger > currentTeeth) {
+            val currentTeeth = teethS[current]
+            if (trigger > currentTeeth && candles[current].c < trigger) {
                 out += CampaignSignalN(
-                    signalId = campaignSignalId(symbol, frame, "FRACTAL", candles[fractalCenter].t),
+                    signalId = campaignSignalId(symbol, "1h", "FRACTAL", candles[fractalCenter].t),
                     type = "FRACTAL",
                     role = "ENTRY",
                     signalBarTimeMs = candles[fractalCenter].t,
                     triggerPrice = trigger,
                     protectivePrice = candles[fractalCenter].l - tick,
-                    teethAtDetection = currentTeeth,
+                    teethAtDetection = teethS[fractalCenter + 2].takeIf { it.isFinite() } ?: currentTeeth,
                     invalidationPrice = candles[fractalCenter].l - tick,
-                    reason = "WM3 confirmed buy fractal; trigger must remain above Teeth"
+                    reason = "WM3 H1 fractal; dynamic Teeth validation at trigger"
                 )
             }
         }
 
-        // Keep at most one signal per family, ordered by formation time. The
-        // campaign engine chooses the earliest still-valid first-entry signal.
-        return out.distinctBy { it.signalId }.sortedBy { it.signalBarTimeMs }
+        return out
+            .distinctBy { it.signalId }
+            .sortedWith(
+                compareBy<CampaignSignalN> {
+                    when (it.type.uppercase(Locale.US)) {
+                        "REVERSAL" -> 0
+                        "SUPER_AO" -> 1
+                        "FRACTAL" -> 2
+                        else -> 99
+                    }
+                }.thenBy { it.signalBarTimeMs }
+            )
     }
 
     private fun analyseBase(
@@ -6553,16 +6822,10 @@ private class NativeEngine(
         spread: Double,
         volume: Double
     ): BaseAnalysis {
-        val workCandles =
-            if (campaignEngineEnabled &&
-                campaignExecutionTimeframe != interval
-            ) {
-                runCatching {
-                    fetchCandles(symbol, campaignExecutionTimeframe, 150)
-                }.getOrElse { candles }
-            } else {
-                candles
-            }
+        // H1 is the sole Williams Decision stream. The execution TF is
+        // fetched separately by the trigger/replay layer and never replaces H1
+        // candles for signal construction.
+        val workCandles = candles
         val i = workCandles.lastIndex
         if (i < 40) {
             return BaseAnalysis(
@@ -6669,14 +6932,15 @@ private class NativeEngine(
 
         var strictSignal =
             if (campaignEngineEnabled) {
+                // Williams Core truth is H1 campaign signals only. H4/Wave/OBI
+                // are advisory context and cannot invalidate a valid Core signal.
                 campaignSignals.isNotEmpty() &&
                     atrPct in 0.0..0.08 &&
                     spread <= maxSpreadPct
             } else {
-                bullish &&
-                    aoPositive &&
-                    breakout &&
-                    atrPct in 0.0..0.08
+                campaignSignals.isNotEmpty() &&
+                    atrPct in 0.0..0.08 &&
+                    spread <= maxSpreadPct
             }
 
         if (preliminaryWave.position == 3) {
@@ -6692,7 +6956,7 @@ private class NativeEngine(
         val flowImbalance = tradeFlowImbalance(symbol)
         if (obi != null) {
             score += (obi * 5.0).coerceIn(-5.0, 5.0)
-            if (strictSignal && obi <= -0.80) strictSignal = false
+            // OBI is ranking/diagnostic only; it never invalidates Williams Core.
         }
         if (flowImbalance != null) {
             score += (flowImbalance * 4.0).coerceIn(-4.0, 4.0)
@@ -6908,22 +7172,36 @@ private class NativeEngine(
         // lower-TF Wave 3 after higher-TF context confirms the direction.
         val finalSignal =
             if (campaignEngineEnabled) {
-                baseCandidate.campaignSignals.isNotEmpty() &&
-                    baseCandidate.atrPct <= 0.08 &&
-                    baseCandidate.spreadPct <= 0.0015 &&
-                    htfConfirmed &&
-                    !countertrendCorrectionImpulse &&
-                    junior != null &&
-                    !entryInsideCorrection &&
-                    middle?.position !in listOf(2, 4)
+                if (coreMode()) {
+                    // H1 Williams Core is authoritative. H4/Wave are context
+                    // only and cannot veto an already-valid H1 signal.
+                    baseCandidate.signal &&
+                        baseCandidate.atrPct <= 0.08 &&
+                        baseCandidate.spreadPct <= maxSpreadPct
+                } else {
+                    baseCandidate.campaignSignals.isNotEmpty() &&
+                        baseCandidate.atrPct <= 0.08 &&
+                        baseCandidate.spreadPct <= 0.0015 &&
+                        htfConfirmed &&
+                        !countertrendCorrectionImpulse &&
+                        junior != null &&
+                        !entryInsideCorrection &&
+                        middle?.position !in listOf(2, 4)
+                }
             } else {
-                entrySignal &&
-                    baseCandidate.atrPct <= 0.08 &&
-                    baseCandidate.spreadPct <= 0.0015 &&
-                    baseCandidate.riskReward >= 1.5
+                if (coreMode()) {
+                    baseCandidate.signal &&
+                        baseCandidate.atrPct <= 0.08 &&
+                        baseCandidate.spreadPct <= maxSpreadPct
+                } else {
+                    entrySignal &&
+                        baseCandidate.atrPct <= 0.08 &&
+                        baseCandidate.spreadPct <= 0.0015 &&
+                        baseCandidate.riskReward >= 1.5
+                }
             }
 
-        if (!finalSignal && baseCandidate.signal) {
+        if (!finalSignal && baseCandidate.signal && !coreMode()) {
             score = min(score, 84.0)
         }
 
@@ -6941,6 +7219,8 @@ private class NativeEngine(
             middle?.path?.substringBefore(":") ?: ""
 
         val reason = when {
+            coreMode() && finalSignal ->
+                "H1 Williams Core VALID; H4/Wave context advisory"
             entrySignal && middle?.position == 3 ->
                 "MTF ENTRY: $entryFrame Wave 3 inside parent $parentFrame Wave 3"
             countertrendCorrectionImpulse && !entrySignal ->
@@ -6948,7 +7228,7 @@ private class NativeEngine(
             entrySignal && nestedW3ParentW5 ->
                 "MTF ENTRY: $entryFrame Wave 3 inside parent Wave 5; allowed with reduced priority"
             setup.position == 5 && !nestedW3ParentW5 ->
-                "MTF: Wave 5/exhaustion context blocks entry"
+                "MTF: Wave 5/exhaustion context"
             finalSignal ->
                 "MTF ENTRY: lower-TF Wave 3 + higher-TF context confirmed"
             else ->
@@ -7746,6 +8026,14 @@ private class NativeEngine(
         }
 
         val dailyGuard = dailyTradeGuard()
+        val blockers = executionBlockers()
+        val firstBlocker = blockers.firstOrNull()
+            ?: when {
+                pendingEntries.isNotEmpty() -> "WAIT_FOR_TRIGGER"
+                positionList().any { it.qty > 0.0 && it.protectiveOrderId.isBlank() } -> "POSITION_UNPROTECTED"
+                executionReady() -> "NONE"
+                else -> "NOT_REPORTED"
+            }
 
         return JSONObject()
             .put("version", BuildConfig.VERSION_NAME)
@@ -7757,6 +8045,7 @@ private class NativeEngine(
             .put("recovered", true)
             .put("state", stateName())
             .put("execution_enabled", executionReady())
+            .put("first_blocker", firstBlocker)
             .put(
                 "position_symbol",
                 positionList().firstOrNull()?.symbol ?: JSONObject.NULL
@@ -7820,6 +8109,7 @@ private class NativeEngine(
             .put("max_total_risk_pct", maxTotalRiskPct)
             .put("max_risk_per_trade_pct", maxRiskPerTradePct)
             .put("reconcile_required", reconcileRequired)
+            .put("first_blocker", firstBlocker)
             .put("pnl", if (positionList().isEmpty()) JSONObject.NULL else livePnl)
             .put("pnl_pct", if (positionList().isEmpty()) JSONObject.NULL else livePnlPct)
             .put(
@@ -7831,10 +8121,23 @@ private class NativeEngine(
                 "stop_loss_price",
                 positionList().firstOrNull()?.stop ?: JSONObject.NULL
             )
-            .put("stop_loss_pct", 0.02)
-            .put("take_profit_pct", if (campaignEngineEnabled) 0.0 else 0.04)
+            .put("stop_loss_pct", 0.0)
+            .put("stop_mode", "H1_STRUCTURAL")
+            .put("take_profit_pct", 0.0)
+            .put("fixed_take_profit", false)
             .put("risk_per_trade_pct", maxRiskPerTradePct)
-            .put("max_daily_loss_pct", 0.03)
+            .put("campaign_risk_limit_pct", campaignRiskLimitPct)
+            .put("max_daily_loss_pct", 0.01)
+            .put("max_full_stop_outs", 2)
+            .put("averaging_down", false)
+            .put("eod_flat", true)
+            .put("macro_timeframe", "1d")
+            .put("context_timeframe", "4h")
+            .put("decision_timeframe", interval)
+            .put("execution_timeframe", campaignExecutionTimeframe)
+            .put("micro_timeframe", "5m")
+            .put("trading_session_utc", "08:00-20:00")
+            .put("no_new_entries_after_utc", "18:00")
             .put("trades_today", dailyGuard.optInt("trades_today", 0))
             .put("daily_pnl_usdt", dailyGuard.optDouble("daily_pnl_usdt", 0.0))
             .put("consecutive_losses", dailyGuard.optInt("consecutive_losses", 0))

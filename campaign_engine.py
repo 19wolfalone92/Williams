@@ -32,13 +32,13 @@ class CampaignEngine:
         self,
         db,
         *,
-        portfolio_risk_limit_pct: float = 0.01,
-        campaign_risk_limit_pct: float = 0.005,
-        initial_risk_fraction_of_campaign: float = 0.40,
+        portfolio_risk_limit_pct: float = 0.006,
+        campaign_risk_limit_pct: float = 0.006,
+        initial_risk_fraction_of_campaign: float = 0.4166666667,
     ) -> None:
         self.db = db
-        self.portfolio_risk_limit_pct = max(0.0, min(0.01, float(portfolio_risk_limit_pct)))
-        self.campaign_risk_limit_pct = max(0.0, min(0.005, float(campaign_risk_limit_pct)))
+        self.portfolio_risk_limit_pct = max(0.0, min(0.006, float(portfolio_risk_limit_pct)))
+        self.campaign_risk_limit_pct = max(0.0, min(0.006, float(campaign_risk_limit_pct)))
         self.initial_risk_fraction = max(
             0.05,
             min(1.0, float(initial_risk_fraction_of_campaign)),
@@ -160,9 +160,23 @@ class CampaignEngine:
         ]
         if not candidates:
             return None
-        # Book model: first available valid signal starts the campaign.  We
-        # therefore order primarily by signal-bar time, not by a score.
-        return min(candidates, key=lambda s: (s.signal_bar_time_ms, s.created_at_ms))
+        # Campaign semantics: among simultaneously available signals the
+        # newest valid H1 signal wins. Signal family is only a tie-breaker.
+        # This preserves WM2-first/WM3-first campaigns instead of letting a
+        # stale WM1 monopolize the initial entry.
+        priority = {
+            SignalType.REVERSAL: 0,   # WM1
+            SignalType.SUPER_AO: 1,   # WM2
+            SignalType.FRACTAL: 2,    # WM3
+        }
+        return max(
+            candidates,
+            key=lambda s: (
+                s.signal_bar_time_ms,
+                -priority.get(s.signal_type, 99),
+                s.created_at_ms,
+            ),
+        )
 
     @staticmethod
     def should_replace_pending(old: SignalSpec, new: SignalSpec, *, min_ticks: int = 1, tick_size: float = 0.0) -> bool:
@@ -216,7 +230,64 @@ class CampaignEngine:
         # campaign cap always dominates the historical ratio.
         total_weight = 1 + 5 + 4 + 3 + 2
         weighted = self.campaign_risk_limit_pct * (weight / total_weight)
-        return min(remaining / equity_quote, weighted)
+        return min(remaining / equity_quote, weighted, self.campaign_risk_limit_pct)
+
+    def _position_risk_quote(
+        self,
+        *,
+        quantity: float,
+        average_entry_price: float,
+        stop_price: float,
+        fee_quote: float = 0.0,
+    ) -> float:
+        """Conservatively mark loss to the active structural stop.
+
+        This is deliberately recomputed from the actual position rather than
+        trusting the originally requested tranche risk.  Moving a LONG stop
+        upward therefore releases risk capacity; adding size consumes only the
+        risk represented by the resulting aggregate position.
+        """
+        qty = max(0.0, float(quantity))
+        entry = max(0.0, float(average_entry_price))
+        stop = max(0.0, float(stop_price))
+        if qty <= 0.0 or entry <= 0.0 or stop <= 0.0:
+            return 0.0
+        if str(getattr(self, "side", "LONG")).upper() == "SHORT":
+            gross = max(0.0, stop - entry) * qty
+        else:
+            gross = max(0.0, entry - stop) * qty
+        fee_per_side = max(0.0, float(__import__("os").getenv("FEE_BUFFER_PER_SIDE_PCT", "0.001")))
+        slippage = max(0.0, float(__import__("os").getenv("RISK_SLIPPAGE_BUFFER_PCT", "0.0015")))
+        notional = entry * qty
+        return gross + max(0.0, float(fee_quote)) + notional * (2.0 * fee_per_side + slippage)
+
+    @staticmethod
+    def _campaign_position_risk(
+        campaign: TradingCampaign,
+        *,
+        fee_quote: float = 0.0,
+    ) -> float:
+        qty = max(0.0, float(campaign.position_qty or 0.0))
+        entry = max(0.0, float(campaign.average_entry_price or 0.0))
+        stop = max(0.0, float(campaign.current_stop_price or 0.0))
+        if qty <= 0.0 or entry <= 0.0 or stop <= 0.0:
+            return 0.0
+        if campaign.side.upper() == "SHORT":
+            gross = max(0.0, stop - entry) * qty
+        else:
+            gross = max(0.0, entry - stop) * qty
+        import os
+        fee_per_side = max(0.0, float(os.getenv("FEE_BUFFER_PER_SIDE_PCT", "0.001")))
+        slippage = max(0.0, float(os.getenv("RISK_SLIPPAGE_BUFFER_PCT", "0.0015")))
+        notional = entry * qty
+        return gross + max(0.0, float(fee_quote)) + notional * (2.0 * fee_per_side + slippage)
+
+    def refresh_open_risk(self, campaign: TradingCampaign, *, fee_quote: float = 0.0) -> float:
+        campaign.open_risk_quote = self._campaign_position_risk(
+            campaign,
+            fee_quote=fee_quote,
+        )
+        return campaign.open_risk_quote
 
     # ------------------------------------------------------------------
     # State decisions
@@ -245,6 +316,8 @@ class CampaignEngine:
     def arm_add_on(self, campaign: TradingCampaign, signal: SignalSpec, *, risk_quote: float, capital_reserved_quote: float) -> TradingCampaign:
         if campaign.position_qty <= 0:
             raise ValueError("add-on requires an open campaign position")
+        if campaign.additions >= 4 or campaign.tranche_index >= 5:
+            raise ValueError("campaign has reached the five-tranche reverse-pyramid limit")
         if signal.side != campaign.side:
             raise ValueError("add-on side does not match campaign")
         if signal.signal_bar_time_ms <= 0:
@@ -253,9 +326,26 @@ class CampaignEngine:
             CampaignState.OPEN_INITIAL,
             CampaignState.TREND_ACTIVE,
             CampaignState.TRAILING,
-            CampaignState.EXHAUSTION_WATCH,
         }:
             raise ValueError(f"Cannot arm add-on from {campaign.state.value}")
+
+        # One Super AO add-on and up to three Fractal add-ons are the
+        # canonical five-tranche campaign structure. Reversal bars do not
+        # create additional tranches.
+        signal_type = signal.signal_type
+        if signal_type == SignalType.REVERSAL:
+            raise ValueError("WM1 reversal is an entry signal, not a campaign add-on")
+        row = self.db.conn.execute(
+            "SELECT COUNT(*) AS n FROM campaign_signals "
+            "WHERE campaign_id=? AND signal_type=? "
+            "AND state IN ('DETECTED','ARMED','TRIGGERED','FILLED')",
+            (campaign.campaign_id, signal_type.value),
+        ).fetchone()
+        count = int(row["n"] or 0)
+        if signal_type == SignalType.SUPER_AO and count >= 1:
+            raise ValueError("campaign already consumed its WM2 Super AO add-on")
+        if signal_type == SignalType.FRACTAL and count >= 3:
+            raise ValueError("campaign reached the three Fractal add-on limit")
 
         # The book continues the same campaign with later Wise-Men signals.
         # A new signal becomes an add-on, never a second independent campaign.
@@ -309,6 +399,11 @@ class CampaignEngine:
         risk_quote: float,
         fee_quote: float = 0.0,
     ) -> TradingCampaign:
+        if campaign.state == CampaignState.ADD_ON_PENDING:
+            campaign.transition(
+                CampaignState.POSITION_EXPANDING,
+                reason="exchange confirmed conditional add-on fill",
+            )
         if campaign.state != CampaignState.POSITION_EXPANDING:
             raise ValueError(f"Cannot record add-on fill from {campaign.state.value}")
         old_qty = float(campaign.position_qty)
@@ -321,11 +416,11 @@ class CampaignEngine:
         ) / max(new_qty, 1e-12)
         campaign.position_qty = new_qty
         campaign.additions += 1
-        campaign.tranche_index = min(4, campaign.tranche_index + 1)
-        campaign.open_risk_quote += max(0.0, float(risk_quote))
+        campaign.tranche_index = min(5, campaign.tranche_index + 1)
         campaign.pending_risk_quote = 0.0
         campaign.capital_reserved_quote = 0.0
         campaign.tags["last_add_on_fee_quote"] = float(fee_quote)
+        self.refresh_open_risk(campaign, fee_quote=fee_quote)
         campaign.next_action = "MONITOR_CAMPAIGN"
         campaign.transition(CampaignState.TREND_ACTIVE, reason="add-on filled and position revalued")
         self.db.save_campaign(campaign)
@@ -362,12 +457,12 @@ class CampaignEngine:
         campaign.initial_stop_price = float(initial_stop_price)
         campaign.current_stop_price = float(initial_stop_price)
         campaign.structural_stop_source = "INITIAL_SIGNAL"
-        campaign.open_risk_quote = max(0.0, float(risk_quote))
         campaign.pending_risk_quote = 0.0
         campaign.capital_reserved_quote = 0.0
         campaign.tranche_index = 1
         campaign.next_action = "MONITOR_CAMPAIGN"
         campaign.tags["entry_fee_quote"] = float(fee_quote)
+        self.refresh_open_risk(campaign, fee_quote=fee_quote)
         campaign.transition(CampaignState.OPEN_INITIAL, reason="entry fully filled and hard stop initialized")
         self.db.save_campaign(campaign)
         self.db.log_campaign_event(
@@ -403,6 +498,7 @@ class CampaignEngine:
             return False
         campaign.current_stop_price = float(proposed_stop)
         campaign.structural_stop_source = str(source)
+        self.refresh_open_risk(campaign, fee_quote=float(campaign.tags.get("entry_fee_quote", 0.0) or 0.0))
         if campaign.state in {CampaignState.OPEN_INITIAL, CampaignState.TREND_ACTIVE, CampaignState.EXHAUSTION_WATCH}:
             try:
                 campaign.transition(CampaignState.TRAILING, reason="structural protective stop advanced")
@@ -467,11 +563,52 @@ class CampaignEngine:
         row = self.db.get_campaign(campaign_id)
         if row is None:
             return {"found": False, "campaign_id": campaign_id}
-        signals = self.db.active_campaign_signals(campaign_id)
+
+        state = str(row.get("state", "UNKNOWN")).upper()
+        tags = {}
+        try:
+            tags = json.loads(row.get("tags_json") or "{}")
+        except Exception:
+            tags = {}
+        qty = float(row.get("position_qty") or 0.0)
+        stop = float(row.get("current_stop_price") or 0.0)
+        first_blocker = ""
+        next_action = str(row.get("next_action") or "WAIT")
+
+        if state == CampaignState.RECONCILE_REQUIRED.value:
+            first_blocker = "RECONCILE_REQUIRED: " + str(tags.get("reconcile_reason") or "exchange state is not reconciled")
+            next_action = "RECONCILE"
+        elif state == CampaignState.ENTRY_PENDING.value:
+            if not tags.get("pending_order_id") and not tags.get("pending_order_client_id"):
+                first_blocker = "ENTRY_PENDING_WITHOUT_EXCHANGE_ID"
+                next_action = "RECONCILE"
+            else:
+                first_blocker = "WAIT_FOR_ENTRY_TRIGGER"
+                next_action = "WAIT_FOR_TRIGGER"
+        elif state == CampaignState.ADD_ON_PENDING.value:
+            if not tags.get("pending_order_id") and not tags.get("pending_order_client_id"):
+                first_blocker = "ADD_ON_PENDING_WITHOUT_EXCHANGE_ID"
+                next_action = "RECONCILE"
+            else:
+                first_blocker = "WAIT_FOR_ADD_ON_TRIGGER"
+                next_action = "WAIT_FOR_TRIGGER"
+        elif qty > 0.0 and stop <= 0.0:
+            first_blocker = "POSITION_UNPROTECTED"
+            next_action = "ARM_PROTECTION"
+        elif state == CampaignState.EXIT_PENDING.value:
+            first_blocker = "WAIT_FOR_EXIT_FILL"
+            next_action = "WAIT_FOR_EXIT"
+        elif state == CampaignState.EXHAUSTION_WATCH.value:
+            first_blocker = "EXHAUSTION_WATCH_ACTIVE"
+            next_action = "WAIT_FOR_EXIT_SIGNAL"
+
         return {
             "found": True,
             "campaign": row,
-            "active_signals": signals,
+            "active_signals": self.db.active_campaign_signals(campaign_id),
             "portfolio_reserved_risk_quote": self.portfolio_reserved_risk_quote(),
             "portfolio_reserved_capital_quote": self.portfolio_reserved_capital_quote(),
+            "first_blocker": first_blocker,
+            "next_action": next_action,
+            "reconcile_required": state == CampaignState.RECONCILE_REQUIRED.value,
         }

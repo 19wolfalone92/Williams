@@ -626,6 +626,55 @@ def db():
     return state.ensure_trader().db
 
 
+def _campaign_diagnostics(multi):
+    """Return compact causal diagnostics for the Android cockpit."""
+    rows = []
+    first_blocker = ""
+    try:
+        engine = multi.campaign_execution.engine
+        for row in multi.db.open_campaigns():
+            snap = engine.diagnostic_snapshot(str(row["campaign_id"]))
+            campaign = snap.get("campaign") or row
+            item = {
+                "campaign_id": campaign.get("campaign_id"),
+                "symbol": campaign.get("symbol"),
+                "side": campaign.get("side"),
+                "state": campaign.get("state"),
+                "signal_type": campaign.get("current_signal_type"),
+                "signal_id": campaign.get("current_signal_id"),
+                "position_qty": float(campaign.get("position_qty") or 0.0),
+                "open_risk_quote": float(campaign.get("open_risk_quote") or 0.0),
+                "pending_risk_quote": float(campaign.get("pending_risk_quote") or 0.0),
+                "health": campaign.get("health") or "UNKNOWN",
+                "first_blocker": snap.get("first_blocker") or "",
+                "next_action": snap.get("next_action") or campaign.get("next_action") or "WAIT",
+                "reconcile_required": bool(snap.get("reconcile_required")),
+                "decision_trace": multi.db.recent_decision_traces(campaign_id=str(campaign["campaign_id"]), limit=5) if hasattr(multi.db, "recent_decision_traces") else [],
+            }
+            rows.append(item)
+            if not first_blocker and item["first_blocker"]:
+                first_blocker = item["first_blocker"]
+    except Exception as exc:
+        first_blocker = "CAMPAIGN_DIAGNOSTICS_UNAVAILABLE: " + str(exc)
+    return {"campaigns": rows, "first_blocker": first_blocker}
+
+def _next_action_for_blocker(blocker: str, *, execution_enabled: bool) -> str:
+    value = str(blocker or '').upper()
+    if value.startswith('RECONCILE_REQUIRED') or 'RECONCILE' in value:
+        return 'RECONCILE / RECOVER'
+    if value.startswith('WAIT_FOR_TRIGGER'):
+        return 'WAIT FOR TRIGGER'
+    if 'POSITION_UNPROTECTED' in value:
+        return 'ARM PROTECTION'
+    if ('RISK_CAPACITY' in value or 'RISK' in value) and not execution_enabled:
+        return 'RESOLVE RISK BLOCKER'
+    if 'PAUSED' in value or 'RUNTIME_EXECUTION_DISABLED' in value:
+        return 'RESUME / ENABLE EXECUTION'
+    if 'KILL_SWITCH' in value:
+        return 'RESET KILL SWITCH'
+    return 'MONITOR' if execution_enabled else 'RESOLVE BLOCKER'
+
+
 def _canonical_execution_state(multi, positions=None):
     """Single backend execution-state contract used by health, status and recovery."""
     unresolved_symbols = list(multi.unresolved_symbols())
@@ -937,6 +986,19 @@ def status():
     if positions:
         selected_position = positions[0]
 
+    campaign_diag = _campaign_diagnostics(multi)
+    first_blocker = campaign_diag["first_blocker"]
+    if not first_blocker:
+        if unresolved_symbols:
+            first_blocker = "RECONCILE_REQUIRED: " + ",".join(unresolved_symbols)
+        elif pending_symbols:
+            first_blocker = "WAIT_FOR_TRIGGER: " + ",".join(pending_symbols)
+        elif not p0_ready:
+            first_blocker = "P0_GATE_NOT_READY"
+        elif remaining_risk_quote <= 0.0:
+            first_blocker = "AGGREGATE_RISK_CAPACITY_EXHAUSTED"
+
+    next_action = _next_action_for_blocker(first_blocker, execution_enabled=execution_enabled)
     return {
         'version': VERSION,
         'symbol': t.symbol,
@@ -996,17 +1058,22 @@ def status():
         'user_stream_sync_required': bool(hub.user_sync_required),
         'history_ready': bool(mtf_service.snapshot_status().get('contexts', 0) >= len(t.config.symbols) * len(t.config.structural_timeframes)),
         'p0_gate_passed': bool(t.preflight_report and t.preflight_report.get('ready')),
-        'p0_gate_reason': ('PASS' if t.preflight_report and t.preflight_report.get('ready') else 'NOT_READY'),
+        'p0_gate_reason': ('PASS' if execution_enabled else first_blocker),
         'max_open_positions_locked': False,
         'reconcile_required': bool(unresolved_symbols or pending_symbols),
         'unresolved_symbols': unresolved_symbols,
         'pending_entry_symbols': pending_symbols,
+        'first_blocker': first_blocker,
+        'next_action': next_action,
+        'campaign_diagnostics': campaign_diag["campaigns"],
         'execution_state_contract': {
             'version': 1,
             'state': execution_state,
             'execution_enabled': execution_enabled,
             'reconciliation_required': bool(unresolved_symbols or pending_symbols),
             'kill_switch_latched': kill_switch_latched,
+            'first_blocker': first_blocker,
+            'next_action': next_action,
         },
     }
 

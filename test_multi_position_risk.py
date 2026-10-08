@@ -31,6 +31,7 @@ class FakeScanner:
 
 
 def test_multiple_positions_fit_aggregate_risk(monkeypatch):
+    monkeypatch.setenv("WILLIAMS_MODE", "LEGACY")
     monkeypatch.setenv("MAX_OPEN_POSITIONS", "0")
     monkeypatch.setenv("MAX_TOTAL_RISK_PCT", "0.01")
     monkeypatch.setenv("MAX_RISK_PER_TRADE_PCT", "0.005")
@@ -49,6 +50,7 @@ def test_multiple_positions_fit_aggregate_risk(monkeypatch):
 
 
 def test_existing_risk_leaves_only_remaining_budget(monkeypatch):
+    monkeypatch.setenv("WILLIAMS_MODE", "LEGACY")
     monkeypatch.setenv("MAX_OPEN_POSITIONS", "0")
     monkeypatch.setenv("MAX_TOTAL_RISK_PCT", "0.01")
     monkeypatch.setenv("MAX_RISK_PER_TRADE_PCT", "0.005")

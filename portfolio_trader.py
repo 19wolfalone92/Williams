@@ -11,6 +11,9 @@ from execution_accumulator import ExecutionSummary, accumulate_order
 from campaign_execution import CampaignExecutionService, CampaignExecutionError
 from campaign_model import SignalSpec, SignalType, SignalRole
 from campaign_monitor import CampaignMonitor
+from execution_barrier import ExecutionBarrier, OrderIntent
+from market_context import ContextCache
+from williams.intraday_policy import IntradayPolicy
 
 
 POSITION_STATES = {
@@ -42,31 +45,35 @@ class MultiPositionTrader:
     def __init__(self, client, db=None, symbols=None, execution_barrier=None):
         self.client = client
         self.db = db or Database()
+        self.williams_mode = str(os.getenv("WILLIAMS_MODE", "INTRADAY_CORE")).upper()
+        self.core_mode = self.williams_mode == "INTRADAY_CORE"
+        allowed_core = {"BTCUSDT", "ETHUSDT"}
         if symbols is not None:
-            self.symbols = [str(x).strip().upper() for x in symbols if str(x).strip()]
+            requested_symbols = [str(x).strip().upper() for x in symbols if str(x).strip()]
+            self.symbols = [x for x in requested_symbols if x in allowed_core] if self.core_mode else requested_symbols
         else:
-            raw_symbols = os.getenv("AUTO_SCAN_SYMBOLS", "ALL").strip()
-            self.symbols = (
-                []
-                if raw_symbols.upper() in {"ALL", "AUTO", "*"}
-                else [x.strip().upper() for x in raw_symbols.split(",") if x.strip()]
-            )
+            raw_symbols = os.getenv("AUTO_SCAN_SYMBOLS", "BTCUSDT,ETHUSDT" if self.core_mode else "ALL").strip()
+            if raw_symbols.upper() in {"ALL", "AUTO", "*"}:
+                self.symbols = sorted(allowed_core) if self.core_mode else []
+            else:
+                requested_symbols = [x.strip().upper() for x in raw_symbols.split(",") if x.strip()]
+                self.symbols = [x for x in requested_symbols if x in allowed_core] if self.core_mode else requested_symbols
         self.max_open_positions = max(
             0,
-            int(os.getenv("MAX_OPEN_POSITIONS", "5")),
+            1 if self.core_mode else int(os.getenv("MAX_OPEN_POSITIONS", "5")),
         )
         self.max_total_risk_pct = min(
-            0.01,
+            0.006 if self.core_mode else 0.01,
             max(
                 0.0,
-                float(os.getenv("MAX_TOTAL_RISK_PCT", "0.01")),
+                float(os.getenv("MAX_TOTAL_RISK_PCT", "0.006" if self.core_mode else "0.01")),
             ),
         )
         self.max_risk_per_trade_pct = min(
-            0.005,
+            0.0025 if self.core_mode else 0.005,
             max(
                 0.0,
-                float(os.getenv("MAX_RISK_PER_TRADE_PCT", os.getenv("RISK_PER_TRADE_PCT", "0.005"))),
+                float(os.getenv("MAX_RISK_PER_TRADE_PCT", os.getenv("RISK_PER_TRADE_PCT", "0.0025" if self.core_mode else "0.005"))),
             ),
         )
         self.dry_run = (
@@ -84,11 +91,11 @@ class MultiPositionTrader:
         self.l2_guard = L2SlippageGuard(
             float(os.getenv("MAX_L2_SLIPPAGE_PCT", os.getenv("MAX_SPREAD_PCT", "0.0015")))
         )
-        self.equity_breaker = EquityCircuitBreaker(float(os.getenv("MAX_DAILY_LOSS_PCT", "0.03")))
+        self.equity_breaker = EquityCircuitBreaker(float(os.getenv("MAX_DAILY_LOSS_PCT", "0.01" if self.core_mode else "0.03")))
         self.max_trades_per_day = max(0, int(os.getenv("MAX_TRADES_PER_DAY", "5")))
-        self.max_consecutive_losses = max(0, int(os.getenv("MAX_CONSECUTIVE_LOSSES", "3")))
+        self.max_consecutive_losses = max(0, int(os.getenv("MAX_CONSECUTIVE_LOSSES", "2" if self.core_mode else "3")))
         self.cooldown_minutes = max(0, int(os.getenv("COOLDOWN_MINUTES", "30")))
-        self.execution_barrier = execution_barrier
+        self.execution_barrier = execution_barrier or ExecutionBarrier(ContextCache(), self.db)
         self.campaign_engine_enabled = (
             os.getenv("CAMPAIGN_ENGINE", "true").lower() == "true"
         )
@@ -107,6 +114,24 @@ class MultiPositionTrader:
     # Durable state
     # ------------------------------------------------------------------
 
+    def _execution_mutation(self, symbol, side, order_type, *, purpose, submit, permission_interval=None, campaign_id="", signal_id=""):
+        """Route every legacy Binance mutation through the canonical door."""
+        if self.execution_barrier is None:
+            raise RuntimeError("ExecutionBarrier is required; direct Binance mutation is forbidden")
+        interval = str(permission_interval or os.getenv("INTERVAL", "1h")).lower()
+        snapshot = self.execution_barrier.context_cache.snapshot()
+        required = snapshot.versions(str(symbol).upper(), [interval])
+        purpose_value = str(purpose).upper()
+        intent = OrderIntent.new(
+            str(symbol).upper(), str(side).upper(), str(order_type).upper(),
+            required_context_versions=required, purpose=purpose_value,
+            permission_interval=interval if (purpose_value == "ENTRY" or purpose_value.endswith("_ENTRY") or purpose_value.endswith("_ADD_ON")) else "",
+            campaign_id=str(campaign_id or ""), signal_id=str(signal_id or ""),
+        )
+        result = self.execution_barrier.execute(intent, submit)
+        if not result.accepted:
+            raise RuntimeError(f"ExecutionBarrier blocked: {result.reason}")
+        return result.response
     def _state_key(self, symbol):
         return f"position_state:{symbol.upper()}"
 
@@ -720,12 +745,13 @@ class MultiPositionTrader:
             )
 
         client_id = f"{self.EMERGENCY_PREFIX}{uuid.uuid4().hex[:16]}"
-        sell = self.client.order_safe(
-            symbol,
-            "SELL",
-            "MARKET",
-            quantity=self.client.decimal_format(sell_qty),
-            new_client_order_id=client_id,
+        sell = self._execution_mutation(
+            symbol, "SELL", "MARKET", purpose="LEGACY_EMERGENCY_EXIT",
+            submit=lambda: self.client.order_safe(
+                symbol, "SELL", "MARKET",
+                quantity=self.client.decimal_format(sell_qty),
+                new_client_order_id=client_id,
+            ),
         )
         self.db.save_order(sell)
 
@@ -934,13 +960,16 @@ class MultiPositionTrader:
         self.set_state(symbol, "EXIT_PENDING")
 
         create_oco = getattr(self.client, "create_oco_sell_safe", None) or self.client.create_oco_sell
-        result = create_oco(
-            symbol,
-            self.client.decimal_format(qty),
-            self.client.decimal_format(tp),
-            self.client.decimal_format(sl),
-            self.client.decimal_format(sl_limit),
-            client_id,
+        result = self._execution_mutation(
+            symbol, "SELL", "OCO", purpose="LEGACY_EXIT_OCO",
+            submit=lambda: create_oco(
+                symbol,
+                self.client.decimal_format(qty),
+                self.client.decimal_format(tp),
+                self.client.decimal_format(sl),
+                self.client.decimal_format(sl_limit),
+                client_id,
+            ),
         )
 
         for leg in result.get("orderReports", []):
@@ -1656,10 +1685,15 @@ class MultiPositionTrader:
             if list_id or list_client:
                 cancel = getattr(self.client, "cancel_oco", None)
                 if cancel is not None:
-                    if list_id:
-                        cancel(symbol, order_list_id=list_id)
-                    else:
-                        cancel(symbol, list_client_order_id=list_client)
+                    self._execution_mutation(
+                        symbol, "SELL", "CANCEL",
+                        purpose="LEGACY_EXIT_OCO_CANCEL",
+                        submit=lambda: (
+                            cancel(symbol, order_list_id=list_id)
+                            if list_id
+                            else cancel(symbol, list_client_order_id=list_client)
+                        ),
+                    )
 
             account = self.client.account()
             free_qty = self._asset_balance(
@@ -1676,12 +1710,13 @@ class MultiPositionTrader:
                     f"{symbol}: managed quantity is no longer available"
                 )
 
-            sell = self.client.order_safe(
-                symbol,
-                "SELL",
-                "MARKET",
-                quantity=self.client.decimal_format(sell_qty),
-                new_client_order_id=f"{self.MANUAL_PREFIX}{uuid.uuid4().hex[:20]}",
+            sell = self._execution_mutation(
+                symbol, "SELL", "MARKET", purpose="LEGACY_MANUAL_EXIT",
+                submit=lambda: self.client.order_safe(
+                    symbol, "SELL", "MARKET",
+                    quantity=self.client.decimal_format(sell_qty),
+                    new_client_order_id=f"{self.MANUAL_PREFIX}{uuid.uuid4().hex[:20]}",
+                ),
             )
             self.db.save_order(sell)
 
@@ -2215,12 +2250,14 @@ class MultiPositionTrader:
                     float(quote),
                 )
 
-                order = self.client.order_safe(
-                    symbol,
-                    "BUY",
-                    "MARKET",
-                    quote_order_qty=self.client.decimal_format(quote),
-                    new_client_order_id=client_id,
+                order = self._execution_mutation(
+                    symbol, "BUY", "MARKET", purpose="LEGACY_ENTRY",
+                    permission_interval=os.getenv("INTERVAL", "1h"),
+                    submit=lambda: self.client.order_safe(
+                        symbol, "BUY", "MARKET",
+                        quote_order_qty=self.client.decimal_format(quote),
+                        new_client_order_id=client_id,
+                    ),
                 )
                 self.db.save_order(order)
 
@@ -2367,6 +2404,50 @@ class MultiPositionTrader:
                     "campaign_monitor": campaign_monitor,
                     "results": [],
                     "reason": "campaign reconciliation required",
+                }
+
+        if self.core_mode:
+            policy = IntradayPolicy(
+                session_start_utc=os.getenv("TRADING_SESSION_START_UTC", "08:00"),
+                no_new_entries_utc=os.getenv("NO_NEW_ENTRIES_UTC", "18:00"),
+                flat_time_utc=os.getenv("MANDATORY_FLAT_UTC", "20:00"),
+            )
+            now_utc = datetime.now(timezone.utc)
+            session_state = policy.state(now_utc)
+
+            if policy.must_flat(now_utc):
+                eod = self.campaign_execution.force_end_of_day()
+                unresolved = self.unresolved_symbols()
+                return {
+                    "status": "EOD_FLAT" if not unresolved else "RECONCILE_REQUIRED",
+                    "recovery": recovery,
+                    "campaign_monitor": campaign_monitor if self.campaign_engine_enabled else [],
+                    "eod": eod,
+                    "results": [],
+                    "reason": "mandatory intraday flat time reached",
+                    "unresolved_symbols": unresolved,
+                }
+
+            if session_state == "CLOSED":
+                return {
+                    "status": "SESSION_CLOSED",
+                    "recovery": recovery,
+                    "campaign_monitor": campaign_monitor if self.campaign_engine_enabled else [],
+                    "results": [],
+                    "reason": "outside trading session",
+                }
+
+            if session_state == "NO_NEW_ENTRIES":
+                pending_cancel = self.campaign_execution.cancel_pending_campaign_entries("NO_NEW_ENTRIES")
+                unresolved = self.unresolved_symbols()
+                return {
+                    "status": "NO_NEW_ENTRIES" if not unresolved else "RECONCILE_REQUIRED",
+                    "recovery": recovery,
+                    "campaign_monitor": campaign_monitor if self.campaign_engine_enabled else [],
+                    "pending_cancel": pending_cancel,
+                    "results": [],
+                    "reason": "new campaign/add-on arming disabled after configured cutoff",
+                    "unresolved_symbols": unresolved,
                 }
 
         allowed, risk_reason = self._daily_entry_guard()

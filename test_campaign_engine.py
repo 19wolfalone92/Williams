@@ -27,13 +27,18 @@ def make_signal(signal_type=SignalType.REVERSAL, role=SignalRole.ENTRY, trigger=
     )
 
 
-def test_first_available_signal_starts_campaign():
+def test_initial_campaign_prefers_canonical_wise_man_order():
     signals = [
         make_signal(SignalType.FRACTAL, bar=30),
-        make_signal(SignalType.REVERSAL, bar=10),
         make_signal(SignalType.SUPER_AO, bar=20),
+        make_signal(SignalType.REVERSAL, bar=10),
     ]
     assert CampaignEngine.choose_initial_signal(signals).signal_type == SignalType.REVERSAL
+
+
+def test_fractal_can_start_when_no_earlier_wise_man_is_available():
+    signal = make_signal(SignalType.FRACTAL, bar=30)
+    assert CampaignEngine.choose_initial_signal([signal]).signal_type == SignalType.FRACTAL
 
 
 def test_wise_men_can_be_later_adds_not_two_of_three_gate():
@@ -98,3 +103,35 @@ def test_portfolio_risk_includes_pending_campaign():
         db.save_campaign(campaign)
         assert engine.portfolio_reserved_risk_quote() == 40.0
         assert engine.portfolio_reserved_capital_quote() == 500.0
+
+
+def test_campaign_limits_one_wm2_and_three_fractal_add_ons():
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "addons.sqlite3"))
+        engine = CampaignEngine(db)
+        initial = make_signal(SignalType.REVERSAL, bar=10)
+        campaign = engine.create_campaign(initial, initial_risk_pct=0.002)
+        engine.arm_entry(campaign, initial)
+        campaign = engine.mark_triggered(campaign, initial.signal_id, "1")
+        campaign = engine.record_initial_fill(
+            campaign,
+            quantity=0.01,
+            average_entry_price=101.0,
+            initial_stop_price=97.0,
+            fill_order_id="1",
+            risk_quote=2.0,
+        )
+
+        wm2 = make_signal(SignalType.SUPER_AO, role=SignalRole.ENTRY, bar=20)
+        engine.arm_add_on(campaign, wm2, risk_quote=1.0, capital_reserved_quote=10.0)
+        campaign = engine.load_campaign(campaign.campaign_id)
+        campaign = engine.record_add_on_fill(
+            campaign,
+            quantity=0.001,
+            average_entry_price=102.0,
+            fill_order_id="2",
+            risk_quote=1.0,
+        )
+
+        with __import__("pytest").raises(ValueError, match="WM2"):
+            engine.arm_add_on(campaign, make_signal(SignalType.SUPER_AO, bar=25), risk_quote=1.0, capital_reserved_quote=10.0)

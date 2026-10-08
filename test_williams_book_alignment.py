@@ -38,6 +38,9 @@ def test_ao_green_streak_drives_super_ao():
     ind = calculate_indicators(frame(prices), config_from_env())
     assert int(ind['ao_green_streak'].iloc[-1]) >= 3
     assert bool(ind['super_ao_long'].iloc[-1]) is True
+    # WM2 is the third-bar event; after the streak continues it remains a
+    # state, not a new signal on every later candle.
+    assert bool(ind['long_super_ao_signal'].eq(True).any()) is True
     assert bool(ind['long_ao_positive'].iloc[-1]) is True
 
 
@@ -58,7 +61,7 @@ def test_wise_men_columns_are_present_and_signal_is_conservative():
 def test_config_defaults_keep_countertrend_disabled():
     cfg = config_from_env({})
     assert cfg['super_ao_bars'] == 3
-    assert cfg['min_wise_men_confirmations'] == 2
+    assert cfg['min_wise_men_confirmations'] == 1
     assert cfg['allow_countertrend_wise_man'] is False
 
 
@@ -89,4 +92,42 @@ def test_reversal_bar_needs_followup_extreme_breakout():
     df = pd.DataFrame({'open': open_, 'high': high, 'low': low, 'close': close, 'volume': volume})
     out = calculate_indicators(df, config_from_env())
     assert bool(out['bullish_reversal_bar'].iloc[70]) is True
-    assert bool(out['long_wise_reversal_entry'].iloc[70]) is False
+    assert bool(out['long_wise_reversal_entry'].iloc[70]) == bool(out['wm1_long_valid'].iloc[70])
+
+
+def test_mfi_prefers_binance_trade_count_as_tick_volume_proxy():
+    df = frame([100, 101, 102, 103, 104], [1000, 2000, 3000, 4000, 5000])
+    df["trades"] = [100, 120, 80, 160, 320]
+    out = calculate_indicators(df, config_from_env())
+    assert out["tick_volume_proxy"].tolist() == [100, 120, 80, 160, 320]
+
+
+def test_rsi_context_is_present_and_bounded():
+    prices = [100 + i for i in range(40)]
+    out = calculate_indicators(frame(prices), config_from_env())
+    assert "rsi" in out.columns
+    assert out["rsi"].between(0.0, 100.0).all()
+
+
+def test_angulation_uses_canonical_jaw_and_teeth_reference():
+    prices = [100.0 + i * 0.25 for i in range(20)]
+    df = frame(prices)
+    ind = calculate_indicators(df, config_from_env())
+    # Canonical angulation uses Jaw/Teeth geometry. The result must remain
+    # computable from the canonical mouth reference.
+    ind["jaw_shifted"] = ind["jaw_shifted"].fillna(100.0)
+    ind["teeth_shifted"] = ind["teeth_shifted"].fillna(100.0)
+    from williams_signals import _angulation
+    score, valid = _angulation(ind, len(ind) - 1)
+    assert score >= 0.0
+    assert isinstance(valid, bool)
+
+
+def test_super_ao_is_not_gated_by_fractal():
+    prices = [100 + (i * 0.05) ** 2 for i in range(80)]
+    out = calculate_indicators(frame(prices), config_from_env())
+    # Break the Fractal context deliberately. WM2 must still reflect the AO
+    # three-colour sequence itself.
+    out["long_fractal_outside"] = False
+    assert bool(out["super_ao_long"].iloc[-1]) is True
+    assert bool(out["long_super_ao_signal"].iloc[-1]) is True

@@ -41,9 +41,13 @@ class Candidate:
     spread_pct: float
 
     htf_confirmed: bool
+    htf_context_state: str = "NEUTRAL"
+    execution_feasible: bool = True
+    block_reason: str = ""
+    decision_trace: dict = field(default_factory=dict)
 
     # Human-readable state
-    setup_state: str
+    setup_state: str = "NONE"
     reason: str = ""
     wise_man_count: int = 0
     signal_family: str = "NONE"
@@ -129,7 +133,9 @@ class MarketScanner:
     def __init__(self, client, symbols=None, interval=None):
         self.client = client
 
-        self.interval = _normalize_interval(interval or os.getenv("INTERVAL", "1h"))
+        self.mode = str(os.getenv("WILLIAMS_MODE", "INTRADAY_CORE")).upper()
+        self.core_mode = self.mode == "INTRADAY_CORE"
+        self.interval = "1h" if self.core_mode else _normalize_interval(interval or os.getenv("INTERVAL", "1h"))
 
         # `None` means resolve the configured/default universe. An explicit []
         # remains a genuine empty test universe and does not fall back to all.
@@ -140,10 +146,8 @@ class MarketScanner:
             else self._load_symbols()
         )
 
-        self.scan_all_usdt = (
-            os.getenv("SCAN_ALL_USDT", "true").lower() == "true"
-        )  # dynamically discover Spot/USDT pairs
-        self.scan_max_symbols = max(0, int(os.getenv("SCAN_MAX_SYMBOLS", "0")))
+        self.scan_all_usdt = False if self.core_mode else (os.getenv("SCAN_ALL_USDT", "true").lower() == "true")
+        self.scan_max_symbols = 2 if self.core_mode else max(0, int(os.getenv("SCAN_MAX_SYMBOLS", "0")))
         self.exclude_leveraged_tokens = (
             os.getenv("EXCLUDE_LEVERAGED_TOKENS", "true").lower() == "true"
         )
@@ -167,12 +171,10 @@ class MarketScanner:
         self.atr_period = int(os.getenv("ATR_PERIOD", "14"))
         self.max_atr_pct = float(os.getenv("MAX_ATR_PCT", "0.08"))
         self.max_spread_pct = float(os.getenv("MAX_SPREAD_PCT", "0.0015"))
-        self.require_htf_confirmation = (
-            os.getenv("REQUIRE_HTF_CONFIRMATION", "true").lower() == "true"
-        )
-        self.min_risk_reward = float(os.getenv("MIN_RISK_REWARD", "1.5"))
+        self.require_htf_confirmation = False if self.core_mode else (os.getenv("REQUIRE_HTF_CONFIRMATION", "true").lower() == "true")
+        self.min_risk_reward = 0.0 if self.core_mode else float(os.getenv("MIN_RISK_REWARD", "1.5"))
         self.stop_pct = float(os.getenv("STOP_LOSS_PCT", "0.02"))
-        self.target_pct = float(os.getenv("TAKE_PROFIT_PCT", "0.04"))
+        self.target_pct = 0.0 if self.core_mode else float(os.getenv("TAKE_PROFIT_PCT", "0.04"))
         self.min_rr = self.min_risk_reward
         self.htf_interval = _normalize_interval(os.getenv("HTF_INTERVAL", "4h"))
 
@@ -204,8 +206,11 @@ class MarketScanner:
         if raw.upper() in {"ALL", "AUTO", "*"}:
             return []
         if raw:
-            return [str(x).upper().strip() for x in raw.split(",") if str(x).strip()]
-        return []
+            requested = [str(x).upper().strip() for x in raw.split(",") if str(x).strip()]
+            if getattr(self, "core_mode", False):
+                return [x for x in requested if x in {"BTCUSDT", "ETHUSDT"}]
+            return requested
+        return ["BTCUSDT", "ETHUSDT"] if bool(getattr(self, "core_mode", False)) else []
     def _atr(df, period):
         prev = df["close"].shift(1)
         tr = pd.concat(
@@ -337,6 +342,28 @@ class MarketScanner:
 
         return list(self.symbols)
 
+    def _htf_context_state(self, symbol):
+        """Classify H4 context without turning it into a BUY/SELL gate."""
+        try:
+            htf = fetch_klines(self.client, symbol, self.htf_interval, limit=160)
+            if len(htf) > 1:
+                htf = htf.iloc[:-1].copy()
+            if len(htf) < 80:
+                return "NEUTRAL"
+            ind = calculate_indicators(htf, config_from_env())
+            last = ind.iloc[-1]
+            if bool(last.get("bullish_alligator", False)) and float(last.get("ao", 0) or 0) > 0:
+                return "SUPPORTIVE"
+            if bool(last.get("bearish_alligator", False)) and float(last.get("ao", 0) or 0) < 0:
+                return "ADVERSE"
+            state = str(last.get("alligator_state", "NEUTRAL") or "NEUTRAL").upper()
+            if state == "SLEEPING":
+                return "NEUTRAL"
+            return "NEUTRAL"
+        except Exception as exc:
+            log.warning("H4 context unavailable for %s: %s", symbol, exc)
+            return "NEUTRAL"
+
     def _htf_confirmation(self, symbol):
         if not self.require_htf_confirmation:
             return True
@@ -424,12 +451,14 @@ class MarketScanner:
             if tick_size <= 0:
                 return None
 
+            h4_context = self._htf_context_state(symbol) if self.core_mode else "NEUTRAL"
             campaign_specs = extract_long_signal_specs(
                 symbol,
                 indicators,
                 timeframe=self.interval,
                 tick_size=tick_size,
-                htf_confirmed=False,
+                htf_confirmed=(h4_context == "SUPPORTIVE"),
+                h4_context=h4_context,
             )
             setup_state = self._setup_state(last)
             if setup_state == "NONE" and not campaign_specs:
@@ -450,9 +479,17 @@ class MarketScanner:
             if spread_pct > self.max_spread_pct:
                 return None
 
-            rr = self.target_pct / max(self.stop_pct, 1e-9)
-            if rr < self.min_rr:
-                return None
+            rr = 0.0
+            if campaign_specs:
+                trigger0 = float(campaign_specs[0].trigger_price or 0.0)
+                stop0 = float(campaign_specs[0].protective_reference or 0.0)
+                if trigger0 > 0 and stop0 > 0 and abs(trigger0 - stop0) > 0:
+                    # Core has no fixed TP. R:R is therefore diagnostic only.
+                    rr = 0.0
+            elif self.min_rr > 0.0 and self.stop_pct > 0.0:
+                rr = self.target_pct / self.stop_pct
+                if rr < self.min_rr:
+                    return None
 
             legacy_strict_signal = bool(last.get("long_signal", False))
             campaign_signal = bool(campaign_specs)
@@ -466,13 +503,9 @@ class MarketScanner:
             else:
                 signal_strength = 0.5
 
-            risk_pct = self.stop_pct * 100.0
-            risk_score = self._clamp(
-                20.0 * (0.02 / max(self.stop_pct, 0.0001)),
-                0.0,
-                20.0,
-            )
-            rr_score = min(20.0, 20.0 * (rr / 3.0))
+            risk_pct = 0.25 if self.core_mode else self.stop_pct * 100.0
+            risk_score = 10.0 if self.core_mode else self._clamp(20.0 * (0.02 / max(self.stop_pct, 0.0001)), 0.0, 20.0)
+            rr_score = 0.0 if self.core_mode else min(20.0, 20.0 * (rr / 3.0))
             atr_score = max(
                 0.0,
                 10.0 * (1.0 - atr_pct / max(self.max_atr_pct, 1e-9)),
@@ -513,9 +546,8 @@ class MarketScanner:
                 risk_reward=round(rr, 3),
                 atr_pct=round(atr_pct, 6),
                 spread_pct=round(spread_pct, 6),
-                # This is populated authoritatively by Wave Engine. Keep it
-                # false here rather than performing another duplicate HTF call.
-                htf_confirmed=False,
+                htf_confirmed=(h4_context == "SUPPORTIVE"),
+                htf_context_state=h4_context,
                 setup_state=setup_state,
                 reason=reason,
                 wise_man_count=int(last.get("long_wise_man_count", 0) or 0),
@@ -639,7 +671,7 @@ class MarketScanner:
             100.0,
         )
 
-        htf_confirmed = bool(report.htf_confirmed)
+        htf_confirmed = bool(candidate.htf_confirmed) if self.core_mode else bool(report.htf_confirmed)
         reason = candidate.reason
         if report.reason:
             reason += f"; wave: {report.reason}"
@@ -668,7 +700,7 @@ class MarketScanner:
                     trigger_price=float(raw["trigger_price"]),
                     protective_reference=float(raw["protective_reference"]),
                     trigger_buffer_ticks=int(raw.get("trigger_buffer_ticks", 1) or 1),
-                    invalidation_price=float(frame_setup.invalidation_price if frame_setup else raw.get("invalidation_price", 0.0) or 0.0),
+                    invalidation_price=(float(raw.get("invalidation_price", 0.0) or 0.0) if self.core_mode else float(frame_setup.invalidation_price if frame_setup else raw.get("invalidation_price", 0.0) or 0.0)),
                     teeth_at_detection=float(raw.get("teeth_at_detection", 0.0) or 0.0),
                     alligator_bullish=bool(raw.get("alligator_bullish", False)),
                     alligator_awake=bool(raw.get("alligator_awake", False)),
@@ -694,15 +726,8 @@ class MarketScanner:
             base_score=round(float(candidate.base_score), 2),
             quant_rank_adjustment=round(float(quant_adjustment), 4),
             quant_score=round(self._clamp(float(final_score), 0.0, 100.0), 2),
-            wave_entry_allowed=bool(
-                (not candidate.signal)
-                or bool(report.entry_allowed)
-            ),
-            wave_block_reason=(
-                report.entry_block_reason
-                if candidate.signal and not report.entry_allowed
-                else ""
-            ),
+            wave_entry_allowed=(True if self.core_mode else bool((not candidate.signal) or bool(report.entry_allowed))),
+            wave_block_reason=("" if self.core_mode else (report.entry_block_reason if candidate.signal and not report.entry_allowed else "")),
             wave_score=round(float(report.wave_score), 2),
             wave_adjustment=round(float(wave_adjustment), 2),
             wave_position=wave_position,
@@ -727,7 +752,7 @@ class MarketScanner:
             wave_scenario_primary=(setup.scenario_primary if setup else ""),
             wave_scenario_alternative=(setup.scenario_alternative if setup else ""),
             wave_operative_interval=report.operative_interval,
-            campaign_ready=bool(candidate.campaign_ready and htf_confirmed),
+            campaign_ready=bool(candidate.campaign_ready),
             entry_signal_type=(
                 enriched_signal_specs[0].get("signal_type", "") if enriched_signal_specs else candidate.entry_signal_type
             ),
@@ -869,7 +894,7 @@ class MarketScanner:
                     log.info("AUTO-SCAN HTF BLOCK: %s strict signal has no bullish HTF confirmation", candidate.symbol)
                     blocked_symbols.add(candidate.symbol)
                     continue
-                if candidate.signal and not enriched_candidate.wave_entry_allowed:
+                if candidate.signal and (not self.core_mode) and not enriched_candidate.wave_entry_allowed:
                     log.info("AUTO-SCAN WAVE BLOCK: %s %s", candidate.symbol, enriched_candidate.wave_block_reason)
                     blocked_symbols.add(candidate.symbol)
                     continue
@@ -877,7 +902,7 @@ class MarketScanner:
                 continue
 
             log.warning("Wave analysis failed for %s: %s", candidate.symbol, exc)
-            if candidate.signal and os.getenv("NO_TRADE_WHEN_UNCERTAIN", "true").lower() == "true":
+            if candidate.signal and (not self.core_mode) and os.getenv("NO_TRADE_WHEN_UNCERTAIN", "true").lower() == "true":
                 blocked_symbols.add(candidate.symbol)
                 continue
             neutral = replace(

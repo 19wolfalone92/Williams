@@ -162,3 +162,160 @@ def test_stop_replacement_never_lowers_stop():
         assert current > 0
         assert not svc.engine.propose_stop(campaign, current - 1.0, "BAD")
         assert campaign.current_stop_price == current
+
+
+def test_campaign_permission_denial_is_fail_closed_before_exchange_mutation():
+    class DenyContext(FakeContext):
+        def __init__(self, version=1):
+            super().__init__(version)
+            self.allow_long = False
+
+    class DenySnapshot:
+        def context(self, symbol, interval):
+            return DenyContext(1)
+
+    class DenyCache(FakeCache):
+        def snapshot(self):
+            return DenySnapshot()
+
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "permission.sqlite3"))
+        barrier = ExecutionBarrier(DenyCache(), db)
+        calls = []
+
+        from execution_barrier import OrderIntent
+        intent = OrderIntent.new(
+            "BTCUSDT",
+            "BUY",
+            "STOP_LOSS",
+            {},
+            purpose="CAMPAIGN_ENTRY",
+            permission_interval="5m",
+            campaign_id="campaign-1",
+            client_order_id="WILLV5_ENTRY_TEST",
+        )
+        result = barrier.execute(
+            intent,
+            lambda: calls.append("BINANCE") or {"orderId": "1"},
+        )
+        assert result.accepted is False
+        assert "does not allow LONG" in result.reason
+        assert calls == []
+
+
+def test_reconcile_required_campaign_risk_remains_reserved():
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "risk.sqlite3"))
+        engine = CampaignEngine(db)
+        spec = signal(trigger=101.0)
+        campaign = engine.create_campaign(spec, initial_risk_pct=0.002)
+        campaign.pending_risk_quote = 25.0
+        campaign.state = CampaignState.RECONCILE_REQUIRED
+        db.save_campaign(campaign)
+        assert db.campaign_risk_reserved_quote() == 25.0
+
+
+def test_partial_fill_cancel_creates_canonical_cancel_intent():
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "partial-cancel.sqlite3"))
+        client = MockExchange()
+        client.partial_fill_ratio = 0.4
+        svc = service(db, client)
+
+        result = svc.arm_initial_entry(
+            signal(trigger=101.0),
+            equity_quote=10_000,
+            candidate_risk_pct=0.004,
+        )
+        client.set_price("BTCUSDT", 101.5)
+        svc.reconcile_pending_entries()
+
+        row = db.conn.execute(
+            "SELECT purpose,status FROM execution_intents "
+            "WHERE purpose='CAMPAIGN_ENTRY_PARTIAL_CANCEL' "
+            "ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+        assert row is not None
+        assert row["purpose"] == "CAMPAIGN_ENTRY_PARTIAL_CANCEL"
+        assert row["status"] == "SUBMITTED"
+
+
+def test_canonical_campaign_reconcile_state_blocks_even_if_mirror_is_stale():
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "canonical-reconcile.sqlite3"))
+        engine = CampaignEngine(db)
+        spec = signal(trigger=101.0)
+        campaign = engine.create_campaign(spec, initial_risk_pct=0.002)
+        # Simulate a stale mirror from an older runtime.
+        db.state_set(f"campaign_state:{campaign.campaign_id}", "ENTRY_PENDING")
+        campaign.state = CampaignState.RECONCILE_REQUIRED
+        db.conn.execute(
+            "UPDATE campaigns SET state='RECONCILE_REQUIRED' WHERE campaign_id=?",
+            (campaign.campaign_id,),
+        )
+        db.conn.commit()
+
+        from execution_barrier import OrderIntent
+        intent = OrderIntent.new(
+            "BTCUSDT",
+            "BUY",
+            "STOP_LOSS",
+            {},
+            purpose="CAMPAIGN_ENTRY",
+            permission_interval="5m",
+            campaign_id=campaign.campaign_id,
+        )
+        result = ExecutionBarrier(FakeCache(), db).execute(
+            intent,
+            lambda: {"orderId": "must-not-submit"},
+        )
+        assert result.accepted is False
+        assert "reconcile" in result.reason.lower()
+
+
+def test_add_on_respects_aggregate_portfolio_risk_not_only_campaign_cap():
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "aggregate-risk.sqlite3"))
+        client = MockExchange()
+        svc = service(db, client)
+
+        initial = signal(trigger=101.0)
+        campaign = svc.engine.create_campaign(initial, initial_risk_pct=0.002)
+        campaign.state = CampaignState.OPEN_INITIAL
+        campaign.position_qty = 1.0
+        campaign.average_entry_price = 100.0
+        campaign.current_stop_price = 90.0
+        campaign.open_risk_quote = 20.0
+        db.save_campaign(campaign)
+
+        other = SignalSpec.new(
+            symbol="ETHUSDT",
+            side="BUY",
+            signal_type=SignalType.FRACTAL,
+            role=SignalRole.ENTRY,
+            timeframe="5m",
+            signal_bar_time_ms=200,
+            trigger_price=11.0,
+            protective_reference=9.0,
+        )
+        other_campaign = svc.engine.create_campaign(other, initial_risk_pct=0.002)
+        other_campaign.pending_risk_quote = 90.0
+        other_campaign.state = CampaignState.ENTRY_PENDING
+        db.save_campaign(other_campaign)
+
+        addon = signal(
+            kind=SignalType.SUPER_AO,
+            role=SignalRole.ADD_ON,
+            bar=300,
+            trigger=102.0,
+        )
+        try:
+            svc.arm_add_on(
+                addon,
+                equity_quote=10_000.0,
+                candidate_risk_pct=0.004,
+            )
+        except Exception as exc:
+            assert "risk budget exhausted" in str(exc).lower()
+        else:
+            raise AssertionError("add-on escaped aggregate portfolio risk cap")

@@ -34,6 +34,7 @@ import uuid
 class CampaignState(str, Enum):
     FLAT = "FLAT"
     SIGNAL_DETECTED = "SIGNAL_DETECTED"
+    SIGNAL_SUPERSEDED = "SIGNAL_SUPERSEDED"
     ENTRY_ARMING = "ENTRY_ARMING"
     ENTRY_PENDING = "ENTRY_PENDING"
     ENTRY_TRIGGERED = "ENTRY_TRIGGERED"
@@ -72,6 +73,7 @@ class SignalState(str, Enum):
     EXPIRED = "EXPIRED"
     CANCEL_REQUESTED = "CANCEL_REQUESTED"
     CANCELLED = "CANCELLED"
+    SUPERSEDED = "SUPERSEDED"
 
 
 class CampaignEventType(str, Enum):

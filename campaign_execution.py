@@ -12,6 +12,10 @@ from binance_client import BinanceAPIError
 from campaign_engine import CampaignEngine
 from campaign_model import CampaignState, PendingOrderRecord, SignalSpec, SignalState, SignalType
 from execution_barrier import ExecutionBarrier, OrderIntent
+from pending_signal import PendingSignal
+from recovery_matrix import RecoveryMatrix
+from williams.execution_economics import ExecutionFeasibilityGate
+from williams.intraday_policy import IntradayPolicy
 
 
 class CampaignExecutionError(RuntimeError):
@@ -27,12 +31,23 @@ class CampaignExecutionService:
         self.client = client
         self.db = db
         self.barrier = execution_barrier
+        self.core_mode = str(os.getenv("WILLIAMS_MODE", "INTRADAY_CORE")).upper() == "INTRADAY_CORE"
+        self.economics_gate = ExecutionFeasibilityGate(
+            fee_per_side_pct=float(os.getenv("FEE_BUFFER_PER_SIDE_PCT", "0.001")),
+            slippage_pct=float(os.getenv("RISK_SLIPPAGE_BUFFER_PCT", "0.0015")),
+            max_spread_pct=float(os.getenv("MAX_SPREAD_PCT", "0.0015")),
+        )
+        self.intraday_policy = IntradayPolicy(
+            session_start_utc=os.getenv("TRADING_SESSION_START_UTC", "08:00"),
+            no_new_entries_utc=os.getenv("NO_NEW_ENTRIES_UTC", "18:00"),
+            flat_time_utc=os.getenv("MANDATORY_FLAT_UTC", "20:00"),
+        )
         self.engine = CampaignEngine(
             db,
-            portfolio_risk_limit_pct=float(os.getenv("MAX_TOTAL_RISK_PCT", "0.01")),
-            campaign_risk_limit_pct=float(os.getenv("MAX_RISK_PER_TRADE_PCT", "0.005")),
+            portfolio_risk_limit_pct=float(os.getenv("MAX_TOTAL_RISK_PCT", "0.006")),
+            campaign_risk_limit_pct=float(os.getenv("MAX_RISK_PER_TRADE_PCT", "0.0025" if self.core_mode else "0.005")),
             initial_risk_fraction_of_campaign=float(
-                os.getenv("CAMPAIGN_INITIAL_RISK_FRACTION", "0.40")
+                os.getenv("CAMPAIGN_INITIAL_RISK_FRACTION", "0.4166666667")
             ),
         )
 
@@ -199,6 +214,8 @@ class CampaignExecutionService:
     ) -> dict[str, Any]:
         if signal.side != "BUY":
             raise CampaignExecutionError("Current Spot campaign executor only arms LONG entries")
+        if self.core_mode and not self.intraday_policy.allows_new_campaign(datetime.now(timezone.utc)):
+            raise CampaignExecutionError("INTRADAY_SESSION_BLOCKED: new campaign not allowed at current UTC time")
 
         reserved = self.engine.portfolio_reserved_risk_quote()
         capacity = max(0.0, float(equity_quote) * self.engine.portfolio_risk_limit_pct)
@@ -231,6 +248,32 @@ class CampaignExecutionService:
                 f"{signal.symbol}: invalid campaign structural stop {stop:.12g}"
             )
 
+        spread_pct = 0.0
+        try:
+            book = self.client.book_ticker(signal.symbol)
+            bid = float(book.get("bidPrice", 0) or 0.0)
+            ask = float(book.get("askPrice", 0) or 0.0)
+            if bid > 0 and ask > 0:
+                spread_pct = (ask - bid) / ((ask + bid) / 2.0)
+        except Exception:
+            # Failure to obtain spread does not falsify Williams Core. The
+            # execution barrier remains the final admission layer.
+            spread_pct = 0.0
+
+        economics = self.economics_gate.evaluate(
+            entry=trigger,
+            stop=stop,
+            spread_pct=spread_pct,
+            estimated_slippage_pct=float(os.getenv("MAX_L2_SLIPPAGE_PCT", "0.0015")),
+            minimum_notional_ok=True,
+            balance_ok=float(equity_quote) > 0.0,
+            time_to_eod_ok=True,
+        )
+        if not economics.feasible:
+            raise CampaignExecutionError(
+                "BLOCKED_BY_EXECUTION_ECONOMICS: " + ",".join(economics.reasons)
+            )
+
         stop_fraction = (trigger - stop) / trigger
         effective_loss_fraction = (
             stop_fraction
@@ -254,10 +297,12 @@ class CampaignExecutionService:
                 f"{signal.symbol}: another conditional entry is already reserved"
             )
 
+        pending_signal = PendingSignal.from_spec(signal)
         campaign = self.engine.create_campaign(
             signal,
             initial_risk_pct=requested_risk,
         )
+        campaign.tags["pending_signal"] = pending_signal.to_dict()
         campaign.tags["signal_role"] = signal.role.value
         campaign.tags["initial_stop_price"] = stop
         campaign.initial_stop_price = stop
@@ -271,6 +316,10 @@ class CampaignExecutionService:
         # IMPORTANT: persist ENTRY_PENDING before touching Binance. A fast
         # conditional fill can arrive on the user stream immediately.
         self.engine.arm_entry(campaign, signal)
+        campaign.tags["pending_signal"] = PendingSignal.from_spec(
+            signal, state=SignalState.ARMED
+        ).to_dict()
+        self.db.save_campaign(campaign)
         self.db.state_set(f"campaign_state:{campaign.campaign_id}", campaign.state.value)
 
         intent = OrderIntent.new(
@@ -346,6 +395,31 @@ class CampaignExecutionService:
                 ),
                 check,
             )
+            exchange_status = str(order.get("status", "")).upper()
+            executed_now = float(order.get("executedQty", 0) or 0)
+            if exchange_status in {"CANCELED", "EXPIRED", "REJECTED", "EXPIRED_IN_MATCH"} and executed_now <= 0:
+                # Known terminal no-fill outcomes release the pending reservation
+                # immediately. EXPIRED_IN_MATCH is Binance STP and is not an
+                # unknown execution outcome.
+                campaign.state = CampaignState.CLOSED
+                campaign.pending_risk_quote = 0.0
+                campaign.capital_reserved_quote = 0.0
+                campaign.next_action = "WAIT"
+                self.db.set_campaign_signal_state(
+                    signal.signal_id,
+                    SignalState.CANCELLED.value,
+                )
+                self.db.state_delete(f"entry_client_order_id:{signal.symbol}")
+                self.db.save_campaign(campaign)
+                return {
+                    "campaign_id": campaign.campaign_id,
+                    "signal_id": signal.signal_id,
+                    "client_order_id": client_id,
+                    "order_id": order.get("orderId"),
+                    "state": CampaignState.CLOSED.value,
+                    "order_status": exchange_status,
+                }
+
             self.db.save_campaign_order(
                 PendingOrderRecord(
                     order_id=str(order.get("orderId", "") or ""),
@@ -462,6 +536,90 @@ class CampaignExecutionService:
 
                 executed = float(order.get("executedQty", 0) or 0)
                 quote = float(order.get("cummulativeQuoteQty", 0) or 0)
+
+                # Williams' Fractal rule is evaluated at the instant the
+                # breakout is hit, not only when the pending order is armed.
+                # Teeth can move while a conditional order waits on Binance.
+                if (
+                    str(campaign.current_signal_type or "").upper() == SignalType.FRACTAL.value
+                    and status in {"NEW", "PENDING_NEW", "PARTIALLY_FILLED", "FILLED"}
+                ):
+                    try:
+                        from data import fetch_klines
+                        from strategy import calculate_indicators, config_from_env
+                        df = fetch_klines(
+                            self.client,
+                            symbol,
+                            campaign.execution_timeframe,
+                            limit=160,
+                        )
+                        closed = df.iloc[:-1].copy() if len(df) > 1 else df
+                        ind = calculate_indicators(closed, config_from_env())
+                        teeth = float(ind.iloc[-1].get("teeth_shifted", 0.0) or 0.0)
+                        hit_price = float(order.get("stopPrice", 0) or 0)
+                        fractal_valid = teeth <= 0.0 or hit_price > teeth
+                    except Exception as exc:
+                        self.engine.mark_reconcile_required(
+                            campaign,
+                            f"Fractal hit-time validation unavailable: {exc}",
+                        )
+                        raise CampaignExecutionError(
+                            f"{symbol}: cannot verify Fractal Teeth filter at trigger time"
+                        ) from exc
+
+                    if not fractal_valid:
+                        if executed <= 0:
+                            self._execute_cancel(
+                                campaign,
+                                int(order.get("orderId")),
+                                "CAMPAIGN_FRACTAL_INVALIDATED",
+                            )
+                            self.db.set_campaign_signal_state(
+                                signal_id,
+                                SignalState.INVALIDATED.value,
+                            )
+                            campaign.pending_risk_quote = 0.0
+                            campaign.capital_reserved_quote = 0.0
+                            campaign.next_action = "WAIT"
+                            campaign.transition(
+                                CampaignState.CLOSED,
+                                reason="Fractal failed Teeth filter before fill",
+                            )
+                            self.db.state_delete(f"entry_client_order_id:{symbol}")
+                            self.db.save_campaign(campaign)
+                            results.append({
+                                "symbol": symbol,
+                                "campaign_id": campaign.campaign_id,
+                                "state": "INVALIDATED",
+                                "reason": "Fractal trigger no longer above Teeth",
+                            })
+                            continue
+
+                        # A fill that violates the hit-time Fractal filter is
+                        # not a valid Williams entry. Protect it first, then
+                        # flatten only the campaign inventory.
+                        protection = self.create_hard_stop(
+                            campaign,
+                            quantity=executed,
+                            stop_price=float(campaign.current_stop_price),
+                        )
+                        campaign.tags["protective_order_id"] = protection.get("order_id", "")
+                        campaign.position_qty = executed
+                        campaign.average_entry_price = quote / executed if quote > 0 else float(order.get("price", 0) or 0)
+                        campaign.open_risk_quote = self.engine.refresh_open_risk(campaign)
+                        campaign.state = CampaignState.OPEN_INITIAL
+                        self.db.save_campaign(campaign)
+                        self.exit_market(
+                            campaign,
+                            reason="FRACTAL_TEETH_FILTER_FAILED_AT_FILL",
+                        )
+                        results.append({
+                            "symbol": symbol,
+                            "campaign_id": campaign.campaign_id,
+                            "state": "CLOSED",
+                            "reason": "Fractal trigger failed Teeth filter at fill",
+                        })
+                        continue
                 if quote <= 0 and executed > 0 and hasattr(self.client, "my_trades"):
                     try:
                         fills = self.client.my_trades(
@@ -487,14 +645,25 @@ class CampaignExecutionService:
                     })
                     continue
 
+                recovery = RecoveryMatrix.explain(
+                    lifecycle=campaign.state.value,
+                    exchange_status=status,
+                    executed_qty=executed,
+                )
                 if status == "PARTIALLY_FILLED" and order.get("orderId") is not None:
-                    cancel = getattr(self.client, "cancel_order", None)
-                    if cancel is None:
-                        raise CampaignExecutionError(
-                            f"{symbol}: partial conditional BUY cannot be safely cancelled"
-                        )
                     try:
-                        cancel(symbol, order_id=order.get("orderId"))
+                        self._execute_cancel(
+                            campaign,
+                            int(order.get("orderId")),
+                            "CAMPAIGN_ENTRY_PARTIAL_CANCEL",
+                        )
+                        self.db.log_campaign_event(
+                            campaign.campaign_id,
+                            "ENTRY_PARTIAL_FILL",
+                            order_id=str(order.get("orderId", "")),
+                            reason="recovery matrix: CANCEL_AND_PROTECT",
+                            payload=recovery,
+                        )
                     except Exception as exc:
                         self.engine.mark_reconcile_required(
                             campaign,
@@ -582,6 +751,7 @@ class CampaignExecutionService:
                         self.db.state_delete(f"entry_client_order_id:{symbol}")
                         self.db.state_set(f"position_state:{symbol}", "OPEN")
                         campaign.tags.pop("pending_order_id", None)
+                campaign.tags.pop("pending_order_client_id", None)
                         self.db.save_campaign(campaign)
                         results.append({
                             "symbol": symbol,
@@ -687,7 +857,7 @@ class CampaignExecutionService:
                     })
                     continue
 
-                if status in {"CANCELED", "EXPIRED", "REJECTED"}:
+                if status in {"CANCELED", "EXPIRED", "REJECTED", "EXPIRED_IN_MATCH"}:
                     if purpose == "ADD_ON" or campaign.state == CampaignState.ADD_ON_PENDING:
                         try:
                             campaign.transition(
@@ -756,12 +926,124 @@ class CampaignExecutionService:
                 })
         return results
 
+    def cancel_pending_campaign_entries(self, reason: str = "NO_NEW_ENTRIES") -> list[dict[str, Any]]:
+        """Cancel bot-owned pending campaign BUYs and release reservations."""
+        results: list[dict[str, Any]] = []
+        for row in list(self.db.open_campaigns()):
+            campaign_id = str(row.get("campaign_id") or "")
+            if not campaign_id:
+                continue
+            campaign = self.engine.load_campaign(campaign_id)
+            if campaign is None or campaign.position_qty > 0:
+                continue
+            if campaign.state not in {
+                CampaignState.ENTRY_PENDING,
+                CampaignState.ENTRY_ARMING,
+                CampaignState.SIGNAL_DETECTED,
+                CampaignState.ADD_ON_PENDING,
+                CampaignState.ADD_ON_ARMING,
+            }:
+                continue
+            try:
+                pending_id = str(campaign.tags.get("pending_order_id", "") or "").strip()
+                client_id = str(campaign.tags.get("pending_order_client_id", "") or "").strip()
+
+                # Some restart/crash paths persist only the client ID before the
+                # order record exists. Resolve the authoritative Binance order
+                # before attempting cancellation.
+                if not pending_id and client_id:
+                    try:
+                        observed = self.client.get_order(
+                            campaign.symbol,
+                            orig_client_order_id=client_id,
+                        )
+                    except Exception:
+                        observed = {}
+                    pending_id = str(observed.get("orderId", "") or "").strip()
+                    status = str(observed.get("status", "") or "").upper()
+                    if status in {"FILLED", "PARTIALLY_FILLED"} and float(observed.get("executedQty", 0) or 0) > 0:
+                        raise CampaignExecutionError(
+                            f"{campaign.symbol}: pending entry already has executed quantity; reconcile instead of cancel"
+                        )
+                if pending_id:
+                    self._execute_cancel(campaign, int(pending_id), reason)
+                signal_id = str(campaign.current_signal_id or campaign.origin_signal_id or "")
+                if signal_id:
+                    self.db.set_campaign_signal_state(signal_id, SignalState.CANCELLED.value)
+                campaign.pending_risk_quote = 0.0
+                campaign.capital_reserved_quote = 0.0
+                campaign.tags.pop("pending_order_id", None)
+                campaign.next_action = "WAIT"
+                campaign.state = CampaignState.CLOSED
+                self.db.state_delete(f"entry_client_order_id:{campaign.symbol}")
+                self.db.state_set(f"position_state:{campaign.symbol}", "FLAT")
+                self.db.save_campaign(campaign)
+                results.append({
+                    "campaign_id": campaign_id,
+                    "symbol": campaign.symbol,
+                    "action": "PENDING_CANCELLED",
+                    "reason": reason,
+                })
+            except Exception as exc:
+                self.engine.mark_reconcile_required(campaign, str(exc))
+                self.db.state_set(f"position_state:{campaign.symbol}", "RECONCILE_REQUIRED")
+                results.append({
+                    "campaign_id": campaign_id,
+                    "symbol": campaign.symbol,
+                    "action": "RECONCILE_REQUIRED",
+                    "error": str(exc),
+                })
+        return results
+
+    def force_end_of_day(self) -> list[dict[str, Any]]:
+        """Cancel pending entries, then flatten every remaining Spot campaign."""
+        results = self.cancel_pending_campaign_entries("END_OF_DAY_PENDING_CANCEL")
+        for row in list(self.db.open_campaigns()):
+            campaign_id = str(row.get("campaign_id") or "")
+            if not campaign_id:
+                continue
+            campaign = self.engine.load_campaign(campaign_id)
+            if campaign is None or campaign.position_qty <= 0:
+                continue
+            try:
+                results.append({
+                    "campaign_id": campaign_id,
+                    "symbol": campaign.symbol,
+                    "action": "FORCE_FLAT",
+                    "exit": self.exit_market(campaign, reason="END_OF_DAY"),
+                })
+            except Exception as exc:
+                self.engine.mark_reconcile_required(campaign, str(exc))
+                self.db.state_set(f"position_state:{campaign.symbol}", "RECONCILE_REQUIRED")
+                results.append({
+                    "campaign_id": campaign_id,
+                    "symbol": campaign.symbol,
+                    "action": "RECONCILE_REQUIRED",
+                    "error": str(exc),
+                })
+        return results
+
     def _current_equity_quote(self) -> float:
         account = self.client.account()
-        equity = 0.0
-        for row in account.get("balances", []):
-            if str(row.get("asset", "")).upper() == "USDT":
-                equity += float(row.get("free", 0) or 0) + float(row.get("locked", 0) or 0)
+        equity = sum(
+            float(row.get("free", 0) or 0) + float(row.get("locked", 0) or 0)
+            for row in account.get("balances", [])
+            if str(row.get("asset", "")).upper() == "USDT"
+        )
+        # Use the same mark-to-market portfolio base as the legacy trader.
+        # This prevents campaign risk from being calculated on USDT only when
+        # existing Spot positions already hold part of the portfolio.
+        for row in self.db.open_campaigns():
+            qty = float(row.get("position_qty", 0) or 0)
+            symbol = str(row.get("symbol", "")).upper()
+            if qty <= 0 or not symbol:
+                continue
+            try:
+                price = float(self.client.ticker_price(symbol).get("price", 0) or 0)
+            except Exception:
+                price = 0.0
+            if price > 0:
+                equity += qty * price
         return max(equity, 0.0)
 
     def reconcile_active_campaigns(self) -> list[dict[str, Any]]:
@@ -929,6 +1211,18 @@ class CampaignExecutionService:
         self._check_buy_position_capacity(symbol, qty)
         self._check_algo_capacity(symbol, 1)
 
+        # Final last-mile aggregate risk assertion. The campaign row already
+        # contains pending_risk_quote at this point, so this check catches
+        # concurrent/stale reservations before the exchange mutation.
+        equity = self._current_equity_quote()
+        capacity = equity * self.engine.portfolio_risk_limit_pct
+        reserved = float(self.db.campaign_risk_reserved_quote())
+        if reserved > capacity + 1e-9:
+            raise CampaignExecutionError(
+                f"{symbol}: aggregate campaign risk {reserved:.12g} exceeds "
+                f"portfolio capacity {capacity:.12g}"
+            )
+
     def arm_add_on(
         self,
         signal: SignalSpec,
@@ -937,6 +1231,8 @@ class CampaignExecutionService:
         candidate_risk_pct: float,
     ) -> dict[str, Any]:
         campaign = self._active_campaign_for_symbol(signal.symbol)
+        if self.core_mode and not self.intraday_policy.allows_new_campaign(datetime.now(timezone.utc)):
+            raise CampaignExecutionError("INTRADAY_SESSION_BLOCKED: add-on not allowed after UTC cutoff")
         if campaign is None or campaign.position_qty <= 0:
             raise CampaignExecutionError(f"{signal.symbol}: no active campaign for add-on")
         if signal.signal_bar_time_ms <= 0:
@@ -946,11 +1242,24 @@ class CampaignExecutionService:
 
         reserved = float(campaign.open_risk_quote or 0) + float(campaign.pending_risk_quote or 0)
         campaign_capacity = float(equity_quote) * self.engine.campaign_risk_limit_pct
-        remaining = max(0.0, campaign_capacity - reserved)
+        campaign_remaining = max(0.0, campaign_capacity - reserved)
+
+        # P0 aggregate invariant: an add-on must fit BOTH the campaign cap and
+        # the portfolio cap after every other campaign's open/pending risk.
+        portfolio_capacity = float(equity_quote) * self.engine.portfolio_risk_limit_pct
+        portfolio_reserved = float(self.db.campaign_risk_reserved_quote())
+        portfolio_remaining = max(0.0, portfolio_capacity - portfolio_reserved)
+        weighted_risk_pct = self.engine.next_add_on_risk_pct(
+            campaign_reserved_risk_quote=reserved,
+            equity_quote=float(equity_quote),
+            tranche_index=max(1, int(campaign.tranche_index or 1)),
+        )
         requested = min(
-            remaining,
+            campaign_remaining,
+            portfolio_remaining,
             float(equity_quote) * min(
                 float(candidate_risk_pct),
+                weighted_risk_pct,
                 float(os.getenv("CAMPAIGN_ADD_RISK_MAX_PCT", "0.002")),
             ),
         )
@@ -991,6 +1300,8 @@ class CampaignExecutionService:
         if prior and str(prior["state"]).upper() in {"ARMED", "TRIGGERED", "FILLED"}:
             raise CampaignExecutionError("signal is already active or filled for this campaign")
         self.db.save_campaign_signal(signal, campaign.campaign_id, state=SignalState.DETECTED.value)
+        pending_signal = PendingSignal.from_spec(signal)
+        campaign.tags["pending_signal"] = pending_signal.to_dict()
         campaign.tags["last_signal_time_ms"] = int(signal.signal_bar_time_ms)
         campaign.tags["pending_add_signal_id"] = signal.signal_id
         campaign.pending_risk_quote = requested
@@ -1001,6 +1312,10 @@ class CampaignExecutionService:
             risk_quote=requested,
             capital_reserved_quote=qty * trigger,
         )
+        campaign.tags["pending_signal"] = PendingSignal.from_spec(
+            signal, state=SignalState.ARMED
+        ).to_dict()
+        self.db.save_campaign(campaign)
         # Reuse the same durable per-symbol pending key. Only one conditional
         # order for a symbol may be waiting at a time; this keeps startup
         # recovery idempotent and avoids a second persistence protocol.
@@ -1032,6 +1347,7 @@ class CampaignExecutionService:
             quantity=self.client.decimal_format(qty),
             client_order_id=cid,
             purpose="CAMPAIGN_ADD_ON",
+            permission_interval=signal.timeframe,
             campaign_id=campaign.campaign_id,
             signal_id=signal.signal_id,
             risk_quote=requested,
@@ -1195,7 +1511,15 @@ class CampaignExecutionService:
                         order_id=int(protective_id),
                     )
                     status = str(current.get("status", "")).upper()
-                    if status not in {"CANCELED", "EXPIRED", "FILLED", "REJECTED"}:
+                    if status == "FILLED":
+                        self.engine.mark_reconcile_required(
+                            campaign,
+                            "protective stop filled while exit was being prepared",
+                        )
+                        raise CampaignExecutionError(
+                            f"{symbol}: protective stop filled; campaign must reconcile before exit"
+                        )
+                    if status not in {"CANCELED", "EXPIRED", "REJECTED"}:
                         raise
                 except Exception:
                     self.engine.mark_reconcile_required(
@@ -1233,7 +1557,20 @@ class CampaignExecutionService:
             ),
             0.0,
         )
-        qty = self._normalize_qty(symbol, free_qty)
+        expected_qty = max(0.0, float(campaign.position_qty))
+        tolerance = max(
+            float(os.getenv("MIN_RECOVERY_QTY", "0.000001")),
+            expected_qty * float(os.getenv("BALANCE_TOLERANCE_PCT", "0.005")),
+        )
+        if free_qty + tolerance < expected_qty:
+            self.engine.mark_reconcile_required(
+                campaign,
+                f"campaign exit inventory below expected: expected={expected_qty:.12g} actual={free_qty:.12g}",
+            )
+            raise CampaignExecutionError(
+                f"{symbol}: campaign inventory below expected before exit"
+            )
+        qty = self._normalize_qty(symbol, min(expected_qty, free_qty))
         if qty <= 0:
             raise CampaignExecutionError(
                 f"{symbol}: no free campaign inventory after protection cancel"
@@ -1383,7 +1720,7 @@ class CampaignExecutionService:
         new_result = str(result.get("newOrderResult", "")).upper()
         # Any non-success or transport ambiguity must be reconciled before
         # another mutation; cancelReplace is not atomic.
-        if cancel_result not in {"SUCCESS", "NOT_FOUND"} or new_result not in {"SUCCESS", ""}:
+        if cancel_result != "SUCCESS" or new_result != "SUCCESS":
             campaign.mark_reconcile_required(
                 f"cancelReplace ambiguous: cancel={cancel_result} new={new_result}"
             )
