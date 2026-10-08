@@ -561,8 +561,9 @@ class CampaignExecutionService:
         observed_price: float,
         order_id: str = "",
         stage: str = "ENTRY",
+        trigger_confirmed: bool = False,
     ) -> None:
-        """Persist the final market proof without mutating the source contract."""
+        """Persist authoritative conditional-order price proof."""
         observed = float(observed_price)
         decision_payload = campaign.tags.get("canonical_williams_decision")
         if not isinstance(decision_payload, dict):
@@ -577,14 +578,18 @@ class CampaignExecutionService:
 
         trigger = float(decision_payload.get("trigger_price", 0.0) or 0.0)
         direction = str(decision_payload.get("direction", "") or "").upper()
-        crossed = (
-            direction == "LONG" and observed >= trigger
-        ) or (
-            direction == "SHORT" and observed <= trigger
-        )
+
+        crossed = bool(trigger_confirmed)
+        if not crossed:
+            crossed = (
+                direction == "LONG" and observed >= trigger
+            ) or (
+                direction == "SHORT" and observed <= trigger
+            )
+
         if not crossed:
             raise CampaignExecutionError(
-                f"{campaign.symbol}: authoritative fill price {observed:.12g} "
+                f"{campaign.symbol}: observed price {observed:.12g} "
                 f"does not prove trigger {trigger:.12g} for {direction}"
             )
 
@@ -599,6 +604,11 @@ class CampaignExecutionService:
             "trigger_price": trigger,
             "order_id": str(order_id),
             "stage": stage,
+            "proof_source": (
+                "BINANCE_CONDITIONAL_ORDER_EVENT"
+                if trigger_confirmed
+                else "MARKET_PRICE_CROSS"
+            ),
         }
 
     def _find_campaign_by_pending_client_id(self, client_id: str):
@@ -806,6 +816,7 @@ class CampaignExecutionService:
                             observed_price=avg,
                             order_id=str(order.get("orderId", "")),
                             stage="ADD_ON",
+                            trigger_confirmed=True,
                         )
                         self.engine.record_add_on_fill(
                             campaign,
@@ -902,6 +913,7 @@ class CampaignExecutionService:
                         observed_price=avg,
                         order_id=str(order.get("orderId", "")),
                         stage="ENTRY",
+                        trigger_confirmed=True,
                     )
                     self.engine.record_initial_fill(
                         campaign,
