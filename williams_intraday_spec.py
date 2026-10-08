@@ -85,7 +85,7 @@ class IntradayPolicy:
         campaign=.005 if conservative else .006
         daily=.0075 if conservative else .01
         symbols=tuple(dict.fromkeys(
-            x.strip().upper() for x in str(e.get("WILLIAMS_INTRADAY_SYMBOLS","BTCUSDT,ETHUSDT")).split(",") if x.strip()
+            x.strip().upper() for x in str(e.get("WILLIAMS_INTRADAY_SYMBOLS", e.get("WILLIAMS_SYMBOLS","BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,XRPUSDT"))).split(",") if x.strip()
         )) or ("BTCUSDT","ETHUSDT")
         p=cls(
             profile=profile,
