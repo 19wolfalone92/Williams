@@ -273,6 +273,30 @@ class ExecutionBarrier:
             try:
                 response = submit()
             except Exception as exc:
+                # A known terminal exchange outcome is different from a transport
+                # ambiguity: the order exists and its final state is authoritative.
+                if bool(getattr(exc, "terminal", False)) and isinstance(getattr(exc, "payload", None), dict):
+                    response = dict(exc.payload)
+                    status = str(response.get("status", "")).upper()
+                    try:
+                        state_machine.transition(OrderLifecycleState.SUBMITTED)
+                        state_machine.record_exchange_status(status)
+                    except ValueError:
+                        state_machine.state = OrderLifecycleState.RECONCILE_REQUIRED
+                    self._trace(
+                        intent,
+                        stage="BINANCE_ACK",
+                        decision="TERMINAL",
+                        reason=str(exc),
+                        payload={
+                            "state": state_machine.state.value,
+                            "status": status,
+                            "order_id": response.get("orderId"),
+                            "client_order_id": response.get("clientOrderId"),
+                        },
+                    )
+                    self._persist(intent, "SUBMITTED", status)
+                    return ExecutionResult(intent.intent_id, True, response=response, reason=status)
                 state_machine.mark_ambiguous(f"{type(exc).__name__}: {exc}")
                 self._trace(intent, stage="BINANCE_SUBMIT", decision="AMBIGUOUS", reason=str(exc), blocker="EXCHANGE_OUTCOME_UNKNOWN", payload={"state": state_machine.state.value})
                 self._persist(intent, "AMBIGUOUS", f"{type(exc).__name__}: {exc}")
