@@ -2344,7 +2344,43 @@ class MultiPositionTrader:
 
         return results
 
-    def scan_and_execute(self):
+    def _apply_intraday_boundary(self):
+        policy = evaluate_intraday_policy(
+            datetime.now(timezone.utc),
+            self.intraday_contract,
+            active_campaigns=len(self.db.open_campaigns()),
+            daily_loss_pct=0.0,
+            full_stop_outs=int(self.db.state_get("full_stop_outs_today", "0") or 0),
+        )
+        if policy.cancel_pending:
+            for row in list(self.db.open_campaigns()):
+                if str(row.get("state", "")) not in {"ENTRY_PENDING", "ENTRY_ARMING", "SIGNAL_DETECTED"}:
+                    continue
+                campaign = self.campaign_execution.engine.load_campaign(row["campaign_id"])
+                if campaign is None:
+                    continue
+                self.campaign_execution.cancel_pending_entry(
+                    campaign,
+                    reason=policy.block_reason or "SESSION_BOUNDARY",
+                )
+        if policy.force_flat:
+            exits = []
+            for row in list(self.db.open_campaigns()):
+                campaign = self.campaign_execution.engine.load_campaign(row["campaign_id"])
+                if campaign is None or campaign.position_qty <= 0:
+                    continue
+                exits.append(
+                    self.campaign_execution.exit_market(
+                        campaign,
+                        reason=policy.block_reason or "EOD_FORCE_FLAT",
+                    )
+                )
+            return {"status": "FORCE_FLAT", "results": exits, "reason": policy.block_reason}
+        if not policy.allow_new_campaign:
+            return {"status": "SESSION_BLOCKED", "results": [], "reason": policy.block_reason}
+        return None
+
+    def scan_and_execute(self):\n        boundary = self._apply_intraday_boundary()\n        if boundary is not None:\n            return boundary
         recovery = self.recover()
         if not recovery["ok"]:
             return {
