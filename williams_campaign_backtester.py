@@ -466,21 +466,35 @@ class WilliamsCampaignBacktester:
                 fractals_short=latest_short_timeline[i],
             )
 
+            available_specs=(
+                tuple(s for s in decision.signal_specs if s.signal_type in allowed_types)
+                if allowed_types is not None
+                else decision.signal_specs
+            )
+
             if (
                 position is None
-                and pending is None
                 and session=="ENTRY_WINDOW"
                 and not day_blocked
                 and not before_backtest_start
             ):
-                available_specs=(
-                    tuple(s for s in decision.signal_specs if s.signal_type in allowed_types)
-                    if allowed_types is not None
-                    else decision.signal_specs
-                )
-                chosen=self._pick_initial(available_specs)
-                if chosen is not None:
-                    pending={"spec":chosen}
+                if pending is not None:
+                    current_same_family=[
+                        s for s in available_specs
+                        if s.side=="BUY"
+                        and s.signal_type==pending["spec"].signal_type
+                        and int(s.signal_bar_time_ms) > int(pending["spec"].signal_bar_time_ms)
+                    ]
+                    if current_same_family:
+                        replacement=min(
+                            current_same_family,
+                            key=lambda s:(int(s.signal_bar_time_ms),int(s.created_at_ms)),
+                        )
+                        pending={"spec":replacement}
+                if pending is None:
+                    chosen=self._pick_initial(available_specs)
+                    if chosen is not None:
+                        pending={"spec":chosen}
             elif (
                 position is not None
                 and pending is None
