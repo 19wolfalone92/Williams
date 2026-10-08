@@ -515,6 +515,12 @@ class FuturesWilliamsRuntime:
             report["details"]["reason"] = "missing Binance API credentials"
             return report
         try:
+            if not self.client.testnet and not self.config.allow_live:
+                report["checks"]["live_permission"] = "FAIL"
+                report["details"]["reason"] = "LIVE Futures requires ALLOW_LIVE=true"
+                return report
+            report["checks"]["live_permission"] = "PASS" if self.client.testnet or self.config.allow_live else "FAIL"
+
             self.client.sync_time()
             report["checks"]["server_time"] = "PASS"
             self.client.ping()
@@ -545,6 +551,10 @@ class FuturesWilliamsRuntime:
                     report["checks"]["multi_assets_mode"] = "FAIL"
                     report["details"]["reason"] = "Multi-Assets Mode active with existing position/orders"
                     return report
+                if self.dry_run:
+                    report["checks"]["multi_assets_mode"] = "FAIL"
+                    report["details"]["reason"] = "DRY_RUN will not mutate Futures account mode"
+                    return report
                 self.client.set_multi_assets_mode_single()
                 multi_assets = bool(
                     self.client.get_multi_assets_mode().get("multiAssetsMargin", False)
@@ -563,6 +573,10 @@ class FuturesWilliamsRuntime:
                 if existing_positions or self.client.open_orders():
                     report["checks"]["position_mode"] = "FAIL"
                     report["details"]["reason"] = "Hedge Mode active with existing position/orders"
+                    return report
+                if self.dry_run:
+                    report["checks"]["position_mode"] = "FAIL"
+                    report["details"]["reason"] = "DRY_RUN will not mutate Futures account mode"
                     return report
                 self.client.set_position_mode_one_way()
                 mode = self.client.get_position_mode()
@@ -766,6 +780,9 @@ class FuturesWilliamsRuntime:
         return qty, risk_quote, notional
 
     def _arm_entry(self, candidate: FuturesCandidate):
+        if self.dry_run:
+            self.db.log_event("INFO", "futures_dry_run_entry_blocked", "DRY_RUN=true; conditional entry not submitted", {"symbol": candidate.symbol})
+            return {"state": "DRY_RUN_BLOCKED", "symbol": candidate.symbol}
         signal = candidate.signal
         symbol = signal.symbol
         self._ensure_symbol_config(symbol)
@@ -911,6 +928,9 @@ class FuturesWilliamsRuntime:
             raise
 
     def _arm_add_on(self, campaign, signal):
+        if self.dry_run:
+            self.db.log_event("INFO", "futures_dry_run_add_on_blocked", "DRY_RUN=true; conditional add-on not submitted", {"symbol": campaign.symbol})
+            return {"state": "DRY_RUN_BLOCKED", "symbol": campaign.symbol}
         if signal.side != campaign.side:
             raise RuntimeError("add-on direction mismatch")
         self._ensure_symbol_config(signal.symbol)
@@ -1633,6 +1653,8 @@ class FuturesWilliamsRuntime:
         }
 
     def _trail(self, campaign):
+        if self.dry_run:
+            return {"state": campaign.state.value, "current_stop": campaign.current_stop_price, "dry_run": True}
         symbol = campaign.symbol
         frame = fetch_klines(self.client, symbol, campaign.execution_timeframe, limit=80)
         if len(frame) < 20:
@@ -1682,6 +1704,9 @@ class FuturesWilliamsRuntime:
             self.recovered = True
 
         self._reconcile_pending()
+        if self.dry_run:
+            self.db.log_event("INFO", "futures_dry_run_cycle", "DRY_RUN=true; no strategy orders or exits submitted")
+            return []
         candidates = self.scanner.scan()
         by_symbol = {}
         for c in candidates:
@@ -1757,6 +1782,8 @@ class FuturesWilliamsRuntime:
 
     def manual_sell(self, symbol):
         symbol = str(symbol).upper()
+        if self.dry_run:
+            return {"sold": False, "symbol": symbol, "reason": "DRY_RUN=true; manual exit blocked"}
         campaign = self._active_campaign(symbol)
         if campaign is None:
             self.recover()
