@@ -107,7 +107,7 @@ class PendingSignal:
         return data
 
 
-def supersede(self, new_signal: SignalSpec) -> "PendingSignal":
+    def supersede(self, new_signal: SignalSpec) -> "PendingSignal":
     return PendingSignal(
         signal_id=self.signal_id,
         symbol=self.symbol,
