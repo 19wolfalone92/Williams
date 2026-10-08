@@ -159,3 +159,7 @@ Any new layer must sit downstream of H1 Core and declare whether it is:
 - economics
 - execution
 - diagnostics
+
+
+Implementation audit: 2026-10-08
+Production implementation resides on this branch. The canonical runtime profile is WILLIAMS_INTRADAY_CORE; the conservative profile remains explicitly selectable. Full legacy test-suite failures are reported separately from the Intraday Core regression suite.
