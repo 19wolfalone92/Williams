@@ -63,9 +63,11 @@ class SignalRole(str, Enum):
 
 class SignalState(str, Enum):
     DETECTED = "DETECTED"
+    VALIDATED = "VALIDATED"
     ARMED = "ARMED"
     TRIGGERED = "TRIGGERED"
     FILLED = "FILLED"
+    SUPERSEDED = "SUPERSEDED"
     REPLACEMENT_REQUESTED = "REPLACEMENT_REQUESTED"
     REPLACED = "REPLACED"
     INVALIDATED = "INVALIDATED"
@@ -166,6 +168,33 @@ class SignalSpec:
             protective_reference=float(protective_reference),
             **kwargs,
         )
+
+
+@dataclass
+class PendingSignal:
+    """Durable signal lifecycle attached to one campaign and its conditional order."""
+    signal: SignalSpec
+    state: SignalState = SignalState.DETECTED
+    order_id: str = ""
+    client_order_id: str = ""
+    filled_quantity: float = 0.0
+    created_at_ms: int = field(default_factory=lambda: int(time.time() * 1000))
+    updated_at_ms: int = field(default_factory=lambda: int(time.time() * 1000))
+
+    def transition(self, state: SignalState) -> None:
+        self.state = state
+        self.updated_at_ms = int(time.time() * 1000)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "signal": self.signal.to_dict(),
+            "state": self.state.value,
+            "order_id": self.order_id,
+            "client_order_id": self.client_order_id,
+            "filled_quantity": float(self.filled_quantity),
+            "created_at_ms": int(self.created_at_ms),
+            "updated_at_ms": int(self.updated_at_ms),
+        }
 
 
 @dataclass
