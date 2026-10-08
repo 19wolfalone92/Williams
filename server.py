@@ -182,12 +182,11 @@ class ControlState:
                 self.api_secret,
                 self.testnet,
             )
-        hub.configure_credentials(
-            self.api_key,
-            self.api_secret,
-            self.testnet,
-        )
-        mtf_service.configure_credentials(self.api_key, self.api_secret, self.testnet)
+        # Futures trading is backend-authoritative. Spot websocket/MTF services
+        # are not started in Futures mode to avoid a second exchange state source.
+        if os.getenv("BINANCE_MARKET", "futures_usdt").strip().lower() == "spot":
+            hub.configure_credentials(self.api_key, self.api_secret, self.testnet)
+            mtf_service.configure_credentials(self.api_key, self.api_secret, self.testnet)
 
     def ensure_trader(self):
         with self.lock:
@@ -300,8 +299,8 @@ class ControlState:
         metrics.inc("kill_switch_total")
         with self.lock:
             self.desired_running = False
-        # Close only Williams-managed positions/orders; never cancel
-        # unrelated account orders via DELETE /openOrders.
+            # Close only Williams-managed Futures campaigns; never cancel
+        # unrelated account orders.
         with self.lock:
             self.running = False
             self.paused = True
@@ -581,16 +580,14 @@ def startup():
         name='williams-heartbeat',
     )
     heartbeat_thread.start()
-    hub.configure_credentials(
-        state.api_key,
-        state.api_secret,
-        state.testnet,
-    )
-    mtf_service.configure_credentials(state.api_key, state.api_secret, state.testnet)
-    mtf_service.db = state.ensure_trader().db
-    hub.start()
-    if os.getenv('MTF_CONTEXT_ENABLED', 'true').lower() == 'true':
-        mtf_service.start()
+    market_mode = os.getenv("BINANCE_MARKET", "futures_usdt").strip().lower()
+    if market_mode == "spot":
+        hub.configure_credentials(state.api_key, state.api_secret, state.testnet)
+        mtf_service.configure_credentials(state.api_key, state.api_secret, state.testnet)
+        mtf_service.db = state.ensure_trader().db
+        hub.start()
+        if os.getenv('MTF_CONTEXT_ENABLED', 'true').lower() == 'true':
+            mtf_service.start()
     if (
         os.getenv('AUTO_START', 'true').lower() == 'true'
         and state.api_key
@@ -736,12 +733,12 @@ def clear_binance_config():
     except Exception as exc:
         raise HTTPException(
             503,
-            'Cannot verify Spot account state before credential removal: ' + str(exc),
+            'Cannot verify Futures account state before credential removal: ' + str(exc),
         )
     if managed_positions or exchange_orders:
         raise HTTPException(
             409,
-            'Credentials cannot be removed while Spot positions or open orders exist. '
+            'Credentials cannot be removed while Futures positions or open orders exist. '
             'Close/reconcile the account first.',
         )
 
@@ -753,8 +750,9 @@ def clear_binance_config():
         state.last_error = None
         state.paused = False
     state.credentials.clear()
-    hub.configure_credentials('', '', True)
-    mtf_service.configure_credentials('', '', True)
+    if os.getenv("BINANCE_MARKET", "futures_usdt").strip().lower() == "spot":
+        hub.configure_credentials('', '', True)
+        mtf_service.configure_credentials('', '', True)
     return {
         'configured': False,
         'cleared': True,
