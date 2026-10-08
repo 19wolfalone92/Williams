@@ -240,6 +240,32 @@ class CampaignExecutionService:
                 f"{signal.symbol}: invalid campaign structural stop {stop:.12g}"
             )
 
+        spread_pct = 0.0
+        try:
+            book = self.client.book_ticker(signal.symbol)
+            bid = float(book.get("bidPrice", 0) or 0.0)
+            ask = float(book.get("askPrice", 0) or 0.0)
+            if bid > 0 and ask > 0:
+                spread_pct = (ask - bid) / ((ask + bid) / 2.0)
+        except Exception:
+            # Failure to obtain spread does not falsify Williams Core. The
+            # execution barrier remains the final admission layer.
+            spread_pct = 0.0
+
+        economics = self.economics_gate.evaluate(
+            entry=trigger,
+            stop=stop,
+            spread_pct=spread_pct,
+            estimated_slippage_pct=float(os.getenv("MAX_L2_SLIPPAGE_PCT", "0.0015")),
+            minimum_notional_ok=True,
+            balance_ok=float(equity_quote) > 0.0,
+            time_to_eod_ok=True,
+        )
+        if not economics.feasible:
+            raise CampaignExecutionError(
+                "BLOCKED_BY_EXECUTION_ECONOMICS: " + ",".join(economics.reasons)
+            )
+
         stop_fraction = (trigger - stop) / trigger
         effective_loss_fraction = (
             stop_fraction
