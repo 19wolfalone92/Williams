@@ -128,7 +128,7 @@ def test_conservative_profile_disables_wm3_first():
 def test_decision_trace_is_durable(tmp_path):
     db = Database(str(tmp_path / "trace.sqlite3"))
     trace = {
-        "trace_id": "BTCUSDT:1h:123",
+        "trace_id": "BTCUSDT:15m:123",
         "symbol": "BTCUSDT",
         "decision_time_ms": 123,
         "decision_tf": "1h",
