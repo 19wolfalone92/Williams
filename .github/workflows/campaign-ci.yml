@@ -72,6 +72,8 @@ jobs:
             test_testnet_release_gate.py \
             test_campaign_engine.py \
             test_campaign_execution.py \
+            test_stop_engine.py \
+            test_no_direct_order_bypass.py \
             2>&1 | tee campaign-pytest-output.txt
 
   android:
