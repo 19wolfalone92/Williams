@@ -127,7 +127,7 @@ class ExecutionBarrier:
         age = now_ms - intent.created_at_ms
         if age < 0:
             return "intent created_at_ms is in the future"
-        if age > intent.max_age_ms:
+        if purpose in entry_purposes and age > intent.max_age_ms:
             return f"stale intent age={age}ms"
 
         direction = "long" if side == "BUY" else "short"
@@ -199,35 +199,36 @@ class ExecutionBarrier:
             ):
                 return "missing campaign_id for campaign entry"
 
-        if not isinstance(intent.required_context_versions, Mapping):
-            return "required_context_versions must be a mapping"
-        for tf, required in intent.required_context_versions.items():
-            if not isinstance(tf, str) or not tf.strip():
-                return "invalid context interval key"
-            if isinstance(required, bool) or not isinstance(required, int) or required < 0:
-                return f"invalid required context version for {tf}"
-            ctx = snapshot.context(symbol, tf)
-            if ctx is None:
-                return f"missing context {symbol} {tf}"
-            if isinstance(ctx.version, bool) or not isinstance(ctx.version, int) or ctx.version < 0:
-                return f"invalid published context version for {tf}"
-            if int(ctx.version) != required:
-                return f"stale context {tf}: required={required} current={ctx.version}"
-            # Validate data availability/shape without inventing an unapproved
-            # universal maximum context age. A sourced age policy remains open.
-            if (
-                isinstance(ctx.candle_close_time_ms, bool)
-                or not isinstance(ctx.candle_close_time_ms, int)
-                or ctx.candle_close_time_ms <= 0
-                or ctx.candle_close_time_ms > now_ms
-            ):
-                return f"invalid or future context close timestamp for {tf}"
-            try:
-                context_price = float(ctx.price)
-            except (TypeError, ValueError):
-                return f"invalid context price for {tf}"
-            if not math.isfinite(context_price) or context_price <= 0:
-                return f"invalid context price for {tf}"
+        if purpose in entry_purposes:
+            if not isinstance(intent.required_context_versions, Mapping):
+                return "required_context_versions must be a mapping"
+            for tf, required in intent.required_context_versions.items():
+                if not isinstance(tf, str) or not tf.strip():
+                    return "invalid context interval key"
+                if isinstance(required, bool) or not isinstance(required, int) or required < 0:
+                    return f"invalid required context version for {tf}"
+                ctx = snapshot.context(symbol, tf)
+                if ctx is None:
+                    return f"missing context {symbol} {tf}"
+                if isinstance(ctx.version, bool) or not isinstance(ctx.version, int) or ctx.version < 0:
+                    return f"invalid published context version for {tf}"
+                if int(ctx.version) != required:
+                    return f"stale context {tf}: required={required} current={ctx.version}"
+                # Validate data availability/shape without inventing an unapproved
+                # universal maximum context age. A sourced age policy remains open.
+                if (
+                    isinstance(ctx.candle_close_time_ms, bool)
+                    or not isinstance(ctx.candle_close_time_ms, int)
+                    or ctx.candle_close_time_ms <= 0
+                    or ctx.candle_close_time_ms > now_ms
+                ):
+                    return f"invalid or future context close timestamp for {tf}"
+                try:
+                    context_price = float(ctx.price)
+                except (TypeError, ValueError):
+                    return f"invalid context price for {tf}"
+                if not math.isfinite(context_price) or context_price <= 0:
+                    return f"invalid context price for {tf}"
 
         if purpose in entry_purposes:
             permission_tf = (intent.permission_interval or "").lower()
