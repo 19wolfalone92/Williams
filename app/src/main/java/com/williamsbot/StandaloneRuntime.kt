@@ -3090,10 +3090,39 @@ private class NativeEngine(
 
             val remaining = max(0.0, position.qty - executed)
             if (remaining > max(0.000001, position.qty * 0.005)) {
-                setReconcileRequired(
-                    symbol + ": campaign exit partially filled; residual=" + remaining
-                )
-                return
+                try {
+                    val residual = position.copy(
+                        qty = remaining,
+                        campaignState = "EXIT_PARTIAL"
+                    )
+                    val protection = createCampaignStop(residual)
+
+                    synchronized(positions) {
+                        positions[symbol] = residual.copy(
+                            protectiveOrderId = protection.optString("orderId", ""),
+                            campaignState = "PROTECTED"
+                        )
+                    }
+                    lastError =
+                        symbol + ": partial campaign exit executed; residual re-protected"
+                    auditStore.recordError(
+                        "PARTIAL_EXIT_REPROTECTED",
+                        lastError ?: "partial exit residual re-protected"
+                    )
+                    savePersistedState()
+                    stateMachine.force(
+                        TradingState.PROTECTED,
+                        "Partial campaign exit residual re-protected"
+                    )
+                    return
+                } catch (protectError: Throwable) {
+                    setReconcileRequired(
+                        symbol + ": campaign exit partial fill left residual " +
+                            remaining + " and re-protection failed: " +
+                            (protectError.message ?: protectError.javaClass.simpleName)
+                    )
+                    return
+                }
             }
 
             recordCompletedTrade(
@@ -4271,12 +4300,17 @@ private class NativeEngine(
                         require(qty >= rules.minQty) {
                             "Emergency SELL quantity below Binance minimum"
                         }
-                        val sell = signedPost(
-                            "/api/v3/order",
-                            "symbol=" + stored.symbol +
-                                "&side=SELL&type=MARKET&quantity=" +
-                                fmtQty(qty, rules.decimals)
-                        )
+                        val sell = withCampaignMutation(
+                            stored.symbol,
+                            "EMERGENCY_UNPROTECTED_EXIT"
+                        ) {
+                            signedPost(
+                                "/api/v3/order",
+                                "symbol=" + stored.symbol +
+                                    "&side=SELL&type=MARKET&quantity=" +
+                                    fmtQty(qty, rules.decimals)
+                            )
+                        }
                         val exitPrice = sell.optString("cummulativeQuoteQty")
                             .toDoubleOrNull()
                             ?.let { q -> if (qty > 0.0) q / qty else 0.0 }
@@ -6367,18 +6401,28 @@ private class NativeEngine(
             // Cancel only the bot-owned OCO. Never cancel unrelated
             // orders that happen to belong to the same symbol.
             if (stored.ocoListId.isNotBlank()) {
-                signedDelete(
-                    "/api/v3/orderList",
-                    "symbol=" + symbol +
-                        "&orderListId=" + stored.ocoListId
-                )
+                withCampaignMutation(
+                    symbol,
+                    "MANUAL_PROTECTION_CANCEL"
+                ) {
+                    signedDelete(
+                        "/api/v3/orderList",
+                        "symbol=" + symbol +
+                            "&orderListId=" + stored.ocoListId
+                    )
+                }
             } else if (stored.ocoListClientId.isNotBlank()) {
-                signedDelete(
-                    "/api/v3/orderList",
-                    "symbol=" + symbol +
-                        "&listClientOrderId=" +
-                        stored.ocoListClientId
-                )
+                withCampaignMutation(
+                    symbol,
+                    "MANUAL_PROTECTION_CANCEL"
+                ) {
+                    signedDelete(
+                        "/api/v3/orderList",
+                        "symbol=" + symbol +
+                            "&listClientOrderId=" +
+                            stored.ocoListClientId
+                    )
+                }
             } else {
                 setReconcileRequired(
                     "Manual SELL refused: missing managed OCO identifier for " +
@@ -6427,16 +6471,21 @@ private class NativeEngine(
             }
 
             val sell =
-                signedPost(
-                    "/api/v3/order",
-                    "symbol=" + symbol +
-                        "&side=SELL&type=MARKET" +
-                        "&quantity=" +
-                        fmtQty(
-                            qty,
-                            rules.decimals
-                        )
-                )
+                withCampaignMutation(
+                    symbol,
+                    "MANUAL_EXIT"
+                ) {
+                    signedPost(
+                        "/api/v3/order",
+                        "symbol=" + symbol +
+                            "&side=SELL&type=MARKET" +
+                            "&quantity=" +
+                            fmtQty(
+                                qty,
+                                rules.decimals
+                            )
+                    )
+                }
 
             val exitPrice =
                 sell.optString("cummulativeQuoteQty")
