@@ -202,10 +202,11 @@ class WilliamsIntradayCore:
         d1s=str(d1_state or "UNKNOWN")
         context=str(context_state or "UNKNOWN")
         mtf_context_ready = h4c != "UNKNOWN" and context != "UNKNOWN"
-        continuation_allowed = h4c in {"SUPPORTIVE", "NEUTRAL"} and mtf_context_ready
+        long_continuation_allowed = h4c in {"SUPPORTIVE", "NEUTRAL"} and mtf_context_ready
+        short_continuation_allowed = h4c in {"ADVERSE", "NEUTRAL"} and mtf_context_ready
 
-        # WM1: lower/higher extreme + half-bar close + outside mouth + book geometry.
-        rng=high-low;loc=(close-low)/rng if rng>0 else 0.0
+        rng=high-low
+        loc=(close-low)/rng if rng>0 else 0.0
         prev_lows=[float(v) for v in ind["low"].iloc[-3:-1].tolist()]
         prev_highs=[float(v) for v in ind["high"].iloc[-3:-1].tolist()]
         lower_low=bool(prev_lows) and low<min(prev_lows)
@@ -214,49 +215,114 @@ class WilliamsIntradayCore:
         outside_short,dist_short,close_dist_short=self._mouth_metrics(cur,"SHORT")
         long_ang=measure_side_angulation(ind,len(ind)-1,"LONG",window=5)
         short_ang=measure_side_angulation(ind,len(ind)-1,"SHORT",window=5)
-        ao=float(cur.get("ao",0) or 0);prev_ao=float(prev.get("ao",0) or 0)
-        ao_long_red=ao<prev_ao;ao_short_green=ao>prev_ao
-        wm1_long=lower_low and loc>=.50 and outside_long and close_dist_long>0 and long_ang.valid and ao_long_red
+        ao=float(cur.get("ao",0) or 0)
+        prev_ao=float(prev.get("ao",0) or 0)
+        ao_long_red=ao<prev_ao
+        ao_short_green=ao>prev_ao
 
-        tick=max(float(tick_size),1e-12);specs=[]
+        wm1_long=(
+            lower_low and loc>=.50 and outside_long and close_dist_long>0
+            and long_ang.valid and ao_long_red and long_continuation_allowed
+        )
+        wm1_short=(
+            higher_high and loc<=.50 and outside_short and close_dist_short>0
+            and short_ang.valid and ao_short_green and short_continuation_allowed
+        )
+
+        tick=max(float(tick_size),1e-12)
+        specs=[]
+
         if wm1_long:
             stop=max(0.0,low-tick)
             specs.append(SignalSpec.new(
                 symbol=symbol,side="BUY",signal_type=SignalType.REVERSAL,role=SignalRole.ENTRY,
                 timeframe=policy.timeframes.decision_tf,signal_bar_time_ms=tms,trigger_price=high+tick,
-                protective_reference=stop,invalidation_price=stop,teeth_at_detection=float(cur.get("teeth_shifted",0) or 0),
-                alligator_bullish=bool(cur.get("bullish_alligator",False)),alligator_awake=bool(cur.get("alligator_awake",False)),
+                protective_reference=stop,invalidation_price=stop,
+                teeth_at_detection=float(cur.get("teeth_shifted",0) or 0),
+                alligator_bullish=bool(cur.get("bullish_alligator",False)),
+                alligator_awake=bool(cur.get("alligator_awake",False)),
                 angulation_score=long_ang.angular_separation,htf_confirmed=h4c=="SUPPORTIVE",
                 reason="WM1: lower low + close upper half + outside Alligator + LONG angulation + red AO",
                 source_candle_index=len(ind)-1,execution_timeframe=policy.timeframes.execution_tf,detected_time_ms=tms))
 
-        # WM2: third same-colour AO bar, represented by 2 -> 3 transition; no fractal prerequisite.
-        ao_idx=self._ao_event(ind,"LONG")
-        if ao_idx is not None and continuation_allowed:
-            r=ind.iloc[ao_idx];trigger=float(r["high"])+tick
+        if wm1_short:
+            stop=high+tick
+            specs.append(SignalSpec.new(
+                symbol=symbol,side="SELL",signal_type=SignalType.REVERSAL,role=SignalRole.ENTRY,
+                timeframe=policy.timeframes.decision_tf,signal_bar_time_ms=tms,trigger_price=low-tick,
+                protective_reference=stop,invalidation_price=stop,
+                teeth_at_detection=float(cur.get("teeth_shifted",0) or 0),
+                alligator_bullish=bool(cur.get("bullish_alligator",False)),
+                alligator_awake=bool(cur.get("alligator_awake",False)),
+                angulation_score=short_ang.angular_separation,htf_confirmed=h4c=="ADVERSE",
+                reason="WM1: higher high + close lower half + outside Alligator + SHORT angulation + rising AO",
+                source_candle_index=len(ind)-1,execution_timeframe=policy.timeframes.execution_tf,detected_time_ms=tms))
+
+        # WM2 is the 2 -> 3 AO colour transition; neither side requires a fractal.
+        ao_long_idx=self._ao_event(ind,"LONG")
+        if ao_long_idx is not None and long_continuation_allowed:
+            r=ind.iloc[ao_long_idx]
+            trigger=float(r["high"])+tick
             if trigger>close:
                 stop=max(0.0,float(r["low"])-tick)
                 specs.append(SignalSpec.new(
                     symbol=symbol,side="BUY",signal_type=SignalType.SUPER_AO,role=SignalRole.ENTRY,
                     timeframe=policy.timeframes.decision_tf,signal_bar_time_ms=self._time_ms(r),
                     trigger_price=trigger,protective_reference=stop,invalidation_price=stop,
-                    teeth_at_detection=float(r.get("teeth_shifted",0) or 0),alligator_bullish=bool(cur.get("bullish_alligator",False)),
+                    teeth_at_detection=float(r.get("teeth_shifted",0) or 0),
+                    alligator_bullish=bool(cur.get("bullish_alligator",False)),
                     alligator_awake=bool(cur.get("alligator_awake",False)),htf_confirmed=h4c=="SUPPORTIVE",
                     reason="WM2: third consecutive rising/green AO bar; trigger above corresponding price bar",
-                    source_candle_index=ao_idx,execution_timeframe=policy.timeframes.execution_tf,detected_time_ms=self._time_ms(r)))
+                    source_candle_index=ao_long_idx,execution_timeframe=policy.timeframes.execution_tf,detected_time_ms=self._time_ms(r)))
 
-        # WM3: activation remains valid only while the trigger is beyond Teeth.
-        latest=self._latest_wm3(ind,"LONG",tick,observations=fractals_long)
-        if latest is not None and policy.wm3_first_allowed and continuation_allowed:
-            center=ind.iloc[latest.center_index];trigger=float(latest.level)+tick;stop=max(0.0,float(center["low"])-tick)
+        ao_short_idx=self._ao_event(ind,"SHORT")
+        if ao_short_idx is not None and short_continuation_allowed:
+            r=ind.iloc[ao_short_idx]
+            trigger=float(r["low"])-tick
+            if trigger<close:
+                stop=float(r["high"])+tick
+                specs.append(SignalSpec.new(
+                    symbol=symbol,side="SELL",signal_type=SignalType.SUPER_AO,role=SignalRole.ENTRY,
+                    timeframe=policy.timeframes.decision_tf,signal_bar_time_ms=self._time_ms(r),
+                    trigger_price=trigger,protective_reference=stop,invalidation_price=stop,
+                    teeth_at_detection=float(r.get("teeth_shifted",0) or 0),
+                    alligator_bullish=bool(cur.get("bullish_alligator",False)),
+                    alligator_awake=bool(cur.get("alligator_awake",False)),htf_confirmed=h4c=="ADVERSE",
+                    reason="WM2: third consecutive falling/red AO bar; trigger below corresponding price bar",
+                    source_candle_index=ao_short_idx,execution_timeframe=policy.timeframes.execution_tf,detected_time_ms=self._time_ms(r)))
+
+        # WM3 is direction-symmetric and re-checks Teeth at activation time.
+        latest_long=self._latest_wm3(ind,"LONG",tick,observations=fractals_long)
+        if latest_long is not None and policy.wm3_first_allowed and long_continuation_allowed:
+            center=ind.iloc[latest_long.center_index]
+            trigger=float(latest_long.level)+tick
+            stop=max(0.0,float(center["low"])-tick)
             specs.append(SignalSpec.new(
                 symbol=symbol,side="BUY",signal_type=SignalType.FRACTAL,role=SignalRole.ENTRY,
-                timeframe=policy.timeframes.decision_tf,signal_bar_time_ms=self._time_ms(center),
-                trigger_price=trigger,protective_reference=stop,invalidation_price=stop,
-                teeth_at_detection=float(cur.get("teeth_shifted",0) or 0),alligator_bullish=bool(cur.get("bullish_alligator",False)),
-                alligator_awake=bool(cur.get("alligator_awake",False)),htf_confirmed=h4c=="SUPPORTIVE",
-                reason=f"WM3: {latest.formation} fractal; activation must remain above Teeth",
-                source_candle_index=latest.center_index,execution_timeframe=policy.timeframes.execution_tf,detected_time_ms=tms))
+                timeframe=policy.timeframes.decision_tf,signal_bar_time_ms=self._time_ms(center),trigger_price=trigger,
+                protective_reference=stop,invalidation_price=stop,
+                teeth_at_detection=float(cur.get("teeth_shifted",0) or 0),
+                alligator_bullish=bool(cur.get("bullish_alligator",False)),
+                alligator_awake=bool(cur.get("alligator_awake",False)),angulation_score=long_ang.angular_separation,
+                htf_confirmed=h4c=="SUPPORTIVE",
+                reason=f"WM3: {latest_long.formation} fractal; activation must remain above Teeth",
+                source_candle_index=latest_long.center_index,execution_timeframe=policy.timeframes.execution_tf,detected_time_ms=tms))
+
+        latest_short=self._latest_wm3(ind,"SHORT",tick,observations=fractals_short)
+        if latest_short is not None and policy.wm3_first_allowed and short_continuation_allowed:
+            center=ind.iloc[latest_short.center_index]
+            trigger=float(latest_short.level)-tick
+            stop=float(center["high"])+tick
+            specs.append(SignalSpec.new(
+                symbol=symbol,side="SELL",signal_type=SignalType.FRACTAL,role=SignalRole.ENTRY,
+                timeframe=policy.timeframes.decision_tf,signal_bar_time_ms=self._time_ms(center),trigger_price=trigger,
+                protective_reference=stop,invalidation_price=stop,
+                teeth_at_detection=float(cur.get("teeth_shifted",0) or 0),
+                alligator_bullish=bool(cur.get("bullish_alligator",False)),
+                alligator_awake=bool(cur.get("alligator_awake",False)),angulation_score=short_ang.angular_separation,
+                htf_confirmed=h4c=="ADVERSE",
+                reason=f"WM3: {latest_short.formation} fractal; activation must remain below Teeth",
+                source_candle_index=latest_short.center_index,execution_timeframe=policy.timeframes.execution_tf,detected_time_ms=tms))
 
         if not mtf_context_ready:
             specs=[]
@@ -275,7 +341,9 @@ class WilliamsIntradayCore:
             "ao":ao,"ao_previous":prev_ao,
             "ao_green_streak":int(cur.get("ao_green_streak",0) or 0),"ao_red_streak":int(cur.get("ao_red_streak",0) or 0),
             "zone_color":str(cur.get("zone_color","UNKNOWN") or "UNKNOWN"),"zone_streak":int(cur.get("zone_streak",0) or 0),
-            "h4_context":h4c,"h1_context":context,"d1_state":d1s,"mtf_context_ready":mtf_context_ready,"continuation_allowed":continuation_allowed,"teeth_at_trigger":float(cur.get("teeth_shifted",0) or 0),
+            "h4_context":h4c,"h1_context":context,"d1_state":d1s,"mtf_context_ready":mtf_context_ready,
+            "long_continuation_allowed":long_continuation_allowed,"short_continuation_allowed":short_continuation_allowed,
+            "teeth_at_trigger":float(cur.get("teeth_shifted",0) or 0),
         }
         return StrategyDecision(
             symbol=symbol,decision_time_ms=tms,decision_tf=policy.timeframes.decision_tf,execution_tf=policy.timeframes.execution_tf,
@@ -283,8 +351,8 @@ class WilliamsIntradayCore:
             h4_context=h4c,d1_state=d1s,context_state=context,wm1=wm1_long,wm2=ao_idx is not None,wm3=latest is not None,
             core_valid=bool(specs),quality=quality,first_signal_type=first.signal_type.value if first else "",
             signal_specs=tuple(specs),
-            angulation=(long_ang.to_dict() if wm1_long else short_ang.to_dict() if short_ang.valid else long_ang.to_dict()),
-            momentum_relation="RED_AO_EXPECTED_FOR_LONG_REVERSAL" if ao_long_red else "NOT_RED_AO",
+            angulation=(long_ang.to_dict() if wm1_long else short_ang.to_dict() if wm1_short else long_ang.to_dict()),
+            momentum_relation=("RED_AO_EXPECTED_FOR_LONG_REVERSAL" if ao_long_red else "GREEN_AO_EXPECTED_FOR_SHORT_REVERSAL" if ao_short_green else "NO_REVERSAL_MOMENTUM"),
             reason="Williams Core signal ready" if specs else ("Missing/invalid H4-H1 context" if not mtf_context_ready else "No valid Williams Wise-Man signal"),
             fields=fields)
 
