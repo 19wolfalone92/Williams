@@ -137,15 +137,14 @@ def extract_long_signal_specs(
     if ind is None or ind.empty:
         return []
 
-    # Canonical production path: one H1 Williams Core. This prevents the
+    # Canonical production path: one Williams Core. This prevents the
     # legacy extractor from becoming a second Strategy Truth implementation.
-    profile = str(os.getenv("WILLIAMS_STRATEGY_PROFILE", "WILLIAMS_INTRADAY_CORE")).upper()
-    if str(timeframe).lower() == "1h" and profile in {"WILLIAMS_INTRADAY_CORE", "WILLIAMS_INTRADAY_CONSERVATIVE"}:
+    profile = str(os.getenv("WILLIAMS_STRATEGY_PROFILE", "WILLIAMS_CORE_INTRADAY")).upper()
+    from williams_intraday_spec import IntradayPolicy
+    policy = IntradayPolicy.from_env()
+    if str(timeframe).lower() == policy.timeframes.decision_tf and profile in {"WILLIAMS_INTRADAY_CORE", "WILLIAMS_INTRADAY_CONSERVATIVE", "WILLIAMS_CORE_INTRADAY", "WILLIAMS_CORE_INTRADAY_CONSERVATIVE"}:
         from williams_intraday_core import WilliamsIntradayCore
-        from williams_intraday_spec import IntradayPolicy
-        decision = WilliamsIntradayCore(IntradayPolicy.from_env()).evaluate(
-            symbol, ind, tick_size=tick_size
-        )
+        decision = WilliamsIntradayCore(policy).evaluate(symbol, ind, tick_size=tick_size)
         return list(decision.signal_specs)
 
     specs: list[SignalSpec] = []
