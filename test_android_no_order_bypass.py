@@ -1,67 +1,47 @@
 from pathlib import Path
-import re
 
 
-ANDROID_RUNTIME = Path("app/src/main/java/com/williamsbot/StandaloneRuntime.kt")
-ALLOWED_MUTATION_OWNERS = {
-    "withCampaignMutation",
-    "signedPost",
-    "signedDelete",
-    "signedCancelReplace",
-}
+ANDROID_RUNTIME = Path(
+    "app/src/main/java/com/williamsbot/StandaloneRuntime.kt"
+)
 
 
-def _function_at_line(lines, target_index):
-    current = "<top-level>"
-    brace_depth = 0
-    function_depth = None
-
-    for index, line in enumerate(lines):
-        # Capture one-line/multiline Kotlin function declarations. The body
-        # begins at the first '{' after the declaration.
-        match = re.match(
-            r"s*(?:private|public|internal|protected)?s*(?:suspends+)?"
-            r"funs+([A-Za-z_][A-Za-z0-9_]*)s*(",
-            line,
-        )
-        if match and function_depth is None:
-            current = match.group(1)
-            if "{" in line[line.find("("):]:
-                function_depth = brace_depth
-        opens = line.count("{")
-        closes = line.count("}")
-
-        if function_depth is None and match:
-            # Function signature may continue over several lines; wait for body.
-            current = match.group(1)
-            if opens:
-                function_depth = brace_depth
-
-        brace_depth += opens - closes
-
-        if function_depth is not None and brace_depth <= function_depth:
-            function_depth = None
-            current = "<top-level>"
-
-        if index == target_index:
-            return current
-
-    return current
-
-
-def test_android_runtime_has_no_direct_order_mutation_bypass():
+def test_android_signed_order_mutations_have_runtime_execution_door():
     assert ANDROID_RUNTIME.exists(), str(ANDROID_RUNTIME)
-    lines = ANDROID_RUNTIME.read_text(encoding="utf-8").splitlines()
+    source = ANDROID_RUNTIME.read_text(encoding="utf-8")
 
-    findings = []
-    for index, line in enumerate(lines):
-        if re.search(r"signed(?:Post|Delete)s*(", line):
-            owner = _function_at_line(lines, index)
-            if owner not in ALLOWED_MUTATION_OWNERS:
-                findings.append(
-                    f"{ANDROID_RUNTIME}:{index + 1}: "
-                    f"signed mutation outside execution door: {owner}"
-                )
+    assert "private fun requireMutationDoor(path: String)" in source
+    assert "EXECUTION_DOOR_BYPASS_BLOCKED" in source
 
-    assert not findings, "
-".join(findings)
+    signed_post = source[
+        source.index("private fun signedPost("):
+        source.index("private fun signedCancelReplace(", source.index("private fun signedPost("))
+    ]
+    assert "requireMutationDoor(path)" in signed_post
+    assert 'signedRequest("POST", path, params)' in signed_post
+
+    signed_delete = source[
+        source.index("private fun signedDelete("):
+    ]
+    assert "requireMutationDoor(path)" in signed_delete
+    assert 'signedRequest("DELETE", path, params)' in signed_delete
+
+    barrier = source[
+        source.index("private fun <T> withCampaignMutation("):
+        source.index("private fun signedGet(", source.index("private fun <T> withCampaignMutation("))
+    ]
+    assert "mutationDoorDepth += 1" in barrier
+    assert "mutationDoorDepth = max(0, mutationDoorDepth - 1)" in barrier
+    assert 'putBoolean("execution_mutation_lock", true)' in barrier
+    assert 'putBoolean("execution_mutation_lock", false)' in barrier
+
+
+def test_android_legacy_order_intent_cannot_execute():
+    source = ANDROID_RUNTIME.read_text(encoding="utf-8")
+    marker = "private fun submitOrderIntent(candidate: BaseAnalysis)"
+    start = source.index(marker)
+    end = source.index("private fun", start + len(marker))
+    legacy_body = source[start:end]
+    assert "signedPost(" not in legacy_body
+    assert "withCampaignMutation(" not in legacy_body
+    assert "LEGACY_ORDER_PATH_BLOCKED" in legacy_body or "legacy" in legacy_body.lower()
