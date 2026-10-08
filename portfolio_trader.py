@@ -120,7 +120,7 @@ class MultiPositionTrader:
         intent = OrderIntent.new(
             str(symbol).upper(), str(side).upper(), str(order_type).upper(),
             required_context_versions=required, purpose=purpose_value,
-            permission_interval=interval if (purpose_value == "ENTRY" or purpose_value in {"CAMPAIGN_ENTRY", "CAMPAIGN_ADD_ON"}) else "",
+            permission_interval=interval if (purpose_value == "ENTRY" or purpose_value.endswith("_ENTRY") or purpose_value.endswith("_ADD_ON")) else "",
             campaign_id=str(campaign_id or ""), signal_id=str(signal_id or ""),
         )
         result = self.execution_barrier.execute(intent, submit)
