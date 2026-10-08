@@ -12,6 +12,8 @@ from campaign_execution import CampaignExecutionService, CampaignExecutionError
 from campaign_model import SignalSpec, SignalType, SignalRole
 from campaign_monitor import CampaignMonitor
 from execution_barrier import OrderIntent
+from williams_intraday_spec import IntradayPolicy
+from decision_trace import DecisionTrace
 
 
 POSITION_STATES = {
@@ -43,6 +45,8 @@ class MultiPositionTrader:
     def __init__(self, client, db=None, symbols=None, execution_barrier=None):
         self.client = client
         self.db = db or Database()
+        self.intraday_policy = IntradayPolicy.from_env()
+        self.intraday_core_enabled = self.intraday_policy.profile in {"WILLIAMS_INTRADAY_CORE", "WILLIAMS_INTRADAY_CONSERVATIVE"}
         if symbols is not None:
             self.symbols = [str(x).strip().upper() for x in symbols if str(x).strip()]
         else:
@@ -54,7 +58,7 @@ class MultiPositionTrader:
             )
         self.max_open_positions = max(
             0,
-            int(os.getenv("MAX_OPEN_POSITIONS", "5")),
+            int(os.getenv("MAX_OPEN_POSITIONS", str(self.intraday_policy.risk.max_campaigns if self.intraday_core_enabled else 5))),
         )
         self.max_total_risk_pct = min(
             0.01,
@@ -67,7 +71,7 @@ class MultiPositionTrader:
             0.005,
             max(
                 0.0,
-                float(os.getenv("MAX_RISK_PER_TRADE_PCT", os.getenv("RISK_PER_TRADE_PCT", "0.005"))),
+                float(os.getenv("MAX_RISK_PER_TRADE_PCT", os.getenv("RISK_PER_TRADE_PCT", str(self.intraday_policy.risk.initial_risk_pct)))),
             ),
         )
         self.dry_run = (
@@ -85,9 +89,9 @@ class MultiPositionTrader:
         self.l2_guard = L2SlippageGuard(
             float(os.getenv("MAX_L2_SLIPPAGE_PCT", os.getenv("MAX_SPREAD_PCT", "0.0015")))
         )
-        self.equity_breaker = EquityCircuitBreaker(float(os.getenv("MAX_DAILY_LOSS_PCT", "0.03")))
-        self.max_trades_per_day = max(0, int(os.getenv("MAX_TRADES_PER_DAY", "5")))
-        self.max_consecutive_losses = max(0, int(os.getenv("MAX_CONSECUTIVE_LOSSES", "3")))
+        self.equity_breaker = EquityCircuitBreaker(float(os.getenv("MAX_DAILY_LOSS_PCT", str(self.intraday_policy.risk.daily_loss_pct))))
+        self.max_trades_per_day = max(0, int(os.getenv("MAX_TRADES_PER_DAY", "0" if self.intraday_core_enabled else "5")))
+        self.max_consecutive_losses = max(0, int(os.getenv("MAX_CONSECUTIVE_LOSSES", str(self.intraday_policy.risk.max_full_stopouts if self.intraday_core_enabled else 3))))
         self.cooldown_minutes = max(0, int(os.getenv("COOLDOWN_MINUTES", "30")))
         self.execution_barrier = execution_barrier
         self.campaign_engine_enabled = (
@@ -1918,6 +1922,7 @@ class MultiPositionTrader:
                         created_at_ms=int(raw.get("created_at_ms", 0) or 0),
                         expires_at_ms=int(raw.get("expires_at_ms", 0) or 0),
                         source_candle_index=int(raw.get("source_candle_index", -1) or -1),
+                        execution_timeframe=str(raw.get("execution_timeframe", self.intraday_policy.timeframes.execution_tf if self.intraday_core_enabled else "") or ""),
                     )
                 )
             except Exception:
@@ -1974,11 +1979,24 @@ class MultiPositionTrader:
         open_count = len(self.open_trades())
         pending = {symbol for symbol, _ in self._pending_entries()}
 
+        session_state = self.intraday_policy.session.state(datetime.now(timezone.utc)) if self.intraday_core_enabled else "ENTRY_WINDOW"
+        if self.intraday_core_enabled and session_state != "ENTRY_WINDOW":
+            return [{"action": "SESSION_BLOCK", "state": session_state, "reason": "no new campaigns outside 08:00-18:00 UTC"}]
+
         for selection in selections:
             specs = self._signal_specs(selection)
             if not specs:
                 continue
             symbol = str(selection.candidate.symbol).upper()
+            trace = dict(getattr(selection.candidate, "decision_trace", {}) or {})
+            if trace:
+                trace["risk_feasible"] = bool(getattr(selection.risk, "allowed", False))
+                trace["trade_allowed"] = False
+                trace["block_reason"] = "" if trace["risk_feasible"] else str(getattr(selection.risk, "reason", "RISK_BLOCKED"))
+                try:
+                    self.db.save_decision_trace(trace)
+                except Exception as exc:
+                    self.db.log_event("WARNING", "decision_trace_persist_failed", str(exc), {"symbol": symbol})
             if symbol in pending:
                 continue
 
@@ -2071,6 +2089,14 @@ class MultiPositionTrader:
                         max(0.0, float(selection.risk.risk_pct) / 100.0),
                     ),
                 )
+                if trace:
+                    trace["trade_allowed"] = True
+                    trace["execution_feasible"] = True
+                    trace["block_reason"] = ""
+                    try:
+                        self.db.save_decision_trace(trace)
+                    except Exception as exc:
+                        self.db.log_event("WARNING", "decision_trace_persist_failed", str(exc), {"symbol": symbol})
                 results.append(
                     {
                         "symbol": symbol,
@@ -2080,6 +2106,9 @@ class MultiPositionTrader:
                     }
                 )
                 pending.add(symbol)
+                open_count += 1
+                if self.intraday_core_enabled:
+                    break
             except CampaignExecutionError as exc:
                 self.db.log_event(
                     "WARNING",
@@ -2385,7 +2414,18 @@ class MultiPositionTrader:
             # Manage open campaigns before looking for new opportunities. If a
             # protection mutation becomes ambiguous, the whole execution path
             # stays fail-closed.
+            session_actions = self.campaign_monitor.enforce_session()
             campaign_monitor = self.campaign_monitor.monitor_all()
+            session_state = self.intraday_policy.session.state(datetime.now(timezone.utc)) if self.intraday_core_enabled else "ENTRY_WINDOW"
+            if self.intraday_core_enabled and session_state != "ENTRY_WINDOW":
+                return {
+                    "status": "SESSION_MANAGED",
+                    "recovery": recovery,
+                    "session_actions": session_actions,
+                    "campaign_monitor": campaign_monitor,
+                    "results": [],
+                    "session_state": session_state,
+                }
             # A resolved/verified pending campaign is now represented by the
             # campaign state; unresolved mutation remains a hard global block.
             unresolved = self.unresolved_symbols()
