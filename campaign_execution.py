@@ -11,6 +11,7 @@ import uuid
 from binance_client import BinanceAPIError
 from campaign_engine import CampaignEngine
 from campaign_model import CampaignState, PendingOrderRecord, SignalSpec, SignalState, SignalType
+from decision_trace import DecisionTrace
 from execution_barrier import ExecutionBarrier, OrderIntent
 
 
@@ -259,6 +260,8 @@ class CampaignExecutionService:
             initial_risk_pct=requested_risk,
         )
         campaign.tags["signal_role"] = signal.role.value
+        campaign.tags["decision_trace"] = DecisionTrace.from_signal(signal).to_dict()
+        campaign.tags["pending_signal_expires_at_ms"] = int(signal.expires_at_ms or 0)
         campaign.tags["initial_stop_price"] = stop
         campaign.initial_stop_price = stop
         campaign.current_stop_price = stop
@@ -419,7 +422,12 @@ class CampaignExecutionService:
         rows = self.db.conn.execute(
             "SELECT key,value FROM bot_state "
             "WHERE key LIKE 'entry_client_order_id:%' "
-            "AND value LIKE 'WILLV5_ENTRY_%'"
+            "AND ("
+            "value LIKE 'WILLV5_ENTRY_%' OR "
+            "value LIKE 'WILLV4_ENTRY_%' OR "
+            "value LIKE 'W5E_%' OR "
+            "value LIKE 'W4B_%'"
+            ")"
         ).fetchall()
         results: list[dict[str, Any]] = []
 
