@@ -7796,6 +7796,14 @@ private class NativeEngine(
         }
 
         val dailyGuard = dailyTradeGuard()
+        val blockers = executionBlockers()
+        val firstBlocker = blockers.firstOrNull()
+            ?: when {
+                pendingEntries.isNotEmpty() -> "WAIT_FOR_TRIGGER"
+                positionList().any { it.qty > 0.0 && it.protectiveOrderId.isBlank() } -> "POSITION_UNPROTECTED"
+                executionReady() -> "NONE"
+                else -> "NOT_REPORTED"
+            }
 
         return JSONObject()
             .put("version", BuildConfig.VERSION_NAME)
@@ -7807,6 +7815,7 @@ private class NativeEngine(
             .put("recovered", true)
             .put("state", stateName())
             .put("execution_enabled", executionReady())
+            .put("first_blocker", firstBlocker)
             .put(
                 "position_symbol",
                 positionList().firstOrNull()?.symbol ?: JSONObject.NULL
@@ -7870,6 +7879,7 @@ private class NativeEngine(
             .put("max_total_risk_pct", maxTotalRiskPct)
             .put("max_risk_per_trade_pct", maxRiskPerTradePct)
             .put("reconcile_required", reconcileRequired)
+            .put("first_blocker", firstBlocker)
             .put("pnl", if (positionList().isEmpty()) JSONObject.NULL else livePnl)
             .put("pnl_pct", if (positionList().isEmpty()) JSONObject.NULL else livePnlPct)
             .put(
