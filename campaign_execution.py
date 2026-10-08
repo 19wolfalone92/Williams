@@ -1109,6 +1109,8 @@ class CampaignExecutionService:
         if prior and str(prior["state"]).upper() in {"ARMED", "TRIGGERED", "FILLED"}:
             raise CampaignExecutionError("signal is already active or filled for this campaign")
         self.db.save_campaign_signal(signal, campaign.campaign_id, state=SignalState.DETECTED.value)
+        pending_signal = PendingSignal.from_spec(signal)
+        campaign.tags["pending_signal"] = pending_signal.to_dict()
         campaign.tags["last_signal_time_ms"] = int(signal.signal_bar_time_ms)
         campaign.tags["pending_add_signal_id"] = signal.signal_id
         campaign.pending_risk_quote = requested
