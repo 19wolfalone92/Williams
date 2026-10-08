@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from decimal import Decimal, InvalidOperation
 import uuid
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
@@ -128,9 +129,11 @@ class ExecutionBarrier:
         self,
         context_cache: ContextCache,
         db=None,
+        client=None,
     ) -> None:
         self.context_cache = context_cache
         self.db = db
+        self.client = client
         self._mutation_lock_reason = ""
 
     @property
@@ -253,6 +256,10 @@ class ExecutionBarrier:
         ):
             return "missing client_order_id for exchange mutation"
 
+        filter_failure = self._exchange_filter_failure(intent)
+        if filter_failure:
+            return filter_failure
+
         direction = (
             "long" if intent.side == "BUY"
             else "short" if intent.side == "SELL"
@@ -289,6 +296,125 @@ class ExecutionBarrier:
                     return "campaign_reconcile_required"
 
         return ""
+
+    def _exchange_filter_failure(self, intent: OrderIntent) -> str:
+        """Validate Binance symbol/order filters at the final execution door."""
+        if self.client is None or intent.order_type.upper() in {
+            "CANCEL",
+            "CANCEL_OCO",
+            "CANCEL_REPLACE",
+        }:
+            return ""
+
+        try:
+            info = self.client.exchange_info(intent.symbol)
+            rows = info.get("symbols", []) if isinstance(info, dict) else []
+            if not rows:
+                return f"exchangeInfo unavailable for {intent.symbol}"
+            symbol_row = next(
+                (
+                    row for row in rows
+                    if str(row.get("symbol", "")).upper() == intent.symbol.upper()
+                ),
+                rows[0],
+            )
+            filters = {
+                str(item.get("filterType")): item
+                for item in symbol_row.get("filters", [])
+                if isinstance(item, dict)
+            }
+
+            qty_text = str(intent.quantity or "").strip()
+            if qty_text:
+                qty = Decimal(qty_text)
+                if qty <= 0:
+                    return "quantity must be > 0"
+
+                lot = (
+                    filters.get("MARKET_LOT_SIZE")
+                    if intent.order_type.upper() == "MARKET"
+                    else filters.get("LOT_SIZE")
+                ) or filters.get("LOT_SIZE") or {}
+                min_qty = Decimal(str(lot.get("minQty", "0") or "0"))
+                max_qty = Decimal(str(lot.get("maxQty", "0") or "0"))
+                step = Decimal(str(lot.get("stepSize", "0") or "0"))
+                if min_qty > 0 and qty < min_qty:
+                    return f"quantity {qty} below Binance minQty {min_qty}"
+                if max_qty > 0 and qty > max_qty:
+                    return f"quantity {qty} above Binance maxQty {max_qty}"
+                if step > 0:
+                    steps = qty / step
+                    if steps != steps.to_integral_value():
+                        return f"quantity {qty} is not aligned to stepSize {step}"
+
+            order_type = intent.order_type.upper()
+            if order_type in {"STOP_LOSS", "STOP_LOSS_LIMIT", "TAKE_PROFIT", "TAKE_PROFIT_LIMIT"}:
+                trigger = Decimal(
+                    str(intent.risk_decision.williams_decision.trigger_price)
+                )
+                price_filter = filters.get("PRICE_FILTER") or {}
+                tick = Decimal(str(price_filter.get("tickSize", "0") or "0"))
+                min_price = Decimal(str(price_filter.get("minPrice", "0") or "0"))
+                max_price = Decimal(str(price_filter.get("maxPrice", "0") or "0"))
+                if tick > 0:
+                    steps = trigger / tick
+                    if steps != steps.to_integral_value():
+                        return f"stopPrice {trigger} is not aligned to tickSize {tick}"
+                if min_price > 0 and trigger < min_price:
+                    return f"stopPrice {trigger} below Binance minPrice {min_price}"
+                if max_price > 0 and trigger > max_price:
+                    return f"stopPrice {trigger} above Binance maxPrice {max_price}"
+
+                ticker = self.client.ticker_price(intent.symbol)
+                market = Decimal(str(ticker.get("price", "0") or "0"))
+                if market <= 0:
+                    return "current market price unavailable for stop validation"
+                side = str(intent.side).upper()
+                if order_type.startswith("STOP_LOSS"):
+                    if side == "BUY" and trigger <= market:
+                        return (
+                            f"STOP_LOSS BUY stopPrice {trigger} must be above market {market}"
+                        )
+                    if side == "SELL" and trigger >= market:
+                        return (
+                            f"STOP_LOSS SELL stopPrice {trigger} must be below market {market}"
+                        )
+                if order_type.startswith("TAKE_PROFIT"):
+                    if side == "BUY" and trigger >= market:
+                        return (
+                            f"TAKE_PROFIT BUY stopPrice {trigger} must be below market {market}"
+                        )
+                    if side == "SELL" and trigger <= market:
+                        return (
+                            f"TAKE_PROFIT SELL stopPrice {trigger} must be above market {market}"
+                        )
+
+            try:
+                qty = Decimal(qty_text) if qty_text else Decimal("0")
+                trigger = Decimal(
+                    str(intent.risk_decision.williams_decision.trigger_price)
+                )
+            except (InvalidOperation, ValueError):
+                return "invalid numeric execution parameters"
+
+            notional_filter = (
+                filters.get("NOTIONAL")
+                or filters.get("MIN_NOTIONAL")
+                or {}
+            )
+            min_notional = Decimal(
+                str(notional_filter.get("minNotional", "0") or "0")
+            )
+            if qty > 0 and min_notional > 0 and qty * max(trigger, Decimal("0")) < min_notional:
+                return (
+                    f"notional {qty * trigger} below Binance minNotional {min_notional}"
+                )
+
+            return ""
+        except (InvalidOperation, ValueError, TypeError) as exc:
+            return f"exchange filter validation failed: {exc}"
+        except Exception as exc:
+            return f"exchange filter validation failed: {type(exc).__name__}: {exc}"
 
     @staticmethod
     def _authoritative_status(response: Any) -> str:
