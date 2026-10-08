@@ -63,24 +63,31 @@ class MultiPositionTrader:
             )
         if self.intraday_core_enabled and not self.symbols:
             self.symbols = list(self.intraday_policy.symbols)
-        self.max_open_positions = max(
-            0,
-            int(os.getenv("MAX_OPEN_POSITIONS", str(self.intraday_policy.risk.max_campaigns if self.intraday_core_enabled else 5))),
+        configured_max_positions = max(0, int(os.getenv("MAX_OPEN_POSITIONS", "5")))
+        configured_total_risk = max(
+            0.0,
+            float(os.getenv("MAX_TOTAL_RISK_PCT", "0.01")),
         )
-        self.max_total_risk_pct = min(
-            0.006 if self.intraday_core_enabled else 0.01,
-            max(
-                0.0,
-                float(os.getenv("MAX_TOTAL_RISK_PCT", str(self.intraday_policy.risk.campaign_risk_pct if self.intraday_core_enabled else 0.01))),
-            ),
+        configured_trade_risk = max(
+            0.0,
+            float(os.getenv("MAX_RISK_PER_TRADE_PCT", os.getenv("RISK_PER_TRADE_PCT", "0.005"))),
         )
-        self.max_risk_per_trade_pct = min(
-            0.0025 if self.intraday_core_enabled else 0.005,
-            max(
-                0.0,
-                float(os.getenv("MAX_RISK_PER_TRADE_PCT", os.getenv("RISK_PER_TRADE_PCT", str(self.intraday_policy.risk.initial_risk_pct)))),
-            ),
-        )
+        if self.intraday_core_enabled:
+            # Canonical Core limits are hard upper bounds. Environment values
+            # may make the system more conservative, never more permissive.
+            self.max_open_positions = 1
+            self.max_total_risk_pct = min(
+                self.intraday_policy.risk.campaign_risk_pct,
+                configured_total_risk,
+            )
+            self.max_risk_per_trade_pct = min(
+                self.intraday_policy.risk.initial_risk_pct,
+                configured_trade_risk,
+            )
+        else:
+            self.max_open_positions = configured_max_positions
+            self.max_total_risk_pct = min(0.01, configured_total_risk)
+            self.max_risk_per_trade_pct = min(0.005, configured_trade_risk)
         self.dry_run = (
             os.getenv("DRY_RUN", "true").lower() == "true"
         )
@@ -96,9 +103,19 @@ class MultiPositionTrader:
         self.l2_guard = L2SlippageGuard(
             float(os.getenv("MAX_L2_SLIPPAGE_PCT", os.getenv("MAX_SPREAD_PCT", "0.0015")))
         )
-        self.equity_breaker = EquityCircuitBreaker(float(os.getenv("MAX_DAILY_LOSS_PCT", str(self.intraday_policy.risk.daily_loss_pct if self.intraday_core_enabled else 0.03))))
+        configured_daily_loss = max(0.0, float(os.getenv("MAX_DAILY_LOSS_PCT", "0.03")))
+        configured_consecutive = max(0, int(os.getenv("MAX_CONSECUTIVE_LOSSES", "3")))
+        self.equity_breaker = EquityCircuitBreaker(
+            min(self.intraday_policy.risk.daily_loss_pct, configured_daily_loss)
+            if self.intraday_core_enabled
+            else configured_daily_loss
+        )
         self.max_trades_per_day = max(0, int(os.getenv("MAX_TRADES_PER_DAY", "0" if self.intraday_core_enabled else "5")))
-        self.max_consecutive_losses = max(0, int(os.getenv("MAX_CONSECUTIVE_LOSSES", str(self.intraday_policy.risk.max_full_stopouts if self.intraday_core_enabled else 3))))
+        self.max_consecutive_losses = (
+            min(self.intraday_policy.risk.max_full_stopouts, configured_consecutive)
+            if self.intraday_core_enabled
+            else configured_consecutive
+        )
         self.cooldown_minutes = max(0, int(os.getenv("COOLDOWN_MINUTES", "30")))
         self.execution_barrier = execution_barrier or ExecutionBarrier(ContextCache(), self.db)
         self.campaign_engine_enabled = (
