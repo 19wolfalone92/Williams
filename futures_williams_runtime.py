@@ -309,7 +309,10 @@ class FuturesWilliamsRuntime:
         return self.db.state_get(f"position_state:{symbol}", "FLAT")
 
     def _set_state(self, symbol, state):
-        self.db.state_set(f"position_state:{str(symbol).upper()}", state)
+        symbol = str(symbol).upper()
+        self.db.state_set(f"position_state:{symbol}", state)
+        self.db.state_set("position_state", state)
+        self.db.state_set("active_symbol", symbol)
 
     def open_trades(self):
         return self.db.open_trades()
