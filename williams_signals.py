@@ -51,8 +51,13 @@ def _row_time_ms(row: pd.Series) -> int:
         return int(idx) if isinstance(idx, (int, float)) else 0
 
 
-def _angulation(ind: pd.DataFrame, index: int, *, window: int = 5) -> tuple[float, bool]:
-    """Approximate increasing separation of price from the Alligator Jaw."""
+def _angulation(
+    ind: pd.DataFrame,
+    index: int,
+    *,
+    window: int = 5,
+) -> tuple[float, bool]:
+    """Approximate Alligator angulation using raw and ATR-normalized separation."""
     if index < 1 or "jaw_shifted" not in ind.columns:
         return 0.0, False
 
@@ -69,21 +74,32 @@ def _angulation(ind: pd.DataFrame, index: int, *, window: int = 5) -> tuple[floa
     if low.isna().any() or high.isna().any() or jaw.isna().any():
         return 0.0, False
 
+    prev_close = close.shift(1)
+    true_range = pd.concat(
+        [
+            high - low,
+            (high - prev_close).abs(),
+            (low - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    atr_window = max(
+        3,
+        int(os.getenv("ANGULATION_ATR_PERIOD", "14")),
+    )
+    atr = true_range.rolling(atr_window, min_periods=1).mean()
+    atr = atr.replace(0, pd.NA).ffill().bfill().fillna(1.0)
+
     bullish_distance = (jaw - low).clip(lower=0.0)
     bearish_distance = (high - jaw).clip(lower=0.0)
+    bullish_atr = bullish_distance / atr
+    bearish_atr = bearish_distance / atr
 
-    # A reversal has to be outside the mouth and the separation must increase.
     bull_delta = float(bullish_distance.iloc[-1] - bullish_distance.iloc[0])
     bear_delta = float(bearish_distance.iloc[-1] - bearish_distance.iloc[0])
+    bull_atr_delta = float(bullish_atr.iloc[-1] - bullish_atr.iloc[0])
+    bear_atr_delta = float(bearish_atr.iloc[-1] - bearish_atr.iloc[0])
 
-    base = max(
-        abs(float(close.iloc[-1])),
-        abs(float(jaw.iloc[-1])),
-        1e-9,
-    )
-    score = max(bull_delta, bear_delta) / base * 100.0
-
-    # Also require positive regression slope on the separation itself.
     k = len(rows)
     x = list(range(k))
 
@@ -92,15 +108,47 @@ def _angulation(ind: pd.DataFrame, index: int, *, window: int = 5) -> tuple[floa
         xm = sum(x) / k
         ym = sum(y) / k
         denom = sum((v - xm) ** 2 for v in x)
-        return 0.0 if denom <= 0 else sum((x[i] - xm) * (y[i] - ym) for i in range(k)) / denom
+        return (
+            0.0
+            if denom <= 0
+            else sum(
+                (x[i] - xm) * (y[i] - ym)
+                for i in range(k)
+            ) / denom
+        )
 
     bull_slope = slope(bullish_distance)
     bear_slope = slope(bearish_distance)
-    valid = (
-        (bull_delta > 0 and bull_slope > 0)
-        or (bear_delta > 0 and bear_slope > 0)
+    bull_atr_slope = slope(bullish_atr)
+    bear_atr_slope = slope(bearish_atr)
+
+    min_atr_delta = max(
+        0.0,
+        float(os.getenv("ANGULATION_MIN_ATR_DELTA", "0.10")),
     )
-    return float(max(score, 0.0)), bool(valid)
+    min_atr_slope = max(
+        0.0,
+        float(os.getenv("ANGULATION_MIN_ATR_SLOPE", "0.01")),
+    )
+
+    bullish_valid = (
+        bull_delta > 0.0
+        and bull_slope > 0.0
+        and bull_atr_delta >= min_atr_delta
+        and bull_atr_slope >= min_atr_slope
+    )
+    bearish_valid = (
+        bear_delta > 0.0
+        and bear_slope > 0.0
+        and bear_atr_delta >= min_atr_delta
+        and bear_atr_slope >= min_atr_slope
+    )
+
+    # Return the normalized separation change as the production-facing
+    # angulation score. It is diagnostic; ProofEngine uses the explicit
+    # pass/fail result.
+    score = max(bull_atr_delta, bear_atr_delta, 0.0)
+    return float(score), bool(bullish_valid or bearish_valid)
 
 
 def _latest_reversal(
