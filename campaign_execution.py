@@ -52,9 +52,22 @@ class CampaignExecutionService:
                 float(os.getenv("WILLIAMS_CAMPAIGN_RISK_PCT", str(self.policy.risk.campaign_risk_pct))),
             )
             campaign_risk_limit = min(self.policy.risk.campaign_risk_pct, configured_campaign)
-            initial_fraction = (
+            canonical_initial_fraction = (
                 self.policy.risk.initial_risk_pct
                 / max(self.policy.risk.campaign_risk_pct, 1e-12)
+            )
+            configured_initial_fraction = max(
+                0.0,
+                float(
+                    os.getenv(
+                        "CAMPAIGN_INITIAL_RISK_FRACTION",
+                        str(canonical_initial_fraction),
+                    )
+                ),
+            )
+            initial_fraction = min(
+                canonical_initial_fraction,
+                configured_initial_fraction,
             )
         else:
             portfolio_risk_limit = min(
