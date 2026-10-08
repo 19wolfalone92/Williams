@@ -39,8 +39,8 @@ class CampaignExecutionService:
         self.barrier = execution_barrier
         self.engine = CampaignEngine(
             db,
-            portfolio_risk_limit_pct=float(os.getenv("MAX_TOTAL_RISK_PCT", str(self.policy.risk.campaign_risk_pct))),
-            campaign_risk_limit_pct=float(os.getenv("MAX_RISK_PER_TRADE_PCT", str(self.policy.risk.campaign_risk_pct))),
+            portfolio_risk_limit_pct=float(os.getenv("MAX_TOTAL_RISK_PCT", str(self.policy.risk.campaign_risk_pct if self.intraday_core_enabled else 0.01))),
+            campaign_risk_limit_pct=float(os.getenv("MAX_RISK_PER_TRADE_PCT", str(self.policy.risk.campaign_risk_pct if self.intraday_core_enabled else 0.005))),
             initial_risk_fraction_of_campaign=float(
                 os.getenv("CAMPAIGN_INITIAL_RISK_FRACTION", str((self.policy.risk.initial_risk_pct / max(self.policy.risk.campaign_risk_pct, 1e-12)) if self.intraday_core_enabled else "0.40"))
             ),
@@ -306,7 +306,7 @@ class CampaignExecutionService:
                 min_notional=float(nf.get("minNotional", 0) or 0),
                 available_quote=self._available_quote(signal.symbol),
             )
-        if not economics.allowed:
+        if self.intraday_core_enabled and not economics.allowed:
             raise CampaignExecutionError(
                 f"{signal.symbol}: BLOCKED_BY_EXECUTION_ECONOMICS:{economics.block_reason}"
             )
