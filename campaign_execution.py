@@ -158,6 +158,16 @@ class CampaignExecutionService:
                 f"new={float(quantity):.12g}, max={max_position:.12g})"
             )
 
+    def _available_quote(self, symbol: str) -> float:
+        info = self.client.exchange_info(symbol)
+        rows = info.get("symbols", [])
+        quote_asset = str(rows[0].get("quoteAsset", "USDT")).upper() if rows else "USDT"
+        account = self.client.account()
+        for row in account.get("balances", []):
+            if str(row.get("asset", "")).upper() == quote_asset:
+                return max(0.0, float(row.get("free", 0) or 0))
+        return 0.0
+
     def _current_price(self, symbol: str) -> float:
         row = self.client.ticker_price(symbol)
         price = float(row.get("price", 0) or 0)
@@ -269,6 +279,7 @@ class CampaignExecutionService:
             min_qty=float(lot.get("minQty", 0) or 0),
             qty_step=float(lot.get("stepSize", 0) or 0),
             min_notional=float(nf.get("minNotional", 0) or 0),
+            available_quote=self._available_quote(signal.symbol),
         )
         if not economics.allowed:
             raise CampaignExecutionError(
@@ -1235,6 +1246,7 @@ class CampaignExecutionService:
             min_qty=float(lot.get("minQty", 0) or 0),
             qty_step=float(lot.get("stepSize", 0) or 0),
             min_notional=float(nf.get("minNotional", 0) or 0),
+            available_quote=self._available_quote(signal.symbol),
         )
         if not economics.allowed:
             raise CampaignExecutionError(
