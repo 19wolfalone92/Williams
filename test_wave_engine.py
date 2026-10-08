@@ -292,11 +292,11 @@ def test_monthly_binance_interval_is_not_collapsed_to_one_minute():
 def test_point_zero_requires_and_reports_all_five_magic_bullets():
     e = engine(base_interval="1h", min_bars=140)
     data = pd.DataFrame({
-        "high": [91, 101, 96, 121, 111, 129, 130, 131, 130],
+        "high": [91, 101, 96, 121, 111, 131, 130, 129, 130],
         "low": [89, 99, 94, 119, 109, 127, 128, 129, 128],
         "squatting_bar": [False, False, False, False, False, True, False, False, False],
         "ao_green": [False, False, False, True, False, False, False, True, True],
-        "ao_red": [False, True, False, False, True, False, False, False, False],
+        "ao_red": [False, True, False, False, True, False, True, False, False],
     })
     ps = [
         Pivot(DIRECTION_DOWN, 90, 0, 2, 0.0),
