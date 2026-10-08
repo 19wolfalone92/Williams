@@ -71,7 +71,8 @@ def test_post_5xx_is_unknown_execution():
     ])
 
     with pytest.raises(BinanceAPIError) as exc:
-        client.order("BTCUSDT", "BUY", "MARKET", quote_order_qty="25")
+        with entry_submission_scope():
+            client.order("BTCUSDT", "BUY", "MARKET", quote_order_qty="25")
 
     assert exc.value.unknown_execution is True
 
