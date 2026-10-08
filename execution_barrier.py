@@ -95,7 +95,19 @@ class ExecutionBarrier:
         # require at least one live snapshot; the campaign pre-submit validator
         # is responsible for the exact strategy/risk re-check.
         if not intent.required_context_versions:
-            if not intent.purpose.upper().startswith("CAMPAIGN_"):
+            purpose = intent.purpose.upper()
+            # Entry/add-on mutations require explicit context versions. Non-entry
+            # exits/cancellations may be admitted without a version dependency,
+            # provided their caller still enters this barrier.
+            if (
+                not purpose.startswith("CAMPAIGN_")
+                and purpose not in {
+                    "EMERGENCY_EXIT",
+                    "MANUAL_SELL",
+                    "LEGACY_PROTECTION",
+                    "MANUAL_CANCEL_PROTECTION",
+                }
+            ):
                 return "missing required_context_versions"
         for tf, required in intent.required_context_versions.items():
             ctx = snapshot.context(intent.symbol, tf)
