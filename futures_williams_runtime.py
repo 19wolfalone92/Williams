@@ -721,6 +721,12 @@ class FuturesWilliamsRuntime:
         )
 
     def _submit(self, intent, fn, checks=None):
+        if self.dry_run:
+            raise RuntimeError(
+                f"DRY_RUN=true blocks Futures order mutation: {intent.purpose}"
+            )
+        if not self.client.testnet and not self.config.allow_live:
+            raise RuntimeError("LIVE Futures order mutation requires ALLOW_LIVE=true")
         return self.execution_barrier.execute(
             intent,
             fn,
