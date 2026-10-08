@@ -11,6 +11,10 @@ from execution_accumulator import ExecutionSummary, accumulate_order
 from campaign_execution import CampaignExecutionService, CampaignExecutionError
 from campaign_model import SignalSpec, SignalType, SignalRole
 from campaign_monitor import CampaignMonitor
+from intraday_contract import WilliamsIntradayContract
+from intraday_policy import evaluate_intraday_policy
+from execution_economics import ExecutionEconomics, evaluate_execution_economics
+from decision_trace import DecisionTrace
 
 
 POSITION_STATES = {
@@ -45,28 +49,29 @@ class MultiPositionTrader:
         if symbols is not None:
             self.symbols = [str(x).strip().upper() for x in symbols if str(x).strip()]
         else:
-            raw_symbols = os.getenv("AUTO_SCAN_SYMBOLS", "ALL").strip()
+            raw_symbols = os.getenv("AUTO_SCAN_SYMBOLS", "BTCUSDT,ETHUSDT").strip()
             self.symbols = (
                 []
                 if raw_symbols.upper() in {"ALL", "AUTO", "*"}
                 else [x.strip().upper() for x in raw_symbols.split(",") if x.strip()]
             )
+        self.intraday_contract = WilliamsIntradayContract.from_env(os.environ)
         self.max_open_positions = max(
             0,
-            int(os.getenv("MAX_OPEN_POSITIONS", "5")),
+            self.intraday_contract.max_open_campaigns,
         )
         self.max_total_risk_pct = min(
             0.01,
             max(
                 0.0,
-                float(os.getenv("MAX_TOTAL_RISK_PCT", "0.01")),
+                self.intraday_contract.max_campaign_risk_pct,
             ),
         )
         self.max_risk_per_trade_pct = min(
             0.005,
             max(
                 0.0,
-                float(os.getenv("MAX_RISK_PER_TRADE_PCT", os.getenv("RISK_PER_TRADE_PCT", "0.005"))),
+                self.intraday_contract.initial_risk_pct,
             ),
         )
         self.dry_run = (
@@ -84,9 +89,9 @@ class MultiPositionTrader:
         self.l2_guard = L2SlippageGuard(
             float(os.getenv("MAX_L2_SLIPPAGE_PCT", os.getenv("MAX_SPREAD_PCT", "0.0015")))
         )
-        self.equity_breaker = EquityCircuitBreaker(float(os.getenv("MAX_DAILY_LOSS_PCT", "0.03")))
+        self.equity_breaker = EquityCircuitBreaker(self.intraday_contract.max_daily_loss_pct)
         self.max_trades_per_day = max(0, int(os.getenv("MAX_TRADES_PER_DAY", "5")))
-        self.max_consecutive_losses = max(0, int(os.getenv("MAX_CONSECUTIVE_LOSSES", "3")))
+        self.max_consecutive_losses = max(0, int(os.getenv("MAX_CONSECUTIVE_LOSSES", "2")))
         self.cooldown_minutes = max(0, int(os.getenv("COOLDOWN_MINUTES", "30")))
         self.execution_barrier = execution_barrier
         self.campaign_engine_enabled = (
@@ -1933,6 +1938,32 @@ class MultiPositionTrader:
                 continue
         return specs
 
+    def _execution_economics_gate(self, selection):
+        candidate = selection.candidate
+        stop_pct = max(0.0, float(getattr(selection.risk, "stop_distance_pct", 0.0) or 0.0)) / 100.0
+        rr = max(1.0, float(getattr(selection.risk, "risk_reward", 1.0) or 1.0))
+        return evaluate_execution_economics(ExecutionEconomics(
+            spread_pct=max(0.0, float(getattr(candidate, "spread_pct", 0.0) or 0.0)),
+            estimated_slippage_pct=max(0.0, float(os.getenv("RISK_SLIPPAGE_BUFFER_PCT", "0.0015"))),
+            entry_fee_pct=max(0.0, float(os.getenv("FEE_BUFFER_PER_SIDE_PCT", "0.001"))),
+            exit_fee_pct=max(0.0, float(os.getenv("FEE_BUFFER_PER_SIDE_PCT", "0.001"))),
+            expected_move_pct=stop_pct * rr,
+        ))
+
+    def _record_decision_trace(self, selection, signal, *, economic_gate, risk_allowed, block_reason=""):
+        trace = DecisionTrace.now(
+            selection.candidate.symbol,
+            trigger_price=float(getattr(signal, "trigger_price", 0.0) or 0.0),
+            initial_stop=float(getattr(signal, "protective_reference", 0.0) or 0.0),
+            williams_valid=signal is not None,
+            risk_allowed=bool(risk_allowed),
+            economic_gate=bool(economic_gate),
+            signal_family=str(getattr(signal, "signal_type", "") or ""),
+        )
+        if block_reason: trace.block(block_reason)
+        else: trace.admit()
+        self.db.log_event("INFO" if trace.trade_allowed else "DEBUG", "decision_trace", trace.to_json(), {"symbol": selection.candidate.symbol})
+        return trace
     def execute_campaign(self, selections):
         if not selections:
             return []
@@ -1989,6 +2020,12 @@ class MultiPositionTrader:
                     "dataclasses"
                 ).replace(signal, role=SignalRole.ADD_ON)
 
+                economics = self._execution_economics_gate(selection)
+                if not economics.feasible:
+                    self._record_decision_trace(selection, add_signal, economic_gate=False, risk_allowed=True, block_reason=economics.block_reason)
+                    results.append({"symbol": symbol, "campaign": True, "action": "BLOCKED_BY_EXECUTION_ECONOMICS", "reason": economics.block_reason})
+                    continue
+                self._record_decision_trace(selection, add_signal, economic_gate=True, risk_allowed=True)
                 try:
                     result = self.campaign_execution.arm_add_on(
                         add_signal,
@@ -2033,6 +2070,13 @@ class MultiPositionTrader:
             if signal is None:
                 continue
 
+            economics = self._execution_economics_gate(selection)
+            requested_risk = min(self.max_risk_per_trade_pct, max(0.0, float(selection.risk.risk_pct) / 100.0))
+            if not economics.feasible:
+                self._record_decision_trace(selection, signal, economic_gate=False, risk_allowed=requested_risk > 0, block_reason=economics.block_reason)
+                results.append({"symbol": symbol, "campaign": True, "action": "BLOCKED_BY_EXECUTION_ECONOMICS", "reason": economics.block_reason})
+                continue
+            self._record_decision_trace(selection, signal, economic_gate=True, risk_allowed=requested_risk > 0)
             try:
                 result = self.campaign_execution.arm_initial_entry(
                     signal,
@@ -2051,6 +2095,7 @@ class MultiPositionTrader:
                     }
                 )
                 pending.add(symbol)
+                open_count += 1
             except CampaignExecutionError as exc:
                 self.db.log_event(
                     "WARNING",
@@ -2339,6 +2384,42 @@ class MultiPositionTrader:
 
         return results
 
+    def _apply_intraday_boundary(self):
+        policy = evaluate_intraday_policy(
+            datetime.now(timezone.utc),
+            self.intraday_contract,
+            active_campaigns=len(self.db.open_campaigns()),
+            daily_loss_pct=0.0,
+            full_stop_outs=int(self.db.state_get("full_stop_outs_today", "0") or 0),
+        )
+        if policy.cancel_pending:
+            for row in list(self.db.open_campaigns()):
+                if str(row.get("state", "")) not in {"ENTRY_PENDING", "ENTRY_ARMING", "SIGNAL_DETECTED"}:
+                    continue
+                campaign = self.campaign_execution.engine.load_campaign(row["campaign_id"])
+                if campaign is None:
+                    continue
+                self.campaign_execution.cancel_pending_entry(
+                    campaign,
+                    reason=policy.block_reason or "SESSION_BOUNDARY",
+                )
+        if policy.force_flat:
+            exits = []
+            for row in list(self.db.open_campaigns()):
+                campaign = self.campaign_execution.engine.load_campaign(row["campaign_id"])
+                if campaign is None or campaign.position_qty <= 0:
+                    continue
+                exits.append(
+                    self.campaign_execution.exit_market(
+                        campaign,
+                        reason=policy.block_reason or "EOD_FORCE_FLAT",
+                    )
+                )
+            return {"status": "FORCE_FLAT", "results": exits, "reason": policy.block_reason}
+        if not policy.allow_new_campaign:
+            return {"status": "SESSION_BLOCKED", "results": [], "reason": policy.block_reason}
+        return None
+
     def scan_and_execute(self):
         recovery = self.recover()
         if not recovery["ok"]:
@@ -2368,6 +2449,10 @@ class MultiPositionTrader:
                     "results": [],
                     "reason": "campaign reconciliation required",
                 }
+
+        boundary = self._apply_intraday_boundary()
+        if boundary is not None:
+            return boundary
 
         allowed, risk_reason = self._daily_entry_guard()
         if not allowed:

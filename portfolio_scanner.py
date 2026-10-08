@@ -31,9 +31,9 @@ class PortfolioScanner:
 
         self.risk_engine = RiskEngine(
             balance_quote=balance_quote,
-            risk_per_trade_pct=min(0.005, max(0.0, float(os.getenv("MAX_RISK_PER_TRADE_PCT", "0.005")))),
+            risk_per_trade_pct=min(0.005, max(0.0, float(os.getenv("WILLIAMS_INITIAL_RISK_PCT", "0.0025")))),
             max_position_fraction=0.25,
-            max_daily_loss_pct=0.03,
+            max_daily_loss_pct=0.01,
             min_rr=1.5,
             max_atr_pct=0.08,
         )
@@ -115,7 +115,7 @@ class PortfolioScanner:
         )
 
 
-    def allocate(self, open_risk_quote=0.0, open_positions=0, max_open_positions=None):
+    def allocate(self, open_risk_quote=0.0, open_positions=0, max_open_positions=1):
         """Allocate candidates from the remaining portfolio risk budget.
         
         Position count is telemetry/backward compatibility only. Capacity is
@@ -125,11 +125,11 @@ class PortfolioScanner:
         balance = max(float(self.risk_engine.balance), 0.0)
         max_total_risk_pct = min(
             0.01,
-            max(0.0, float(os.getenv("MAX_TOTAL_RISK_PCT", "0.01"))),
+            max(0.0, float(os.getenv("WILLIAMS_MAX_CAMPAIGN_RISK_PCT", "0.006"))),
         )
         max_risk_per_trade_pct = min(
             0.005,
-            max(0.0, float(os.getenv("MAX_RISK_PER_TRADE_PCT", "0.005"))),
+            max(0.0, float(os.getenv("WILLIAMS_INITIAL_RISK_PCT", "0.0025"))),
         )
         used_pct = float(open_risk_quote) / balance if balance > 0 else max_total_risk_pct
         remaining_pct = max(0.0, max_total_risk_pct - used_pct)

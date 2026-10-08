@@ -171,6 +171,27 @@ def calculate_indicators(df, cfg):
     x["long_reversal_signal"] = x["bullish_reversal_bar"]
     x["short_reversal_signal"] = x["bearish_reversal_bar"]
 
+    # WM1 angulation: price must separate from the Alligator mouth rather than
+    # merely remain outside it. This is side-specific and evaluated on H1.
+    long_jaw_sep = (x["jaw_shifted"] - x["low"]).clip(lower=0.0)
+    long_teeth_sep = (x["teeth_shifted"] - x["low"]).clip(lower=0.0)
+    short_jaw_sep = (x["high"] - x["jaw_shifted"]).clip(lower=0.0)
+    short_teeth_sep = (x["high"] - x["teeth_shifted"]).clip(lower=0.0)
+    x["long_angulation_valid"] = (
+        (long_jaw_sep.diff().rolling(3).mean() > 0)
+        & (long_teeth_sep.diff().rolling(3).mean() > 0)
+    ).fillna(False)
+    x["short_angulation_valid"] = (
+        (short_jaw_sep.diff().rolling(3).mean() > 0)
+        & (short_teeth_sep.diff().rolling(3).mean() > 0)
+    ).fillna(False)
+    x["last_long_angulation"] = (
+        x["long_angulation_valid"].where(x["bullish_reversal_bar"]).ffill().shift(1)
+    )
+    x["last_short_angulation"] = (
+        x["short_angulation_valid"].where(x["bearish_reversal_bar"]).ffill().shift(1)
+    )
+
     # The book places a buy/sell stop beyond the reversal bar. Therefore the
     # reversal bar itself is context; the actionable trigger is a later break
     # of that signal bar's extreme.
@@ -195,16 +216,15 @@ def calculate_indicators(df, cfg):
     # Conservative execution overlay. The counter-trend Wise-Man signals from
     # the book are retained as diagnostics, but disabled for the long-only
     # autonomous entry path unless explicitly enabled.
-    countertrend = bool(cfg["allow_countertrend_wise_man"])
     x["long_wise_reversal_entry"] = (
         x["last_bullish_reversal_high"].notna()
         & (x["close"] > x["last_bullish_reversal_high"])
-        & (x["bullish_alligator"] | countertrend)
+        & x["last_long_angulation"].eq(True)
     )
     x["short_wise_reversal_entry"] = (
         x["last_bearish_reversal_low"].notna()
         & (x["close"] < x["last_bearish_reversal_low"])
-        & (x["bearish_alligator"] | countertrend)
+        & x["last_short_angulation"].eq(True)
     )
 
     # Canonical Wise-Men count. This is confirmation/ranking information in our
@@ -230,22 +250,18 @@ def calculate_indicators(df, cfg):
     x["short_ac_negative"] = x["ac"] < 0
     x["short_fractal_ready"] = x["last_down_level"].notna()
 
-    # Strict entry: conservative Williams gate + at least one valid Wise-Man
-    # trigger. Fractal breakouts, Super AO continuation and reversal bars are
-    # separate triggers; they are not incorrectly ANDed together.
-    min_wise = int(cfg["min_wise_men_confirmations"])
+    # Canonical Williams Core: the first actual Wise Man may start a
+    # campaign.  WM1, WM2 and WM3 are independent signal families; they are
+    # never ANDed into a synthetic multi-indicator gate.
     x["long_signal"] = (
-        # Williams' first gate: no downstream Wise-Man signal is actionable
-        # until a confirmed fractal has formed outside the Teeth/balance line.
-        x["long_fractal_outside"]
-        & x["long_bullish"]
-        & x["long_awake"]
-        & x["long_wise_man_count"].ge(min_wise)
+        x["long_wise_reversal_entry"]
+        | x["long_super_ao_signal"]
+        | x["long_fractal_signal"]
     )
     x["short_signal"] = (
-        x["short_bearish"]
-        & x["short_awake"]
-        & x["short_wise_man_count"].ge(min_wise)
+        x["short_wise_reversal_entry"]
+        | x["short_super_ao_signal"]
+        | x["short_fractal_signal"]
     )
 
     def _family(row, side):
@@ -314,7 +330,7 @@ def config_from_env(env=os.environ):
         "fractal_left": int(env.get("FRACTAL_LEFT", "2")),
         "fractal_right": int(env.get("FRACTAL_RIGHT", "2")),
         "super_ao_bars": int(env.get("SUPER_AO_BARS", "3")),
-        "min_wise_men_confirmations": int(env.get("MIN_WISE_MEN_CONFIRMATIONS", "2")),
+        "min_wise_men_confirmations": int(env.get("MIN_WISE_MEN_CONFIRMATIONS", "1")),
         "allow_countertrend_wise_man": env.get("ALLOW_COUNTERTREND_WISE_MAN", "false").lower() == "true",
         "min_alligator_spread_pct": float(env.get("MIN_ALLIGATOR_SPREAD_PCT", "0.001")),
     }
