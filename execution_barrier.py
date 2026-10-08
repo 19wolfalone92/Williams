@@ -192,7 +192,19 @@ class ExecutionBarrier:
                     self._record("WARNING", "execution_blocked", intent, reason)
                     return ExecutionResult(intent.intent_id, False, reason=reason)
 
-            order_fsm.transition(OrderState.SUBMITTING)
+            # Pre-submit checks can perform network I/O (for example, a
+            # closed-candle/fractal refresh). Revalidate time-sensitive entry
+            # constraints immediately before the irreversible exchange call.
+            reason = self._validate(intent, snapshot)
+            if reason:
+                try:
+                    order_fsm.transition(OrderState.CANCELED)
+                except ValueError:
+                    order_fsm.state = OrderState.RECONCILE_REQUIRED
+                self._persist(intent, "BLOCKED", reason)
+                self._record("WARNING", "execution_blocked", intent, reason)
+                return ExecutionResult(intent.intent_id, False, reason=reason)
+
             order_fsm.transition(OrderState.SUBMITTING)
             self._record(
                 "INFO",
