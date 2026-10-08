@@ -638,3 +638,10 @@ def test_execution_accumulator_keeps_quote_commission_as_quote_fee():
     assert abs(float(summary.fee_quote) - 0.1) < 1e-12
     assert abs(float(summary.fee_quote_equivalent) - 0.1) < 1e-12
     assert abs(float(summary.net_base_qty) - 1.0) < 1e-12
+
+
+def test_spot_scanner_does_not_route_short_signal_as_executable_entry():
+    from pathlib import Path
+    source = Path("market_scanner.py").read_text(encoding="utf-8")
+    assert 'executable_specs = [spec for spec in specs if str(spec.side).upper() == "BUY"]' in source
+    assert "entry_trigger_price=first.trigger_price" in source
