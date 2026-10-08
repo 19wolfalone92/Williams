@@ -349,9 +349,19 @@ class ExecutionBarrier:
 
             order_type = intent.order_type.upper()
             if order_type in {"STOP_LOSS", "STOP_LOSS_LIMIT", "TAKE_PROFIT", "TAKE_PROFIT_LIMIT"}:
-                trigger = Decimal(
-                    str(intent.risk_decision.williams_decision.trigger_price)
-                )
+                try:
+                    if getattr(intent, "risk_decision", None) is not None:
+                        trigger = Decimal(
+                            str(
+                                intent.risk_decision.williams_decision.trigger_price
+                            )
+                        )
+                    else:
+                        trigger = Decimal(
+                            str(intent.invalidation_level)
+                        )
+                except (InvalidOperation, TypeError, ValueError):
+                    return "invalid stop/trigger price"
                 price_filter = filters.get("PRICE_FILTER") or {}
                 tick = Decimal(str(price_filter.get("tickSize", "0") or "0"))
                 min_price = Decimal(str(price_filter.get("minPrice", "0") or "0"))
