@@ -111,8 +111,12 @@ class ExecutionBarrier:
         # All declared TFs are version dependencies, but the permission
         # decision belongs to one operative/entry timeframe. Higher TFs provide
         # structural context and must not be required to emit a duplicate trigger.
-        if intent.purpose.upper() == "ENTRY":
-            permission_tf = (intent.permission_interval or "").lower()
+        if intent.purpose.upper() in {
+            "ENTRY",
+            "CAMPAIGN_ENTRY",
+            "CAMPAIGN_ADD_ON",
+        }:
+            permission_tf = (intent.permission_interval or "5m").lower()
             permission_ctx = snapshot.context(intent.symbol, permission_tf) if permission_tf else None
             if permission_ctx is None:
                 return f"missing permission context {intent.symbol} {permission_tf}"
@@ -125,12 +129,20 @@ class ExecutionBarrier:
             state = str(self.db.state_get("position_state", "FLAT"))
             if state == "RECONCILE_REQUIRED":
                 return "RECONCILE_REQUIRED"
+            local_symbol_state = str(
+                self.db.state_get(
+                    f"position_state:{intent.symbol}",
+                    "FLAT"
+                )
+            ).upper()
+            if local_symbol_state == "RECONCILE_REQUIRED":
+                return "symbol_reconcile_required"
             campaign_state = str(
                 self.db.state_get(
                     f"campaign_state:{intent.campaign_id}",
                     "CLEAN"
                 )
-            ) if intent.campaign_id else "CLEAN"
+            ).upper() if intent.campaign_id else "CLEAN"
             if campaign_state == "RECONCILE_REQUIRED":
                 return "campaign_reconcile_required"
 
