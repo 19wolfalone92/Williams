@@ -19,7 +19,7 @@ Any BUY with another or missing purpose is rejected. A caller cannot obtain fewe
 - `symbol`, `side=BUY`, `order_type`, `client_order_id`.
 - Stable non-empty `signal_id`.
 - Positive absolute `signal_expires_at_ms`, copied from the source signal's resolved deadline.
-- Non-empty `required_context_versions` mapping, representing the context snapshot on which the signal was admitted.
+- Non-empty `required_context_versions` mapping, representing the context snapshot on which the signal was admitted; it must include `permission_interval`.
 - Non-empty `permission_interval`, naming the operative timeframe whose current direction permission is authoritative.
 - `campaign_id` for `CAMPAIGN_ENTRY` and `CAMPAIGN_ADD_ON`.
 - Intent creation timestamp within the existing `max_age_ms` policy.
