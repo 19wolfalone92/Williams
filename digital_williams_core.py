@@ -105,6 +105,7 @@ class DigitalWilliamsCore:
         proof = evaluation.proof_vector
         why_not = WhyNotEngine.explain_pre_price(
             proof,
+            wise_man_stage=evaluation.wise_man_stage,
             pending_actionable=actionable,
         )
         trace = DecisionTrace.from_signal(
