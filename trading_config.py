@@ -140,7 +140,7 @@ class TradingConfig:
             structural_timeframes=_tf_chain(execution_timeframe, source),
             execution_timeframe=execution_timeframe,
             allow_long=_bool(source, "ALLOW_LONG", True),
-            allow_short=_bool(source, "ALLOW_SHORT", False),
+            allow_short=_bool(source, "ALLOW_SHORT", True),
             require_htf_confirmation=_bool(source, "REQUIRE_HTF_CONFIRMATION", True),
             no_trade_when_uncertain=_bool(source, "NO_TRADE_WHEN_UNCERTAIN", True),
             risk_per_trade_pct=risk,
