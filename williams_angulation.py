@@ -36,6 +36,10 @@ def measure_side_angulation(ind,index,side,*,window=5):
     start=max(0,int(index)-max(3,int(window))+1)
     rows=ind.iloc[start:int(index)+1].copy()
     edge_col="low" if side=="LONG" else "high"
+    if edge_col not in rows.columns:
+        # Synthetic/legacy fixtures without OHLC edges can use close only as a
+        # deterministic compatibility fallback; live Binance data always has edges.
+        rows[edge_col]=pd.to_numeric(rows["close"],errors="coerce") if "close" in rows.columns else np.nan
     if len(rows)<3 or "jaw_shifted" not in rows.columns or edge_col not in rows.columns:
         return AngulationMeasurement(side,"JAW",edge_col.upper(),0,0,0,0,0,0,False,len(rows))
     ref=pd.to_numeric(rows["jaw_shifted"],errors="coerce").to_numpy(float)
