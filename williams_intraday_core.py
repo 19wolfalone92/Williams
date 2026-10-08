@@ -143,15 +143,58 @@ class WilliamsIntradayCore:
         denom=max(abs(close),1e-12)
         return edge>0,edge/denom*100.0,close_dist/denom*100.0
 
-    def evaluate(self,symbol,m15,*,h1=None,h4=None,d1=None,tick_size=0.0):
-        policy=self.policy
-        m15=self._closed(m15);h1=self._closed(h1);h4=self._closed(h4);d1=self._closed(d1)
-        if m15 is None or len(m15)<60:return self._empty(symbol,"INSUFFICIENT_15M_HISTORY")
+    def evaluate(
+        self,
+        symbol,
+        m15,
+        *,
+        h1=None,
+        h4=None,
+        d1=None,
+        tick_size=0.0,
+    ):
+        m15=self._closed(m15)
+        h1=self._closed(h1)
+        h4=self._closed(h4)
+        d1=self._closed(d1)
+        if m15 is None or len(m15)<60:
+            return self._empty(symbol,"INSUFFICIENT_15M_HISTORY")
         ind=calculate_indicators(m15,config_from_env())
+        return self.evaluate_precomputed(
+            symbol,
+            m15,
+            ind,
+            h4_context=self._h4_permission(h4),
+            d1_state=self._d1_state(d1),
+            context_state=self._state(h1),
+            tick_size=tick_size,
+        )
+
+    def evaluate_precomputed(
+        self,
+        symbol,
+        m15,
+        ind,
+        *,
+        h4_context=None,
+        d1_state=None,
+        context_state=None,
+        tick_size=0.0,
+        fractals_long=None,
+        fractals_short=None,
+    ):
+        """Evaluate Core from precomputed indicator state without redefining signals."""
+        policy=self.policy
+        m15=self._closed(m15)
+        if m15 is None or ind is None or len(ind)<60:
+            return self._empty(symbol,"INSUFFICIENT_15M_HISTORY")
         cur=ind.iloc[-1];prev=ind.iloc[-2]
         close=float(cur.get("close",0) or 0);high=float(cur.get("high",0) or 0);low=float(cur.get("low",0) or 0)
         if min(close,high,low)<=0:return self._empty(symbol,"INVALID_PRICE")
-        tms=self._time_ms(cur);h4c=self._h4_permission(h4);d1s=self._d1_state(d1);context=self._state(h1)
+        tms=self._time_ms(cur)
+        h4c=str(h4_context or "UNKNOWN")
+        d1s=str(d1_state or "UNKNOWN")
+        context=str(context_state or "UNKNOWN")
         mtf_context_ready = h4c != "UNKNOWN" and context != "UNKNOWN"
         continuation_allowed = h4c in {"SUPPORTIVE", "NEUTRAL"} and mtf_context_ready
 
@@ -197,7 +240,7 @@ class WilliamsIntradayCore:
                     source_candle_index=ao_idx,execution_timeframe=policy.timeframes.execution_tf,detected_time_ms=self._time_ms(r)))
 
         # WM3: activation remains valid only while the trigger is beyond Teeth.
-        latest=self._latest_wm3(ind,"LONG",tick)
+        latest=self._latest_wm3(ind,"LONG",tick,observations=fractals_long)
         if latest is not None and policy.wm3_first_allowed and continuation_allowed:
             center=ind.iloc[latest.center_index];trigger=float(latest.level)+tick;stop=max(0.0,float(center["low"])-tick)
             specs.append(SignalSpec.new(
