@@ -566,10 +566,17 @@ class ExecutionBarrier:
             r"client_order_id=([^:\s]+)",
             self.mutation_lock_reason,
         )
-        if not match:
+        if match:
+            cid = match.group(1)
+            row = self.db.execution_intent_by_client_order_id(cid)
+        elif hasattr(self.db, "latest_unknown_execution_intent"):
+            row = self.db.latest_unknown_execution_intent()
+            cid = str((row or {}).get("client_order_id") or "")
+        else:
+            row = None
+            cid = ""
+        if not row or not cid:
             return None
-        cid = match.group(1)
-        row = self.db.execution_intent_by_client_order_id(cid)
         if not row:
             return None
 
