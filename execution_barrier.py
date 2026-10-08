@@ -121,18 +121,25 @@ class ExecutionBarrier:
             if direction == "short" and not permission_ctx.allow_short:
                 return f"context {permission_tf} does not allow SHORT"
 
-        if self.db is not None and hasattr(self.db, "state_get"):
-            state = str(self.db.state_get("position_state", "FLAT"))
-            if state == "RECONCILE_REQUIRED":
-                return "RECONCILE_REQUIRED"
-            campaign_state = str(
-                self.db.state_get(
-                    f"campaign_state:{intent.campaign_id}",
-                    "CLEAN"
-                )
-            ) if intent.campaign_id else "CLEAN"
-            if campaign_state == "RECONCILE_REQUIRED":
-                return "campaign_reconcile_required"
+        if self.db is not None:
+            # Campaign state is authoritative in the campaigns row. Do not rely
+            # on a bot_state mirror that may be stale or absent.
+            if intent.campaign_id and hasattr(self.db, "get_campaign"):
+                campaign = self.db.get_campaign(intent.campaign_id)
+                if campaign is None:
+                    return "campaign_not_found"
+                campaign_state = str(campaign.get("state", "")).upper()
+                if campaign_state == "RECONCILE_REQUIRED":
+                    return "campaign_reconcile_required"
+
+            # Position/reconciliation state is symbol-scoped. The historical
+            # global key could incorrectly block or admit another symbol.
+            if hasattr(self.db, "state_get"):
+                symbol_state = str(
+                    self.db.state_get(f"position_state:{intent.symbol}", "FLAT")
+                ).upper()
+                if symbol_state == "RECONCILE_REQUIRED":
+                    return "RECONCILE_REQUIRED"
 
         return ""
 
