@@ -353,6 +353,7 @@ def campaign_transition_allowed(
         CampaignState.CLOSED: set(),
         CampaignState.RECONCILE_REQUIRED: {
             CampaignState.FLAT,
+            CampaignState.ENTRY_PENDING,
             CampaignState.OPEN_INITIAL,
             CampaignState.TREND_ACTIVE,
             CampaignState.EXIT_PENDING,
