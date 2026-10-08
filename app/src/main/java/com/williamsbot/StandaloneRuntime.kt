@@ -536,6 +536,9 @@ private class NativeEngine(
     )
     private val tradingEventLoop = TradingEventLoop()
     private val executionGate = ExecutionGate()
+    // All Binance mutations share one lock because portfolio/campaign risk
+    // reservations are global, not symbol-local.
+    private val campaignMutationLock = Any()
     private val executionExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "williams-execution-io").apply { isDaemon = true }
     }
@@ -2595,7 +2598,7 @@ private class NativeEngine(
         symbol: String,
         purpose: String,
         block: () -> JSONObject
-    ): JSONObject {
+    ): JSONObject = synchronized(campaignMutationLock) {
         if (!running) error("Runtime is not running")
         if (paused) error("Runtime is paused")
         if (reconcileRequired) error("RECONCILE_REQUIRED")
@@ -2607,7 +2610,7 @@ private class NativeEngine(
             .putString("execution_gate_symbol", symbol)
             .putString("execution_gate_purpose", purpose)
             .apply()
-        return try {
+        try {
             block()
         } finally {
             executionGate.release(symbol)
