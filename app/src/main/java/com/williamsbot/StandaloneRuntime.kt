@@ -547,16 +547,16 @@ private class NativeEngine(
     private val interval = "1h"
 
     // Deep-analysis universe: five core USDT pairs only.
-    private val coreSymbols = listOf("BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT")
+    private val coreSymbols = listOf("BTCUSDT", "ETHUSDT")
     private val analysisFrames = listOf("1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w", "1M")
     // Startup only needs the frames that directly participate in execution.
     // The complete 15-TF matrix is analysis metadata, not a startup blocker.
-    private val startupFrames = listOf("15m", "1h", "4h")
+    private val startupFrames = listOf("15m", "1h", "4h", "1d")
     // Fetch enough closed candles for the scanner's 150-candle working set while
     // leaving headroom for the currently forming candle.
     private val startupHistoryLimit = 180
     private val minStartupHistoryCandles = 150
-    private val maxScanSymbols = 5
+    private val maxScanSymbols = 2
     private val waveTopN = 5
     private val scanExecutor = Executors.newFixedThreadPool(12)
     private val historyBackfillExecutor = Executors.newFixedThreadPool(6) { runnable ->
@@ -584,7 +584,7 @@ private class NativeEngine(
 
     private val scanCacheTtlMs = 12_000L
     private val deepWatchTopN = 10
-    private val scannerUniverseLabel = "CORE_5_BTC_ETH_BNB_SOL_XRP"
+    private val scannerUniverseLabel = "CORE_2_BTC_ETH"
 
     @Volatile
     private var running = false
@@ -610,21 +610,21 @@ private class NativeEngine(
     // Default supports the portfolio model: up to five independent positions;
     // aggregate risk remains capped separately at 1%.
     private val maxOpenPositions: Int
-        get() = prefs.getInt("max_open_positions", 5).coerceIn(1, 10)
+        get() = prefs.getInt("max_open_positions", 1).coerceIn(1, 1)
     private val campaignEngineEnabled: Boolean
         get() = prefs.getBoolean("campaign_engine_enabled", true)
     private val campaignExecutionTimeframe: String
-        get() = prefs.getString("campaign_execution_timeframe", "5m") ?: "5m"
-    private val campaignRiskLimitPct = 0.005
-    private val campaignInitialRiskPct = 0.002
+        get() = prefs.getString("campaign_execution_timeframe", "15m") ?: "15m"
+    private val campaignRiskLimitPct = 0.006
+    private val campaignInitialRiskPct = 0.0025
     private val campaignAddRiskCapPct = 0.002
     private val campaignTrailBars: Int
         get() = prefs.getInt("campaign_trail_bars", 5).coerceIn(3, 5)
-    private val maxTotalRiskPct = 0.01
-    private val maxRiskPerTradePct = 0.005
+    private val maxTotalRiskPct = 0.006
+    private val maxRiskPerTradePct = 0.0025
     private val maxSpreadPct = 0.0015
     private val maxSlippagePct = 0.0015
-    private val equityCircuitBreaker = EquityCircuitBreaker(maxDrawdownPct = 0.05)
+    private val equityCircuitBreaker = EquityCircuitBreaker(maxDrawdownPct = 0.01)
     @Volatile private var lastEquityCheckMs = 0L
     @Volatile private var circuitBreakerTripInProgress = false
     private val feeBufferPerSidePct = 0.001
