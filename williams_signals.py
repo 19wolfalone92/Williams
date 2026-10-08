@@ -350,7 +350,7 @@ def extract_short_signal_specs(
         trigger = trigger_base - tick
         if current_close > trigger:
             row = ind.iloc[i]
-            score, _ = _angulation(ind, i)
+            score, _ = _angulation(ind, i, side="SHORT")
             specs.append(
                 SignalSpec.new(
                     symbol=symbol,
