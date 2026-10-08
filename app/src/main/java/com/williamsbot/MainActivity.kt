@@ -126,7 +126,8 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         // Williams Android app is a remote cockpit only. The authoritative
         // trading engine runs on the VPS/backend; no native Spot trading loop
-        // is started from the UI process.
+        // is started from the UI process. Legacy TradingForegroundService
+        // remains present only as a compatibility shell and never starts trading.
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(
                 this,
