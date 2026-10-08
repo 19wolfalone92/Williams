@@ -740,12 +740,30 @@ class MultiPositionTrader:
             )
 
         client_id = f"{self.EMERGENCY_PREFIX}{uuid.uuid4().hex[:16]}"
-        sell = self.client.order_safe(
+        intent = __import__(
+            "execution_barrier",
+            fromlist=["OrderIntent"],
+        ).OrderIntent.new(
             symbol,
             "SELL",
             "MARKET",
+            {},
+            client_order_id=client_id,
+            purpose="EMERGENCY_EXIT",
+            campaign_id=f"TRADE_{trade_id}",
+            signal_id="",
             quantity=self.client.decimal_format(sell_qty),
-            new_client_order_id=client_id,
+        )
+        sell = self._execute_non_williams_mutation(
+            intent,
+            lambda: self.client.order_safe(
+                symbol,
+                "SELL",
+                "MARKET",
+                quantity=self.client.decimal_format(sell_qty),
+                new_client_order_id=client_id,
+                reconcile_unknown=False,
+            ),
         )
         self.db.save_order(sell)
 
@@ -1651,6 +1669,23 @@ class MultiPositionTrader:
             "unresolved_symbols": unresolved,
         }
 
+    def _execute_non_williams_mutation(self, intent, submit):
+        """Route manual/emergency mutations through the same execution door."""
+        if self.execution_barrier is None:
+            raise RuntimeError(
+                "ExecutionBarrier is mandatory for manual/emergency exchange mutations"
+            )
+        result = self.execution_barrier.execute(
+            intent,
+            submit,
+            pre_submit_checks=None,
+        )
+        if not result.accepted:
+            raise RuntimeError(
+                f"ExecutionBarrier blocked {intent.purpose}: {result.reason}"
+            )
+        return result.response
+
     # ------------------------------------------------------------------
     # Manual / emergency exit for one managed position
     # ------------------------------------------------------------------
@@ -1676,10 +1711,39 @@ class MultiPositionTrader:
             if list_id or list_client:
                 cancel = getattr(self.client, "cancel_oco", None)
                 if cancel is not None:
+                    cancel_client_id = (
+                        f"{self.MANUAL_PREFIX}CANCEL_{uuid.uuid4().hex[:14]}"
+                    )
+                    cancel_intent = __import__(
+                        "execution_barrier",
+                        fromlist=["OrderIntent"],
+                    ).OrderIntent.new(
+                        symbol,
+                        "SELL",
+                        "CANCEL_OCO",
+                        {},
+                        client_order_id=cancel_client_id,
+                        purpose="MANUAL_PROTECTION_CANCEL",
+                        campaign_id=f"TRADE_{trade['id']}",
+                        signal_id="",
+                        related_order_list_id=list_id,
+                    )
                     if list_id:
-                        cancel(symbol, order_list_id=list_id)
+                        self._execute_non_williams_mutation(
+                            cancel_intent,
+                            lambda: cancel(
+                                symbol,
+                                order_list_id=list_id,
+                            ),
+                        )
                     else:
-                        cancel(symbol, list_client_order_id=list_client)
+                        self._execute_non_williams_mutation(
+                            cancel_intent,
+                            lambda: cancel(
+                                symbol,
+                                list_client_order_id=list_client,
+                            ),
+                        )
 
             account = self.client.account()
             free_qty = self._asset_balance(
@@ -1696,12 +1760,31 @@ class MultiPositionTrader:
                     f"{symbol}: managed quantity is no longer available"
                 )
 
-            sell = self.client.order_safe(
+            client_id = f"{self.MANUAL_PREFIX}{uuid.uuid4().hex[:20]}"
+            sell_intent = __import__(
+                "execution_barrier",
+                fromlist=["OrderIntent"],
+            ).OrderIntent.new(
                 symbol,
                 "SELL",
                 "MARKET",
+                {},
+                client_order_id=client_id,
+                purpose="MANUAL_EXIT",
+                campaign_id=f"TRADE_{trade['id']}",
+                signal_id="",
                 quantity=self.client.decimal_format(sell_qty),
-                new_client_order_id=f"{self.MANUAL_PREFIX}{uuid.uuid4().hex[:20]}",
+            )
+            sell = self._execute_non_williams_mutation(
+                sell_intent,
+                lambda: self.client.order_safe(
+                    symbol,
+                    "SELL",
+                    "MARKET",
+                    quantity=self.client.decimal_format(sell_qty),
+                    new_client_order_id=client_id,
+                    reconcile_unknown=False,
+                ),
             )
             self.db.save_order(sell)
 
