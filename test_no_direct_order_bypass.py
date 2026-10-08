@@ -28,13 +28,16 @@ def _is_barrier_wrapped(node, parent):
     cur = node
     while cur in parent:
         cur = parent[cur]
-        if isinstance(cur, ast.Call):
-            fn = cur.func
-            if isinstance(fn, ast.Name) and fn.id in {"_submit", "_barrier_legacy_mutation"}:
+        if not isinstance(cur, ast.Call):
+            continue
+        fn = cur.func
+        if isinstance(fn, ast.Name) and fn.id in {"_submit", "_barrier_legacy_mutation"}:
+            return True
+        if isinstance(fn, ast.Attribute):
+            if fn.attr in {"_submit", "_barrier_legacy_mutation"}:
                 return True
-            if isinstance(fn, ast.Attribute) and fn.attr in {"execute"}:
-                owner = fn.value
-                if isinstance(owner, ast.Attribute) and owner.attr == "execution_barrier":
+            if fn.attr == "execute" and isinstance(fn.value, ast.Attribute):
+                if fn.value.attr in {"barrier", "execution_barrier"}:
                     return True
     return False
 
