@@ -170,7 +170,7 @@ def test_market_quantity_uses_market_lot_size_over_lot_size(tmp_path):
     assert trader._normalize_qty("BTCUSDT", "0.049", market=False) == 0.049
 
 
-def test_multi_position_execution_creates_independent_trades(tmp_path, monkeypatch):
+def test_legacy_multi_position_mode_fails_closed_without_signal_contract(tmp_path, monkeypatch):
     monkeypatch.setenv("MAX_OPEN_POSITIONS", "0")
     monkeypatch.setenv("MAX_TOTAL_RISK_PCT", "0.01")
     monkeypatch.setenv("MAX_RISK_PER_TRADE_PCT", "0.005")
@@ -187,17 +187,8 @@ def test_multi_position_execution_creates_independent_trades(tmp_path, monkeypat
     result = trader.execute([Selection("BTCUSDT"), Selection("ETHUSDT")])
 
     assert len(result) == 2
-    trades = db.open_trades()
-    assert len(trades) == 2
-    assert {row["symbol"] for row in trades} == {"BTCUSDT", "ETHUSDT"}
-    assert client.buy_calls == 2
-    assert client.oco_calls == 2
-    assert trader.reserved_risk_quote() / 10000.0 <= 0.0100001
-    assert all(
-        float(row["entry_price"]) * float(row["quantity"]) *
-        trader._effective_risk_fraction(
-            (float(row["entry_price"]) - float(row["stop_price"])) /
-            float(row["entry_price"])
-        ) / 10000.0 <= 0.005 + 1e-9
-        for row in trades
-    )
+    assert all(row["action"] == "ENTRY_BLOCKED" for row in result)
+    assert all("ExecutionBarrier" in row["reason"] for row in result)
+    assert db.open_trades() == []
+    assert client.buy_calls == 0
+    assert client.oco_calls == 0
