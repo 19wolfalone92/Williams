@@ -149,7 +149,7 @@ class WilliamsCampaignBacktester:
         priority={SignalType.REVERSAL:0,SignalType.SUPER_AO:1,SignalType.FRACTAL:2}
         return min(specs,key=lambda s:(int(s.signal_bar_time_ms),priority.get(s.signal_type,99),int(s.created_at_ms)))
 
-    def run(self,symbol,h1,m15,m5=None,*,h4=None,d1=None,tick_size=.01):
+    def run(self,symbol,h1,m15,m5=None,*,h4=None,d1=None,tick_size=.01,start_at=None):
         if m15 is None or len(m15)<80:
             return {"status":"INSUFFICIENT_DATA","equity":self.equity,"trades":[],"fills":[]}
         m15=m15.sort_index()
@@ -179,6 +179,7 @@ class WilliamsCampaignBacktester:
         current_day=None
         daily_start_equity=self.equity
         daily_stopouts=0
+        active_start=self._ts(start_at) if start_at is not None else None
 
         def close_position(pos, when, exit_price, reason):
             qty=float(pos["qty"])
@@ -218,10 +219,12 @@ class WilliamsCampaignBacktester:
                 day_loss<=-self.policy.risk.daily_loss_pct
                 or daily_stopouts>=self.policy.risk.max_full_stopouts
             )
+            before_backtest_start=active_start is not None and now<active_start
 
-            # New risk is not allowed outside the entry window. A pending
+            # New risk is not allowed outside the entry window or before the
+            # requested historical measurement window. A pending conditional
             # conditional is therefore cancelled at the session cutoff.
-            if session!="ENTRY_WINDOW" or day_blocked:
+            if session!="ENTRY_WINDOW" or day_blocked or before_backtest_start:
                 pending=None
 
             # Existing protective stop gets first right of way inside the
@@ -405,6 +408,7 @@ class WilliamsCampaignBacktester:
                 and pending is None
                 and session=="ENTRY_WINDOW"
                 and not day_blocked
+                and not before_backtest_start
             ):
                 chosen=self._pick_initial(decision.signal_specs)
                 if chosen is not None:
@@ -414,6 +418,7 @@ class WilliamsCampaignBacktester:
                 and pending is None
                 and session=="ENTRY_WINDOW"
                 and not day_blocked
+                and not before_backtest_start
             ):
                 later=[
                     s for s in decision.signal_specs
