@@ -78,54 +78,35 @@ class WilliamsProofEngine:
 
     @staticmethod
     def evaluate(signal: SignalSpec) -> ProofEvaluation:
-        context_pass = bool(signal.htf_confirmed or signal.alligator_bullish)
-        reason = str(signal.reason or "").strip().lower()
-        behavior_pass = (
-            int(signal.source_candle_index) >= 0
-            and (
-                "reversal" in reason
-                or "super ao" in reason
-                or "fractal" in reason
-            )
+        context_pass = bool(
+            signal.htf_confirmed or signal.alligator_bullish
         )
-        structure_pass = (
-            int(signal.source_candle_index) >= 0
-            and signal.signal_type in {
-                SignalType.REVERSAL,
-                SignalType.SUPER_AO,
-                SignalType.FRACTAL,
-            }
+
+        behavior_pass = bool(
+            signal.behavior_confirmed
         )
+
+        structure_pass = bool(
+            signal.structure_confirmed
+            and int(signal.source_candle_index) >= 0
+        )
+
         location_pass = bool(
             float(signal.teeth_at_detection or 0.0) > 0.0
-            or signal.alligator_bullish
+            and float(signal.trigger_price or 0.0) >
+            float(signal.teeth_at_detection or 0.0)
         )
 
-        if signal.signal_type is SignalType.REVERSAL:
-            angulation_pass = float(signal.angulation_score or 0.0) > 0.0
-        else:
-            # WM2/WM3 are continuation/structural confirmations in an active
-            # Williams structure; Alligator wakefulness is a valid production
-            # representation of the established trend location.
-            angulation_pass = bool(
-                signal.alligator_awake or
-                float(signal.angulation_score or 0.0) > 0.0
-            )
+        angulation_pass = bool(signal.angulation_valid)
 
-        momentum_pass = (
-            signal.signal_type is SignalType.SUPER_AO
-            or (
-                signal.signal_type is SignalType.FRACTAL
-                and (
-                    float(signal.wave_confidence or 0.0) > 0.0
-                    or bool(signal.alligator_awake)
-                )
-            )
-            or float(signal.wave_confidence or 0.0) > 0.0
-        )
+        momentum_pass = bool(signal.momentum_confirmed)
 
         invalidation_present = bool(
-            float(signal.invalidation_price or signal.protective_reference or 0.0) > 0.0
+            float(
+                signal.invalidation_price
+                or signal.protective_reference
+                or 0.0
+            ) > 0.0
         )
 
         return ProofEvaluation(
@@ -145,6 +126,7 @@ class WilliamsProofEngine:
                 SignalType.FRACTAL: 3,
             }[signal.signal_type],
         )
+
 
     @staticmethod
     def with_price_proof(
