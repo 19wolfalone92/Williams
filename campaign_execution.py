@@ -975,7 +975,15 @@ class CampaignExecutionService:
         *,
         equity_quote: float,
         candidate_risk_pct: float,
+        risk_decision: RiskDecision | None = None,
     ) -> dict[str, Any]:
+        if risk_decision is not None:
+            decision = risk_decision.williams_decision
+            if decision.symbol != signal.symbol.upper():
+                raise CampaignExecutionError("RiskDecision symbol does not match add-on signal")
+            if decision.direction is not SignalDirection.LONG:
+                raise CampaignExecutionError("Spot campaign add-on requires LONG RiskDecision")
+
         campaign = self._active_campaign_for_symbol(signal.symbol)
         if campaign is None or campaign.position_qty <= 0:
             raise CampaignExecutionError(f"{signal.symbol}: no active campaign for add-on")
@@ -994,6 +1002,18 @@ class CampaignExecutionService:
                 float(os.getenv("CAMPAIGN_ADD_RISK_MAX_PCT", "0.002")),
             ),
         )
+        canonical_quantity_limit = 0.0
+        if risk_decision is not None:
+            requested = min(
+                requested,
+                float(equity_quote)
+                * float(risk_decision.allocated_r_multiple)
+                * float(self.engine.campaign_risk_limit_pct),
+            )
+            canonical_quantity_limit = max(
+                0.0,
+                float(risk_decision.calculated_quantity),
+            )
         if requested <= 0:
             raise CampaignExecutionError("campaign risk budget exhausted")
 
@@ -1021,6 +1041,8 @@ class CampaignExecutionService:
             equity_quote * float(os.getenv("CAMPAIGN_ADD_CAPITAL_FRACTION", "0.25")),
             requested / max(effective_loss_fraction, 1e-12),
         )
+        if canonical_quantity_limit > 0:
+            notional = min(notional, canonical_quantity_limit * trigger)
         qty = self._normalized_entry_qty(signal.symbol, notional, trigger)
         cid = f"{self.ENTRY_PREFIX}ADD_{uuid.uuid4().hex[:16]}"
 
@@ -1062,10 +1084,21 @@ class CampaignExecutionService:
             raise CampaignExecutionError(
                 f"{signal.symbol}: another pending conditional order exists"
             )
-        intent = OrderIntent.new(
-            signal.symbol,
-            "BUY",
-            "STOP_LOSS",
+        if risk_decision is None:
+            raise CampaignExecutionError("canonical RiskDecision is required for campaign add-on")
+        canonical_intent = __import__(
+            "domain.contracts",
+            fromlist=["ExecutionIntent"],
+        ).ExecutionIntent(
+            risk_decision=risk_decision,
+            order_type="STOP_LOSS",
+            client_order_id=cid,
+            recv_window=int(getattr(self.client, "recv_window", 5000) or 5000),
+            time_in_force="GTC",
+            reduce_only=False,
+        )
+        intent = OrderIntent.from_canonical(
+            canonical_intent,
             required_context_versions=dict(signal.context_versions),
             hypothesis_id=f"WILLIAMS_ADD_{signal.signal_type.value}",
             invalidation_level=stop,
