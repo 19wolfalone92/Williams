@@ -1012,6 +1012,14 @@ class Database:
         if not self._transaction_active:
             self.conn.commit()
 
+    def replace_campaign_signal(self, old_signal_id, new_signal_id):
+        self.conn.execute(
+            "UPDATE campaign_signals SET state=?, supersedes_signal_id=? WHERE signal_id=?",
+            ("REPLACED", str(new_signal_id), str(old_signal_id)),
+        )
+        if not self._transaction_active:
+            self.conn.commit()
+
     def set_campaign_signal_state(self, signal_id, state):
         self.conn.execute("UPDATE campaign_signals SET state=? WHERE signal_id=?",(str(state),str(signal_id)))
         if not self._transaction_active:
