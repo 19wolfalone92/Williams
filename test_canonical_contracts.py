@@ -1009,3 +1009,55 @@ def test_campaign_monitor_never_mutates_interrupted_canonical_campaign():
         CampaignOrderState.FAULT.value,
     }
     assert result["action"] == "BLOCKED"
+
+
+def test_canonical_stop_filter_uses_trigger_not_invalidation(tmp_path):
+    db = Database(str(tmp_path / "canonical-stop-trigger.sqlite3"))
+    client = FakeExchangeClient("100.0")
+    barrier = ExecutionBarrier(FakeCache(), db, client=client)
+
+    decision = WilliamsDecision(
+        timestamp=1,
+        symbol="BTCUSDT",
+        direction=SignalDirection.LONG,
+        wise_man_stage=1,
+        trigger_price=101.0,
+        invalidation_price=97.0,
+        proof_vector=ProofVector(True, True, True, True, True, True, False, True),
+        context_regime="BULLISH_AWAKE",
+    )
+    risk = RiskDecision(
+        williams_decision=decision,
+        approved=True,
+        allocated_r_multiple=0.25,
+        calculated_quantity=0.1,
+        max_allowed_slippage=0.001,
+    )
+    canonical = __import__(
+        "domain.contracts",
+        fromlist=["ExecutionIntent"],
+    ).ExecutionIntent(
+        risk_decision=risk,
+        order_type="STOP_LOSS",
+        client_order_id="WILL_TRIGGER_SEMANTICS",
+        recv_window=5000,
+        time_in_force="GTC",
+        reduce_only=False,
+    )
+    order_intent = OrderIntent.from_canonical(
+        canonical,
+        permission_interval="5m",
+    )
+    assert order_intent.trigger_price == 101.0
+    result = barrier.execute(
+        order_intent,
+        lambda: {
+            "symbol": "BTCUSDT",
+            "side": "BUY",
+            "status": "NEW",
+            "orderId": 1001,
+            "clientOrderId": "WILL_TRIGGER_SEMANTICS",
+            "executedQty": "0",
+        },
+    )
+    assert result.accepted is True
