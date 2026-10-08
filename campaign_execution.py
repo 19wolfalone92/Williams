@@ -259,6 +259,7 @@ class CampaignExecutionService:
             initial_risk_pct=requested_risk,
         )
         campaign.tags["signal_role"] = signal.role.value
+        campaign.tags["signal_bar_time_ms"] = int(signal.signal_bar_time_ms)
         campaign.tags["initial_stop_price"] = stop
         campaign.initial_stop_price = stop
         campaign.current_stop_price = stop
