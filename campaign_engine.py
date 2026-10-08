@@ -329,6 +329,24 @@ class CampaignEngine:
         }:
             raise ValueError(f"Cannot arm add-on from {campaign.state.value}")
 
+        # One Super AO add-on and up to three Fractal add-ons are the
+        # canonical five-tranche campaign structure. Reversal bars do not
+        # create additional tranches.
+        signal_type = signal.signal_type
+        if signal_type == SignalType.REVERSAL:
+            raise ValueError("WM1 reversal is an entry signal, not a campaign add-on")
+        row = self.db.conn.execute(
+            "SELECT COUNT(*) AS n FROM campaign_signals "
+            "WHERE campaign_id=? AND signal_type=? "
+            "AND state IN ('DETECTED','ARMED','TRIGGERED','FILLED')",
+            (campaign.campaign_id, signal_type.value),
+        ).fetchone()
+        count = int(row["n"] or 0)
+        if signal_type == SignalType.SUPER_AO and count >= 1:
+            raise ValueError("campaign already consumed its WM2 Super AO add-on")
+        if signal_type == SignalType.FRACTAL and count >= 3:
+            raise ValueError("campaign reached the three Fractal add-on limit")
+
         # The book continues the same campaign with later Wise-Men signals.
         # A new signal becomes an add-on, never a second independent campaign.
         campaign.current_signal_id = signal.signal_id
