@@ -41,6 +41,8 @@ class OrderIntent:
     created_at_ms: int = 0
     max_age_ms: int = 15_000
     recv_window: int = 5_000
+    time_in_force: str = "GTC"
+    reduce_only: bool = False
 
     @classmethod
     def new(
@@ -96,6 +98,8 @@ class OrderIntent:
             risk_quote=float(risk_quote),
             capital_reserved_quote=float(capital_reserved_quote),
             recv_window=int(intent.recv_window),
+            time_in_force=intent.time_in_force,
+            reduce_only=bool(intent.reduce_only),
         )
 
 
@@ -286,6 +290,37 @@ class ExecutionBarrier:
             "REJECTED",
         }
 
+    def _verify_response_identity(
+        self,
+        intent: OrderIntent,
+        response: Any,
+    ) -> str:
+        if not isinstance(response, dict):
+            return "exchange response is not an object"
+
+        expected_symbol = str(intent.symbol).upper()
+        returned_symbol = str(response.get("symbol", "") or "").upper()
+        if returned_symbol and returned_symbol != expected_symbol:
+            return (
+                f"exchange response symbol mismatch: "
+                f"expected={expected_symbol} actual={returned_symbol}"
+            )
+
+        cid = str(response.get("clientOrderId", "") or "").strip()
+        if cid and cid != str(intent.client_order_id).strip():
+            return (
+                f"exchange response clientOrderId mismatch: "
+                f"expected={intent.client_order_id} actual={cid}"
+            )
+
+        side = str(response.get("side", "") or "").upper()
+        if side and side != str(intent.side).upper():
+            return (
+                f"exchange response side mismatch: "
+                f"expected={intent.side} actual={side}"
+            )
+        return ""
+
     @staticmethod
     def _positive_order_status(status: str) -> bool:
         return str(status or "").upper().strip() in {
@@ -417,6 +452,18 @@ class ExecutionBarrier:
                 self._record("ERROR", "execution_unknown", intent, reason)
                 raise ExecutionAmbiguousError(reason)
             else:
+                identity_error = self._verify_response_identity(
+                    intent,
+                    response,
+                )
+                if identity_error:
+                    reason = identity_error
+                    self._lock_mutations(reason)
+                    order_fsm.mark_unknown()
+                    self._persist(intent, "UNKNOWN", reason)
+                    self._record("ERROR", "execution_identity_mismatch", intent, reason)
+                    raise ExecutionAmbiguousError(reason)
+
                 status = self._authoritative_status(response)
                 if not status or not self._known_order_status(status):
                     reason = "exchange response lacks authoritative order status"
@@ -538,6 +585,23 @@ class ExecutionBarrier:
                 )
 
             if isinstance(response, dict):
+                identity_error = self._verify_response_identity(intent, response)
+                if identity_error:
+                    reason = identity_error
+                    self._persist(intent, "RECONCILIATION_FAILED", reason)
+                    self._record(
+                        "ERROR",
+                        "execution_reconcile_failed",
+                        intent,
+                        reason,
+                    )
+                    return ExecutionResult(
+                        intent.intent_id,
+                        False,
+                        response=response,
+                        reason=reason,
+                    )
+
                 status = self._authoritative_status(response)
                 if status in {
                     "PENDING_NEW",
