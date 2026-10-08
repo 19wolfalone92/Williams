@@ -357,7 +357,8 @@ class BinanceSpotClient:
         )
     def order_safe(self, symbol, side, type_, *, quantity=None, quote_order_qty=None,
                    price=None, stop_price=None, time_in_force=None,
-                   new_client_order_id=None):
+                   new_client_order_id=None, strategy_id=None, strategy_type=None,
+                   trailing_delta=None):
         """Place one order and reconcile ambiguous transport failures first.
 
         The wrapper requires a clientOrderId. POST/5xx/timeout is never blindly
@@ -375,6 +376,9 @@ class BinanceSpotClient:
                 stop_price=stop_price,
                 time_in_force=time_in_force,
                 new_client_order_id=new_client_order_id,
+                strategy_id=strategy_id,
+                strategy_type=strategy_type,
+                trailing_delta=trailing_delta,
             )
         except BinanceAPIError as exc:
             if not exc.unknown_execution:
@@ -414,7 +418,7 @@ class BinanceSpotClient:
             )
         return result
 
-    def order(self,symbol,side,type_,quantity=None,quote_order_qty=None,price=None,stop_price=None,time_in_force=None,new_client_order_id=None):
+    def order(self,symbol,side,type_,quantity=None,quote_order_qty=None,price=None,stop_price=None,time_in_force=None,new_client_order_id=None,strategy_id=None,strategy_type=None,trailing_delta=None):
         p={'symbol':symbol,'side':side,'type':type_,'newOrderRespType':'FULL'}
         if quantity is not None:p['quantity']=quantity
         if quote_order_qty is not None:p['quoteOrderQty']=quote_order_qty
@@ -422,6 +426,9 @@ class BinanceSpotClient:
         if stop_price is not None:p['stopPrice']=stop_price
         if time_in_force is not None:p['timeInForce']=time_in_force
         if new_client_order_id:p['newClientOrderId']=new_client_order_id
+        if strategy_id is not None:p['strategyId']=int(strategy_id)
+        if strategy_type is not None:p['strategyType']=int(strategy_type)
+        if trailing_delta is not None:p['trailingDelta']=int(trailing_delta)
         return self._request('POST','/api/v3/order',p,signed=True)
     def get_order(self,symbol,order_id=None,orig_client_order_id=None):
         p={'symbol':symbol}

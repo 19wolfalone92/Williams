@@ -1,7 +1,14 @@
+import pytest
 import json
 import os
 import threading
 import time
+
+@pytest.fixture(autouse=True)
+def _legacy_campaign_mode(monkeypatch):
+    monkeypatch.setenv("CAMPAIGN_ENGINE", "false")
+
+
 
 from db import Database
 from portfolio_trader import MultiPositionTrader

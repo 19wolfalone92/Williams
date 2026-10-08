@@ -19,7 +19,7 @@ from binance_client import BinanceSpotClient
 
 load_dotenv()
 API_TOKEN = os.getenv('MOBILE_API_TOKEN', '').strip()
-VERSION = '4.23.0'
+VERSION = '4.24.0'
 
 app = FastAPI(title='Williams Binance Bot API', version=VERSION)
 hub = WebSocketHub()
@@ -219,6 +219,7 @@ class ControlState:
                     t.client,
                     db=t.db,
                     symbols=t.auto_scan_symbols,
+                    execution_barrier=t.execution_barrier,
                 )
             return t._multi_position_trader
 

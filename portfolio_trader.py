@@ -8,6 +8,9 @@ from db import Database
 from equity_breaker import EquityCircuitBreaker
 from l2_slippage import L2SlippageGuard
 from execution_accumulator import ExecutionSummary, accumulate_order
+from campaign_execution import CampaignExecutionService, CampaignExecutionError
+from campaign_model import SignalSpec, SignalType, SignalRole
+from campaign_monitor import CampaignMonitor
 
 
 POSITION_STATES = {
@@ -36,7 +39,7 @@ class MultiPositionTrader:
     EMERGENCY_PREFIX = "WILLV4_EMERGENCY_"
     MANUAL_PREFIX = "WILLV4_MANUAL_"
 
-    def __init__(self, client, db=None, symbols=None):
+    def __init__(self, client, db=None, symbols=None, execution_barrier=None):
         self.client = client
         self.db = db or Database()
         if symbols is not None:
@@ -85,6 +88,20 @@ class MultiPositionTrader:
         self.max_trades_per_day = max(0, int(os.getenv("MAX_TRADES_PER_DAY", "5")))
         self.max_consecutive_losses = max(0, int(os.getenv("MAX_CONSECUTIVE_LOSSES", "3")))
         self.cooldown_minutes = max(0, int(os.getenv("COOLDOWN_MINUTES", "30")))
+        self.execution_barrier = execution_barrier
+        self.campaign_engine_enabled = (
+            os.getenv("CAMPAIGN_ENGINE", "true").lower() == "true"
+        )
+        self.campaign_execution = CampaignExecutionService(
+            self.client,
+            self.db,
+            execution_barrier=self.execution_barrier,
+        )
+        self.campaign_monitor = CampaignMonitor(
+            self.client,
+            self.db,
+            self.campaign_execution,
+        )
 
     # ------------------------------------------------------------------
     # Durable state
@@ -586,6 +603,15 @@ class MultiPositionTrader:
         return max(0.0, float(stop_fraction) + (2.0 * fee_per_side) + slippage_buffer)
 
     def reserved_risk_quote(self):
+        if self.campaign_engine_enabled:
+            try:
+                return max(
+                    0.0,
+                    float(self.campaign_execution.engine.portfolio_reserved_risk_quote()),
+                )
+            except Exception:
+                # A campaign risk calculation failure must never open extra capacity.
+                return self.max_total_risk_pct * max(self._balance(), 0.0)
         total = 0.0
         for trade in self.open_trades():
             entry = float(trade.get("entry_price") or 0.0)
@@ -1544,7 +1570,40 @@ class MultiPositionTrader:
         return results
 
     def recover(self):
-        """Startup/full recovery. No new entry is allowed until it is clean."""
+        """Startup/full recovery. Campaign mode never routes through legacy OCO recovery."""
+        if self.campaign_engine_enabled:
+            pending = self.campaign_execution.reconcile_pending_entries()
+            active = self.campaign_execution.reconcile_active_campaigns()
+            repaired = self._repair_stale_reconcile_states()
+            unresolved = self.unresolved_symbols()
+            pending_keys = self._pending_entries()
+            ok = not unresolved and not pending_keys
+            canonical_state = self._sync_legacy_state()
+            results = pending + active
+            results.extend(
+                {"symbol": symbol, "state": "FLAT", "stale_reconcile_cleared": True}
+                for symbol in repaired
+            )
+            self.db.log_event(
+                "INFO" if ok else "ERROR",
+                "campaign_recovery_complete",
+                "Campaign exchange/SQLite reconciliation complete",
+                {
+                    "open_positions": len(self.open_trades()),
+                    "open_campaigns": len(self.db.open_campaigns()),
+                    "unresolved_symbols": unresolved,
+                    "pending_entries": [x[0] for x in pending_keys],
+                },
+            )
+            return {
+                "ok": ok,
+                "results": results,
+                "open_positions": len(self.open_trades()),
+                "open_campaigns": len(self.db.open_campaigns()),
+                "unresolved_symbols": unresolved,
+                "state": canonical_state,
+            }
+
         results = self.reconcile_open_positions()
         repaired = self._repair_stale_reconcile_states()
         unresolved = self.unresolved_symbols()
@@ -1794,6 +1853,238 @@ class MultiPositionTrader:
         ok, reason = self.equity_breaker.check(self.db, equity, None, unrealized, fees)
         return ok, reason
     # ------------------------------------------------------------------
+    # Williams campaign entries
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _selection_signal(selection):
+        raw_specs = list(
+            getattr(selection.candidate, "campaign_signal_specs", []) or []
+        )
+        specs = []
+        for raw in raw_specs:
+            try:
+                specs.append(
+                    SignalSpec(
+                        signal_id=str(raw["signal_id"]),
+                        symbol=str(raw["symbol"]),
+                        side=str(raw["side"]),
+                        signal_type=SignalType(str(raw["signal_type"])),
+                        role=SignalRole(str(raw["role"])),
+                        timeframe=str(raw["timeframe"]),
+                        signal_bar_time_ms=int(raw["signal_bar_time_ms"]),
+                        trigger_price=float(raw["trigger_price"]),
+                        protective_reference=float(raw["protective_reference"]),
+                        trigger_buffer_ticks=int(raw.get("trigger_buffer_ticks", 1) or 1),
+                        invalidation_price=float(raw.get("invalidation_price", 0.0) or 0.0),
+                        teeth_at_detection=float(raw.get("teeth_at_detection", 0.0) or 0.0),
+                        alligator_bullish=bool(raw.get("alligator_bullish", False)),
+                        alligator_awake=bool(raw.get("alligator_awake", False)),
+                        angulation_score=float(raw.get("angulation_score", 0.0) or 0.0),
+                        wave_confidence=float(raw.get("wave_confidence", 0.0) or 0.0),
+                        wave_exhaustion_risk=float(raw.get("wave_exhaustion_risk", 0.0) or 0.0),
+                        htf_confirmed=bool(raw.get("htf_confirmed", False)),
+                        context_versions=dict(raw.get("context_versions", {}) or {}),
+                        reason=str(raw.get("reason", "")),
+                        created_at_ms=int(raw.get("created_at_ms", 0) or 0),
+                        expires_at_ms=int(raw.get("expires_at_ms", 0) or 0),
+                        source_candle_index=int(raw.get("source_candle_index", -1) or -1),
+                    )
+                )
+            except Exception:
+                continue
+        return CampaignEngine.choose_initial_signal(specs) if specs else None
+
+    def _signal_specs(self, selection):
+        raw_specs = list(
+            getattr(selection.candidate, "campaign_signal_specs", []) or []
+        )
+        specs = []
+        for raw in raw_specs:
+            try:
+                specs.append(
+                    SignalSpec(
+                        signal_id=str(raw["signal_id"]),
+                        symbol=str(raw["symbol"]),
+                        side=str(raw["side"]),
+                        signal_type=SignalType(str(raw["signal_type"])),
+                        role=SignalRole(str(raw["role"])),
+                        timeframe=str(raw["timeframe"]),
+                        signal_bar_time_ms=int(raw["signal_bar_time_ms"]),
+                        trigger_price=float(raw["trigger_price"]),
+                        protective_reference=float(raw["protective_reference"]),
+                        trigger_buffer_ticks=int(raw.get("trigger_buffer_ticks", 1) or 1),
+                        invalidation_price=float(raw.get("invalidation_price", 0.0) or 0.0),
+                        teeth_at_detection=float(raw.get("teeth_at_detection", 0.0) or 0.0),
+                        alligator_bullish=bool(raw.get("alligator_bullish", False)),
+                        alligator_awake=bool(raw.get("alligator_awake", False)),
+                        angulation_score=float(raw.get("angulation_score", 0.0) or 0.0),
+                        wave_confidence=float(raw.get("wave_confidence", 0.0) or 0.0),
+                        wave_exhaustion_risk=float(raw.get("wave_exhaustion_risk", 0.0) or 0.0),
+                        htf_confirmed=bool(raw.get("htf_confirmed", False)),
+                        context_versions=dict(raw.get("context_versions", {}) or {}),
+                        reason=str(raw.get("reason", "")),
+                        created_at_ms=int(raw.get("created_at_ms", 0) or 0),
+                        expires_at_ms=int(raw.get("expires_at_ms", 0) or 0),
+                        source_candle_index=int(raw.get("source_candle_index", -1) or -1),
+                    )
+                )
+            except Exception:
+                continue
+        return specs
+
+    def execute_campaign(self, selections):
+        if not selections:
+            return []
+
+        results = []
+        equity = self._balance()
+        if equity <= 0:
+            return []
+
+        open_count = len(self.open_trades())
+        pending = {symbol for symbol, _ in self._pending_entries()}
+
+        for selection in selections:
+            specs = self._signal_specs(selection)
+            if not specs:
+                continue
+            symbol = str(selection.candidate.symbol).upper()
+            if symbol in pending:
+                continue
+
+            campaign = self.campaign_execution._active_campaign_for_symbol(symbol)
+
+            # Active campaign: later WM2/WM3 signals are add-ons. A new
+            # reversal is not auto-added by default because it can represent
+            # countertrend risk; this is explicitly configurable.
+            if campaign is not None and campaign.position_qty > 0:
+                latest_time = int(
+                    campaign.tags.get("last_signal_time_ms", 0)
+                    or campaign.tags.get("signal_bar_time_ms", 0)
+                    or 0
+                )
+                allow_reversal_add = (
+                    os.getenv("CAMPAIGN_ALLOW_REVERSAL_ADD", "false").lower()
+                    == "true"
+                )
+                eligible = [
+                    s for s in specs
+                    if s.signal_bar_time_ms > latest_time
+                    and (
+                        s.signal_type in {SignalType.SUPER_AO, SignalType.FRACTAL}
+                        or (
+                            allow_reversal_add
+                            and s.signal_type == SignalType.REVERSAL
+                        )
+                    )
+                ]
+                if not eligible:
+                    continue
+                signal = min(
+                    eligible,
+                    key=lambda s: (s.signal_bar_time_ms, s.created_at_ms),
+                )
+                add_signal = __import__(
+                    "dataclasses"
+                ).replace(signal, role=SignalRole.ADD_ON)
+
+                try:
+                    result = self.campaign_execution.arm_add_on(
+                        add_signal,
+                        equity_quote=equity,
+                        candidate_risk_pct=min(
+                            self.max_risk_per_trade_pct,
+                            max(0.0, float(selection.risk.risk_pct) / 100.0),
+                        ),
+                    )
+                    results.append(
+                        {
+                            "symbol": symbol,
+                            "campaign": True,
+                            "action": "ADD_ON_ARMED",
+                            **result,
+                        }
+                    )
+                    pending.add(symbol)
+                except CampaignExecutionError as exc:
+                    self.db.log_event(
+                        "WARNING",
+                        "campaign_add_on_not_armed",
+                        str(exc),
+                        {"symbol": symbol, "signal_id": signal.signal_id},
+                    )
+                    results.append(
+                        {
+                            "symbol": symbol,
+                            "campaign": True,
+                            "action": "WAIT_ADD_ON",
+                            "error": str(exc),
+                        }
+                    )
+                continue
+
+            # No open campaign: this is a new initial campaign. Position
+            # capacity applies only to new campaigns, not later additions.
+            if self.max_open_positions > 0 and open_count >= self.max_open_positions:
+                continue
+
+            signal = self.campaign_execution.engine.choose_initial_signal(specs)
+            if signal is None:
+                continue
+
+            try:
+                result = self.campaign_execution.arm_initial_entry(
+                    signal,
+                    equity_quote=equity,
+                    candidate_risk_pct=min(
+                        self.max_risk_per_trade_pct,
+                        max(0.0, float(selection.risk.risk_pct) / 100.0),
+                    ),
+                )
+                results.append(
+                    {
+                        "symbol": symbol,
+                        "campaign": True,
+                        "action": "ENTRY_ARMED",
+                        **result,
+                    }
+                )
+                pending.add(symbol)
+            except CampaignExecutionError as exc:
+                self.db.log_event(
+                    "WARNING",
+                    "campaign_entry_not_armed",
+                    str(exc),
+                    {"symbol": symbol, "signal_id": signal.signal_id},
+                )
+                results.append(
+                    {
+                        "symbol": symbol,
+                        "campaign": True,
+                        "action": "WAIT",
+                        "error": str(exc),
+                    }
+                )
+            except Exception as exc:
+                self.db.log_event(
+                    "ERROR",
+                    "campaign_entry_error",
+                    str(exc),
+                    {"symbol": symbol, "signal_id": signal.signal_id},
+                )
+                self.set_state(symbol, "RECONCILE_REQUIRED")
+                results.append(
+                    {
+                        "symbol": symbol,
+                        "campaign": True,
+                        "action": "RECONCILE_REQUIRED",
+                        "error": str(exc),
+                    }
+                )
+        return results
+
+    # ------------------------------------------------------------------
     # New entries
     # ------------------------------------------------------------------
 
@@ -1813,6 +2104,21 @@ class MultiPositionTrader:
         return True
 
     def execute(self, selections):
+        if self.campaign_engine_enabled:
+            if self.dry_run:
+                return [
+                    {
+                        "symbol": selection.candidate.symbol,
+                        "campaign": True,
+                        "action": "SHADOW_ENTRY_ARM",
+                        "risk_pct": selection.risk.risk_pct,
+                        "trigger_price": getattr(selection.candidate, "entry_trigger_price", 0.0),
+                        "entry_signal_type": getattr(selection.candidate, "entry_signal_type", ""),
+                    }
+                    for selection in selections
+                ]
+            return self.execute_campaign(selections)
+
         if self.dry_run:
             return [
                 {
@@ -2042,6 +2348,27 @@ class MultiPositionTrader:
                 "results": [],
             }
 
+        if self.campaign_engine_enabled:
+            pending_recovery = self.campaign_execution.reconcile_pending_entries()
+            active_recovery = self.campaign_execution.reconcile_active_campaigns()
+            # Manage open campaigns before looking for new opportunities. If a
+            # protection mutation becomes ambiguous, the whole execution path
+            # stays fail-closed.
+            campaign_monitor = self.campaign_monitor.monitor_all()
+            # A resolved/verified pending campaign is now represented by the
+            # campaign state; unresolved mutation remains a hard global block.
+            unresolved = self.unresolved_symbols()
+            if unresolved:
+                return {
+                    "status": "BLOCKED",
+                    "recovery": recovery,
+                    "pending_recovery": pending_recovery,
+                    "active_recovery": active_recovery,
+                    "campaign_monitor": campaign_monitor,
+                    "results": [],
+                    "reason": "campaign reconciliation required",
+                }
+
         allowed, risk_reason = self._daily_entry_guard()
         if not allowed:
             self.db.log_event("WARNING", "daily_entry_blocked", risk_reason)
@@ -2056,20 +2383,28 @@ class MultiPositionTrader:
             }
 
         open_trades = self.open_trades()
-        pending_entries = self._pending_entries()
-        if pending_entries:
-            return {
-                "status": "BLOCKED",
-                "results": [],
-                "reason": "ENTRY_PENDING: durable entry intent requires recovery",
-            }
+
+        # A pending conditional campaign is normal in campaign mode; it is not
+        # a recovery failure and must not block unrelated symbols.
+        if not self.campaign_engine_enabled:
+            pending_entries = self._pending_entries()
+            if pending_entries:
+                return {
+                    "status": "BLOCKED",
+                    "results": [],
+                    "reason": "ENTRY_PENDING: durable entry intent requires recovery",
+                }
+
         if self.max_open_positions > 0 and len(open_trades) >= self.max_open_positions:
-            return {
-                "status": "POSITION_LIMIT",
-                "results": [],
-                "reason": f"MAX_OPEN_POSITIONS={self.max_open_positions}",
-                "open_positions": len(open_trades),
-            }
+            # Existing campaigns can still be monitored/add to; only new
+            # independent campaigns are blocked by this portfolio capacity.
+            if not self.campaign_engine_enabled:
+                return {
+                    "status": "POSITION_LIMIT",
+                    "results": [],
+                    "reason": f"MAX_OPEN_POSITIONS={self.max_open_positions}",
+                    "open_positions": len(open_trades),
+                }
 
         controller = PortfolioController(
             self.client,
@@ -2080,10 +2415,19 @@ class MultiPositionTrader:
             open_risk_quote=self.reserved_risk_quote(),
             open_positions=len(open_trades),
         )
+        results = (
+            self.execute_campaign(selections)
+            if self.campaign_engine_enabled
+            else self.execute(selections)
+        )
         return {
             "status": "EXECUTED",
             "recovery": recovery,
-            "results": self.execute(selections),
+            "pending_recovery": pending_recovery if self.campaign_engine_enabled else [],
+            "campaign_monitor": campaign_monitor if self.campaign_engine_enabled else [],
+            "results": results,
             "open_positions": len(self.open_trades()),
             "reserved_risk_quote": self.reserved_risk_quote(),
+            "campaign_engine": self.campaign_engine_enabled,
         }
+

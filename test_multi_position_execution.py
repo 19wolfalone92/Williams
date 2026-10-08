@@ -1,4 +1,11 @@
+import pytest
 import uuid
+
+@pytest.fixture(autouse=True)
+def _legacy_campaign_mode(monkeypatch):
+    monkeypatch.setenv("CAMPAIGN_ENGINE", "false")
+
+
 
 from portfolio_trader import MultiPositionTrader
 from db import Database

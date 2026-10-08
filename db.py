@@ -6,7 +6,7 @@ from contextlib import contextmanager
 
 
 class Database:
-    SCHEMA_VERSION = 5
+    SCHEMA_VERSION = 6
 
     def __init__(self, path=None):
         path = path or os.getenv('WILLIAMS_DB_PATH') or 'data/trader.sqlite3'
@@ -142,12 +142,123 @@ class Database:
             event TEXT NOT NULL,
             payload_json TEXT
         );
+        CREATE TABLE IF NOT EXISTS campaigns(
+            campaign_id TEXT PRIMARY KEY,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            symbol TEXT NOT NULL,
+            side TEXT NOT NULL,
+            execution_timeframe TEXT NOT NULL,
+            state TEXT NOT NULL,
+            origin_signal_id TEXT,
+            current_signal_id TEXT,
+            current_signal_type TEXT,
+            position_qty REAL DEFAULT 0,
+            average_entry_price REAL DEFAULT 0,
+            initial_stop_price REAL DEFAULT 0,
+            current_stop_price REAL DEFAULT 0,
+            structural_stop_source TEXT,
+            additions INTEGER DEFAULT 0,
+            tranche_index INTEGER DEFAULT 0,
+            realized_pnl_quote REAL DEFAULT 0,
+            unrealized_pnl_quote REAL DEFAULT 0,
+            open_risk_quote REAL DEFAULT 0,
+            pending_risk_quote REAL DEFAULT 0,
+            capital_reserved_quote REAL DEFAULT 0,
+            wave_context_json TEXT,
+            health TEXT DEFAULT 'GREEN',
+            next_action TEXT DEFAULT 'WAIT',
+            reconciliation_state TEXT DEFAULT 'CLEAN',
+            exit_reason TEXT,
+            tags_json TEXT
+        );
+        CREATE TABLE IF NOT EXISTS campaign_signals(
+            signal_id TEXT PRIMARY KEY,
+            campaign_id TEXT NOT NULL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            symbol TEXT NOT NULL,
+            side TEXT NOT NULL,
+            signal_type TEXT NOT NULL,
+            role TEXT NOT NULL,
+            timeframe TEXT NOT NULL,
+            signal_bar_time_ms INTEGER NOT NULL,
+            trigger_price REAL NOT NULL,
+            protective_reference REAL NOT NULL,
+            invalidation_price REAL DEFAULT 0,
+            teeth_at_detection REAL DEFAULT 0,
+            angulation_score REAL DEFAULT 0,
+            wave_confidence REAL DEFAULT 0,
+            wave_exhaustion_risk REAL DEFAULT 0,
+            htf_confirmed INTEGER DEFAULT 0,
+            state TEXT NOT NULL,
+            source_candle_index INTEGER DEFAULT -1,
+            expires_at_ms INTEGER DEFAULT 0,
+            context_versions_json TEXT,
+            reason TEXT,
+            supersedes_signal_id TEXT
+        );
+        CREATE TABLE IF NOT EXISTS campaign_orders(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            campaign_id TEXT NOT NULL,
+            signal_id TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            symbol TEXT NOT NULL,
+            side TEXT NOT NULL,
+            purpose TEXT NOT NULL,
+            order_type TEXT NOT NULL,
+            order_id TEXT,
+            order_list_id TEXT,
+            client_order_id TEXT,
+            status TEXT,
+            price REAL DEFAULT 0,
+            stop_price REAL DEFAULT 0,
+            quantity REAL DEFAULT 0,
+            risk_quote REAL DEFAULT 0,
+            capital_reserved_quote REAL DEFAULT 0,
+            raw_json TEXT
+        );
+        CREATE TABLE IF NOT EXISTS campaign_fills(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            campaign_id TEXT NOT NULL,
+            order_id TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            symbol TEXT NOT NULL,
+            side TEXT NOT NULL,
+            quantity REAL NOT NULL,
+            price REAL NOT NULL,
+            quote_quantity REAL DEFAULT 0,
+            fee_quote REAL DEFAULT 0,
+            commission_base REAL DEFAULT 0,
+            commission_asset TEXT,
+            raw_json TEXT
+        );
+        CREATE TABLE IF NOT EXISTS campaign_events(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            campaign_id TEXT NOT NULL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            event TEXT NOT NULL,
+            level TEXT DEFAULT 'INFO',
+            signal_id TEXT,
+            order_id TEXT,
+            reason TEXT,
+            payload_json TEXT
+        );
         CREATE INDEX IF NOT EXISTS idx_trade_journal_diagnosis
             ON trade_journal(diagnosis);
         CREATE INDEX IF NOT EXISTS idx_trades_open_symbol
             ON trades(symbol, exit_time);
         CREATE INDEX IF NOT EXISTS idx_orders_symbol_list
             ON orders(symbol, order_list_id);
+        CREATE INDEX IF NOT EXISTS idx_campaigns_symbol_state
+            ON campaigns(symbol, state);
+        CREATE INDEX IF NOT EXISTS idx_campaign_signals_campaign_state
+            ON campaign_signals(campaign_id, state);
+        CREATE INDEX IF NOT EXISTS idx_campaign_orders_campaign
+            ON campaign_orders(campaign_id, status);
+        CREATE INDEX IF NOT EXISTS idx_campaign_fills_campaign
+            ON campaign_fills(campaign_id);
+        CREATE INDEX IF NOT EXISTS idx_campaign_events_campaign
+            ON campaign_events(campaign_id, id);
         ''')
         self._migrate_trade_columns()
         self.state_set('schema_version', self.SCHEMA_VERSION)
@@ -743,6 +854,163 @@ class Database:
             'by_signal_family': group('signal_family'),
             'by_score_bucket': group('score_bucket'),
         }
+
+    # ------------------------------------------------------------------
+    # Trading campaign persistence
+    # ------------------------------------------------------------------
+
+    def save_campaign(self, campaign):
+        data = campaign.to_dict() if hasattr(campaign, "to_dict") else dict(campaign)
+        self.conn.execute(
+            """INSERT INTO campaigns(
+                campaign_id,updated_at,symbol,side,execution_timeframe,state,
+                origin_signal_id,current_signal_id,current_signal_type,
+                position_qty,average_entry_price,initial_stop_price,current_stop_price,
+                structural_stop_source,additions,tranche_index,realized_pnl_quote,
+                unrealized_pnl_quote,open_risk_quote,pending_risk_quote,
+                capital_reserved_quote,wave_context_json,health,next_action,
+                reconciliation_state,exit_reason,tags_json
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(campaign_id) DO UPDATE SET
+                updated_at=CURRENT_TIMESTAMP,symbol=excluded.symbol,side=excluded.side,
+                execution_timeframe=excluded.execution_timeframe,state=excluded.state,
+                origin_signal_id=excluded.origin_signal_id,current_signal_id=excluded.current_signal_id,
+                current_signal_type=excluded.current_signal_type,position_qty=excluded.position_qty,
+                average_entry_price=excluded.average_entry_price,initial_stop_price=excluded.initial_stop_price,
+                current_stop_price=excluded.current_stop_price,structural_stop_source=excluded.structural_stop_source,
+                additions=excluded.additions,tranche_index=excluded.tranche_index,
+                realized_pnl_quote=excluded.realized_pnl_quote,unrealized_pnl_quote=excluded.unrealized_pnl_quote,
+                open_risk_quote=excluded.open_risk_quote,pending_risk_quote=excluded.pending_risk_quote,
+                capital_reserved_quote=excluded.capital_reserved_quote,wave_context_json=excluded.wave_context_json,
+                health=excluded.health,next_action=excluded.next_action,
+                reconciliation_state=excluded.reconciliation_state,exit_reason=excluded.exit_reason,
+                tags_json=excluded.tags_json""",
+            (
+                data["campaign_id"], datetime.now(timezone.utc).isoformat(), data["symbol"], data["side"],
+                data["execution_timeframe"], data["state"], data.get("origin_signal_id",""),
+                data.get("current_signal_id",""), data.get("current_signal_type",""),
+                float(data.get("position_qty",0) or 0), float(data.get("average_entry_price",0) or 0),
+                float(data.get("initial_stop_price",0) or 0), float(data.get("current_stop_price",0) or 0),
+                data.get("structural_stop_source",""), int(data.get("additions",0) or 0),
+                int(data.get("tranche_index",0) or 0), float(data.get("realized_pnl_quote",0) or 0),
+                float(data.get("unrealized_pnl_quote",0) or 0), float(data.get("open_risk_quote",0) or 0),
+                float(data.get("pending_risk_quote",0) or 0), float(data.get("capital_reserved_quote",0) or 0),
+                json.dumps(data.get("wave_context",{}),default=str,sort_keys=True),
+                data.get("health","GREEN"),data.get("next_action","WAIT"),data.get("reconciliation_state","CLEAN"),
+                data.get("exit_reason",""),json.dumps(data.get("tags",{}),default=str,sort_keys=True),
+            ),
+        )
+        if not self._transaction_active:
+            self.conn.commit()
+
+    def get_campaign(self, campaign_id):
+        row=self.conn.execute("SELECT * FROM campaigns WHERE campaign_id=?",(str(campaign_id),)).fetchone()
+        return dict(row) if row else None
+
+    def open_campaigns(self):
+        rows=self.conn.execute(
+            "SELECT * FROM campaigns WHERE state NOT IN ('CLOSED','FLAT') ORDER BY updated_at DESC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def save_campaign_signal(self, signal, campaign_id, state="DETECTED", supersedes_signal_id=""):
+        data = signal.to_dict() if hasattr(signal, "to_dict") else dict(signal)
+        st = data.get("signal_type")
+        role = data.get("role")
+        self.conn.execute(
+            """INSERT OR REPLACE INTO campaign_signals(
+                signal_id,campaign_id,symbol,side,signal_type,role,timeframe,
+                signal_bar_time_ms,trigger_price,protective_reference,invalidation_price,
+                teeth_at_detection,angulation_score,wave_confidence,wave_exhaustion_risk,
+                htf_confirmed,state,source_candle_index,expires_at_ms,context_versions_json,reason,supersedes_signal_id
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                data["signal_id"], str(campaign_id), data["symbol"], data["side"],
+                st.value if hasattr(st,"value") else st, role.value if hasattr(role,"value") else role,
+                data["timeframe"], int(data["signal_bar_time_ms"]), float(data["trigger_price"]),
+                float(data["protective_reference"]), float(data.get("invalidation_price",0) or 0),
+                float(data.get("teeth_at_detection",0) or 0), float(data.get("angulation_score",0) or 0),
+                float(data.get("wave_confidence",0) or 0), float(data.get("wave_exhaustion_risk",0) or 0),
+                1 if data.get("htf_confirmed") else 0, state, int(data.get("source_candle_index",-1) or -1),
+                int(data.get("expires_at_ms",0) or 0), json.dumps(data.get("context_versions",{}),sort_keys=True),
+                data.get("reason",""), supersedes_signal_id or None,
+            ),
+        )
+        if not self._transaction_active:
+            self.conn.commit()
+
+    def set_campaign_signal_state(self, signal_id, state):
+        self.conn.execute("UPDATE campaign_signals SET state=? WHERE signal_id=?",(str(state),str(signal_id)))
+        if not self._transaction_active:
+            self.conn.commit()
+
+    def active_campaign_signals(self, campaign_id):
+        rows=self.conn.execute(
+            "SELECT * FROM campaign_signals WHERE campaign_id=? AND state IN ('DETECTED','ARMED') ORDER BY signal_bar_time_ms",
+            (str(campaign_id),),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def save_campaign_order(self, record):
+        data=record.to_dict() if hasattr(record,"to_dict") else dict(record)
+        self.conn.execute(
+            """INSERT INTO campaign_orders(
+                campaign_id,signal_id,symbol,side,purpose,order_type,order_id,order_list_id,
+                client_order_id,status,price,stop_price,quantity,risk_quote,capital_reserved_quote,raw_json
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                data.get("campaign_id",""),data.get("signal_id",""),data.get("symbol",""),data.get("side",""),
+                data.get("purpose",""),data.get("order_type",""),data.get("order_id"),data.get("order_list_id"),
+                data.get("client_order_id"),data.get("status",""),float(data.get("price",0) or 0),
+                float(data.get("stop_price",0) or 0),float(data.get("quantity",0) or 0),
+                float(data.get("risk_quote",0) or 0),float(data.get("capital_reserved_quote",0) or 0),
+                json.dumps(data.get("raw_json",data),default=str),
+            ),
+        )
+        if not self._transaction_active:
+            self.conn.commit()
+
+    def save_campaign_fill(self, fill):
+        data=fill if isinstance(fill,dict) else dict(fill)
+        self.conn.execute(
+            """INSERT INTO campaign_fills(
+                campaign_id,order_id,symbol,side,quantity,price,quote_quantity,
+                fee_quote,commission_base,commission_asset,raw_json
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                data.get("campaign_id",""),data.get("order_id"),data.get("symbol",""),
+                data.get("side",""),float(data.get("quantity",0) or 0),float(data.get("price",0) or 0),
+                float(data.get("quote_quantity",0) or 0),float(data.get("fee_quote",0) or 0),
+                float(data.get("commission_base",0) or 0),data.get("commission_asset",""),
+                json.dumps(data,default=str),
+            ),
+        )
+        if not self._transaction_active:
+            self.conn.commit()
+
+    def log_campaign_event(self, campaign_id, event, *, level="INFO", signal_id=None, order_id=None, reason="", payload=None):
+        self.conn.execute(
+            """INSERT INTO campaign_events(campaign_id,event,level,signal_id,order_id,reason,payload_json)
+               VALUES(?,?,?,?,?,?,?)""",
+            (str(campaign_id),str(event),str(level),signal_id,order_id,str(reason),
+             json.dumps(payload,default=str,sort_keys=True) if payload is not None else None),
+        )
+        if not self._transaction_active:
+            self.conn.commit()
+
+    def campaign_risk_reserved_quote(self):
+        row=self.conn.execute(
+            "SELECT COALESCE(SUM(open_risk_quote),0)+COALESCE(SUM(pending_risk_quote),0) AS risk "
+            "FROM campaigns WHERE state NOT IN ('CLOSED','FLAT','RECONCILE_REQUIRED')"
+        ).fetchone()
+        return float(row["risk"] or 0.0)
+
+    def campaign_capital_reserved_quote(self):
+        row=self.conn.execute(
+            "SELECT COALESCE(SUM(capital_reserved_quote),0) AS capital "
+            "FROM campaigns WHERE state IN ('SIGNAL_DETECTED','ENTRY_ARMING','ENTRY_PENDING','ADD_ON_ARMING','ADD_ON_PENDING')"
+        ).fetchone()
+        return float(row["capital"] or 0.0)
 
     def recent_orders(self, symbol, limit=100):
         return [

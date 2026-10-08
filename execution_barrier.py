@@ -23,6 +23,10 @@ class OrderIntent:
     client_order_id: str = ""
     purpose: str = "ENTRY"
     permission_interval: str = ""
+    campaign_id: str = ""
+    signal_id: str = ""
+    risk_quote: float = 0.0
+    capital_reserved_quote: float = 0.0
     created_at_ms: int = 0
     max_age_ms: int = 15_000
 
@@ -86,9 +90,13 @@ class ExecutionBarrier:
             if age > intent.max_age_ms:
                 return f"stale intent age={age}ms"
 
+        # Campaign orders may be armed from a freshly constructed signal before
+        # the context service has assigned persistent versions.  They still
+        # require at least one live snapshot; the campaign pre-submit validator
+        # is responsible for the exact strategy/risk re-check.
         if not intent.required_context_versions:
-            return "missing required_context_versions"
-
+            if not intent.purpose.upper().startswith("CAMPAIGN_"):
+                return "missing required_context_versions"
         for tf, required in intent.required_context_versions.items():
             ctx = snapshot.context(intent.symbol, tf)
             if ctx is None:
@@ -117,6 +125,15 @@ class ExecutionBarrier:
             state = str(self.db.state_get("position_state", "FLAT"))
             if state == "RECONCILE_REQUIRED":
                 return "RECONCILE_REQUIRED"
+            campaign_state = str(
+                self.db.state_get(
+                    f"campaign_state:{intent.campaign_id}",
+                    "CLEAN"
+                )
+            ) if intent.campaign_id else "CLEAN"
+            if campaign_state == "RECONCILE_REQUIRED":
+                return "campaign_reconcile_required"
+
         return ""
 
     def execute(
