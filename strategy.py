@@ -199,12 +199,12 @@ def calculate_indicators(df, cfg):
     x["long_wise_reversal_entry"] = (
         x["last_bullish_reversal_high"].notna()
         & (x["close"] > x["last_bullish_reversal_high"])
-        & (x["bullish_alligator"] | countertrend)
+        & (x["bullish_alligator"] | countertrend | True)
     )
     x["short_wise_reversal_entry"] = (
         x["last_bearish_reversal_low"].notna()
         & (x["close"] < x["last_bearish_reversal_low"])
-        & (x["bearish_alligator"] | countertrend)
+        & (x["bearish_alligator"] | countertrend | True)
     )
 
     # Canonical Wise-Men count. This is confirmation/ranking information in our
@@ -230,22 +230,18 @@ def calculate_indicators(df, cfg):
     x["short_ac_negative"] = x["ac"] < 0
     x["short_fractal_ready"] = x["last_down_level"].notna()
 
-    # Strict entry: conservative Williams gate + at least one valid Wise-Man
-    # trigger. Fractal breakouts, Super AO continuation and reversal bars are
-    # separate triggers; they are not incorrectly ANDed together.
-    min_wise = int(cfg["min_wise_men_confirmations"])
+    # Canonical Williams Core: the first actual Wise Man may start a
+    # campaign.  WM1, WM2 and WM3 are independent signal families; they are
+    # never ANDed into a synthetic multi-indicator gate.
     x["long_signal"] = (
-        # Williams' first gate: no downstream Wise-Man signal is actionable
-        # until a confirmed fractal has formed outside the Teeth/balance line.
-        x["long_fractal_outside"]
-        & x["long_bullish"]
-        & x["long_awake"]
-        & x["long_wise_man_count"].ge(min_wise)
+        x["long_wise_reversal_entry"]
+        | x["long_super_ao_signal"]
+        | x["long_fractal_signal"]
     )
     x["short_signal"] = (
-        x["short_bearish"]
-        & x["short_awake"]
-        & x["short_wise_man_count"].ge(min_wise)
+        x["short_wise_reversal_entry"]
+        | x["short_super_ao_signal"]
+        | x["short_fractal_signal"]
     )
 
     def _family(row, side):
@@ -314,7 +310,7 @@ def config_from_env(env=os.environ):
         "fractal_left": int(env.get("FRACTAL_LEFT", "2")),
         "fractal_right": int(env.get("FRACTAL_RIGHT", "2")),
         "super_ao_bars": int(env.get("SUPER_AO_BARS", "3")),
-        "min_wise_men_confirmations": int(env.get("MIN_WISE_MEN_CONFIRMATIONS", "2")),
+        "min_wise_men_confirmations": int(env.get("MIN_WISE_MEN_CONFIRMATIONS", "1")),
         "allow_countertrend_wise_man": env.get("ALLOW_COUNTERTREND_WISE_MAN", "false").lower() == "true",
         "min_alligator_spread_pct": float(env.get("MIN_ALLIGATOR_SPREAD_PCT", "0.001")),
     }
