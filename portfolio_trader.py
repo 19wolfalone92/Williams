@@ -2231,12 +2231,8 @@ class MultiPositionTrader:
                     float(quote),
                 )
 
-                order = self.client.order_safe(
-                    symbol,
-                    "BUY",
-                    "MARKET",
-                    quote_order_qty=self.client.decimal_format(quote),
-                    new_client_order_id=client_id,
+                raise RuntimeError(
+                    "legacy autonomous BUY disabled: route entries through CampaignExecutionService"
                 )
                 self.db.save_order(order)
 
