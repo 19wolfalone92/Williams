@@ -1998,7 +1998,34 @@ class MultiPositionTrader:
                 except Exception as exc:
                     self.db.log_event("WARNING", "decision_trace_persist_failed", str(exc), {"symbol": symbol})
             if symbol in pending:
-                continue
+                if self.intraday_core_enabled:
+                    pending_campaign = self.campaign_execution._active_campaign_for_symbol(symbol)
+                    trace = dict(getattr(selection.candidate, "decision_trace", {}) or {})
+                    current_type = str(getattr(pending_campaign, "current_signal_type", "") or "").upper() if pending_campaign else ""
+                    current_time = int(getattr(pending_campaign, "tags", {}).get("signal_bar_time_ms", 0) or 0) if pending_campaign else 0
+                    newer = [
+                        x for x in specs
+                        if x.signal_type == SignalType.FRACTAL
+                        and current_type == SignalType.FRACTAL
+                        and x.signal_bar_time_ms > current_time
+                    ]
+                    if pending_campaign is not None and pending_campaign.position_qty <= 0 and newer:
+                        try:
+                            newest = max(newer, key=lambda x: x.signal_bar_time_ms)
+                            self.campaign_execution.supersede_pending_fractal(pending_campaign, newest)
+                            pending.discard(symbol)
+                        except CampaignExecutionError as exc:
+                            self.db.log_event(
+                                "WARNING",
+                                "fractal_supersede_blocked",
+                                str(exc),
+                                {"symbol": symbol, "signal_id": getattr(newer[-1], "signal_id", "")},
+                            )
+                            continue
+                    else:
+                        continue
+                else:
+                    continue
 
             campaign = self.campaign_execution._active_campaign_for_symbol(symbol)
 
