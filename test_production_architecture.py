@@ -55,6 +55,19 @@ def test_execution_barrier_rejects_stale_context():
     assert "stale context" in result.reason
 
 
+def test_execution_barrier_reports_missing_permission_on_fresh_entry():
+    cache = ContextCache()
+    cache.publish(context())
+    barrier = ExecutionBarrier(cache)
+    intent = OrderIntent.new(
+        "BTCUSDT", "BUY", "MARKET",
+        required_context_versions={"1h": 1},
+        purpose="ENTRY",
+    )
+    result = barrier.execute(intent, lambda: {"orderId": 1})
+    assert not result.accepted
+    assert result.reason == "missing permission_interval for execution mutation"
+
 def test_execution_barrier_serializes_publish_and_submit():
     cache = ContextCache()
     cache.publish(context())
