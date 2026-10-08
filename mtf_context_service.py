@@ -17,6 +17,7 @@ from hypothesis_engine import build_hypotheses
 from strategy import calculate_indicators, config_from_env
 from trading_config import TradingConfig
 from wave_engine import MultiTimeframeWaveEngine
+from williams_intraday_spec import CORE_PROFILE, CONSERVATIVE_PROFILE
 
 log = logging.getLogger("williams-mtf")
 
@@ -155,9 +156,16 @@ class MultiTimeframeContextService:
                 and hypothesis_summary.margin >= self.config.probability_margin_threshold
                 and hypothesis_summary.entropy <= self.config.entropy_threshold
             )
-        long_ok = bullish and bool(last.get("alligator_awake", False)) and self.config.allow_long and strong
-        short_ok = bearish and bool(last.get("alligator_awake", False)) and self.config.allow_short and strong
-        decision = "LONG" if long_ok else "SHORT" if short_ok else "NO_TRADE"
+        intraday_core = str(os.getenv("WILLIAMS_STRATEGY_PROFILE", CORE_PROFILE)).strip().upper() in {CORE_PROFILE, CONSERVATIVE_PROFILE}
+        if intraday_core and interval == "15m":
+            # M15 is execution permission only. It must never create or veto an H1 Williams signal.
+            long_ok = bool(self.config.allow_long)
+            short_ok = False
+            decision = "EXECUTION_PERMISSION_LONG" if long_ok else "NO_TRADE"
+        else:
+            long_ok = bullish and bool(last.get("alligator_awake", False)) and self.config.allow_long and strong
+            short_ok = bearish and bool(last.get("alligator_awake", False)) and self.config.allow_short and strong
+            decision = "LONG" if long_ok else "SHORT" if short_ok else "NO_TRADE"
         if hypothesis_summary is not None and hypothesis_summary.decision in {"UNCERTAIN", "NO_TRADE"}:
             decision = "NO_TRADE"
         operative_interval = interval
