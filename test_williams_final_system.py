@@ -38,7 +38,7 @@ def test_same_time_prefers_wm1(tmp_path):
 
 def test_structural_trail_uses_lowest_recent_low_when_it_is_the_tightest_candidate():
     stop,source=structural_stop_for_long(
-        signal_type=SignalType.FRACTAL, signal_bar_low=90,
+        signal_type=SignalType.FRACTAL, signal_bar_low=80,
         recent_lows=[88,87,86,85,84], teeth=0, buffer=0.1,
     )
     assert source=="3_5_BAR_STRUCTURE"
