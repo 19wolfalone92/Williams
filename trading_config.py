@@ -75,9 +75,13 @@ class TradingConfig:
     symbols: tuple[str, ...] = DEFAULT_SYMBOLS
     structural_timeframes: tuple[str, ...] = DEFAULT_STRUCTURAL_TFS
     execution_timeframe: str = "5m"
+    market: str = "futures_usdt"
+    futures_leverage: int = 2
+    futures_margin_type: str = "ISOLATED"
+    futures_force_one_way: bool = True
 
     allow_long: bool = True
-    allow_short: bool = False
+    allow_short: bool = True
     require_htf_confirmation: bool = True
     no_trade_when_uncertain: bool = True
 
@@ -121,13 +125,22 @@ class TradingConfig:
         total_risk = max(0.0, min(0.01, _float(source, "MAX_TOTAL_RISK_PCT", 0.01)))
 
         execution_timeframe = str(source.get("EXECUTION_TIMEFRAME", "5m")).lower()
+        market = str(source.get("BINANCE_MARKET", "futures_usdt")).strip().lower()
+        if market in {"futures", "usdm", "usd_m", "usd-m"}:
+            market = "futures_usdt"
+        elif market not in {"futures_usdt", "spot"}:
+            market = "futures_usdt"
+        futures_leverage = max(1, min(20, _int(source, "FUTURES_LEVERAGE", 2)))
+        futures_margin_type = str(source.get("FUTURES_MARGIN_TYPE", "ISOLATED")).strip().upper()
+        if futures_margin_type not in {"ISOLATED", "CROSSED"}:
+            futures_margin_type = "ISOLATED"
 
         return cls(
             symbols=symbols,
             structural_timeframes=_tf_chain(execution_timeframe, source),
             execution_timeframe=execution_timeframe,
             allow_long=_bool(source, "ALLOW_LONG", True),
-            allow_short=_bool(source, "ALLOW_SHORT", False),
+            allow_short=_bool(source, "ALLOW_SHORT", True),
             require_htf_confirmation=_bool(source, "REQUIRE_HTF_CONFIRMATION", True),
             no_trade_when_uncertain=_bool(source, "NO_TRADE_WHEN_UNCERTAIN", True),
             risk_per_trade_pct=risk,

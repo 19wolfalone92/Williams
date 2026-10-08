@@ -287,3 +287,48 @@ def test_monthly_binance_interval_is_not_collapsed_to_one_minute():
     assert "1M" in e.intervals
     assert "1m" in e.intervals
     assert e.intervals.index("1M") < e.intervals.index("1m")
+
+
+def test_point_zero_requires_and_reports_all_five_magic_bullets():
+    e = engine(base_interval="1h", min_bars=140)
+    data = pd.DataFrame({
+        "high": [91, 101, 96, 121, 111, 131, 130, 129, 130],
+        "low": [89, 99, 94, 119, 109, 127, 128, 129, 128],
+        "squatting_bar": [False, False, False, False, False, True, False, False, False],
+        "ao_green": [False, False, False, True, False, False, False, True, True],
+        "ao_red": [False, True, False, False, True, False, True, False, False],
+    })
+    ps = [
+        Pivot(DIRECTION_DOWN, 90, 0, 2, 0.0),
+        Pivot(DIRECTION_UP, 100, 1, 3, 10.0),
+        Pivot(DIRECTION_DOWN, 95, 2, 4, -4.0),
+        Pivot(DIRECTION_UP, 120, 3, 5, 20.0),
+        Pivot(DIRECTION_DOWN, 110, 4, 6, -5.0),
+        Pivot(DIRECTION_UP, 130, 5, 7, 12.0),
+    ]
+    bullets, count, reason = e._point_zero_bullets(data, ps, DIRECTION_UP)
+    assert count == 5
+    assert all(bullets.values())
+    assert "Point Zero bullets 5/5" in reason
+
+
+def test_point_zero_rejects_non_w3_w5_divergence():
+    e = engine(base_interval="1h", min_bars=140)
+    data = pd.DataFrame({
+        "high": [91, 101, 96, 121, 111, 129, 130, 131, 130],
+        "low": [89, 99, 94, 119, 109, 127, 128, 129, 128],
+        "squatting_bar": [False] * 9,
+        "ao_green": [False, False, False, True, False, False, False, True, True],
+        "ao_red": [False, True, False, False, True, False, False, False, False],
+    })
+    ps = [
+        Pivot(DIRECTION_DOWN, 90, 0, 2, 0.0),
+        Pivot(DIRECTION_UP, 100, 1, 3, 30.0),
+        Pivot(DIRECTION_DOWN, 95, 2, 4, -4.0),
+        Pivot(DIRECTION_UP, 120, 3, 5, 20.0),
+        Pivot(DIRECTION_DOWN, 110, 4, 6, -5.0),
+        Pivot(DIRECTION_UP, 130, 5, 7, 25.0),
+    ]
+    bullets, count, _ = e._point_zero_bullets(data, ps, DIRECTION_UP)
+    assert bullets["divergence"] is False
+    assert count < 5

@@ -109,3 +109,63 @@ def test_wise_men_state_machine_is_durable():
     assert restored.state.phase == WiseMenPhase.TREND_ACTIVE
     payload = json.loads(db.data[restored.key])
     assert payload["additions"] == 0
+
+
+class _BarrierDB:
+    def __init__(self):
+        self.saved = []
+        self.events = []
+        self.campaigns = {}
+        self.states = {}
+
+    def save_execution_intent(self, *args):
+        self.saved.append(args)
+
+    def log_event(self, *args, **kwargs):
+        self.events.append((args, kwargs))
+
+    def save_execution_event(self, *args):
+        self.events.append(args)
+
+    def get_campaign(self, campaign_id):
+        return self.campaigns.get(campaign_id)
+
+    def state_get(self, key, default=None):
+        return self.states.get(key, default)
+
+
+def test_execution_barrier_uses_campaign_row_and_symbol_scoped_reconcile():
+    cache = ContextCache()
+    cache.publish(context(symbol="BTCUSDT", interval="5m"))
+    db = _BarrierDB()
+    db.campaigns["c1"] = {"state": "OPEN_INITIAL"}
+    db.states["position_state:ETHUSDT"] = "RECONCILE_REQUIRED"
+    barrier = ExecutionBarrier(cache, db)
+    intent = OrderIntent.new(
+        "BTCUSDT", "BUY", "MARKET",
+        required_context_versions={},
+        purpose="CAMPAIGN_ENTRY",
+        permission_interval="5m",
+        campaign_id="c1",
+    )
+    result = barrier.execute(intent, lambda: {"status": "NEW"})
+    assert result.accepted is True
+
+
+def test_execution_barrier_blocks_missing_campaign_before_exchange():
+    cache = ContextCache()
+    cache.publish(context(symbol="BTCUSDT", interval="5m"))
+    db = _BarrierDB()
+    barrier = ExecutionBarrier(cache, db)
+    intent = OrderIntent.new(
+        "BTCUSDT", "BUY", "MARKET",
+        required_context_versions={},
+        purpose="CAMPAIGN_ENTRY",
+        permission_interval="5m",
+        campaign_id="missing",
+    )
+    called = []
+    result = barrier.execute(intent, lambda: called.append(True))
+    assert result.accepted is False
+    assert result.reason == "campaign_not_found"
+    assert called == []

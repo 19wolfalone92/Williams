@@ -117,22 +117,19 @@ import java.util.concurrent.TimeUnit
 import kotlin.math.max
 import kotlin.math.min
 
-// Williams 4.24.0 Trading Core production cockpit
-// Autonomous runtime contract: local loopback API is intentional; no VPS required.
+// Williams 4.24.0 remote Futures cockpit.
+// The VPS/backend is authoritative; Android never starts a trading runtime.
 // CI compile-log capture enabled
 // Diagnostic contract v2: runtime self-tests are exposed through /api/v1/diagnostics.
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // Williams autonomous runtime: trading engine, Binance connection and
-        // local API bridge run on the phone. Remote Backend is optional.
-        val serviceIntent = Intent(
-            this,
-            TradingForegroundService::class.java
-        ).apply {
-            action = TradingForegroundService.ACTION_START
-        }
-        ContextCompat.startForegroundService(this, serviceIntent)
+        // Williams Android app is a remote cockpit only. The authoritative
+        // trading engine runs on the VPS/backend; no native Spot trading loop
+        // is started from the UI process. Legacy TradingForegroundService
+        // remains present only as a compatibility shell and never starts trading.
+        // Historical localhost endpoint http://127.0.0.1:18080 is intentionally
+        // unused; production control is HTTPS to the Williams Futures backend.
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(
                 this,
@@ -379,24 +376,21 @@ private class BackendApi(context: Context) {
         .build()
 
     val backendUrl: String
-        get() = securePrefs.getString("backend_url", "http://127.0.0.1:18080")
+        get() = securePrefs.getString("backend_url", "")?.trimEnd('/') ?: ""
             ?.trimEnd('/')
             ?: ""
 
     val mobileToken: String
-        get() = securePrefs.getString("mobile_token", "standalone")?.trim() ?: "standalone"
+        get() = securePrefs.getString("mobile_token", "")?.trim() ?: ""
 
     fun saveConnection(url: String, token: String) {
         val normalized = url.trim().trimEnd('/')
         require(normalized.isNotBlank()) { "Backend URL не задан" }
-        val localRuntime =
-            normalized.startsWith("http://127.0.0.1:18080") ||
-                normalized.startsWith("http://localhost:18080")
-        if (!normalized.startsWith("https://") && !localRuntime) {
-            error("Удалённый Backend URL должен использовать HTTPS.")
+        require(normalized.startsWith("https://")) {
+            "Williams Futures Backend URL должен использовать HTTPS."
         }
-        if (!localRuntime && token.trim().length < 32) {
-            error("Для удалённого Backend нужен Mobile API Token (минимум 32 символа).")
+        require(token.trim().length >= 32) {
+            "Для удалённого Backend нужен Mobile API Token (минимум 32 символа)."
         }
         securePrefs.edit {
             putString("backend_url", normalized)
@@ -413,11 +407,8 @@ private class BackendApi(context: Context) {
         path: String,
         body: String?
     ): String {
-        val localRuntime =
-            backendUrl.startsWith("http://127.0.0.1:18080") ||
-                backendUrl.startsWith("http://localhost:18080")
-        require(localRuntime || backendUrl.startsWith("https://")) {
-            "Укажите HTTPS Backend URL или используйте автономный Williams Runtime."
+        require(backendUrl.startsWith("https://")) {
+            "Укажите HTTPS Backend URL для Williams Futures."
         }
         if (!localRuntime) {
             require(mobileToken.isNotBlank()) {
@@ -472,7 +463,7 @@ fun WilliamsApp(context: Context) {
     var apiSecret by remember { mutableStateOf("") }
     var backendUrl by remember { mutableStateOf(api.backendUrl) }
     var mobileToken by remember { mutableStateOf(api.mobileToken) }
-    var message by remember { mutableStateOf("Williams Runtime: автономный режим") }
+    var message by remember { mutableStateOf("Williams Futures: remote cockpit") }
     var refreshing by remember { mutableStateOf(false) }
     var backupPassword by remember { mutableStateOf("") }
     var backupMessage by remember { mutableStateOf("") }
@@ -612,18 +603,13 @@ fun WilliamsApp(context: Context) {
             try {
                 require(apiKey.isNotBlank()) { "Введите API Key" }
                 require(apiSecret.isNotBlank()) { "Введите API Secret" }
-                // Write directly into the same Keystore-backed store consumed
-                // by NativeEngine. Binance secrets never cross the HTTP bridge.
-                val writeResult = StandaloneRuntime.configureCredentials(
-                    context,
-                    apiKey.trim(),
-                    apiSecret.trim()
-                )
-                require(writeResult.optBoolean("read_back_verified", false)) {
-                    "Credentials write/read-back verification failed"
-                }
+                val payload = JSONObject()
+                    .put("api_key", apiKey.trim())
+                    .put("api_secret", apiSecret.trim())
+                    .put("testnet", true)
+                api.post("/api/v1/config/binance", payload.toString())
 
-                val verified = StandaloneRuntime.status(context, fast = true)
+                val verified = JSONObject(api.get("/api/v1/status?fast=true"))
                 val configured = verified.optBoolean(
                     "binance_configured",
                     verified.optBoolean("auth_configured", false)
@@ -638,9 +624,9 @@ fun WilliamsApp(context: Context) {
                     diagnosticsMessage = ""
                     message = when {
                         configured && testnet && executionEnabled ->
-                            "Binance Spot Testnet подключён; автономный runtime готов"
+                            "Binance Futures Testnet подключён; backend готов"
                         configured && testnet ->
-                            "Binance Testnet подключён; execution пока заблокирован safety/reconcile gate"
+                            "Binance Futures Testnet подключён; execution пока заблокирован safety/reconcile gate"
                         configured ->
                             "Ключи сохранены, но runtime не подтвердил TESTNET"
                         else ->
@@ -659,8 +645,8 @@ fun WilliamsApp(context: Context) {
     fun clearCredentials() {
         scope.launch(Dispatchers.IO) {
             try {
-                StandaloneRuntime.clearCredentials(context)
-                val verified = StandaloneRuntime.status(context, fast = true)
+                api.delete("/api/v1/config/binance")
+                val verified = JSONObject(api.get("/api/v1/status?fast=true"))
                 withContext(Dispatchers.Main) {
                     status = parseStatus(verified)
                     message = "Binance-ключи удалены. Можно ввести новые ключи."

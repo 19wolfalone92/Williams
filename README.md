@@ -1,6 +1,6 @@
-# Williams Binance Bot + Android Dashboard 4.22.3
+# Williams Binance USDⓈ-M Futures Bot + Android Dashboard
 
-Полноценная Testnet-first версия торгового бота по Williams (Alligator + AO + Fractals) с Android Dashboard, SQLite recovery, Binance WebSocket и защитными risk-фильтрами.
+Полноценная Testnet-first версия торгового бота по Williams (Alligator + AO + Fractals) для Binance USDⓈ-M Futures с симметричными Long/Short кампаниями, SQLite recovery и жёсткими execution/risk gates.
 
 ## Что сделано в 4.10.0
 
@@ -70,13 +70,14 @@ REST остаётся обязательным reconciliation-слоем: WebSoc
 
 ## Безопасность
 
-1. Начинать только с Binance Spot Testnet.
+1. Начинать только с Binance USDⓈ-M Futures Testnet.
 2. `TESTNET=true` — значение по умолчанию.
-3. LIVE требует явного `ALLOW_LIVE=true`.
-4. Никогда не помещать реальные API keys в Git или ZIP.
-5. Для API приложения использовать длинный случайный `MOBILE_API_TOKEN`.
-6. Для LIVE использовать HTTPS/WSS.
-7. API key Binance должен иметь только необходимые торговые права; вывод средств не нужен.
+3. `BINANCE_MARKET=futures_usdt` — основной production market.
+4. LIVE требует явного `ALLOW_LIVE=true`.
+5. Никогда не помещать реальные API keys в Git или ZIP.
+6. Для API приложения использовать длинный случайный `MOBILE_API_TOKEN`.
+7. Для LIVE использовать HTTPS/WSS.
+8. API key Binance должен иметь только необходимые Futures/reading права; вывод средств не нужен.
 
 ## Запуск Python backend
 
@@ -113,6 +114,111 @@ Recovery suite включает 10 сценариев:
 - timeout после BUY восстанавливается по clientOrderId;
 - Entry связан с точным OCO list.
 
+# Williams Binance USDⓈ-M Futures Bot + Android Remote Cockpit
+
+Production-oriented, Testnet-first Williams campaign runtime for Binance USDⓈ-M Futures. The active execution core is bidirectional LONG/SHORT, campaign-based, SQLite-persistent and fail-closed under uncertain exchange state.
+
+## Active architecture in 4.24.0
+
+### Williams trading core
+
+The execution authority is:
+
+`closed candles → Williams signals → first-presenting Wise Man → PendingSignal → CampaignEngine → Risk → ExecutionBarrier → Binance Futures → reconciliation`
+
+Canonical Wise-Man triggers are implemented in `williams_signals.py`:
+
+- WM1 reversal: conditional BUY/SELL STOP beyond the reversal-bar extreme, with direction-specific angulation validation.
+- Super AO: three consecutive same-colour AO bars; it may be the first presenting entry.
+- Fractal: confirmed five-bar fractal breakout, with Teeth validity.
+- LONG and SHORT use mirrored trigger, protection and exit semantics.
+- Later valid Wise Men become campaign add-ons rather than independent campaigns.
+
+The reverse-pyramid allocation is normalized to the historical Williams 1:5:4:3:2 sequence and applied as risk-budget weights rather than literal contract counts.
+
+### Campaign and state safety
+
+Every active campaign is durable in SQLite.
+
+`PendingSignal` tracks:
+
+`DETECTED → VALIDATED → ARMED → TRIGGERED/FILLED`
+
+with terminal or fail-safe states including `SUPERSEDED`, `EXPIRED`, `CANCELLED` and `RECONCILE_REQUIRED`.
+
+Order mutations use one Futures execution door. Unknown/ambiguous exchange outcomes are reconciled by client order id instead of blind retry.
+
+### Risk
+
+Risk is bounded at multiple levels:
+
+- initial campaign risk = campaign cap × 1/15;
+- add-ons follow 1:5:4:3:2 weights but cannot exceed campaign cap;
+- aggregate `MAX_TOTAL_RISK_PCT` is enforced before sizing each new campaign/add-on;
+- sizing is based on loss to the structural stop plus bounded fee/slippage reserve;
+- leverage changes margin efficiency, not the intended loss budget;
+- liquidation-buffer checks can fail-safe flatten a position when a structural stop cannot safely protect it.
+
+The default environment is `DRY_RUN=true`, `TESTNET=true`, `ALLOW_LIVE=false`, `FUTURES_LEVERAGE=2`, `FUTURES_MARGIN_TYPE=ISOLATED` and `FUTURES_FORCE_ONE_WAY=true`.
+
+### Protection and exit
+
+The campaign has no fixed strategic take-profit.
+
+For LONG, the structural trail is the lowest low of the selected last 3/5 closed bars, moved only in the favorable direction. For SHORT, it is the highest high of the selected last 3/5 closed bars, again only tightening risk.
+
+Protection replacement is recovery-safe:
+
+`create new protective STOP_MARKET → persist durable ownership → cancel old stop`
+
+All protection orders are reduce-only and sized to the actual Futures position.
+
+After a market exit, the position must first be verified flat; only then is the protective order cancelled.
+
+### Futures account safety
+
+Startup performs a Futures-specific preflight:
+
+- credentials/account reachability;
+- TESTNET/LIVE permission contract;
+- Single-Asset/Multi-Assets mode validation;
+- One-Way/Hedge mode validation;
+- foreign-position rejection;
+- foreign-open-order rejection;
+- exchange symbol/filter availability.
+
+When `DRY_RUN=true`, account-mode mutations are not performed.
+
+## Android
+
+Android 4.24.0 is a remote cockpit, not a trading engine.
+
+The phone:
+
+- talks to the backend over HTTPS;
+- stores the backend URL and mobile token using encrypted Android storage;
+- never starts `StandaloneRuntime`;
+- keeps the legacy foreground service only as a compatibility shell;
+- does not place Binance orders locally.
+
+The authoritative trading process is the Futures backend/VPS.
+
+## Release and testing
+
+The release contract is Futures-native. It validates:
+
+- Python syntax and active Futures runtime files;
+- bidirectional Williams signal extraction;
+- PendingSignal lifecycle;
+- execution-door safety;
+- Futures Demo endpoint contract;
+- reduce-only STOP_MARKET protection;
+- crash/reconciliation invariants;
+- Android remote-only behavior;
+- APK build/signing workflow.
+
+Authenticated Futures Demo validation is explicitly opt-in through `WILLIAMS_TESTNET_E2E=1`; the default release tests do not submit trading orders.
+
 ## Backtester
 
 ```bash
@@ -141,11 +247,13 @@ python run_backtest.py --symbol BTCUSDT --interval 1h --start 2024-01-01 --end 2
 
 Release-подпись не хранится в проекте: создайте собственный keystore и локальный `keystore.properties`. Это необходимо для безопасного выпуска обновлений приложения.
 
-## Автосканирование
+## Автосканирование Futures
 
-- Binance Spot USDT universe: динамическое обнаружение допустимых Spot/USDT пар.
-- Для рабочего цикла используется liquidity preselection Top-50, чтобы не перегружать Binance REST; все строгие сигналы внутри выбранных 50 проходят MTF/Wave-проверку, watch-only кандидаты ограничиваются Wave Top-N.
-- Исполнение выбирает несколько лучших кандидатов, когда они одновременно проходят сигналы и риск-бюджет: каждая новая позиция <=0,5%, суммарный зарезервированный риск <=1%. Binance exchangeInfo; L2/flow/quant остаются фильтрами качества и не создают сигнал самостоятельно.
+- Binance USDⓈ-M USDT perpetual universe: динамическое обнаружение контрактов со статусом TRADING.
+- Сканируются обе стороны: LONG и SHORT. Первый валидный представляющий Wise Man может открыть кампанию; WM2/WM3 после открытия становятся add-ons.
+- Начальный размер кампании использует минимальную долю reverse pyramid; следующие добавления следуют весам 1:5:4:3:2, ограниченным жёстким campaign/portfolio risk budget.
+- Защита — единичный reduce-only STOP_MARKET; основной выход — Williams 3/5-bar structural trail или подтверждённый противоположный сигнал. Fixed TP не является стратегическим выходом.
+- Long и Short используют одинаковые safety/recovery gates; leverage не увеличивает допустимый риск.
 
 ## 24/7 VPS mode
 
@@ -165,18 +273,18 @@ The backend persists encrypted Binance credentials and bot state on the VPS. Doc
 См. `APK_BUILD_AUTO_RU.md`. После push в `main` GitHub Actions автоматически собирает устанавливаемый `app-debug.apk` и публикует его в Artifacts.
 
 
-## Williams 4.12 strategy alignment
+## Williams strategy alignment
 
 The strategy layer now keeps separate Williams First/Second/Third Wise-Man signals, the Super AO three-bar condition, the fractal/Teeth gate, Market Facilitation diagnostics, and multi-timeframe wave context. An active Wave-5 exhaustion gate is applied conservatively on the execution timeframe; a nested lower-timeframe Wave 3 inside a higher-timeframe Wave 5 is not vetoed automatically. See `WILLIAMS_BOOK_ALIGNMENT_RU.md`.
 
 
 ## 4.17 deep market model
 
-- The scanner discovers valid Binance Spot/USDT pairs dynamically, then applies exchange-status, liquidity and risk filters. The five pairs are only the default structural set for realtime MTF context.
-- Standalone Android maintains realtime Binance Testnet kline streams for all supported native timeframes from 1m through 1M.
+- The active production scanner discovers valid Binance USDⓈ-M USDT perpetual contracts dynamically, then applies exchange-status, liquidity and risk filters. The five pairs are only the default structural set for realtime MTF context.
+- Android acts as a remote cockpit; native Spot trading loops are not started by the application.
 - Indicators are recalculated per pair/timeframe from the live candle cache: Alligator, AO, AC, fractals and divergence context.
 - Historical data is treated as a persistent research layer; the in-memory layer is bounded to prevent Android OOM while the wave engine uses the full historical store where available.
-- Binance exchangeInfo/bookTicker/account/order data remain execution gates; strategy signals are generated by Williams logic, not by Binance.
+- Binance Futures exchangeInfo/position/order data remain execution gates; strategy signals are generated by Williams logic, not by Binance.
 - Initial protection uses market structure/Alligator Teeth with ATR as a volatility guard. Profit protection follows the Williams five-green-zone/Teeth trailing model rather than a fixed 1.5R take-profit.
 
 

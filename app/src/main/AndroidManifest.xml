@@ -30,7 +30,7 @@
             android:foregroundServiceType="specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Autonomous Williams Binance Spot trading runtime" />
+                android:value="Williams remote Futures cockpit compatibility service" />
         </service>
 
         <activity

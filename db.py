@@ -569,6 +569,25 @@ class Database:
         if not self._transaction_active:
             self.conn.commit()
 
+    def update_trade_position(self, trade_id, quantity, entry_price=None):
+        """Synchronize the journaled position after a Futures campaign add-on."""
+        assignments = ['quantity=?', 'updated_at=?']
+        params = [
+            self._num(quantity),
+            datetime.now(timezone.utc).isoformat(),
+        ]
+        if entry_price is not None:
+            assignments.insert(1, 'entry_price=?')
+            params.insert(1, self._num(entry_price))
+        params.append(int(trade_id))
+        self.conn.execute(
+            'UPDATE trades SET ' + ','.join(assignments) +
+            ' WHERE id=? AND exit_time IS NULL',
+            tuple(params),
+        )
+        if not self._transaction_active:
+            self.conn.commit()
+
     def close_trade(
         self,
         trade_id,

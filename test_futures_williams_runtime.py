@@ -1,0 +1,345 @@
+import math
+import os
+
+import pandas as pd
+
+from campaign_engine import CampaignEngine
+from campaign_model import CampaignState, PendingSignal, SignalRole, SignalSpec, SignalState, SignalType, stop_only_reduces_risk
+from futures_williams_runtime import FuturesWilliamsRuntime
+from williams_signals import extract_short_signal_specs, _latest_super_ao
+
+
+def test_super_ao_recovers_original_third_bar_after_scanner_gap():
+    ind = pd.DataFrame({
+        "ao_green_streak": [0, 1, 2, 3, 4, 5],
+        "close": [100, 101, 102, 103, 104, 105],
+        "high": [101, 102, 103, 104, 105, 106],
+        "low": [99, 100, 101, 102, 103, 104],
+    })
+    result = _latest_super_ao(ind, side="LONG")
+    assert result is not None
+    assert result[0] == 3
+    assert result[1] == 104.0
+    assert result[2] == 102.0
+
+
+def test_super_ao_does_not_require_fractal_gate():
+    ind = pd.DataFrame({
+        "ao_red_streak": [0, 1, 2, 3],
+        "close": [100, 99, 98, 97],
+        "high": [101, 100, 99, 98],
+        "low": [99, 98, 97, 96],
+        "jaw_shifted": [100, 100, 100, 100],
+    })
+    result = _latest_super_ao(ind, side="SHORT")
+    assert result is not None
+    assert result[0] == 3
+
+
+def test_short_super_ao_can_be_first_wise_man():
+    ind = pd.DataFrame({
+        "ao_red_streak": [0, 1, 2, 3],
+        "close": [100, 99, 98, 97],
+        "high": [101, 100, 99, 98],
+        "low": [99, 98, 97, 96],
+        "jaw_shifted": [100, 100, 100, 100],
+        "teeth_shifted": [100, 100, 100, 100],
+        "short_fractal_outside": [False, False, False, False],
+    })
+    specs = extract_short_signal_specs(
+        "BTCUSDT",
+        ind,
+        timeframe="5m",
+        tick_size=0.1,
+    )
+    assert any(s.signal_type == SignalType.SUPER_AO and s.side == "SELL" for s in specs)
+
+
+def test_campaign_initial_signal_accepts_short():
+    signal = SignalSpec.new(
+        symbol="BTCUSDT",
+        side="SELL",
+        signal_type=SignalType.SUPER_AO,
+        role=SignalRole.ENTRY,
+        timeframe="5m",
+        signal_bar_time_ms=100,
+        trigger_price=99.0,
+        protective_reference=101.0,
+    )
+    engine = CampaignEngine(None)
+    assert engine.choose_initial_signal([signal]) is signal
+
+
+def test_stop_monotonicity_is_directional():
+    assert stop_only_reduces_risk("LONG", 100.0, 101.0)
+    assert not stop_only_reduces_risk("LONG", 100.0, 99.0)
+    assert stop_only_reduces_risk("SHORT", 100.0, 99.0)
+    assert not stop_only_reduces_risk("SHORT", 100.0, 101.0)
+
+
+def test_futures_risk_sizing_is_independent_of_leverage():
+    runtime = object.__new__(FuturesWilliamsRuntime)
+    runtime._equity = lambda: 10000.0
+    runtime._min_notional = lambda symbol: 0.0
+    runtime._normalize_qty = lambda symbol, qty: qty
+    runtime._filters = lambda symbol: {
+        "LOT_SIZE": {"stepSize": "0.001", "minQty": "0", "maxQty": "100000"}
+    }
+    os.environ["FUTURES_MAX_MARGIN_FRACTION"] = "0.25"
+    os.environ["MAX_RISK_PER_TRADE_PCT"] = "0.005"
+    os.environ["FUTURES_LEVERAGE"] = "2"
+    qty, risk, notional = runtime._size_from_risk("BTCUSDT", 100.0, 98.0, 0.001)
+    assert risk == 10.0
+    assert notional <= 5000.0 + 1e-9
+    assert math.isclose(qty, notional / 100.0)
+
+
+def test_liquidation_guard_requires_liquidation_beyond_stop():
+    runtime = object.__new__(FuturesWilliamsRuntime)
+    long_campaign = type("C", (), {"side": "BUY", "current_stop_price": 95.0, "average_entry_price": 100.0})()
+    short_campaign = type("C", (), {"side": "SELL", "current_stop_price": 105.0, "average_entry_price": 100.0})()
+    assert runtime._liquidation_guard(long_campaign, {"liquidationPrice": "90"})
+    assert not runtime._liquidation_guard(long_campaign, {"liquidationPrice": "96"})
+    assert runtime._liquidation_guard(short_campaign, {"liquidationPrice": "110"})
+    assert not runtime._liquidation_guard(short_campaign, {"liquidationPrice": "104"})
+
+
+def test_directional_williams_triggers_are_not_same_side_only():
+    long_signal = SignalSpec.new(
+        symbol="BTCUSDT", side="BUY", signal_type=SignalType.FRACTAL,
+        role=SignalRole.ENTRY, timeframe="5m", signal_bar_time_ms=10,
+        trigger_price=101, protective_reference=99,
+    )
+    short_signal = SignalSpec.new(
+        symbol="BTCUSDT", side="SELL", signal_type=SignalType.FRACTAL,
+        role=SignalRole.ENTRY, timeframe="5m", signal_bar_time_ms=11,
+        trigger_price=99, protective_reference=101,
+    )
+    engine = CampaignEngine(None)
+    selected = engine.choose_initial_signal([long_signal, short_signal])
+    assert selected is long_signal
+
+
+def test_pending_signal_has_explicit_durable_lifecycle():
+    signal = SignalSpec.new(
+        symbol="BTCUSDT", side="BUY", signal_type=SignalType.SUPER_AO,
+        role=SignalRole.ENTRY, timeframe="5m", signal_bar_time_ms=1000,
+        trigger_price=101.0, protective_reference=98.0,
+    )
+    pending = PendingSignal(signal=signal)
+    pending.transition(SignalState.VALIDATED)
+    pending.client_order_id = "WILLF_ENTRY_TEST"
+    pending.order_id = "123"
+    pending.transition(SignalState.ARMED)
+    pending.filled_quantity = 0.5
+    pending.transition(SignalState.FILLED)
+    payload = pending.to_dict()
+    assert payload["signal"]["signal_id"] == signal.signal_id
+    assert payload["state"] == "FILLED"
+    assert payload["client_order_id"] == "WILLF_ENTRY_TEST"
+    assert payload["filled_quantity"] == 0.5
+
+
+def test_structural_trail_uses_min_low_for_long_and_max_high_for_short(monkeypatch):
+    frame = pd.DataFrame({
+        "low": list(range(80, 160)),
+        "high": list(range(100, 180)),
+    })
+
+    class Client:
+        def __init__(self, price):
+            self.price = price
+        def ticker_price(self, symbol):
+            return {"price": str(self.price)}
+
+    runtime = object.__new__(FuturesWilliamsRuntime)
+    runtime._tick = lambda symbol: 1.0
+
+    calls = []
+    runtime._replace_protection = lambda campaign, proposed, **kwargs: calls.append((campaign.side, proposed, kwargs)) or True
+
+    monkeypatch.setattr("futures_williams_runtime.fetch_klines", lambda *args, **kwargs: frame)
+
+    long_campaign = type("C", (), {
+        "symbol": "BTCUSDT", "side": "BUY", "current_stop_price": 70.0,
+        "execution_timeframe": "5m", "state": CampaignState.OPEN_INITIAL,
+    })()
+    runtime.client = Client(160.0)
+    runtime._trail(long_campaign)
+    assert calls[-1][0] == "BUY"
+    assert calls[-1][1] == 154.0
+    assert calls[-1][2] == {}
+
+    short_campaign = type("C", (), {
+        "symbol": "BTCUSDT", "side": "SELL", "current_stop_price": 190.0,
+        "execution_timeframe": "5m", "state": CampaignState.OPEN_INITIAL,
+    })()
+    runtime.client = Client(90.0)
+    runtime._trail(short_campaign)
+    assert calls[-1][0] == "SELL"
+    assert calls[-1][1] == 180.0
+    assert calls[-1][2] == {}
+
+
+def test_pending_signal_rejects_illegal_backward_transition():
+    signal = SignalSpec.new(
+        symbol="BTCUSDT", side="SELL", signal_type=SignalType.FRACTAL,
+        role=SignalRole.ENTRY, timeframe="5m", signal_bar_time_ms=2000,
+        trigger_price=99.0, protective_reference=101.0,
+    )
+    pending = PendingSignal(signal=signal)
+    pending.transition(SignalState.VALIDATED)
+    pending.transition(SignalState.ARMED)
+    try:
+        pending.transition(SignalState.DETECTED)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("illegal PendingSignal rollback was accepted")
+
+
+def test_portfolio_risk_capacity_is_enforced_before_new_campaign():
+    runtime = object.__new__(FuturesWilliamsRuntime)
+    runtime.max_total_risk_pct = 0.01
+    runtime.engine = type("E", (), {
+        "portfolio_reserved_risk_quote": lambda self: 75.0,
+    })()
+    assert math.isclose(
+        runtime._portfolio_available_risk_pct(10000.0),
+        0.0025,
+        rel_tol=0.0,
+        abs_tol=1e-12,
+    )
+
+
+def test_liquidation_guard_violation_uses_fail_safe_flatten():
+    runtime = object.__new__(FuturesWilliamsRuntime)
+    calls = []
+    runtime._set_state = lambda symbol, state: calls.append(("state", symbol, state))
+    runtime._exit_market = lambda campaign, reason: calls.append(("exit", reason)) or {
+        "state": "CLOSED", "symbol": campaign.symbol
+    }
+    campaign = type("C", (), {"symbol": "BTCUSDT"})()
+    result = runtime._fail_safe_flatten(campaign, "LIQUIDATION_GUARD_TEST")
+    assert result["state"] == "CLOSED"
+    assert ("state", "BTCUSDT", "RECONCILE_REQUIRED") in calls
+    assert ("exit", "LIQUIDATION_GUARD_TEST") in calls
+
+
+def test_execution_door_blocks_dry_run_before_exchange_call():
+    runtime = object.__new__(FuturesWilliamsRuntime)
+    runtime.dry_run = True
+    runtime.config = type("Cfg", (), {"allow_live": False})()
+    runtime.client = type("Client", (), {"testnet": True})()
+    intent = type("Intent", (), {"purpose": "CAMPAIGN_ENTRY"})()
+    try:
+        runtime._submit(intent, lambda: (_ for _ in ()).throw(AssertionError("exchange called")))
+    except RuntimeError as exc:
+        assert "DRY_RUN" in str(exc)
+    else:
+        raise AssertionError("DRY_RUN did not block execution door")
+
+
+def test_execution_door_blocks_live_without_allow_live():
+    runtime = object.__new__(FuturesWilliamsRuntime)
+    runtime.dry_run = False
+    runtime.config = type("Cfg", (), {"allow_live": False})()
+    runtime.client = type("Client", (), {"testnet": False})()
+    intent = type("Intent", (), {"purpose": "CAMPAIGN_ENTRY"})()
+    try:
+        runtime._submit(intent, lambda: (_ for _ in ()).throw(AssertionError("exchange called")))
+    except RuntimeError as exc:
+        assert "ALLOW_LIVE" in str(exc)
+    else:
+        raise AssertionError("live execution bypassed ALLOW_LIVE")
+
+
+def test_futures_pre_submit_blocks_entry_when_position_appears_after_signal():
+    runtime = object.__new__(FuturesWilliamsRuntime)
+    campaign = type("C", (), {
+        "campaign_id": "c1",
+        "symbol": "BTCUSDT",
+        "side": "BUY",
+        "state": CampaignState.ENTRY_PENDING,
+    })()
+    runtime.engine = type("E", (), {"load_campaign": lambda self, cid: campaign})()
+    runtime.config = type("Cfg", (), {"allow_long": True, "allow_short": True})()
+    runtime._position = lambda symbol: {"positionAmt": "0.25"}
+    runtime._signed_position_qty = lambda position: float(position["positionAmt"])
+    intent = type("I", (), {
+        "campaign_id": "c1",
+        "symbol": "BTCUSDT",
+        "side": "BUY",
+        "purpose": "CAMPAIGN_ENTRY",
+    })()
+    try:
+        runtime._futures_pre_submit_checks(intent)
+    except RuntimeError as exc:
+        assert "already exists" in str(exc)
+    else:
+        raise AssertionError("entry was admitted over an existing Futures position")
+
+
+def test_short_fractal_requires_valid_teeth_context():
+    ind = pd.DataFrame({
+        "confirmed_down_level": [float("nan"), float("nan"), float("nan"), float("nan"), 98.0],
+        "fractal_down": [False, False, True, False, False],
+        "close": [99.5, 99.0, 98.5, 98.0, 97.5],
+        "low": [99.0, 98.5, 97.0, 97.5, 97.0],
+        "high": [100.0, 99.5, 99.0, 98.5, 98.0],
+        "teeth_shifted": [0.0, 0.0, 0.0, 0.0, 0.0],
+    })
+    assert extract_short_signal_specs(
+        "BTCUSDT",
+        ind,
+        timeframe="5m",
+        tick_size=0.1,
+    ) == []
+
+
+def test_five_magic_bullets_core_math():
+    from magic_bullets import (
+        ao_price_divergence,
+        evaluate_magic_bullets,
+        momentum_change,
+        price_in_target_zone,
+        terminal_squat,
+    )
+
+    assert ao_price_divergence(
+        side="LONG",
+        wave3_price=100,
+        wave5_price=110,
+        wave3_ao=8,
+        wave5_ao=5,
+    )
+    assert ao_price_divergence(
+        side="SHORT",
+        wave3_price=110,
+        wave5_price=100,
+        wave3_ao=-8,
+        wave5_ao=-5,
+    )
+    assert price_in_target_zone(
+        162,
+        side="LONG",
+        wave1_start=100,
+        wave3_end=150,
+        wave4_end=130,
+    )
+    assert terminal_squat(
+        candidate_index=8,
+        terminal_extreme_index=10,
+        squat=True,
+    )
+    assert momentum_change(previous_ao_color="GREEN", current_ao_color="RED")
+
+    state = evaluate_magic_bullets(
+        divergence=True,
+        target_zone_hit=True,
+        terminal_fractal=True,
+        terminal_squat_hit=True,
+        momentum_change_hit=True,
+    )
+    assert state.count == 5
+    assert state.all_five

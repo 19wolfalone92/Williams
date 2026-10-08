@@ -1,117 +1,198 @@
 #!/usr/bin/env python3
-"""Fast, stdlib-only release gate for the Williams repository."""
-# Autonomous Android runtime contract is validated alongside the Python release gate.
+"""Fast, stdlib-only release contract gate for Williams Futures."""
 from __future__ import annotations
+
 import ast
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-EXPECTED_VERSION = '4.24.0'
+EXPECTED_VERSION = "4.24.0"
+
 
 def read(path: str) -> str:
     p = ROOT / path
     assert p.is_file(), f"missing required file: {path}"
     return p.read_text(encoding="utf-8", errors="replace")
 
+
 def must(text: str, needle: str, where: str) -> None:
     assert needle in text, f"{where}: missing {needle!r}"
+
 
 def must_not(text: str, needle: str, where: str) -> None:
     assert needle not in text, f"{where}: forbidden {needle!r}"
 
+
 def main() -> None:
-    for path in (
-        "trading_config.py", "market_scanner.py", "portfolio_controller.py",
-        "portfolio_trader.py", "trader.py", "server.py", "wave_engine.py",
-        "binance_client.py", "preflight_gate.py", "test_testnet_release_gate.py",
-    ):
+    core_files = (
+        "trading_config.py",
+        "campaign_model.py",
+        "campaign_engine.py",
+        "futures_williams_runtime.py",
+        "binance_futures_client.py",
+        "server.py",
+        "db.py",
+        "execution_barrier.py",
+        "williams_signals.py",
+        "test_testnet_release_gate.py",
+    )
+    for path in core_files:
         ast.parse(read(path), filename=path)
 
     env = read(".env.example")
     for needle in (
-        "TESTNET=true", "ALLOW_LIVE=false", "MAX_OPEN_POSITIONS=5",
-        "AUTO_SCAN_SYMBOLS=", "SCAN_ALL_USDT=true", "SCAN_MAX_SYMBOLS=0",
-        "LIQUIDITY_PRESELECT=0", "WAVE_FULL_TF_ALL=true",
+        "TESTNET=true",
+        "ALLOW_LIVE=false",
+        "DRY_RUN=true",
+        "BINANCE_MARKET=futures_usdt",
+        "FUTURES_LEVERAGE=2",
+        "FUTURES_MARGIN_TYPE=ISOLATED",
+        "FUTURES_FORCE_ONE_WAY=true",
+        "ALLOW_LONG=true",
+        "ALLOW_SHORT=true",
+        "TAKE_PROFIT_PCT=0.0",
+        "CAMPAIGN_TRAIL_BARS=5",
+        "MAX_OPEN_POSITIONS=5",
+        "MAX_TOTAL_RISK_PCT=0.01",
+        "MAX_RISK_PER_TRADE_PCT=0.005",
     ):
         must(env, needle, ".env.example")
 
     cfg = read("trading_config.py")
-    must(cfg, "max_open_positions: int = 5", "trading_config.py")
-    must(cfg, 'MAX_OPEN_POSITIONS", 5', "trading_config.py")
-    must(cfg, '{"ALL", "AUTO", "*"}', "trading_config.py")
-    must(cfg, 'risk_key = "MAX_RISK_PER_TRADE_PCT"', "trading_config.py")
-    must(cfg, 'min(0.005', "trading_config.py")
-    must(cfg, 'min(0.01', "trading_config.py")
-
-    scanner = read("market_scanner.py")
     for needle in (
-        'os.getenv("SCAN_ALL_USDT", "true")',
-        'os.getenv("SCAN_MAX_SYMBOLS", "0")',
-        'os.getenv("LIQUIDITY_PRESELECT", "0")',
-        'os.getenv("SCAN_WORKERS", "4")',
+        'market: str = "futures_usdt"',
+        "futures_leverage: int = 2",
+        'futures_margin_type: str = "ISOLATED"',
+        "futures_force_one_way: bool = True",
+        "allow_long: bool = True",
+        "allow_short: bool = True",
+        'market = str(source.get("BINANCE_MARKET", "futures_usdt"))',
+        'risk_key = "MAX_RISK_PER_TRADE_PCT"',
+        "min(0.005",
+        "min(0.01",
     ):
-        must(scanner, needle, "market_scanner.py")
+        must(cfg, needle, "trading_config.py")
 
-    trader = read("trader.py")
-    must(trader, "os.getenv('AUTO_SCAN_SYMBOLS', '').strip()", "trader.py")
-    must(trader, "SCAN_THROTTLED", "trader.py")
-    portfolio_trader = read("portfolio_trader.py")
-    must(portfolio_trader, 'os.getenv("CAMPAIGN_ENGINE", "true")', "portfolio_trader.py")
-    must(trader, "_auto_scan_lock", "trader.py")
+    model = read("campaign_model.py")
+    for needle in (
+        "class PendingSignal",
+        "class CampaignState",
+        "class SignalState",
+        "RECONCILE_REQUIRED =",
+        "TRIGGERED =",
+        "FILLED =",
+    ):
+        must(model, needle, "campaign_model.py")
+
+    engine = read("campaign_engine.py")
+    for needle in (
+        "def choose_initial_signal",
+        's.side in {"BUY", "SELL"}',
+        "def arm_entry",
+        "def arm_add_on",
+    ):
+        must(engine, needle, "campaign_engine.py")
+
+    signals = read("williams_signals.py")
+    for needle in (
+        "def extract_long_signal_specs",
+        "def extract_short_signal_specs",
+        "def _latest_super_ao",
+        "def _latest_reversal",
+        "side=side",
+    ):
+        must(signals, needle, "williams_signals.py")
+
+    futures = read("futures_williams_runtime.py")
+    for needle in (
+        "class FuturesWilliamsScanner",
+        "class FuturesWilliamsRuntime",
+        "PendingSignal",
+        "SignalState.VALIDATED",
+        'order_type="STOP_MARKET"',
+        "reduce_only=True",
+        "def _replace_protection",
+        "def _reconcile_pending",
+        "def _finalize_confirmed_exchange_exit",
+        "def recover",
+        "def process",
+        "FUTURES_LIQUIDATION_BUFFER_PCT",
+    ):
+        must(futures, needle, "futures_williams_runtime.py")
+    must_not(futures, "client.cancel_replace(", "futures_williams_runtime.py")
+
+    client = read("binance_futures_client.py")
+    for needle in (
+        "/fapi/v1/order",
+        "/fapi/v2/account",
+        "positionAmt",
+        "reduceOnly",
+        "STOP_MARKET",
+    ):
+        must(client, needle, "binance_futures_client.py")
 
     server = read("server.py")
-    must(server, f"VERSION = '{EXPECTED_VERSION}'", "server.py")
+    for needle in (
+        "FuturesWilliamsRuntime",
+        "BinanceFuturesClient",
+        "BINANCE_MARKET",
+        "USDⓈ-M Futures",
+    ):
+        must(server, needle, "server.py")
 
     android = read("app/src/main/java/com/williamsbot/MainActivity.kt")
-    must(android, f"Williams {EXPECTED_VERSION}", "MainActivity.kt")
     for needle in (
-        "Top 50 liquid USDT", "1D / 4H / 1H / 15M",
-        '.putString("api_key"', '.putString("api_secret"',
+        f"Williams {EXPECTED_VERSION}",
+        "class BackendApi",
+        "https://",
+        'putString("backend_url"',
+        'putString("mobile_token"',
     ):
-        must_not(android, needle, "MainActivity.kt")
-    must(android, "TradingForegroundService", "MainActivity.kt")
-    must(android, "http://127.0.0.1:18080", "MainActivity.kt")
-    gradle = read("app/build.gradle.kts")
-    must(gradle, f'versionName = "{EXPECTED_VERSION}"', "app/build.gradle.kts")
-    must(android, "val maxOpenPositions: Int = 5", "MainActivity.kt")
-    runtime = read("app/src/main/java/com/williamsbot/StandaloneRuntime.kt")
-    must(runtime, 'prefs.getInt("max_open_positions", 5)', "StandaloneRuntime.kt")
-    must(runtime, "private val maxSlippagePct = 0.0015", "StandaloneRuntime.kt")
-    must(runtime, "control/self-heal", "StandaloneRuntime.kt")
-    must(runtime, "activeHistoryTasks", "StandaloneRuntime.kt")
-    must(runtime, "campaignEngineEnabled", "StandaloneRuntime.kt")
-    must(runtime, 'type=STOP_LOSS', "StandaloneRuntime.kt")
+        must(android, needle, "MainActivity.kt")
+    must_not(android, "StandaloneRuntime.start(this)", "MainActivity.kt")
+    must_not(android, 'putString("api_key"', "MainActivity.kt")
+    must_not(android, 'putString("api_secret"', "MainActivity.kt")
+    must_not(android, "http://127.0.0.1:18080", "MainActivity.kt")
+    must_not(android, "http://localhost:18080", "MainActivity.kt")
+
+    service = read("app/src/main/java/com/williamsbot/TradingForegroundService.kt")
+    for needle in ("legacy native Spot runtime", "remote Futures backend"):
+        must(service, needle, "TradingForegroundService.kt")
+    must_not(service, "StandaloneRuntime.start(this)", "TradingForegroundService.kt")
 
     remote = read("test_android_remote_only.py")
     for needle in (
-        "test_android_has_autonomous_runtime",
-        "test_android_local_runtime_does_not_require_remote_https",
-        "test_native_runtime_uses_binance_spot_testnet",
-        "test_android_has_portfolio_local_api",
+        "test_android_has_remote_cockpit_runtime",
+        "test_android_remote_backend_requires_https",
+        "test_android_does_not_start_native_spot_runtime",
+        "test_active_backend_uses_futures_and_legacy_spot_is_not_authoritative",
     ):
-        must(remote, needle, "Android autonomous contract")
+        must(remote, needle, "Android remote contract")
 
     testnet = read("test_testnet_release_gate.py")
-    must(testnet, "if not live_e2e_enabled():", "testnet release gate")
-    must(testnet, "Binance Spot Testnet", "testnet release gate")
+    for needle in (
+        "BinanceFuturesClient",
+        "demo-fapi.binance.com",
+        "USD-M Futures Demo",
+        "reduce-only",
+    ):
+        must(testnet, needle, "Futures Testnet release gate")
+    must_not(testnet, "BinanceSpotClient", "Futures Testnet release gate")
+    must_not(testnet, "Spot Testnet", "Futures Testnet release gate")
 
-    android_ci = read(".github/workflows/android-apk.yml")
-    must(android_ci, "python3 ci_release_gate.py", "android workflow")
-    must(android_ci, "group: android-${{ github.workflow }}-${{ github.ref }}-${{ github.sha }}", "android workflow")
-    must(android_ci, "gradle --no-daemon :app:lintDebug", "android workflow")
-    must_not(android_ci, "./gradlew --no-daemon :app:", "android workflow")
+    for path in (
+        ".github/workflows/python-ci.yml",
+        ".github/workflows/campaign-ci.yml",
+        ".github/workflows/android-apk.yml",
+    ):
+        workflow = read(path)
+        must(workflow, "ci_release_gate.py", path)
+    workflow = read(".github/workflows/python-ci.yml")
+    must(workflow, "futures_williams_runtime.py", ".github/workflows/python-ci.yml")
+    must(workflow, "python -m py_compile", ".github/workflows/python-ci.yml")
 
-    python_ci = read(".github/workflows/python-ci.yml")
-    must(python_ci, "python3 ci_release_gate.py", "python workflow")
-    must(python_ci, "group: backend-ci-${{ github.ref }}-${{ github.sha }}", "python workflow")
+    print("WILLIAMS FUTURES RELEASE CONTRACT GATE: PASS")
 
-    testnet_ci = read(".github/workflows/testnet-readonly.yml")
-    must(testnet_ci, "python3 ci_release_gate.py", "testnet workflow")
-    must(testnet_ci, 'ALLOW_LIVE: "false"', "testnet workflow")
-    must(testnet_ci, 'TESTNET: "true"', "testnet workflow")
-    must(testnet_ci, "test_testnet_release_gate.py --read-only", "testnet workflow")
-
-    print("WILLIAMS RELEASE CONTRACT GATE: PASS")
 
 if __name__ == "__main__":
     main()

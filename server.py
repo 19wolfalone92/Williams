@@ -5,17 +5,16 @@ from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect, Response
 from pydantic import BaseModel
 from db import Database
-from trader import Trader
+from futures_williams_runtime import FuturesWilliamsRuntime as Trader
 from portfolio_trader import MultiPositionTrader
 from data import fetch_klines
 from strategy import calculate_indicators, config_from_env
 from ws_hub import WebSocketHub
 from credentials_store import CredentialStore
-from market_scanner import MarketScanner
 from market_context import ContextCache
 from mtf_context_service import MultiTimeframeContextService
 from feature_store import FeatureStore
-from binance_client import BinanceSpotClient
+from binance_futures_client import BinanceFuturesClient
 
 load_dotenv()
 API_TOKEN = os.getenv('MOBILE_API_TOKEN', '').strip()
@@ -139,25 +138,25 @@ class ControlState:
         if not key or not secret:
             raise RuntimeError('Binance API key and secret are required.')
 
-        # Validate the exact Spot credentials before persisting them. This prevents
-        # the backend from storing a broken/expired key and only discovering it
-        # later inside the autonomous trading loop.
-        candidate = BinanceSpotClient(key, secret, testnet=testnet)
+        # Validate USDⓈ-M Futures credentials before persisting them. A valid
+        # Spot key/account is not sufficient for the Futures trading path.
+        candidate = BinanceFuturesClient(key, secret, testnet=testnet)
         try:
             candidate.sync_time()
             account = candidate.account()
-            if str(account.get('accountType', 'SPOT')).upper() not in {'SPOT', ''}:
-                raise RuntimeError('Configured Binance account is not Spot.')
+            if str(account.get('accountType', 'FUTURES')).upper() not in {'FUTURES', 'USD_M_FUTURES'}:
+                raise RuntimeError('Configured Binance account is not USD-M Futures.')
             if not testnet:
                 restrictions = candidate.api_restrictions()
-                if not (
-                    bool(restrictions.get('enableReading', False))
-                    and bool(restrictions.get('enableSpotAndMarginTrading', False))
-                    and not bool(restrictions.get('enableWithdrawals', True))
-                ):
-                    raise RuntimeError(
-                        'Live Spot API key must allow reading + Spot trading and have withdrawals disabled.'
-                    )
+                futures_permission = restrictions.get('enableFutures')
+                if futures_permission is None:
+                    futures_permission = restrictions.get('enableUmFutures')
+                if futures_permission is False:
+                    raise RuntimeError('Live Futures API key does not permit USD-M Futures trading.')
+                if not bool(restrictions.get('enableReading', False)):
+                    raise RuntimeError('Live Futures API key must allow account reading.')
+                if bool(restrictions.get('enableWithdrawals', True)):
+                    raise RuntimeError('Live Futures API key must have withdrawals disabled.')
         except Exception as exc:
             raise RuntimeError(f'Binance credential validation failed: {exc}') from exc
 
@@ -186,12 +185,11 @@ class ControlState:
                 self.api_secret,
                 self.testnet,
             )
-        hub.configure_credentials(
-            self.api_key,
-            self.api_secret,
-            self.testnet,
-        )
-        mtf_service.configure_credentials(self.api_key, self.api_secret, self.testnet)
+        # Futures trading is backend-authoritative. Spot websocket/MTF services
+        # are not started in Futures mode to avoid a second exchange state source.
+        if os.getenv("BINANCE_MARKET", "futures_usdt").strip().lower() == "spot":
+            hub.configure_credentials(self.api_key, self.api_secret, self.testnet)
+            mtf_service.configure_credentials(self.api_key, self.api_secret, self.testnet)
 
     def ensure_trader(self):
         with self.lock:
@@ -208,12 +206,14 @@ class ControlState:
         with self.lock:
             t = self.ensure_trader()
             if self.scanner is None:
-                self.scanner = MarketScanner(t.client)
+                self.scanner = t.scanner
             return self.scanner
 
     def ensure_multi(self):
         with self.lock:
             t = self.ensure_trader()
+            if getattr(t, 'is_futures_runtime', False):
+                return t
             if not hasattr(t, '_multi_position_trader'):
                 t._multi_position_trader = MultiPositionTrader(
                     t.client,
@@ -302,8 +302,8 @@ class ControlState:
         metrics.inc("kill_switch_total")
         with self.lock:
             self.desired_running = False
-        # Close only Williams-managed positions/orders; never cancel
-        # unrelated account orders via DELETE /openOrders.
+            # Close only Williams-managed Futures campaigns; never cancel
+        # unrelated account orders.
         with self.lock:
             self.running = False
             self.paused = True
@@ -536,18 +536,16 @@ def _heartbeat_loop():
             multi = state.ensure_multi()
             positions = multi.open_positions()
             account = t.client.account()
-            usdt = next(
-                (float(b.get('free', 0) or 0) + float(b.get('locked', 0) or 0)
-                 for b in account.get('balances', []) if b.get('asset') == 'USDT'),
-                0.0,
-            )
+            equity = float(account.get('totalWalletBalance', 0) or 0)
+            available = float(account.get('availableBalance', 0) or 0)
             t.notify(
                 'WILLIAMS HEARTBEAT\\n'
                 f'state={_canonical_execution_state(multi)[0]}\\n'
                 f'positions={len(positions)}\\n'
-                f'USDT≈{usdt:.2f}\\n'
+                f'equity≈{equity:.2f} USDT\\n'
+                f'available≈{available:.2f} USDT\\n'
                 f'testnet={t.client.testnet}\\n'
-                f'ws={hub.snapshot().get("ws_connected")}'
+                f'market=USD_M_FUTURES'
             )
         except Exception as exc:
             try:
@@ -583,16 +581,14 @@ def startup():
         name='williams-heartbeat',
     )
     heartbeat_thread.start()
-    hub.configure_credentials(
-        state.api_key,
-        state.api_secret,
-        state.testnet,
-    )
-    mtf_service.configure_credentials(state.api_key, state.api_secret, state.testnet)
-    mtf_service.db = state.ensure_trader().db
-    hub.start()
-    if os.getenv('MTF_CONTEXT_ENABLED', 'true').lower() == 'true':
-        mtf_service.start()
+    market_mode = os.getenv("BINANCE_MARKET", "futures_usdt").strip().lower()
+    if market_mode == "spot":
+        hub.configure_credentials(state.api_key, state.api_secret, state.testnet)
+        mtf_service.configure_credentials(state.api_key, state.api_secret, state.testnet)
+        mtf_service.db = state.ensure_trader().db
+        hub.start()
+        if os.getenv('MTF_CONTEXT_ENABLED', 'true').lower() == 'true':
+            mtf_service.start()
     if (
         os.getenv('AUTO_START', 'true').lower() == 'true'
         and state.api_key
@@ -738,12 +734,12 @@ def clear_binance_config():
     except Exception as exc:
         raise HTTPException(
             503,
-            'Cannot verify Spot account state before credential removal: ' + str(exc),
+            'Cannot verify Futures account state before credential removal: ' + str(exc),
         )
     if managed_positions or exchange_orders:
         raise HTTPException(
             409,
-            'Credentials cannot be removed while Spot positions or open orders exist. '
+            'Credentials cannot be removed while Futures positions or open orders exist. '
             'Close/reconcile the account first.',
         )
 
@@ -755,8 +751,9 @@ def clear_binance_config():
         state.last_error = None
         state.paused = False
     state.credentials.clear()
-    hub.configure_credentials('', '', True)
-    mtf_service.configure_credentials('', '', True)
+    if os.getenv("BINANCE_MARKET", "futures_usdt").strip().lower() == "spot":
+        hub.configure_credentials('', '', True)
+        mtf_service.configure_credentials('', '', True)
     return {
         'configured': False,
         'cleared': True,
@@ -818,52 +815,101 @@ async def _ws_sender(client):
 
 def _position_payload(t, trade):
     symbol = str(trade['symbol']).upper()
-    ticker = None
+    position = {}
     try:
-        ticker = float(
-            t.client.ticker_price(symbol)['price']
-        )
+        position = t.client.position(symbol)
+        current = float(position.get('markPrice', 0) or 0)
+        exchange_entry = float(position.get('entryPrice', 0) or 0)
+        qty_signed = float(position.get('positionAmt', 0) or 0)
     except Exception:
-        pass
+        current = 0.0
+        exchange_entry = 0.0
+        qty_signed = 0.0
 
-    entry = float(trade.get('entry_price') or 0.0)
-    qty = float(trade.get('quantity') or 0.0)
-    stop = (
-        float(trade.get('stop_price') or 0.0)
-        or None
-    )
-    take = (
-        float(trade.get('take_profit_price') or 0.0)
-        or None
-    )
+    entry = exchange_entry or float(trade.get('entry_price') or 0.0)
+    qty = abs(qty_signed) or abs(float(trade.get('quantity') or 0.0))
+    side = str(trade.get('side') or ('LONG' if qty_signed >= 0 else 'SHORT')).upper()
+    stop = float(trade.get('stop_price') or 0.0) or None
+    take = None
     pnl = None
     pnl_pct = None
-    if ticker is not None and entry > 0:
-        pnl = (ticker - entry) * qty
-        pnl_pct = ticker / entry - 1.0
+    if current > 0 and entry > 0:
+        if side == 'SHORT':
+            pnl = (entry - current) * qty
+            pnl_pct = entry / current - 1.0
+        else:
+            pnl = (current - entry) * qty
+            pnl_pct = current / entry - 1.0
 
     return {
         'trade_id': int(trade['id']),
         'symbol': symbol,
-        'side': trade.get('side', 'LONG'),
+        'side': side,
         'quantity': qty,
         'entry_price': entry,
-        'current_price': ticker,
+        'current_price': current or None,
         'stop_price': stop,
         'take_profit_price': take,
-        'risk_pct': float(trade.get('risk_pct') or 0.0),
-        'entry_order_id': trade.get('entry_order_id'),
-        'entry_client_order_id': trade.get('entry_client_order_id'),
-        'exit_order_list_id': trade.get('exit_order_list_id'),
-        'exit_order_list_client_id': trade.get(
-            'exit_order_list_client_id'
-        ),
-        'opened_at': trade.get('entry_time'),
         'unrealized_pnl': pnl,
         'unrealized_pnl_pct': pnl_pct,
-        'state': state.ensure_multi().state(symbol),
+        'exit_order_list_id': None,
+        'exit_order_list_client_id': None,
+        'futures_position_amt': qty_signed,
+        'liquidation_price': float(position.get('liquidationPrice', 0) or 0),
+        'mark_price': current or None,
     }
 
+@app.get(
+    '/api/v1/market/klines',
+    dependencies=[Depends(auth)],
+)
+def market_klines(
+    limit: int = 120,
+    symbol: Optional[str] = None,
+    interval: Optional[str] = None,
+):
+    t = state.ensure_trader()
+    target_symbol = str(symbol or t.symbol).strip().upper()
+    raw_interval = str(interval or t.interval).strip()
+    target_interval = "1M" if raw_interval == "1M" else raw_interval.lower()
+    allowed_intervals = {
+        "1m", "3m", "5m", "15m", "30m", "1h", "2h",
+        "4h", "6h", "8h", "12h", "1d", "3d", "1w", "1M",
+    }
+    if target_interval not in allowed_intervals:
+        raise HTTPException(400, f"Unsupported Binance interval: {target_interval}")
+    if not target_symbol.endswith("USDT") or not target_symbol.isalnum():
+        raise HTTPException(400, "Invalid Futures symbol")
+    df = fetch_klines(
+        t.client,
+        target_symbol,
+        target_interval,
+        limit=max(30, min(limit, 250)),
+    )
+    if df is None or df.empty:
+        raise HTTPException(503, "No market data available")
+    closed = df.iloc[:-1].copy() if len(df) > 1 else df.copy()
+    ind = calculate_indicators(closed, config_from_env())
+    rows = []
+    for idx, row in ind.iterrows():
+        rows.append(
+            {
+                "time": idx.isoformat(),
+                "open": float(row.open),
+                "high": float(row.high),
+                "low": float(row.low),
+                "close": float(row.close),
+                "jaw": None if row.jaw_shifted != row.jaw_shifted else float(row.jaw_shifted),
+                "teeth": None if row.teeth_shifted != row.teeth_shifted else float(row.teeth_shifted),
+                "lips": None if row.lips_shifted != row.lips_shifted else float(row.lips_shifted),
+                "ao": None if row.ao != row.ao else float(row.ao),
+                "long_signal": bool(row.long_signal),
+                "short_signal": bool(row.short_signal),
+                "fractal_up": bool(row.fractal_up),
+                "fractal_down": bool(row.fractal_down),
+            }
+        )
+    return {"symbol": target_symbol, "interval": target_interval, "candles": rows}
 
 @app.get('/api/v1/status', dependencies=[Depends(auth)])
 def status():
@@ -966,7 +1012,7 @@ def status():
         'max_risk_per_trade_pct': multi.max_risk_per_trade_pct,
         'unrealized_pnl_quote': total_pnl,
         'stop_loss_pct': t.stop_pct,
-        'take_profit_pct': t.target_pct,
+        'take_profit_pct': 0.0,
         'risk_per_trade_pct': t.risk_per_trade_pct,
         'max_daily_loss_pct': t.max_daily_loss_pct,
         'max_trades_per_day': t.max_trades_day,
@@ -983,8 +1029,9 @@ def status():
         'server_time': datetime.now(
             timezone.utc
         ).isoformat(),
-        'market_context': mtf_service.symbol_snapshot(t.symbol),
-        'market_context_status': mtf_service.snapshot_status(),
+        'market_mode': 'USD_M_FUTURES',
+        'futures_leverage': int(os.getenv('FUTURES_LEVERAGE', '2')),
+        'futures_margin_type': os.getenv('FUTURES_MARGIN_TYPE', 'ISOLATED').upper(),
         'scanner_scanning': bool(_scanner_snapshot()['scanning']),
         'scanner_symbols': int(_scanner_snapshot()['symbols_scanned']),
         'scanner_duration_ms': int(_scanner_snapshot()['duration_ms']),
@@ -1013,55 +1060,37 @@ def status():
 
 @app.get('/api/v1/portfolio', dependencies=[Depends(auth)])
 def portfolio():
-    """Authoritative Binance Spot portfolio snapshot with USDT/BTC valuation."""
+    """Authoritative Binance USDⓈ-M Futures account and managed campaign snapshot."""
     t = state.ensure_trader()
     account = t.client.account()
-    balances = account.get('balances', []) if isinstance(account, dict) else []
-    ticker_rows = t.client.ticker_prices()
-    prices = {}
-    for row in ticker_rows if isinstance(ticker_rows, list) else []:
-        try:
-            symbol = str(row.get('symbol', '')).upper()
-            price = float(row.get('price', 0) or 0)
-            if symbol and price > 0:
-                prices[symbol] = price
-        except (TypeError, ValueError):
-            continue
-    btc_usdt = prices.get('BTCUSDT')
+    total_wallet = float(account.get('totalWalletBalance', 0) or 0)
+    unrealized_account = float(account.get('totalUnrealizedProfit', 0) or 0)
+    total_margin = float(
+        account.get('totalMarginBalance', total_wallet + unrealized_account)
+        or (total_wallet + unrealized_account)
+    )
+    available_margin = float(account.get('availableBalance', 0) or 0)
+
     assets = []
-    for row in balances:
+    for row in account.get('balances', []) if isinstance(account, dict) else []:
         if not isinstance(row, dict):
             continue
         asset = str(row.get('asset', '')).upper()
-        if not asset:
-            continue
-        try:
-            free = float(row.get('free', 0) or 0)
-            locked = float(row.get('locked', 0) or 0)
-        except (TypeError, ValueError):
-            continue
+        free = float(row.get('free', 0) or 0)
+        locked = float(row.get('locked', 0) or 0)
         total = free + locked
-        if total <= 1e-15:
-            continue
-        price_usdt = 1.0 if asset == 'USDT' else prices.get(asset + 'USDT')
-        if price_usdt is None and btc_usdt:
-            price_btc = prices.get(asset + 'BTC')
-            if price_btc:
-                price_usdt = price_btc * btc_usdt
-        value_usdt = total * price_usdt if price_usdt and price_usdt > 0 else 0.0
-        free_value_usdt = free * price_usdt if price_usdt and price_usdt > 0 else 0.0
-        locked_value_usdt = locked * price_usdt if price_usdt and price_usdt > 0 else 0.0
-        assets.append({
-            'asset': asset, 'free': free, 'locked': locked, 'total': total,
-            'price_usdt': price_usdt, 'value_usdt': value_usdt,
-            'free_value_usdt': free_value_usdt, 'locked_value_usdt': locked_value_usdt,
-        })
-    total_equity_usdt = sum(x['value_usdt'] for x in assets)
-    free_equity_usdt = sum(x['free_value_usdt'] for x in assets)
-    locked_equity_usdt = sum(x['locked_value_usdt'] for x in assets)
-    total_equity_btc = total_equity_usdt / btc_usdt if btc_usdt and btc_usdt > 0 else None
-    for row in assets:
-        row['allocation_pct'] = row['value_usdt'] / total_equity_usdt if total_equity_usdt > 0 else 0.0
+        if asset and total > 1e-15:
+            assets.append({
+                'asset': asset,
+                'free': free,
+                'locked': locked,
+                'total': total,
+                'price_usdt': 1.0 if asset == 'USDT' else None,
+                'value_usdt': total if asset == 'USDT' else 0.0,
+                'free_value_usdt': free if asset == 'USDT' else 0.0,
+                'locked_value_usdt': locked if asset == 'USDT' else 0.0,
+            })
+
     multi = state.ensure_multi()
     positions = []
     for trade in multi.open_positions():
@@ -1074,32 +1103,45 @@ def portfolio():
                 **raw,
                 'avg_entry_price': raw.get('entry_price'),
                 'stop_loss': raw.get('stop_price'),
-                'take_profit': raw.get('take_profit_price'),
+                'take_profit': None,
                 'position_value_usdt': position_value,
-                'allocation_pct': position_value / total_equity_usdt if total_equity_usdt > 0 else 0.0,
+                'allocation_pct': position_value / total_margin if total_margin > 0 else 0.0,
                 'unrealized_pnl_usdt': float(raw.get('unrealized_pnl') or 0.0),
                 'unrealized_pnl_pct': float(raw.get('unrealized_pnl_pct') or 0.0),
-                'oco_list_id': raw.get('exit_order_list_id'),
-                'oco_list_client_id': raw.get('exit_order_list_client_id'),
+                'oco_list_id': None,
+                'oco_list_client_id': None,
             })
         except Exception as exc:
             state.last_error = f'portfolio-position: {exc}'
-    unrealized_pnl_usdt = sum(float(p.get('unrealized_pnl_usdt') or 0.0) for p in positions)
+
+    unrealized_pnl_usdt = sum(
+        float(p.get('unrealized_pnl_usdt') or 0.0) for p in positions
+    )
     realized_pnl_usdt = 0.0
     try:
-        row = db().conn.execute("SELECT COALESCE(SUM(CAST(pnl AS REAL)), 0) AS pnl FROM trades WHERE pnl IS NOT NULL").fetchone()
+        row = db().conn.execute(
+            "SELECT COALESCE(SUM(CAST(pnl AS REAL)), 0) AS pnl "
+            "FROM trades WHERE pnl IS NOT NULL"
+        ).fetchone()
         realized_pnl_usdt = float(row['pnl'] or 0.0) if row else 0.0
     except Exception:
         pass
+
+    for row in assets:
+        row['allocation_pct'] = (
+            row['value_usdt'] / total_margin if total_margin > 0 else 0.0
+        )
+
     return {
         'configured': bool(t.client.api_key and t.client.api_secret),
         'testnet': bool(t.client.testnet),
-        'source': 'binance_spot_account',
-        'account_type': 'SPOT',
-        'total_equity_usdt': total_equity_usdt,
-        'total_equity_btc': total_equity_btc,
-        'free_equity_usdt': free_equity_usdt,
-        'locked_equity_usdt': locked_equity_usdt,
+        'source': 'binance_usdm_futures_account',
+        'account_type': 'FUTURES',
+        'total_wallet_balance_usdt': total_wallet,
+        'total_unrealized_pnl_usdt': unrealized_account,
+        'total_equity_usdt': total_margin,
+        'free_equity_usdt': available_margin,
+        'locked_equity_usdt': max(0.0, total_margin - available_margin),
         'realized_pnl_usdt': realized_pnl_usdt,
         'unrealized_pnl_usdt': unrealized_pnl_usdt,
         'assets': assets,
@@ -1153,7 +1195,7 @@ def market_klines(
     if target_interval not in allowed_intervals:
         raise HTTPException(400, f"Unsupported Binance interval: {target_interval}")
     if not target_symbol.endswith("USDT") or not target_symbol.isalnum():
-        raise HTTPException(400, "Invalid Spot symbol")
+        raise HTTPException(400, "Invalid Futures symbol")
     df = fetch_klines(
         t.client,
         target_symbol,
@@ -1198,271 +1240,3 @@ def market_klines(
                 'fractal_down': bool(row.fractal_down),
             }
         )
-    return {
-        'symbol': target_symbol,
-        'interval': target_interval,
-        'candles': rows,
-    }
-
-
-@app.get('/api/v1/market/snapshot', dependencies=[Depends(auth)])
-def market_snapshot(symbol: Optional[str] = None, depth: int = 20, trades: int = 20):
-    """Return one coherent read-only Binance market-data snapshot."""
-    t = state.ensure_trader()
-    selected = (symbol or t.symbol).upper().strip()
-    depth_limit = max(5, min(int(depth), 100))
-    trade_limit = max(1, min(int(trades), 100))
-
-    ticker = t.client.ticker_price(selected)
-    book = t.client.book_ticker(selected)
-    day = t.client.ticker_24hr(selected)
-    book_depth = t.client.depth(selected, limit=depth_limit)
-    exchange = t.client.exchange_info(selected)
-    recent = t.client.agg_trades(selected, limit=trade_limit)
-
-    bids = book_depth.get('bids', []) if isinstance(book_depth, dict) else []
-    asks = book_depth.get('asks', []) if isinstance(book_depth, dict) else []
-    bid_qty = sum(float(row[1]) for row in bids if len(row) >= 2)
-    ask_qty = sum(float(row[1]) for row in asks if len(row) >= 2)
-    total_qty = bid_qty + ask_qty
-    imbalance = ((bid_qty - ask_qty) / total_qty) if total_qty > 0 else 0.0
-
-    symbol_info = next((x for x in exchange.get('symbols', []) if x.get('symbol') == selected), {})
-    filters = {x.get('filterType'): x for x in symbol_info.get('filters', [])}
-
-    return {
-        'symbol': selected,
-        'server_time_ms': int(time.time() * 1000),
-        'price': ticker.get('price'),
-        'book': {
-            'bid': book.get('bidPrice'),
-            'ask': book.get('askPrice'),
-            'bid_qty': book.get('bidQty'),
-            'ask_qty': book.get('askQty'),
-        },
-        'depth': {
-            'last_update_id': book_depth.get('lastUpdateId') if isinstance(book_depth, dict) else None,
-            'levels': depth_limit,
-            'bid_qty': bid_qty,
-            'ask_qty': ask_qty,
-            'imbalance': imbalance,
-        },
-        'ticker_24h': day,
-        'filters': filters,
-        'recent_agg_trades': recent,
-    }
-
-
-@app.post('/api/v1/control/start', dependencies=[Depends(auth)])
-def start():
-    return {'started': state.start()}
-
-
-@app.post('/api/v1/control/stop', dependencies=[Depends(auth)])
-def stop():
-    return {'stopped': state.stop()}
-
-
-@app.post('/api/v1/control/pause', dependencies=[Depends(auth)])
-def pause():
-    return {'paused': state.pause()}
-
-
-@app.post('/api/v1/control/resume', dependencies=[Depends(auth)])
-def resume():
-    return {'resumed': state.resume()}
-
-@app.post('/api/v1/control/panic', dependencies=[Depends(auth)])
-def panic():
-    """PANIC STOP: block new entries without closing an existing position."""
-    result = state.pause()
-    try:
-        state.ensure_trader().db.log_event(
-            'ERROR', 'panic_stop',
-            'PANIC STOP activated: new entries paused; current position left intact.',
-            {'action': 'PANIC_STOP'},
-        )
-    except Exception:
-        pass
-    return {'panic_stopped': bool(result), 'trading_stopped': True, 'positions_closed': False}
-
-
-@app.post('/api/v1/control/kill', dependencies=[Depends(auth)])
-def kill():
-    return state.kill()
-
-
-@app.post('/api/v1/control/sell', dependencies=[Depends(auth)])
-def manual_sell(symbol: str):
-    multi = state.ensure_multi()
-    result = multi.manual_sell(symbol)
-    if not result.get('sold') and result.get('state') == 'RECONCILE_REQUIRED':
-        raise HTTPException(409, result.get('error', 'Position requires reconciliation'))
-    return result
-
-
-@app.post('/api/v1/control/recover', dependencies=[Depends(auth)])
-def recover():
-    t = state.ensure_trader()
-    multi = state.ensure_multi()
-
-    # Recovery must use the same canonical state machine as status/health.
-    # Never route the button through the legacy single-symbol recovery only.
-    result = multi.recover()
-    t.recovered = bool(result.get('ok'))
-    execution_state, unresolved_symbols, pending_symbols = _canonical_execution_state(
-        multi,
-        positions=multi.open_positions(),
-    )
-    return {
-        'recovered': bool(result.get('ok')),
-        'state': execution_state,
-        'unresolved_symbols': unresolved_symbols,
-        'pending_entry_symbols': pending_symbols,
-        'details': result,
-    }
-
-
-@app.get('/api/v1/trades', dependencies=[Depends(auth)])
-def trades(limit: int = 50):
-    return [
-        dict(r)
-        for r in db().conn.execute(
-            'SELECT * FROM trades '
-            'ORDER BY id DESC LIMIT ?',
-            (max(1, min(limit, 200)),),
-        ).fetchall()
-    ]
-
-
-@app.get('/api/v1/orders', dependencies=[Depends(auth)])
-def orders(
-    limit: int = 50,
-    symbol: Optional[str] = None,
-):
-    if symbol:
-        return db().recent_orders(
-            symbol.upper(),
-            max(1, min(limit, 200)),
-        )
-    return db().recent_all_orders(
-        max(1, min(limit, 500))
-    )
-
-
-@app.get('/api/v1/logs', dependencies=[Depends(auth)])
-def logs(limit: int = 100):
-    return [
-        dict(r)
-        for r in db().conn.execute(
-            'SELECT * FROM events '
-            'ORDER BY id DESC LIMIT ?',
-            (max(1, min(limit, 300)),),
-        ).fetchall()
-    ]
-
-
-@app.get(
-    '/api/v1/trade-journal',
-    dependencies=[Depends(auth)],
-)
-def trade_journal_endpoint(limit: int = 100):
-    return db().recent_trade_journal(limit)
-
-
-@app.get('/api/v1/insights', dependencies=[Depends(auth)])
-def insights():
-    return db().learning_summary()
-
-
-@app.get(
-    '/api/v1/scanner/diagnostics',
-    dependencies=[Depends(auth)],
-)
-def scanner_diagnostics():
-    scanner = state.ensure_scanner()
-    snap = _scanner_snapshot()
-    snap.update(
-        {
-            "scan_workers": scanner.scan_workers,
-            "wave_top_n": scanner.wave_top_n,
-            "liquidity_preselect": getattr(
-                scanner,
-                "liquidity_preselect",
-                0,
-            ),
-        }
-    )
-    return snap
-
-
-
-@app.get('/api/v1/quant/health', dependencies=[Depends(auth)])
-def quant_health():
-    """Read-only health/status of the Williams quantitative shadow layer."""
-    enabled = os.getenv("FEATURE_STORE_ENABLED", "true").lower() == "true"
-    latest = quant_store.recent(limit=1)
-    shadows = quant_store.recent_shadow(limit=1)
-    shadow_exec = quant_store.recent_shadow_executions(limit=1)
-    return {
-        "enabled": enabled,
-        "schema_version": 1,
-        "feature_store_path": quant_store.path,
-        "latest_feature_timestamp_ms": latest[0].get("timestamp_ms") if latest else None,
-        "latest_shadow": shadows[0] if shadows else None,
-        "latest_shadow_execution": shadow_exec[0] if shadow_exec else None,
-        "production_execution": "UNCHANGED",
-        "ai_order_submission": False,
-    }
-
-
-@app.get('/api/v1/quant/features', dependencies=[Depends(auth)])
-def quant_features(symbol: Optional[str] = None, limit: int = 20):
-    return quant_store.recent(
-        symbol=symbol,
-        limit=max(1, min(limit, 200)),
-    )
-
-
-@app.get('/api/v1/quant/shadow', dependencies=[Depends(auth)])
-def quant_shadow(limit: int = 50):
-    return quant_store.recent_shadow(max(1, min(limit, 200)))
-
-
-@app.get('/api/v1/quant/shadow-execution', dependencies=[Depends(auth)])
-def quant_shadow_execution(limit: int = 50):
-    return quant_store.recent_shadow_executions(max(1, min(limit, 200)))
-
-@app.get('/api/v1/settings', dependencies=[Depends(auth)])
-def settings():
-    t = state.ensure_trader()
-    multi = state.ensure_multi()
-    return {
-        'version': VERSION,
-        'symbol': t.symbol,
-        'interval': t.interval,
-        'position_fraction': t.position_fraction,
-        'stop_loss_pct': t.stop_pct,
-        'take_profit_pct': t.target_pct,
-        'poll_seconds': t.poll_seconds,
-        'risk_per_trade_pct': t.risk_per_trade_pct,
-        'max_daily_loss_pct': t.max_daily_loss_pct,
-        'max_trades_per_day': t.max_trades_day,
-        'max_consecutive_losses': t.max_consecutive_losses,
-        'cooldown_minutes': t.cooldown_minutes,
-        'min_risk_reward': t.min_risk_reward,
-        'atr_period': t.atr_period,
-        'max_atr_pct': t.max_atr_pct,
-        'max_spread_pct': t.max_spread_pct,
-        'require_htf_confirmation': t.require_htf_confirmation,
-        'htf_interval': t.htf_interval,
-        'testnet': t.client.testnet,
-        'alligator': config_from_env(),
-        'strategy_name': 'Williams Profitunity Conservative',
-        'binance_configured': bool(
-            t.client.api_key and t.client.api_secret
-        ),
-        'max_open_positions': multi.max_open_positions,
-        'max_total_risk_pct': multi.max_total_risk_pct,
-        'max_risk_per_trade_pct': multi.max_risk_per_trade_pct,
-    }

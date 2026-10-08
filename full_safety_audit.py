@@ -468,7 +468,7 @@ else:
 # ---------------------------------------------------------------------
 # 15. WILLIAMS TRADING CORE REGRESSION INVARIANTS
 # ---------------------------------------------------------------------
-section("15. TRADING CORE REGRESSION INVARIANTS")
+section("15. WILLIAMS TRADING CORE REGRESSION INVARIANTS")
 
 android_root = ROOT / "app" / "src" / "main"
 android_files = [
@@ -483,52 +483,84 @@ for forbidden in ("LunaScreen", "AiForgeClient", "AI_FORGE", "AI Forge"):
         f"Trading APK {'still contains' if forbidden in android_text else 'free of'} {forbidden}"
     )
 
-native_runtime = ROOT / "app" / "src" / "main" / "java" / "com" / "williamsbot" / "StandaloneRuntime.kt"
-native = read_text(native_runtime)
+main_activity = read_text(
+    ROOT / "app" / "src" / "main" / "java" / "com" / "williamsbot" / "MainActivity.kt"
+)
+service = read_text(
+    ROOT / "app" / "src" / "main" / "java" / "com" / "williamsbot" / "TradingForegroundService.kt"
+)
+futures_runtime = read_text(ROOT / "futures_williams_runtime.py")
+futures_client = read_text(ROOT / "binance_futures_client.py")
+config = read_text(ROOT / "trading_config.py")
 
-if native:
-    if re.search(r"private\s+val\s+maxOpenPositions\s*=\s*1\b", native):
-        finding("FAIL", "Android runtime still hard-locks maxOpenPositions=1")
-    elif re.search(r"private\s+val\s+maxOpenPositions\s*=\s*0\b", native):
-        finding("PASS", "Android runtime uses risk-budgeted multi-position mode")
-    else:
-        finding("WARN", "Could not prove Android multi-position default from source")
-
-    finding(
-        "PASS" if '/api/v3/orderList/oco' in native else "FAIL",
-        "Android uses current Spot OCO endpoint"
-    )
-    finding(
-        "PASS" if 'userDataStream.subscribe.signature' in android_text else "FAIL",
-        "Android uses signed User Data Stream subscription"
-    )
-    finding(
-        "PASS" if 'EncryptedSharedPreferences' in native and 'MasterKey.KeyScheme.AES256_GCM' in native else "FAIL",
-        "Binance credentials use encrypted Android storage"
-    )
-    finding(
-        "PASS" if '"testnet.binance.vision"' in native and 'api.binance.com' not in native else "WARN",
-        "Android trading REST base is pinned to Spot Testnet"
-    )
-    finding(
-        "FAIL" if 'max_open_positions_locked", true' in native else "PASS",
-        "Android status does not advertise fixed max-position lock"
-    )
+finding(
+    "PASS" if "https://" in main_activity
+    and "StandaloneRuntime.start(this)" not in main_activity
+    and "http://127.0.0.1:18080" not in main_activity
+    and "http://localhost:18080" not in main_activity
+    else "FAIL",
+    "Android is remote HTTPS-only and does not start native trading"
+)
+finding(
+    "PASS" if "remote Futures backend" in service
+    and "StandaloneRuntime.start(this)" not in service
+    else "FAIL",
+    "Foreground service is a compatibility shell only"
+)
+finding(
+    "PASS" if "futures_usdt" in config
+    and "allow_short: bool = True" in config
+    and "futures_force_one_way: bool = True" in config
+    else "FAIL",
+    "Trading configuration is bidirectional USD-M Futures"
+)
+finding(
+    "PASS" if "class FuturesWilliamsRuntime" in futures_runtime
+    and "class FuturesWilliamsScanner" in futures_runtime
+    and "reduce_only=True" in futures_runtime
+    and 'order_type="STOP_MARKET"' in futures_runtime
+    else "FAIL",
+    "Futures campaign runtime is the active trading core"
+)
+finding(
+    "PASS" if "positionAmt" in futures_client
+    and "/fapi/v1/order" in futures_client
+    and "/fapi/v1/account" in futures_client
+    else "FAIL",
+    "Binance client uses USD-M Futures endpoints"
+)
+finding(
+    "PASS" if "PendingSignal" in futures_runtime
+    and "def _reconcile_pending" in futures_runtime
+    and "RECONCILE_REQUIRED" in futures_runtime
+    else "FAIL",
+    "Pending-signal and fail-closed recovery are present"
+)
+finding(
+    "PASS" if "client.cancel_replace(" not in futures_runtime
+    else "FAIL",
+    "Futures runtime does not bypass new-first protection replacement"
+)
+finding(
+    "PASS" if "min(recent) - tick" in futures_runtime
+    and "max(recent) + tick" in futures_runtime
+    else "FAIL",
+    "Structural trailing uses lowest-low / highest-high extremes"
+)
 
 bc_text = read_text(ROOT / "binance_client.py")
-if bc_text:
-    finding(
-        "PASS" if "X-MBX-ORDER-COUNT-10S" in bc_text and "order_limit_10s" in bc_text else "FAIL",
-        "Python Binance client tracks 10s order-rate window"
-    )
-    finding(
-        "PASS" if "_update_rate_limits_from_exchange_info" in bc_text else "FAIL",
-        "Python client learns dynamic Binance rate limits"
-    )
-    finding(
-        "PASS" if "unknown_execution=True" in bc_text and "clientOrderId" in bc_text else "FAIL",
-        "Ambiguous order outcome requires clientOrderId reconciliation"
-    )
+finding(
+    "PASS" if "X-MBX-ORDER-COUNT-10S" in bc_text and "order_limit_10s" in bc_text else "FAIL",
+    "Legacy Binance client tracks 10s order-rate window"
+)
+finding(
+    "PASS" if "_update_rate_limits_from_exchange_info" in bc_text else "FAIL",
+    "Binance client learns dynamic rate limits"
+)
+finding(
+    "PASS" if "unknown_execution=True" in bc_text and "clientOrderId" in bc_text else "FAIL",
+    "Ambiguous order outcome requires clientOrderId reconciliation"
+)
 
 ob_text = read_text(ROOT / "app" / "src" / "main" / "java" / "com" / "williamsbot" / "OrderBookCache.kt")
 finding(

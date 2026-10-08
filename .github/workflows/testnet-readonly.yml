@@ -1,10 +1,10 @@
-name: Binance Spot Testnet read-only gate
+name: Binance USD-M Futures Demo read-only gate
 
 on:
   workflow_dispatch:
     inputs:
       symbol:
-        description: "Spot USDT symbol for authenticated preflight"
+        description: "USD-M Futures USDT-M symbol for authenticated preflight"
         required: true
         default: "BTCUSDT"
         type: string
@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   testnet-read-only:
-    name: Binance Spot Testnet preflight
+    name: Binance USD-M Futures Demo preflight
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
@@ -47,7 +47,7 @@ jobs:
           test -n "${BINANCE_API_KEY}" || { echo "::error::WILLIAMS_TESTNET_API_KEY is not configured."; exit 1; }
           test -n "${BINANCE_API_SECRET}" || { echo "::error::WILLIAMS_TESTNET_API_SECRET is not configured."; exit 1; }
 
-      - name: Run authenticated Spot Testnet read-only gate
+      - name: Run authenticated Futures Demo read-only gate
         run: python test_testnet_release_gate.py --read-only
         env:
           TESTNET_SYMBOL: ${{ inputs.symbol }}

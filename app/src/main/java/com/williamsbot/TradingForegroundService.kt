@@ -42,7 +42,7 @@ class TradingForegroundService : Service() {
                 .setSmallIcon(R.drawable.ic_launcher)
                 .setContentTitle("Williams Trader")
                 .setContentText(
-                    "Binance Testnet: торговый двигатель активен"
+                    "Remote Futures cockpit: backend engine"
                 )
                 .setOngoing(true)
                 .setCategory(
@@ -66,8 +66,8 @@ class TradingForegroundService : Service() {
             }
         )
 
-        StandaloneRuntime.start(this)
-        StandaloneRuntime.autostart(this)
+        // The authoritative Futures trading engine is backend-only.
+        // This service intentionally does not start the legacy native Spot runtime.
     }
 
     override fun onStartCommand(
@@ -77,14 +77,12 @@ class TradingForegroundService : Service() {
     ): Int {
         when (intent?.action) {
             ACTION_START -> {
-                // ACTION_START means "keep the foreground runtime alive".
-                // Trading itself is started explicitly through the local control API
-                // after Binance Testnet credentials have been configured.
-                StandaloneRuntime.start(this)
+                // ACTION_START keeps only the Android foreground service alive.
+                // Trading remains exclusively on the remote Futures backend.
             }
 
             ACTION_STOP -> {
-                StandaloneRuntime.stopTrading()
+                // Trading is stopped through the backend control API.
                 stopSelf()
             }
         }
