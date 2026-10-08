@@ -671,7 +671,7 @@ class MarketScanner:
             100.0,
         )
 
-        htf_confirmed = bool(report.htf_confirmed)
+        htf_confirmed = bool(candidate.htf_confirmed) if self.core_mode else bool(report.htf_confirmed)
         reason = candidate.reason
         if report.reason:
             reason += f"; wave: {report.reason}"
@@ -700,7 +700,7 @@ class MarketScanner:
                     trigger_price=float(raw["trigger_price"]),
                     protective_reference=float(raw["protective_reference"]),
                     trigger_buffer_ticks=int(raw.get("trigger_buffer_ticks", 1) or 1),
-                    invalidation_price=float(frame_setup.invalidation_price if frame_setup else raw.get("invalidation_price", 0.0) or 0.0),
+                    invalidation_price=(float(raw.get("invalidation_price", 0.0) or 0.0) if self.core_mode else float(frame_setup.invalidation_price if frame_setup else raw.get("invalidation_price", 0.0) or 0.0)),
                     teeth_at_detection=float(raw.get("teeth_at_detection", 0.0) or 0.0),
                     alligator_bullish=bool(raw.get("alligator_bullish", False)),
                     alligator_awake=bool(raw.get("alligator_awake", False)),
