@@ -196,7 +196,8 @@ class Database:
             expires_at_ms INTEGER DEFAULT 0,
             context_versions_json TEXT,
             reason TEXT,
-            supersedes_signal_id TEXT
+            supersedes_signal_id TEXT,
+            detected_time_ms INTEGER DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS campaign_orders(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -277,6 +278,7 @@ class Database:
             ON campaign_events(campaign_id, id);
         ''')
         self._migrate_campaign_columns()
+        self._migrate_campaign_signal_columns()
         self._migrate_trade_columns()
         self.state_set('schema_version', self.SCHEMA_VERSION)
         self.state_set('position_state', self.state_get('position_state', 'FLAT'))
@@ -286,6 +288,11 @@ class Database:
         columns = {row["name"] for row in self.conn.execute("PRAGMA table_info(campaigns)").fetchall()}
         if "decision_timeframe" not in columns:
             self.conn.execute('ALTER TABLE campaigns ADD COLUMN decision_timeframe TEXT NOT NULL DEFAULT "1h"')
+
+    def _migrate_campaign_signal_columns(self):
+        columns = {row["name"] for row in self.conn.execute("PRAGMA table_info(campaign_signals)").fetchall()}
+        if "detected_time_ms" not in columns:
+            self.conn.execute("ALTER TABLE campaign_signals ADD COLUMN detected_time_ms INTEGER DEFAULT 0")
 
     def _migrate_trade_columns(self):
         columns = {
@@ -988,8 +995,8 @@ class Database:
                 signal_id,campaign_id,symbol,side,signal_type,role,timeframe,
                 signal_bar_time_ms,trigger_price,protective_reference,invalidation_price,
                 teeth_at_detection,angulation_score,wave_confidence,wave_exhaustion_risk,
-                htf_confirmed,state,source_candle_index,expires_at_ms,context_versions_json,reason,supersedes_signal_id
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                htf_confirmed,state,source_candle_index,expires_at_ms,context_versions_json,reason,supersedes_signal_id,detected_time_ms
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 data["signal_id"], str(campaign_id), data["symbol"], data["side"],
                 st.value if hasattr(st,"value") else st, role.value if hasattr(role,"value") else role,
@@ -999,7 +1006,7 @@ class Database:
                 float(data.get("wave_confidence",0) or 0), float(data.get("wave_exhaustion_risk",0) or 0),
                 1 if data.get("htf_confirmed") else 0, state, int(data.get("source_candle_index",-1) or -1),
                 int(data.get("expires_at_ms",0) or 0), json.dumps(data.get("context_versions",{}),sort_keys=True),
-                data.get("reason",""), supersedes_signal_id or None,
+                data.get("reason",""), supersedes_signal_id or None, int(data.get("detected_time_ms", 0) or 0),
             ),
         )
         if not self._transaction_active:
