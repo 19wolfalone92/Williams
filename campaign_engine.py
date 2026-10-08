@@ -183,12 +183,17 @@ class CampaignEngine:
             SignalType.SUPER_AO: 1,   # WM2
             SignalType.FRACTAL: 2,    # WM3
         }
-        return max(
+        # Chronology is primary: the first valid Wise Man starts the campaign.
+        # WM1 > WM2 > WM3 is only a deterministic tie-breaker for a truly
+        # simultaneous signal event, matching the books without reordering later
+        # signals ahead of an earlier one.
+        return min(
             candidates,
             key=lambda s: (
-                -priority.get(s.signal_type, 99),
+                int(s.signal_bar_time_ms),
                 int(s.detected_time_ms or s.signal_bar_time_ms),
-                s.created_at_ms,
+                priority.get(s.signal_type, 99),
+                -int(s.created_at_ms),
             ),
         )
 
