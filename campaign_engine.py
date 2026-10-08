@@ -37,8 +37,10 @@ class CampaignEngine:
         portfolio_risk_limit_pct: float = 0.01,
         campaign_risk_limit_pct: float = 0.005,
         initial_risk_fraction_of_campaign: float = 0.40,
+        enforce_intraday_contract: bool = False,
     ) -> None:
         self.db = db
+        self.enforce_intraday_contract = bool(enforce_intraday_contract)
         self.portfolio_risk_limit_pct = max(0.0, min(0.006, float(portfolio_risk_limit_pct)))
         self.campaign_risk_limit_pct = max(0.0, min(0.006, float(campaign_risk_limit_pct)))
         self.initial_risk_fraction = max(
@@ -56,7 +58,7 @@ class CampaignEngine:
 
     def create_campaign(self, signal: SignalSpec, *, initial_risk_pct: float) -> TradingCampaign:
         policy = IntradayPolicy.from_env()
-        if policy.profile in {CORE_PROFILE, CONSERVATIVE_PROFILE}:
+        if self.enforce_intraday_contract:
             if signal.timeframe.lower() != policy.timeframes.decision_tf:
                 raise ValueError("intraday campaign strategy timeframe must be H1")
             if (signal.execution_timeframe or policy.timeframes.execution_tf).lower() != policy.timeframes.execution_tf:
@@ -327,7 +329,7 @@ class CampaignEngine:
 
     def arm_add_on(self, campaign: TradingCampaign, signal: SignalSpec, *, risk_quote: float, capital_reserved_quote: float) -> TradingCampaign:
         policy = IntradayPolicy.from_env()
-        if policy.profile in {CORE_PROFILE, CONSERVATIVE_PROFILE}:
+        if self.enforce_intraday_contract:
             if signal.timeframe.lower() != policy.timeframes.decision_tf or (signal.execution_timeframe or policy.timeframes.execution_tf).lower() != policy.timeframes.execution_tf:
                 raise ValueError("intraday add-on must originate on H1 and execute on M15")
         if campaign.position_qty <= 0:
