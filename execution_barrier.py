@@ -111,7 +111,8 @@ class ExecutionBarrier:
         # All declared TFs are version dependencies, but the permission
         # decision belongs to one operative/entry timeframe. Higher TFs provide
         # structural context and must not be required to emit a duplicate trigger.
-        if intent.purpose.upper() == "ENTRY":
+        purpose = intent.purpose.upper()
+        if purpose in {"ENTRY", "CAMPAIGN_ENTRY", "CAMPAIGN_ADD_ON"}:
             permission_tf = (intent.permission_interval or "").lower()
             permission_ctx = snapshot.context(intent.symbol, permission_tf) if permission_tf else None
             if permission_ctx is None:
@@ -120,6 +121,27 @@ class ExecutionBarrier:
                 return f"context {permission_tf} does not allow LONG"
             if direction == "short" and not permission_ctx.allow_short:
                 return f"context {permission_tf} does not allow SHORT"
+
+        # Keep campaign intent semantics explicit at the final admission point.
+        # A malformed purpose/order-type pair is safer to reject than to let
+        # an otherwise valid Binance request escape with the wrong mutation.
+        campaign_types = {
+            "CAMPAIGN_ENTRY": {"STOP_LOSS", "STOP_LOSS_LIMIT"},
+            "CAMPAIGN_ADD_ON": {"STOP_LOSS", "STOP_LOSS_LIMIT"},
+            "CAMPAIGN_PROTECTION": {"STOP_LOSS", "STOP_LOSS_LIMIT"},
+            "CAMPAIGN_TRAIL": {"STOP_LOSS", "STOP_LOSS_LIMIT"},
+            "CAMPAIGN_EXIT": {"MARKET"},
+            "CAMPAIGN_EMERGENCY_EXIT": {"MARKET"},
+            "CAMPAIGN_ENTRY_CANCEL": {"CANCEL"},
+            "CAMPAIGN_PARTIAL_ENTRY_CANCEL": {"CANCEL"},
+            "CAMPAIGN_PROTECTION_CANCEL": {"CANCEL"},
+        }
+        allowed_types = campaign_types.get(purpose)
+        if allowed_types is not None and intent.order_type not in allowed_types:
+            return (
+                f"purpose {purpose} does not permit order type "
+                f"{intent.order_type}"
+            )
 
         if self.db is not None and hasattr(self.db, "state_get"):
             state = str(self.db.state_get("position_state", "FLAT"))
