@@ -2128,6 +2128,23 @@ class MultiPositionTrader:
                 for selection in selections
             ]
 
+        # Legacy MARKET-BUY execution has no canonical Williams signal/expiry
+        # contract and cannot be admitted safely by ExecutionBarrier. Fail
+        # closed rather than leave CAMPAIGN_ENGINE=false as a bypass. Existing
+        # position management, emergency exits and protection paths are separate.
+        return [
+            {
+                "symbol": str(selection.candidate.symbol).upper(),
+                "action": "ENTRY_BLOCKED",
+                "reason": (
+                    "CAMPAIGN_ENGINE=false disables autonomous legacy entries: "
+                    "the legacy BUY path does not satisfy the canonical "
+                    "ExecutionBarrier contract"
+                ),
+            }
+            for selection in selections
+        ]
+
         results = []
         for selection in selections:
             symbol = selection.candidate.symbol.upper()
