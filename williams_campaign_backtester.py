@@ -86,11 +86,12 @@ class WilliamsCampaignBacktester:
         start=cls._ts(m15_bar.name);end=start+pd.Timedelta(minutes=15)
         micro=cls._micro_slice(m5,start,end)
         if micro is None:
-            if after is None or cls._ts(after) <= start:
-                return (start,stop) if float(m15_bar["low"])<=stop else (None,0.0)
-            # Without microstructure data we cannot know whether the stop was
-            # crossed before or after an intra-bar fill, so fail conservatively.
-            return None,0.0
+            # Without intrabar data, an M15 high/low cannot establish whether
+            # the stop was traded before or after an entry/fill in the same
+            # candle. Never infer a post-fill stop from ambiguous OHLC path.
+            if after is not None:
+                return None,0.0
+            return (start,stop) if float(m15_bar["low"])<=stop else (None,0.0)
         after_ts=cls._ts(after) if after is not None else None
         eligible=[]
         for ts,bar in micro.iterrows():
