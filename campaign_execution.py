@@ -1012,6 +1012,18 @@ class CampaignExecutionService:
         self._check_buy_position_capacity(symbol, qty)
         self._check_algo_capacity(symbol, 1)
 
+        # Final last-mile aggregate risk assertion. The campaign row already
+        # contains pending_risk_quote at this point, so this check catches
+        # concurrent/stale reservations before the exchange mutation.
+        equity = self._current_equity_quote()
+        capacity = equity * self.engine.portfolio_risk_limit_pct
+        reserved = float(self.db.campaign_risk_reserved_quote())
+        if reserved > capacity + 1e-9:
+            raise CampaignExecutionError(
+                f"{symbol}: aggregate campaign risk {reserved:.12g} exceeds "
+                f"portfolio capacity {capacity:.12g}"
+            )
+
     def arm_add_on(
         self,
         signal: SignalSpec,
@@ -1029,9 +1041,16 @@ class CampaignExecutionService:
 
         reserved = float(campaign.open_risk_quote or 0) + float(campaign.pending_risk_quote or 0)
         campaign_capacity = float(equity_quote) * self.engine.campaign_risk_limit_pct
-        remaining = max(0.0, campaign_capacity - reserved)
+        campaign_remaining = max(0.0, campaign_capacity - reserved)
+
+        # P0 aggregate invariant: an add-on must fit BOTH the campaign cap and
+        # the portfolio cap after every other campaign's open/pending risk.
+        portfolio_capacity = float(equity_quote) * self.engine.portfolio_risk_limit_pct
+        portfolio_reserved = float(self.db.campaign_risk_reserved_quote())
+        portfolio_remaining = max(0.0, portfolio_capacity - portfolio_reserved)
         requested = min(
-            remaining,
+            campaign_remaining,
+            portfolio_remaining,
             float(equity_quote) * min(
                 float(candidate_risk_pct),
                 float(os.getenv("CAMPAIGN_ADD_RISK_MAX_PCT", "0.002")),
