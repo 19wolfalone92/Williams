@@ -101,6 +101,7 @@ class MultiPositionTrader:
             self.client,
             self.db,
             execution_barrier=self.execution_barrier,
+            require_canonical_risk=True,
         )
         self.campaign_monitor = CampaignMonitor(
             self.client,
