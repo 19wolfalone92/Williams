@@ -1363,9 +1363,9 @@ reconcile_unknown=False,
         cid = deterministic_client_order_id(
             "STOP",
             campaign.campaign_id,
-            signal.current_signal_id if hasattr(signal, "current_signal_id") else campaign.current_signal_id,
+            campaign.current_signal_id,
             stop,
-            quantity,
+            qty,
         )
         intent = OrderIntent.new(
             campaign.symbol,
