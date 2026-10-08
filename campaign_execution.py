@@ -202,6 +202,10 @@ class CampaignExecutionService:
     ) -> dict[str, Any]:
         if signal.side != "BUY":
             raise CampaignExecutionError("Current Spot campaign executor only arms LONG entries")
+        if risk_decision is None:
+            raise CampaignExecutionError("canonical RiskDecision is required for campaign entry")
+        if risk_decision is None:
+            raise CampaignExecutionError("canonical RiskDecision is required for campaign add-on")
         if risk_decision is not None:
             decision = risk_decision.williams_decision
             if decision.symbol != signal.symbol.upper():
@@ -281,7 +285,15 @@ class CampaignExecutionService:
             initial_risk_pct=requested_risk,
         )
         campaign.tags["signal_role"] = signal.role.value
-        campaign.tags["decision_trace"] = DecisionTrace.from_signal(signal).to_dict()
+        campaign.tags["canonical_williams_decision"] = (
+            risk_decision.williams_decision.to_dict()
+        )
+        campaign.tags["canonical_risk_decision"] = risk_decision.to_dict()
+        campaign.tags["decision_trace"] = DecisionTrace.from_signal(
+            signal,
+            proof_vector=risk_decision.williams_decision.proof_vector.to_dict(),
+            system_versions={"risk_engine": "canonical"},
+        ).to_dict()
         campaign.tags["pending_signal_expires_at_ms"] = int(signal.expires_at_ms or 0)
         campaign.tags["initial_stop_price"] = stop
         campaign.initial_stop_price = stop
@@ -297,8 +309,6 @@ class CampaignExecutionService:
         self.engine.arm_entry(campaign, signal)
         self.db.state_set(f"campaign_state:{campaign.campaign_id}", campaign.state.value)
 
-        if risk_decision is None:
-            raise CampaignExecutionError("canonical RiskDecision is required for campaign entry")
         canonical_intent = __import__(
             "domain.contracts",
             fromlist=["ExecutionIntent"],
