@@ -1,0 +1,61 @@
+name: Williams Core Signal Ablation
+
+on:
+  push:
+    branches: ["williams-core-final-20261008"]
+    paths:
+      - "run_ablation.py"
+      - "williams_campaign_backtester.py"
+      - "williams_intraday_core.py"
+      - "williams_intraday_spec.py"
+      - "campaign_model.py"
+      - "strategy.py"
+      - "data.py"
+      - ".github/workflows/williams-ablation.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: williams-ablation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ablation:
+    name: BTCUSDT ${{ matrix.variant }} campaign replay
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [ALL, WM1, WM2, WM3]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      PYTHONUNBUFFERED: "1"
+      WILLIAMS_RESEARCH_MAINNET: "true"
+      WILLIAMS_STRATEGY_PROFILE: "WILLIAMS_CORE_INTRADAY"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Compile ablation runner
+        run: |
+          python -m py_compile             run_ablation.py             williams_campaign_backtester.py             williams_intraday_core.py
+      - name: Run signal-family campaign replay
+        run: |
+          python run_ablation.py             --symbol BTCUSDT             --start 2024-01-01             --end 2026-10-01             --capital 500             --fee 0.001             --slippage 0.0005             --variant "${{ matrix.variant }}"             --outdir "results/ablation"
+      - name: Upload ablation report
+        uses: actions/upload-artifact@v7
+        with:
+          name: williams-ablation-BTCUSDT-${{ matrix.variant }}-${{ github.run_number }}
+          path: results/ablation/BTCUSDT/${{ matrix.variant }}.json
+          if-no-files-found: error
+          retention-days: 30
