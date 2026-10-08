@@ -1705,7 +1705,9 @@ class FuturesWilliamsRuntime:
         return False
 
     def process(self):
-        if not self.recovered:
+        if self.preflight_report is None:
+            self.setup()
+        elif not self.recovered:
             self.recover()
             self.recovered = True
 
@@ -1788,6 +1790,8 @@ class FuturesWilliamsRuntime:
 
     def manual_sell(self, symbol):
         symbol = str(symbol).upper()
+        if self.preflight_report is None:
+            self.setup()
         if self.dry_run:
             return {"sold": False, "symbol": symbol, "reason": "DRY_RUN=true; manual exit blocked"}
         campaign = self._active_campaign(symbol)
