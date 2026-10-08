@@ -375,3 +375,78 @@ def test_campaign_order_fsm_rejects_illegal_operational_jump():
     fsm = CampaignOrderStateMachine(CampaignOrderState.NO_IDEA)
     with pytest.raises(ValueError):
         fsm.transition(CampaignOrderState.CAMPAIGN_ACTIVE)
+
+
+def test_campaign_engine_persists_canonical_lifecycle_state(tmp_path):
+    from campaign_engine import CampaignEngine
+    from campaign_model import SignalRole, SignalSpec, SignalType
+    from campaign_order_fsm import CampaignOrderState
+
+    db = Database(str(tmp_path / "campaign.sqlite3"))
+    engine = CampaignEngine(db)
+    signal = SignalSpec.new(
+        symbol="BTCUSDT",
+        side="BUY",
+        signal_type=SignalType.REVERSAL,
+        role=SignalRole.ENTRY,
+        timeframe="5m",
+        signal_bar_time_ms=1000,
+        trigger_price=101.0,
+        protective_reference=97.0,
+        alligator_bullish=True,
+        alligator_awake=True,
+        angulation_score=1.0,
+        htf_confirmed=True,
+        source_candle_index=10,
+    )
+    campaign = engine.create_campaign(signal, initial_risk_pct=0.002)
+    assert engine.canonical_state(campaign) is CampaignOrderState.SETUP_IDENTIFIED
+
+    engine.arm_entry(campaign, signal)
+    assert engine.canonical_state(campaign) is CampaignOrderState.ENTRY_PENDING
+
+    engine.mark_triggered(campaign, signal.signal_id, "123")
+    assert engine.canonical_state(campaign) is CampaignOrderState.TRIGGERED
+
+    engine.record_initial_fill(
+        campaign,
+        quantity=0.1,
+        average_entry_price=100.5,
+        initial_stop_price=97.0,
+        fill_order_id="123",
+        risk_quote=10.0,
+    )
+    assert engine.canonical_state(campaign) is CampaignOrderState.PROTECTED
+
+    reloaded = engine.load_campaign(campaign.campaign_id)
+    assert reloaded is not None
+    assert engine.canonical_state(reloaded) is CampaignOrderState.PROTECTED
+
+
+def test_campaign_engine_reconciliation_interrupt_blocks_normal_state_progression(tmp_path):
+    from campaign_engine import CampaignEngine
+    from campaign_model import SignalRole, SignalSpec, SignalType
+    from campaign_order_fsm import CampaignOrderState
+
+    db = Database(str(tmp_path / "campaign-reconcile.sqlite3"))
+    engine = CampaignEngine(db)
+    signal = SignalSpec.new(
+        symbol="BTCUSDT",
+        side="BUY",
+        signal_type=SignalType.REVERSAL,
+        role=SignalRole.ENTRY,
+        timeframe="5m",
+        signal_bar_time_ms=1000,
+        trigger_price=101.0,
+        protective_reference=97.0,
+        alligator_bullish=True,
+        alligator_awake=True,
+        angulation_score=1.0,
+        htf_confirmed=True,
+        source_candle_index=10,
+    )
+    campaign = engine.create_campaign(signal, initial_risk_pct=0.002)
+    engine.mark_reconcile_required(campaign, "exchange/local mismatch")
+    assert engine.canonical_state(campaign) is CampaignOrderState.RECONCILIATION_REQUIRED
+    with pytest.raises(ValueError):
+        engine.arm_entry(campaign, signal)
