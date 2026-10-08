@@ -171,16 +171,6 @@ class Database:
         BEGIN
             SELECT RAISE(ABORT, 'decision_traces is append-only');
         END;
-        CREATE TRIGGER IF NOT EXISTS campaign_events_no_update
-        BEFORE UPDATE ON campaign_events
-        BEGIN
-            SELECT RAISE(ABORT, 'campaign_events is append-only');
-        END;
-        CREATE TRIGGER IF NOT EXISTS campaign_events_no_delete
-        BEFORE DELETE ON campaign_events
-        BEGIN
-            SELECT RAISE(ABORT, 'campaign_events is append-only');
-        END;
         CREATE TABLE IF NOT EXISTS campaigns(
             campaign_id TEXT PRIMARY KEY,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -298,6 +288,16 @@ class Database:
             ON campaign_fills(campaign_id);
         CREATE INDEX IF NOT EXISTS idx_campaign_events_campaign
             ON campaign_events(campaign_id, id);
+        CREATE TRIGGER IF NOT EXISTS campaign_events_no_update
+        BEFORE UPDATE ON campaign_events
+        BEGIN
+            SELECT RAISE(ABORT, 'campaign_events is append-only');
+        END;
+        CREATE TRIGGER IF NOT EXISTS campaign_events_no_delete
+        BEFORE DELETE ON campaign_events
+        BEGIN
+            SELECT RAISE(ABORT, 'campaign_events is append-only');
+        END;
         ''')
         self._migrate_trade_columns()
         self.state_set('schema_version', self.SCHEMA_VERSION)
