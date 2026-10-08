@@ -722,6 +722,62 @@ class FuturesWilliamsRuntime:
             fees=0.0,
         )
 
+    def _futures_pre_submit_checks(self, intent):
+        """Final exchange-state checks immediately before a Futures mutation."""
+        if not intent.campaign_id:
+            return
+
+        campaign = self.engine.load_campaign(intent.campaign_id)
+        if campaign is None:
+            raise RuntimeError(f"{intent.symbol}: campaign {intent.campaign_id} not found")
+        if campaign.state == CampaignState.RECONCILE_REQUIRED:
+            raise RuntimeError(f"{intent.symbol}: campaign requires reconciliation")
+        if campaign.symbol != intent.symbol or campaign.side != intent.side and intent.purpose.upper() in {
+            "CAMPAIGN_ENTRY", "CAMPAIGN_ADD_ON"
+        }:
+            raise RuntimeError(f"{intent.symbol}: order/campaign direction mismatch")
+
+        position = self._position(intent.symbol)
+        pos_qty = abs(self._signed_position_qty(position))
+        purpose = intent.purpose.upper()
+
+        if purpose == "CAMPAIGN_ENTRY":
+            if campaign.state != CampaignState.ENTRY_PENDING:
+                raise RuntimeError(
+                    f"{intent.symbol}: entry mutation from invalid campaign state {campaign.state.value}"
+                )
+            if pos_qty > 0:
+                raise RuntimeError(
+                    f"{intent.symbol}: campaign entry blocked because a Futures position already exists"
+                )
+            if intent.side == "BUY" and not self.config.allow_long:
+                raise RuntimeError("LONG entries are disabled by configuration")
+            if intent.side == "SELL" and not self.config.allow_short:
+                raise RuntimeError("SHORT entries are disabled by configuration")
+        elif purpose == "CAMPAIGN_ADD_ON":
+            if campaign.state != CampaignState.ADD_ON_PENDING:
+                raise RuntimeError(
+                    f"{intent.symbol}: add-on mutation from invalid campaign state {campaign.state.value}"
+                )
+            if not self._position_matches(campaign, position):
+                raise RuntimeError(
+                    f"{intent.symbol}: add-on blocked because exchange position no longer matches campaign"
+                )
+        elif purpose in {"CAMPAIGN_PROTECTION", "CAMPAIGN_TRAIL"}:
+            if pos_qty <= 0 or not self._position_matches(campaign, position):
+                raise RuntimeError(
+                    f"{intent.symbol}: protection mutation requires an exact active campaign position"
+                )
+            if not self._liquidation_guard(campaign, position):
+                raise RuntimeError(
+                    f"{intent.symbol}: liquidation safety buffer is violated"
+                )
+        elif purpose == "CAMPAIGN_EXIT":
+            if pos_qty <= 0 or not self._position_matches(campaign, position):
+                raise RuntimeError(
+                    f"{intent.symbol}: exit requires the exact active campaign position"
+                )
+
     def _submit(self, intent, fn, checks=None):
         if self.dry_run:
             raise RuntimeError(
@@ -729,10 +785,16 @@ class FuturesWilliamsRuntime:
             )
         if not self.client.testnet and not self.config.allow_live:
             raise RuntimeError("LIVE Futures order mutation requires ALLOW_LIVE=true")
+
+        def combined_checks(snapshot):
+            self._futures_pre_submit_checks(intent)
+            if checks is not None:
+                checks(snapshot)
+
         return self.execution_barrier.execute(
             intent,
             fn,
-            pre_submit_checks=checks,
+            pre_submit_checks=combined_checks,
         )
 
     def _client_id(self, prefix):
