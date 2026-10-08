@@ -1,5 +1,3 @@
-import os
-import tempfile
 import threading
 
 import pytest
@@ -252,3 +250,81 @@ def test_execution_barrier_does_not_unlock_on_failed_reconciliation(tmp_path):
     )
     assert failed.accepted is False
     assert barrier.mutation_locked is True
+
+
+def test_wm1_can_be_armable_without_wm2_momentum_score():
+    from campaign_model import SignalRole, SignalSpec, SignalType
+    from proof_engine import WilliamsProofEngine
+    from why_not_engine import WhyNotEngine
+
+    signal = SignalSpec.new(
+        symbol="BTCUSDT",
+        side="BUY",
+        signal_type=SignalType.REVERSAL,
+        role=SignalRole.ENTRY,
+        timeframe="5m",
+        signal_bar_time_ms=100,
+        trigger_price=101.0,
+        protective_reference=97.0,
+        alligator_bullish=True,
+        alligator_awake=True,
+        angulation_score=1.0,
+        htf_confirmed=True,
+        source_candle_index=10,
+    )
+    evaluation = WilliamsProofEngine.evaluate(signal)
+    assert evaluation.proof_vector.momentum_pass is False
+    assert evaluation.armable is True
+    assert WhyNotEngine.armable(
+        evaluation.proof_vector,
+        wise_man_stage=1,
+    ) is True
+    assert evaluation.hypothesis_proven is False
+
+
+def test_wm2_requires_momentum_before_add_on_arm():
+    from campaign_model import SignalRole, SignalSpec, SignalType
+    from proof_engine import WilliamsProofEngine
+    from why_not_engine import WhyNotEngine
+
+    signal = SignalSpec.new(
+        symbol="BTCUSDT",
+        side="BUY",
+        signal_type=SignalType.SUPER_AO,
+        role=SignalRole.ADD_ON,
+        timeframe="5m",
+        signal_bar_time_ms=100,
+        trigger_price=101.0,
+        protective_reference=97.0,
+        alligator_bullish=True,
+        alligator_awake=True,
+        htf_confirmed=True,
+        source_candle_index=10,
+        wave_confidence=0.0,
+    )
+    evaluation = WilliamsProofEngine.evaluate(signal)
+    assert evaluation.proof_vector.momentum_pass is True
+    assert evaluation.armable is True
+    assert WhyNotEngine.explain_pre_price(
+        evaluation.proof_vector,
+        wise_man_stage=2,
+    ) == ()
+
+
+def test_proof_diagnostic_score_never_replaces_missing_gate():
+    from domain.contracts import ProofVector
+    from why_not_engine import WhyNotEngine
+
+    proof = ProofVector(
+        context_pass=True,
+        behavior_pass=True,
+        structure_pass=True,
+        location_pass=True,
+        angulation_pass=True,
+        momentum_pass=True,
+        price_proof_pass=False,
+        invalidation_present=True,
+    )
+    assert proof.diagnostic_score == 7 / 8
+    assert proof.is_fully_proven is False
+    assert WhyNotEngine.explain_full(proof) == ("price_proof_not_triggered",)
