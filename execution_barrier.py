@@ -130,10 +130,12 @@ class ExecutionBarrier:
         context_cache: ContextCache,
         db=None,
         client=None,
+        client_provider: Callable[[], Any] | None = None,
     ) -> None:
         self.context_cache = context_cache
         self.db = db
         self.client = client
+        self.client_provider = client_provider
         self._mutation_lock_reason = ""
 
     @property
@@ -297,9 +299,20 @@ class ExecutionBarrier:
 
         return ""
 
+    def _current_client(self):
+        if self.client_provider is not None:
+            try:
+                client = self.client_provider()
+            except Exception:
+                client = None
+            if client is not None:
+                return client
+        return self.client
+
     def _exchange_filter_failure(self, intent: OrderIntent) -> str:
         """Validate Binance symbol/order filters at the final execution door."""
-        if self.client is None or intent.order_type.upper() in {
+        client = self._current_client()
+        if client is None or intent.order_type.upper() in {
             "CANCEL",
             "CANCEL_OCO",
             "CANCEL_REPLACE",
@@ -307,7 +320,7 @@ class ExecutionBarrier:
             return ""
 
         try:
-            info = self.client.exchange_info(intent.symbol)
+            info = client.exchange_info(intent.symbol)
             rows = info.get("symbols", []) if isinstance(info, dict) else []
             if not rows:
                 return f"exchangeInfo unavailable for {intent.symbol}"
@@ -375,7 +388,7 @@ class ExecutionBarrier:
                 if max_price > 0 and trigger > max_price:
                     return f"stopPrice {trigger} above Binance maxPrice {max_price}"
 
-                ticker = self.client.ticker_price(intent.symbol)
+                ticker = client.ticker_price(intent.symbol)
                 market = Decimal(str(ticker.get("price", "0") or "0"))
                 if market <= 0:
                     return "current market price unavailable for stop validation"
@@ -406,7 +419,7 @@ class ExecutionBarrier:
                         str(intent.risk_decision.williams_decision.trigger_price)
                     )
                 else:
-                    ticker = self.client.ticker_price(intent.symbol)
+                    ticker = client.ticker_price(intent.symbol)
                     trigger = Decimal(str(ticker.get("price", "0") or "0"))
             except (InvalidOperation, ValueError, TypeError):
                 return "invalid numeric execution parameters"
