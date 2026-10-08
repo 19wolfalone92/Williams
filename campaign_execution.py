@@ -700,6 +700,20 @@ class CampaignExecutionService:
                             risk_quote=float(campaign.pending_risk_quote),
                             fee_quote=0.0,
                         )
+                        self._update_decision_trace(
+                            campaign,
+                            actual_fill=True,
+                            fill_time_ms=int(order.get("transactTime", order.get("time", 0)) or 0),
+                            fill_price=avg,
+                            fill_quantity=executed,
+                            campaign_id=campaign.campaign_id,
+                            campaign_step=int(campaign.tranche_index or 1),
+                            execution_feasible=True,
+                            risk_feasible=True,
+                            core_valid=True,
+                            trade_allowed=True,
+                            block_reason="",
+                        )
                         self.db.set_campaign_signal_state(
                             signal_id,
                             SignalState.FILLED.value,
@@ -790,6 +804,20 @@ class CampaignExecutionService:
                         fill_order_id=str(order.get("orderId", "")),
                         risk_quote=float(campaign.pending_risk_quote),
                         fee_quote=0.0,
+                    )
+                    self._update_decision_trace(
+                        campaign,
+                        actual_fill=True,
+                        fill_time_ms=int(order.get("transactTime", order.get("time", 0)) or 0),
+                        fill_price=avg,
+                        fill_quantity=executed,
+                        campaign_id=campaign.campaign_id,
+                        campaign_step=1,
+                        execution_feasible=True,
+                        risk_feasible=True,
+                        core_valid=True,
+                        trade_allowed=True,
+                        block_reason="",
                     )
                     self.db.set_campaign_signal_state(
                         signal_id,
