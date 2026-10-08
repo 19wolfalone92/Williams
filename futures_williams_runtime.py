@@ -1496,7 +1496,14 @@ class FuturesWilliamsRuntime:
 
                 order = self.client.get_order(symbol, orig_client_order_id=cid)
                 status = str(order.get("status", "")).upper()
-                if row is None:
+                if row is None or not str(row["campaign_id"] or "") or not str(row["campaign_id"]) == str(campaign.campaign_id):
+                    self._set_state(symbol, "RECONCILE_REQUIRED")
+                    raise RuntimeError("pending exit durable ownership mismatch")
+                durable_order_id = str(row["order_id"] or "")
+                if not durable_order_id or (
+                    order.get("orderId") is not None
+                    and durable_order_id != str(order.get("orderId"))
+                ):
                     self.db.save_campaign_order(
                         PendingOrderRecord(
                             order_id=str(order.get("orderId", "")),
