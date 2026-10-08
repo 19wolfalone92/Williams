@@ -1,13 +1,14 @@
 """P0 serialized execution barrier for Williams."""
 from __future__ import annotations
 
+import math
+import re
 import time
 import uuid
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
 from market_context import ContextCache, MarketStateSnapshot
-from order_state_machine import OrderState, OrderStateMachine
 from order_state_machine import OrderState, OrderStateMachine
 
 
@@ -73,12 +74,15 @@ class ExecutionBarrier:
         self.context_cache = context_cache
         self.db = db
 
-    def _persist(self, intent: OrderIntent, status: str, reason: str = "") -> None:
-        if self.db is not None and hasattr(self.db, "save_execution_intent"):
-            try:
-                self.db.save_execution_intent(intent, status, reason)
-            except Exception:
-                pass
+    def _persist(self, intent: OrderIntent, status: str, reason: str = "") -> bool:
+        """Persist intent state; return False rather than hiding durability failure."""
+        if self.db is None or not callable(getattr(self.db, "save_execution_intent", None)):
+            return False
+        try:
+            self.db.save_execution_intent(intent, status, reason)
+            return True
+        except Exception:
+            return False
 
     def _record(self, level: str, event: str, intent: OrderIntent, message: str, raw=None) -> None:
         if self.db is not None and hasattr(self.db, "log_event"):
@@ -91,22 +95,57 @@ class ExecutionBarrier:
         now_ms = int(time.time() * 1000)
         purpose = str(intent.purpose or "").strip().upper()
         entry_purposes = {"ENTRY", "CAMPAIGN_ENTRY", "CAMPAIGN_ADD_ON"}
+        side = str(intent.side or "").strip().upper()
+        symbol = str(intent.symbol or "").strip().upper()
+        order_type = str(intent.order_type or "").strip().upper()
+        client_order_id = str(intent.client_order_id or "").strip()
+        allowed_order_types = {
+            "MARKET", "LIMIT", "LIMIT_MAKER", "STOP_LOSS",
+            "STOP_LOSS_LIMIT", "TAKE_PROFIT", "TAKE_PROFIT_LIMIT",
+        }
 
-        if intent.created_at_ms:
-            age = now_ms - int(intent.created_at_ms)
-            if age > int(intent.max_age_ms):
-                return f"stale intent age={age}ms"
+        if not str(intent.intent_id or "").strip():
+            return "missing intent_id"
+        if not re.fullmatch(r"[A-Z0-9]{5,32}", symbol):
+            return "invalid symbol format"
+        if side not in {"BUY", "SELL"}:
+            return f"unsupported side {side or '<empty>'}"
+        if order_type not in allowed_order_types and order_type != "CANCEL":
+            return f"unsupported order_type {order_type or '<empty>'}"
+        if isinstance(intent.created_at_ms, bool) or not isinstance(intent.created_at_ms, int) or intent.created_at_ms <= 0:
+            return "invalid or missing created_at_ms"
+        if isinstance(intent.max_age_ms, bool) or not isinstance(intent.max_age_ms, int) or intent.max_age_ms <= 0:
+            return "invalid or missing max_age_ms"
+        age = now_ms - intent.created_at_ms
+        if age < 0:
+            return "intent created_at_ms is in the future"
+        if age > intent.max_age_ms:
+            return f"stale intent age={age}ms"
 
-        direction = "long" if intent.side == "BUY" else "short" if intent.side == "SELL" else ""
+        direction = "long" if side == "BUY" else "short"
         if not direction:
             return f"unsupported side {intent.side}"
 
         # In Spot, every autonomous BUY is a new entry or add-on. Unknown
         # purposes must not become an alternate route around entry admission.
-        if intent.side == "BUY" and purpose not in entry_purposes:
+        if side == "BUY" and purpose not in entry_purposes:
             return f"BUY intent has unsupported entry purpose {purpose or '<empty>'}"
 
         if purpose in entry_purposes:
+            if not re.fullmatch(r"[A-Za-z0-9_.:/-]{1,36}", client_order_id):
+                return "missing or invalid client_order_id"
+            if order_type not in {"MARKET", "STOP_LOSS"}:
+                return f"entry order_type is not approved for current Spot execution model: {order_type}"
+            quantity = str(intent.quantity or "").strip()
+            quote_quantity = str(intent.quote_order_quantity or "").strip()
+            if bool(quantity) == bool(quote_quantity):
+                return "entry requires exactly one of quantity or quote_order_quantity"
+            try:
+                amount = float(quantity if quantity else quote_quantity)
+            except (TypeError, ValueError):
+                return "invalid entry quantity"
+            if not math.isfinite(amount) or amount <= 0:
+                return "entry quantity must be finite and positive"
             if not intent.required_context_versions:
                 return "missing required_context_versions"
             if not intent.signal_id:
@@ -124,16 +163,35 @@ class ExecutionBarrier:
             if purpose.startswith("CAMPAIGN_") and not intent.campaign_id:
                 return "missing campaign_id for campaign entry"
 
+        if not isinstance(intent.required_context_versions, Mapping):
+            return "required_context_versions must be a mapping"
         for tf, required in intent.required_context_versions.items():
-            ctx = snapshot.context(intent.symbol, tf)
+            if not isinstance(tf, str) or not tf.strip():
+                return "invalid context interval key"
+            if isinstance(required, bool) or not isinstance(required, int) or required < 0:
+                return f"invalid required context version for {tf}"
+            ctx = snapshot.context(symbol, tf)
             if ctx is None:
-                return f"missing context {intent.symbol} {tf}"
-            if int(ctx.version) != int(required):
+                return f"missing context {symbol} {tf}"
+            if isinstance(ctx.version, bool) or not isinstance(ctx.version, int) or ctx.version < 0:
+                return f"invalid published context version for {tf}"
+            if int(ctx.version) != required:
                 return f"stale context {tf}: required={required} current={ctx.version}"
+            # Validate data availability/shape without inventing an unapproved
+            # universal maximum context age. A sourced age policy remains open.
+            if (
+                isinstance(ctx.candle_close_time_ms, bool)
+                or not isinstance(ctx.candle_close_time_ms, int)
+                or ctx.candle_close_time_ms <= 0
+                or ctx.candle_close_time_ms > now_ms
+            ):
+                return f"invalid or future context close timestamp for {tf}"
+            if not math.isfinite(float(ctx.price)) or float(ctx.price) <= 0:
+                return f"invalid context price for {tf}"
 
         if purpose in entry_purposes:
             permission_tf = (intent.permission_interval or "").lower()
-            permission_ctx = snapshot.context(intent.symbol, permission_tf)
+            permission_ctx = snapshot.context(symbol, permission_tf)
             if permission_ctx is None:
                 return f"missing permission context {intent.symbol} {permission_tf}"
             if direction == "long" and not permission_ctx.allow_long:
@@ -169,7 +227,13 @@ class ExecutionBarrier:
         with self.context_cache.execution_lock:
             order_fsm = OrderStateMachine()
             order_fsm.transition(OrderState.ADMISSION)
-            self._persist(intent, "PENDING")
+            purpose = str(intent.purpose or "").strip().upper()
+            entry_purposes = {"ENTRY", "CAMPAIGN_ENTRY", "CAMPAIGN_ADD_ON"}
+            durable = self._persist(intent, "PENDING")
+            if purpose in entry_purposes and not durable:
+                reason = "mandatory intent persistence failed; entry blocked before exchange submission"
+                self._record("ERROR", "execution_blocked", intent, reason)
+                return ExecutionResult(intent.intent_id, False, reason=reason)
             if self.db is not None and hasattr(self.db, "save_execution_event"):
                 try:
                     self.db.save_execution_event(intent.intent_id, "ADMISSION_STARTED", dict(intent.required_context_versions))
@@ -317,7 +381,10 @@ class ExecutionBarrier:
                     raise RuntimeError(
                         "ExecutionBarrier: exchange response lacks authoritative order state"
                     )
-            self._persist(intent, "SUBMITTED")
+            if not self._persist(intent, "SUBMITTED"):
+                reason = "exchange submission response received but durable status update failed; reconciliation required"
+                self._record("ERROR", "execution_ambiguous", intent, reason)
+                raise RuntimeError(reason)
             if self.db is not None and hasattr(self.db, "save_execution_event"):
                 try:
                     self.db.save_execution_event(intent.intent_id, "BINANCE_SUBMITTED", {"symbol": intent.symbol, "side": intent.side})
