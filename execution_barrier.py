@@ -154,6 +154,21 @@ class ExecutionBarrier:
             if campaign_state == "RECONCILE_REQUIRED":
                 return "campaign_reconcile_required"
 
+            # Never trust only the mirror: the canonical campaign row is the
+            # durable source of truth. This closes the race where a recovery
+            # path marks the campaign unsafe but a stale bot_state value remains.
+            if intent.campaign_id and hasattr(self.db, "get_campaign"):
+                campaign = self.db.get_campaign(intent.campaign_id)
+                if campaign is not None and str(campaign.get("state", "")).upper() == "RECONCILE_REQUIRED":
+                    return "campaign_reconcile_required"
+            if hasattr(self.db, "open_campaigns"):
+                for campaign in self.db.open_campaigns():
+                    if (
+                        str(campaign.get("symbol", "")).upper() == intent.symbol.upper()
+                        and str(campaign.get("state", "")).upper() == "RECONCILE_REQUIRED"
+                    ):
+                        return "symbol_campaign_reconcile_required"
+
             # Optional runtime latches are read only when explicitly persisted;
             # absence preserves unit-test and headless-library compatibility.
             runtime_enabled = self.db.state_get("runtime_execution_enabled")
