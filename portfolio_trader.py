@@ -42,11 +42,11 @@ class MultiPositionTrader:
     EMERGENCY_PREFIX = "WILLV4_EMERGENCY_"
     MANUAL_PREFIX = "WILLV4_MANUAL_"
 
-    def __init__(self, client, db=None, symbols=None, execution_barrier=None):
+    def __init__(self, client, db=None, symbols=None, execution_barrier=None, strategy_profile=None):
         self.client = client
         self.db = db or Database()
         self.intraday_policy = IntradayPolicy.from_env()
-        explicit_profile = str(os.getenv("WILLIAMS_STRATEGY_PROFILE", "")).strip().upper()
+        explicit_profile = str(strategy_profile or os.getenv("WILLIAMS_STRATEGY_PROFILE", "")).strip().upper()
         self.intraday_core_enabled = explicit_profile in {"WILLIAMS_INTRADAY_CORE", "WILLIAMS_INTRADAY_CONSERVATIVE"}
         if symbols is not None:
             self.symbols = [str(x).strip().upper() for x in symbols if str(x).strip()]
