@@ -77,7 +77,7 @@ class TradingConfig:
     execution_timeframe: str = "5m"
 
     allow_long: bool = True
-    allow_short: bool = False
+    allow_short: bool = True
     require_htf_confirmation: bool = True
     no_trade_when_uncertain: bool = True
 
