@@ -55,7 +55,8 @@ def main() -> None:
     trader = read("trader.py")
     must(trader, "os.getenv('AUTO_SCAN_SYMBOLS', '').strip()", "trader.py")
     must(trader, "SCAN_THROTTLED", "trader.py")
-    must(trader, 'os.getenv("CAMPAIGN_ENGINE", "true")', "trader.py")
+    portfolio_trader = read("portfolio_trader.py")
+    must(portfolio_trader, 'os.getenv("CAMPAIGN_ENGINE", "true")', "portfolio_trader.py")
     must(trader, "_auto_scan_lock", "trader.py")
 
     server = read("server.py")
