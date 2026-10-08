@@ -206,8 +206,11 @@ class MarketScanner:
         if raw.upper() in {"ALL", "AUTO", "*"}:
             return []
         if raw:
-            return [str(x).upper().strip() for x in raw.split(",") if str(x).strip()]
-        return []
+            requested = [str(x).upper().strip() for x in raw.split(",") if str(x).strip()]
+            if self.core_mode:
+                return [x for x in requested if x in {"BTCUSDT", "ETHUSDT"}]
+            return requested
+        return ["BTCUSDT", "ETHUSDT"] if self.core_mode else []
     def _atr(df, period):
         prev = df["close"].shift(1)
         tr = pd.concat(
