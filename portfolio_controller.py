@@ -148,7 +148,14 @@ class PortfolioController:
                 htf_confirmed=base.candidate.htf_confirmed,
                 spread_pct=base.candidate.spread_pct,
                 max_spread_pct=self.scanner.max_spread_pct,
-                invalidation_price=float(getattr(base.candidate, "wave_invalidation_price", 0.0) or 0.0),
+                invalidation_price=(
+                    float(getattr(base.candidate, "wave_invalidation_price", 0.0) or 0.0)
+                    if not (
+                        os.getenv("CAMPAIGN_ENGINE", "false").lower() == "true"
+                        and getattr(base.candidate, "campaign_signal_specs", None)
+                    )
+                    else float(base.risk.stop_price)
+                ),
                 risk_pct_override=allocation_pct,
             )
             if not r.allowed:
