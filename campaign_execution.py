@@ -11,6 +11,7 @@ import uuid
 from binance_client import BinanceAPIError
 from campaign_engine import CampaignEngine
 from campaign_model import CampaignState, PendingOrderRecord, SignalSpec, SignalState, SignalType
+from pending_signal import PendingSignal
 from decision_trace import DecisionTrace
 from execution_barrier import ExecutionBarrier, OrderIntent
 
@@ -198,6 +199,11 @@ class CampaignExecutionService:
         candidate_risk_pct: float,
         capital_fraction: float = 0.25,
     ) -> dict[str, Any]:
+        pending_signal = PendingSignal.from_spec(signal)
+        if not pending_signal.actionable():
+            raise CampaignExecutionError(
+                f"{signal.symbol}: signal expired or invalid before campaign entry"
+            )
         if signal.side != "BUY":
             raise CampaignExecutionError("Current Spot campaign executor only arms LONG entries")
 
@@ -261,7 +267,8 @@ class CampaignExecutionService:
         )
         campaign.tags["signal_role"] = signal.role.value
         campaign.tags["decision_trace"] = DecisionTrace.from_signal(signal).to_dict()
-        campaign.tags["pending_signal_expires_at_ms"] = int(signal.expires_at_ms or 0)
+        campaign.tags["pending_signal_expires_at_ms"] = int(pending_signal.expires_at_ms)
+        campaign.tags["pending_signal"] = pending_signal.to_dict()
         campaign.tags["initial_stop_price"] = stop
         campaign.initial_stop_price = stop
         campaign.current_stop_price = stop
@@ -289,11 +296,16 @@ class CampaignExecutionService:
             permission_interval=signal.timeframe,
             campaign_id=campaign.campaign_id,
             signal_id=signal.signal_id,
+            signal_expires_at_ms=pending_signal.expires_at_ms,
             risk_quote=risk_quote,
             capital_reserved_quote=qty * trigger,
         )
 
         def check(snapshot):
+            if pending_signal.is_expired():
+                raise CampaignExecutionError(
+                    f"{signal.symbol}: signal expired before order submission"
+                )
             # Last-mile market condition: this is a conditional order, never a
             # substitute for a missed trigger. If price already crossed the
             # trigger, abort rather than turn it into a MARKET BUY.
@@ -944,6 +956,11 @@ class CampaignExecutionService:
         equity_quote: float,
         candidate_risk_pct: float,
     ) -> dict[str, Any]:
+        pending_signal = PendingSignal.from_spec(signal)
+        if not pending_signal.actionable():
+            raise CampaignExecutionError(
+                f"{signal.symbol}: add-on signal expired or invalid"
+            )
         campaign = self._active_campaign_for_symbol(signal.symbol)
         if campaign is None or campaign.position_qty <= 0:
             raise CampaignExecutionError(f"{signal.symbol}: no active campaign for add-on")
@@ -1001,6 +1018,7 @@ class CampaignExecutionService:
         self.db.save_campaign_signal(signal, campaign.campaign_id, state=SignalState.DETECTED.value)
         campaign.tags["last_signal_time_ms"] = int(signal.signal_bar_time_ms)
         campaign.tags["pending_add_signal_id"] = signal.signal_id
+        campaign.tags["pending_add_signal_expires_at_ms"] = int(pending_signal.expires_at_ms)
         campaign.pending_risk_quote = requested
         campaign.capital_reserved_quote = qty * trigger
         self.engine.arm_add_on(
@@ -1040,8 +1058,10 @@ class CampaignExecutionService:
             quantity=self.client.decimal_format(qty),
             client_order_id=cid,
             purpose="CAMPAIGN_ADD_ON",
+            permission_interval=signal.timeframe,
             campaign_id=campaign.campaign_id,
             signal_id=signal.signal_id,
+            signal_expires_at_ms=pending_signal.expires_at_ms,
             risk_quote=requested,
             capital_reserved_quote=qty * trigger,
         )
@@ -1055,10 +1075,11 @@ class CampaignExecutionService:
                 stop_price=self.client.decimal_format(trigger),
                 new_client_order_id=cid,
             ),
-            lambda _snapshot: self._validate_add_on_submission(
-                signal.symbol,
-                qty,
-                trigger,
+            lambda _snapshot: (
+                (_ for _ in ()).throw(CampaignExecutionError(
+                    f"{signal.symbol}: add-on signal expired before order submission"
+                )) if pending_signal.is_expired() else
+                self._validate_add_on_submission(signal.symbol, qty, trigger)
             ),
         )
         self.db.save_campaign_order(
