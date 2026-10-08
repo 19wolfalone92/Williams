@@ -49,6 +49,7 @@ def report(position, exhaustion, nested=False):
 
 
 def test_w5_high_exhaustion_is_blocked(monkeypatch):
+    monkeypatch.setenv("WILLIAMS_MODE", "LEGACY")
     monkeypatch.setenv("MAX_WAVE_EXHAUSTION_FOR_ENTRY", "80")
     scanner = MarketScanner(FakeClient(), symbols=["BTCUSDT"], interval="1h")
     scanner.wave_engine.analyse = lambda symbol, cache=None: report(5, 85)
@@ -58,6 +59,7 @@ def test_w5_high_exhaustion_is_blocked(monkeypatch):
 
 
 def test_child_w3_in_parent_w5_is_not_blocked_by_parent_context(monkeypatch):
+    monkeypatch.setenv("WILLIAMS_MODE", "LEGACY")
     monkeypatch.setenv("MAX_WAVE_EXHAUSTION_FOR_ENTRY", "80")
     scanner = MarketScanner(FakeClient(), symbols=["BTCUSDT"], interval="1h")
     scanner.wave_engine.analyse = lambda symbol, cache=None: report(3, 20, nested=True)
