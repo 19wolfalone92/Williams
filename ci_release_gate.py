@@ -136,7 +136,7 @@ def main() -> None:
         "FuturesWilliamsRuntime",
         "BinanceFuturesClient",
         "BINANCE_MARKET",
-        "USD-M Futures",
+        "USDⓈ-M Futures",
     ):
         must(server, needle, "server.py")
 
