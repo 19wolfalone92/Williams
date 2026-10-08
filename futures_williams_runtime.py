@@ -539,8 +539,10 @@ class FuturesWilliamsRuntime:
             try:
                 multi_mode = self.client.get_multi_assets_mode()
                 multi_assets = bool(multi_mode.get("multiAssetsMargin", False))
-            except Exception:
-                multi_assets = False
+            except Exception as exc:
+                report["checks"]["multi_assets_mode"] = "FAIL"
+                report["details"]["reason"] = f"cannot verify Multi-Assets Mode: {type(exc).__name__}: {exc}"
+                return report
             if multi_assets:
                 existing_positions = [
                     p for p in (self.client.position_risk() or [])
