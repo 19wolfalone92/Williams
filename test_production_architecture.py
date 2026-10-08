@@ -67,6 +67,8 @@ def test_execution_barrier_rejects_stale_context():
         required_context_versions={"1h": snap.context("BTCUSDT", "1h").version},
         client_order_id="WTEST_123456789",
         quantity="1",
+        client_order_id="WTEST_123456789",
+        quantity="1",
         signal_id="test-signal",
         signal_expires_at_ms=int(time.time() * 1000) + 60_000,
         permission_interval="1h",
@@ -81,7 +83,7 @@ def test_execution_barrier_rejects_stale_context():
 def test_execution_barrier_serializes_publish_and_submit():
     cache = ContextCache()
     cache.publish(context())
-    barrier = ExecutionBarrier(cache)
+    barrier = ExecutionBarrier(cache, IntentDB())
     version = cache.snapshot().context("BTCUSDT", "1h").version
     started = threading.Event()
     published = threading.Event()
@@ -104,6 +106,8 @@ def test_execution_barrier_serializes_publish_and_submit():
         "BUY",
         "MARKET",
         {"1h": version},
+        client_order_id="WTEST_123456789",
+        quantity="1",
         signal_id="test-signal",
         signal_expires_at_ms=int(time.time() * 1000) + 60_000,
         permission_interval="1h",
@@ -140,11 +144,13 @@ def test_wise_men_state_machine_is_durable():
 def test_execution_barrier_rejects_signal_expired_after_intent_creation():
     cache = ContextCache()
     cache.publish(context())
-    barrier = ExecutionBarrier(cache)
+    barrier = ExecutionBarrier(cache, IntentDB())
     version = cache.snapshot().context("BTCUSDT", "1h").version
     intent = OrderIntent.new(
         "BTCUSDT", "BUY", "STOP_LOSS",
         {"1h": version},
+        client_order_id="WTEST_123456789",
+        quantity="1",
         signal_id="test-signal",
         signal_expires_at_ms=int(time.time() * 1000) - 1,
         permission_interval="1h",
@@ -160,12 +166,14 @@ def test_execution_barrier_rejects_signal_expired_after_intent_creation():
 def test_execution_barrier_rejects_empty_context_dependencies_for_campaign_entry():
     cache = ContextCache()
     cache.publish(context())
-    barrier = ExecutionBarrier(cache)
+    barrier = ExecutionBarrier(cache, IntentDB())
     intent = OrderIntent.new(
         "BTCUSDT", "BUY", "STOP_LOSS",
         {},
         purpose="CAMPAIGN_ENTRY",
         campaign_id="campaign-1",
+        client_order_id="WTEST_123456789",
+        quantity="1",
         client_order_id="WTEST_123456789",
         quantity="1",
         signal_id="signal-1",
@@ -183,13 +191,15 @@ def test_execution_barrier_rejects_empty_context_dependencies_for_campaign_entry
 def test_execution_barrier_checks_direction_permission_for_campaign_entry():
     cache = ContextCache()
     cache.publish(context(allow_long=False, allow_short=False))
-    barrier = ExecutionBarrier(cache)
+    barrier = ExecutionBarrier(cache, IntentDB())
     version = cache.snapshot().context("BTCUSDT", "1h").version
     intent = OrderIntent.new(
         "BTCUSDT", "BUY", "STOP_LOSS",
         {"1h": version},
         purpose="CAMPAIGN_ENTRY",
         campaign_id="campaign-1",
+        client_order_id="WTEST_123456789",
+        quantity="1",
         signal_id="signal-1",
         signal_expires_at_ms=int(time.time() * 1000) + 60_000,
         permission_interval="1h",
@@ -206,11 +216,13 @@ def test_execution_barrier_checks_direction_permission_for_campaign_entry():
 def test_execution_barrier_rechecks_expiry_after_slow_pre_submit_validation():
     cache = ContextCache()
     cache.publish(context())
-    barrier = ExecutionBarrier(cache)
+    barrier = ExecutionBarrier(cache, IntentDB())
     version = cache.snapshot().context("BTCUSDT", "1h").version
     intent = OrderIntent.new(
         "BTCUSDT", "BUY", "STOP_LOSS",
         {"1h": version},
+        client_order_id="WTEST_123456789",
+        quantity="1",
         signal_id="test-signal",
         signal_expires_at_ms=int(time.time() * 1000) + 250,
         permission_interval="1h",
@@ -234,7 +246,7 @@ def test_execution_barrier_rechecks_expiry_after_slow_pre_submit_validation():
 def test_execution_barrier_rejects_buy_with_unrecognized_purpose():
     cache = ContextCache()
     cache.publish(context())
-    barrier = ExecutionBarrier(cache)
+    barrier = ExecutionBarrier(cache, IntentDB())
     intent = OrderIntent.new(
         "BTCUSDT", "BUY", "MARKET",
         {"1h": 1},
@@ -290,6 +302,8 @@ def test_execution_barrier_blocks_new_entry_during_reconciliation():
     intent = OrderIntent.new(
         "BTCUSDT", "BUY", "STOP_LOSS",
         {"1h": version},
+        client_order_id="WTEST_123456789",
+        quantity="1",
         signal_id="signal-1",
         signal_expires_at_ms=int(time.time() * 1000) + 60_000,
         permission_interval="1h",
@@ -310,11 +324,13 @@ def test_execution_barrier_requires_permission_interval_version_dependency():
     cache = ContextCache()
     cache.publish(context(interval="1h"))
     cache.publish(context(interval="4h"))
-    barrier = ExecutionBarrier(cache)
+    barrier = ExecutionBarrier(cache, IntentDB())
     version = cache.snapshot().context("BTCUSDT", "4h").version
     intent = OrderIntent.new(
         "BTCUSDT", "BUY", "STOP_LOSS",
         {"4h": version},
+        client_order_id="WTEST_123456789",
+        quantity="1",
         signal_id="signal-1",
         signal_expires_at_ms=int(time.time() * 1000) + 60_000,
         permission_interval="1h",
