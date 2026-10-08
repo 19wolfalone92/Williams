@@ -67,7 +67,7 @@ class PortfolioController:
             try:
                 if bool(getattr(self, "core_mode", False)) and not self.intraday_policy.allows_new_campaign(now):
                     continue
-                if self.core_mode and bool(os.getenv("H4_ADVERSE_BLOCKS", "false").lower() == "true") and candidate.htf_context_state == "ADVERSE":
+                if bool(getattr(self, "core_mode", False)) and bool(os.getenv("H4_ADVERSE_BLOCKS", "false").lower() == "true") and candidate.htf_context_state == "ADVERSE":
                     continue
                 raw_specs = list(getattr(candidate, "campaign_signal_specs", []) or [])
                 if not raw_specs:
@@ -84,7 +84,7 @@ class PortfolioController:
                 min_notional = float(notional_filter.get("minNotional", 0) or 0)
                 quality_risk = self.max_risk_per_trade_pct
                 family = str(chosen.get("signal_type", "")).upper()
-                if self.core_mode:
+                if bool(getattr(self, "core_mode", False)):
                     if family == "REVERSAL":
                         quality_risk = 0.0025 if candidate.htf_context_state == "SUPPORTIVE" else 0.001875
                     else:
@@ -100,7 +100,7 @@ class PortfolioController:
                     max_spread_pct=self.scanner.max_spread_pct,
                     invalidation_price=stop_price,
                     risk_pct_override=quality_risk,
-                    target_atr_multiplier=0.0 if self.core_mode else 4.0,
+                    target_atr_multiplier=0.0 if bool(getattr(self, "core_mode", False)) else 4.0,
                 )
                 economics = self.economics_gate.evaluate(
                     entry=entry_price,
@@ -109,7 +109,7 @@ class PortfolioController:
                     estimated_slippage_pct=float(os.getenv("MAX_L2_SLIPPAGE_PCT", "0.0015")),
                     minimum_notional_ok=(min_notional <= 0 or risk.position_quote >= min_notional),
                     balance_ok=(float(self.risk_engine.balance) >= float(risk.position_quote)),
-                    time_to_eod_ok=self.intraday_policy.allows_new_campaign(now) if self.core_mode else True,
+                    time_to_eod_ok=self.intraday_policy.allows_new_campaign(now) if bool(getattr(self, "core_mode", False)) else True,
                 )
                 if risk.allowed and economics.feasible:
                     analysed.append(Selection(
