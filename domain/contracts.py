@@ -1,1 +1,180 @@
-"""Canonical immutable contracts for Digital Bill Williams.\n\nThese contracts belong to the Pure Williams / policy boundary. They do not\nknow about Binance, persistence, Android, HTTP or order execution.\n"""\n\nfrom __future__ import annotations\n\nfrom dataclasses import asdict, dataclass\nfrom enum import Enum\nfrom typing import Any, Optional\n\n\nclass SignalDirection(str, Enum):\n    LONG = "LONG"\n    SHORT = "SHORT"\n    FLAT = "FLAT"\n\n\n@dataclass(frozen=True, slots=True)\nclass ProofVector:\n    """Eight-stage evidence vector.\n\n    diagnostic_score is informational only. It must never be used as a\n    substitute for the individual proof gates.\n    """\n\n    context_pass: bool\n    behavior_pass: bool\n    structure_pass: bool\n    location_pass: bool\n    angulation_pass: bool\n    momentum_pass: bool\n    price_proof_pass: bool\n    invalidation_present: bool\n\n    @property\n    def is_fully_proven(self) -> bool:\n        return all((\n            self.context_pass,\n            self.behavior_pass,\n            self.structure_pass,\n            self.location_pass,\n            self.angulation_pass,\n            self.momentum_pass,\n            self.price_proof_pass,\n            self.invalidation_present,\n        ))\n\n    @property\n    def diagnostic_score(self) -> float:\n        return sum(\n            bool(value)\n            for value in (\n                self.context_pass,\n                self.behavior_pass,\n                self.structure_pass,\n                self.location_pass,\n                self.angulation_pass,\n                self.momentum_pass,\n                self.price_proof_pass,\n                self.invalidation_present,\n            )\n        ) / 8.0\n\n    def to_dict(self) -> dict[str, Any]:\n        return asdict(self)\n\n\n@dataclass(frozen=True, slots=True)\nclass WilliamsDecision:\n    """Immutable Williams-side decision contract.\n\n    A decision contains evidence and the prices that define the hypothesis.\n    It does not contain execution instructions and cannot call an exchange.\n    """\n\n    timestamp: int\n    symbol: str\n    direction: SignalDirection\n    wise_man_stage: int\n    trigger_price: float\n    invalidation_price: float\n    proof_vector: ProofVector\n    context_regime: str\n\n    def __post_init__(self) -> None:\n        symbol = str(self.symbol).upper().strip()\n        if not symbol:\n            raise ValueError("WilliamsDecision.symbol is required")\n        if int(self.timestamp) < 0:\n            raise ValueError("WilliamsDecision.timestamp must be >= 0")\n        if int(self.wise_man_stage) not in {1, 2, 3}:\n            raise ValueError("wise_man_stage must be 1, 2 or 3")\n        if float(self.trigger_price) <= 0:\n            raise ValueError("trigger_price must be > 0")\n        if float(self.invalidation_price) <= 0:\n            raise ValueError("invalidation_price must be > 0")\n        if not isinstance(self.direction, SignalDirection):\n            raise ValueError("direction must be SignalDirection")\n        if not isinstance(self.proof_vector, ProofVector):\n            raise ValueError("proof_vector must be ProofVector")\n        object.__setattr__(self, "symbol", symbol)\n        object.__setattr__(self, "context_regime", str(self.context_regime or "UNKNOWN").upper())\n\n    def to_dict(self) -> dict[str, Any]:\n        data = asdict(self)\n        data["direction"] = self.direction.value\n        return data\n\n\n@dataclass(frozen=True, slots=True)\nclass RiskDecision:\n    """Immutable risk admission result derived from a WilliamsDecision."""\n\n    williams_decision: WilliamsDecision\n    approved: bool\n    allocated_r_multiple: float\n    calculated_quantity: float\n    max_allowed_slippage: float\n    rejection_reason: Optional[str] = None\n\n    def __post_init__(self) -> None:\n        if not isinstance(self.williams_decision, WilliamsDecision):\n            raise ValueError("williams_decision must be WilliamsDecision")\n        if float(self.allocated_r_multiple) < 0:\n            raise ValueError("allocated_r_multiple must be >= 0")\n        if float(self.calculated_quantity) < 0:\n            raise ValueError("calculated_quantity must be >= 0")\n        if float(self.max_allowed_slippage) < 0:\n            raise ValueError("max_allowed_slippage must be >= 0")\n        if self.approved and self.rejection_reason:\n            raise ValueError("approved RiskDecision cannot have rejection_reason")\n        if not self.approved and not str(self.rejection_reason or "").strip():\n            raise ValueError("rejected RiskDecision requires rejection_reason")\n\n    def to_dict(self) -> dict[str, Any]:\n        data = asdict(self)\n        data["williams_decision"]["direction"] = self.williams_decision.direction.value\n        return data\n\n\n@dataclass(frozen=True, slots=True)\nclass ExecutionIntent:\n    """Immutable hand-off from risk policy to the execution barrier."""\n\n    risk_decision: RiskDecision\n    order_type: str\n    client_order_id: str\n    recv_window: int\n    time_in_force: str\n    reduce_only: bool\n\n    def __post_init__(self) -> None:\n        if not isinstance(self.risk_decision, RiskDecision):\n            raise ValueError("risk_decision must be RiskDecision")\n        order_type = str(self.order_type or "").upper().strip()\n        client_id = str(self.client_order_id or "").strip()\n        tif = str(self.time_in_force or "").upper().strip()\n        if not self.risk_decision.approved:\n            raise ValueError("ExecutionIntent requires an approved RiskDecision")\n        if not order_type:\n            raise ValueError("ExecutionIntent.order_type is required")\n        if not client_id:\n            raise ValueError("ExecutionIntent.client_order_id is required")\n        if int(self.recv_window) <= 0:\n            raise ValueError("ExecutionIntent.recv_window must be > 0")\n        if int(self.recv_window) > 60_000:\n            raise ValueError("ExecutionIntent.recv_window must be <= 60000")\n        if not tif:\n            raise ValueError("ExecutionIntent.time_in_force is required")\n        object.__setattr__(self, "order_type", order_type)\n        object.__setattr__(self, "client_order_id", client_id)\n        object.__setattr__(self, "time_in_force", tif)\n\n    def to_dict(self) -> dict[str, Any]:\n        return asdict(self)
+"""Canonical immutable contracts for Digital Bill Williams.
+
+These contracts belong to the Pure Williams / policy boundary. They do not
+know about Binance, persistence, Android, HTTP or order execution.
+"""
+
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass
+from enum import Enum
+from typing import Any, Optional
+
+
+class SignalDirection(str, Enum):
+    LONG = "LONG"
+    SHORT = "SHORT"
+    FLAT = "FLAT"
+
+
+@dataclass(frozen=True, slots=True)
+class ProofVector:
+    """Eight-stage evidence vector.
+
+    diagnostic_score is informational only. It must never be used as a
+    substitute for the individual proof gates.
+    """
+
+    context_pass: bool
+    behavior_pass: bool
+    structure_pass: bool
+    location_pass: bool
+    angulation_pass: bool
+    momentum_pass: bool
+    price_proof_pass: bool
+    invalidation_present: bool
+
+    @property
+    def is_fully_proven(self) -> bool:
+        return all((
+            self.context_pass,
+            self.behavior_pass,
+            self.structure_pass,
+            self.location_pass,
+            self.angulation_pass,
+            self.momentum_pass,
+            self.price_proof_pass,
+            self.invalidation_present,
+        ))
+
+    @property
+    def diagnostic_score(self) -> float:
+        return sum(
+            bool(value)
+            for value in (
+                self.context_pass,
+                self.behavior_pass,
+                self.structure_pass,
+                self.location_pass,
+                self.angulation_pass,
+                self.momentum_pass,
+                self.price_proof_pass,
+                self.invalidation_present,
+            )
+        ) / 8.0
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        data["risk_decision"] = self.risk_decision.to_dict()
+        return data
+
+
+@dataclass(frozen=True, slots=True)
+class WilliamsDecision:
+    """Immutable Williams-side decision contract.
+
+    A decision contains evidence and the prices that define the hypothesis.
+    It does not contain execution instructions and cannot call an exchange.
+    """
+
+    timestamp: int
+    symbol: str
+    direction: SignalDirection
+    wise_man_stage: int
+    trigger_price: float
+    invalidation_price: float
+    proof_vector: ProofVector
+    context_regime: str
+
+    def __post_init__(self) -> None:
+        symbol = str(self.symbol).upper().strip()
+        if not symbol:
+            raise ValueError("WilliamsDecision.symbol is required")
+        if int(self.timestamp) < 0:
+            raise ValueError("WilliamsDecision.timestamp must be >= 0")
+        if int(self.wise_man_stage) < 0 or int(self.wise_man_stage) > 3:
+            raise ValueError("wise_man_stage must be in [0, 3]")
+        if float(self.trigger_price) <= 0:
+            raise ValueError("trigger_price must be > 0")
+        if float(self.invalidation_price) <= 0:
+            raise ValueError("invalidation_price must be > 0")
+        if not isinstance(self.direction, SignalDirection):
+            raise ValueError("direction must be SignalDirection")
+        if not isinstance(self.proof_vector, ProofVector):
+            raise ValueError("proof_vector must be ProofVector")
+        object.__setattr__(self, "symbol", symbol)
+        object.__setattr__(self, "context_regime", str(self.context_regime or "UNKNOWN").upper())
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        data["direction"] = self.direction.value
+        data["proof_vector"] = self.proof_vector.to_dict()
+        return data
+
+
+@dataclass(frozen=True, slots=True)
+class RiskDecision:
+    """Immutable risk admission result derived from a WilliamsDecision."""
+
+    williams_decision: WilliamsDecision
+    approved: bool
+    allocated_r_multiple: float
+    calculated_quantity: float
+    max_allowed_slippage: float
+    rejection_reason: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.williams_decision, WilliamsDecision):
+            raise ValueError("williams_decision must be WilliamsDecision")
+        if float(self.allocated_r_multiple) < 0:
+            raise ValueError("allocated_r_multiple must be >= 0")
+        if float(self.calculated_quantity) < 0:
+            raise ValueError("calculated_quantity must be >= 0")
+        if float(self.max_allowed_slippage) < 0:
+            raise ValueError("max_allowed_slippage must be >= 0")
+        if self.approved and self.rejection_reason:
+            raise ValueError("approved RiskDecision cannot have rejection_reason")
+        if not self.approved and not str(self.rejection_reason or "").strip():
+            raise ValueError("rejected RiskDecision requires rejection_reason")
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        data["williams_decision"] = self.williams_decision.to_dict()
+        return data
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionIntent:
+    """Immutable hand-off from risk policy to the execution barrier."""
+
+    risk_decision: RiskDecision
+    order_type: str
+    client_order_id: str
+    recv_window: int
+    time_in_force: str
+    reduce_only: bool
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.risk_decision, RiskDecision):
+            raise ValueError("risk_decision must be RiskDecision")
+        order_type = str(self.order_type or "").upper().strip()
+        client_id = str(self.client_order_id or "").strip()
+        tif = str(self.time_in_force or "").upper().strip()
+        if not self.risk_decision.approved:
+            raise ValueError("ExecutionIntent requires an approved RiskDecision")
+        if not order_type:
+            raise ValueError("ExecutionIntent.order_type is required")
+        if not client_id:
+            raise ValueError("ExecutionIntent.client_order_id is required")
+        if int(self.recv_window) <= 0:
+            raise ValueError("ExecutionIntent.recv_window must be > 0")
+        if int(self.recv_window) > 60_000:
+            raise ValueError("ExecutionIntent.recv_window must be <= 60000")
+        if not tif:
+            raise ValueError("ExecutionIntent.time_in_force is required")
+        object.__setattr__(self, "order_type", order_type)
+        object.__setattr__(self, "client_order_id", client_id)
+        object.__setattr__(self, "time_in_force", tif)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
