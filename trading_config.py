@@ -122,12 +122,16 @@ class TradingConfig:
         risk = max(0.0, min(0.0025, _float(source, risk_key, 0.0025)))
         total_risk = max(0.0, min(0.006, _float(source, "MAX_TOTAL_RISK_PCT", 0.006)))
 
-        decision_timeframe = str(source.get("DECISION_TIMEFRAME", "1h")).lower()\n        execution_timeframe = str(source.get("EXECUTION_TIMEFRAME", "15m")).lower()\n        micro_timeframe = str(source.get("MICRO_TIMEFRAME", "5m")).lower()
+        decision_timeframe = str(source.get("DECISION_TIMEFRAME", "1h")).lower()
+        execution_timeframe = str(source.get("EXECUTION_TIMEFRAME", "15m")).lower()
+        micro_timeframe = str(source.get("MICRO_TIMEFRAME", "5m")).lower()
 
         return cls(
             symbols=symbols,
-            structural_timeframes=_tf_chain(execution_timeframe, source),
+            structural_timeframes=("1d", "4h", "1h", "15m", "5m"),
+            decision_timeframe=decision_timeframe,
             execution_timeframe=execution_timeframe,
+            micro_timeframe=micro_timeframe,
             allow_long=_bool(source, "ALLOW_LONG", True),
             allow_short=_bool(source, "ALLOW_SHORT", False),
             require_htf_confirmation=_bool(source, "REQUIRE_HTF_CONFIRMATION", True),
