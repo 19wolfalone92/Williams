@@ -462,6 +462,90 @@ class CampaignExecutionService:
 
                 executed = float(order.get("executedQty", 0) or 0)
                 quote = float(order.get("cummulativeQuoteQty", 0) or 0)
+
+                # Williams' Fractal rule is evaluated at the instant the
+                # breakout is hit, not only when the pending order is armed.
+                # Teeth can move while a conditional order waits on Binance.
+                if (
+                    str(campaign.current_signal_type or "").upper() == SignalType.FRACTAL.value
+                    and status in {"NEW", "PENDING_NEW", "PARTIALLY_FILLED", "FILLED"}
+                ):
+                    try:
+                        from data import fetch_klines
+                        from strategy import calculate_indicators, config_from_env
+                        df = fetch_klines(
+                            self.client,
+                            symbol,
+                            campaign.execution_timeframe,
+                            limit=160,
+                        )
+                        closed = df.iloc[:-1].copy() if len(df) > 1 else df
+                        ind = calculate_indicators(closed, config_from_env())
+                        teeth = float(ind.iloc[-1].get("teeth_shifted", 0.0) or 0.0)
+                        hit_price = float(order.get("stopPrice", 0) or 0)
+                        fractal_valid = teeth <= 0.0 or hit_price > teeth
+                    except Exception as exc:
+                        self.engine.mark_reconcile_required(
+                            campaign,
+                            f"Fractal hit-time validation unavailable: {exc}",
+                        )
+                        raise CampaignExecutionError(
+                            f"{symbol}: cannot verify Fractal Teeth filter at trigger time"
+                        ) from exc
+
+                    if not fractal_valid:
+                        if executed <= 0:
+                            self._execute_cancel(
+                                campaign,
+                                int(order.get("orderId")),
+                                "CAMPAIGN_FRACTAL_INVALIDATED",
+                            )
+                            self.db.set_campaign_signal_state(
+                                signal_id,
+                                SignalState.INVALIDATED.value,
+                            )
+                            campaign.pending_risk_quote = 0.0
+                            campaign.capital_reserved_quote = 0.0
+                            campaign.next_action = "WAIT"
+                            campaign.transition(
+                                CampaignState.CLOSED,
+                                reason="Fractal failed Teeth filter before fill",
+                            )
+                            self.db.state_delete(f"entry_client_order_id:{symbol}")
+                            self.db.save_campaign(campaign)
+                            results.append({
+                                "symbol": symbol,
+                                "campaign_id": campaign.campaign_id,
+                                "state": "INVALIDATED",
+                                "reason": "Fractal trigger no longer above Teeth",
+                            })
+                            continue
+
+                        # A fill that violates the hit-time Fractal filter is
+                        # not a valid Williams entry. Protect it first, then
+                        # flatten only the campaign inventory.
+                        protection = self.create_hard_stop(
+                            campaign,
+                            quantity=executed,
+                            stop_price=float(campaign.current_stop_price),
+                        )
+                        campaign.tags["protective_order_id"] = protection.get("order_id", "")
+                        campaign.position_qty = executed
+                        campaign.average_entry_price = quote / executed if quote > 0 else float(order.get("price", 0) or 0)
+                        campaign.open_risk_quote = self.engine.refresh_open_risk(campaign)
+                        campaign.state = CampaignState.OPEN_INITIAL
+                        self.db.save_campaign(campaign)
+                        self.exit_market(
+                            campaign,
+                            reason="FRACTAL_TEETH_FILTER_FAILED_AT_FILL",
+                        )
+                        results.append({
+                            "symbol": symbol,
+                            "campaign_id": campaign.campaign_id,
+                            "state": "CLOSED",
+                            "reason": "Fractal trigger failed Teeth filter at fill",
+                        })
+                        continue
                 if quote <= 0 and executed > 0 and hasattr(self.client, "my_trades"):
                     try:
                         fills = self.client.my_trades(
