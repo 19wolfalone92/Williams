@@ -102,6 +102,8 @@ class OrderIntent:
             recv_window=int(intent.recv_window),
             time_in_force=intent.time_in_force,
             reduce_only=bool(intent.reduce_only),
+            related_order_id="",
+            related_order_list_id="",
         )
 
 
