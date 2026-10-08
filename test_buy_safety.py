@@ -63,3 +63,12 @@ def test_market_buy_guard_order_is_independent_of_setup(monkeypatch):
     # must still prevent a direct live BUY path.
     with pytest.raises(RuntimeError):
         t.market_buy(100.0)
+
+
+
+def test_legacy_market_buy_fails_closed_without_williams_signal_contract(monkeypatch):
+    monkeypatch.setenv("ALLOW_LIVE", "true")
+    t = make_trader(FakeClient())
+
+    with pytest.raises(RuntimeError, match="lacks no Williams|legacy Trader.market_buy"):
+        t.market_buy(100.0)
