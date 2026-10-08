@@ -276,6 +276,8 @@ class FuturesWilliamsRuntime:
                 if testnet is None else bool(testnet)
             ),
         )
+        self.db.state_set("active_symbol", self.symbol)
+
         self.engine = CampaignEngine(
             self.db,
             portfolio_risk_limit_pct=float(os.getenv("MAX_TOTAL_RISK_PCT", "0.01")),
@@ -288,6 +290,13 @@ class FuturesWilliamsRuntime:
             htf_interval=self.htf_interval,
         )
         self.auto_scan_symbols = []
+        self.symbols = list(self.config.symbols)
+        self.max_open_positions = max(0, int(os.getenv("MAX_OPEN_POSITIONS", "5")))
+        self.max_total_risk_pct = min(0.01, max(0.0, float(os.getenv("MAX_TOTAL_RISK_PCT", "0.01"))))
+        self.max_risk_per_trade_pct = min(0.005, max(0.0, float(os.getenv("MAX_RISK_PER_TRADE_PCT", "0.005"))))
+        self.scan_workers = 1
+        self.wave_top_n = 0
+        self.liquidity_preselect = int(os.getenv("FUTURES_SCAN_TOP_N", "40"))
         self._locks: set[str] = set()
         self._initialised_symbols: set[str] = set()
 
