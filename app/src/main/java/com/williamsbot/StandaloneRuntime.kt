@@ -2622,7 +2622,7 @@ private class NativeEngine(
         if (current <= 0.0) return
 
         val rules = runCatching { symbolFilters(candidate.symbol) }.getOrNull() ?: return
-        val trigger = normalizePrice(signal.triggerPrice, rules.tick)
+        val trigger = normalizeTriggerPrice(signal.triggerPrice, rules.tick)
         val stop = normalizePrice(signal.protectivePrice, rules.tick)
         if (trigger <= current || stop <= 0.0 || stop >= trigger) return
 
@@ -3075,7 +3075,7 @@ private class NativeEngine(
                             ),
                             stopPrice = fmtPrice(
                                 existing.stop,
-                                rules.decimals
+                                rules.tick
                             ),
                             newClientOrderId =
                                 "W5S_" + System.nanoTime().toString(16)
@@ -3219,14 +3219,14 @@ private class NativeEngine(
                 stop = protected.stop,
                 take = 0.0,
                 riskPct = protected.riskPct,
-                contextJson = JSONObject()
+                notional = protected.entry * protected.qty,
+                candidate = JSONObject()
                     .put("campaign_id", protected.campaignId)
                     .put("signal_id", protected.signalId)
                     .put("signal_type", protected.signalType)
                     .put("entry_trigger", intent.triggerPrice)
                     .put("protective_reference", intent.protectivePrice)
                     .put("campaign_entry_mode", "CONDITIONAL_STOP")
-                    .toString()
             )
             savePersistedState()
             stateMachine.force(
@@ -5096,6 +5096,7 @@ private class NativeEngine(
         type: String,
         quantity: String? = null,
         price: String? = null,
+        stopPrice: String? = null,
         timeInForce: String? = null,
         newClientOrderId: String? = null
     ): JSONObject {
@@ -5108,9 +5109,20 @@ private class NativeEngine(
             .append("&newOrderRespType=FULL")
         if (!quantity.isNullOrBlank()) params.append("&quantity=").append(quantity)
         if (!price.isNullOrBlank()) params.append("&price=").append(price)
+        if (!stopPrice.isNullOrBlank()) params.append("&stopPrice=").append(stopPrice)
         if (!timeInForce.isNullOrBlank()) params.append("&timeInForce=").append(timeInForce)
         if (!newClientOrderId.isNullOrBlank()) params.append("&newClientOrderId=").append(newClientOrderId)
         return signedPost("/api/v3/order/cancelReplace", params.toString())
+    }
+
+    private fun normalizePrice(price: Double, tick: Double): Double {
+        if (price <= 0.0 || tick <= 0.0) return price
+        return floor(price / tick + 1e-12) * tick
+    }
+
+    private fun normalizeTriggerPrice(price: Double, tick: Double): Double {
+        if (price <= 0.0 || tick <= 0.0) return price
+        return ceil(price / tick - 1e-12) * tick
     }
 
     private fun symbolFilters(symbol: String): SymbolRules {
