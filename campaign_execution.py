@@ -179,6 +179,77 @@ class CampaignExecutionService:
         if algo_open + additional > max_algo:
             raise CampaignExecutionError(f"{symbol}: MAX_NUM_ALGO_ORDERS would be exceeded")
 
+    def _validate_percent_price(self, symbol: str, side: str, price: float) -> None:
+        """Check Binance PERCENT_PRICE(_BY_SIDE) when the client exposes avgPrice."""
+        avg_price_fn = getattr(self.client, "avg_price", None)
+        if avg_price_fn is None:
+            return
+        try:
+            ref = float(avg_price_fn(symbol).get("price", 0) or 0)
+        except Exception:
+            return
+        if ref <= 0:
+            return
+
+        filters = self._rules(symbol)
+        by_side = filters.get("PERCENT_PRICE_BY_SIDE") or {}
+        generic = filters.get("PERCENT_PRICE") or {}
+        side = str(side).upper()
+        if by_side:
+            if side == "BUY":
+                lower = ref * float(by_side.get("bidMultiplierDown", 0) or 0)
+                upper = ref * float(by_side.get("bidMultiplierUp", 0) or 0)
+            else:
+                lower = ref * float(by_side.get("askMultiplierDown", 0) or 0)
+                upper = ref * float(by_side.get("askMultiplierUp", 0) or 0)
+        else:
+            lower = ref * float(generic.get("multiplierDown", 0) or 0)
+            upper = ref * float(generic.get("multiplierUp", 0) or 0)
+        if lower > 0 and price < lower:
+            raise CampaignExecutionError(
+                f"{symbol}: price {price:.12g} below Binance percent-price lower bound {lower:.12g}"
+            )
+        if upper > 0 and price > upper:
+            raise CampaignExecutionError(
+                f"{symbol}: price {price:.12g} above Binance percent-price upper bound {upper:.12g}"
+            )
+
+    def _check_algo_capacity(self, symbol: str, additional: int = 1) -> None:
+        filters = self._rules(symbol)
+        open_orders = self.client.open_orders(symbol)
+        max_orders = int((filters.get("MAX_NUM_ORDERS") or {}).get("maxNumOrders", 10**9))
+        max_algo = int((filters.get("MAX_NUM_ALGO_ORDERS") or {}).get("maxNumAlgoOrders", 10**9))
+        if len(open_orders) + additional > max_orders:
+            raise CampaignExecutionError(f"{symbol}: MAX_NUM_ORDERS would be exceeded")
+        algo_open = sum(
+            1
+            for row in open_orders
+            if str(row.get("type", "")).upper()
+            in {"STOP_LOSS", "STOP_LOSS_LIMIT", "TAKE_PROFIT", "TAKE_PROFIT_LIMIT"}
+        )
+        if algo_open + additional > max_algo:
+            raise CampaignExecutionError(f"{symbol}: MAX_NUM_ALGO_ORDERS would be exceeded")
+
+        exchange_max_orders = int(
+            (filters.get("EXCHANGE_MAX_NUM_ORDERS") or {}).get("maxNumOrders", 10**9)
+        )
+        exchange_max_algo = int(
+            (filters.get("EXCHANGE_MAX_NUM_ALGO_ORDERS") or {}).get("maxNumAlgoOrders", 10**9)
+        )
+        if exchange_max_orders < 10**9 or exchange_max_algo < 10**9:
+            all_open = self.client.open_orders()
+            if exchange_max_orders < 10**9 and len(all_open) + additional > exchange_max_orders:
+                raise CampaignExecutionError("EXCHANGE_MAX_NUM_ORDERS would be exceeded")
+            if exchange_max_algo < 10**9:
+                algo_all = sum(
+                    1
+                    for row in all_open
+                    if str(row.get("type", "")).upper()
+                    in {"STOP_LOSS", "STOP_LOSS_LIMIT", "TAKE_PROFIT", "TAKE_PROFIT_LIMIT"}
+                )
+                if algo_all + additional > exchange_max_algo:
+                    raise CampaignExecutionError("EXCHANGE_MAX_NUM_ALGO_ORDERS would be exceeded")
+
     def _submit(self, intent: OrderIntent, submit, pre_submit_checks):
         if self.barrier is None:
             raise CampaignExecutionError(
@@ -318,9 +389,3 @@ class CampaignExecutionService:
                         signal.symbol,
                         signal.timeframe,
                         limit=160,
-                    )
-                    closed = df.iloc[:-1].copy() if len(df) > 1 else df
-                    ind = calculate_indicators(closed, config_from_env())
-                    teeth = float(ind.iloc[-1].get("teeth_shifted", 0.0) or 0.0)
-                    if teeth > 0 and trigger <= teeth:
-                        raise CampaignExecutionError(
