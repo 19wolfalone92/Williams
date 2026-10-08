@@ -45,6 +45,7 @@ class WilliamsIntradayCore:
     if pd.to_datetime(x["close_time"],utc=True).iloc[-1]>pd.Timestamp.now(tz="UTC"):x=x.iloc[:-1].copy()
    except Exception:pass
   if len(x)<60:return self._empty(symbol,"INSUFFICIENT_H1_HISTORY")
+  if "volume" not in x.columns: x["volume"]=0.0
   ind=calculate_indicators(x,config_from_env());cur=ind.iloc[-1];prev=ind.iloc[-2]
   tms=self._time_ms(cur);h4c=self._h4_context(h4);d1s=self._d1_state(d1)
   vals=[float(cur.get(k,0) or 0) for k in ("jaw_shifted","teeth_shifted","lips_shifted")];mouth=[v for v in vals if v>0]
