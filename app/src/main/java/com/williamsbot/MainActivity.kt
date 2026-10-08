@@ -117,7 +117,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.math.max
 import kotlin.math.min
 
-// Williams 4.24.0 Trading Core production cockpit
+// Williams 4.25.0 Digital Williams Core production cockpit
 // Autonomous runtime contract: local loopback API is intentional; no VPS required.
 // CI compile-log capture enabled
 // Diagnostic contract v2: runtime self-tests are exposed through /api/v1/diagnostics.
@@ -776,9 +776,16 @@ fun WilliamsApp(context: Context) {
                 }
                 loadAll(false)
             } catch (e: Exception) {
+                // A failed self-heal is itself an incident: immediately capture
+                // a fresh diagnostic archive so the user has a forensic bundle.
+                runCatching {
+                    val report = api.get("/api/v1/diagnostics?run=true")
+                    DiagnosticsArchive.writeLatest(context, report)
+                }
                 withContext(Dispatchers.Main) {
                     diagnosticsMessage =
-                        e.message ?: "Не удалось выполнить безопасное восстановление"
+                        (e.message ?: "Не удалось выполнить безопасное восстановление") +
+                            "\nДиагностический архив сохранён на телефоне."
                 }
             }
         }
@@ -793,9 +800,20 @@ fun WilliamsApp(context: Context) {
                     diagnosticsMessage = "Диагностика выполнена и сохранена на телефоне."
                 }
             } catch (e: Exception) {
+                // Even when the normal diagnostic endpoint fails, preserve a
+                // local incident note rather than losing the failure.
+                val fallback = JSONObject()
+                    .put("created_at", System.currentTimeMillis())
+                    .put("diagnostic_contract_version", 7)
+                    .put("status", "DIAGNOSTICS_ENDPOINT_FAILED")
+                    .put("error", e.message ?: e.javaClass.simpleName)
+                runCatching {
+                    DiagnosticsArchive.writeLatest(context, fallback.toString())
+                }
                 withContext(Dispatchers.Main) {
                     diagnosticsMessage =
-                        e.message ?: "Не удалось выполнить диагностику"
+                        (e.message ?: "Не удалось выполнить диагностику") +
+                            "\nЛокальный incident-архив сохранён."
                 }
             }
         }
