@@ -23,6 +23,8 @@ def main() -> None:
     for path in (
         "trading_config.py", "market_scanner.py", "portfolio_controller.py",
         "portfolio_trader.py", "trader.py", "server.py", "wave_engine.py",
+        "execution_barrier.py", "order_state_machine.py", "pending_signal.py",
+        "decision_trace.py", "recovery_matrix.py", "stop_engine.py",
         "binance_client.py", "preflight_gate.py", "test_testnet_release_gate.py",
     ):
         ast.parse(read(path), filename=path)
@@ -101,7 +103,17 @@ def main() -> None:
     must(android_ci, "gradle --no-daemon :app:lintDebug", "android workflow")
     must_not(android_ci, "./gradlew --no-daemon :app:", "android workflow")
 
+    execution_barrier = read("execution_barrier.py")
+    must(execution_barrier, "class ExecutionBarrier", "execution_barrier.py")
+    must(execution_barrier, "OrderStateMachine", "execution_barrier.py")
+    must(execution_barrier, "DecisionTrace", "execution_barrier.py")
+    must(execution_barrier, "RECONCILE_REQUIRED", "execution_barrier.py")
+    pending_signal = read("pending_signal.py")
+    must(pending_signal, "class PendingSignal", "pending_signal.py")
+    recovery = read("recovery_matrix.py")
+    must(recovery, "EXPIRED_IN_MATCH", "recovery_matrix.py")
     python_ci = read(".github/workflows/python-ci.yml")
+    must(python_ci, "test_execution_components.py", "python workflow")
     must(python_ci, "python3 ci_release_gate.py", "python workflow")
     must(python_ci, "group: backend-ci-${{ github.ref }}-${{ github.sha }}", "python workflow")
 
