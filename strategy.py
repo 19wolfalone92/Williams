@@ -72,6 +72,53 @@ def calculate_indicators(df, cfg):
     # Accelerator/Decelerator: AO minus its 5-period SMA.
     x["ac"] = x["ao"] - x["ao"].rolling(cfg["ac_period"]).mean()
 
+    # Profitunity Zone (book): Green when AO and AC both rise, Red when both
+    # fall, Gray when they disagree. This is a management/add-on dimension,
+    # not a universal initial-entry gate.
+    x["zone_green"] = x["ao_green"] & (x["ac"] > x["ac"].shift(1))
+    x["zone_red"] = x["ao_red"] & (x["ac"] < x["ac"].shift(1))
+    x["zone_color"] = np.where(
+        x["zone_green"], "GREEN",
+        np.where(x["zone_red"], "RED", "GRAY")
+    )
+    x["zone_streak"] = _streak(
+        pd.Series(x["zone_color"].eq("GREEN"), index=x.index)
+    )
+    x["zone_red_streak"] = _streak(
+        pd.Series(x["zone_color"].eq("RED"), index=x.index)
+    )
+    # RSI is a secondary Profitunity market-chaos diagnostic. It is not
+    # an autonomous order trigger; campaign policy may use it as context.
+    delta = x["close"].diff()
+    gain = delta.clip(lower=0.0)
+    loss = -delta.clip(upper=0.0)
+    avg_gain = gain.ewm(
+        alpha=1.0 / max(int(cfg["rsi_period"]), 1),
+        adjust=False,
+        min_periods=int(cfg["rsi_period"]),
+    ).mean()
+    avg_loss = loss.ewm(
+        alpha=1.0 / max(int(cfg["rsi_period"]), 1),
+        adjust=False,
+        min_periods=int(cfg["rsi_period"]),
+    ).mean()
+    rs = avg_gain / avg_loss.replace(0, np.nan)
+    x["rsi"] = 100.0 - (100.0 / (1.0 + rs))
+    x["rsi"] = x["rsi"].fillna(50.0)
+
+    # Binance klines expose number-of-trades. Profitunity's original MFI
+    # uses tick volume; where trade-count data exists it is a closer market
+    # microstructure proxy than base-asset volume, while preserving a clear
+    # fallback for older cached datasets.
+    trade_count = pd.to_numeric(
+        x.get("trades", pd.Series(np.nan, index=x.index)),
+        errors="coerce",
+    )
+    base_volume = pd.to_numeric(x.get("volume", pd.Series(0.0, index=x.index)), errors="coerce").fillna(0.0)
+    tick_volume = trade_count.where(trade_count > 0, base_volume)
+    x["tick_volume_proxy"] = tick_volume
+
+
     # Fractals. The center must be strictly higher/lower than the two bars
     # on each side; equality therefore does not create a false fractal.
     left = cfg["fractal_left"]
@@ -183,14 +230,12 @@ def calculate_indicators(df, cfg):
 
     # Second Wise Man: Super AO. We use Williams' histogram color definition
     # (green = current AO above previous AO, red = below), not merely AO > 0.
-    x["long_super_ao_signal"] = (
-        x["super_ao_long"]
-        & x["long_fractal_outside"].shift(1).eq(True)
-    )
-    x["short_super_ao_signal"] = (
-        x["super_ao_short"]
-        & x["short_fractal_outside"].shift(1).eq(True)
-    )
+    # Wise Man 2 is independent of Wise Man 3. The Super AO observation
+    # is defined by the three-bar AO colour sequence itself; execution policy
+    # may later require a Fractal for a specific role, but this indicator layer
+    # must not silently change WM2 semantics.
+    x["long_super_ao_signal"] = x["super_ao_long"]
+    x["short_super_ao_signal"] = x["super_ao_short"]
 
     # Conservative execution overlay. The counter-trend Wise-Man signals from
     # the book are retained as diagnostics, but disabled for the long-only
@@ -230,22 +275,19 @@ def calculate_indicators(df, cfg):
     x["short_ac_negative"] = x["ac"] < 0
     x["short_fractal_ready"] = x["last_down_level"].notna()
 
-    # Strict entry: conservative Williams gate + at least one valid Wise-Man
-    # trigger. Fractal breakouts, Super AO continuation and reversal bars are
-    # separate triggers; they are not incorrectly ANDed together.
-    min_wise = int(cfg["min_wise_men_confirmations"])
+    # Legacy compatibility signal. Canonical Campaign mode must use the
+    # stateful Williams core, where WM1/WM2/WM3 are alternative signal families,
+    # not AND-filters. Keeping this field aligned with that principle prevents
+    # an old caller from reintroducing the historical over-filter.
     x["long_signal"] = (
-        # Williams' first gate: no downstream Wise-Man signal is actionable
-        # until a confirmed fractal has formed outside the Teeth/balance line.
-        x["long_fractal_outside"]
-        & x["long_bullish"]
-        & x["long_awake"]
-        & x["long_wise_man_count"].ge(min_wise)
+        x["long_wise_reversal_entry"]
+        | x["long_super_ao_signal"]
+        | x["long_fractal_signal"]
     )
     x["short_signal"] = (
-        x["short_bearish"]
-        & x["short_awake"]
-        & x["short_wise_man_count"].ge(min_wise)
+        x["short_wise_reversal_entry"]
+        | x["short_super_ao_signal"]
+        | x["short_fractal_signal"]
     )
 
     def _family(row, side):
@@ -289,8 +331,11 @@ def calculate_indicators(df, cfg):
     # it is deliberately diagnostic only.
     volume = pd.to_numeric(x.get("volume", pd.Series(np.nan, index=x.index)), errors="coerce")
     x["volume"] = volume
-    x["mfi_proxy"] = (x["high"] - x["low"]) / volume.replace(0, np.nan)
-    x["volume_up"] = volume > volume.shift(1)
+    x["mfi_proxy"] = (
+        (x["high"] - x["low"]) /
+        x["tick_volume_proxy"].replace(0, np.nan)
+    )
+    x["volume_up"] = x["tick_volume_proxy"] > x["tick_volume_proxy"].shift(1)
     x["volume_down"] = volume < volume.shift(1)
     x["mfi_up"] = x["mfi_proxy"] > x["mfi_proxy"].shift(1)
     x["mfi_down"] = x["mfi_proxy"] < x["mfi_proxy"].shift(1)
@@ -311,10 +356,11 @@ def config_from_env(env=os.environ):
         "ao_fast": int(env.get("AO_FAST", "5")),
         "ao_slow": int(env.get("AO_SLOW", "34")),
         "ac_period": int(env.get("AC_PERIOD", "5")),
+        "rsi_period": int(env.get("RSI_PERIOD", "14")),
         "fractal_left": int(env.get("FRACTAL_LEFT", "2")),
         "fractal_right": int(env.get("FRACTAL_RIGHT", "2")),
         "super_ao_bars": int(env.get("SUPER_AO_BARS", "3")),
-        "min_wise_men_confirmations": int(env.get("MIN_WISE_MEN_CONFIRMATIONS", "2")),
-        "allow_countertrend_wise_man": env.get("ALLOW_COUNTERTREND_WISE_MAN", "false").lower() == "true",
+        "min_wise_men_confirmations": int(env.get("MIN_WISE_MEN_CONFIRMATIONS", "1" if env.get("WILLIAMS_STRATEGY_PROFILE", "").upper() in {"WILLIAMS_INTRADAY_CORE", "WILLIAMS_INTRADAY_CONSERVATIVE"} else "2")),
+        "allow_countertrend_wise_man": env.get("ALLOW_COUNTERTREND_WISE_MAN", "true" if env.get("WILLIAMS_STRATEGY_PROFILE", "").upper() in {"WILLIAMS_INTRADAY_CORE", "WILLIAMS_INTRADAY_CONSERVATIVE"} else "false").lower() == "true",
         "min_alligator_spread_pct": float(env.get("MIN_ALLIGATOR_SPREAD_PCT", "0.001")),
     }

@@ -129,6 +129,8 @@ class SignalSpec:
     created_at_ms: int = field(default_factory=lambda: int(time.time() * 1000))
     expires_at_ms: int = 0
     source_candle_index: int = -1
+    execution_timeframe: str = "5m"
+    detected_time_ms: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -224,6 +226,7 @@ class TradingCampaign:
     symbol: str
     side: str
     execution_timeframe: str
+    decision_timeframe: str = "1h"
     state: CampaignState = CampaignState.SIGNAL_DETECTED
     origin_signal_id: str = ""
     current_signal_id: str = ""
@@ -370,31 +373,25 @@ def structural_stop_for_long(
     wave_invalidation: float = 0.0,
     buffer: float = 0.0,
 ) -> tuple[float, str]:
-    """Return a long structural stop and its source.
+    """Return the canonical long protective level.
 
-    Priority is deliberately conservative: the closest meaningful structural
-    invalidation is preferred, while the stop remains below entry.  The
-    caller must enforce the invariant that a later stop never loosens risk.
+    Initial protection comes from the signal structure. Once a completed
+    3/5-bar structure is available, Williams' trailing rule is the lowest
+    low of that structure. Teeth/wave levels are fallback invalidation levels,
+    not replacements for the book's 3/5-bar trailing rule.
     """
-    candidates: list[tuple[float, str]] = []
-    if signal_bar_low > 0:
-        candidates.append((signal_bar_low - max(0.0, buffer), f"{signal_type.value}_SIGNAL_BAR"))
+    b=max(0.0,float(buffer))
     if recent_lows:
-        valid_lows = [float(x) for x in recent_lows if float(x) > 0]
+        valid_lows=[float(x) for x in recent_lows if float(x)>0]
         if valid_lows:
-            # For a LONG trail, the closest valid protection is the highest
-            # recent structural low, not the lowest low in the window.
-            low = max(valid_lows)
-            candidates.append((low - max(0.0, buffer), "3_5_BAR_STRUCTURE"))
-    if teeth > 0:
-        candidates.append((teeth - max(0.0, buffer), "TEETH"))
-    if wave_invalidation > 0:
-        candidates.append((wave_invalidation - max(0.0, buffer), "WAVE_INVALIDATION"))
-    if not candidates:
-        return 0.0, "UNAVAILABLE"
-    return max(candidates, key=lambda item: item[0])
-
-
+            return min(valid_lows)-b, "3_5_BAR_STRUCTURE"
+    if signal_bar_low>0:
+        return float(signal_bar_low)-b, f"{signal_type.value}_SIGNAL_BAR"
+    if teeth>0:
+        return float(teeth)-b, "TEETH"
+    if wave_invalidation>0:
+        return float(wave_invalidation)-b, "WAVE_INVALIDATION"
+    return 0.0, "UNAVAILABLE"
 def stop_only_reduces_risk(side: str, current_stop: float, proposed_stop: float) -> bool:
     """Hard invariant: a protective stop may never move against the position."""
     if current_stop <= 0:

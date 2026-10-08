@@ -1,0 +1,81 @@
+name: Williams Canonical Historical Backtest
+
+on:
+  push:
+    branches: ["williams-core-final-20261008"]
+    paths:
+      - "run_backtest.py"
+      - "williams_campaign_backtester.py"
+      - "williams_intraday_core.py"
+      - "williams_intraday_spec.py"
+      - "campaign_model.py"
+      - "strategy.py"
+      - "data.py"
+      - "stress_suite.py"
+      - ".github/workflows/williams-historical-backtest.yml"
+  pull_request:
+    branches: ["main"]
+    paths:
+      - "run_backtest.py"
+      - "williams_campaign_backtester.py"
+      - "williams_intraday_core.py"
+      - "williams_intraday_spec.py"
+      - "campaign_model.py"
+      - "strategy.py"
+      - "data.py"
+      - "stress_suite.py"
+      - ".github/workflows/williams-historical-backtest.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: williams-historical-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backtest:
+    name: Canonical ${{ matrix.symbol }} event-driven replay
+    strategy:
+      fail-fast: false
+      matrix:
+        symbol: [BTCUSDT, ETHUSDT]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      PYTHONUNBUFFERED: "1"
+      WILLIAMS_RESEARCH_MAINNET: "true"
+      WILLIAMS_STRATEGY_PROFILE: "WILLIAMS_CORE_INTRADAY"
+      START_DATE: "2024-01-01"
+      END_DATE: "2026-10-01"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install runtime dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Compile canonical research sources
+        run: |
+          python -m py_compile             run_backtest.py             williams_campaign_backtester.py             williams_intraday_core.py             williams_intraday_spec.py             campaign_model.py             strategy.py             data.py             stress_suite.py
+
+      - name: Run canonical historical backtest
+        run: |
+          python run_backtest.py             --symbol "${{ matrix.symbol }}"             --start "${START_DATE}"             --end "${END_DATE}"             --capital 500             --fee 0.001             --slippage 0.0005             --outdir "results/canonical/${{ matrix.symbol }}"
+
+      - name: Upload canonical backtest report
+        uses: actions/upload-artifact@v7
+        with:
+          name: williams-canonical-backtest-${{ matrix.symbol }}-${{ github.run_number }}
+          path: results/canonical/${{ matrix.symbol }}/
+          if-no-files-found: error
+          retention-days: 30

@@ -11,6 +11,10 @@ from execution_accumulator import ExecutionSummary, accumulate_order
 from campaign_execution import CampaignExecutionService, CampaignExecutionError
 from campaign_model import SignalSpec, SignalType, SignalRole
 from campaign_monitor import CampaignMonitor
+from market_context import ContextCache
+from execution_barrier import ExecutionBarrier, OrderIntent
+from williams_intraday_spec import IntradayPolicy
+from decision_trace import DecisionTrace
 
 
 POSITION_STATES = {
@@ -39,9 +43,15 @@ class MultiPositionTrader:
     EMERGENCY_PREFIX = "WILLV4_EMERGENCY_"
     MANUAL_PREFIX = "WILLV4_MANUAL_"
 
-    def __init__(self, client, db=None, symbols=None, execution_barrier=None):
+    def __init__(self, client, db=None, symbols=None, execution_barrier=None, strategy_profile=None):
         self.client = client
         self.db = db or Database()
+        self.intraday_policy = IntradayPolicy.from_env()
+        explicit_profile = str(strategy_profile or os.getenv("WILLIAMS_STRATEGY_PROFILE", "")).strip().upper()
+        self.intraday_core_enabled = explicit_profile in {
+            "WILLIAMS_CORE_INTRADAY", "WILLIAMS_CORE_INTRADAY_CONSERVATIVE",
+            "WILLIAMS_INTRADAY_CORE", "WILLIAMS_INTRADAY_CONSERVATIVE",
+        }
         if symbols is not None:
             self.symbols = [str(x).strip().upper() for x in symbols if str(x).strip()]
         else:
@@ -51,24 +61,33 @@ class MultiPositionTrader:
                 if raw_symbols.upper() in {"ALL", "AUTO", "*"}
                 else [x.strip().upper() for x in raw_symbols.split(",") if x.strip()]
             )
-        self.max_open_positions = max(
-            0,
-            int(os.getenv("MAX_OPEN_POSITIONS", "5")),
+        if self.intraday_core_enabled and not self.symbols:
+            self.symbols = list(self.intraday_policy.symbols)
+        configured_max_positions = max(0, int(os.getenv("MAX_OPEN_POSITIONS", "5")))
+        configured_total_risk = max(
+            0.0,
+            float(os.getenv("MAX_TOTAL_RISK_PCT", "0.01")),
         )
-        self.max_total_risk_pct = min(
-            0.01,
-            max(
-                0.0,
-                float(os.getenv("MAX_TOTAL_RISK_PCT", "0.01")),
-            ),
+        configured_trade_risk = max(
+            0.0,
+            float(os.getenv("MAX_RISK_PER_TRADE_PCT", os.getenv("RISK_PER_TRADE_PCT", "0.005"))),
         )
-        self.max_risk_per_trade_pct = min(
-            0.005,
-            max(
-                0.0,
-                float(os.getenv("MAX_RISK_PER_TRADE_PCT", os.getenv("RISK_PER_TRADE_PCT", "0.005"))),
-            ),
-        )
+        if self.intraday_core_enabled:
+            # Canonical Core limits are hard upper bounds. Environment values
+            # may make the system more conservative, never more permissive.
+            self.max_open_positions = 1
+            self.max_total_risk_pct = min(
+                self.intraday_policy.risk.campaign_risk_pct,
+                configured_total_risk,
+            )
+            self.max_risk_per_trade_pct = min(
+                self.intraday_policy.risk.initial_risk_pct,
+                configured_trade_risk,
+            )
+        else:
+            self.max_open_positions = configured_max_positions
+            self.max_total_risk_pct = min(0.01, configured_total_risk)
+            self.max_risk_per_trade_pct = min(0.005, configured_trade_risk)
         self.dry_run = (
             os.getenv("DRY_RUN", "true").lower() == "true"
         )
@@ -84,18 +103,30 @@ class MultiPositionTrader:
         self.l2_guard = L2SlippageGuard(
             float(os.getenv("MAX_L2_SLIPPAGE_PCT", os.getenv("MAX_SPREAD_PCT", "0.0015")))
         )
-        self.equity_breaker = EquityCircuitBreaker(float(os.getenv("MAX_DAILY_LOSS_PCT", "0.03")))
-        self.max_trades_per_day = max(0, int(os.getenv("MAX_TRADES_PER_DAY", "5")))
-        self.max_consecutive_losses = max(0, int(os.getenv("MAX_CONSECUTIVE_LOSSES", "3")))
+        configured_daily_loss = max(0.0, float(os.getenv("MAX_DAILY_LOSS_PCT", "0.03")))
+        configured_consecutive = max(0, int(os.getenv("MAX_CONSECUTIVE_LOSSES", "3")))
+        self.equity_breaker = EquityCircuitBreaker(
+            min(self.intraday_policy.risk.daily_loss_pct, configured_daily_loss)
+            if self.intraday_core_enabled
+            else configured_daily_loss
+        )
+        self.max_trades_per_day = max(0, int(os.getenv("MAX_TRADES_PER_DAY", "0" if self.intraday_core_enabled else "5")))
+        self.max_consecutive_losses = (
+            min(self.intraday_policy.risk.max_full_stopouts, configured_consecutive)
+            if self.intraday_core_enabled
+            else configured_consecutive
+        )
         self.cooldown_minutes = max(0, int(os.getenv("COOLDOWN_MINUTES", "30")))
-        self.execution_barrier = execution_barrier
+        self.execution_barrier = execution_barrier or ExecutionBarrier(ContextCache(), self.db)
         self.campaign_engine_enabled = (
-            os.getenv("CAMPAIGN_ENGINE", "true").lower() == "true"
+            True if self.intraday_core_enabled
+            else os.getenv("CAMPAIGN_ENGINE", "true").lower() == "true"
         )
         self.campaign_execution = CampaignExecutionService(
             self.client,
             self.db,
             execution_barrier=self.execution_barrier,
+            strategy_profile=self.intraday_policy.profile if self.intraday_core_enabled else None,
         )
         self.campaign_monitor = CampaignMonitor(
             self.client,
@@ -107,6 +138,28 @@ class MultiPositionTrader:
     # Durable state
     # ------------------------------------------------------------------
 
+    def _execution_mutation(self, symbol, side, order_type, *, purpose, submit, permission_interval=None, campaign_id="", signal_id=""):
+        """Route every legacy Binance mutation through the canonical door."""
+        if self.execution_barrier is None:
+            raise RuntimeError("ExecutionBarrier is required; direct Binance mutation is forbidden")
+        interval = str(permission_interval or os.getenv("INTERVAL", "1h")).lower()
+        snapshot = self.execution_barrier.context_cache.snapshot()
+        required = snapshot.versions(str(symbol).upper(), [interval])
+        purpose_value = str(purpose).upper()
+        permission_required = (
+            purpose_value == "ENTRY"
+            or purpose_value.endswith(("_ENTRY", "_ADD_ON"))
+        )
+        intent = OrderIntent.new(
+            str(symbol).upper(), str(side).upper(), str(order_type).upper(),
+            required_context_versions=required, purpose=purpose_value,
+            permission_interval=interval if permission_required else "",
+            campaign_id=str(campaign_id or ""), signal_id=str(signal_id or ""),
+        )
+        result = self.execution_barrier.execute(intent, submit)
+        if not result.accepted:
+            raise RuntimeError(f"ExecutionBarrier blocked: {result.reason}")
+        return result.response
     def _state_key(self, symbol):
         return f"position_state:{symbol.upper()}"
 
@@ -720,12 +773,13 @@ class MultiPositionTrader:
             )
 
         client_id = f"{self.EMERGENCY_PREFIX}{uuid.uuid4().hex[:16]}"
-        sell = self.client.order_safe(
-            symbol,
-            "SELL",
-            "MARKET",
-            quantity=self.client.decimal_format(sell_qty),
-            new_client_order_id=client_id,
+        sell = self._execution_mutation(
+            symbol, "SELL", "MARKET", purpose="LEGACY_EMERGENCY_EXIT",
+            submit=lambda: self.client.order_safe(
+                symbol, "SELL", "MARKET",
+                quantity=self.client.decimal_format(sell_qty),
+                new_client_order_id=client_id,
+            ),
         )
         self.db.save_order(sell)
 
@@ -934,13 +988,16 @@ class MultiPositionTrader:
         self.set_state(symbol, "EXIT_PENDING")
 
         create_oco = getattr(self.client, "create_oco_sell_safe", None) or self.client.create_oco_sell
-        result = create_oco(
-            symbol,
-            self.client.decimal_format(qty),
-            self.client.decimal_format(tp),
-            self.client.decimal_format(sl),
-            self.client.decimal_format(sl_limit),
-            client_id,
+        result = self._execution_mutation(
+            symbol, "SELL", "OCO", purpose="LEGACY_EXIT_OCO",
+            submit=lambda: create_oco(
+                symbol,
+                self.client.decimal_format(qty),
+                self.client.decimal_format(tp),
+                self.client.decimal_format(sl),
+                self.client.decimal_format(sl_limit),
+                client_id,
+            ),
         )
 
         for leg in result.get("orderReports", []):
@@ -1656,10 +1713,15 @@ class MultiPositionTrader:
             if list_id or list_client:
                 cancel = getattr(self.client, "cancel_oco", None)
                 if cancel is not None:
-                    if list_id:
-                        cancel(symbol, order_list_id=list_id)
-                    else:
-                        cancel(symbol, list_client_order_id=list_client)
+                    self._execution_mutation(
+                        symbol, "SELL", "CANCEL",
+                        purpose="LEGACY_EXIT_OCO_CANCEL",
+                        submit=lambda: (
+                            cancel(symbol, order_list_id=list_id)
+                            if list_id
+                            else cancel(symbol, list_client_order_id=list_client)
+                        ),
+                    )
 
             account = self.client.account()
             free_qty = self._asset_balance(
@@ -1676,12 +1738,13 @@ class MultiPositionTrader:
                     f"{symbol}: managed quantity is no longer available"
                 )
 
-            sell = self.client.order_safe(
-                symbol,
-                "SELL",
-                "MARKET",
-                quantity=self.client.decimal_format(sell_qty),
-                new_client_order_id=f"{self.MANUAL_PREFIX}{uuid.uuid4().hex[:20]}",
+            sell = self._execution_mutation(
+                symbol, "SELL", "MARKET", purpose="LEGACY_MANUAL_EXIT",
+                submit=lambda: self.client.order_safe(
+                    symbol, "SELL", "MARKET",
+                    quantity=self.client.decimal_format(sell_qty),
+                    new_client_order_id=f"{self.MANUAL_PREFIX}{uuid.uuid4().hex[:20]}",
+                ),
             )
             self.db.save_order(sell)
 
@@ -1889,6 +1952,8 @@ class MultiPositionTrader:
                         created_at_ms=int(raw.get("created_at_ms", 0) or 0),
                         expires_at_ms=int(raw.get("expires_at_ms", 0) or 0),
                         source_candle_index=int(raw.get("source_candle_index", -1) or -1),
+                        execution_timeframe=str(raw.get("execution_timeframe", self.intraday_policy.timeframes.execution_tf if self.intraday_core_enabled else "") or ""),
+                        detected_time_ms=int(raw.get("detected_time_ms", 0) or 0),
                     )
                 )
             except Exception:
@@ -1945,15 +2010,64 @@ class MultiPositionTrader:
         open_count = len(self.open_trades())
         pending = {symbol for symbol, _ in self._pending_entries()}
 
+        session_state = self.intraday_policy.session.state(datetime.now(timezone.utc)) if self.intraday_core_enabled else "ENTRY_WINDOW"
+        if self.intraday_core_enabled and session_state != "ENTRY_WINDOW":
+            return [{"action": "SESSION_BLOCK", "state": session_state, "reason": "no new campaigns outside 08:00-18:00 UTC"}]
+
         for selection in selections:
             specs = self._signal_specs(selection)
             if not specs:
                 continue
             symbol = str(selection.candidate.symbol).upper()
+            trace = dict(getattr(selection.candidate, "decision_trace", {}) or {})
+            if trace:
+                trace["risk_feasible"] = bool(getattr(selection.risk, "allowed", False))
+                trace["trade_allowed"] = False
+                trace["block_reason"] = "" if trace["risk_feasible"] else str(getattr(selection.risk, "reason", "RISK_BLOCKED"))
+                try:
+                    self.db.save_decision_trace(trace)
+                except Exception as exc:
+                    self.db.log_event("WARNING", "decision_trace_persist_failed", str(exc), {"symbol": symbol})
             if symbol in pending:
-                continue
+                if self.intraday_core_enabled:
+                    pending_campaign = self.campaign_execution._active_campaign_for_symbol(symbol)
+                    trace = dict(getattr(selection.candidate, "decision_trace", {}) or {})
+                    current_type = str(getattr(pending_campaign, "current_signal_type", "") or "").upper() if pending_campaign else ""
+                    current_time = int(getattr(pending_campaign, "tags", {}).get("signal_bar_time_ms", 0) or 0) if pending_campaign else 0
+                    newer = [
+                        x for x in specs
+                        if x.signal_type == SignalType.FRACTAL
+                        and current_type == SignalType.FRACTAL
+                        and x.signal_bar_time_ms > current_time
+                    ]
+                    if pending_campaign is not None and pending_campaign.position_qty <= 0 and newer:
+                        try:
+                            newest = max(newer, key=lambda x: x.signal_bar_time_ms)
+                            self.campaign_execution.supersede_pending_fractal(pending_campaign, newest)
+                            pending.discard(symbol)
+                        except CampaignExecutionError as exc:
+                            self.db.log_event(
+                                "WARNING",
+                                "fractal_supersede_blocked",
+                                str(exc),
+                                {"symbol": symbol, "signal_id": getattr(newer[-1], "signal_id", "")},
+                            )
+                            continue
+                    else:
+                        continue
+                else:
+                    continue
 
             campaign = self.campaign_execution._active_campaign_for_symbol(symbol)
+
+            if (
+                self.intraday_core_enabled
+                and campaign is not None
+                and str((getattr(selection.candidate, "decision_trace", {}) or {}).get("alligator_state", "")).upper() == "SLEEP"
+            ):
+                # Sleeping Alligator can host an initial WM1 watch/entry, but
+                # it is not a license for aggressive trend-following additions.
+                continue
 
             # Active campaign: later WM2/WM3 signals are add-ons. A new
             # reversal is not auto-added by default because it can represent
@@ -1970,7 +2084,7 @@ class MultiPositionTrader:
                 )
                 eligible = [
                     s for s in specs
-                    if s.signal_bar_time_ms > latest_time
+                    if int(s.detected_time_ms or s.signal_bar_time_ms) > latest_time
                     and (
                         s.signal_type in {SignalType.SUPER_AO, SignalType.FRACTAL}
                         or (
@@ -1983,7 +2097,7 @@ class MultiPositionTrader:
                     continue
                 signal = min(
                     eligible,
-                    key=lambda s: (s.signal_bar_time_ms, s.created_at_ms),
+                    key=lambda s: (int(s.detected_time_ms or s.signal_bar_time_ms), s.created_at_ms),
                 )
                 add_signal = __import__(
                     "dataclasses"
@@ -2042,6 +2156,14 @@ class MultiPositionTrader:
                         max(0.0, float(selection.risk.risk_pct) / 100.0),
                     ),
                 )
+                if trace:
+                    trace["trade_allowed"] = True
+                    trace["execution_feasible"] = True
+                    trace["block_reason"] = ""
+                    try:
+                        self.db.save_decision_trace(trace)
+                    except Exception as exc:
+                        self.db.log_event("WARNING", "decision_trace_persist_failed", str(exc), {"symbol": symbol})
                 results.append(
                     {
                         "symbol": symbol,
@@ -2051,7 +2173,18 @@ class MultiPositionTrader:
                     }
                 )
                 pending.add(symbol)
+                open_count += 1
+                if self.intraday_core_enabled:
+                    break
             except CampaignExecutionError as exc:
+                if trace:
+                    trace["execution_feasible"] = False
+                    trace["trade_allowed"] = False
+                    trace["block_reason"] = str(exc)
+                    try:
+                        self.db.save_decision_trace(trace)
+                    except Exception:
+                        pass
                 self.db.log_event(
                     "WARNING",
                     "campaign_entry_not_armed",
@@ -2067,6 +2200,14 @@ class MultiPositionTrader:
                     }
                 )
             except Exception as exc:
+                if trace:
+                    trace["execution_feasible"] = False
+                    trace["trade_allowed"] = False
+                    trace["block_reason"] = str(exc)
+                    try:
+                        self.db.save_decision_trace(trace)
+                    except Exception:
+                        pass
                 self.db.log_event(
                     "ERROR",
                     "campaign_entry_error",
@@ -2215,12 +2356,14 @@ class MultiPositionTrader:
                     float(quote),
                 )
 
-                order = self.client.order_safe(
-                    symbol,
-                    "BUY",
-                    "MARKET",
-                    quote_order_qty=self.client.decimal_format(quote),
-                    new_client_order_id=client_id,
+                order = self._execution_mutation(
+                    symbol, "BUY", "MARKET", purpose="LEGACY_ENTRY",
+                    permission_interval=os.getenv("INTERVAL", "1h"),
+                    submit=lambda: self.client.order_safe(
+                        symbol, "BUY", "MARKET",
+                        quote_order_qty=self.client.decimal_format(quote),
+                        new_client_order_id=client_id,
+                    ),
                 )
                 self.db.save_order(order)
 
@@ -2354,7 +2497,18 @@ class MultiPositionTrader:
             # Manage open campaigns before looking for new opportunities. If a
             # protection mutation becomes ambiguous, the whole execution path
             # stays fail-closed.
+            session_actions = self.campaign_monitor.enforce_session()
             campaign_monitor = self.campaign_monitor.monitor_all()
+            session_state = self.intraday_policy.session.state(datetime.now(timezone.utc)) if self.intraday_core_enabled else "ENTRY_WINDOW"
+            if self.intraday_core_enabled and session_state != "ENTRY_WINDOW":
+                return {
+                    "status": "SESSION_MANAGED",
+                    "recovery": recovery,
+                    "session_actions": session_actions,
+                    "campaign_monitor": campaign_monitor,
+                    "results": [],
+                    "session_state": session_state,
+                }
             # A resolved/verified pending campaign is now represented by the
             # campaign state; unresolved mutation remains a hard global block.
             unresolved = self.unresolved_symbols()
@@ -2410,6 +2564,8 @@ class MultiPositionTrader:
             self.client,
             balance_quote=balance,
             symbols=self.symbols,
+            db=self.db,
+            strategy_profile=self.intraday_policy.profile if self.intraday_core_enabled else None,
         )
         selections = controller.select_portfolio(
             open_risk_quote=self.reserved_risk_quote(),

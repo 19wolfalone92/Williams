@@ -220,13 +220,19 @@ for name, locations in critical.items():
 section("8. DUPLICATE CRITICAL METHOD DEFINITIONS")
 
 for name, locations in critical.items():
-    if len(locations) > 1:
+    production_locations = [
+        loc for loc in locations
+        if loc[0] not in {"mock_exchange.py"}
+    ]
+    if len(production_locations) > 1:
         finding(
             "WARN",
-            f"{name} defined {len(locations)} times: {locations}"
+            f"{name} defined {len(production_locations)} production times: {production_locations}"
         )
+    elif production_locations:
+        finding("PASS", f"{name}: single production definition")
     elif locations:
-        finding("PASS", f"{name}: single definition")
+        finding("PASS", f"{name}: only test/mock definitions: {locations}")
 
 # ---------------------------------------------------------------------
 # 9. Static DRY_RUN gate inspection
@@ -487,10 +493,10 @@ native_runtime = ROOT / "app" / "src" / "main" / "java" / "com" / "williamsbot" 
 native = read_text(native_runtime)
 
 if native:
-    if re.search(r"private\s+val\s+maxOpenPositions\s*=\s*1\b", native):
-        finding("FAIL", "Android runtime still hard-locks maxOpenPositions=1")
+    if re.search(r"private\s+val\s+maxOpenPositions\s*:\s*Int\s*=\s*1\b", native):
+        finding("PASS", "Android runtime enforces canonical single-campaign Core")
     elif re.search(r"private\s+val\s+maxOpenPositions\s*=\s*0\b", native):
-        finding("PASS", "Android runtime uses risk-budgeted multi-position mode")
+        finding("WARN", "Android runtime uses a dynamic non-Core position mode")
     else:
         finding("WARN", "Could not prove Android multi-position default from source")
 
@@ -506,8 +512,12 @@ if native:
         "PASS" if 'EncryptedSharedPreferences' in native and 'MasterKey.KeyScheme.AES256_GCM' in native else "FAIL",
         "Binance credentials use encrypted Android storage"
     )
+    testnet_rest_ok = (
+        'private val baseUrl = "https://testnet.binance.vision"' in native
+        and 'api.binance.com' not in native
+    )
     finding(
-        "PASS" if '"testnet.binance.vision"' in native and 'api.binance.com' not in native else "WARN",
+        "PASS" if testnet_rest_ok else "FAIL",
         "Android trading REST base is pinned to Spot Testnet"
     )
     finding(

@@ -11,6 +11,7 @@ never presented as an author-certified formula.
 """
 
 from __future__ import annotations
+import os
 
 from dataclasses import asdict
 from typing import Any
@@ -19,6 +20,7 @@ import math
 import pandas as pd
 
 from campaign_model import SignalRole, SignalSpec, SignalType
+from williams_angulation import measure_side_angulation
 
 
 def _tick_buffer(tick_size: float, ticks: int = 1) -> float:
@@ -41,56 +43,10 @@ def _row_time_ms(row: pd.Series) -> int:
 
 
 def _angulation(ind: pd.DataFrame, index: int, *, window: int = 5) -> tuple[float, bool]:
-    """Approximate increasing separation of price from the Alligator Jaw."""
-    if index < 1 or "jaw_shifted" not in ind.columns:
-        return 0.0, False
-
-    start = max(0, index - max(3, int(window)) + 1)
-    rows = ind.iloc[start:index + 1].copy()
-    if len(rows) < 3 or rows["jaw_shifted"].isna().all():
-        return 0.0, False
-
-    jaw = pd.to_numeric(rows["jaw_shifted"], errors="coerce")
-    low = pd.to_numeric(rows["low"], errors="coerce")
-    high = pd.to_numeric(rows["high"], errors="coerce")
-    close = pd.to_numeric(rows["close"], errors="coerce")
-
-    if low.isna().any() or high.isna().any() or jaw.isna().any():
-        return 0.0, False
-
-    bullish_distance = (jaw - low).clip(lower=0.0)
-    bearish_distance = (high - jaw).clip(lower=0.0)
-
-    # A reversal has to be outside the mouth and the separation must increase.
-    bull_delta = float(bullish_distance.iloc[-1] - bullish_distance.iloc[0])
-    bear_delta = float(bearish_distance.iloc[-1] - bearish_distance.iloc[0])
-
-    base = max(
-        abs(float(close.iloc[-1])),
-        abs(float(jaw.iloc[-1])),
-        1e-9,
-    )
-    score = max(bull_delta, bear_delta) / base * 100.0
-
-    # Also require positive regression slope on the separation itself.
-    k = len(rows)
-    x = list(range(k))
-
-    def slope(values: pd.Series) -> float:
-        y = values.to_list()
-        xm = sum(x) / k
-        ym = sum(y) / k
-        denom = sum((v - xm) ** 2 for v in x)
-        return 0.0 if denom <= 0 else sum((x[i] - xm) * (y[i] - ym) for i in range(k)) / denom
-
-    bull_slope = slope(bullish_distance)
-    bear_slope = slope(bearish_distance)
-    valid = (
-        (bull_delta > 0 and bull_slope > 0)
-        or (bear_delta > 0 and bear_slope > 0)
-    )
-    return float(max(score, 0.0)), bool(valid)
-
+    long_m=measure_side_angulation(ind,index,"LONG",window=window)
+    short_m=measure_side_angulation(ind,index,"SHORT",window=window)
+    score=max(long_m.angular_separation,short_m.angular_separation)
+    return float(max(score,0.0)), bool(long_m.valid or short_m.valid)
 
 def _latest_reversal(
     ind: pd.DataFrame,
@@ -121,31 +77,19 @@ def _latest_super_ao(
     max_age_bars: int = 20,
 ) -> tuple[int, float, float] | None:
     streak_col = "ao_green_streak" if side == "LONG" else "ao_red_streak"
-    if streak_col not in ind.columns:
+    color_col = "ao_green" if side == "LONG" else "ao_red"
+    if streak_col not in ind.columns or color_col not in ind.columns:
         return None
-
-    start = max(0, len(ind) - max(2, int(max_age_bars)))
+    start = max(0, len(ind) - max(3, int(max_age_bars)))
     for i in range(len(ind) - 1, start - 1, -1):
-        row = ind.iloc[i]
-        try:
-            streak = int(row.get(streak_col, 0) or 0)
-        except (TypeError, ValueError):
-            streak = 0
-        # The book's third same-colour bar is the specific signal bar.
-        # Williams' Super AO is a continuation signal inside an established
-        # structure, so retain the existing valid fractal/Balance-Line gate.
-        fractal_gate_col = "long_fractal_outside" if side == "LONG" else "short_fractal_outside"
-        gate_i = max(0, i - 1)
-        gate_ok = (
-            fractal_gate_col not in ind.columns
-            or bool(ind.iloc[gate_i].get(fractal_gate_col, False))
-        )
-        if streak == 3 and gate_ok:
-            trigger_base = float(row["high"] if side == "LONG" else row["low"])
-            protective = float(row["low"] if side == "LONG" else row["high"])
+        if not bool(ind.iloc[i].get(color_col, False)):
+            continue
+        previous = int(ind.iloc[i - 1].get(streak_col, 0) or 0) if i > 0 else 0
+        if previous == 2:
+            trigger_base = float(ind.iloc[i]["high"] if side == "LONG" else ind.iloc[i]["low"])
+            protective = float(ind.iloc[i]["low"] if side == "LONG" else ind.iloc[i]["high"])
             return i, trigger_base, protective
     return None
-
 
 def _latest_confirmed_fractal(
     ind: pd.DataFrame,
@@ -192,6 +136,16 @@ def extract_long_signal_specs(
     """Extract all presently armable LONG signals from closed candles."""
     if ind is None or ind.empty:
         return []
+
+    # Canonical production path: one Williams Core. This prevents the
+    # legacy extractor from becoming a second Strategy Truth implementation.
+    profile = str(os.getenv("WILLIAMS_STRATEGY_PROFILE", "WILLIAMS_CORE_INTRADAY")).upper()
+    from williams_intraday_spec import IntradayPolicy
+    policy = IntradayPolicy.from_env()
+    if str(timeframe).lower() == policy.timeframes.decision_tf and profile in {"WILLIAMS_INTRADAY_CORE", "WILLIAMS_INTRADAY_CONSERVATIVE", "WILLIAMS_CORE_INTRADAY", "WILLIAMS_CORE_INTRADAY_CONSERVATIVE"}:
+        from williams_intraday_core import WilliamsIntradayCore
+        decision = WilliamsIntradayCore(policy).evaluate(symbol, ind, tick_size=tick_size)
+        return list(decision.signal_specs)
 
     specs: list[SignalSpec] = []
     current = ind.iloc[-1]

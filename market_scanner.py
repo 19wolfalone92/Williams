@@ -13,6 +13,8 @@ from feature_store import FeatureStore, build_market_feature_vector
 from ai_shadow import ShadowDecisionEngine, journal_shadow_decision
 from williams_signals import extract_long_signal_specs
 from shadow_execution import ShadowExecutionSimulator
+from williams_intraday_core import WilliamsIntradayCore
+from williams_intraday_spec import IntradayPolicy, CORE_PROFILE, CONSERVATIVE_PROFILE
 
 
 log = logging.getLogger("williams-scanner")
@@ -97,6 +99,7 @@ class Candidate:
     quant_features: dict = field(default_factory=dict)
     xai_factors: dict = field(default_factory=dict)
     shadow_intent: dict = field(default_factory=dict)
+    decision_trace: dict = field(default_factory=dict)
 
     def __post_init__(self):
         # Existing tests/integrations may construct Candidate(score=...) before
@@ -126,10 +129,18 @@ class MarketScanner:
     4. Re-rank using the legacy score plus a bounded wave adjustment.
     """
 
-    def __init__(self, client, symbols=None, interval=None):
+    def __init__(self, client, symbols=None, interval=None, strategy_profile=None):
         self.client = client
+        self.policy = IntradayPolicy.from_env()
+        explicit_profile = str(strategy_profile or os.getenv("WILLIAMS_STRATEGY_PROFILE", "")).strip().upper()
+        self.intraday_core_enabled = explicit_profile in {CORE_PROFILE, CONSERVATIVE_PROFILE}
+        self.core = WilliamsIntradayCore(self.policy)
 
-        self.interval = _normalize_interval(interval or os.getenv("INTERVAL", "1h"))
+        self.interval = _normalize_interval(
+            interval or os.getenv("INTERVAL", self.policy.timeframes.decision_tf)
+        )
+        if self.intraday_core_enabled:
+            self.interval = self.policy.timeframes.decision_tf
 
         # `None` means resolve the configured/default universe. An explicit []
         # remains a genuine empty test universe and does not fall back to all.
@@ -143,6 +154,10 @@ class MarketScanner:
         self.scan_all_usdt = (
             os.getenv("SCAN_ALL_USDT", "true").lower() == "true"
         )  # dynamically discover Spot/USDT pairs
+        if self.intraday_core_enabled:
+            self.scan_all_usdt = False
+            if not self.explicit_symbols:
+                self.symbols = list(self.policy.symbols)
         self.scan_max_symbols = max(0, int(os.getenv("SCAN_MAX_SYMBOLS", "0")))
         self.exclude_leveraged_tokens = (
             os.getenv("EXCLUDE_LEVERAGED_TOKENS", "true").lower() == "true"
@@ -381,6 +396,97 @@ class MarketScanner:
     def _clamp(value, low, high):
         return max(low, min(high, value))
 
+    def _analyse_intraday_core_base(self, symbol: str, closed: pd.DataFrame, tick_size: float) -> Optional[Tuple[Candidate, pd.DataFrame]]:
+        # Canonical chain: H4 permission -> H1 context -> M15 Williams decision.
+        h1 = fetch_klines(self.client, symbol, self.policy.timeframes.context_tf, limit=180)
+        h4 = fetch_klines(self.client, symbol, self.policy.timeframes.permission_tf, limit=180)
+        d1 = fetch_klines(self.client, symbol, self.policy.timeframes.macro_tf, limit=120)
+        if len(h1) > 1: h1 = h1.iloc[:-1].copy()
+        if len(h4) > 1: h4 = h4.iloc[:-1].copy()
+        if len(d1) > 1: d1 = d1.iloc[:-1].copy()
+
+        decision = self.core.evaluate(symbol, closed, h1=h1, h4=h4, d1=d1, tick_size=tick_size)
+        if not decision.core_valid:
+            return None
+
+        price = float(closed["close"].iloc[-1])
+        atr = self._atr(closed, self.atr_period)
+        if price <= 0 or atr <= 0:
+            return None
+        spread_pct = self._spread(symbol)
+
+        specs = list(decision.signal_specs)
+        # Spot execution is LONG-only. Keep the complete strategy truth in
+        # decision.signal_specs, but expose an executable entry only when a
+        # BUY signal exists so a SELL context can never leak into Spot order
+        # parameters or CampaignEngine selection.
+        executable_specs = [spec for spec in specs if str(spec.side).upper() == "BUY"]
+        first = executable_specs[0] if executable_specs else None
+        if first is None:
+            return None
+        risk_pct = self.policy.initial_risk_for(
+            quality=decision.quality,
+            h4_context=decision.h4_context,
+        )
+        score = {"A": 100.0, "B": 80.0, "C": 60.0, "D": 0.0}[decision.quality]
+        trace = {
+            "trace_id": f"{symbol}:{self.policy.timeframes.decision_tf}:{decision.decision_time_ms}",
+            "symbol": symbol,
+            "macro_tf": self.policy.timeframes.macro_tf,
+            "context_tf": self.policy.timeframes.context_tf,
+            "decision_tf": self.policy.timeframes.decision_tf,
+            "execution_tf": self.policy.timeframes.execution_tf,
+            "micro_tf": self.policy.timeframes.execution_tf,
+            "decision_time_ms": decision.decision_time_ms,
+            "h4_context": decision.h4_context,
+            "d1_state": decision.d1_state,
+            "alligator_state": decision.context_state,
+            "wm1": "VALID" if decision.wm1 else "INVALID",
+            "wm2": "VALID" if decision.wm2 else "INVALID",
+            "wm3": "VALID" if decision.wm3 else "INVALID",
+            "fractal_state": "VALID" if decision.wm3 else "NONE",
+            "angulation": decision.angulation,
+            "momentum_relation": decision.momentum_relation,
+            "trigger_price": first.trigger_price if first else 0.0,
+            "initial_stop": first.protective_reference if first else 0.0,
+            "campaign_step": 1,
+            "first_signal_type": decision.first_signal_type,
+            "quality": decision.quality,
+            "execution_feasible": False,
+            "risk_feasible": False,
+            "core_valid": True,
+            "trade_allowed": False,
+            "block_reason": "PENDING_RISK_AND_EXECUTION_ECONOMICS",
+            "fields": decision.fields,
+        }
+        candidate = Candidate(
+            symbol=symbol,
+            score=score,
+            signal=True,
+            setup_score=score,
+            signal_strength=1.0 if decision.quality == "A" else 0.8,
+            breakout_distance_pct=0.0,
+            risk_pct=risk_pct * 100.0,
+            risk_reward=0.0,
+            atr_pct=atr / price,
+            spread_pct=spread_pct,
+            htf_confirmed=decision.h4_context == "SUPPORTIVE",
+            setup_state="WILLIAMS_CORE",
+            reason=decision.reason,
+            wise_man_count=sum((decision.wm1, decision.wm2, decision.wm3)),
+            signal_family="+".join(x.signal_type.value for x in specs) or "NONE",
+            base_score=score,
+            campaign_ready=True,
+            entry_signal_type=decision.first_signal_type,
+            entry_trigger_price=first.trigger_price if first else 0.0,
+            entry_protective_reference=first.protective_reference if first else 0.0,
+            entry_signal_time_ms=first.signal_bar_time_ms if first else 0,
+            campaign_signal_specs=[x.to_dict() for x in specs],
+            wave_entry_allowed=True,
+            decision_trace=trace,
+        )
+        return candidate, closed
+
     def _analyse_base(self, symbol, metadata=None) -> Optional[Tuple[Candidate, pd.DataFrame]]:
         symbol = str(symbol).upper()
         try:
@@ -423,6 +529,9 @@ class MarketScanner:
             )
             if tick_size <= 0:
                 return None
+
+            if self.intraday_core_enabled:
+                return self._analyse_intraday_core_base(symbol, closed, tick_size)
 
             campaign_specs = extract_long_signal_specs(
                 symbol,
@@ -817,6 +926,10 @@ class MarketScanner:
                 candidate.signal,
                 candidate.score,
             )
+
+        if self.intraday_core_enabled:
+            candidates.sort(key=self._ranking_key, reverse=True)
+            return candidates
 
         # Strict signals are the actual execution candidates, so all of them
         # receive Wave analysis. If there are no strict signals, enrich only the

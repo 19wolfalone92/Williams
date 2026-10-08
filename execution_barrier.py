@@ -90,13 +90,25 @@ class ExecutionBarrier:
             if age > intent.max_age_ms:
                 return f"stale intent age={age}ms"
 
-        # Campaign orders may be armed from a freshly constructed signal before
-        # the context service has assigned persistent versions.  They still
-        # require at least one live snapshot; the campaign pre-submit validator
-        # is responsible for the exact strategy/risk re-check.
-        if not intent.required_context_versions:
-            if not intent.purpose.upper().startswith("CAMPAIGN_"):
-                return "missing required_context_versions"
+        direction = "long" if intent.side == "BUY" else "short" if intent.side == "SELL" else ""
+        if not direction:
+            return f"unsupported side {intent.side}"
+
+        # Canonical state is checked before any exchange mutation.
+        if self.db is not None and hasattr(self.db, "state_get"):
+            symbol_state = str(
+                self.db.state_get(f"position_state:{intent.symbol}", "FLAT")
+            ).upper()
+            legacy_state = str(
+                self.db.state_get("position_state", "FLAT")
+            ).upper()
+            if symbol_state == "RECONCILE_REQUIRED" or legacy_state == "RECONCILE_REQUIRED":
+                return "RECONCILE_REQUIRED"
+
+        # Validate the declared context dependencies before validating the
+        # permission decision. This keeps diagnostics causal: a stale declared
+        # dependency is reported as stale context, rather than being masked by
+        # a missing permission field on the same intent.
         for tf, required in intent.required_context_versions.items():
             ctx = snapshot.context(intent.symbol, tf)
             if ctx is None:
@@ -104,16 +116,18 @@ class ExecutionBarrier:
             if int(ctx.version) != int(required):
                 return f"stale context {tf}: required={required} current={ctx.version}"
 
-        direction = "long" if intent.side == "BUY" else "short" if intent.side == "SELL" else ""
-        if not direction:
-            return f"unsupported side {intent.side}"
-
-        # All declared TFs are version dependencies, but the permission
-        # decision belongs to one operative/entry timeframe. Higher TFs provide
-        # structural context and must not be required to emit a duplicate trigger.
-        if intent.purpose.upper() == "ENTRY":
+        purpose = intent.purpose.upper()
+        needs_permission = (
+            purpose == "ENTRY"
+            or purpose in {"CAMPAIGN_ENTRY", "CAMPAIGN_ADD_ON"}
+            or purpose.endswith("_ENTRY")
+            or purpose.endswith("_ADD_ON")
+        )
+        if needs_permission:
             permission_tf = (intent.permission_interval or "").lower()
-            permission_ctx = snapshot.context(intent.symbol, permission_tf) if permission_tf else None
+            if not permission_tf:
+                return "missing permission_interval for execution mutation"
+            permission_ctx = snapshot.context(intent.symbol, permission_tf)
             if permission_ctx is None:
                 return f"missing permission context {intent.symbol} {permission_tf}"
             if direction == "long" and not permission_ctx.allow_long:
@@ -122,17 +136,43 @@ class ExecutionBarrier:
                 return f"context {permission_tf} does not allow SHORT"
 
         if self.db is not None and hasattr(self.db, "state_get"):
-            state = str(self.db.state_get("position_state", "FLAT"))
-            if state == "RECONCILE_REQUIRED":
-                return "RECONCILE_REQUIRED"
-            campaign_state = str(
-                self.db.state_get(
-                    f"campaign_state:{intent.campaign_id}",
-                    "CLEAN"
-                )
-            ) if intent.campaign_id else "CLEAN"
+            campaign_state = (
+                str(self.db.state_get(f"campaign_state:{intent.campaign_id}", "CLEAN")).upper()
+                if intent.campaign_id
+                else "CLEAN"
+            )
             if campaign_state == "RECONCILE_REQUIRED":
                 return "campaign_reconcile_required"
+
+            # Canonical campaign row is the durable source of truth. This
+            # closes the race where a persisted mirror remains stale.
+            if intent.campaign_id and hasattr(self.db, "get_campaign"):
+                campaign = self.db.get_campaign(intent.campaign_id)
+                if (
+                    campaign is not None
+                    and str(campaign.get("state", "")).upper() == "RECONCILE_REQUIRED"
+                ):
+                    return "campaign_reconcile_required"
+
+            if hasattr(self.db, "open_campaigns"):
+                for campaign in self.db.open_campaigns():
+                    if (
+                        str(campaign.get("symbol", "")).upper() == intent.symbol.upper()
+                        and str(campaign.get("state", "")).upper() == "RECONCILE_REQUIRED"
+                    ):
+                        return "symbol_campaign_reconcile_required"
+
+            # Optional runtime latches are fail-closed only when explicitly
+            # persisted; absence preserves headless/unit-test compatibility.
+            runtime_enabled = self.db.state_get("runtime_execution_enabled")
+            if runtime_enabled is not None and str(runtime_enabled).lower() not in {"1", "true", "yes"}:
+                return "runtime_execution_disabled"
+            paused = self.db.state_get("runtime_paused")
+            if paused is not None and str(paused).lower() in {"1", "true", "yes"}:
+                return "paused"
+            kill_latched = self.db.state_get("kill_switch_latched")
+            if kill_latched is not None and str(kill_latched).lower() in {"1", "true", "yes"}:
+                return "kill_switch_latched"
 
         return ""
 
@@ -192,6 +232,28 @@ class ExecutionBarrier:
                     {"error": f"{type(exc).__name__}: {exc}"},
                 )
                 raise
+
+            # A successful mutation response must identify the mutation. A
+            # transport-success response without an order/list identity is not
+            # evidence that the exchange state is knowable.
+            if (
+                intent.order_type not in {"CANCEL", "CANCEL_REPLACE"}
+                and isinstance(response, dict)
+                and response.get("orderId") is None
+                and response.get("clientOrderId") is None
+                and response.get("orderListId") is None
+            ):
+                self._persist(intent, "AMBIGUOUS", "submission response has no exchange identity")
+                self._record(
+                    "ERROR",
+                    "execution_ambiguous",
+                    intent,
+                    "Binance response contained no order identity; reconciliation required",
+                    {"response": response},
+                )
+                raise RuntimeError(
+                    "Execution mutation response is missing exchange identity; reconciliation required"
+                )
 
             self._persist(intent, "SUBMITTED")
             if self.db is not None and hasattr(self.db, "save_execution_event"):

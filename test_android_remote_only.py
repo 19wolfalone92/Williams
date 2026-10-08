@@ -44,9 +44,9 @@ def test_native_runtime_uses_binance_spot_testnet():
     assert "wss://stream.testnet.binance.vision" in runtime
     # Require the exact canonical Spot Testnet WebSocket API endpoint.
     assert "wss://ws-api.testnet.binance.vision/ws-api/v3" in runtime
-    assert 'prefs.getInt("max_open_positions", 5)' in runtime
+    assert "private val maxOpenPositions: Int = 1" in runtime
     assert "private val maxSlippagePct = 0.0015" in runtime
-    assert "val maxOpenPositions: Int = 5" in _read(ANDROID / "java/com/williamsbot/MainActivity.kt")
+    assert "val maxOpenPositions: Int = 1" in _read(ANDROID / "java/com/williamsbot/MainActivity.kt")
 
 
 def test_android_has_portfolio_local_api():

@@ -6,7 +6,7 @@ from contextlib import contextmanager
 
 
 class Database:
-    SCHEMA_VERSION = 6
+    SCHEMA_VERSION = 7
 
     def __init__(self, path=None):
         path = path or os.getenv('WILLIAMS_DB_PATH') or 'data/trader.sqlite3'
@@ -149,6 +149,7 @@ class Database:
             symbol TEXT NOT NULL,
             side TEXT NOT NULL,
             execution_timeframe TEXT NOT NULL,
+            decision_timeframe TEXT NOT NULL DEFAULT "1h",
             state TEXT NOT NULL,
             origin_signal_id TEXT,
             current_signal_id TEXT,
@@ -195,7 +196,8 @@ class Database:
             expires_at_ms INTEGER DEFAULT 0,
             context_versions_json TEXT,
             reason TEXT,
-            supersedes_signal_id TEXT
+            supersedes_signal_id TEXT,
+            detected_time_ms INTEGER DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS campaign_orders(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -243,6 +245,21 @@ class Database:
             reason TEXT,
             payload_json TEXT
         );
+        CREATE TABLE IF NOT EXISTS decision_traces(
+            trace_id TEXT PRIMARY KEY,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            symbol TEXT NOT NULL,
+            decision_time_ms INTEGER NOT NULL,
+            decision_tf TEXT NOT NULL,
+            execution_tf TEXT NOT NULL,
+            micro_tf TEXT NOT NULL,
+            core_valid INTEGER NOT NULL DEFAULT 0,
+            trade_allowed INTEGER NOT NULL DEFAULT 0,
+            block_reason TEXT,
+            trace_json TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_decision_traces_symbol_time
+            ON decision_traces(symbol, decision_time_ms);
         CREATE INDEX IF NOT EXISTS idx_trade_journal_diagnosis
             ON trade_journal(diagnosis);
         CREATE INDEX IF NOT EXISTS idx_trades_open_symbol
@@ -260,10 +277,22 @@ class Database:
         CREATE INDEX IF NOT EXISTS idx_campaign_events_campaign
             ON campaign_events(campaign_id, id);
         ''')
+        self._migrate_campaign_columns()
+        self._migrate_campaign_signal_columns()
         self._migrate_trade_columns()
         self.state_set('schema_version', self.SCHEMA_VERSION)
         self.state_set('position_state', self.state_get('position_state', 'FLAT'))
         self.conn.commit()
+
+    def _migrate_campaign_columns(self):
+        columns = {row["name"] for row in self.conn.execute("PRAGMA table_info(campaigns)").fetchall()}
+        if "decision_timeframe" not in columns:
+            self.conn.execute('ALTER TABLE campaigns ADD COLUMN decision_timeframe TEXT NOT NULL DEFAULT "1h"')
+
+    def _migrate_campaign_signal_columns(self):
+        columns = {row["name"] for row in self.conn.execute("PRAGMA table_info(campaign_signals)").fetchall()}
+        if "detected_time_ms" not in columns:
+            self.conn.execute("ALTER TABLE campaign_signals ADD COLUMN detected_time_ms INTEGER DEFAULT 0")
 
     def _migrate_trade_columns(self):
         columns = {
@@ -283,6 +312,54 @@ class Database:
                 self.conn.execute(
                     f'ALTER TABLE trades ADD COLUMN {name} {sql_type}'
                 )
+
+    def save_decision_trace(self, trace):
+        data = trace.to_dict() if hasattr(trace, "to_dict") else dict(trace)
+        self.conn.execute(
+            """INSERT OR REPLACE INTO decision_traces(
+                trace_id,symbol,decision_time_ms,decision_tf,execution_tf,micro_tf,
+                core_valid,trade_allowed,block_reason,trace_json
+            ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+            (
+                str(data["trace_id"]),
+                str(data["symbol"]).upper(),
+                int(data.get("decision_time_ms", 0) or 0),
+                str(data.get("decision_tf", "")),
+                str(data.get("execution_tf", "")),
+                str(data.get("micro_tf", "")),
+                1 if data.get("core_valid") else 0,
+                1 if data.get("trade_allowed") else 0,
+                str(data.get("block_reason", "")),
+                json.dumps(data, sort_keys=True, default=str),
+            ),
+        )
+        if not self._transaction_active:
+            self.conn.commit()
+
+    def get_decision_trace(self, trace_id):
+        row = self.conn.execute(
+            "SELECT trace_json FROM decision_traces WHERE trace_id=?",
+            (str(trace_id),),
+        ).fetchone()
+        if not row:
+            return None
+        try:
+            return json.loads(row["trace_json"])
+        except Exception:
+            return None
+
+    def recent_decision_traces(self, symbol=None, limit=100):
+        if symbol:
+            rows = self.conn.execute(
+                "SELECT * FROM decision_traces WHERE symbol=? ORDER BY decision_time_ms DESC LIMIT ?",
+                (str(symbol).upper(), max(1, min(int(limit), 500))),
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT * FROM decision_traces ORDER BY decision_time_ms DESC LIMIT ?",
+                (max(1, min(int(limit), 500)),),
+            ).fetchall()
+        return [dict(r) for r in rows]
 
     def state_get(self, key, default=None):
         r = self.conn.execute(
@@ -863,17 +940,17 @@ class Database:
         data = campaign.to_dict() if hasattr(campaign, "to_dict") else dict(campaign)
         self.conn.execute(
             """INSERT INTO campaigns(
-                campaign_id,updated_at,symbol,side,execution_timeframe,state,
+                campaign_id,updated_at,symbol,side,execution_timeframe,decision_timeframe,state,
                 origin_signal_id,current_signal_id,current_signal_type,
                 position_qty,average_entry_price,initial_stop_price,current_stop_price,
                 structural_stop_source,additions,tranche_index,realized_pnl_quote,
                 unrealized_pnl_quote,open_risk_quote,pending_risk_quote,
                 capital_reserved_quote,wave_context_json,health,next_action,
                 reconciliation_state,exit_reason,tags_json
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(campaign_id) DO UPDATE SET
                 updated_at=CURRENT_TIMESTAMP,symbol=excluded.symbol,side=excluded.side,
-                execution_timeframe=excluded.execution_timeframe,state=excluded.state,
+                execution_timeframe=excluded.execution_timeframe,decision_timeframe=excluded.decision_timeframe,state=excluded.state,
                 origin_signal_id=excluded.origin_signal_id,current_signal_id=excluded.current_signal_id,
                 current_signal_type=excluded.current_signal_type,position_qty=excluded.position_qty,
                 average_entry_price=excluded.average_entry_price,initial_stop_price=excluded.initial_stop_price,
@@ -887,7 +964,7 @@ class Database:
                 tags_json=excluded.tags_json""",
             (
                 data["campaign_id"], datetime.now(timezone.utc).isoformat(), data["symbol"], data["side"],
-                data["execution_timeframe"], data["state"], data.get("origin_signal_id",""),
+                data["execution_timeframe"], data.get("decision_timeframe","1h"), data["state"], data.get("origin_signal_id",""),
                 data.get("current_signal_id",""), data.get("current_signal_type",""),
                 float(data.get("position_qty",0) or 0), float(data.get("average_entry_price",0) or 0),
                 float(data.get("initial_stop_price",0) or 0), float(data.get("current_stop_price",0) or 0),
@@ -899,6 +976,14 @@ class Database:
                 data.get("health","GREEN"),data.get("next_action","WAIT"),data.get("reconciliation_state","CLEAN"),
                 data.get("exit_reason",""),json.dumps(data.get("tags",{}),default=str,sort_keys=True),
             ),
+        )
+        # Keep the execution barrier's durable campaign-state mirror in
+        # lockstep with the canonical campaign row. This is deliberately done
+        # for every save, including RECONCILE_REQUIRED, so a stale mirror can
+        # never reopen an unsafe mutation path.
+        self.state_set(
+            f"campaign_state:{data['campaign_id']}",
+            data["state"],
         )
         if not self._transaction_active:
             self.conn.commit()
@@ -922,8 +1007,8 @@ class Database:
                 signal_id,campaign_id,symbol,side,signal_type,role,timeframe,
                 signal_bar_time_ms,trigger_price,protective_reference,invalidation_price,
                 teeth_at_detection,angulation_score,wave_confidence,wave_exhaustion_risk,
-                htf_confirmed,state,source_candle_index,expires_at_ms,context_versions_json,reason,supersedes_signal_id
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                htf_confirmed,state,source_candle_index,expires_at_ms,context_versions_json,reason,supersedes_signal_id,detected_time_ms
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 data["signal_id"], str(campaign_id), data["symbol"], data["side"],
                 st.value if hasattr(st,"value") else st, role.value if hasattr(role,"value") else role,
@@ -933,8 +1018,16 @@ class Database:
                 float(data.get("wave_confidence",0) or 0), float(data.get("wave_exhaustion_risk",0) or 0),
                 1 if data.get("htf_confirmed") else 0, state, int(data.get("source_candle_index",-1) or -1),
                 int(data.get("expires_at_ms",0) or 0), json.dumps(data.get("context_versions",{}),sort_keys=True),
-                data.get("reason",""), supersedes_signal_id or None,
+                data.get("reason",""), supersedes_signal_id or None, int(data.get("detected_time_ms", 0) or 0),
             ),
+        )
+        if not self._transaction_active:
+            self.conn.commit()
+
+    def replace_campaign_signal(self, old_signal_id, new_signal_id):
+        self.conn.execute(
+            "UPDATE campaign_signals SET state=?, supersedes_signal_id=? WHERE signal_id=?",
+            ("REPLACED", str(new_signal_id), str(old_signal_id)),
         )
         if not self._transaction_active:
             self.conn.commit()
@@ -1001,7 +1094,7 @@ class Database:
     def campaign_risk_reserved_quote(self):
         row=self.conn.execute(
             "SELECT COALESCE(SUM(open_risk_quote),0)+COALESCE(SUM(pending_risk_quote),0) AS risk "
-            "FROM campaigns WHERE state NOT IN ('CLOSED','FLAT','RECONCILE_REQUIRED')"
+            "FROM campaigns WHERE state NOT IN ('CLOSED','FLAT')"
         ).fetchone()
         return float(row["risk"] or 0.0)
 

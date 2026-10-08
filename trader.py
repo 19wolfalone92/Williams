@@ -30,13 +30,15 @@ def utc_now(): return datetime.now(timezone.utc).isoformat()
 
 class Trader:
     def __init__(self, api_key=None, api_secret=None, testnet=None, context_cache=None):
+        self.strategy_profile = os.getenv("WILLIAMS_STRATEGY_PROFILE", "WILLIAMS_INTRADAY_CORE").strip().upper()
         self.config = TradingConfig.from_env()
         self.context_cache = context_cache or ContextCache()
-        self.symbol=os.getenv('SYMBOL',self.config.symbols[0]).upper(); self.interval=os.getenv('INTERVAL','1h')
+        profile = os.getenv('WILLIAMS_STRATEGY_PROFILE', 'WILLIAMS_INTRADAY_CORE').strip().upper()
+        self.symbol=os.getenv('SYMBOL',self.config.symbols[0]).upper(); self.interval=('1h' if profile in {'WILLIAMS_INTRADAY_CORE','WILLIAMS_INTRADAY_CONSERVATIVE'} else os.getenv('INTERVAL','1h'))
         self.position_fraction=float(os.getenv('POSITION_FRACTION','0.25')); self.stop_pct=float(os.getenv('STOP_LOSS_PCT','0.02')); self.target_pct=float(os.getenv('TAKE_PROFIT_PCT','0.04'))
         self.poll_seconds=int(os.getenv('POLL_SECONDS','20'))
         self.risk_per_trade_pct=self.config.risk_per_trade_pct; self.max_daily_loss_pct=self.config.max_daily_loss_pct
-        self.max_trades_day=int(os.getenv('MAX_TRADES_PER_DAY','5')); self.max_consecutive_losses=int(os.getenv('MAX_CONSECUTIVE_LOSSES','3')); self.cooldown_minutes=int(os.getenv('COOLDOWN_MINUTES','30'))
+        self.max_trades_day=int(os.getenv('MAX_TRADES_PER_DAY','0' if self.strategy_profile in {'WILLIAMS_INTRADAY_CORE','WILLIAMS_INTRADAY_CONSERVATIVE'} else '5')); self.max_consecutive_losses=int(os.getenv('MAX_CONSECUTIVE_LOSSES','2' if self.strategy_profile in {'WILLIAMS_INTRADAY_CORE','WILLIAMS_INTRADAY_CONSERVATIVE'} else '3')); self.cooldown_minutes=int(os.getenv('COOLDOWN_MINUTES','30'))
         self.min_risk_reward=self.config.min_risk_reward; self.atr_period=self.config.atr_period; self.max_atr_pct=self.config.max_atr_pct
         self.max_spread_pct=self.config.max_spread_pct; self.require_htf_confirmation=self.config.require_htf_confirmation; self.htf_interval=os.getenv('HTF_INTERVAL','4h')
         self.db=Database(
@@ -53,9 +55,12 @@ class Trader:
         self.filters={}; self.base_asset=self.quote_asset=None; self.recovered=False
         self.symbol_rules = None
         self.preflight_report = None
-        self.auto_scan_enabled = os.getenv(
-            'AUTO_SCAN_ENABLED', 'true'
-        ).lower() == 'true'
+        profile = os.getenv('WILLIAMS_STRATEGY_PROFILE', 'WILLIAMS_INTRADAY_CORE').strip().upper()
+        self.auto_scan_enabled = (
+            True
+            if profile in {'WILLIAMS_INTRADAY_CORE', 'WILLIAMS_INTRADAY_CONSERVATIVE'}
+            else os.getenv('AUTO_SCAN_ENABLED', 'true').lower() == 'true'
+        )
 
         self.dry_run = os.getenv(
             'DRY_RUN', 'true'
@@ -81,8 +86,8 @@ class Trader:
         self._auto_scan_lock = False
 
         self.max_open_positions = max(0, int(self.config.max_open_positions))
-        self.max_total_risk_pct = min(0.01, max(0.0, float(os.getenv('MAX_TOTAL_RISK_PCT', '0.01'))))
-        self.max_risk_per_trade_pct = min(0.005, max(0.0, float(os.getenv('MAX_RISK_PER_TRADE_PCT', '0.005'))))
+        self.max_total_risk_pct = min(0.006, max(0.0, float(os.getenv('MAX_TOTAL_RISK_PCT', str(self.config.max_total_risk_pct)))))
+        self.max_risk_per_trade_pct = min(0.0025, max(0.0, float(os.getenv('MAX_RISK_PER_TRADE_PCT', str(self.config.risk_per_trade_pct)))))
         self.active_symbol = self.symbol
 
         self.db.state_set('active_symbol', self.symbol)
@@ -118,6 +123,7 @@ class Trader:
                 db=self.db,
                 symbols=self.auto_scan_symbols,
                 execution_barrier=self.execution_barrier,
+                strategy_profile=self.strategy_profile,
             ).recover()
             if not recovery.get('ok'):
                 raise RuntimeError(
@@ -135,6 +141,7 @@ class Trader:
             db=self.db,
             symbols=self.auto_scan_symbols,
             execution_barrier=self.execution_barrier,
+            strategy_profile=self.strategy_profile,
         )
         recovery = self._multi_position_trader.recover()
         if not recovery.get('ok'):
@@ -208,6 +215,7 @@ class Trader:
                 db=self.db,
                 symbols=self.auto_scan_symbols or [self.symbol],
                 execution_barrier=self.execution_barrier,
+                strategy_profile=self.strategy_profile,
             )
             recovery = recovery_trader.recover()
             if not recovery.get('ok'):
@@ -252,6 +260,7 @@ class Trader:
             db=self.db,
             symbols=self.auto_scan_symbols,
             execution_barrier=self.execution_barrier,
+            strategy_profile=self.strategy_profile,
         )
         recovery = self._multi_position_trader.recover()
 
@@ -1266,6 +1275,7 @@ class Trader:
                     db=self.db,
                     symbols=self.auto_scan_symbols,
                     execution_barrier=self.execution_barrier,
+                    strategy_profile=self.strategy_profile,
                 )
                 recovery = self._multi_position_trader.recover()
                 if not recovery.get('ok'):
@@ -1280,8 +1290,8 @@ class Trader:
 
     def process(self):
         if getattr(self, 'auto_scan_enabled', False):
-            # Canonical Spot portfolio runtime. Multiple simultaneous positions
-            # are allowed only while aggregate protected risk remains <= 1%.
+            # Canonical Spot portfolio runtime. Intraday Core hard-limits this
+            # mode to one active campaign and the configured campaign-risk cap.
             result = self._auto_scan_process()
             if result:
                 self.db.log_event(

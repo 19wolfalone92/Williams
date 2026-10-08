@@ -1,4 +1,4 @@
-# Williams Binance Bot + Android Dashboard 4.22.3
+# Williams Binance Bot + Android Dashboard 4.24.0
 
 Полноценная Testnet-first версия торгового бота по Williams (Alligator + AO + Fractals) с Android Dashboard, SQLite recovery, Binance WebSocket и защитными risk-фильтрами.
 
@@ -27,16 +27,19 @@
 - подтверждение старшего таймфрейма;
 - размер позиции ограничивается одновременно долей капитала и риском на сделку.
 
-По умолчанию:
-- риск на сделку: максимум 0,5%;
-- совокупный открытый риск: максимум 1%;
-- одновременно допускается до 5 управляемых позиций; совокупный открытый риск остаётся ограничен 1%;
-- максимум дневного убытка: 3%;
-- максимум 5 сделок в день;
-- максимум 3 последовательных убытка;
-- cooldown 30 минут;
-- minimum R/R 1.5;
-- старший таймфрейм: 4h.
+Canonical Williams Core (small-deposit intraday) по умолчанию:
+- initial risk: 0,25% equity;
+- campaign risk cap: 0,60%;
+- portfolio reserved-risk cap: 0,60%;
+- одновременно: 1 активная кампания;
+- дневной loss cap: 1%;
+- максимум 2 полных stop-out за день;
+- leverage: 0;
+- averaging down: OFF;
+- fixed take-profit: OFF;
+- execution timeframe: 5m;
+- decision timeframe: M15;
+- permission/context: H4/H1.
 
 Это защитные ограничения, а не гарантия прибыли.
 
@@ -113,19 +116,21 @@ Recovery suite включает 10 сценариев:
 - timeout после BUY восстанавливается по clientOrderId;
 - Entry связан с точным OCO list.
 
-## Backtester
+## Canonical event-driven backtester
 
 ```bash
-python run_backtest.py --symbol BTCUSDT --interval 1h --start 2024-01-01 --end 2026-10-01
+python run_backtest.py --symbol BTCUSDT --start 2024-01-01 --end 2026-10-01 --capital 500
 ```
 
-Исторический `fetch_klines()` поддерживает как live-вызов через Binance client, так и позиционный вызов `fetch_klines(symbol, interval, start, end)`.
+Runner использует тот же `WilliamsIntradayCore` и `WilliamsCampaignBacktester`, что production Testnet path:
+`1D → 4H → 1H → M15 signal truth → M5 trigger/fill → campaign`.
+M5 не создаёт сигнал. Без M5 неоднозначные intrabar-пути обрабатываются консервативно. Research market data отделена от execution safety и может идти через Binance public market-data endpoint.
 
 ## Android
 
 Открыть корень проекта в Android Studio и собрать `app`.
 
-Версия приложения: **4.22.3**, versionCode формируется GitHub Actions.
+Версия приложения: **4.24.0**, versionCode формируется GitHub Actions.
 
 Среда, в которой подготовлен этот архив, не содержит Android SDK/Gradle distribution, поэтому APK здесь не заявляется как собранный. Исходники Gradle-проекта подготовлены для сборки Android Studio.
 
@@ -135,17 +140,18 @@ python run_backtest.py --symbol BTCUSDT --interval 1h --start 2024-01-01 --end 2
 
 ## Сборка APK
 
-Полная инструкция: `BUILD_APK_RU.md`. Текущая версия Android: **4.22.3**.
+Полная инструкция: `BUILD_APK_RU.md`. Текущая версия Android: **4.24.0**.
 
 Проект подготовлен с AGP 8.7.3, Gradle 8.9, Java/Kotlin target 17 и compile/target SDK 35. Для локальной сборки можно использовать Android Studio. Для автоматической debug-сборки в GitHub предусмотрен workflow `.github/workflows/android-apk.yml`.
 
 Release-подпись не хранится в проекте: создайте собственный keystore и локальный `keystore.properties`. Это необходимо для безопасного выпуска обновлений приложения.
 
-## Автосканирование
+## Автосканирование Canonical Core
 
-- Binance Spot USDT universe: динамическое обнаружение допустимых Spot/USDT пар.
-- Для рабочего цикла используется liquidity preselection Top-50, чтобы не перегружать Binance REST; все строгие сигналы внутри выбранных 50 проходят MTF/Wave-проверку, watch-only кандидаты ограничиваются Wave Top-N.
-- Исполнение выбирает несколько лучших кандидатов, когда они одновременно проходят сигналы и риск-бюджет: каждая новая позиция <=0,5%, суммарный зарезервированный риск <=1%. Binance exchangeInfo; L2/flow/quant остаются фильтрами качества и не создают сигнал самостоятельно.
+- Core использует динамически проверяемый Spot/USDT universe, но для малого депозита рабочая MTF-цепочка ограничена безопасным набором из пяти базовых пар: BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT.
+- MTF/Williams-анализ выполняется только на закрытых свечах: 1D → 4H → 1H → M15; M5 используется только для trigger/fill и не создаёт новый сигнал.
+- Одновременно разрешена одна активная кампания; initial risk <=0,25%, campaign/portfolio risk <=0,60%, daily loss cap 1%. L2/flow/quant/Wave остаются качественными/диагностическими слоями и не создают BUY самостоятельно.
+- Legacy full-universe scanner-path не является источником Strategy Truth для Core и не может быть включён скрытым переопределением профиля.
 
 ## 24/7 VPS mode
 

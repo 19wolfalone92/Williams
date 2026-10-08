@@ -29,7 +29,11 @@ def main() -> None:
 
     env = read(".env.example")
     for needle in (
-        "TESTNET=true", "ALLOW_LIVE=false", "MAX_OPEN_POSITIONS=5",
+        "TESTNET=true", "ALLOW_LIVE=false", "MAX_OPEN_POSITIONS=1",
+        "MAX_RISK_PER_TRADE_PCT=0.0025",
+        "MAX_TOTAL_RISK_PCT=0.006",
+        "MAX_DAILY_LOSS_PCT=0.01",
+        "MAX_CONSECUTIVE_LOSSES=2",
         "AUTO_SCAN_SYMBOLS=", "SCAN_ALL_USDT=true", "SCAN_MAX_SYMBOLS=0",
         "LIQUIDITY_PRESELECT=0", "WAVE_FULL_TF_ALL=true",
     ):
@@ -73,9 +77,9 @@ def main() -> None:
     must(android, "http://127.0.0.1:18080", "MainActivity.kt")
     gradle = read("app/build.gradle.kts")
     must(gradle, f'versionName = "{EXPECTED_VERSION}"', "app/build.gradle.kts")
-    must(android, "val maxOpenPositions: Int = 5", "MainActivity.kt")
+    must(android, "val maxOpenPositions: Int = 1", "MainActivity.kt")
     runtime = read("app/src/main/java/com/williamsbot/StandaloneRuntime.kt")
-    must(runtime, 'prefs.getInt("max_open_positions", 5)', "StandaloneRuntime.kt")
+    must(runtime, "private val maxOpenPositions: Int = 1", "StandaloneRuntime.kt")
     must(runtime, "private val maxSlippagePct = 0.0015", "StandaloneRuntime.kt")
     must(runtime, "control/self-heal", "StandaloneRuntime.kt")
     must(runtime, "activeHistoryTasks", "StandaloneRuntime.kt")

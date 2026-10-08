@@ -55,7 +55,7 @@ def _tf_chain(execution: str, env: Mapping[str, str]) -> tuple[str, ...]:
         "1m": ("4h", "1h", "15m", "5m", "1m"),
         "3m": ("1d", "4h", "1h", "15m", "5m", "3m"),
         "5m": ("1d", "4h", "1h", "15m", "5m"),
-        "15m": ("1d", "4h", "1h", "15m"),
+        "15m": ("1d", "4h", "1h", "15m", "5m"),
         "30m": ("1d", "4h", "1h", "30m", "15m"),
         "1h": ("1d", "4h", "1h", "15m"),
         "2h": ("1w", "1d", "4h", "2h", "1h"),
@@ -121,6 +121,26 @@ class TradingConfig:
         total_risk = max(0.0, min(0.01, _float(source, "MAX_TOTAL_RISK_PCT", 0.01)))
 
         execution_timeframe = str(source.get("EXECUTION_TIMEFRAME", "5m")).lower()
+        profile = str(source.get("WILLIAMS_STRATEGY_PROFILE", "WILLIAMS_CORE_INTRADAY")).upper()
+        core_profiles = {"WILLIAMS_CORE_INTRADAY", "WILLIAMS_CORE_INTRADAY_CONSERVATIVE",
+                         "WILLIAMS_INTRADAY_CORE", "WILLIAMS_INTRADAY_CONSERVATIVE"}
+        conservative_profiles = {"WILLIAMS_CORE_INTRADAY_CONSERVATIVE", "WILLIAMS_INTRADAY_CONSERVATIVE"}
+        is_core = profile in core_profiles
+        is_conservative = profile in conservative_profiles
+        if is_core:
+            execution_timeframe = "5m"
+            max_positions = 1
+            risk = min(risk, 0.002 if is_conservative else 0.0025)
+            total_risk = min(total_risk, 0.005 if is_conservative else 0.006)
+        daily_loss = max(0.0, _float(source, "MAX_DAILY_LOSS_PCT", 0.03))
+        consecutive_losses = max(0, _int(source, "MAX_CONSECUTIVE_LOSSES", 3))
+        require_htf = _bool(source, "REQUIRE_HTF_CONFIRMATION", True)
+        no_trade_uncertain = _bool(source, "NO_TRADE_WHEN_UNCERTAIN", True)
+        if is_core:
+            daily_loss = min(daily_loss, 0.0075 if is_conservative else 0.01)
+            consecutive_losses = min(consecutive_losses, 2)
+            require_htf = True
+            no_trade_uncertain = True
 
         return cls(
             symbols=symbols,
@@ -128,12 +148,12 @@ class TradingConfig:
             execution_timeframe=execution_timeframe,
             allow_long=_bool(source, "ALLOW_LONG", True),
             allow_short=_bool(source, "ALLOW_SHORT", False),
-            require_htf_confirmation=_bool(source, "REQUIRE_HTF_CONFIRMATION", True),
-            no_trade_when_uncertain=_bool(source, "NO_TRADE_WHEN_UNCERTAIN", True),
+            require_htf_confirmation=require_htf,
+            no_trade_when_uncertain=no_trade_uncertain,
             risk_per_trade_pct=risk,
             max_total_risk_pct=max(total_risk, risk),
-            max_daily_loss_pct=max(0.0, _float(source, "MAX_DAILY_LOSS_PCT", 0.03)),
-            max_consecutive_losses=max(0, _int(source, "MAX_CONSECUTIVE_LOSSES", 3)),
+            max_daily_loss_pct=daily_loss,
+            max_consecutive_losses=consecutive_losses,
             cooldown_minutes=max(0, _int(source, "COOLDOWN_MINUTES", 30)),
             max_open_positions=max_positions,
             min_risk_reward=max(0.0, _float(source, "MIN_RISK_REWARD", 1.5)),

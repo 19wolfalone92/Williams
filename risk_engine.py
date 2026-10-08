@@ -241,6 +241,72 @@ class RiskEngine:
         result._risk_pct = effective_risk_pct * 100.0
         return result
 
+    def analyse_structural_stop(
+        self,
+        symbol: str,
+        entry_price: float,
+        stop_price: float,
+        *,
+        risk_pct_override: float | None = None,
+        spread_pct: float = 0.0,
+        max_spread_pct: float = 0.0015,
+        min_notional: float = 0.0,
+        max_position_fraction: float | None = None,
+    ) -> RiskAnalysis:
+        """Size a position from the real Williams structural stop.
+
+        No target is invented here. This is the risk/allocation calculation for
+        Williams Core, where exits are structural/EOD rather than fixed-TP.
+        """
+        entry = float(entry_price)
+        stop = float(stop_price)
+        if entry <= 0:
+            return self._blocked(symbol, "LONG", entry, "invalid entry price")
+        if stop <= 0 or stop >= entry:
+            return self._blocked(symbol, "LONG", entry, "invalid structural stop")
+        if spread_pct > max_spread_pct:
+            return self._blocked(symbol, "LONG", entry, "spread exceeds maximum allowed")
+
+        allocation = self.risk_per_trade_pct if risk_pct_override is None else float(risk_pct_override)
+        if allocation <= 0:
+            return self._blocked(symbol, "LONG", entry, "risk allocation is zero")
+
+        stop_pct = (entry - stop) / entry
+        cost_pct = 2.0 * self.fee_buffer_per_side_pct + self.slippage_buffer_pct + float(spread_pct)
+        risk_quote = self.balance * allocation
+        effective_loss_fraction = stop_pct + cost_pct
+        risk_based_position = risk_quote / max(effective_loss_fraction, 1e-12)
+        exposure_cap = self.max_position_fraction if max_position_fraction is None else float(max_position_fraction)
+        position_quote = min(risk_based_position, self.balance * max(0.0, exposure_cap))
+
+        if position_quote <= 0:
+            return self._blocked(symbol, "LONG", entry, "calculated position size is zero")
+        if min_notional > 0 and position_quote < float(min_notional):
+            return self._blocked(
+                symbol, "LONG", entry,
+                f"position notional {position_quote:.8f} below Binance minimum {float(min_notional):.8f}"
+            )
+
+        efficiency = max(0.0, min(1.0, 1.0 - cost_pct / max(stop_pct, 1e-12)))
+        result = RiskAnalysis(
+            symbol=symbol.upper(),
+            side="LONG",
+            entry_price=entry,
+            stop_price=stop,
+            take_profit_price=0.0,
+            stop_distance_pct=stop_pct * 100.0,
+            take_profit_pct=0.0,
+            risk_reward=float("inf"),
+            risk_quote=risk_quote,
+            position_quote=position_quote,
+            position_fraction=position_quote / max(self.balance, 1e-12),
+            score=round(100.0 * efficiency, 2),
+            allowed=True,
+            reason="structural risk checks passed; fixed TP disabled",
+        )
+        result._risk_pct = allocation * 100.0
+        return result
+
     def _blocked(self, symbol, side, entry, reason):
         return RiskAnalysis(
             symbol=symbol.upper(),

@@ -17,6 +17,7 @@ from campaign_model import CampaignState, structural_stop_for_long
 from campaign_execution import CampaignExecutionError, CampaignExecutionService
 from strategy import calculate_indicators, config_from_env
 from data import fetch_klines
+from williams_intraday_spec import IntradayPolicy
 
 
 class CampaignMonitor:
@@ -24,6 +25,7 @@ class CampaignMonitor:
         self.client = client
         self.db = db
         self.execution = execution_service
+        self.intraday_policy = IntradayPolicy.from_env()
         self.wave_recheck_seconds = max(
             30,
             int(os.getenv("CAMPAIGN_WAVE_RECHECK_SECONDS", "60")),
@@ -51,17 +53,13 @@ class CampaignMonitor:
         return raw.copy()
 
     @staticmethod
-    def _five_same_color(candles) -> str:
-        if len(candles) < 5:
-            return "NONE"
-        rows = candles.tail(5)
-        bullish = all(float(r["close"]) > float(r["open"]) for _, r in rows.iterrows())
-        bearish = all(float(r["close"]) < float(r["open"]) for _, r in rows.iterrows())
-        if bullish:
-            return "BULLISH"
-        if bearish:
-            return "BEARISH"
-        return "NONE"
+    def _zone_snapshot(indicators) -> tuple[str, int]:
+        if indicators is None or len(indicators) == 0:
+            return "UNKNOWN", 0
+        row = indicators.iloc[-1]
+        color = str(row.get("zone_color", "UNKNOWN") or "UNKNOWN").upper()
+        streak = int(row.get("zone_streak", 0) or 0) if color == "GREEN" else int(row.get("zone_red_streak", 0) or 0) if color == "RED" else 0
+        return color, streak
 
     def _wave_snapshot(self, campaign, candles):
         now = int(time.time() * 1000)
@@ -74,17 +72,17 @@ class CampaignMonitor:
 
             engine = MultiTimeframeWaveEngine(
                 self.client,
-                base_interval=campaign.execution_timeframe,
+                base_interval=campaign.decision_timeframe,
                 include_micro=False,
             )
             report = engine.analyse(
                 campaign.symbol,
-                cache={campaign.execution_timeframe: candles},
+                cache={campaign.decision_timeframe: candles},
             )
             campaign.tags["wave_last_sample_ms"] = now
             campaign.wave_position = int(
                 getattr(
-                    report.frames.get(campaign.execution_timeframe),
+                    report.frames.get(campaign.decision_timeframe),
                     "position",
                     getattr(report, "setup_position", 0),
                 )
@@ -113,7 +111,7 @@ class CampaignMonitor:
         candles = self._closed_candles(
             self.client,
             symbol,
-            campaign.execution_timeframe,
+            campaign.decision_timeframe,
             limit=max(40, int(os.getenv("CAMPAIGN_TRAIL_CANDLES", "80"))),
         )
         if len(candles) < 20:
@@ -133,8 +131,15 @@ class CampaignMonitor:
 
         indicators = calculate_indicators(candles, config_from_env())
         last_ind = indicators.iloc[-1]
+        prev_ind = indicators.iloc[-2] if len(indicators) > 1 else last_ind
         teeth = float(last_ind.get("teeth_shifted", 0.0) or 0.0)
-        five_color = self._five_same_color(candles)
+        zone_color, zone_streak = self._zone_snapshot(indicators)
+
+        # Stagnation is an operational diagnosis only. It never widens or
+        # tightens the stop by itself and never replaces a Williams exit.
+        current_spread = float(last_ind.get("alligator_spread_pct", 0.0) or 0.0)
+        previous_spread = float(prev_ind.get("alligator_spread_pct", 0.0) or 0.0)
+
 
         tick = self._tick(self.client, symbol)
         if tick <= 0:
@@ -162,6 +167,16 @@ class CampaignMonitor:
         )
 
         # Structural 3/5-bar protection is the primary Williams trail.
+        # Williams' Zone is a separate profit-extraction layer.
+        zone_trail_armed = bool(campaign.tags.get("zone_trail_armed", False))
+        if zone_color == "GREEN" and zone_streak >= 5:
+            zone_trail_armed = True
+        campaign.tags["zone_trail_armed"] = zone_trail_armed
+        if zone_trail_armed and len(candles):
+            zone_stop = float(candles.iloc[-1]["low"]) - tick
+            if zone_stop > proposed:
+                proposed = zone_stop
+                source = "ZONE_5_GREEN"
         # Teeth tightening is optional and OFF by default to avoid turning a
         # context line into an implicit fixed exit rule.
         if os.getenv("CAMPAIGN_TRAIL_TO_TEETH", "false").lower() == "true" and teeth > 0:
@@ -170,6 +185,30 @@ class CampaignMonitor:
 
         current_stop = float(campaign.current_stop_price or 0.0)
         stop_moved = False
+
+        stagnation_bars = int(campaign.tags.get("stagnation_bars", 0) or 0)
+        prior_spread = float(campaign.tags.get("last_alligator_spread", current_spread) or current_spread)
+        progress = proposed > current_stop + tick or current_price > float(campaign.tags.get("last_progress_price", campaign.average_entry_price or current_price) or current_price)
+        if not progress and current_spread <= prior_spread:
+            stagnation_bars += 1
+        else:
+            stagnation_bars = 0
+        campaign.tags["stagnation_bars"] = stagnation_bars
+        campaign.tags["last_alligator_spread"] = current_spread
+        campaign.tags["last_progress_price"] = current_price
+        if stagnation_bars >= max(3, int(os.getenv("CAMPAIGN_STAGNATION_BARS", "3"))):
+            campaign.tags["stagnant"] = True
+            campaign.tags["stagnation_reason"] = "no_structural_progress_and_no_alligator_expansion"
+            campaign.next_action = "CAMPAIGN_STAGNANT"
+            self.db.log_campaign_event(
+                campaign.campaign_id,
+                "CAMPAIGN_STAGNANT",
+                level="INFO",
+                reason="no structural progress and no Alligator expansion",
+                payload={"stagnation_bars": stagnation_bars},
+            )
+        else:
+            campaign.tags["stagnant"] = False
         if (
             proposed > current_stop + tick
             and proposed < current_price
@@ -200,7 +239,8 @@ class CampaignMonitor:
                     "old_stop": current_stop,
                     "new_stop": proposed,
                     "trail_bars": trail_window,
-                    "five_same_color": five_color,
+                    "zone_color": zone_color,
+                    "zone_streak": zone_streak,
                 },
             )
             stop_moved = True
@@ -219,7 +259,7 @@ class CampaignMonitor:
                 exhaustion_reasons.append(
                     f"wave_exhaustion={campaign.wave_exhaustion_risk:.1f}"
                 )
-            setup = report.frames.get(campaign.execution_timeframe)
+            setup = report.frames.get(campaign.decision_timeframe)
             if setup is not None and bool(getattr(setup, "terminal_fractal", False)):
                 exhaustion_reasons.append("terminal_fractal")
             if setup is not None and bool(getattr(setup, "ao_bearish_divergence", False)):
@@ -263,12 +303,47 @@ class CampaignMonitor:
             "proposed_stop": proposed,
             "stop_source": source,
             "stop_moved": stop_moved,
-            "five_same_color": five_color,
+            "zone_color": zone_color,
+            "zone_streak": zone_streak,
             "teeth": teeth,
             "wave_exhaustion_risk": campaign.wave_exhaustion_risk,
             "exhaustion_reasons": exhaustion_reasons,
+            "stagnation_bars": int(campaign.tags.get("stagnation_bars", 0) or 0),
+            "stagnant": bool(campaign.tags.get("stagnant", False)),
             "next_action": campaign.next_action,
         }
+
+    def enforce_session(self) -> list[dict]:
+        now = __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
+        state = self.intraday_policy.session.state(now)
+        if state in {"PRE_SESSION", "ENTRY_WINDOW"}:
+            return []
+        if state == "MANAGE_ONLY":
+            # Pending entries are not allowed after the 18:00 UTC cutoff.
+            return self.execution.cancel_pending_for_eod("NO_NEW_ENTRIES_AFTER_CUTOFF")
+        results = self.execution.cancel_pending_for_eod("EOD_PENDING_CANCELLED")
+        for row in list(self.db.open_campaigns()):
+            campaign = self.execution.engine.load_campaign(str(row["campaign_id"]))
+            if campaign is None or campaign.position_qty <= 0:
+                continue
+            if campaign.state in {CampaignState.EXIT_SIGNALLED, CampaignState.EXIT_PENDING, CampaignState.RECONCILE_REQUIRED}:
+                continue
+            try:
+                results.append({
+                    "campaign_id": campaign.campaign_id,
+                    "symbol": campaign.symbol,
+                    "state": "EOD_FLAT",
+                    "exit": self.execution.exit_market(campaign, reason="EOD_FLAT"),
+                })
+            except Exception as exc:
+                self.execution.engine.mark_reconcile_required(campaign, f"EOD_FLAT failed: {exc}")
+                results.append({
+                    "campaign_id": campaign.campaign_id,
+                    "symbol": campaign.symbol,
+                    "state": "RECONCILE_REQUIRED",
+                    "error": str(exc),
+                })
+        return results
 
     def monitor_all(self) -> list[dict]:
         results = []
@@ -283,6 +358,9 @@ class CampaignMonitor:
                     CampaignState.ADD_ON_PENDING,
                     CampaignState.ADD_ON_ARMING,
                     CampaignState.SIGNAL_DETECTED,
+                    CampaignState.EXIT_SIGNALLED,
+                    CampaignState.EXIT_PENDING,
+                    CampaignState.RECONCILE_REQUIRED,
                 }:
                     continue
                 results.append(self.manage_campaign(campaign))

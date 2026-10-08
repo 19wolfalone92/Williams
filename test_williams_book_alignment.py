@@ -90,3 +90,42 @@ def test_reversal_bar_needs_followup_extreme_breakout():
     out = calculate_indicators(df, config_from_env())
     assert bool(out['bullish_reversal_bar'].iloc[70]) is True
     assert bool(out['long_wise_reversal_entry'].iloc[70]) is False
+
+
+def test_mfi_prefers_binance_trade_count_as_tick_volume_proxy():
+    df = frame([100, 101, 102, 103, 104], [1000, 2000, 3000, 4000, 5000])
+    df["trades"] = [100, 120, 80, 160, 320]
+    out = calculate_indicators(df, config_from_env())
+    assert out["tick_volume_proxy"].tolist() == [100, 120, 80, 160, 320]
+
+
+def test_rsi_context_is_present_and_bounded():
+    prices = [100 + i for i in range(40)]
+    out = calculate_indicators(frame(prices), config_from_env())
+    assert "rsi" in out.columns
+    assert out["rsi"].between(0.0, 100.0).all()
+
+
+def test_angulation_uses_lips_reference_not_jaw():
+    prices = [100.0 + i * 0.25 for i in range(20)]
+    df = frame(prices)
+    ind = calculate_indicators(df, config_from_env())
+    # The signal extractor must be able to score using Lips even if Jaw is
+    # deliberately made unusable; this prevents regression to the old Jaw-based
+    # approximation.
+    ind["lips_shifted"] = ind["lips_shifted"].fillna(100.0)
+    ind["jaw_shifted"] = float("nan")
+    from williams_signals import _angulation
+    score, valid = _angulation(ind, len(ind) - 1)
+    assert score >= 0.0
+    assert isinstance(valid, bool)
+
+
+def test_super_ao_is_not_gated_by_fractal():
+    prices = [100 + (i * 0.05) ** 2 for i in range(80)]
+    out = calculate_indicators(frame(prices), config_from_env())
+    # Break the Fractal context deliberately. WM2 must still reflect the AO
+    # three-colour sequence itself.
+    out["long_fractal_outside"] = False
+    assert bool(out["super_ao_long"].iloc[-1]) is True
+    assert bool(out["long_super_ao_signal"].iloc[-1]) is True

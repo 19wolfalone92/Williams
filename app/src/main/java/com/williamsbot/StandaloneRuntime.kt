@@ -139,6 +139,8 @@ private data class PositionState(
     var campaignState: String = "OPEN_INITIAL",
     var stopSource: String = "INITIAL_SIGNAL",
     var additions: Int = 0,
+    var wm2Added: Boolean = false,
+    var fractalAdditions: Int = 0,
     var protectiveOrderId: String = ""
 )
 
@@ -602,24 +604,24 @@ private class NativeEngine(
     private var primaryCandles = emptyList<CandleN>()
     private var lastScanDurationMs = 0L
     private var lastSymbolsScanned = 0
-    // Default supports the portfolio model: up to five independent positions;
-    // aggregate risk remains capped separately at 1%.
-    private val maxOpenPositions: Int
-        get() = prefs.getInt("max_open_positions", 5).coerceIn(1, 10)
+    // Canonical Williams Core small-deposit contract:
+    // one active campaign, initial risk 0.25%, campaign cap 0.60%,
+    // portfolio risk cap 0.60%, daily loss cap 1.00%.
+    private val maxOpenPositions: Int = 1
     private val campaignEngineEnabled: Boolean
         get() = prefs.getBoolean("campaign_engine_enabled", true)
     private val campaignExecutionTimeframe: String
         get() = prefs.getString("campaign_execution_timeframe", "5m") ?: "5m"
-    private val campaignRiskLimitPct = 0.005
-    private val campaignInitialRiskPct = 0.002
+    private val campaignRiskLimitPct = 0.006
+    private val campaignInitialRiskPct = 0.0025
     private val campaignAddRiskCapPct = 0.002
     private val campaignTrailBars: Int
         get() = prefs.getInt("campaign_trail_bars", 5).coerceIn(3, 5)
-    private val maxTotalRiskPct = 0.01
-    private val maxRiskPerTradePct = 0.005
+    private val maxTotalRiskPct = 0.006
+    private val maxRiskPerTradePct = 0.0025
     private val maxSpreadPct = 0.0015
     private val maxSlippagePct = 0.0015
-    private val equityCircuitBreaker = EquityCircuitBreaker(maxDrawdownPct = 0.05)
+    private val equityCircuitBreaker = EquityCircuitBreaker(maxDrawdownPct = 0.01)
     @Volatile private var lastEquityCheckMs = 0L
     @Volatile private var circuitBreakerTripInProgress = false
     private val feeBufferPerSidePct = 0.001
@@ -824,6 +826,8 @@ private class NativeEngine(
                     .put("campaign_state", it.campaignState)
                     .put("stop_source", it.stopSource)
                     .put("additions", it.additions)
+                    .put("wm2_added", it.wm2Added)
+                    .put("fractal_additions", it.fractalAdditions)
                     .put("protective_order_id", it.protectiveOrderId)
             )
         }
@@ -887,6 +891,8 @@ private class NativeEngine(
                         campaignState = item.optString("campaign_state", "OPEN_INITIAL"),
                         stopSource = item.optString("stop_source", "INITIAL_SIGNAL"),
                         additions = item.optInt("additions", 0),
+                        wm2Added = item.optBoolean("wm2_added", false),
+                        fractalAdditions = item.optInt("fractal_additions", 0),
                         protectiveOrderId = item.optString("protective_order_id", "")
                     )
                 }
@@ -2516,6 +2522,18 @@ private class NativeEngine(
             pendingEntries.values.sumOf { it.riskReservedPct }
         }
 
+    private fun campaignPositionRiskPct(position: PositionState): Double {
+        val equity = estimateManagedEquity()
+        if (equity <= 0.0 || position.qty <= 0.0 || position.entry <= 0.0 || position.stop <= 0.0) {
+            return 0.0
+        }
+        val gross = ((position.entry - position.stop).coerceAtLeast(0.0) * position.qty)
+        val notional = position.entry * position.qty
+        val buffered = gross +
+            notional * (2.0 * feeBufferPerSidePct + maxSlippagePct)
+        return (buffered / equity).coerceAtLeast(0.0)
+    }
+
     private fun campaignRiskUsedPct(): Double =
         (
             positionList().sumOf { p ->
@@ -2600,7 +2618,17 @@ private class NativeEngine(
 
     private fun campaignEntryCandidate(candidate: BaseAnalysis): CampaignSignalN? =
         candidate.campaignSignals
-            .sortedBy { it.signalBarTimeMs }
+            .filter { it.role.equals("ENTRY", ignoreCase = true) }
+            .sortedWith(
+                compareBy<CampaignSignalN> {
+                    when (it.type.uppercase(Locale.US)) {
+                        "REVERSAL" -> 0
+                        "SUPER_AO" -> 1
+                        "FRACTAL" -> 2
+                        else -> 99
+                    }
+                }.thenByDescending { it.signalBarTimeMs }
+            )
             .firstOrNull()
 
     private fun submitCampaignEntry(candidate: BaseAnalysis) {
@@ -2772,11 +2800,14 @@ private class NativeEngine(
                 )
             )
             synchronized(positions) {
+                val updated = position.copy(
+                    stop = stop,
+                    stopSource = "3_5_BAR_STRUCTURE",
+                    protectiveOrderId = created.optString("orderId", "")
+                )
                 positions[position.symbol] =
-                    position.copy(
-                        stop = stop,
-                        stopSource = "3_5_BAR_STRUCTURE",
-                        protectiveOrderId = created.optString("orderId", "")
+                    updated.copy(
+                        riskPct = campaignPositionRiskPct(updated)
                     )
             }
             savePersistedState()
@@ -2818,6 +2849,7 @@ private class NativeEngine(
                     stop = stop,
                     stopSource = "3_5_BAR_STRUCTURE",
                     protectiveOrderId = newId,
+                    riskPct = campaignPositionRiskPct(position.copy(stop = stop)),
                     campaignState = "TRAILING"
                 )
         }
@@ -3044,14 +3076,20 @@ private class NativeEngine(
             existing.symbol + ": add-on cannot be protected by current stop"
         }
 
-        val provisional = existing.copy(
+        val provisionalBase = existing.copy(
             qty = newQty,
             entry = newAvg,
-            riskPct = existing.riskPct + intent.riskReservedPct,
+            riskPct = 0.0,
             signalId = intent.signalId,
             signalType = intent.signalType,
             additions = existing.additions + 1,
+            wm2Added = existing.wm2Added || intent.signalType.equals("SUPER_AO", ignoreCase = true),
+            fractalAdditions = existing.fractalAdditions +
+                if (intent.signalType.equals("FRACTAL", ignoreCase = true)) 1 else 0,
             campaignState = "POSITION_EXPANDING"
+        )
+        val provisional = provisionalBase.copy(
+            riskPct = campaignPositionRiskPct(provisionalBase)
         )
 
         try {
@@ -3179,13 +3217,13 @@ private class NativeEngine(
             return
         }
 
-        val provisional = PositionState(
+        val provisionalBase = PositionState(
             symbol = intent.symbol,
             qty = qty,
             entry = entry,
             stop = stop,
             take = 0.0,
-            riskPct = intent.riskReservedPct,
+            riskPct = 0.0,
             entryOrderId = order.optString("orderId", ""),
             entryClientOrderId = intent.clientOrderId,
             openedAt = order.optLong("transactTime", System.currentTimeMillis()),
@@ -3193,7 +3231,12 @@ private class NativeEngine(
             signalId = intent.signalId,
             signalType = intent.signalType,
             campaignState = "OPEN_INITIAL",
-            stopSource = "INITIAL_SIGNAL"
+            stopSource = "INITIAL_SIGNAL",
+            wm2Added = intent.signalType.equals("SUPER_AO", ignoreCase = true),
+            fractalAdditions = if (intent.signalType.equals("FRACTAL", ignoreCase = true)) 1 else 0
+        )
+        val provisional = provisionalBase.copy(
+            riskPct = campaignPositionRiskPct(provisionalBase)
         )
 
         try {
@@ -3489,6 +3532,13 @@ private class NativeEngine(
             ?: return
 
         if (synchronized(pendingEntries) { pendingEntries.containsKey(candidate.symbol) }) return
+        if (position.additions >= 4) return
+
+        when (signal.type.uppercase(Locale.US)) {
+            "SUPER_AO" -> if (position.wm2Added) return
+            "FRACTAL" -> if (position.fractalAdditions >= 3) return
+            else -> return
+        }
 
         val equity = estimateManagedEquity()
         val remainingCampaign =
@@ -7574,7 +7624,7 @@ private class NativeEngine(
         }
         val cooldown = consecutiveLosses >= 2 && lastLossAt > 0L &&
             System.currentTimeMillis() - lastLossAt < 30L * 60L * 1000L
-        val hardPause = consecutiveLosses >= 3
+        val hardPause = consecutiveLosses >= 2
         return JSONObject()
             .put("trades_today", count)
             .put("daily_pnl_usdt", pnl)
@@ -7746,6 +7796,14 @@ private class NativeEngine(
         }
 
         val dailyGuard = dailyTradeGuard()
+        val blockers = executionBlockers()
+        val firstBlocker = blockers.firstOrNull()
+            ?: when {
+                pendingEntries.isNotEmpty() -> "WAIT_FOR_TRIGGER"
+                positionList().any { it.qty > 0.0 && it.protectiveOrderId.isBlank() } -> "POSITION_UNPROTECTED"
+                executionReady() -> "NONE"
+                else -> "NOT_REPORTED"
+            }
 
         return JSONObject()
             .put("version", BuildConfig.VERSION_NAME)
@@ -7757,6 +7815,7 @@ private class NativeEngine(
             .put("recovered", true)
             .put("state", stateName())
             .put("execution_enabled", executionReady())
+            .put("first_blocker", firstBlocker)
             .put(
                 "position_symbol",
                 positionList().firstOrNull()?.symbol ?: JSONObject.NULL
@@ -7820,6 +7879,7 @@ private class NativeEngine(
             .put("max_total_risk_pct", maxTotalRiskPct)
             .put("max_risk_per_trade_pct", maxRiskPerTradePct)
             .put("reconcile_required", reconcileRequired)
+            .put("first_blocker", firstBlocker)
             .put("pnl", if (positionList().isEmpty()) JSONObject.NULL else livePnl)
             .put("pnl_pct", if (positionList().isEmpty()) JSONObject.NULL else livePnlPct)
             .put(
@@ -7834,7 +7894,7 @@ private class NativeEngine(
             .put("stop_loss_pct", 0.02)
             .put("take_profit_pct", if (campaignEngineEnabled) 0.0 else 0.04)
             .put("risk_per_trade_pct", maxRiskPerTradePct)
-            .put("max_daily_loss_pct", 0.03)
+             .put("max_daily_loss_pct", 0.01)
             .put("trades_today", dailyGuard.optInt("trades_today", 0))
             .put("daily_pnl_usdt", dailyGuard.optDouble("daily_pnl_usdt", 0.0))
             .put("consecutive_losses", dailyGuard.optInt("consecutive_losses", 0))
@@ -8246,7 +8306,7 @@ private class NativeEngine(
             .put("campaign_entry_mode", "CONDITIONAL_STOP")
             .put("campaign_fixed_take_profit", false)
             .put("campaign_entry_execution", "BUY_STOP_ONLY")
-            .put("campaign_risk_limit_pct", campaignRiskLimitPct)
+             .put("campaign_risk_limit_pct", campaignRiskLimitPct)
             .put("campaign_initial_risk_pct", campaignInitialRiskPct)
             .put("campaign_add_on_risk_cap_pct", campaignAddRiskCapPct)
             .put("campaign_trail_bars", campaignTrailBars)
@@ -8269,7 +8329,7 @@ private class NativeEngine(
             .put("risk_per_trade_pct", maxRiskPerTradePct)
             .put("max_daily_loss_pct", 0.03)
             .put("max_trades_per_day", 0)
-            .put("max_consecutive_losses", 3)
+             .put("max_consecutive_losses", 2)
             .put("cooldown_minutes", 30)
             .put("min_risk_reward", 1.5)
             .put("atr_period", 14)

@@ -29,7 +29,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  GRADLE_VERSION: '8.14.5'
+  GRADLE_VERSION: '8.14.6'
   # CI validation intentionally runs against the exact current main tree.
   ANDROID_PLATFORM: 'platforms;android-36'
   ANDROID_BUILD_TOOLS: 'build-tools;36.0.0'
@@ -62,25 +62,27 @@ jobs:
         with:
           gradle-version: ${{ env.GRADLE_VERSION }}
           validate-wrappers: false
-      - name: Restore persistent debug signing key
+      - name: Restore optional persistent debug signing key
         env:
           DEBUG_KEYSTORE_B64: ${{ secrets.WILLIAMS_DEBUG_KEYSTORE_B64 }}
+          DEBUG_KEYSTORE_PASSWORD: ${{ secrets.WILLIAMS_DEBUG_KEYSTORE_PASSWORD }}
         run: |
           set -euo pipefail
-          if [ -z "${DEBUG_KEYSTORE_B64:-}" ]; then
-            echo "::error::WILLIAMS_DEBUG_KEYSTORE_B64 GitHub Secret is not configured."
-            exit 1
+          if [ -n "${DEBUG_KEYSTORE_B64:-}" ] && [ -n "${DEBUG_KEYSTORE_PASSWORD:-}" ]; then
+            mkdir -p build
+            printf '%s' "$DEBUG_KEYSTORE_B64" | base64 --decode > build/williams-debug.p12
+            chmod 600 build/williams-debug.p12
+            echo "WILLIAMS_CUSTOM_DEBUG_SIGNING=true" >> "$GITHUB_ENV"
+          else
+            echo "WILLIAMS_CUSTOM_DEBUG_SIGNING=false" >> "$GITHUB_ENV"
+            echo "No persistent debug keystore configured; Gradle default debug signing will be used."
           fi
-          mkdir -p build
-          printf '%s' "$DEBUG_KEYSTORE_B64" | base64 --decode > build/williams-debug.p12
-          chmod 600 build/williams-debug.p12
-      - name: Validate debug signing configuration
-        env:
-          WILLIAMS_DEBUG_KEYSTORE_PASSWORD: ${{ secrets.WILLIAMS_DEBUG_KEYSTORE_PASSWORD }}
-          WILLIAMS_DEBUG_KEYSTORE_B64: ${{ secrets.WILLIAMS_DEBUG_KEYSTORE_B64 }}
+      - name: Validate optional debug signing configuration
         run: |
           set -euo pipefail
-          test -s build/williams-debug.p12
+          if [ "${WILLIAMS_CUSTOM_DEBUG_SIGNING:-false}" = "true" ]; then
+            test -s build/williams-debug.p12
+          fi
       # Release gate is the single pre-build contract check for every APK commit.
       - name: Run release contract gate
         run: python3 ci_release_gate.py
@@ -145,11 +147,14 @@ jobs:
           set -euo pipefail
           "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging app/build/outputs/apk/debug/app-debug.apk | grep -E "package:|sdkVersion:|targetSdkVersion:"
           "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging app/build/outputs/apk/release/app-release-unsigned.apk | grep -E "package:|sdkVersion:|targetSdkVersion:"
-      - name: Verify persistent debug keystore
+      - name: Verify debug APK signature
         run: |
           set -euo pipefail
-          test -s build/williams-debug.p12
-      - name: Verify persistent debug APK signature
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner"
+          "$APKSIGNER" verify --verbose "$APK"
+      - name: Verify optional persistent debug APK signature
+        if: env.WILLIAMS_CUSTOM_DEBUG_SIGNING == 'true'
         env:
           WILLIAMS_DEBUG_KEYSTORE_PASSWORD: ${{ secrets.WILLIAMS_DEBUG_KEYSTORE_PASSWORD }}
         run: |
@@ -162,7 +167,6 @@ jobs:
           test -n "$KEYSTORE_SHA"
           test -n "$APK_SHA"
           test "$(printf '%s' "$KEYSTORE_SHA" | tr -d ':' | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "$APK_SHA" | tr -d ':' | tr '[:upper:]' '[:lower:]')"
-          "$APKSIGNER" verify --verbose "$APK"
       - name: Generate SHA-256 checksums
         run: |
           set -euo pipefail
