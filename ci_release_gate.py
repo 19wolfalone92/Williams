@@ -43,6 +43,7 @@ def main() -> None:
     for needle in (
         "TESTNET=true",
         "ALLOW_LIVE=false",
+        "DRY_RUN=true",
         "BINANCE_MARKET=futures_usdt",
         "FUTURES_LEVERAGE=2",
         "FUTURES_MARGIN_TYPE=ISOLATED",
