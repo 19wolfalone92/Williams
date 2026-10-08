@@ -75,18 +75,22 @@ class WilliamsIntradayCore:
         return x
 
     @staticmethod
-    def _state(frame):
-        if frame is None or len(frame)<40:return "UNKNOWN"
-        cfg=config_from_env()
-        r=calculate_indicators(frame,cfg).iloc[-1]
-        vals=[float(r.get(k,0) or 0) for k in ("jaw_shifted","teeth_shifted","lips_shifted")]
+    def _state_from_row(row, cfg=None):
+        cfg=cfg or config_from_env()
+        vals=[float(row.get(k,0) or 0) for k in ("jaw_shifted","teeth_shifted","lips_shifted")]
         vals=[v for v in vals if v>0]
-        close=float(r.get("close",0) or 0)
+        close=float(row.get("close",0) or 0)
         if len(vals)!=3 or close<=0:return "UNKNOWN"
-        if bool(r.get("bullish_alligator",False)):return "BULLISH"
-        if bool(r.get("bearish_alligator",False)):return "BEARISH"
+        if bool(row.get("bullish_alligator",False)):return "BULLISH"
+        if bool(row.get("bearish_alligator",False)):return "BEARISH"
         if max(vals)-min(vals)<=close*float(cfg.get("min_alligator_spread_pct",.001)):return "SLEEP"
         return "AWAKENING"
+
+    @classmethod
+    def _state(cls,frame):
+        if frame is None or len(frame)<40:return "UNKNOWN"
+        cfg=config_from_env()
+        return cls._state_from_row(calculate_indicators(frame,cfg).iloc[-1],cfg)
 
     @classmethod
     def _h4_permission(cls,frame):
@@ -111,10 +115,12 @@ class WilliamsIntradayCore:
             if before==2:return i
         return None
 
-    def _latest_wm3(self,ind,side,tick):
+    def _latest_wm3(self,ind,side,tick,observations=None):
         if len(ind)<5:return None
         teeth_now=float(ind.iloc[-1].get("teeth_shifted",0) or 0)
-        obs=self.fractals.detect(ind,side=side,teeth_series=ind.get("teeth_shifted"))
+        obs=observations if observations is not None else self.fractals.detect(
+            ind,side=side,teeth_series=ind.get("teeth_shifted")
+        )
         active=sorted(
             (z for z in obs if z.confirmation_index<len(ind)),
             key=lambda z:(z.confirmation_index,z.center_index),
