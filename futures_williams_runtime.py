@@ -1486,7 +1486,7 @@ class FuturesWilliamsRuntime:
         for symbol, cid in list(self._pending_exits()):
             try:
                 row = self.db.conn.execute(
-                    "SELECT campaign_id FROM campaign_orders WHERE client_order_id=? "
+                    "SELECT campaign_id,order_id FROM campaign_orders WHERE client_order_id=? "
                     "ORDER BY id DESC LIMIT 1",
                     (cid,),
                 ).fetchone()
