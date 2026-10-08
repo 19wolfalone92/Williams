@@ -423,17 +423,17 @@ class MarketScanner:
         )
         score = {"A": 100.0, "B": 80.0, "C": 60.0, "D": 0.0}[decision.quality]
         trace = {
-            "trace_id": f"{symbol}:1h:{decision.decision_time_ms}",
+            "trace_id": f"{symbol}:{self.policy.timeframes.decision_tf}:{decision.decision_time_ms}",
             "symbol": symbol,
             "macro_tf": self.policy.timeframes.macro_tf,
             "context_tf": self.policy.timeframes.context_tf,
             "decision_tf": self.policy.timeframes.decision_tf,
             "execution_tf": self.policy.timeframes.execution_tf,
-            "micro_tf": self.policy.timeframes.micro_tf,
+            "micro_tf": self.policy.timeframes.execution_tf,
             "decision_time_ms": decision.decision_time_ms,
             "h4_context": decision.h4_context,
             "d1_state": decision.d1_state,
-            "alligator_state": decision.alligator_state,
+            "alligator_state": decision.context_state,
             "wm1": "VALID" if decision.wm1 else "INVALID",
             "wm2": "VALID" if decision.wm2 else "INVALID",
             "wm3": "VALID" if decision.wm3 else "INVALID",
