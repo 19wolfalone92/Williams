@@ -571,6 +571,7 @@ private class NativeEngine(
     )
     private val tradingEventLoop = TradingEventLoop()
     private val executionGate = ExecutionGate()
+    @Volatile private var mutationDoorDepth = 0
     private val executionExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "williams-execution-io").apply { isDaemon = true }
     }
@@ -2677,6 +2678,7 @@ private class NativeEngine(
             .putLong("execution_mutation_started_ms", System.currentTimeMillis())
             .apply()
 
+        mutationDoorDepth += 1
         return try {
             val result = block()
             prefs.edit()
@@ -2695,6 +2697,7 @@ private class NativeEngine(
                     (x.message ?: x.javaClass.simpleName)
             throw x
         } finally {
+            mutationDoorDepth = max(0, mutationDoorDepth - 1)
             executionGate.release(symbol)
         }
     }
@@ -5267,6 +5270,22 @@ private class NativeEngine(
         return false
     }
 
+    private fun requireMutationDoor(path: String) {
+        val isOrderMutation =
+            path.startsWith("/api/v3/order") ||
+                path.startsWith("/api/v3/orderList")
+        if (isOrderMutation && mutationDoorDepth <= 0) {
+            auditStore.recordError(
+                "EXECUTION_DOOR_BYPASS_BLOCKED",
+                "Direct Binance mutation blocked outside withCampaignMutation: " + path
+            )
+            error(
+                "EXECUTION_DOOR_BYPASS_BLOCKED: " +
+                    path
+            )
+        }
+    }
+
     private fun signedGet(
         path: String,
         params: String
@@ -5275,7 +5294,10 @@ private class NativeEngine(
     private fun signedPost(
         path: String,
         params: String
-    ): JSONObject = signedRequest("POST", path, params)
+    ): JSONObject {
+        requireMutationDoor(path)
+        return signedRequest("POST", path, params)
+    }
 
     /**
      * Binance cancel-replace is not truly transactional. STOP_ON_FAILURE
@@ -6589,7 +6611,10 @@ private class NativeEngine(
     private fun signedDelete(
         path: String,
         params: String
-    ): JSONObject = signedRequest("DELETE", path, params)
+    ): JSONObject {
+        requireMutationDoor(path)
+        return signedRequest("DELETE", path, params)
+    }
 
     private fun campaignSignalId(symbol: String, frame: String, type: String, barTimeMs: Long): String =
         symbol.uppercase(Locale.US) + ":" +
