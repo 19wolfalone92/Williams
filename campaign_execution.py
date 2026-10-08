@@ -12,6 +12,8 @@ from binance_client import BinanceAPIError
 from campaign_engine import CampaignEngine
 from campaign_model import CampaignState, PendingOrderRecord, SignalSpec, SignalState, SignalType
 from execution_barrier import ExecutionBarrier, OrderIntent
+from williams_intraday_spec import IntradayPolicy
+from williams_execution_economics import ExecutionEconomicsGate
 
 
 class CampaignExecutionError(RuntimeError):
@@ -26,13 +28,19 @@ class CampaignExecutionService:
     def __init__(self, client, db, execution_barrier: ExecutionBarrier | None = None):
         self.client = client
         self.db = db
+        self.policy = IntradayPolicy.from_env()
+        self.economics = ExecutionEconomicsGate(
+            fee_pct=float(os.getenv("FEE_BUFFER_PER_SIDE_PCT", "0.001")),
+            slippage_pct=float(os.getenv("RISK_SLIPPAGE_BUFFER_PCT", "0.0015")),
+            spread_pct_limit=float(os.getenv("MAX_SPREAD_PCT", "0.0015")),
+        )
         self.barrier = execution_barrier
         self.engine = CampaignEngine(
             db,
-            portfolio_risk_limit_pct=float(os.getenv("MAX_TOTAL_RISK_PCT", "0.01")),
-            campaign_risk_limit_pct=float(os.getenv("MAX_RISK_PER_TRADE_PCT", "0.005")),
+            portfolio_risk_limit_pct=float(os.getenv("MAX_TOTAL_RISK_PCT", str(self.policy.risk.campaign_risk_pct))),
+            campaign_risk_limit_pct=float(os.getenv("MAX_RISK_PER_TRADE_PCT", str(self.policy.risk.campaign_risk_pct))),
             initial_risk_fraction_of_campaign=float(
-                os.getenv("CAMPAIGN_INITIAL_RISK_FRACTION", "0.40")
+                os.getenv("CAMPAIGN_INITIAL_RISK_FRACTION", str(self.policy.risk.initial_risk_pct / max(self.policy.risk.campaign_risk_pct, 1e-12)))
             ),
         )
 
@@ -243,6 +251,29 @@ class CampaignExecutionService:
             risk_quote / max(effective_loss_fraction, 1e-12),
         )
         qty = self._normalized_entry_qty(signal.symbol, notional, trigger)
+
+        book = self.client.book_ticker(signal.symbol)
+        bid = float(book.get("bidPrice", 0) or 0)
+        ask = float(book.get("askPrice", 0) or 0)
+        mid = (bid + ask) / 2.0 if bid > 0 and ask > 0 else 0.0
+        spread_pct = (ask - bid) / mid if mid > 0 else 1.0
+        rules = self._rules(signal.symbol)
+        lot = rules.get("LOT_SIZE") or rules.get("MARKET_LOT_SIZE") or {}
+        nf = rules.get("NOTIONAL") or rules.get("MIN_NOTIONAL") or {}
+        economics = self.economics.evaluate(
+            equity_quote=float(equity_quote),
+            entry_price=trigger,
+            stop_price=stop,
+            risk_pct=requested_risk,
+            spread_pct=spread_pct,
+            min_qty=float(lot.get("minQty", 0) or 0),
+            qty_step=float(lot.get("stepSize", 0) or 0),
+            min_notional=float(nf.get("minNotional", 0) or 0),
+        )
+        if not economics.allowed:
+            raise CampaignExecutionError(
+                f"{signal.symbol}: BLOCKED_BY_EXECUTION_ECONOMICS:{economics.block_reason}"
+            )
         client_id = f"{self.ENTRY_PREFIX}{uuid.uuid4().hex[:20]}"
 
         claimed = self.db.try_claim_state(
@@ -283,7 +314,7 @@ class CampaignExecutionService:
             quantity=self.client.decimal_format(qty),
             client_order_id=client_id,
             purpose="CAMPAIGN_ENTRY",
-            permission_interval=signal.timeframe,
+            permission_interval=(signal.execution_timeframe or self.policy.timeframes.execution_tf),
             campaign_id=campaign.campaign_id,
             signal_id=signal.signal_id,
             risk_quote=risk_quote,
@@ -476,7 +507,7 @@ class CampaignExecutionService:
                         df = fetch_klines(
                             self.client,
                             symbol,
-                            campaign.execution_timeframe,
+                            campaign.decision_timeframe,
                             limit=160,
                         )
                         closed = df.iloc[:-1].copy() if len(df) > 1 else df
