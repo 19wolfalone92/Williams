@@ -13,6 +13,7 @@ from campaign_model import SignalSpec, SignalType, SignalRole
 from campaign_monitor import CampaignMonitor
 from execution_barrier import ExecutionBarrier, OrderIntent
 from market_context import ContextCache
+from williams.intraday_policy import IntradayPolicy
 
 
 POSITION_STATES = {
@@ -2403,6 +2404,50 @@ class MultiPositionTrader:
                     "campaign_monitor": campaign_monitor,
                     "results": [],
                     "reason": "campaign reconciliation required",
+                }
+
+        if self.core_mode:
+            policy = IntradayPolicy(
+                session_start_utc=os.getenv("TRADING_SESSION_START_UTC", "08:00"),
+                no_new_entries_utc=os.getenv("NO_NEW_ENTRIES_UTC", "18:00"),
+                flat_time_utc=os.getenv("MANDATORY_FLAT_UTC", "20:00"),
+            )
+            now_utc = datetime.now(timezone.utc)
+            session_state = policy.state(now_utc)
+
+            if policy.must_flat(now_utc):
+                eod = self.campaign_execution.force_end_of_day()
+                unresolved = self.unresolved_symbols()
+                return {
+                    "status": "EOD_FLAT" if not unresolved else "RECONCILE_REQUIRED",
+                    "recovery": recovery,
+                    "campaign_monitor": campaign_monitor if self.campaign_engine_enabled else [],
+                    "eod": eod,
+                    "results": [],
+                    "reason": "mandatory intraday flat time reached",
+                    "unresolved_symbols": unresolved,
+                }
+
+            if session_state == "CLOSED":
+                return {
+                    "status": "SESSION_CLOSED",
+                    "recovery": recovery,
+                    "campaign_monitor": campaign_monitor if self.campaign_engine_enabled else [],
+                    "results": [],
+                    "reason": "outside trading session",
+                }
+
+            if session_state == "NO_NEW_ENTRIES":
+                pending_cancel = self.campaign_execution.cancel_pending_campaign_entries("NO_NEW_ENTRIES")
+                unresolved = self.unresolved_symbols()
+                return {
+                    "status": "NO_NEW_ENTRIES" if not unresolved else "RECONCILE_REQUIRED",
+                    "recovery": recovery,
+                    "campaign_monitor": campaign_monitor if self.campaign_engine_enabled else [],
+                    "pending_cancel": pending_cancel,
+                    "results": [],
+                    "reason": "new campaign/add-on arming disabled after configured cutoff",
+                    "unresolved_symbols": unresolved,
                 }
 
         allowed, risk_reason = self._daily_entry_guard()
