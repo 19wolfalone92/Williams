@@ -227,8 +227,6 @@ class ExecutionBarrier:
                 return f"stale intent age={age}ms"
 
         order_type = str(intent.order_type).upper()
-        if order_type != "CANCEL" and not str(intent.client_order_id or "").strip():
-            return "missing client_order_id for exchange mutation"
         if int(intent.recv_window) <= 0 or int(intent.recv_window) > 60_000:
             return "invalid recvWindow"
 
@@ -242,6 +240,13 @@ class ExecutionBarrier:
                 return f"missing context {intent.symbol} {tf}"
             if int(ctx.version) != int(required):
                 return f"stale context {tf}: required={required} current={ctx.version}"
+
+        if (
+            order_type != "CANCEL"
+            and self.db is not None
+            and not str(intent.client_order_id or "").strip()
+        ):
+            return "missing client_order_id for exchange mutation"
 
         direction = (
             "long" if intent.side == "BUY"
