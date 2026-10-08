@@ -1923,6 +1923,7 @@ class MultiPositionTrader:
                         expires_at_ms=int(raw.get("expires_at_ms", 0) or 0),
                         source_candle_index=int(raw.get("source_candle_index", -1) or -1),
                         execution_timeframe=str(raw.get("execution_timeframe", self.intraday_policy.timeframes.execution_tf if self.intraday_core_enabled else "") or ""),
+                        detected_time_ms=int(raw.get("detected_time_ms", 0) or 0),
                     )
                 )
             except Exception:
