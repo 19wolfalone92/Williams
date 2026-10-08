@@ -1442,22 +1442,41 @@ reconcile_unknown=False,
                     "CAMPAIGN_PROTECTION_CANCEL",
                 )
             except Exception as exc:
-                # An already-filled/cancelled stop is harmless; anything else is
-                # ambiguous and must be reconciled instead of guessing.
+                # Deterministic terminal cancellation failures may be inspected
+                # by a read. An ambiguous mutation must first pass through the
+                # canonical barrier reconciliation path; never guess locally.
                 try:
+                    if self.barrier is not None and self.barrier.mutation_locked:
+                        recovery = self.reconcile_execution_barrier_unknown()
+                        if self.barrier.mutation_locked:
+                            raise CampaignExecutionError(
+                                "ExecutionBarrier mutation lock remains active "
+                                f"after protection-cancel reconciliation: {recovery}"
+                            )
+
                     current = self.client.get_order(
                         symbol,
                         order_id=int(protective_id),
                     )
                     status = str(current.get("status", "")).upper()
-                    if status not in {"CANCELED", "EXPIRED", "FILLED", "REJECTED"}:
-                        raise
-                except Exception:
+                    if status not in {
+                        "CANCELED",
+                        "EXPIRED",
+                        "FILLED",
+                        "REJECTED",
+                    }:
+                        raise CampaignExecutionError(
+                            f"protective order remains active: {status}"
+                        )
+                except Exception as reconciliation_exc:
                     self.engine.mark_reconcile_required(
                         campaign,
-                        f"cannot cancel campaign protection before exit: {exc}",
+                        f"cannot cancel campaign protection before exit: {exc}; "
+                        f"reconciliation={reconciliation_exc}",
                     )
-                    raise CampaignExecutionError(str(exc)) from exc
+                    raise CampaignExecutionError(
+                        str(reconciliation_exc)
+                    ) from reconciliation_exc
 
         open_orders = self.client.open_orders(symbol)
         unknown_sells = [
@@ -1697,7 +1716,7 @@ reconcile_unknown=False,
                 quantity=self.client.decimal_format(quantity),
                 stop_price=self.client.decimal_format(new_stop),
                 new_client_order_id=cid,
-reconcile_unknown=False,
+                reconcile_unknown=False,
             ),
             lambda _snapshot: self._check_algo_capacity(campaign.symbol, 0),
         )
