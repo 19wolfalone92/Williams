@@ -101,7 +101,11 @@ class MockExchange:
 
     def _new_order(self, symbol, side, qty, status="FILLED", client_order_id="", order_type="MARKET", stop_price=0.0):
         oid = str(len(self.orders) + 1)
-        executed = float(qty) * float(self.partial_fill_ratio)
+        executed = (
+            float(qty) * float(self.partial_fill_ratio)
+            if str(status).upper() != "NEW"
+            else 0.0
+        )
         order = {
             "symbol": symbol,
             "side": side,
