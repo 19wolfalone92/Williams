@@ -36,6 +36,24 @@ class BinanceSpotClient:
         Callers must reconcile by order/clientOrderId before taking another action.
         """
         method = method.upper()
+        order_creation_paths = {
+            "/api/v3/order",
+            "/api/v3/order/cancelReplace",
+            "/api/v3/orderList/oco",
+            "/api/v3/orderList/oto",
+            "/api/v3/orderList/otoco",
+            "/api/v3/orderList/opo",
+        }
+        request_params = dict(params or {})
+        if (
+            method == "POST"
+            and path in order_creation_paths
+            and str(request_params.get("side", "")).strip().upper() == "BUY"
+            and not entry_submission_authorized()
+        ):
+            raise BinanceAPIError(
+                "Spot BUY REST mutation blocked: ExecutionBarrier admission required"
+            )
         # Non-GET requests are never retried for transport/5xx errors because
         # the matching engine may have accepted the order. A signed -1021
         # timestamp rejection is safe to retry once after time synchronization.
