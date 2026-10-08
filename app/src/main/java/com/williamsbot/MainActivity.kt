@@ -242,6 +242,7 @@ data class Status(
     val executionKillLatched: Boolean = false,
     val p0GatePassed: Boolean = false,
     val p0GateReason: String = "NOT_READY",
+    val firstBlocker: String = "",
     val maxOpenPositionsLocked: Boolean = false,
     val unresolvedSymbols: List<String> = emptyList(),
     val pendingEntrySymbols: List<String> = emptyList()
@@ -1240,6 +1241,14 @@ private fun DiagnosticsScreen(
         item { DiagnosticRow("User WS", if (status.userWsConnected && !status.userStreamSyncRequired) "CONNECTED" else "DEGRADED • REST reconciliation") }
         item { DiagnosticRow("Scanner", status.scannerState + " • " + status.scannerSymbols + " symbols • " + status.scanDurationMs + " ms") }
         item { DiagnosticRow("Execution", if (status.p0GatePassed) "READY" else "BLOCKED • " + status.p0GateReason) }
+        item { DiagnosticRow("First blocker", status.firstBlocker.ifBlank { if (status.executionEnabled) "NONE • execution path is clear" else "NOT_REPORTED" }) }
+        item { DiagnosticRow("Next action", when {
+            status.firstBlocker.startsWith("RECONCILE_REQUIRED") -> "RECONCILE / RECOVER"
+            status.firstBlocker.startsWith("WAIT_FOR_") -> "WAIT • conditional order is armed"
+            status.firstBlocker == "POSITION_UNPROTECTED" -> "ARM PROTECTION"
+            status.executionEnabled -> "MONITOR"
+            else -> "RESOLVE BLOCKER"
+        }) }
         status.error?.let { item { DiagnosticRow("Last error", it) } }
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1289,6 +1298,7 @@ private fun ReconcileBarrierScreen(
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 InfoRow("Execution State", status.state)
                 InfoRow("P0 Gate", if (status.p0GatePassed) "PASS" else status.p0GateReason)
+                InfoRow("First blocker", status.firstBlocker.ifBlank { "NONE" })
                 InfoRow("WSS", if (status.marketWsConnected) "CONNECTED" else "OFFLINE")
                 InfoRow("Binance", if (status.binanceConfigured) "CONFIGURED" else "NOT CONFIGURED")
                 InfoRow("Positions", status.openPositions.toString() + " / " + status.maxOpenPositions)
@@ -3231,6 +3241,7 @@ private fun parseStatus(json: JSONObject): Status {
                 "NOT_READY"
             }
         ),
+        firstBlocker = json.optString("first_blocker", json.optString("p0_gate_reason", "")),
         maxOpenPositionsLocked = json.optBoolean(
             "max_open_positions_locked",
             false
