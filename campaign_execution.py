@@ -24,6 +24,8 @@ class CampaignExecutionService:
     EXIT_PREFIX = "WILLV5_EXIT_"
 
     def __init__(self, client, db, execution_barrier: ExecutionBarrier | None = None):
+        if os.getenv("BINANCE_MARKET", "spot").strip().lower() != "spot":
+            raise RuntimeError("Spot CampaignExecutionService is disabled in Futures mode; use FuturesWilliamsRuntime")
         self.client = client
         self.db = db
         self.barrier = execution_barrier
