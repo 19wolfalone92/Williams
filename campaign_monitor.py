@@ -103,6 +103,62 @@ class CampaignMonitor:
             self.db.save_campaign(campaign)
             return None
 
+    def _ensure_protection(self, campaign) -> dict:
+        """Verify the single hard protective stop before any trail/exit decision."""
+        symbol = campaign.symbol.upper()
+        protective_id = str(
+            campaign.tags.get("protective_order_id", "") or ""
+        ).strip()
+
+        if not protective_id:
+            protection = self.execution.create_hard_stop(
+                campaign,
+                quantity=float(campaign.position_qty),
+                stop_price=float(campaign.current_stop_price),
+            )
+            order_id = str(protection.get("order_id", "") or "").strip()
+            if not order_id:
+                raise CampaignExecutionError(
+                    f"{symbol}: protection creation returned no order id"
+                )
+            campaign.tags["protective_order_id"] = order_id
+            campaign.reconciliation_state = "CLEAN"
+            self.db.save_campaign(campaign)
+            self.db.log_campaign_event(
+                campaign.campaign_id,
+                "PROTECTION_ARMED",
+                reason="monitor_repair",
+                payload={"order_id": order_id, "stop_price": campaign.current_stop_price},
+            )
+            return protection
+
+        try:
+            observed = self.client.get_order(
+                symbol,
+                order_id=int(protective_id),
+            )
+        except Exception as exc:
+            raise CampaignExecutionError(
+                f"{symbol}: protective stop lookup failed: {exc}"
+            ) from exc
+
+        status = str(observed.get("status", "")).upper()
+        if status not in {"NEW", "PARTIALLY_FILLED", "PENDING_NEW"}:
+            raise CampaignExecutionError(
+                f"{symbol}: protective stop is not active: status={status or 'UNKNOWN'}"
+            )
+
+        expected_qty = float(campaign.position_qty)
+        observed_qty = float(observed.get("origQty", 0) or 0)
+        qty_tolerance = max(1e-12, expected_qty * 1e-9)
+        if observed_qty > 0 and abs(observed_qty - expected_qty) > qty_tolerance:
+            raise CampaignExecutionError(
+                f"{symbol}: protective stop quantity mismatch: "
+                f"campaign={expected_qty:.12g} exchange={observed_qty:.12g}"
+            )
+
+        return observed
+
     def manage_campaign(self, campaign) -> dict:
         if campaign is None or campaign.position_qty <= 0:
             return {"state": "SKIP", "reason": "no active quantity"}
@@ -130,6 +186,10 @@ class CampaignMonitor:
         )
         if current_price <= 0:
             return {"symbol": symbol, "state": "RECONCILE_REQUIRED", "reason": "invalid current price"}
+
+        # Protection is a prerequisite, not an optional side effect of trailing.
+        # Never send a cancel/replace against a missing or terminal stop.
+        self._ensure_protection(campaign)
 
         indicators = calculate_indicators(candles, config_from_env())
         last_ind = indicators.iloc[-1]
