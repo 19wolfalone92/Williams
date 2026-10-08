@@ -120,7 +120,11 @@ class TradingConfig:
         risk = max(0.0, min(0.0025, _float(source, risk_key, 0.0025)))
         total_risk = max(0.0, min(0.006, _float(source, "MAX_TOTAL_RISK_PCT", 0.006)))
 
-        execution_timeframe = str(source.get("EXECUTION_TIMEFRAME", "5m")).lower()
+        execution_timeframe = str(source.get("EXECUTION_TIMEFRAME", "15m")).lower()
+        profile = str(source.get("WILLIAMS_STRATEGY_PROFILE", "WILLIAMS_INTRADAY_CORE")).upper()
+        if profile in {"WILLIAMS_INTRADAY_CORE", "WILLIAMS_INTRADAY_CONSERVATIVE"}:
+            execution_timeframe = "15m"
+            max_positions = 1
 
         return cls(
             symbols=symbols,
@@ -128,8 +132,8 @@ class TradingConfig:
             execution_timeframe=execution_timeframe,
             allow_long=_bool(source, "ALLOW_LONG", True),
             allow_short=_bool(source, "ALLOW_SHORT", False),
-            require_htf_confirmation=_bool(source, "REQUIRE_HTF_CONFIRMATION", True),
-            no_trade_when_uncertain=_bool(source, "NO_TRADE_WHEN_UNCERTAIN", True),
+            require_htf_confirmation=_bool(source, "REQUIRE_HTF_CONFIRMATION", False),
+            no_trade_when_uncertain=_bool(source, "NO_TRADE_WHEN_UNCERTAIN", False),
             risk_per_trade_pct=risk,
             max_total_risk_pct=max(total_risk, risk),
             max_daily_loss_pct=max(0.0, _float(source, "MAX_DAILY_LOSS_PCT", 0.03)),
