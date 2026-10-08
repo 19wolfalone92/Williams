@@ -47,6 +47,9 @@ def test_execution_barrier_rejects_stale_context():
     intent = OrderIntent.new(
         "BTCUSDT", "BUY", "MARKET",
         required_context_versions={"1h": snap.context("BTCUSDT", "1h").version},
+        signal_id="test-signal",
+        signal_expires_at_ms=int(time.time() * 1000) + 60_000,
+        permission_interval="1h",
     )
     calls = []
     result = barrier.execute(intent, lambda: calls.append("sent"))
@@ -81,6 +84,8 @@ def test_execution_barrier_serializes_publish_and_submit():
         "BUY",
         "MARKET",
         {"1h": version},
+        signal_id="test-signal",
+        signal_expires_at_ms=int(time.time() * 1000) + 60_000,
         permission_interval="1h",
     )
     result = barrier.execute(intent, submit)
@@ -109,3 +114,67 @@ def test_wise_men_state_machine_is_durable():
     assert restored.state.phase == WiseMenPhase.TREND_ACTIVE
     payload = json.loads(db.data[restored.key])
     assert payload["additions"] == 0
+
+
+
+def test_execution_barrier_rejects_signal_expired_after_intent_creation():
+    cache = ContextCache()
+    cache.publish(context())
+    barrier = ExecutionBarrier(cache)
+    version = cache.snapshot().context("BTCUSDT", "1h").version
+    intent = OrderIntent.new(
+        "BTCUSDT", "BUY", "STOP_LOSS",
+        {"1h": version},
+        signal_id="test-signal",
+        signal_expires_at_ms=int(time.time() * 1000) - 1,
+        permission_interval="1h",
+    )
+    calls = []
+    result = barrier.execute(intent, lambda: calls.append("submitted") or {"status": "NEW"})
+
+    assert not result.accepted
+    assert "signal expired" in result.reason
+    assert calls == []
+
+
+def test_execution_barrier_rejects_empty_context_dependencies_for_campaign_entry():
+    cache = ContextCache()
+    cache.publish(context())
+    barrier = ExecutionBarrier(cache)
+    intent = OrderIntent.new(
+        "BTCUSDT", "BUY", "STOP_LOSS",
+        {},
+        purpose="CAMPAIGN_ENTRY",
+        campaign_id="campaign-1",
+        signal_id="signal-1",
+        signal_expires_at_ms=int(time.time() * 1000) + 60_000,
+        permission_interval="1h",
+    )
+    calls = []
+    result = barrier.execute(intent, lambda: calls.append("submitted") or {"status": "NEW"})
+
+    assert not result.accepted
+    assert result.reason == "missing required_context_versions"
+    assert calls == []
+
+
+def test_execution_barrier_checks_direction_permission_for_campaign_entry():
+    cache = ContextCache()
+    cache.publish(context(allow_long=False, allow_short=False))
+    barrier = ExecutionBarrier(cache)
+    version = cache.snapshot().context("BTCUSDT", "1h").version
+    intent = OrderIntent.new(
+        "BTCUSDT", "BUY", "STOP_LOSS",
+        {"1h": version},
+        purpose="CAMPAIGN_ENTRY",
+        campaign_id="campaign-1",
+        signal_id="signal-1",
+        signal_expires_at_ms=int(time.time() * 1000) + 60_000,
+        permission_interval="1h",
+    )
+    calls = []
+    result = barrier.execute(intent, lambda: calls.append("submitted") or {"status": "NEW"})
+
+    assert not result.accepted
+    assert "does not allow LONG" in result.reason
+    assert calls == []
