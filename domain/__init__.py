@@ -1,1 +1,21 @@
-"""Pure domain contracts for the Digital Bill Williams engine.\n\nThe package deliberately contains no Binance, database, network, Android or\nexecution dependencies.\n"""\n\nfrom .contracts import (\n    ExecutionIntent,\n    ProofVector,\n    RiskDecision,\n    SignalDirection,\n    WilliamsDecision,\n)\n\n__all__ = [\n    "ExecutionIntent",\n    "ProofVector",\n    "RiskDecision",\n    "SignalDirection",\n    "WilliamsDecision",\n]
+"""Pure domain contracts for the Digital Bill Williams engine.
+
+The package deliberately contains no Binance, database, network, Android or
+execution dependencies.
+"""
+
+from .contracts import (
+    ExecutionIntent,
+    ProofVector,
+    RiskDecision,
+    SignalDirection,
+    WilliamsDecision,
+)
+
+__all__ = [
+    "ExecutionIntent",
+    "ProofVector",
+    "RiskDecision",
+    "SignalDirection",
+    "WilliamsDecision",
+]
