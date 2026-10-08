@@ -37,6 +37,7 @@ from campaign_model import (
     SignalType,
     TradingCampaign,
     PendingOrderRecord,
+    PendingSignal,
     stop_only_reduces_risk,
 )
 from data import fetch_klines
@@ -799,6 +800,11 @@ class FuturesWilliamsRuntime:
             self.db.save_campaign(campaign)
             raise RuntimeError(f"{symbol}: pending entry already exists")
 
+        pending_signal = PendingSignal(signal=signal)
+        pending_signal.transition(SignalState.VALIDATED)
+        campaign.tags["pending_signal"] = pending_signal.to_dict()
+        self.db.set_campaign_signal_state(signal.signal_id, SignalState.VALIDATED.value)
+        self.db.save_campaign(campaign)
         try:
             self.engine.arm_entry(campaign, signal)
         except Exception:
@@ -856,6 +862,10 @@ class FuturesWilliamsRuntime:
                     campaign_id=campaign.campaign_id,
                 )
             )
+            pending_signal.order_id = str(result.get("orderId", ""))
+            pending_signal.client_order_id = cid
+            pending_signal.transition(SignalState.ARMED)
+            campaign.tags["pending_signal"] = pending_signal.to_dict()
             campaign.tags["pending_order_id"] = str(result.get("orderId", ""))
             self.db.save_campaign(campaign)
             return {"campaign_id": campaign.campaign_id, "order_id": result.get("orderId"), "client_order_id": cid, "trigger_price": trigger, "stop_price": stop, "quantity": qty}
@@ -902,6 +912,11 @@ class FuturesWilliamsRuntime:
             raise RuntimeError(f"{signal.symbol}: another pending order exists")
 
         add_signal = __import__("dataclasses").replace(signal, role=SignalRole.ADD_ON)
+        pending_signal = PendingSignal(signal=add_signal)
+        pending_signal.transition(SignalState.VALIDATED)
+        campaign.tags["pending_signal"] = pending_signal.to_dict()
+        self.db.set_campaign_signal_state(add_signal.signal_id, SignalState.VALIDATED.value)
+        self.db.save_campaign(campaign)
         self.engine.arm_add_on(
             campaign,
             add_signal,
@@ -952,6 +967,10 @@ class FuturesWilliamsRuntime:
                 campaign_id=campaign.campaign_id,
             )
         )
+        pending_signal.order_id = str(result.get("orderId", ""))
+        pending_signal.client_order_id = cid
+        pending_signal.transition(SignalState.ARMED)
+        campaign.tags["pending_signal"] = pending_signal.to_dict()
         campaign.tags["pending_order_id"] = str(result.get("orderId", ""))
         self.db.save_campaign(campaign)
         return {"campaign_id": campaign.campaign_id, "order_id": result.get("orderId"), "client_order_id": cid, "trigger_price": trigger, "quantity": qty}
