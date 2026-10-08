@@ -177,4 +177,6 @@ class ExecutionIntent:
         object.__setattr__(self, "time_in_force", tif)
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        data = asdict(self)
+        data["risk_decision"] = self.risk_decision.to_dict()
+        return data
