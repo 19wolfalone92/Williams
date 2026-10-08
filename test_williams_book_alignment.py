@@ -119,3 +119,13 @@ def test_angulation_uses_lips_reference_not_jaw():
     score, valid = _angulation(ind, len(ind) - 1)
     assert score >= 0.0
     assert isinstance(valid, bool)
+
+
+def test_super_ao_is_not_gated_by_fractal():
+    prices = [100 + (i * 0.05) ** 2 for i in range(80)]
+    out = calculate_indicators(frame(prices), config_from_env())
+    # Break the Fractal context deliberately. WM2 must still reflect the AO
+    # three-colour sequence itself.
+    out["long_fractal_outside"] = False
+    assert bool(out["super_ao_long"].iloc[-1]) is True
+    assert bool(out["long_super_ao_signal"].iloc[-1]) is True
