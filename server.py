@@ -16,16 +16,19 @@ from market_context import ContextCache
 from mtf_context_service import MultiTimeframeContextService
 from feature_store import FeatureStore
 from binance_client import BinanceSpotClient
+from digital_williams_core import DigitalWilliamsCore
+from diagnostics import DiagnosticManager
 
 load_dotenv()
 API_TOKEN = os.getenv('MOBILE_API_TOKEN', '').strip()
-VERSION = '4.24.0'
+VERSION = '4.25.0'
 
 app = FastAPI(title='Williams Binance Bot API', version=VERSION)
 hub = WebSocketHub()
 context_cache = ContextCache()
 mtf_service = MultiTimeframeContextService(context_cache)
 quant_store = FeatureStore()
+digital_williams = DigitalWilliamsCore()
 
 
 class MetricsRegistry:
@@ -126,6 +129,7 @@ class ControlState:
         self.api_secret = ''
         self.testnet = True
         self.credentials = CredentialStore()
+        self.diagnostics = DiagnosticManager()
         stored = self.credentials.load()
         if stored:
             self.api_key = stored['api_key']
@@ -238,14 +242,28 @@ class ControlState:
                     try:
                         t.process()
                     except Exception as e:
-                        self.last_error = (
-                            f'{type(e).__name__}: {e}'
-                        )
-                        t.db.log_event(
-                            'ERROR',
-                            'api_loop_error',
-                            self.last_error,
-                        )
+                        self.last_error = f'{type(e).__name__}: {e}'
+                        incident = self.diagnostics.classify("trading_loop", e)
+                        try:
+                            incident = self.diagnostics.run_safe_heal(
+                                incident,
+                                callbacks={
+                                    "RELOAD_EXCHANGE_INFO": lambda: t.client.exchange_info(t.symbol),
+                                    "RELOAD_MARKET_HISTORY": lambda: fetch_klines(
+                                        t.client, t.symbol, t.interval, limit=60
+                                    ),
+                                    "RECONNECT_MARKET_WS": lambda: hub.start(),
+                                    "RECONNECT_USER_WS": lambda: hub.start(),
+                                },
+                            )
+                            self.diagnostics.record(incident)
+                        finally:
+                            t.db.log_event(
+                                'ERROR',
+                                'api_loop_error',
+                                self.last_error,
+                                {"incident_id": incident.incident_id},
+                            )
                 time.sleep(t.poll_seconds)
         except Exception as e:
             self.last_error = f'{type(e).__name__}: {e}'
@@ -681,6 +699,7 @@ def health():
         'ok': True,
         'service': 'williams-binance-bot',
         'version': VERSION,
+        'digital_williams_core': digital_williams.VERSION,
         'execution_state_contract': {
             'version': 1,
             'state': execution_state,
@@ -699,6 +718,22 @@ def health():
         'execution_enabled': execution_enabled,
         'testnet': t.client.testnet,
     }
+
+@app.get('/api/v1/williams/core', dependencies=[Depends(auth)])
+def williams_core_contract():
+    """Public, credential-free description of the canonical Digital Williams core."""
+    return digital_williams.contract()
+
+
+@app.get('/api/v1/diagnostics/incidents', dependencies=[Depends(auth)])
+def diagnostic_incidents(limit: int = 50):
+    t = state.ensure_trader()
+    rows = t.db.conn.execute(
+        'SELECT * FROM events WHERE event_name=? ORDER BY id DESC LIMIT ?',
+        ('diagnostic_incident', max(1, min(limit, 100))),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
 
 
 @app.post(
