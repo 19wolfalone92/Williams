@@ -494,7 +494,11 @@ class CampaignExecutionService:
                             f"{symbol}: partial conditional BUY cannot be safely cancelled"
                         )
                     try:
-                        cancel(symbol, order_id=order.get("orderId"))
+                        self._execute_cancel(
+                            campaign,
+                            int(order.get("orderId")),
+                            "CAMPAIGN_PARTIAL_ENTRY_CANCEL",
+                        )
                     except Exception as exc:
                         self.engine.mark_reconcile_required(
                             campaign,
@@ -947,12 +951,18 @@ class CampaignExecutionService:
         reserved = float(campaign.open_risk_quote or 0) + float(campaign.pending_risk_quote or 0)
         campaign_capacity = float(equity_quote) * self.engine.campaign_risk_limit_pct
         remaining = max(0.0, campaign_capacity - reserved)
+        weighted_cap = float(equity_quote) * self.engine.next_add_on_risk_pct(
+            campaign_reserved_risk_quote=reserved,
+            equity_quote=float(equity_quote),
+            tranche_index=max(1, int(campaign.tranche_index or 1)),
+        )
         requested = min(
             remaining,
             float(equity_quote) * min(
                 float(candidate_risk_pct),
                 float(os.getenv("CAMPAIGN_ADD_RISK_MAX_PCT", "0.002")),
             ),
+            weighted_cap,
         )
         if requested <= 0:
             raise CampaignExecutionError("campaign risk budget exhausted")
@@ -1352,6 +1362,15 @@ class CampaignExecutionService:
         if not campaign.current_stop_price <= proposed_stop:
             raise CampaignExecutionError("structural stop would loosen LONG risk")
         new_stop = self._normalize_price(campaign.symbol, proposed_stop)
+        if not new_stop >= float(campaign.current_stop_price or 0.0):
+            raise CampaignExecutionError("normalized structural stop would loosen LONG risk")
+        if new_stop <= 0:
+            raise CampaignExecutionError("invalid normalized structural stop")
+        current_price = self._current_price(campaign.symbol)
+        if new_stop >= current_price:
+            raise CampaignExecutionError(
+                f"{campaign.symbol}: protective stop {new_stop:.12g} is not below current price {current_price:.12g}"
+            )
         cid = f"{self.STOP_PREFIX}{uuid.uuid4().hex[:20]}"
         intent = OrderIntent.new(
             campaign.symbol,
@@ -1376,7 +1395,7 @@ class CampaignExecutionService:
                 stop_price=self.client.decimal_format(new_stop),
                 new_client_order_id=cid,
             ),
-            lambda _snapshot: self._check_algo_capacity(campaign.symbol, 0),
+            lambda _snapshot: self._check_algo_capacity(campaign.symbol, 1),
         )
 
         cancel_result = str(result.get("cancelResult", "")).upper()
