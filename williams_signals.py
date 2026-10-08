@@ -450,7 +450,7 @@ def extract_short_signal_specs(
         confirmation_i, center_i, trigger_base, protective, teeth = fractal
         trigger = trigger_base - tick
         current_trigger_valid = current_teeth > 0 and trigger < current_teeth
-        if current_close > trigger and (current_trigger_valid or current_teeth <= 0):
+        if current_close > trigger and current_trigger_valid:
             row = ind.iloc[center_i]
             specs.append(
                 SignalSpec.new(
