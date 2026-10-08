@@ -14,6 +14,8 @@ import json
 import time
 import uuid
 
+from decision_trace import DecisionTrace
+from pending_signal import PendingSignal
 from campaign_model import (
     CampaignEventType,
     CampaignState,
@@ -76,6 +78,8 @@ class CampaignEngine:
                 "wave_confidence": float(signal.wave_confidence),
                 "wave_exhaustion_risk": float(signal.wave_exhaustion_risk),
                 "htf_confirmed": bool(signal.htf_confirmed),
+                "pending_signal": PendingSignal.from_spec(signal).to_dict(),
+                "decision_trace": DecisionTrace.from_signal(signal).to_dict(),
             },
         )
         self.db.save_campaign(campaign)
@@ -151,6 +155,15 @@ class CampaignEngine:
     # ------------------------------------------------------------------
 
     @staticmethod
+    @staticmethod
+    def pending_signal(signal: SignalSpec, *, campaign_id: str = "") -> PendingSignal:
+        return PendingSignal.from_spec(signal, campaign_id=campaign_id)
+
+    @staticmethod
+    def decision_trace(signal: SignalSpec, *, extras: dict[str, Any] | None = None) -> DecisionTrace:
+        return DecisionTrace.from_signal(signal, extras=extras)
+
+    @staticmethod
     def choose_initial_signal(signals: Iterable[SignalSpec]) -> SignalSpec | None:
         candidates = [
             s for s in signals
@@ -172,9 +185,14 @@ class CampaignEngine:
             return True
         distance = abs(float(new.trigger_price) - float(old.trigger_price))
         threshold = max(0.0, float(tick_size)) * max(1, int(min_ticks))
+        old_pending = PendingSignal.from_spec(old)
+        new_pending = PendingSignal.from_spec(new)
+        if old_pending.is_expired() and not new_pending.is_expired():
+            return True
         return (
             new.signal_bar_time_ms > old.signal_bar_time_ms
             and distance >= threshold
+            and not new_pending.is_expired()
         )
 
     # ------------------------------------------------------------------
