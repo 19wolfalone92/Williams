@@ -80,7 +80,7 @@ def test_pending_signal_supports_superseded_terminal_state():
     superseded = pending.supersede(second)
     assert superseded.state == SignalState.SUPERSEDED
     assert superseded.supersedes_signal_id == second.signal_id
-    assert not superseded.transition.__self__.state == SignalState.ARMED
+    assert superseded.state != SignalState.ARMED
 
 
 def test_reverse_pyramid_is_a_weight_bias_under_risk_cap():
