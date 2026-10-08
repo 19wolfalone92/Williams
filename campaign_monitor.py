@@ -135,8 +135,15 @@ class CampaignMonitor:
 
         indicators = calculate_indicators(candles, config_from_env())
         last_ind = indicators.iloc[-1]
+        prev_ind = indicators.iloc[-2] if len(indicators) > 1 else last_ind
         teeth = float(last_ind.get("teeth_shifted", 0.0) or 0.0)
         five_color = self._five_same_color(candles)
+
+        # Stagnation is an operational diagnosis only. It never widens or
+        # tightens the stop by itself and never replaces a Williams exit.
+        current_spread = float(last_ind.get("alligator_spread_pct", 0.0) or 0.0)
+        previous_spread = float(prev_ind.get("alligator_spread_pct", 0.0) or 0.0)
+
 
         tick = self._tick(self.client, symbol)
         if tick <= 0:
@@ -172,6 +179,30 @@ class CampaignMonitor:
 
         current_stop = float(campaign.current_stop_price or 0.0)
         stop_moved = False
+
+        stagnation_bars = int(campaign.tags.get("stagnation_bars", 0) or 0)
+        prior_spread = float(campaign.tags.get("last_alligator_spread", current_spread) or current_spread)
+        progress = proposed > current_stop + tick or current_price > float(campaign.tags.get("last_progress_price", campaign.average_entry_price or current_price) or current_price)
+        if not progress and current_spread <= prior_spread:
+            stagnation_bars += 1
+        else:
+            stagnation_bars = 0
+        campaign.tags["stagnation_bars"] = stagnation_bars
+        campaign.tags["last_alligator_spread"] = current_spread
+        campaign.tags["last_progress_price"] = current_price
+        if stagnation_bars >= max(3, int(os.getenv("CAMPAIGN_STAGNATION_BARS", "3"))):
+            campaign.tags["stagnant"] = True
+            campaign.tags["stagnation_reason"] = "no_structural_progress_and_no_alligator_expansion"
+            campaign.next_action = "CAMPAIGN_STAGNANT"
+            self.db.log_campaign_event(
+                campaign.campaign_id,
+                "CAMPAIGN_STAGNANT",
+                level="INFO",
+                reason="no structural progress and no Alligator expansion",
+                payload={"stagnation_bars": stagnation_bars},
+            )
+        else:
+            campaign.tags["stagnant"] = False
         if (
             proposed > current_stop + tick
             and proposed < current_price
@@ -269,6 +300,8 @@ class CampaignMonitor:
             "teeth": teeth,
             "wave_exhaustion_risk": campaign.wave_exhaustion_risk,
             "exhaustion_reasons": exhaustion_reasons,
+            "stagnation_bars": int(campaign.tags.get("stagnation_bars", 0) or 0),
+            "stagnant": bool(campaign.tags.get("stagnant", False)),
             "next_action": campaign.next_action,
         }
 
