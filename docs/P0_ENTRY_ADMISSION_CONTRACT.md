@@ -78,6 +78,10 @@ When `CAMPAIGN_ENGINE=false`, the legacy `MultiPositionTrader` autonomous MARKET
 
 The implemented live-order adapter is Binance Spot. No Futures, margin, or second-exchange execution adapter is established by this contract. Campaign Entry uses exchange-hosted conditional Spot `STOP_LOSS`; campaign protection is a separately managed SELL stop, not native OCO. The legacy Trader's OCO path is not the approved autonomous BUY path and remains fail-closed for new uncontracted entries.
 
+## Direct BUY bypass defense
+
+The current `BinanceSpotClient` rejects BUY calls through `order_safe()`, raw `order()`, and `cancel_replace()` unless the call is made inside the scoped submission capability opened by `ExecutionBarrier` after admission. New order-mutation methods that can submit BUY exposure must enforce the same capability or be routed through the barrier. This is a code-level guard against accidental bypass, not a sandbox against arbitrary code importing internal helpers.
+
 ## Mandatory persistence semantics
 
 A new entry is blocked if `save_execution_intent(..., "PENDING")` is unavailable or fails. If the exchange submission appears to have succeeded but the durable `SUBMITTED` status update fails, the outcome is treated as reconciliation-required; the caller must not report an unqualified clean success. Protection, exits, cancellations and reconciliation are not blocked solely because entry-intent persistence is unavailable.
