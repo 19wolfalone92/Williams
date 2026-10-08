@@ -565,13 +565,16 @@ class FuturesWilliamsRuntime:
         distance_fraction = abs(trigger - stop) / trigger
         if distance_fraction <= 0:
             raise RuntimeError("zero stop distance")
+        fee_buffer = 2.0 * max(0.0, float(os.getenv("FEE_BUFFER_PER_SIDE_PCT", "0.001")))
+        slippage_buffer = max(0.0, float(os.getenv("RISK_SLIPPAGE_BUFFER_PCT", "0.0015")))
+        effective_loss_fraction = distance_fraction + fee_buffer + slippage_buffer
         leverage = max(1, int(os.getenv("FUTURES_LEVERAGE", "2")))
         max_margin_fraction = max(
             0.01,
             min(0.90, float(os.getenv("FUTURES_MAX_MARGIN_FRACTION", "0.25"))),
         )
         max_notional = equity * max_margin_fraction * leverage
-        notional = min(risk_quote / distance_fraction, max_notional)
+        notional = min(risk_quote / max(effective_loss_fraction, 1e-12), max_notional)
         qty = self._normalize_qty(symbol, notional / trigger)
         if qty <= 0:
             raise RuntimeError("sized quantity below Futures minimum")
@@ -1078,20 +1081,37 @@ class FuturesWilliamsRuntime:
                         if campaign.state == CampaignState.ADD_ON_PENDING:
                             campaign.transition(CampaignState.POSITION_EXPANDING, reason="add-on conditional order filled")
                         old_qty = float(campaign.position_qty)
-                        total = old_qty + float(executed)
-                        campaign.position_qty = total
-                        old_entry = float(campaign.average_entry_price)
-                        campaign.average_entry_price = (
-                            (old_entry * old_qty) + (avg * float(executed))
-                        ) / max(total, 1e-12)
+                        position_avg = float(position.get("entryPrice", 0) or 0)
+                        if position_avg > 0:
+                            campaign.average_entry_price = position_avg
+                        else:
+                            campaign.average_entry_price = (
+                                (float(campaign.average_entry_price) * old_qty)
+                                + (float(avg) * float(executed))
+                            ) / max(old_qty + float(executed), 1e-12)
+                        campaign.position_qty = pos_qty
                         campaign.additions += 1
                         campaign.tranche_index = min(4, campaign.tranche_index + 1)
                         campaign.open_risk_quote += float(campaign.pending_risk_quote or 0)
                         campaign.pending_risk_quote = 0.0
                         campaign.capital_reserved_quote = 0.0
+                        # The add-on increased exposure: resize the single
+                        # reduce-only protective order before exposing the
+                        # campaign as fully open again.
+                        protective_id = int(campaign.tags.get("protective_order_id", "0") or 0)
+                        if protective_id > 0:
+                            self._replace_protection(
+                                campaign,
+                                float(campaign.current_stop_price),
+                            )
+                        else:
+                            self._protect(campaign)
+                        if not self._liquidation_guard(campaign, position):
+                            self._set_state(symbol, "RECONCILE_REQUIRED")
+                            raise RuntimeError("liquidation price violates protective-stop safety buffer after add-on")
                         self.db.set_campaign_signal_state(signal_id, SignalState.FILLED.value)
                         self._set_state(symbol, "OPEN")
-                        campaign.transition(CampaignState.TREND_ACTIVE, reason="add-on filled")
+                        campaign.transition(CampaignState.TREND_ACTIVE, reason="add-on filled and fully reprotected")
                     else:
                         if abs(pos_qty - float(executed)) > max(float(executed) * 0.01, 1e-12):
                             self._set_state(symbol, "RECONCILE_REQUIRED")
