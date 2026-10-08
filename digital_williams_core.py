@@ -14,6 +14,8 @@ from campaign_model import SignalSpec, SignalType
 from decision_trace import DecisionTrace
 from domain.contracts import SignalDirection, WilliamsDecision
 from pending_signal import PendingSignal, should_replace
+from proof_engine import WilliamsProofEngine
+from why_not_engine import WhyNotEngine
 
 
 @dataclass(frozen=True)
@@ -73,37 +75,6 @@ class DigitalWilliamsCore:
             return "HTF_CONFIRMED"
         return "UNKNOWN"
 
-    @staticmethod
-    def _proof_vector(signal: SignalSpec):
-        from domain.contracts import ProofVector
-
-        structure = int(signal.source_candle_index) >= 0
-        location = float(signal.teeth_at_detection or 0.0) > 0.0
-        if signal.signal_type == SignalType.REVERSAL:
-            angulation = float(signal.angulation_score or 0.0) > 0.0
-        else:
-            # WM2/WM3 are continuation/structural confirmations of an
-            # established campaign; do not invent a reversal-bar score for them.
-            angulation = bool(signal.alligator_awake or signal.angulation_score > 0.0)
-        momentum = bool(
-            signal.signal_type == SignalType.SUPER_AO
-            or float(signal.wave_confidence or 0.0) > 0.0
-        )
-        return ProofVector(
-            context_pass=bool(signal.htf_confirmed or signal.alligator_bullish),
-            behavior_pass=bool(signal.reason or signal.signal_type),
-            structure_pass=structure,
-            location_pass=location,
-            angulation_pass=angulation,
-            momentum_pass=momentum,
-            # The signal is being armed before the conditional trigger fires.
-            # Therefore market price has not yet supplied the final proof.
-            price_proof_pass=False,
-            invalidation_present=bool(
-                float(signal.invalidation_price or signal.protective_reference or 0.0) > 0.0
-            ),
-        )
-
     def select_initial(self, signals: Iterable[SignalSpec]) -> SignalSpec | None:
         candidates = [
             s for s in signals
@@ -129,8 +100,24 @@ class DigitalWilliamsCore:
             return CoreComposition(None, None, None, None, "WAIT", ())
 
         pending = PendingSignal.from_spec(signal, campaign_id=campaign_id)
-        trace = DecisionTrace.from_signal(signal)
-        invalidation = float(signal.invalidation_price or signal.protective_reference or 0.0)
+        actionable = pending.actionable(now_ms)
+        evaluation = WilliamsProofEngine.evaluate(signal)
+        proof = evaluation.proof_vector
+        why_not = WhyNotEngine.explain_pre_price(
+            proof,
+            pending_actionable=actionable,
+        )
+        trace = DecisionTrace.from_signal(
+            signal,
+            proof_vector=proof.to_dict(),
+            why_not=why_not,
+        )
+
+        invalidation = float(
+            signal.invalidation_price
+            or signal.protective_reference
+            or 0.0
+        )
         decision = WilliamsDecision(
             timestamp=int(signal.created_at_ms),
             symbol=signal.symbol,
@@ -138,15 +125,23 @@ class DigitalWilliamsCore:
             wise_man_stage=self._wise_man_stage(signal),
             trigger_price=float(signal.trigger_price),
             invalidation_price=invalidation,
-            proof_vector=self._proof_vector(signal),
+            proof_vector=proof,
             context_regime=self._context_regime(signal),
         )
 
-        if not pending.actionable(now_ms):
-            veto = "pending_signal_expired_or_invalid"
-            trace.veto(veto)
+        if not actionable or not evaluation.armable:
+            vetoes = list(why_not)
+            if not actionable and "pending_signal_expired_or_invalid" not in vetoes:
+                vetoes.insert(0, "pending_signal_expired_or_invalid")
+            for reason in vetoes:
+                trace.veto(reason)
             return CoreComposition(
-                decision, signal, pending, trace, "BLOCK", (veto,)
+                decision,
+                signal,
+                pending,
+                trace,
+                "BLOCK",
+                tuple(dict.fromkeys(vetoes)),
             )
 
         # ARM_ENTRY is intentionally allowed before price proof. The exchange
