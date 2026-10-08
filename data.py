@@ -13,7 +13,10 @@ BASE_URL = (
 def market_data_base_url():
     """Return the market-data endpoint without changing execution safety defaults."""
     if os.getenv("WILLIAMS_RESEARCH_MAINNET", "false").lower() == "true":
-        return "https://api.binance.com"
+        # Binance documents data-api.binance.vision as the public market-data
+        # endpoint. This avoids coupling research downloads to account/execution
+        # API routing or regional trading availability.
+        return "https://data-api.binance.vision"
     return BASE_URL
 
 def _normalize_interval(value):
