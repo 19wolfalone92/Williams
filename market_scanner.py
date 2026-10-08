@@ -397,14 +397,15 @@ class MarketScanner:
         return max(low, min(high, value))
 
     def _analyse_intraday_core_base(self, symbol: str, closed: pd.DataFrame, tick_size: float) -> Optional[Tuple[Candidate, pd.DataFrame]]:
-        h4 = fetch_klines(self.client, symbol, self.policy.timeframes.context_tf, limit=180)
+        # Canonical chain: H4 permission -> H1 context -> M15 Williams decision.
+        h1 = fetch_klines(self.client, symbol, self.policy.timeframes.context_tf, limit=180)
+        h4 = fetch_klines(self.client, symbol, self.policy.timeframes.permission_tf, limit=180)
         d1 = fetch_klines(self.client, symbol, self.policy.timeframes.macro_tf, limit=120)
-        if len(h4) > 1:
-            h4 = h4.iloc[:-1].copy()
-        if len(d1) > 1:
-            d1 = d1.iloc[:-1].copy()
+        if len(h1) > 1: h1 = h1.iloc[:-1].copy()
+        if len(h4) > 1: h4 = h4.iloc[:-1].copy()
+        if len(d1) > 1: d1 = d1.iloc[:-1].copy()
 
-        decision = self.core.evaluate(symbol, closed, h4=h4, d1=d1, tick_size=tick_size)
+        decision = self.core.evaluate(symbol, closed, h1=h1, h4=h4, d1=d1, tick_size=tick_size)
         if not decision.core_valid:
             return None
 
