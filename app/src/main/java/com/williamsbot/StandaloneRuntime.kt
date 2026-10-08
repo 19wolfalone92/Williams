@@ -1568,7 +1568,9 @@ private class NativeEngine(
                     params.ifBlank { null },
                     lastBody
                 )
-                if (response.isSuccessful) return JSONObject(lastBody)
+                if (response.isSuccessful) {
+                    return JSONObject(lastBody)
+                }
                 if (attempt == 0 && lastBody.contains("-1021")) {
                     runCatching { syncServerTime() }
                     return@use
@@ -3019,7 +3021,7 @@ private class NativeEngine(
                         )
                     }
 
-                    status in setOf("CANCELED", "EXPIRED", "REJECTED") -> {
+                    status in setOf("CANCELED", "EXPIRED", "REJECTED", "EXPIRED_IN_MATCH") -> {
                         if (executed > 0.0) {
                             require(quote > 0.0) {
                                 intent.symbol + ": terminal campaign fill lacks quote"
