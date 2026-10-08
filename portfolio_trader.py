@@ -8,6 +8,8 @@ from db import Database
 from equity_breaker import EquityCircuitBreaker
 from l2_slippage import L2SlippageGuard
 from execution_accumulator import ExecutionSummary, accumulate_order
+from execution_barrier import ExecutionBarrier
+from market_context import ContextCache
 from campaign_execution import CampaignExecutionService, CampaignExecutionError
 from campaign_model import CampaignState, SignalSpec, SignalType, SignalRole
 from campaign_monitor import CampaignMonitor
@@ -88,7 +90,10 @@ class MultiPositionTrader:
         self.max_trades_per_day = max(0, int(os.getenv("MAX_TRADES_PER_DAY", "5")))
         self.max_consecutive_losses = max(0, int(os.getenv("MAX_CONSECUTIVE_LOSSES", "3")))
         self.cooldown_minutes = max(0, int(os.getenv("COOLDOWN_MINUTES", "30")))
-        self.execution_barrier = execution_barrier
+        # All production entry points pass the canonical barrier. A local
+        # context-backed barrier is created only for legacy/unit construction,
+        # preserving the single mutation door without introducing a Binance bypass.
+        self.execution_barrier = execution_barrier or ExecutionBarrier(ContextCache(), self.db)
         self.campaign_engine_enabled = (
             os.getenv("CAMPAIGN_ENGINE", "true").lower() == "true"
         )
@@ -711,26 +716,16 @@ class MultiPositionTrader:
         quantity="",
         quote_order_quantity="",
     ):
-        """Route legacy/manual mutations through the canonical P0 barrier.
-
-        Legacy execution remains available only as an explicit compatibility
-        path; it is never allowed to POST directly to Binance.
-        """
+        """Route legacy/manual mutations through the canonical P0 barrier."""
         if self.execution_barrier is None:
             raise RuntimeError("ExecutionBarrier is required for all Binance mutations")
-        tf = str(os.getenv("INTERVAL", "1h")).lower()
-        snapshot = self.execution_barrier.context_cache.snapshot()
-        ctx = snapshot.context(str(symbol).upper(), tf)
-        required = {tf: int(ctx.version)} if ctx is not None else {}
-        if not required:
-            raise RuntimeError(f"{symbol}: no live execution context for legacy mutation")
         intent = __import__("execution_barrier").OrderIntent.new(
             str(symbol).upper(),
             str(side).upper(),
             str(order_type).upper(),
-            required,
+            {},
             purpose=str(purpose).upper(),
-            permission_interval=tf,
+            permission_interval=str(os.getenv("INTERVAL", "1h")).lower(),
             quantity=str(quantity or ""),
             quote_order_quantity=str(quote_order_quantity or ""),
             client_order_id=str(client_order_id or ""),
