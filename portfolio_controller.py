@@ -49,14 +49,17 @@ class PortfolioController:
                 continue
             try:
                 campaign_mode = os.getenv("CAMPAIGN_ENGINE", "true").lower() == "true"
-                if campaign_mode and candidate.campaign_signal_specs:
+                signal_specs = list(getattr(candidate, "campaign_signal_specs", None) or [])
+                if campaign_mode and signal_specs:
                     signal = min(
-                        candidate.campaign_signal_specs,
+                        signal_specs,
                         key=lambda x: int(x.get("signal_bar_time_ms", 0) or 0),
                     )
                     entry_price = float(signal.get("trigger_price", 0.0) or 0.0)
                     structural_stop = float(signal.get("protective_reference", 0.0) or 0.0)
                 else:
+                    # Backwards-compatible scanner/risk path. Legacy Candidate
+                    # objects may not expose campaign specs.
                     entry_price = float(self.client.ticker_price(candidate.symbol)["price"])
                     structural_stop = float(getattr(candidate, "wave_invalidation_price", 0.0) or 0.0)
                 atr = entry_price * candidate.atr_pct
