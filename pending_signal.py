@@ -108,20 +108,20 @@ class PendingSignal:
 
 
     def supersede(self, new_signal: SignalSpec) -> "PendingSignal":
-    return PendingSignal(
-        signal_id=self.signal_id,
-        symbol=self.symbol,
-        side=self.side,
-        signal_type=self.signal_type,
-        role=self.role,
-        timeframe=self.timeframe,
-        trigger_price=self.trigger_price,
-        protective_reference=self.protective_reference,
-        signal_bar_time_ms=self.signal_bar_time_ms,
-        state=SignalState.SUPERSEDED,
-        context_versions=dict(self.context_versions),
-        created_at_ms=self.created_at_ms,
-        armed_at_ms=self.armed_at_ms,
-        expires_at_ms=self.expires_at_ms,
-        supersedes_signal_id=str(new_signal.signal_id),
-    )
+        return PendingSignal(
+            signal_id=self.signal_id,
+            symbol=self.symbol,
+            side=self.side,
+            signal_type=self.signal_type,
+            role=self.role,
+            timeframe=self.timeframe,
+            trigger_price=self.trigger_price,
+            protective_reference=self.protective_reference,
+            signal_bar_time_ms=self.signal_bar_time_ms,
+            state=SignalState.SUPERSEDED,
+            context_versions=dict(self.context_versions),
+            created_at_ms=self.created_at_ms,
+            armed_at_ms=self.armed_at_ms,
+            expires_at_ms=self.expires_at_ms,
+            supersedes_signal_id=str(new_signal.signal_id),
+        )
