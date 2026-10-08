@@ -2091,6 +2091,32 @@ class MultiPositionTrader:
                 add_signal = __import__(
                     "dataclasses"
                 ).replace(signal, role=SignalRole.ADD_ON)
+                armable_add = self.williams_core.select_armable(
+                    [add_signal],
+                    role="ADD_ON",
+                )
+                if armable_add is None:
+                    canonical_block = self.williams_core.evaluate_signal(
+                        add_signal,
+                        campaign_id=campaign.campaign_id,
+                    )
+                    self.db.log_event(
+                        "INFO",
+                        "canonical_add_on_not_armable",
+                        "No armable Williams add-on proof is available",
+                        {
+                            "symbol": symbol,
+                            "signal_id": add_signal.signal_id,
+                            "vetoes": list(canonical_block.vetoes),
+                            "proof": (
+                                canonical_block.decision.proof_vector.to_dict()
+                                if canonical_block.decision is not None
+                                else {}
+                            ),
+                        },
+                    )
+                    continue
+                add_signal = armable_add
 
                 canonical = self.williams_core.evaluate_signal(
                     add_signal,
@@ -2209,7 +2235,7 @@ class MultiPositionTrader:
             if self.max_open_positions > 0 and open_count >= self.max_open_positions:
                 continue
 
-            signal = self.campaign_execution.engine.choose_initial_signal(specs)
+            signal = self.williams_core.select_initial(specs)
             if signal is None:
                 continue
 
