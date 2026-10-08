@@ -75,7 +75,7 @@ class WilliamsIntradayCore:
   if wm3:
    center=ind.iloc[latest.center_index]
    specs.append(SignalSpec.new(symbol=symbol,side="BUY",signal_type=SignalType.FRACTAL,role=SignalRole.ENTRY,timeframe="1h",signal_bar_time_ms=self._time_ms(center),trigger_price=latest.level+tick,protective_reference=max(0,float(center["low"])-tick),invalidation_price=max(0,float(center["low"])-tick),teeth_at_detection=teeth,alligator_bullish=bool(cur.get("bullish_alligator",False)),alligator_awake=bool(cur.get("alligator_awake",False)),reason=f"WM3: {latest.formation} fractal; Teeth checked dynamically at trigger",source_candle_index=latest.center_index,execution_timeframe="15m",detected_time_ms=tms))
-  priority={"REVERSAL":0,"SUPER_AO":1,"FRACTAL":2};specs.sort(key=lambda s:(s.signal_bar_time_ms,priority[s.signal_type.value]));usable=[s for s in specs if s.signal_type!=SignalType.FRACTAL or self.policy.wm3_first_allowed]
+  priority={"REVERSAL":0,"SUPER_AO":1,"FRACTAL":2};specs.sort(key=lambda s:(int(s.detected_time_ms or s.signal_bar_time_ms),priority[s.signal_type.value],s.signal_bar_time_ms));usable=[s for s in specs if s.signal_type!=SignalType.FRACTAL or self.policy.wm3_first_allowed]
   first=usable[0].signal_type.value if usable else "";q=self._quality(usable,ang,ag,h4c)
   return StrategyDecision(symbol,tms,"1h","15m","5m",h4c,d1s,ag,wm1,wm2,wm3,bool(usable),q,first,tuple(usable),ang.to_dict(),"BEARISH_OR_FALLING_AO" if ao_down else "NOT_BEARISH","Williams Core valid" if usable else "No H1 Wise Man condition",{"lower_low":lower,"close_upper_half":loc>=.5,"bullish_reversal_bar":bullish_bar,"outside_mouth":outside,"ao":ao,"ao_previous":prev_ao,"ao_green_streak":green,"teeth_at_trigger":teeth,"fractal_count":len(obs)})
  @staticmethod
