@@ -917,6 +917,84 @@ class CampaignExecutionService:
                 })
         return results
 
+    def cancel_pending_campaign_entries(self, reason: str = "NO_NEW_ENTRIES") -> list[dict[str, Any]]:
+        """Cancel bot-owned pending campaign BUYs and release reservations."""
+        results: list[dict[str, Any]] = []
+        for row in list(self.db.open_campaigns()):
+            campaign_id = str(row.get("campaign_id") or "")
+            if not campaign_id:
+                continue
+            campaign = self.engine.load_campaign(campaign_id)
+            if campaign is None or campaign.position_qty > 0:
+                continue
+            if campaign.state not in {
+                CampaignState.ENTRY_PENDING,
+                CampaignState.ENTRY_ARMING,
+                CampaignState.SIGNAL_DETECTED,
+                CampaignState.ADD_ON_PENDING,
+                CampaignState.ADD_ON_ARMING,
+            }:
+                continue
+            try:
+                pending_id = str(campaign.tags.get("pending_order_id", "") or "").strip()
+                if pending_id:
+                    self._execute_cancel(campaign, int(pending_id), reason)
+                signal_id = str(campaign.current_signal_id or campaign.origin_signal_id or "")
+                if signal_id:
+                    self.db.set_campaign_signal_state(signal_id, SignalState.CANCELLED.value)
+                campaign.pending_risk_quote = 0.0
+                campaign.capital_reserved_quote = 0.0
+                campaign.tags.pop("pending_order_id", None)
+                campaign.next_action = "WAIT"
+                campaign.state = CampaignState.CLOSED
+                self.db.state_delete(f"entry_client_order_id:{campaign.symbol}")
+                self.db.state_set(f"position_state:{campaign.symbol}", "FLAT")
+                self.db.save_campaign(campaign)
+                results.append({
+                    "campaign_id": campaign_id,
+                    "symbol": campaign.symbol,
+                    "action": "PENDING_CANCELLED",
+                    "reason": reason,
+                })
+            except Exception as exc:
+                self.engine.mark_reconcile_required(campaign, str(exc))
+                self.db.state_set(f"position_state:{campaign.symbol}", "RECONCILE_REQUIRED")
+                results.append({
+                    "campaign_id": campaign_id,
+                    "symbol": campaign.symbol,
+                    "action": "RECONCILE_REQUIRED",
+                    "error": str(exc),
+                })
+        return results
+
+    def force_end_of_day(self) -> list[dict[str, Any]]:
+        """Cancel pending entries, then flatten every remaining Spot campaign."""
+        results = self.cancel_pending_campaign_entries("END_OF_DAY_PENDING_CANCEL")
+        for row in list(self.db.open_campaigns()):
+            campaign_id = str(row.get("campaign_id") or "")
+            if not campaign_id:
+                continue
+            campaign = self.engine.load_campaign(campaign_id)
+            if campaign is None or campaign.position_qty <= 0:
+                continue
+            try:
+                results.append({
+                    "campaign_id": campaign_id,
+                    "symbol": campaign.symbol,
+                    "action": "FORCE_FLAT",
+                    "exit": self.exit_market(campaign, reason="END_OF_DAY"),
+                })
+            except Exception as exc:
+                self.engine.mark_reconcile_required(campaign, str(exc))
+                self.db.state_set(f"position_state:{campaign.symbol}", "RECONCILE_REQUIRED")
+                results.append({
+                    "campaign_id": campaign_id,
+                    "symbol": campaign.symbol,
+                    "action": "RECONCILE_REQUIRED",
+                    "error": str(exc),
+                })
+        return results
+
     def _current_equity_quote(self) -> float:
         account = self.client.account()
         equity = sum(
