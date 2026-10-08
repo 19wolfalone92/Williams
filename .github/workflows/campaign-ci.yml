@@ -72,6 +72,8 @@ jobs:
             test_testnet_release_gate.py \
             test_campaign_engine.py \
             test_campaign_execution.py \
+            test_williams_intraday_core.py \
+            test_williams_campaign_backtester.py \
             2>&1 | tee campaign-pytest-output.txt
 
   android:
