@@ -14,9 +14,9 @@ def test_conservative_policy():
  assert not p.wm3_first_allowed and p.risk.initial_risk_pct==.002 and p.initial_risk_for(quality="A",h4_context="ADVERSE")==.001
 
 def test_side_specific_angulation():
- frame=pd.DataFrame({"close":[110,108,106,104,102,100,98],"jaw_shifted":[100,100,100,100,100,100,100]})
- assert measure_side_angulation(frame,6,"LONG").valid is True
- assert measure_side_angulation(frame,6,"SHORT").valid is False
+ frame=pd.DataFrame({"close":[95,94,93,92,90],"jaw_shifted":[100,100,100,100,100]})
+ assert measure_side_angulation(frame,4,"LONG").valid is True
+ assert measure_side_angulation(frame,4,"SHORT").valid is False
 
 def test_fractal_extended_forms():
  f=WilliamsFractalEngine()
@@ -27,5 +27,6 @@ def test_fractal_extended_forms():
  assert any(x.formation=="SIX_SHARED" for x in f.detect(s,side="LONG"))
 
 def test_overlapping_fractals_preserved():
- f=WilliamsFractalEngine(); d=_frame([(1,1,0,.5),(1,5,0,4),(1,2,0,1),(1,4,0,3),(1,1,0,.5),(1,5,0,4),(1,2,0,1),(1,1,0,.5)])
+ f=WilliamsFractalEngine()
+ d=_frame([(1,1,0,.5),(1,2,0,1),(1,10,0,9),(1,2,0,1),(1,1,0,.5),(1,2,0,1),(1,9,0,8),(1,2,0,1),(1,1,0,.5)])
  o=f.detect(d,side="LONG"); assert len(o)>=2 and any(x.overlapping for x in o)
