@@ -13,6 +13,8 @@ from campaign_model import SignalSpec, SignalType, SignalRole
 from campaign_monitor import CampaignMonitor
 from intraday_contract import WilliamsIntradayContract
 from intraday_policy import evaluate_intraday_policy
+from intraday_contract import WilliamsIntradayContract
+from intraday_policy import evaluate_intraday_policy
 
 
 POSITION_STATES = {
@@ -53,22 +55,23 @@ class MultiPositionTrader:
                 if raw_symbols.upper() in {"ALL", "AUTO", "*"}
                 else [x.strip().upper() for x in raw_symbols.split(",") if x.strip()]
             )
+        self.intraday_contract = WilliamsIntradayContract.from_env(os.environ)
         self.max_open_positions = max(
             0,
-            int(os.getenv("MAX_OPEN_CAMPAIGNS", "1")),
+            self.intraday_contract.max_open_campaigns,
         )
         self.max_total_risk_pct = min(
             0.01,
             max(
                 0.0,
-                float(os.getenv("MAX_CAMPAIGN_RISK_PCT", "0.006")),
+                self.intraday_contract.max_campaign_risk_pct,
             ),
         )
         self.max_risk_per_trade_pct = min(
             0.005,
             max(
                 0.0,
-                float(os.getenv("MAX_RISK_PER_TRADE_PCT", os.getenv("WILLIAMS_INITIAL_RISK_PCT", "0.0025"))),
+                self.intraday_contract.initial_risk_pct,
             ),
         )
         self.dry_run = (
@@ -86,7 +89,7 @@ class MultiPositionTrader:
         self.l2_guard = L2SlippageGuard(
             float(os.getenv("MAX_L2_SLIPPAGE_PCT", os.getenv("MAX_SPREAD_PCT", "0.0015")))
         )
-        self.equity_breaker = EquityCircuitBreaker(float(os.getenv("WILLIAMS_MAX_DAILY_LOSS_PCT", "0.01")))
+        self.equity_breaker = EquityCircuitBreaker(self.intraday_contract.max_daily_loss_pct)
         self.max_trades_per_day = max(0, int(os.getenv("MAX_TRADES_PER_DAY", "5")))
         self.max_consecutive_losses = max(0, int(os.getenv("MAX_CONSECUTIVE_LOSSES", "2")))
         self.cooldown_minutes = max(0, int(os.getenv("COOLDOWN_MINUTES", "30")))
