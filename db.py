@@ -6,7 +6,7 @@ from contextlib import contextmanager
 
 
 class Database:
-    SCHEMA_VERSION = 6
+    SCHEMA_VERSION = 7
 
     def __init__(self, path=None):
         path = path or os.getenv('WILLIAMS_DB_PATH') or 'data/trader.sqlite3'
@@ -142,6 +142,25 @@ class Database:
             event TEXT NOT NULL,
             payload_json TEXT
         );
+        CREATE TABLE IF NOT EXISTS decision_traces(
+            trace_id TEXT PRIMARY KEY,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            intent_id TEXT,
+            stage TEXT NOT NULL,
+            decision TEXT NOT NULL,
+            symbol TEXT,
+            purpose TEXT,
+            campaign_id TEXT,
+            signal_id TEXT,
+            reason TEXT,
+            blocker TEXT,
+            context_versions_json TEXT,
+            payload_json TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_decision_traces_intent
+            ON decision_traces(intent_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_decision_traces_campaign
+            ON decision_traces(campaign_id, created_at);
         CREATE TABLE IF NOT EXISTS campaigns(
             campaign_id TEXT PRIMARY KEY,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -366,6 +385,53 @@ class Database:
         )
         if not self._transaction_active:
             self.conn.commit()
+
+    def save_decision_trace(self, trace):
+        data = trace.to_dict() if hasattr(trace, 'to_dict') else dict(trace)
+        self.conn.execute(
+            'INSERT INTO decision_traces(\n'
+            'trace_id,intent_id,stage,decision,symbol,purpose,campaign_id,\n'
+            'signal_id,reason,blocker,context_versions_json,payload_json\n'
+            ') VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
+            (
+                str(data['trace_id']), str(data.get('intent_id','')),
+                str(data.get('stage','')), str(data.get('decision','')),
+                str(data.get('symbol','')), str(data.get('purpose','')),
+                str(data.get('campaign_id','')), str(data.get('signal_id','')),
+                str(data.get('reason','')), str(data.get('blocker','')),
+                json.dumps(data.get('context_versions', {}), sort_keys=True),
+                json.dumps(data.get('payload', {}), default=str, sort_keys=True),
+            ),
+        )
+        if not self._transaction_active:
+            self.conn.commit()
+
+    def recent_decision_traces(self, *, intent_id=None, campaign_id=None, limit=100):
+        clauses = []
+        args = []
+        if intent_id:
+            clauses.append('intent_id=?')
+            args.append(str(intent_id))
+        if campaign_id:
+            clauses.append('campaign_id=?')
+            args.append(str(campaign_id))
+        where = (' WHERE ' + ' AND '.join(clauses)) if clauses else ''
+        args.append(max(1, min(int(limit), 500)))
+        rows = self.conn.execute(
+            'SELECT * FROM decision_traces' + where +
+            ' ORDER BY created_at DESC LIMIT ?', tuple(args)
+        ).fetchall()
+        result = []
+        for row in rows:
+            item = dict(row)
+            item['context_versions'] = self._decode_json(
+                item.pop('context_versions_json'), {}
+            )
+            item['payload'] = self._decode_json(
+                item.pop('payload_json'), {}
+            )
+            result.append(item)
+        return result
 
     def save_market_context(self, context):
         """Persist the latest immutable MTF context for restart/audit recovery."""
