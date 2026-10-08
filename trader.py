@@ -30,6 +30,8 @@ def utc_now(): return datetime.now(timezone.utc).isoformat()
 
 class Trader:
     def __init__(self, api_key=None, api_secret=None, testnet=None, context_cache=None):
+        if os.getenv("BINANCE_MARKET", "spot").strip().lower() != "spot":
+            raise RuntimeError("Spot Trader is disabled while BINANCE_MARKET is not spot; use FuturesWilliamsRuntime")
         self.config = TradingConfig.from_env()
         self.context_cache = context_cache or ContextCache()
         self.symbol=os.getenv('SYMBOL',self.config.symbols[0]).upper(); self.interval=os.getenv('INTERVAL','1h')
