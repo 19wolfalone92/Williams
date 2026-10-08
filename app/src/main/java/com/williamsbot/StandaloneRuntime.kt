@@ -604,24 +604,24 @@ private class NativeEngine(
     private var primaryCandles = emptyList<CandleN>()
     private var lastScanDurationMs = 0L
     private var lastSymbolsScanned = 0
-    // Default supports the portfolio model: up to five independent positions;
-    // aggregate risk remains capped separately at 1%.
-    private val maxOpenPositions: Int
-        get() = prefs.getInt("max_open_positions", 5).coerceIn(1, 10)
+    // Canonical Williams Core small-deposit contract:
+    // one active campaign, initial risk 0.25%, campaign cap 0.60%,
+    // portfolio risk cap 0.60%, daily loss cap 1.00%.
+    private val maxOpenPositions: Int = 1
     private val campaignEngineEnabled: Boolean
         get() = prefs.getBoolean("campaign_engine_enabled", true)
     private val campaignExecutionTimeframe: String
         get() = prefs.getString("campaign_execution_timeframe", "5m") ?: "5m"
-    private val campaignRiskLimitPct = 0.005
-    private val campaignInitialRiskPct = 0.002
+    private val campaignRiskLimitPct = 0.006
+    private val campaignInitialRiskPct = 0.0025
     private val campaignAddRiskCapPct = 0.002
     private val campaignTrailBars: Int
         get() = prefs.getInt("campaign_trail_bars", 5).coerceIn(3, 5)
-    private val maxTotalRiskPct = 0.01
-    private val maxRiskPerTradePct = 0.005
+    private val maxTotalRiskPct = 0.006
+    private val maxRiskPerTradePct = 0.0025
     private val maxSpreadPct = 0.0015
     private val maxSlippagePct = 0.0015
-    private val equityCircuitBreaker = EquityCircuitBreaker(maxDrawdownPct = 0.05)
+    private val equityCircuitBreaker = EquityCircuitBreaker(maxDrawdownPct = 0.01)
     @Volatile private var lastEquityCheckMs = 0L
     @Volatile private var circuitBreakerTripInProgress = false
     private val feeBufferPerSidePct = 0.001
@@ -7624,7 +7624,7 @@ private class NativeEngine(
         }
         val cooldown = consecutiveLosses >= 2 && lastLossAt > 0L &&
             System.currentTimeMillis() - lastLossAt < 30L * 60L * 1000L
-        val hardPause = consecutiveLosses >= 3
+        val hardPause = consecutiveLosses >= 2
         return JSONObject()
             .put("trades_today", count)
             .put("daily_pnl_usdt", pnl)
@@ -7894,7 +7894,7 @@ private class NativeEngine(
             .put("stop_loss_pct", 0.02)
             .put("take_profit_pct", if (campaignEngineEnabled) 0.0 else 0.04)
             .put("risk_per_trade_pct", maxRiskPerTradePct)
-            .put("max_daily_loss_pct", 0.03)
+             .put("max_daily_loss_pct", 0.01)
             .put("trades_today", dailyGuard.optInt("trades_today", 0))
             .put("daily_pnl_usdt", dailyGuard.optDouble("daily_pnl_usdt", 0.0))
             .put("consecutive_losses", dailyGuard.optInt("consecutive_losses", 0))
@@ -8306,7 +8306,7 @@ private class NativeEngine(
             .put("campaign_entry_mode", "CONDITIONAL_STOP")
             .put("campaign_fixed_take_profit", false)
             .put("campaign_entry_execution", "BUY_STOP_ONLY")
-            .put("campaign_risk_limit_pct", campaignRiskLimitPct)
+             .put("campaign_risk_limit_pct", campaignRiskLimitPct)
             .put("campaign_initial_risk_pct", campaignInitialRiskPct)
             .put("campaign_add_on_risk_cap_pct", campaignAddRiskCapPct)
             .put("campaign_trail_bars", campaignTrailBars)
@@ -8329,7 +8329,7 @@ private class NativeEngine(
             .put("risk_per_trade_pct", maxRiskPerTradePct)
             .put("max_daily_loss_pct", 0.03)
             .put("max_trades_per_day", 0)
-            .put("max_consecutive_losses", 3)
+             .put("max_consecutive_losses", 2)
             .put("cooldown_minutes", 30)
             .put("min_risk_reward", 1.5)
             .put("atr_period", 14)
