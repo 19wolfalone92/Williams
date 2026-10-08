@@ -165,3 +165,20 @@ def test_structural_trail_uses_min_low_for_long_and_max_high_for_short(monkeypat
     assert calls[-1][0] == "SELL"
     assert calls[-1][1] == 179.0
     assert calls[-1][2] == {}
+
+
+def test_pending_signal_rejects_illegal_backward_transition():
+    signal = SignalSpec.new(
+        symbol="BTCUSDT", side="SELL", signal_type=SignalType.FRACTAL,
+        role=SignalRole.ENTRY, timeframe="5m", signal_bar_time_ms=2000,
+        trigger_price=99.0, protective_reference=101.0,
+    )
+    pending = PendingSignal(signal=signal)
+    pending.transition(SignalState.VALIDATED)
+    pending.transition(SignalState.ARMED)
+    try:
+        pending.transition(SignalState.DETECTED)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("illegal PendingSignal rollback was accepted")
