@@ -99,6 +99,7 @@ class CampaignEngine:
         allow_from_interrupt: bool = False,
     ) -> None:
         fsm = self._canonical_fsm(campaign)
+        previous = fsm.state
         if fsm.interrupted:
             if not allow_from_interrupt:
                 raise ValueError(
@@ -108,6 +109,16 @@ class CampaignEngine:
         else:
             fsm.transition(target)
         campaign.tags["canonical_campaign_state"] = fsm.state.value
+        if target not in {
+            CampaignOrderState.RECONCILIATION_REQUIRED,
+            CampaignOrderState.FAULT,
+        }:
+            campaign.tags["canonical_last_valid_state"] = fsm.state.value
+        elif previous not in {
+            CampaignOrderState.RECONCILIATION_REQUIRED,
+            CampaignOrderState.FAULT,
+        }:
+            campaign.tags["canonical_last_valid_state"] = previous.value
         if reason:
             campaign.tags["canonical_transition_reason"] = str(reason)
 
@@ -120,6 +131,8 @@ class CampaignEngine:
         reason: str,
     ) -> TradingCampaign:
         fsm = self._canonical_fsm(campaign)
+        if not fsm.interrupted:
+            campaign.tags["canonical_last_valid_state"] = fsm.state.value
         fsm.require_reconciliation(reason)
         campaign.tags["canonical_campaign_state"] = fsm.state.value
         campaign.tags["canonical_reconciliation_reason"] = str(reason)
