@@ -25,6 +25,7 @@ import java.nio.charset.StandardCharsets
 import java.util.Locale
 import java.util.ArrayDeque
 import java.util.Calendar
+import java.util.TimeZone
 import java.util.concurrent.Callable
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -2530,6 +2531,93 @@ private class NativeEngine(
             it.name = "williams-scanner"
             it.start()
         }
+    }
+
+    private fun intradaySessionState(nowMs: Long = System.currentTimeMillis()): String {
+        val cal = Calendar.getInstance(TimeZone.getTimeZone("UTC"))
+        cal.timeInMillis = nowMs
+        val minutes = cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE)
+        return when {
+            minutes < 8 * 60 -> "PRE_OPEN"
+            minutes >= 20 * 60 -> "FORCE_FLAT"
+            minutes >= 18 * 60 -> "NO_NEW_ENTRIES"
+            else -> "OPEN"
+        }
+    }
+
+    private fun cancelPendingCampaignEntries(reason: String): List<JSONObject> {
+        val pending = synchronized(pendingEntries) { pendingEntries.values.toList() }
+        val results = mutableListOf<JSONObject>()
+        for (entry in pending) {
+            try {
+                val open = signedGet("/api/v3/openOrders", "symbol=" + entry.symbol)
+                val rows = open.optJSONArray("orders")
+                    ?: if (open.has("symbol")) JSONArray().put(open) else JSONArray()
+                val order = (0 until rows.length())
+                    .mapNotNull { rows.optJSONObject(it) }
+                    .firstOrNull {
+                        it.optString("clientOrderId", "") == entry.clientOrderId
+                    }
+                if (order != null) {
+                    val orderId = order.optString("orderId", "")
+                    require(orderId.isNotBlank()) {
+                        entry.symbol + ": pending campaign order has no orderId"
+                    }
+                    withCampaignMutation(entry.symbol, "CAMPAIGN_PENDING_CANCEL") {
+                        signedDelete(
+                            "/api/v3/order",
+                            "symbol=" + entry.symbol + "&orderId=" + orderId
+                        )
+                        JSONObject()
+                    }
+                }
+
+                synchronized(pendingEntries) {
+                    pendingEntries.remove(entry.symbol)
+                }
+                savePersistedState()
+                results += JSONObject()
+                    .put("symbol", entry.symbol)
+                    .put("campaign_id", entry.campaignId)
+                    .put("signal_id", entry.signalId)
+                    .put("action", "PENDING_CANCELLED")
+                    .put("reason", reason)
+            } catch (x: Throwable) {
+                setReconcileRequired(
+                    entry.symbol + ": pending cancellation ambiguous: " +
+                        (x.message ?: x.javaClass.simpleName)
+                )
+                results += JSONObject()
+                    .put("symbol", entry.symbol)
+                    .put("campaign_id", entry.campaignId)
+                    .put("signal_id", entry.signalId)
+                    .put("action", "RECONCILE_REQUIRED")
+                    .put("error", x.message ?: x.javaClass.simpleName)
+            }
+        }
+        return results
+    }
+
+    private fun forceFlatIntraday(reason: String): List<JSONObject> {
+        val out = mutableListOf<JSONObject>()
+        out += cancelPendingCampaignEntries(reason + "_PENDING_CANCEL")
+        val active = positionList().toList()
+        for (position in active) {
+            runCatching {
+                campaignExitMarket(position, reason)
+            }.onFailure {
+                setReconcileRequired(
+                    position.symbol + ": intraday force-flat failed: " +
+                        (it.message ?: it.javaClass.simpleName)
+                )
+            }
+            out += JSONObject()
+                .put("symbol", position.symbol)
+                .put("campaign_id", position.campaignId)
+                .put("action", "FORCE_FLAT_REQUESTED")
+                .put("reason", reason)
+        }
+        return out
     }
 
     private fun campaignPendingRiskPct(): Double =
