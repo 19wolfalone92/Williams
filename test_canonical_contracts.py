@@ -191,3 +191,64 @@ def test_deterministic_binance_rejection_does_not_lock_mutations(tmp_path):
     )
     assert result.accepted is False
     assert barrier.mutation_locked is False
+
+def test_core_returns_canonical_decision_without_exposing_exchange():
+    from campaign_model import SignalRole, SignalSpec, SignalType
+    from digital_williams_core import CoreComposition, DigitalWilliamsCore
+
+    signal = SignalSpec.new(
+        symbol="BTCUSDT",
+        side="BUY",
+        signal_type=SignalType.REVERSAL,
+        role=SignalRole.ENTRY,
+        timeframe="5m",
+        signal_bar_time_ms=100,
+        trigger_price=101.0,
+        protective_reference=97.0,
+        alligator_bullish=True,
+        alligator_awake=True,
+        angulation_score=1.0,
+        htf_confirmed=True,
+        source_candle_index=10,
+    )
+    result = DigitalWilliamsCore().compose([signal], now_ms=150)
+    assert isinstance(result, CoreComposition)
+    assert result.decision is not None
+    assert result.decision.direction is SignalDirection.LONG
+    assert result.decision.wise_man_stage == 1
+    assert result.decision.proof_vector.price_proof_pass is False
+    assert result.action == "ARM_ENTRY"
+
+
+def test_order_state_machine_uses_unknown_for_ambiguous_lifecycle():
+    from order_state_machine import OrderState, OrderStateMachine
+
+    fsm = OrderStateMachine()
+    fsm.transition(OrderState.PENDING_NEW)
+    fsm.mark_unknown()
+    assert fsm.state is OrderState.UNKNOWN
+    fsm.reconcile("FILLED", executed_qty=1.0)
+    assert fsm.state is OrderState.FILLED
+
+
+def test_execution_barrier_does_not_unlock_on_failed_reconciliation(tmp_path):
+    db = Database(str(tmp_path / "failed-reconcile.sqlite3"))
+    barrier = ExecutionBarrier(FakeCache(), db)
+    intent = order_intent("WILL_UNKNOWN_003")
+
+    with pytest.raises(ExecutionAmbiguousError):
+        barrier.execute(
+            intent,
+            lambda: (_ for _ in ()).throw(
+                BinanceAPIError("timeout", unknown_execution=True)
+            ),
+        )
+
+    failed = barrier.reconcile(
+        intent,
+        lambda: (_ for _ in ()).throw(
+            BinanceAPIError("still unavailable", unknown_execution=False, status_code=503)
+        ),
+    )
+    assert failed.accepted is False
+    assert barrier.mutation_locked is True
