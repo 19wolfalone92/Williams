@@ -148,12 +148,15 @@ class ControlState:
                 raise RuntimeError('Configured Binance account is not USD-M Futures.')
             if not testnet:
                 restrictions = candidate.api_restrictions()
-                if not (
-                    bool(restrictions.get('enableReading', False))
-                    and bool(restrictions.get('enableSpotAndMarginTrading', False))
-                    and not bool(restrictions.get('enableWithdrawals', True))
-                ):
-                    raise RuntimeError('Live Futures API key must allow Futures trading, reading, and have withdrawals disabled.')
+                futures_permission = restrictions.get('enableFutures')
+                if futures_permission is None:
+                    futures_permission = restrictions.get('enableUmFutures')
+                if futures_permission is False:
+                    raise RuntimeError('Live Futures API key does not permit USD-M Futures trading.')
+                if not bool(restrictions.get('enableReading', False)):
+                    raise RuntimeError('Live Futures API key must allow account reading.')
+                if bool(restrictions.get('enableWithdrawals', True)):
+                    raise RuntimeError('Live Futures API key must have withdrawals disabled.')
         except Exception as exc:
             raise RuntimeError(f'Binance credential validation failed: {exc}') from exc
 
