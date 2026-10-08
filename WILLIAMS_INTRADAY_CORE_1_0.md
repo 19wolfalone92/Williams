@@ -1,26 +1,25 @@
-# WILLIAMS INTRADAY CORE 1.0
+# WILLIAMS INTRADAY CORE 1.0 — FINAL
 
 ## Canonical timeframe contract
 
 | TF | Role | May create Williams signal? |
 |---|---|---|
 | D1 | Macro / Air Bag | No |
-| H4 | Context | No |
-| H1 | Williams Strategy Truth | Yes |
-| M15 | Trigger / actual fill | No |
+| H4 | Permission / directional context | No |
+| H1 | Structural context / correction / trend | No |
+| M15 | Williams Strategy Truth | Yes |
 | M5 | Intrabar replay / execution diagnostics | No |
 
-H1 is the only operative decision timeframe for the production intraday profile.
-WM1, WM2, WM3, Fractals, AO, Alligator, Campaign and Structural Trail are all computed from closed H1 candles.
+M15 is the operative Williams decision timeframe; H1 supplies structural context, H4 supplies directional permission, and M5 is execution refinement. Williams signals are computed only from closed M15 candles.
 
 ## Core invariants
 
-1. M15 and M5 cannot create, invalidate or reinterpret an H1 Williams signal.
+1. H1 and H4 cannot manufacture a Williams entry; they only provide context/permission. M5 cannot create or reinterpret a signal.
 2. H4 can classify context as SUPPORTIVE / NEUTRAL / ADVERSE; it is not a BUY trigger.
 3. D1 is macro/Air-Bag context only.
 4. WM1 remains valid without requiring bullish Alligator or positive AO.
-5. WM2 is the third same-colour AO bar on H1.
-6. WM3 is an H1 fractal and its Teeth condition is evaluated dynamically at trigger time.
+5. WM2 is the third same-colour AO bar on M15; the event is captured at the 2→3 transition so later scans do not miss it.
+6. WM3 is an M15 fractal and its Teeth condition is evaluated dynamically at trigger time.
 7. A structural stop is market-derived; account size changes quantity, not stop distance.
 8. Stops may only move toward lower risk. No widening and no averaging down.
 9. Fixed percentage take-profit is disabled in Core.
@@ -53,7 +52,7 @@ Conservative profile:
 
 ## Signal lifecycle
 
-H1 closed candle -> StrategyDecision -> DecisionTrace -> SignalSpec / Pending Signal -> M15 trigger and exchange fill -> Campaign Step -> H1 structural management -> structural/EOD exit
+M15 closed candle -> StrategyDecision -> DecisionTrace -> SignalSpec / Pending Signal -> M5 trigger/fill -> Campaign Step -> M15 structural management -> structural/EOD exit
 
 A signal can be pending without being an executed order. Actual exchange fill is persisted separately from trigger price.
 
@@ -83,7 +82,7 @@ First actual executed Williams confirmation is Campaign Step 1 regardless of whe
 
 Later valid same-direction confirmations are additions only. Price movement in the direction of an open profit is never by itself a reason to add.
 
-Structural trail operates from H1 3-5 bar structure.
+Structural trail operates from completed M15 3-5 bar structure, with Profitunity Zone acceleration after five same-colour Zone bars.
 
 Sleeping Alligator permits observation/WM1 monitoring but suppresses aggressive trend-following additions.
 
@@ -93,7 +92,7 @@ Stagnation is diagnostic only; it does not replace structural exits.
 
 The backtester must model:
 
-H1 close -> pending signal -> M15 price path -> M5 refinement when available -> actual fill -> campaign additions -> H1 trail -> EOD/structural exit.
+M15 close -> pending signal -> next M15 price path -> M5 refinement when available -> actual fill -> campaign additions -> M15/Zone trail -> EOD/structural exit.
 
 A same-M15-bar stop hit cannot be inferred from pre-fill M5 bars.
 
@@ -102,6 +101,7 @@ A same-M15-bar stop hit cannot be inferred from pre-fill M5 bars.
 Every production decision should expose:
 - decision timeframe
 - execution timeframe
+- macro/permission/context timeframes
 - micro timeframe
 - H4 context
 - D1 state
