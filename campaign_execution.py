@@ -15,6 +15,7 @@ from execution_barrier import ExecutionBarrier, OrderIntent
 from pending_signal import PendingSignal
 from recovery_matrix import RecoveryMatrix
 from williams.execution_economics import ExecutionFeasibilityGate
+from williams.intraday_policy import IntradayPolicy
 
 
 class CampaignExecutionError(RuntimeError):
@@ -35,6 +36,11 @@ class CampaignExecutionService:
             fee_per_side_pct=float(os.getenv("FEE_BUFFER_PER_SIDE_PCT", "0.001")),
             slippage_pct=float(os.getenv("RISK_SLIPPAGE_BUFFER_PCT", "0.0015")),
             max_spread_pct=float(os.getenv("MAX_SPREAD_PCT", "0.0015")),
+        )
+        self.intraday_policy = IntradayPolicy(
+            session_start_utc=os.getenv("TRADING_SESSION_START_UTC", "08:00"),
+            no_new_entries_utc=os.getenv("NO_NEW_ENTRIES_UTC", "18:00"),
+            flat_time_utc=os.getenv("MANDATORY_FLAT_UTC", "20:00"),
         )
         self.engine = CampaignEngine(
             db,
@@ -208,6 +214,8 @@ class CampaignExecutionService:
     ) -> dict[str, Any]:
         if signal.side != "BUY":
             raise CampaignExecutionError("Current Spot campaign executor only arms LONG entries")
+        if self.core_mode and not self.intraday_policy.allows_new_campaign(datetime.now(timezone.utc)):
+            raise CampaignExecutionError("INTRADAY_SESSION_BLOCKED: new campaign not allowed at current UTC time")
 
         reserved = self.engine.portfolio_reserved_risk_quote()
         capacity = max(0.0, float(equity_quote) * self.engine.portfolio_risk_limit_pct)
@@ -1203,6 +1211,8 @@ class CampaignExecutionService:
         candidate_risk_pct: float,
     ) -> dict[str, Any]:
         campaign = self._active_campaign_for_symbol(signal.symbol)
+        if self.core_mode and not self.intraday_policy.allows_new_campaign(datetime.now(timezone.utc)):
+            raise CampaignExecutionError("INTRADAY_SESSION_BLOCKED: add-on not allowed after UTC cutoff")
         if campaign is None or campaign.position_qty <= 0:
             raise CampaignExecutionError(f"{signal.symbol}: no active campaign for add-on")
         if signal.signal_bar_time_ms <= 0:
