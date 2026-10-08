@@ -177,7 +177,7 @@ class WilliamsCampaignBacktester:
         priority={SignalType.REVERSAL:0,SignalType.SUPER_AO:1,SignalType.FRACTAL:2}
         return min(specs,key=lambda s:(int(s.signal_bar_time_ms),priority.get(s.signal_type,99),int(s.created_at_ms)))
 
-    def run(self,symbol,h1,m15,m5=None,*,h4=None,d1=None,tick_size=.01,start_at=None):
+    def run(self,symbol,h1,m15,m5=None,*,h4=None,d1=None,tick_size=.01,start_at=None,allowed_signal_types=None):
         if m15 is None or len(m15)<80:
             return {"status":"INSUFFICIENT_DATA","equity":self.equity,"trades":[],"fills":[]}
         m15=m15.sort_index()
@@ -209,6 +209,8 @@ class WilliamsCampaignBacktester:
         h1_times,h1_states=self._state_timeline(self.core,h1,"1h")
         h4_times,h4_states=self._state_timeline(self.core,h4,"4h")
         d1_times,d1_states=self._state_timeline(self.core,d1,"1d")
+
+        allowed_types={x for x in allowed_signal_types} if allowed_signal_types is not None else None
 
         position=None
         pending=None
@@ -455,7 +457,12 @@ class WilliamsCampaignBacktester:
                 and not day_blocked
                 and not before_backtest_start
             ):
-                chosen=self._pick_initial(decision.signal_specs)
+                available_specs=(
+                    tuple(s for s in decision.signal_specs if s.signal_type in allowed_types)
+                    if allowed_types is not None
+                    else decision.signal_specs
+                )
+                chosen=self._pick_initial(available_specs)
                 if chosen is not None:
                     pending={"spec":chosen}
             elif (
@@ -468,6 +475,7 @@ class WilliamsCampaignBacktester:
                 later=[
                     s for s in decision.signal_specs
                     if s.signal_type in {SignalType.SUPER_AO,SignalType.FRACTAL}
+                    and (allowed_types is None or s.signal_type in allowed_types)
                     and int(s.signal_bar_time_ms)>last_signal_time
                 ]
                 if later:
