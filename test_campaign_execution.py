@@ -319,7 +319,7 @@ def test_expired_persisted_conditional_entry_is_cancelled_on_recovery():
 
         recovered = svc.reconcile_pending_entries()
 
-        assert recovered[0]["state"] == "EXPIRED"
+        assert recovered[0]["state"] == "EXPIRED", recovered[0]
         assert client.open_orders("BTCUSDT") == []
         assert svc.engine.load_campaign(result["campaign_id"]).state == CampaignState.CLOSED
 
