@@ -56,6 +56,8 @@ class MultiPositionTrader:
                 if raw_symbols.upper() in {"ALL", "AUTO", "*"}
                 else [x.strip().upper() for x in raw_symbols.split(",") if x.strip()]
             )
+        if self.intraday_core_enabled and not self.symbols:
+            self.symbols = list(self.intraday_policy.symbols)
         self.max_open_positions = max(
             0,
             int(os.getenv("MAX_OPEN_POSITIONS", str(self.intraday_policy.risk.max_campaigns if self.intraday_core_enabled else 5))),
