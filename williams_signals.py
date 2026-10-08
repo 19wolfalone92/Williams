@@ -11,6 +11,7 @@ never presented as an author-certified formula.
 """
 
 from __future__ import annotations
+import os
 
 from dataclasses import asdict
 from typing import Any
@@ -187,6 +188,17 @@ def extract_long_signal_specs(
     """Extract all presently armable LONG signals from closed candles."""
     if ind is None or ind.empty:
         return []
+
+    # Canonical production path: one H1 Williams Core. This prevents the
+    # legacy extractor from becoming a second Strategy Truth implementation.
+    profile = str(os.getenv("WILLIAMS_STRATEGY_PROFILE", "WILLIAMS_INTRADAY_CORE")).upper()
+    if str(timeframe).lower() == "1h" and profile in {"WILLIAMS_INTRADAY_CORE", "WILLIAMS_INTRADAY_CONSERVATIVE"}:
+        from williams_intraday_core import WilliamsIntradayCore
+        from williams_intraday_spec import IntradayPolicy
+        decision = WilliamsIntradayCore(IntradayPolicy.from_env()).evaluate(
+            symbol, ind, tick_size=tick_size
+        )
+        return list(decision.signal_specs)
 
     specs: list[SignalSpec] = []
     current = ind.iloc[-1]
