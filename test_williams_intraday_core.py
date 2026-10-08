@@ -41,8 +41,8 @@ def test_structural_stop_uses_lowest_recent_low():
         teeth=0,
         buffer=0.1,
     )
-    assert source == "FRACTAL_SIGNAL_BAR"
-    assert stop == 98.9
+    assert source == "3_5_BAR_STRUCTURE"
+    assert abs(stop - 93.9) < 1e-9
 
 
 def test_final_timeframe_contract():
