@@ -12,6 +12,7 @@ never presented as an author-certified formula.
 
 from __future__ import annotations
 
+import os
 from dataclasses import asdict
 from typing import Any
 import math
@@ -20,6 +21,16 @@ import pandas as pd
 
 from campaign_model import SignalRole, SignalSpec, SignalType
 
+
+def _timeframe_ms(timeframe: str) -> int:
+    values = {
+        "1m": 60_000, "3m": 180_000, "5m": 300_000,
+        "15m": 900_000, "30m": 1_800_000, "1h": 3_600_000,
+        "2h": 7_200_000, "4h": 14_400_000, "6h": 21_600_000,
+        "8h": 28_800_000, "12h": 43_200_000, "1d": 86_400_000,
+        "3d": 259_200_000, "1w": 604_800_000, "1M": 2_592_000_000,
+    }
+    return int(values.get(str(timeframe), 300_000))
 
 def _tick_buffer(tick_size: float, ticks: int = 1) -> float:
     return max(float(tick_size), 0.0) * max(int(ticks), 1)
@@ -239,6 +250,12 @@ def extract_long_signal_specs(
                     context_versions=versions,
                     reason="WM1 bullish reversal + increasing angulation; BUY STOP above signal bar",
                     source_candle_index=i,
+                    expires_at_ms=(
+                        _row_time_ms(row)
+                        + _timeframe_ms(timeframe) * max(
+                            1, int(os.getenv("WILLIAMS_PENDING_REVERSAL_BARS", "2"))
+                        )
+                    ),
                 )
             )
 
@@ -269,6 +286,12 @@ def extract_long_signal_specs(
                     context_versions=versions,
                     reason="WM2 Super AO: third green AO bar; BUY STOP above corresponding price bar",
                     source_candle_index=i,
+                    expires_at_ms=(
+                        _row_time_ms(row)
+                        + _timeframe_ms(timeframe) * max(
+                            1, int(os.getenv("WILLIAMS_PENDING_SUPER_AO_BARS", "2"))
+                        )
+                    ),
                 )
             )
 
@@ -302,6 +325,12 @@ def extract_long_signal_specs(
                     context_versions=versions,
                     reason="WM3 buy fractal; trigger only while price/trigger remains above Teeth",
                     source_candle_index=center_i,
+                    expires_at_ms=(
+                        _row_time_ms(row)
+                        + _timeframe_ms(timeframe) * max(
+                            1, int(os.getenv("WILLIAMS_PENDING_FRACTAL_BARS", "8"))
+                        )
+                    ),
                 )
             )
 
