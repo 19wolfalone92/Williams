@@ -277,9 +277,20 @@ def extract_long_signal_specs(
                     protective_reference=protective,
                     trigger_buffer_ticks=1,
                     invalidation_price=float(wave_invalidation_price or protective),
-                    teeth_at_detection=float(row.get("teeth_shifted", 0.0) or 0.0),
-                    alligator_bullish=bool(row.get("bullish_alligator", False)),
-                    alligator_awake=bool(row.get("alligator_awake", False)),
+                    teeth_at_detection=float(
+                        row.get("teeth_shifted", 0.0)
+                        or current.get("teeth_shifted", 0.0)
+                        or 0.0
+                    ),
+                    alligator_bullish=bool(
+                        row.get("bullish_alligator", False)
+                        or current.get("bullish_alligator", False)
+                    ),
+                    alligator_awake=bool(
+                        row.get("alligator_awake", False)
+                        or current.get("alligator_awake", False)
+                    ),
+                    angulation_score=float(_angulation(ind, i)[0]),
                     wave_confidence=float(wave_confidence),
                     wave_exhaustion_risk=float(wave_exhaustion_risk),
                     htf_confirmed=bool(htf_confirmed),
@@ -317,8 +328,15 @@ def extract_long_signal_specs(
                     trigger_buffer_ticks=1,
                     invalidation_price=float(wave_invalidation_price or protective),
                     teeth_at_detection=float(teeth),
-                    alligator_bullish=bool(current.get("bullish_alligator", False)),
-                    alligator_awake=bool(current.get("alligator_awake", False)),
+                    alligator_bullish=bool(
+                        current.get("bullish_alligator", False)
+                        or ind.iloc[confirmation_i].get("bullish_alligator", False)
+                    ),
+                    alligator_awake=bool(
+                        current.get("alligator_awake", False)
+                        or ind.iloc[confirmation_i].get("alligator_awake", False)
+                    ),
+                    angulation_score=float(_angulation(ind, confirmation_i)[0]),
                     wave_confidence=float(wave_confidence),
                     wave_exhaustion_risk=float(wave_exhaustion_risk),
                     htf_confirmed=bool(htf_confirmed),
