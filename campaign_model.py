@@ -129,7 +129,7 @@ class SignalSpec:
     created_at_ms: int = field(default_factory=lambda: int(time.time() * 1000))
     expires_at_ms: int = 0
     source_candle_index: int = -1
-    execution_timeframe: str = "15m"
+    execution_timeframe: str = "5m"
     detected_time_ms: int = 0
 
     def to_dict(self) -> dict[str, Any]:
@@ -385,9 +385,9 @@ def structural_stop_for_long(
     if recent_lows:
         valid_lows = [float(x) for x in recent_lows if float(x) > 0]
         if valid_lows:
-            # For a LONG trail, the closest valid protection is the highest
-            # recent structural low, not the lowest low in the window.
-            low = max(valid_lows)
+            # Williams describes the common long exit/trail as a break of
+            # the LOWEST low of the recent 3 or 5 completed bars.
+            low = min(valid_lows)
             candidates.append((low - max(0.0, buffer), "3_5_BAR_STRUCTURE"))
     if teeth > 0:
         candidates.append((teeth - max(0.0, buffer), "TEETH"))
