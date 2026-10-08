@@ -7041,22 +7041,36 @@ private class NativeEngine(
         // lower-TF Wave 3 after higher-TF context confirms the direction.
         val finalSignal =
             if (campaignEngineEnabled) {
-                baseCandidate.campaignSignals.isNotEmpty() &&
-                    baseCandidate.atrPct <= 0.08 &&
-                    baseCandidate.spreadPct <= 0.0015 &&
-                    htfConfirmed &&
-                    !countertrendCorrectionImpulse &&
-                    junior != null &&
-                    !entryInsideCorrection &&
-                    middle?.position !in listOf(2, 4)
+                if (coreMode()) {
+                    // H1 Williams Core is authoritative. H4/Wave are context
+                    // only and cannot veto an already-valid H1 signal.
+                    baseCandidate.signal &&
+                        baseCandidate.atrPct <= 0.08 &&
+                        baseCandidate.spreadPct <= maxSpreadPct
+                } else {
+                    baseCandidate.campaignSignals.isNotEmpty() &&
+                        baseCandidate.atrPct <= 0.08 &&
+                        baseCandidate.spreadPct <= 0.0015 &&
+                        htfConfirmed &&
+                        !countertrendCorrectionImpulse &&
+                        junior != null &&
+                        !entryInsideCorrection &&
+                        middle?.position !in listOf(2, 4)
+                }
             } else {
-                entrySignal &&
-                    baseCandidate.atrPct <= 0.08 &&
-                    baseCandidate.spreadPct <= 0.0015 &&
-                    baseCandidate.riskReward >= 1.5
+                if (coreMode()) {
+                    baseCandidate.signal &&
+                        baseCandidate.atrPct <= 0.08 &&
+                        baseCandidate.spreadPct <= maxSpreadPct
+                } else {
+                    entrySignal &&
+                        baseCandidate.atrPct <= 0.08 &&
+                        baseCandidate.spreadPct <= 0.0015 &&
+                        baseCandidate.riskReward >= 1.5
+                }
             }
 
-        if (!finalSignal && baseCandidate.signal) {
+        if (!finalSignal && baseCandidate.signal && !coreMode()) {
             score = min(score, 84.0)
         }
 
@@ -7074,6 +7088,8 @@ private class NativeEngine(
             middle?.path?.substringBefore(":") ?: ""
 
         val reason = when {
+            coreMode() && finalSignal ->
+                "H1 Williams Core VALID; H4/Wave context advisory"
             entrySignal && middle?.position == 3 ->
                 "MTF ENTRY: $entryFrame Wave 3 inside parent $parentFrame Wave 3"
             countertrendCorrectionImpulse && !entrySignal ->
@@ -7081,7 +7097,7 @@ private class NativeEngine(
             entrySignal && nestedW3ParentW5 ->
                 "MTF ENTRY: $entryFrame Wave 3 inside parent Wave 5; allowed with reduced priority"
             setup.position == 5 && !nestedW3ParentW5 ->
-                "MTF: Wave 5/exhaustion context blocks entry"
+                "MTF: Wave 5/exhaustion context"
             finalSignal ->
                 "MTF ENTRY: lower-TF Wave 3 + higher-TF context confirmed"
             else ->
