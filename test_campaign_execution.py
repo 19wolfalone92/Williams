@@ -19,6 +19,8 @@ class FakeContext:
         self.version = version
         self.allow_long = True
         self.allow_short = False
+        self.candle_close_time_ms = int(time.time() * 1000) - 1_000
+        self.price = 100.0
 
 
 class FakeSnapshot:
