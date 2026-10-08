@@ -4,6 +4,7 @@ import uuid
 @pytest.fixture(autouse=True)
 def _legacy_campaign_mode(monkeypatch):
     monkeypatch.setenv("CAMPAIGN_ENGINE", "false")
+    monkeypatch.setenv("WILLIAMS_MODE", "LEGACY")
 
 
 
