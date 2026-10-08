@@ -2695,7 +2695,7 @@ private class NativeEngine(
                         "symbol=" + candidate.symbol +
                             "&side=BUY&type=STOP_LOSS" +
                             "&quantity=" + fmtQty(qty, rules.decimals) +
-                            "&stopPrice=" + fmtPrice(trigger, rules.decimals) +
+                            "&stopPrice=" + fmtPrice(trigger, rules.tick) +
                             "&newClientOrderId=" + clientId
                     )
                 }
@@ -2747,7 +2747,7 @@ private class NativeEngine(
                 "symbol=" + symbol +
                     "&side=SELL&type=STOP_LOSS" +
                     "&quantity=" + fmtQty(qty, rules.decimals) +
-                    "&stopPrice=" + fmtPrice(stop, rules.decimals) +
+                    "&stopPrice=" + fmtPrice(stop, rules.tick) +
                     "&newClientOrderId=" + clientId
             )
         }
@@ -5118,7 +5118,12 @@ private class NativeEngine(
             if (campaignEngineEnabled) {
                 baseCandidate.campaignSignals.isNotEmpty() &&
                     baseCandidate.atrPct <= 0.08 &&
-                    baseCandidate.spreadPct <= 0.0015
+                    baseCandidate.spreadPct <= 0.0015 &&
+                    htfConfirmed &&
+                    !countertrendCorrectionImpulse &&
+                    junior != null &&
+                    !entryInsideCorrection &&
+                    middle?.position !in listOf(2, 4)
             } else {
                 entrySignal &&
                     baseCandidate.atrPct <= 0.08 &&
@@ -5181,7 +5186,7 @@ private class NativeEngine(
                 countertrendCorrectionImpulse = countertrendCorrectionImpulse
             ),
             reason = reason,
-            campaignReady = campaignEngineEnabled && baseCandidate.campaignSignals.isNotEmpty()
+            campaignReady = campaignEngineEnabled && finalSignal
         )
     }
 
