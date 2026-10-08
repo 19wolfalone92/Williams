@@ -160,10 +160,10 @@ class CampaignEngine:
         ]
         if not candidates:
             return None
-        # Canonical campaign policy: prefer the classic Wise Men order
-        # (WM1 -> WM2 -> WM3) when several signals are simultaneously valid.
-        # A Fractal may still start a campaign when it is the only valid
-        # opportunity, as Williams explicitly allows.
+        # Campaign semantics: among simultaneously available signals the
+        # newest valid H1 signal wins. Signal family is only a tie-breaker.
+        # This preserves WM2-first/WM3-first campaigns instead of letting a
+        # stale WM1 monopolize the initial entry.
         priority = {
             SignalType.REVERSAL: 0,   # WM1
             SignalType.SUPER_AO: 1,   # WM2
@@ -172,8 +172,8 @@ class CampaignEngine:
         return max(
             candidates,
             key=lambda s: (
-                -priority.get(s.signal_type, 99),
                 s.signal_bar_time_ms,
+                -priority.get(s.signal_type, 99),
                 s.created_at_ms,
             ),
         )
