@@ -1001,7 +1001,7 @@ class Database:
     def campaign_risk_reserved_quote(self):
         row=self.conn.execute(
             "SELECT COALESCE(SUM(open_risk_quote),0)+COALESCE(SUM(pending_risk_quote),0) AS risk "
-            "FROM campaigns WHERE state NOT IN ('CLOSED','FLAT','RECONCILE_REQUIRED')"
+            "FROM campaigns WHERE state NOT IN ('CLOSED','FLAT')"
         ).fetchone()
         return float(row["risk"] or 0.0)
 
