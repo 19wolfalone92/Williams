@@ -207,7 +207,7 @@ class MarketScanner:
             return []
         if raw:
             requested = [str(x).upper().strip() for x in raw.split(",") if str(x).strip()]
-            if self.core_mode:
+            if getattr(self, "core_mode", False):
                 return [x for x in requested if x in {"BTCUSDT", "ETHUSDT"}]
             return requested
         return ["BTCUSDT", "ETHUSDT"] if self.core_mode else []
