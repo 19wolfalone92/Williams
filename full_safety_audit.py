@@ -110,6 +110,95 @@ for p in PY_FILES:
                 print(f"{rel(p)}:{n}: {line.strip()}")
                 break
 
+# Canonical no-order-bypass audit.
+# Only the Binance adapter and ExecutionBarrier may own exchange mutations.
+# Campaign/portfolio layers may reference mutation calls only as the callable
+# submitted through their canonical barrier wrappers.
+section("2A. CANONICAL EXECUTION-DOOR AUDIT")
+
+MUTATION_METHODS = {
+    "order",
+    "order_safe",
+    "create_order",
+    "create_oco",
+    "create_oco_sell_safe",
+    "place_oco",
+    "cancel_order",
+    "cancel_oco",
+    "cancel_replace",
+    "cancel_open_orders",
+    "cancel_all_open_orders",
+    "market_buy",
+    "market_sell",
+}
+
+BARRIER_FILES = {
+    "binance_client.py",
+    "execution_barrier.py",
+}
+
+def mutation_owner_allowed(path: Path, node: ast.Call, parents: list[ast.AST]) -> bool:
+    if path.name in BARRIER_FILES:
+        return True
+
+    # Campaign mutations are deliberately supplied as callables to _submit().
+    for parent in reversed(parents):
+        if not isinstance(parent, ast.Call):
+            continue
+        func = parent.func
+        if isinstance(func, ast.Attribute) and func.attr == "_submit":
+            return True
+        if isinstance(func, ast.Attribute) and func.attr == "_execute_non_williams_mutation":
+            return True
+
+    return False
+
+for p in PY_FILES:
+    tree = None
+    try:
+        tree = ast.parse(read_text(p), filename=str(p))
+    except Exception:
+        continue
+
+    parent_stack = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not isinstance(func, ast.Attribute):
+            continue
+        if func.attr not in MUTATION_METHODS:
+            continue
+
+        # ast.walk does not expose parents; reconstruct the ancestor chain
+        # locally for this small tree so the exception is explicit and reviewable.
+        def find_parents(root, target, path=None):
+            path = list(path or [])
+            for child in ast.iter_child_nodes(root):
+                if child is target:
+                    return path + [root]
+                found = find_parents(child, target, path + [root])
+                if found is not None:
+                    return found
+            return None
+
+        parents = find_parents(tree, node) or []
+        if mutation_owner_allowed(p, node, parents):
+            finding(
+                "PASS",
+                f"{rel(p)}:{node.lineno}: {func.attr} is behind canonical execution door"
+            )
+        elif p.name.startswith("test_") or "/tests/" in rel(p):
+            finding(
+                "WARN",
+                f"{rel(p)}:{node.lineno}: test-only direct mutation call: {func.attr}"
+            )
+        else:
+            finding(
+                "FAIL",
+                f"{rel(p)}:{node.lineno}: direct exchange mutation bypass: {func.attr}"
+            )
+
 # ---------------------------------------------------------------------
 # 3. Trader construction audit
 # ---------------------------------------------------------------------
