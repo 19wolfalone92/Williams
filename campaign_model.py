@@ -380,8 +380,11 @@ def structural_stop_for_long(
     if signal_bar_low > 0:
         candidates.append((signal_bar_low - max(0.0, buffer), f"{signal_type.value}_SIGNAL_BAR"))
     if recent_lows:
-        low = min(float(x) for x in recent_lows if float(x) > 0)
-        if low > 0:
+        valid_lows = [float(x) for x in recent_lows if float(x) > 0]
+        if valid_lows:
+            # For a LONG trail, the closest valid protection is the highest
+            # recent structural low, not the lowest low in the window.
+            low = max(valid_lows)
             candidates.append((low - max(0.0, buffer), "3_5_BAR_STRUCTURE"))
     if teeth > 0:
         candidates.append((teeth - max(0.0, buffer), "TEETH"))
@@ -396,9 +399,9 @@ def stop_only_reduces_risk(side: str, current_stop: float, proposed_stop: float)
     """Hard invariant: a protective stop may never move against the position."""
     if current_stop <= 0:
         return proposed_stop > 0
-    if str(side).upper() == "LONG":
+    if str(side).upper() in {"LONG", "BUY"}:
         return proposed_stop >= current_stop
-    if str(side).upper() == "SHORT":
+    if str(side).upper() in {"SHORT", "SELL"}:
         return proposed_stop <= current_stop
     return False
 
