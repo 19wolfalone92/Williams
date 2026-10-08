@@ -104,6 +104,7 @@ class MultiPositionTrader:
             self.client,
             self.db,
             execution_barrier=self.execution_barrier,
+            strategy_profile=self.intraday_policy.profile if self.intraday_core_enabled else None,
         )
         self.campaign_monitor = CampaignMonitor(
             self.client,
