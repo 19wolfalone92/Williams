@@ -130,6 +130,7 @@ class SignalSpec:
     expires_at_ms: int = 0
     source_candle_index: int = -1
     execution_timeframe: str = "15m"
+    detected_time_ms: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
