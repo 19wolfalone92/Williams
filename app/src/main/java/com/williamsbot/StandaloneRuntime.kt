@@ -2723,14 +2723,15 @@ private class NativeEngine(
         candidate.campaignSignals
             .filter { it.role.equals("ENTRY", ignoreCase = true) }
             .sortedWith(
-                compareBy<CampaignSignalN> {
-                    when (it.type.uppercase(Locale.US)) {
-                        "REVERSAL" -> 0
-                        "SUPER_AO" -> 1
-                        "FRACTAL" -> 2
-                        else -> 99
+                compareByDescending<CampaignSignalN> { it.signalBarTimeMs }
+                    .thenBy {
+                        when (it.type.uppercase(Locale.US)) {
+                            "REVERSAL" -> 0
+                            "SUPER_AO" -> 1
+                            "FRACTAL" -> 2
+                            else -> 99
+                        }
                     }
-                }.thenByDescending { it.signalBarTimeMs }
             )
             .firstOrNull()
 
@@ -3638,7 +3639,16 @@ private class NativeEngine(
                 it.type in setOf("SUPER_AO", "FRACTAL") &&
                     it.signalBarTimeMs > latestSignalTime
             }
-            .sortedBy { it.signalBarTimeMs }
+            .sortedWith(
+                compareByDescending<CampaignSignalN> { it.signalBarTimeMs }
+                    .thenBy {
+                        when (it.type.uppercase(Locale.US)) {
+                            "SUPER_AO" -> 0
+                            "FRACTAL" -> 1
+                            else -> 99
+                        }
+                    }
+            )
             .firstOrNull()
             ?: return
 
