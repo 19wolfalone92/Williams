@@ -53,17 +53,13 @@ class CampaignMonitor:
         return raw.copy()
 
     @staticmethod
-    def _five_same_color(candles) -> str:
-        if len(candles) < 5:
-            return "NONE"
-        rows = candles.tail(5)
-        bullish = all(float(r["close"]) > float(r["open"]) for _, r in rows.iterrows())
-        bearish = all(float(r["close"]) < float(r["open"]) for _, r in rows.iterrows())
-        if bullish:
-            return "BULLISH"
-        if bearish:
-            return "BEARISH"
-        return "NONE"
+    def _zone_snapshot(indicators) -> tuple[str, int]:
+        if indicators is None or len(indicators) == 0:
+            return "UNKNOWN", 0
+        row = indicators.iloc[-1]
+        color = str(row.get("zone_color", "UNKNOWN") or "UNKNOWN").upper()
+        streak = int(row.get("zone_streak", 0) or 0) if color == "GREEN" else int(row.get("zone_red_streak", 0) or 0) if color == "RED" else 0
+        return color, streak
 
     def _wave_snapshot(self, campaign, candles):
         now = int(time.time() * 1000)
@@ -137,7 +133,7 @@ class CampaignMonitor:
         last_ind = indicators.iloc[-1]
         prev_ind = indicators.iloc[-2] if len(indicators) > 1 else last_ind
         teeth = float(last_ind.get("teeth_shifted", 0.0) or 0.0)
-        five_color = self._five_same_color(candles)
+        zone_color, zone_streak = self._zone_snapshot(indicators)
 
         # Stagnation is an operational diagnosis only. It never widens or
         # tightens the stop by itself and never replaces a Williams exit.
@@ -171,6 +167,16 @@ class CampaignMonitor:
         )
 
         # Structural 3/5-bar protection is the primary Williams trail.
+        # Williams' Zone is a separate profit-extraction layer.
+        zone_trail_armed = bool(campaign.tags.get("zone_trail_armed", False))
+        if zone_color == "GREEN" and zone_streak >= 5:
+            zone_trail_armed = True
+        campaign.tags["zone_trail_armed"] = zone_trail_armed
+        if zone_trail_armed and len(candles):
+            zone_stop = float(candles.iloc[-1]["low"]) - tick
+            if zone_stop > proposed:
+                proposed = zone_stop
+                source = "ZONE_5_GREEN"
         # Teeth tightening is optional and OFF by default to avoid turning a
         # context line into an implicit fixed exit rule.
         if os.getenv("CAMPAIGN_TRAIL_TO_TEETH", "false").lower() == "true" and teeth > 0:
@@ -233,7 +239,8 @@ class CampaignMonitor:
                     "old_stop": current_stop,
                     "new_stop": proposed,
                     "trail_bars": trail_window,
-                    "five_same_color": five_color,
+                    "zone_color": zone_color,
+                    "zone_streak": zone_streak,
                 },
             )
             stop_moved = True
@@ -296,7 +303,8 @@ class CampaignMonitor:
             "proposed_stop": proposed,
             "stop_source": source,
             "stop_moved": stop_moved,
-            "five_same_color": five_color,
+            "zone_color": zone_color,
+            "zone_streak": zone_streak,
             "teeth": teeth,
             "wave_exhaustion_risk": campaign.wave_exhaustion_risk,
             "exhaustion_reasons": exhaustion_reasons,
