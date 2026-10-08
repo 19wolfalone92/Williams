@@ -337,3 +337,41 @@ def test_williams_core_has_no_binance_dependency():
     source = inspect.getsource(digital_williams_core)
     assert "BinanceSpotClient" not in source
     assert "BinanceDataContract" not in source
+
+
+def test_campaign_order_fsm_has_separate_reconciliation_interrupts():
+    from campaign_order_fsm import CampaignOrderState, CampaignOrderStateMachine
+
+    fsm = CampaignOrderStateMachine()
+    for state in (
+        CampaignOrderState.CONTEXT_READY,
+        CampaignOrderState.SETUP_IDENTIFIED,
+        CampaignOrderState.ARMED,
+        CampaignOrderState.ENTRY_PENDING,
+        CampaignOrderState.TRIGGERED,
+        CampaignOrderState.INITIAL_POSITION,
+        CampaignOrderState.PROTECTED,
+        CampaignOrderState.CAMPAIGN_ACTIVE,
+    ):
+        fsm.transition(state)
+    fsm.require_reconciliation("ambiguous exchange mutation")
+    assert fsm.interrupted is True
+
+    with pytest.raises(ValueError):
+        fsm.transition(CampaignOrderState.EXIT_PENDING)
+
+    fsm.reconcile_to(CampaignOrderState.CAMPAIGN_ACTIVE)
+    assert fsm.state is CampaignOrderState.CAMPAIGN_ACTIVE
+
+    fsm.fault("unresolvable state mismatch")
+    assert fsm.state is CampaignOrderState.FAULT
+    with pytest.raises(ValueError):
+        fsm.reconcile_to(CampaignOrderState.NO_IDEA)
+
+
+def test_campaign_order_fsm_rejects_illegal_operational_jump():
+    from campaign_order_fsm import CampaignOrderState, CampaignOrderStateMachine
+
+    fsm = CampaignOrderStateMachine(CampaignOrderState.NO_IDEA)
+    with pytest.raises(ValueError):
+        fsm.transition(CampaignOrderState.CAMPAIGN_ACTIVE)
