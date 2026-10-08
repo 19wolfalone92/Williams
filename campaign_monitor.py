@@ -163,6 +163,10 @@ class CampaignMonitor:
             teeth=teeth if os.getenv("CAMPAIGN_TRAIL_TO_TEETH", "false").lower() == "true" else 0.0,
             wave_invalidation=float(campaign.tags.get("wave_invalidation_price", 0.0) or 0.0),
             current_price=current_price,
+            tighten_to_context=(
+                os.getenv("CAMPAIGN_TRAIL_TO_TEETH", "false").lower() == "true"
+                or os.getenv("CAMPAIGN_TRAIL_TO_WAVE", "false").lower() == "true"
+            ),
         )
         proposed = proposed_obj.price
         source = proposed_obj.source
