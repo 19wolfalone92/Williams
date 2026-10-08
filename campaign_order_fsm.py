@@ -161,7 +161,14 @@ class CampaignOrderStateMachine:
         target = target if isinstance(target, CampaignOrderState) else CampaignOrderState(target)
         if target == self.state:
             return
-        if target in _INTERRUPT and self.state != CampaignOrderState.CLOSED:
+        if target in _INTERRUPT:
+            if self.state in {
+                CampaignOrderState.CLOSED,
+                CampaignOrderState.FAULT,
+            }:
+                raise ValueError(
+                    f"terminal campaign state cannot transition to {target.value}"
+                )
             self.state = target
             return
         if self.state in _INTERRUPT:
@@ -207,8 +214,11 @@ class CampaignOrderStateMachine:
 def campaign_order_transition_allowed(current: CampaignOrderState, nxt: CampaignOrderState) -> bool:
     if current == nxt:
         return True
-    if nxt in _INTERRUPT and current != CampaignOrderState.CLOSED:
-        return True
+    if nxt in _INTERRUPT:
+        return current not in {
+            CampaignOrderState.CLOSED,
+            CampaignOrderState.FAULT,
+        }
     if current in _INTERRUPT:
         return False
     return nxt in _ALLOWED.get(current, set())
