@@ -6,7 +6,7 @@ import ast
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-EXPECTED_VERSION = '4.23.0'
+EXPECTED_VERSION = '4.24.0'
 
 def read(path: str) -> str:
     p = ROOT / path
