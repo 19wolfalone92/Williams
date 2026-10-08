@@ -4,7 +4,7 @@ import os
 import pandas as pd
 
 from campaign_engine import CampaignEngine
-from campaign_model import CampaignState, SignalRole, SignalSpec, SignalType, stop_only_reduces_risk
+from campaign_model import CampaignState, PendingSignal, SignalRole, SignalSpec, SignalState, SignalType, stop_only_reduces_risk
 from futures_williams_runtime import FuturesWilliamsRuntime
 from williams_signals import extract_short_signal_specs, _latest_super_ao
 
@@ -104,3 +104,64 @@ def test_directional_williams_triggers_are_not_same_side_only():
     engine = CampaignEngine(None)
     selected = engine.choose_initial_signal([long_signal, short_signal])
     assert selected is long_signal
+
+
+def test_pending_signal_has_explicit_durable_lifecycle():
+    signal = SignalSpec.new(
+        symbol="BTCUSDT", side="BUY", signal_type=SignalType.SUPER_AO,
+        role=SignalRole.ENTRY, timeframe="5m", signal_bar_time_ms=1000,
+        trigger_price=101.0, protective_reference=98.0,
+    )
+    pending = PendingSignal(signal=signal)
+    pending.transition(SignalState.VALIDATED)
+    pending.client_order_id = "WILLF_ENTRY_TEST"
+    pending.order_id = "123"
+    pending.transition(SignalState.ARMED)
+    pending.filled_quantity = 0.5
+    pending.transition(SignalState.FILLED)
+    payload = pending.to_dict()
+    assert payload["signal"]["signal_id"] == signal.signal_id
+    assert payload["state"] == "FILLED"
+    assert payload["client_order_id"] == "WILLF_ENTRY_TEST"
+    assert payload["filled_quantity"] == 0.5
+
+
+def test_structural_trail_uses_min_low_for_long_and_max_high_for_short(monkeypatch):
+    frame = pd.DataFrame({
+        "low": list(range(80, 160)),
+        "high": list(range(100, 180)),
+    })
+
+    class Client:
+        def __init__(self, price):
+            self.price = price
+        def ticker_price(self, symbol):
+            return {"price": str(self.price)}
+
+    runtime = object.__new__(FuturesWilliamsRuntime)
+    runtime._tick = lambda symbol: 1.0
+
+    calls = []
+    runtime._replace_protection = lambda campaign, proposed, **kwargs: calls.append((campaign.side, proposed, kwargs)) or True
+
+    monkeypatch.setattr("futures_williams_runtime.fetch_klines", lambda *args, **kwargs: frame)
+
+    long_campaign = type("C", (), {
+        "symbol": "BTCUSDT", "side": "BUY", "current_stop_price": 70.0,
+        "execution_timeframe": "5m", "state": CampaignState.OPEN_INITIAL,
+    })()
+    runtime.client = Client(150.0)
+    runtime._trail(long_campaign)
+    assert calls[-1][0] == "BUY"
+    assert calls[-1][1] == 154.0
+    assert calls[-1][2] == {}
+
+    short_campaign = type("C", (), {
+        "symbol": "BTCUSDT", "side": "SELL", "current_stop_price": 190.0,
+        "execution_timeframe": "5m", "state": CampaignState.OPEN_INITIAL,
+    })()
+    runtime.client = Client(90.0)
+    runtime._trail(short_campaign)
+    assert calls[-1][0] == "SELL"
+    assert calls[-1][1] == 180.0
+    assert calls[-1][2] == {}
