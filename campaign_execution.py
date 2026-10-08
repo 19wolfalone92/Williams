@@ -341,17 +341,24 @@ class CampaignExecutionService:
         self.engine.arm_entry(campaign, signal)
         self.db.state_set(f"campaign_state:{campaign.campaign_id}", campaign.state.value)
 
+        permission_tf = (signal.execution_timeframe or self.policy.timeframes.execution_tf).lower()
+        required_context_versions = dict(signal.context_versions or {})
+        if not required_context_versions and self.barrier is not None:
+            snapshot = self.barrier.context_cache.snapshot()
+            context = snapshot.context(signal.symbol, permission_tf)
+            if context is not None:
+                required_context_versions = {permission_tf: int(context.version)}
         intent = OrderIntent.new(
             signal.symbol,
             "BUY",
             "STOP_LOSS",
-            required_context_versions=dict(signal.context_versions),
+            required_context_versions=required_context_versions,
             hypothesis_id=f"WILLIAMS_{signal.signal_type.value}",
             invalidation_level=stop,
             quantity=self.client.decimal_format(qty),
             client_order_id=client_id,
             purpose="CAMPAIGN_ENTRY",
-            permission_interval=(signal.execution_timeframe or self.policy.timeframes.execution_tf),
+            permission_interval=permission_tf,
             campaign_id=campaign.campaign_id,
             signal_id=signal.signal_id,
             risk_quote=risk_quote,
@@ -1368,11 +1375,18 @@ class CampaignExecutionService:
             raise CampaignExecutionError(
                 f"{signal.symbol}: another pending conditional order exists"
             )
+        permission_tf = (signal.execution_timeframe or self.policy.timeframes.execution_tf).lower()
+        required_context_versions = dict(signal.context_versions or {})
+        if not required_context_versions and self.barrier is not None:
+            snapshot = self.barrier.context_cache.snapshot()
+            context = snapshot.context(signal.symbol, permission_tf)
+            if context is not None:
+                required_context_versions = {permission_tf: int(context.version)}
         intent = OrderIntent.new(
             signal.symbol,
             "BUY",
             "STOP_LOSS",
-            required_context_versions=dict(signal.context_versions),
+            required_context_versions=required_context_versions,
             hypothesis_id=f"WILLIAMS_ADD_{signal.signal_type.value}",
             invalidation_level=stop,
             quantity=self.client.decimal_format(qty),
