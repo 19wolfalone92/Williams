@@ -62,18 +62,35 @@ class CampaignExecutionService:
         import math
         return math.floor(float(value) / step + 1e-12) * step
 
-    def _normalize_qty(self, symbol: str, quantity: float) -> float:
+    def _normalize_qty(
+        self,
+        symbol: str,
+        quantity: float,
+        *,
+        market: bool = False,
+    ) -> float:
         filters = self._rules(symbol)
-        lot = filters.get("LOT_SIZE") or filters.get("MARKET_LOT_SIZE") or {}
+        lot = (
+            filters.get("MARKET_LOT_SIZE") or filters.get("LOT_SIZE")
+            if market
+            else filters.get("LOT_SIZE") or filters.get("MARKET_LOT_SIZE")
+        ) or {}
         step = float(lot.get("stepSize", "0") or 0)
         minimum = float(lot.get("minQty", "0") or 0)
         maximum = float(lot.get("maxQty", "inf") or "inf")
+        # Some symbols publish MARKET_LOT_SIZE with zero step/min/max, which
+        # means no additional market-size restriction. Fall back to LOT_SIZE.
+        if market and step <= 0:
+            lot = filters.get("LOT_SIZE") or {}
+            step = float(lot.get("stepSize", "0") or 0)
+            minimum = float(lot.get("minQty", "0") or 0)
+            maximum = float(lot.get("maxQty", "inf") or "inf")
         qty = self._floor(float(quantity), step)
         if qty > maximum:
             qty = self._floor(maximum, step)
         if qty < minimum:
             raise CampaignExecutionError(
-                f"{symbol}: quantity {qty:.12g} below LOT_SIZE {minimum:.12g}"
+                f"{symbol}: quantity {qty:.12g} below applicable lot-size minimum {minimum:.12g}"
             )
         return qty
 
@@ -1456,7 +1473,7 @@ class CampaignExecutionService:
             ),
             0.0,
         )
-        qty = self._normalize_qty(symbol, free_qty)
+        qty = self._normalize_qty(symbol, free_qty, market=True)
         if qty <= 0:
             raise CampaignExecutionError(
                 f"{symbol}: no free campaign inventory after protection cancel"
