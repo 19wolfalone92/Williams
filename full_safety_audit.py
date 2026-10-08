@@ -150,6 +150,16 @@ def mutation_owner_allowed(path: Path, node: ast.Call, parents: list[ast.AST]) -
             return True
         if isinstance(func, ast.Attribute) and func.attr == "_execute_non_williams_mutation":
             return True
+        if isinstance(func, ast.Attribute) and func.attr == "execute":
+            receiver = func.value
+            if (
+                isinstance(receiver, ast.Name)
+                and "barrier" in receiver.id.lower()
+            ) or (
+                isinstance(receiver, ast.Attribute)
+                and "barrier" in receiver.attr.lower()
+            ):
+                return True
 
     return False
 
