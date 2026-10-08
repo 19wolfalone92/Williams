@@ -2002,6 +2002,15 @@ class MultiPositionTrader:
 
             campaign = self.campaign_execution._active_campaign_for_symbol(symbol)
 
+            if (
+                self.intraday_core_enabled
+                and campaign is not None
+                and str((getattr(selection.candidate, "decision_trace", {}) or {}).get("alligator_state", "")).upper() == "SLEEP"
+            ):
+                # Sleeping Alligator can host an initial WM1 watch/entry, but
+                # it is not a license for aggressive trend-following additions.
+                continue
+
             # Active campaign: later WM2/WM3 signals are add-ons. A new
             # reversal is not auto-added by default because it can represent
             # countertrend risk; this is explicitly configurable.
