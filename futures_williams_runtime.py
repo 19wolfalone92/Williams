@@ -389,6 +389,15 @@ class FuturesWilliamsRuntime:
     def reserved_risk_quote(self):
         return float(self.engine.portfolio_reserved_risk_quote())
 
+    def _portfolio_available_risk_pct(self, equity=None) -> float:
+        """Return unreserved portfolio risk capacity as a fraction of equity."""
+        equity = float(self._equity() if equity is None else equity)
+        if equity <= 0:
+            return 0.0
+        capacity = equity * max(0.0, float(self.max_total_risk_pct))
+        reserved = float(self.engine.portfolio_reserved_risk_quote())
+        return max(0.0, (capacity - reserved) / equity)
+
     def _daily_entry_guard(self):
         """Block new risk after daily loss, loss streak or cooldown limits."""
         from datetime import datetime, timezone
@@ -785,10 +794,17 @@ class FuturesWilliamsRuntime:
         if not entry_ok:
             raise RuntimeError(entry_reason)
 
-        qty, risk_quote, notional = self._size_from_risk(
-            symbol, trigger, stop, self._initial_risk_pct()
+        equity = self._equity()
+        initial_risk_pct = min(
+            self._initial_risk_pct(),
+            self._portfolio_available_risk_pct(equity),
         )
-        campaign = self.engine.create_campaign(signal, initial_risk_pct=self._initial_risk_pct())
+        if initial_risk_pct <= 0:
+            raise RuntimeError("portfolio risk budget exhausted")
+        qty, risk_quote, notional = self._size_from_risk(
+            symbol, trigger, stop, initial_risk_pct
+        )
+        campaign = self.engine.create_campaign(signal, initial_risk_pct=initial_risk_pct)
         campaign.initial_stop_price = stop
         campaign.current_stop_price = stop
         campaign.tags["signal_bar_time_ms"] = int(signal.signal_bar_time_ms)
@@ -906,11 +922,18 @@ class FuturesWilliamsRuntime:
             campaign.current_stop_price,
             upward=signal.side == "SELL",
         )
+        equity = self._equity()
+        add_risk_pct = min(
+            self._next_add_risk_pct(campaign),
+            self._portfolio_available_risk_pct(equity),
+        )
+        if add_risk_pct <= 0:
+            raise RuntimeError("portfolio risk budget exhausted for add-on")
         qty, risk_quote, notional = self._size_from_risk(
             signal.symbol,
             trigger,
             stop,
-            self._next_add_risk_pct(campaign),
+            add_risk_pct,
         )
         campaign.tags["pending_order_quantity"] = qty
         campaign.tags["pending_order_trigger"] = trigger
