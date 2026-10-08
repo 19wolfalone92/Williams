@@ -372,6 +372,7 @@ def test_execution_barrier_rejects_missing_or_malformed_contract_fields():
         ({"symbol": ""}, "symbol"),
         ({"side": "BUYISH"}, "side"),
         ({"order_type": "MADE_UP"}, "order_type"),
+        ({"order_type": "MARKET"}, "order_type"),
         ({"created_at_ms": 0}, "created_at_ms"),
         ({"max_age_ms": 0}, "max_age_ms"),
         ({"signal_id": ""}, "signal_id"),
