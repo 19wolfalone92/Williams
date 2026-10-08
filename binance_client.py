@@ -452,6 +452,10 @@ class BinanceSpotClient:
         cancel can still be followed by a failed replacement. Callers must
         inspect both cancelResult/newOrderResult and reconcile on ambiguity.
         """
+        if str(side).strip().upper() == "BUY" and not entry_submission_authorized():
+            raise BinanceAPIError(
+                "Spot BUY cancel-replace blocked: ExecutionBarrier admission required"
+            )
         p={
             'symbol':symbol,
             'cancelReplaceMode':'STOP_ON_FAILURE',
