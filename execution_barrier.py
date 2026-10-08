@@ -107,6 +107,8 @@ class ExecutionBarrier:
                     "LEGACY_ENTRY",
                     "LEGACY_PROTECTION",
                     "MANUAL_CANCEL_PROTECTION",
+                    "CAMPAIGN_ENTRY_EXPIRE",
+                    "CAMPAIGN_PROTECTION_CANCEL",
                 }
             ):
                 return "missing required_context_versions"
