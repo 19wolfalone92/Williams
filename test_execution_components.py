@@ -95,3 +95,34 @@ def test_stop_engine_rejects_stop_above_market():
     )
     assert proposal.accepted is False
     assert proposal.reason in {"stop_not_below_market", "stop_would_loosen_risk"}
+
+
+
+def test_binance_stp_policy_reaches_new_order_payload(monkeypatch):
+    monkeypatch.setenv("BINANCE_STP_MODE", "EXPIRE_TAKER")
+    from binance_client import BinanceSpotClient
+    client = BinanceSpotClient("k", "s", testnet=True)
+    captured = {}
+    client._request = lambda method, path, params=None, signed=False: captured.update(
+        {"method": method, "path": path, "params": dict(params or {}), "signed": signed}
+    ) or {"status": "NEW", "orderId": 1, "clientOrderId": "cid"}
+    client.order("BTCUSDT", "BUY", "STOP_LOSS", quantity="1", stop_price="101", new_client_order_id="cid")
+    assert captured["path"] == "/api/v3/order"
+    assert captured["params"]["selfTradePreventionMode"] == "EXPIRE_TAKER"
+
+
+def test_binance_terminal_stp_is_not_reported_as_unknown(monkeypatch):
+    monkeypatch.delenv("BINANCE_STP_MODE", raising=False)
+    from binance_client import BinanceAPIError, BinanceSpotClient
+    client = BinanceSpotClient("k", "s", testnet=True)
+    client.order = lambda *args, **kwargs: {
+        "status": "EXPIRED_IN_MATCH", "orderId": 2, "clientOrderId": "cid2"
+    }
+    try:
+        client.order_safe("BTCUSDT", "BUY", "STOP_LOSS", quantity="1", stop_price="101", new_client_order_id="cid2")
+    except BinanceAPIError as exc:
+        assert exc.terminal is True
+        assert exc.unknown_execution is False
+        assert exc.payload["status"] == "EXPIRED_IN_MATCH"
+    else:
+        raise AssertionError("EXPIRED_IN_MATCH must be surfaced as terminal")
