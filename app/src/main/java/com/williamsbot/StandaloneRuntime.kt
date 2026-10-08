@@ -2800,11 +2800,14 @@ private class NativeEngine(
                 )
             )
             synchronized(positions) {
+                val updated = position.copy(
+                    stop = stop,
+                    stopSource = "3_5_BAR_STRUCTURE",
+                    protectiveOrderId = created.optString("orderId", "")
+                )
                 positions[position.symbol] =
-                    position.copy(
-                        stop = stop,
-                        stopSource = "3_5_BAR_STRUCTURE",
-                        protectiveOrderId = created.optString("orderId", "")
+                    updated.copy(
+                        riskPct = campaignPositionRiskPct(updated)
                     )
             }
             savePersistedState()
