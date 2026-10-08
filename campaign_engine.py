@@ -14,6 +14,8 @@ import json
 import time
 import uuid
 
+from williams_intraday_spec import IntradayPolicy, CORE_PROFILE, CONSERVATIVE_PROFILE
+
 from campaign_model import (
     CampaignEventType,
     CampaignState,
@@ -53,6 +55,12 @@ class CampaignEngine:
         return uuid.uuid4().hex
 
     def create_campaign(self, signal: SignalSpec, *, initial_risk_pct: float) -> TradingCampaign:
+        policy = IntradayPolicy.from_env()
+        if policy.profile in {CORE_PROFILE, CONSERVATIVE_PROFILE}:
+            if signal.timeframe.lower() != policy.timeframes.decision_tf:
+                raise ValueError("intraday campaign strategy timeframe must be H1")
+            if (signal.execution_timeframe or policy.timeframes.execution_tf).lower() != policy.timeframes.execution_tf:
+                raise ValueError("intraday campaign execution timeframe must be M15")
         campaign = TradingCampaign(
             campaign_id=self.new_campaign_id(),
             symbol=signal.symbol,
@@ -316,6 +324,10 @@ class CampaignEngine:
         return campaign
 
     def arm_add_on(self, campaign: TradingCampaign, signal: SignalSpec, *, risk_quote: float, capital_reserved_quote: float) -> TradingCampaign:
+        policy = IntradayPolicy.from_env()
+        if policy.profile in {CORE_PROFILE, CONSERVATIVE_PROFILE}:
+            if signal.timeframe.lower() != policy.timeframes.decision_tf or (signal.execution_timeframe or policy.timeframes.execution_tf).lower() != policy.timeframes.execution_tf:
+                raise ValueError("intraday add-on must originate on H1 and execute on M15")
         if campaign.position_qty <= 0:
             raise ValueError("add-on requires an open campaign position")
         if campaign.additions >= 4 or campaign.tranche_index >= 5:
