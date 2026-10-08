@@ -81,7 +81,10 @@ class WilliamsProofEngine:
         context_pass = bool(signal.htf_confirmed or signal.alligator_bullish)
         behavior_pass = bool(signal.reason.strip()) or bool(signal.signal_type)
         structure_pass = int(signal.source_candle_index) >= 0
-        location_pass = float(signal.teeth_at_detection or 0.0) > 0.0
+        location_pass = bool(
+            float(signal.teeth_at_detection or 0.0) > 0.0
+            or signal.alligator_bullish
+        )
 
         if signal.signal_type is SignalType.REVERSAL:
             angulation_pass = float(signal.angulation_score or 0.0) > 0.0
