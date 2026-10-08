@@ -11,6 +11,7 @@ from execution_accumulator import ExecutionSummary, accumulate_order
 from campaign_execution import CampaignExecutionService, CampaignExecutionError
 from campaign_model import SignalSpec, SignalType, SignalRole
 from campaign_monitor import CampaignMonitor
+from order_identity import is_entry_id, is_exit_id, is_managed_order
 
 
 POSITION_STATES = {
@@ -34,6 +35,8 @@ class MultiPositionTrader:
         -> RECONCILE_REQUIRED on ambiguity
     """
 
+    # Legacy prefixes remain for recovery compatibility; new CampaignEngine
+    # mutations use WILLV5_* and are classified through order_identity.py.
     ENTRY_PREFIX = "WILLV4_ENTRY_"
     OCO_PREFIX = "WILLV4_OCO_"
     EMERGENCY_PREFIX = "WILLV4_EMERGENCY_"
@@ -157,7 +160,7 @@ class MultiPositionTrader:
             if (
                 str(buy.get("side", "")).upper() != "BUY"
                 or str(buy.get("status", "")).upper() != "FILLED"
-                or not str(buy.get("clientOrderId", "")).startswith(self.ENTRY_PREFIX)
+                or not is_entry_id(str(buy.get("clientOrderId", "")).strip())
             ):
                 continue
 
@@ -534,9 +537,7 @@ class MultiPositionTrader:
 
     def _sell_belongs_to_bot(self, order, all_orders):
         client_id = str(order.get("clientOrderId") or "").strip()
-        if client_id.startswith(
-            (self.OCO_PREFIX, self.EMERGENCY_PREFIX, self.MANUAL_PREFIX)
-        ):
+        if is_exit_id(client_id):
             return True
         order_list_id = str(order.get("orderListId") or "").strip()
         if not order_list_id:
@@ -585,9 +586,7 @@ class MultiPositionTrader:
             if (
                 list_id
                 and order_list_id == list_id
-            ) or (
-                client_id.startswith((self.OCO_PREFIX, self.EMERGENCY_PREFIX, self.MANUAL_PREFIX))
-            ):
+            ) or is_exit_id(client_id):
                 result.append(order)
 
         return result
