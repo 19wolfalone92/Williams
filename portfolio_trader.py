@@ -1950,10 +1950,64 @@ class MultiPositionTrader:
             if not specs:
                 continue
             symbol = str(selection.candidate.symbol).upper()
-            if symbol in pending:
-                continue
-
             campaign = self.campaign_execution._active_campaign_for_symbol(symbol)
+
+            # A pending campaign may be superseded by a newer, materially
+            # different signal. Replacement is explicit and bounded; we never
+            # stack multiple pending BUYs for one symbol.
+            if symbol in pending and campaign is not None and campaign.position_qty <= 0:
+                latest_time = int(
+                    campaign.tags.get("signal_bar_time_ms", 0)
+                    or campaign.tags.get("pending_order_trigger", 0)
+                    or 0
+                )
+                candidates_for_replace = [
+                    x for x in specs
+                    if x.signal_bar_time_ms > latest_time
+                ]
+                if os.getenv("CAMPAIGN_PENDING_REPLACE", "true").lower() == "true" and candidates_for_replace:
+                    replacement = max(
+                        candidates_for_replace,
+                        key=lambda x: (x.signal_bar_time_ms, x.created_at_ms),
+                    )
+                    try:
+                        result = self.campaign_execution.replace_pending_entry(
+                            campaign,
+                            replacement,
+                            equity_quote=equity,
+                            candidate_risk_pct=min(
+                                self.max_risk_per_trade_pct,
+                                max(0.0, float(selection.risk.risk_pct) / 100.0),
+                            ),
+                        )
+                        results.append({
+                            "symbol": symbol,
+                            "campaign": True,
+                            "action": "ENTRY_REPLACED",
+                            **result,
+                        })
+                    except CampaignExecutionError as exc:
+                        self.db.log_event(
+                            "WARNING",
+                            "campaign_entry_not_replaced",
+                            str(exc),
+                            {"symbol": symbol, "signal_id": replacement.signal_id},
+                        )
+                        if campaign.state == CampaignState.RECONCILE_REQUIRED:
+                            results.append({
+                                "symbol": symbol,
+                                "campaign": True,
+                                "action": "RECONCILE_REQUIRED",
+                                "error": str(exc),
+                            })
+                        else:
+                            results.append({
+                                "symbol": symbol,
+                                "campaign": True,
+                                "action": "WAIT_PENDING",
+                                "error": str(exc),
+                            })
+                continue
 
             # Active campaign: later WM2/WM3 signals are add-ons. A new
             # reversal is not auto-added by default because it can represent
