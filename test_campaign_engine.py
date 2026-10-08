@@ -52,7 +52,7 @@ def test_stop_never_loosens_long_risk():
     assert not stop_only_reduces_risk("LONG", 100.0, 99.9)
 
 
-def test_structural_stop_prefers_closest_valid_higher_stop():
+def test_structural_stop_uses_lowest_recent_3_5_bar_structure_by_default():
     stop, source = structural_stop_for_long(
         signal_type=SignalType.REVERSAL,
         signal_bar_low=97.0,
