@@ -68,6 +68,9 @@ class WaveSnapshot:
     squatting_bar: bool = False
     momentum_fading: bool = False
     magic_bullets: Dict[str, bool] = field(default_factory=dict)
+    point_zero_confirmed: bool = False
+    point_zero_score: int = 0
+    point_zero_reason: str = ""
     alligator_state: str = "UNKNOWN"
     alligator_bullish: bool = False
     alligator_bearish: bool = False
@@ -1077,8 +1080,15 @@ class MultiTimeframeWaveEngine:
         primary_count = wave_label if wave_label not in ("?", "") else phase
         alternative_count = self._alternative_count(position, abc_phase, exhaustion)
         invalidation_price = self._invalidation_price(pivots, direction, position)
-        terminal_fractal = bool(structure.get("post_impulse") and pivots and pivots[-1].kind == direction)
-        magic_bullets_count = self._magic_bullets_count(
+        point_zero_bullets, point_zero_score, point_zero_reason = self._point_zero_bullets(
+            ind, pivots, direction
+        )
+        point_zero_confirmed = point_zero_score == 5
+        terminal_fractal = bool(
+            point_zero_bullets.get("terminal_fractal", False)
+            or (structure.get("post_impulse") and pivots and pivots[-1].kind == direction)
+        )
+        magic_bullets_count = point_zero_score if point_zero_score else self._magic_bullets_count(
             target_zone, divergence, terminal_fractal, squatting_bar, momentum_fading
         )
         scenario_primary, scenario_alternative = self._scenario_labels(
@@ -1122,13 +1132,20 @@ class MultiTimeframeWaveEngine:
             target_zone_high=round(target_zone_high, 12),
             squatting_bar=squatting_bar,
             momentum_fading=momentum_fading,
-            magic_bullets={
-                "target_zone": bool(target_zone),
-                "divergence": divergence != "NONE",
-                "terminal_fractal": terminal_fractal,
-                "squatting_bar": squatting_bar,
-                "momentum_fading": momentum_fading,
-            },
+            magic_bullets=(
+                point_zero_bullets
+                if point_zero_score
+                else {
+                    "target_zone": bool(target_zone),
+                    "divergence": divergence != "NONE",
+                    "terminal_fractal": terminal_fractal,
+                    "squatting_bar": squatting_bar,
+                    "momentum_shift": bool(momentum_fading),
+                }
+            ),
+            point_zero_confirmed=point_zero_confirmed,
+            point_zero_score=int(point_zero_score),
+            point_zero_reason=point_zero_reason,
             primary_count=primary_count,
             alternative_count=alternative_count,
             abc_phase=abc_phase,
@@ -1186,6 +1203,70 @@ class MultiTimeframeWaveEngine:
         else:
             alternative = "NONE"
         return primary, alternative
+
+    @staticmethod
+    def _point_zero_bullets(
+        ind: pd.DataFrame,
+        pivots: Sequence[Pivot],
+        direction: str,
+    ) -> Tuple[Dict[str, bool], int, str]:
+        """Canonical five Point-Zero bullets from Williams."""
+        bullets = {
+            "divergence": False,
+            "target_zone": False,
+            "terminal_fractal": False,
+            "squatting_bar": False,
+            "momentum_shift": False,
+        }
+        if direction not in (DIRECTION_UP, DIRECTION_DOWN) or len(pivots) < 6:
+            return bullets, 0, "Insufficient completed five-wave structure."
+        seq = list(pivots[-6:])
+        expected = [self._expected_kind(direction, i) for i in range(6)]
+        if [p.kind for p in seq] != expected or not self._full_impulse_completed(seq, direction):
+            return bullets, 0, "No confirmed five-wave impulse at Point Zero."
+
+        w3, w5 = seq[3], seq[5]
+        bullets["divergence"] = (
+            w5.price > w3.price and w5.ao < w3.ao
+            if direction == DIRECTION_UP
+            else w5.price < w3.price and w5.ao > w3.ao
+        )
+
+        distance = abs(seq[3].price - seq[0].price)
+        if distance > 0:
+            if direction == DIRECTION_UP:
+                zone_low, zone_high = seq[4].price + 0.62 * distance, seq[4].price + distance
+            else:
+                zone_low, zone_high = seq[4].price - distance, seq[4].price - 0.62 * distance
+            bullets["target_zone"] = min(zone_low, zone_high) <= seq[5].price <= max(zone_low, zone_high)
+
+        bullets["terminal_fractal"] = seq[5].kind == direction
+
+        center = int(seq[5].center_index)
+        terminal = ind.iloc[max(0, center - 1):min(len(ind), center + 2)]
+        if not terminal.empty:
+            if direction == DIRECTION_UP:
+                extreme = float(terminal["high"].max())
+                mask = terminal["high"] >= extreme
+            else:
+                extreme = float(terminal["low"].min())
+                mask = terminal["low"] <= extreme
+            bullets["squatting_bar"] = bool(terminal.loc[mask, "squatting_bar"].fillna(False).any())
+
+        confirm = min(len(ind) - 1, int(seq[5].confirmed_index))
+        if confirm > 0:
+            green_now = bool(ind.iloc[confirm].get("ao_green", False))
+            red_now = bool(ind.iloc[confirm].get("ao_red", False))
+            green_prev = bool(ind.iloc[confirm - 1].get("ao_green", False))
+            red_prev = bool(ind.iloc[confirm - 1].get("ao_red", False))
+            bullets["momentum_shift"] = (
+                (direction == DIRECTION_UP and green_now and red_prev)
+                or (direction == DIRECTION_DOWN and red_now and green_prev)
+            )
+
+        count = int(sum(bullets.values()))
+        reason = f"Point Zero bullets {count}/5"
+        return bullets, count, reason
 
     @staticmethod
     def _magic_bullets_count(target_zone: bool, divergence: str, terminal_fractal: bool, squatting_bar: bool, momentum_fading: bool) -> int:
