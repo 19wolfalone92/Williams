@@ -32,7 +32,8 @@ def main() -> None:
         "williams/campaign.py", "williams/allocation.py", "williams/exits.py",
         "williams/intraday_policy.py", "williams/risk_policy.py",
         "williams/execution_economics.py", "williams/spec.py",
-        "williams/core.py", "williams/backtester.py", "test_intraday_core_contract.py",
+        "williams/core.py", "williams/backtester.py", "williams/golden_scenarios.py",
+        "test_intraday_core_contract.py", "WILLIAMS_INTRADAY_STRATEGY_SPEC_1.0.md",
     ):
         ast.parse(read(path), filename=path)
 
@@ -74,6 +75,16 @@ def main() -> None:
 
     server = read("server.py")
     must(server, f"VERSION = '{EXPECTED_VERSION}'", "server.py")
+
+    scenarios = read("williams/golden_scenarios.py")
+    must(scenarios, "GOLDEN_SCENARIOS", "williams/golden_scenarios.py")
+    must(scenarios, "range(1, 26)", "williams/golden_scenarios.py")
+    contract = read("WILLIAMS_INTRADAY_STRATEGY_SPEC_1.0.md")
+    must(contract, "H1", "intraday strategy spec")
+    must(contract, "M15", "intraday strategy spec")
+    must(contract, "M5", "intraday strategy spec")
+    must(contract, "0.60% Equity", "intraday strategy spec")
+    must(contract, "08:00–20:00 UTC", "intraday strategy spec")
 
     android = read("app/src/main/java/com/williamsbot/MainActivity.kt")
     must(android, f"Williams {EXPECTED_VERSION}", "MainActivity.kt")
