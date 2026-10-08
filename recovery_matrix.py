@@ -40,7 +40,7 @@ class RecoveryMatrix:
         executed_qty: float = 0.0,
     ) -> RecoveryAction:
         status = str(exchange_status or "").upper()
-        if lifecycle in {"ENTRY_PENDING", "ENTRY_ARMING", "SIGNAL_DETECTED"}:
+        if lifecycle in {"ENTRY_PENDING", "ENTRY_ARMING", "SIGNAL_DETECTED", "ADD_ON_PENDING", "ADD_ON_ARMING"}:
             return cls.PENDING_ENTRY.get(status, RecoveryAction.RECONCILE_REQUIRED)
         return RecoveryAction.RECONCILE_REQUIRED
 
