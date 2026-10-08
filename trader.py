@@ -30,6 +30,7 @@ def utc_now(): return datetime.now(timezone.utc).isoformat()
 
 class Trader:
     def __init__(self, api_key=None, api_secret=None, testnet=None, context_cache=None):
+        self.strategy_profile = os.getenv("WILLIAMS_STRATEGY_PROFILE", "WILLIAMS_INTRADAY_CORE").strip().upper()
         self.config = TradingConfig.from_env()
         self.context_cache = context_cache or ContextCache()
         profile = os.getenv('WILLIAMS_STRATEGY_PROFILE', 'WILLIAMS_INTRADAY_CORE').strip().upper()
@@ -122,6 +123,7 @@ class Trader:
                 db=self.db,
                 symbols=self.auto_scan_symbols,
                 execution_barrier=self.execution_barrier,
+                strategy_profile=self.strategy_profile,
             ).recover()
             if not recovery.get('ok'):
                 raise RuntimeError(
@@ -139,6 +141,7 @@ class Trader:
             db=self.db,
             symbols=self.auto_scan_symbols,
             execution_barrier=self.execution_barrier,
+            strategy_profile=self.strategy_profile,
         )
         recovery = self._multi_position_trader.recover()
         if not recovery.get('ok'):
@@ -1270,6 +1273,7 @@ class Trader:
                     db=self.db,
                     symbols=self.auto_scan_symbols,
                     execution_barrier=self.execution_barrier,
+                    strategy_profile=self.strategy_profile,
                 )
                 recovery = self._multi_position_trader.recover()
                 if not recovery.get('ok'):
