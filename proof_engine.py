@@ -166,3 +166,24 @@ class WilliamsProofEngine:
             ),
             wise_man_stage=evaluation.wise_man_stage,
         )
+
+
+def price_proof(decision, *, market_price: float) -> ProofEvaluation:
+    """Return a new proof evaluation after price has crossed the hypothesis trigger."""
+    if decision is None:
+        raise ValueError("decision is required")
+    price = float(market_price)
+    trigger = float(decision.trigger_price)
+    if decision.direction.value == "LONG":
+        crossed = price >= trigger
+    elif decision.direction.value == "SHORT":
+        crossed = price <= trigger
+    else:
+        crossed = False
+    return WilliamsProofEngine.with_price_proof(
+        ProofEvaluation(
+            decision.proof_vector,
+            int(decision.wise_man_stage),
+        ),
+        price_proof_pass=crossed,
+    )
