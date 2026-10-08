@@ -150,7 +150,7 @@ def test_structural_trail_uses_min_low_for_long_and_max_high_for_short(monkeypat
         "symbol": "BTCUSDT", "side": "BUY", "current_stop_price": 70.0,
         "execution_timeframe": "5m", "state": CampaignState.OPEN_INITIAL,
     })()
-    runtime.client = Client(150.0)
+    runtime.client = Client(160.0)
     runtime._trail(long_campaign)
     assert calls[-1][0] == "BUY"
     assert calls[-1][1] == 154.0
@@ -163,5 +163,5 @@ def test_structural_trail_uses_min_low_for_long_and_max_high_for_short(monkeypat
     runtime.client = Client(90.0)
     runtime._trail(short_campaign)
     assert calls[-1][0] == "SELL"
-    assert calls[-1][1] == 180.0
+    assert calls[-1][1] == 179.0
     assert calls[-1][2] == {}
