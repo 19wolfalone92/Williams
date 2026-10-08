@@ -83,3 +83,11 @@ def test_scanner_uses_final_strategy_decision_contract():
     assert "decision.alligator_state" not in source
     assert 'decision.context_state' in source
     assert 'self.policy.timeframes.execution_tf' in source
+
+
+def test_research_cli_uses_canonical_event_driven_backtester():
+    from pathlib import Path
+    source = Path("run_backtest.py").read_text(encoding="utf-8")
+    assert "WilliamsCampaignBacktester" in source
+    assert "from backtester import Backtester" not in source
+    assert "M5_ONLY_CONSERVATIVE" in source or "M15_ONLY_CONSERVATIVE" in source
