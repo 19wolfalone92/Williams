@@ -178,13 +178,18 @@ class CampaignOrderStateMachine:
         self.state = CampaignOrderState.RECONCILIATION_REQUIRED
 
     def fault(self, reason: str = "") -> None:
-        if self.state == CampaignOrderState.CLOSED:
-            raise ValueError("closed campaign cannot enter FAULT")
+        if self.state in {
+            CampaignOrderState.CLOSED,
+            CampaignOrderState.FAULT,
+        }:
+            raise ValueError("campaign cannot transition to FAULT from terminal state")
         self.state = CampaignOrderState.FAULT
 
     def reconcile_to(self, target: CampaignOrderState) -> None:
-        if self.state not in _INTERRUPT:
-            raise ValueError("reconcile_to requires RECONCILIATION_REQUIRED or FAULT")
+        if self.state is CampaignOrderState.FAULT:
+            raise ValueError("FAULT requires explicit manual recovery")
+        if self.state is not CampaignOrderState.RECONCILIATION_REQUIRED:
+            raise ValueError("reconcile_to requires RECONCILIATION_REQUIRED")
         target = target if isinstance(target, CampaignOrderState) else CampaignOrderState(target)
         if target in _INTERRUPT:
             raise ValueError("reconcile_to target must be operational")
