@@ -27,16 +27,19 @@
 - подтверждение старшего таймфрейма;
 - размер позиции ограничивается одновременно долей капитала и риском на сделку.
 
-По умолчанию:
-- риск на сделку: максимум 0,5%;
-- совокупный открытый риск: максимум 1%;
-- одновременно допускается до 5 управляемых позиций; совокупный открытый риск остаётся ограничен 1%;
-- максимум дневного убытка: 3%;
-- максимум 5 сделок в день;
-- максимум 3 последовательных убытка;
-- cooldown 30 минут;
-- minimum R/R 1.5;
-- старший таймфрейм: 4h.
+Canonical Williams Core (small-deposit intraday) по умолчанию:
+- initial risk: 0,25% equity;
+- campaign risk cap: 0,60%;
+- portfolio reserved-risk cap: 0,60%;
+- одновременно: 1 активная кампания;
+- дневной loss cap: 1%;
+- максимум 2 полных stop-out за день;
+- leverage: 0;
+- averaging down: OFF;
+- fixed take-profit: OFF;
+- execution timeframe: 5m;
+- decision timeframe: M15;
+- permission/context: H4/H1.
 
 Это защитные ограничения, а не гарантия прибыли.
 
@@ -113,13 +116,15 @@ Recovery suite включает 10 сценариев:
 - timeout после BUY восстанавливается по clientOrderId;
 - Entry связан с точным OCO list.
 
-## Backtester
+## Canonical event-driven backtester
 
 ```bash
-python run_backtest.py --symbol BTCUSDT --interval 1h --start 2024-01-01 --end 2026-10-01
+python run_backtest.py --symbol BTCUSDT --start 2024-01-01 --end 2026-10-01 --capital 500
 ```
 
-Исторический `fetch_klines()` поддерживает как live-вызов через Binance client, так и позиционный вызов `fetch_klines(symbol, interval, start, end)`.
+Runner использует тот же `WilliamsIntradayCore` и `WilliamsCampaignBacktester`, что production Testnet path:
+`1D → 4H → 1H → M15 signal truth → M5 trigger/fill → campaign`.
+M5 не создаёт сигнал. Без M5 неоднозначные intrabar-пути обрабатываются консервативно. Research market data отделена от execution safety и может идти через Binance public market-data endpoint.
 
 ## Android
 
