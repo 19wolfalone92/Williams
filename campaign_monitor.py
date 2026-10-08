@@ -14,6 +14,7 @@ import os
 import time
 
 from campaign_model import CampaignState, structural_stop_for_long
+from campaign_order_fsm import CampaignOrderState
 from campaign_execution import CampaignExecutionError, CampaignExecutionService
 from strategy import calculate_indicators, config_from_env
 from data import fetch_klines
@@ -106,6 +107,35 @@ class CampaignMonitor:
     def manage_campaign(self, campaign) -> dict:
         if campaign is None or campaign.position_qty <= 0:
             return {"state": "SKIP", "reason": "no active quantity"}
+
+        canonical_state = self.execution.engine.canonical_state(campaign)
+        if canonical_state in {
+            CampaignOrderState.RECONCILIATION_REQUIRED,
+            CampaignOrderState.FAULT,
+        }:
+            return {
+                "symbol": campaign.symbol,
+                "state": canonical_state.value,
+                "action": "BLOCKED",
+                "reason": (
+                    "canonical campaign lifecycle is interrupted; "
+                    "no monitor mutation is permitted"
+                ),
+            }
+        if (
+            getattr(self.execution, "barrier", None) is not None
+            and self.execution.barrier.mutation_locked
+        ):
+            return {
+                "symbol": campaign.symbol,
+                "state": "RECONCILIATION_REQUIRED",
+                "action": "BLOCKED",
+                "reason": (
+                    "ExecutionBarrier mutation lock is active; "
+                    "monitor mutations are prohibited"
+                ),
+            }
+
         if campaign.side != "BUY":
             return {"state": "SKIP", "reason": "current Spot campaign monitor is LONG-only"}
 
