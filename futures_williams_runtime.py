@@ -168,6 +168,13 @@ class FuturesWilliamsScanner:
             return []
         closed = frame.iloc[:-1].copy() if len(frame) > 1 else frame
         ind = calculate_indicators(closed, self.config)
+        wave_snapshot = self.wave_engine.build_snapshot(
+            self.interval,
+            closed,
+            degree="EXECUTION",
+        )
+        point_zero_confirmed = bool(wave_snapshot.point_zero_confirmed)
+        point_zero_score = int(wave_snapshot.point_zero_score)
 
         atr = float(
             (closed["high"] - closed["low"]).rolling(
@@ -190,12 +197,22 @@ class FuturesWilliamsScanner:
             ind,
             timeframe=self.interval,
             tick_size=tick,
+            point_zero_confirmed=point_zero_confirmed,
+            point_zero_score=point_zero_score,
+            require_point_zero_for_reversal=os.getenv(
+                "REQUIRE_POINT_ZERO_FOR_WM1", "true"
+            ).lower() == "true",
         )
         short_specs = extract_short_signal_specs(
             symbol,
             ind,
             timeframe=self.interval,
             tick_size=tick,
+            point_zero_confirmed=point_zero_confirmed,
+            point_zero_score=point_zero_score,
+            require_point_zero_for_reversal=os.getenv(
+                "REQUIRE_POINT_ZERO_FOR_WM1", "true"
+            ).lower() == "true",
         )
         long_htf, short_htf = self._htf(symbol)
         out: list[FuturesCandidate] = []
