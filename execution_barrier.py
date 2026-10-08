@@ -90,32 +90,42 @@ class ExecutionBarrier:
             if age > intent.max_age_ms:
                 return f"stale intent age={age}ms"
 
-        # Campaign orders may be armed from a freshly constructed signal before
-        # the context service has assigned persistent versions.  They still
-        # require at least one live snapshot; the campaign pre-submit validator
-        # is responsible for the exact strategy/risk re-check.
-        if not intent.required_context_versions:
-            # Entry/add-on mutations still require a live permission context;
-            # exits, cancels and protection recovery may be admitted without a
-            # strategy snapshot because their purpose is risk reduction.
-            purpose = intent.purpose.upper()
-            context_required = (
-                purpose == "ENTRY"
-                or purpose.endswith("_ENTRY")
-                or purpose.endswith("_ADD_ON")
-            )
-            if context_required:
-                return "missing required_context_versions"
+        direction = "long" if intent.side == "BUY" else "short" if intent.side == "SELL" else ""
+        if not direction:
+            return f"unsupported side {intent.side}"
+
+        # Canonical state is the first blocker so diagnostics stay causal.
+        if self.db is not None and hasattr(self.db, "state_get"):
+            symbol_state = str(self.db.state_get(f"position_state:{intent.symbol}", "FLAT")).upper()
+            legacy_state = str(self.db.state_get("position_state", "FLAT")).upper()
+            if symbol_state == "RECONCILE_REQUIRED" or legacy_state == "RECONCILE_REQUIRED":
+                return "RECONCILE_REQUIRED"
+
+        purpose = intent.purpose.upper()
+        needs_permission = (
+            purpose == "ENTRY"
+            or purpose in {"CAMPAIGN_ENTRY", "CAMPAIGN_ADD_ON"}
+            or purpose.endswith("_ENTRY")
+            or purpose.endswith("_ADD_ON")
+        )
+        permission_tf = (intent.permission_interval or "").lower()
+        if needs_permission:
+            if not permission_tf:
+                return "missing permission_interval for execution mutation"
+            permission_ctx = snapshot.context(intent.symbol, permission_tf)
+            if permission_ctx is None:
+                return f"missing permission context {intent.symbol} {permission_tf}"
+            if direction == "long" and not permission_ctx.allow_long:
+                return f"context {permission_tf} does not allow LONG"
+            if direction == "short" and not permission_ctx.allow_short:
+                return f"context {permission_tf} does not allow SHORT"
+
         for tf, required in intent.required_context_versions.items():
             ctx = snapshot.context(intent.symbol, tf)
             if ctx is None:
                 return f"missing context {intent.symbol} {tf}"
             if int(ctx.version) != int(required):
                 return f"stale context {tf}: required={required} current={ctx.version}"
-
-        direction = "long" if intent.side == "BUY" else "short" if intent.side == "SELL" else ""
-        if not direction:
-            return f"unsupported side {intent.side}"
 
         # All declared TFs are version dependencies, but the permission
         # decision belongs to one operative/entry timeframe. Campaign entry
