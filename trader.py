@@ -44,12 +44,12 @@ class Trader:
             or os.getenv('DB_PATH')
             or 'data/trader.sqlite3'
         ); self.tg=Telegram(os.getenv('TELEGRAM_BOT_TOKEN',''),os.getenv('TELEGRAM_CHAT_ID',''))
-        self.execution_barrier = ExecutionBarrier(self.context_cache, self.db)
         self.l2_guard = L2SlippageGuard(self.config.max_l2_slippage_pct)
         self.equity_breaker = EquityCircuitBreaker(self.config.max_daily_loss_pct)
         self.wise_men_long = WiseMenStateMachine(self.db, self.symbol, 'LONG')
         self.wise_men_short = WiseMenStateMachine(self.db, self.symbol, 'SHORT')
         self.client=BinanceSpotClient(api_key if api_key is not None else os.getenv('BINANCE_API_KEY',''), api_secret if api_secret is not None else os.getenv('BINANCE_API_SECRET',''), testnet=(os.getenv('TESTNET','true').lower()=='true') if testnet is None else testnet)
+        self.execution_barrier = ExecutionBarrier(self.context_cache, self.db, client=self.client)
         self.filters={}; self.base_asset=self.quote_asset=None; self.recovered=False
         self.symbol_rules = None
         self.preflight_report = None
