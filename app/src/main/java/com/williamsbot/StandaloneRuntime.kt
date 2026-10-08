@@ -3685,7 +3685,10 @@ private class NativeEngine(
         }
 
         val ranked = preliminary
-            .map { runCatching { enrichWithMtf(it) }.getOrElse { it } }
+            .map { candidate ->
+                runCatching { enrichWithMtf(candidate) }
+                    .getOrElse { candidate }
+            }
             .sortedWith(
                 compareByDescending<BaseAnalysis> { it.campaignReady }
                     .thenByDescending { it.score }
