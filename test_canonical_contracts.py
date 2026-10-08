@@ -636,3 +636,51 @@ def test_ambiguous_cancel_unlocks_only_after_target_is_terminal(tmp_path):
     assert done.accepted is True
     assert done.reason == "CANCELED"
     assert barrier.mutation_locked is False
+
+
+def test_order_intent_canonical_adapter_preserves_signal_identity():
+    from campaign_model import SignalRole, SignalSpec, SignalType
+    from digital_williams_core import DigitalWilliamsCore
+    from execution_barrier import OrderIntent
+    from risk_engine import CanonicalRiskEngine
+
+    signal = SignalSpec.new(
+        symbol="BTCUSDT",
+        side="BUY",
+        signal_type=SignalType.REVERSAL,
+        role=SignalRole.ENTRY,
+        timeframe="5m",
+        signal_bar_time_ms=100,
+        trigger_price=101.0,
+        protective_reference=97.0,
+        alligator_bullish=True,
+        alligator_awake=True,
+        angulation_score=1.0,
+        htf_confirmed=True,
+        source_candle_index=10,
+    )
+    composition = DigitalWilliamsCore().evaluate_signal(signal, campaign_id="C1")
+    risk = CanonicalRiskEngine().approve(
+        composition.decision,
+        equity_quote=10_000.0,
+    )
+    intent = __import__(
+        "domain.contracts",
+        fromlist=["ExecutionIntent"],
+    ).ExecutionIntent(
+        risk_decision=risk,
+        order_type="STOP_LOSS",
+        client_order_id="WILL_C1_WM1",
+        recv_window=5000,
+        time_in_force="GTC",
+        reduce_only=False,
+    )
+    order_intent = OrderIntent.from_canonical(
+        intent,
+        campaign_id="C1",
+        signal_id=signal.signal_id,
+        purpose="CAMPAIGN_ENTRY",
+        permission_interval="5m",
+    )
+    assert order_intent.signal_id == signal.signal_id
+    assert order_intent.campaign_id == "C1"
