@@ -483,3 +483,34 @@ def test_ambiguous_entry_submit_recovers_same_client_id_without_duplicate_buy():
             if o.get("side") == "SELL" and str(o.get("clientOrderId", "")).startswith(svc_after_restart.STOP_PREFIX)
         ]) == 1
         assert svc_after_restart.reconcile_pending_entries() == []
+
+
+
+def test_expired_entry_cancel_timeout_fails_closed_and_keeps_order_for_reconciliation():
+    now = int(time.time() * 1000)
+    with tempfile.TemporaryDirectory() as d:
+        db_path = os.path.join(d, "campaign.sqlite3")
+        db = Database(db_path)
+        client = MockExchange()
+        svc = service(db, client)
+        spec = signal(bar=now, expires_at_ms=now + 10 * 60_000)
+        result = svc.arm_initial_entry(
+            spec,
+            equity_quote=10_000,
+            candidate_risk_pct=0.004,
+        )
+        campaign = svc.engine.load_campaign(result["campaign_id"])
+        campaign.tags["pending_signal_expires_at_ms"] = now - 1
+        campaign.tags["pending_signal"]["expires_at_ms"] = now - 1
+        db.save_campaign(campaign)
+
+        def lost_cancel(*args, **kwargs):
+            raise TimeoutError("connection lost during cancel")
+
+        client.cancel_order = lost_cancel
+        outcome = svc.reconcile_pending_entries()
+        assert outcome[0]["state"] == "RECONCILE_REQUIRED"
+        assert "ambiguous" in outcome[0]["reason"]
+        assert db.state_get("entry_client_order_id:BTCUSDT") == result["client_order_id"]
+        assert len(client.open_orders("BTCUSDT")) == 1
+        assert svc.engine.load_campaign(result["campaign_id"]).state == CampaignState.RECONCILE_REQUIRED
