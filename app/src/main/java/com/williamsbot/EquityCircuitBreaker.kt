@@ -8,7 +8,7 @@ package com.williamsbot
  * protected positions automatically; existing OCO protection remains active.
  */
 class EquityCircuitBreaker(
-    private val maxDrawdownPct: Double = 0.03
+    private val maxDrawdownPct: Double = 0.01
 ) {
     data class Snapshot(
         val equity: Double,
