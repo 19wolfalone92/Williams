@@ -25,16 +25,16 @@ def evaluate_intraday_policy(
     full_stop_outs: int,
 ) -> IntradayPolicyDecision:
     session = session_decision(now, contract)
+    if session.force_flat:
+        return IntradayPolicyDecision(False, True, True, session.reason)
     if daily_loss_pct >= contract.max_daily_loss_pct:
         return IntradayPolicyDecision(False, True, True, "MAX_DAILY_LOSS_REACHED")
     if full_stop_outs >= contract.max_full_stop_outs:
         return IntradayPolicyDecision(False, True, True, "MAX_FULL_STOP_OUTS_REACHED")
+    if not session.new_entries_allowed:
+        return IntradayPolicyDecision(False, True, False, session.reason)
     if active_campaigns >= contract.max_open_campaigns:
         return IntradayPolicyDecision(False, False, False, "ACTIVE_CAMPAIGN_LIMIT")
-    if session.force_flat:
-        return IntradayPolicyDecision(False, True, True, session.reason)
-    if not session.new_entries_allowed:
-        return IntradayPolicyDecision(False, False, False, session.reason)
     return IntradayPolicyDecision(True, False, False, "")
 
 
