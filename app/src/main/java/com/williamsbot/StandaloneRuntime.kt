@@ -466,6 +466,9 @@ private class StandaloneServer(private val context: Context) {
             method == "GET" && path == "/api/v1/diagnostics" ->
                 x.diagnostics().toString()
 
+            method == "GET" && path == "/api/v1/williams/core" ->
+                x.coreContract().toString()
+
             method == "POST" && path == "/api/v1/config/binance" ->
                 x.configure(JSONObject(body)).toString()
 
@@ -8135,6 +8138,55 @@ private class NativeEngine(
         return tests
     }
 
+    fun coreContract(): JSONObject =
+        JSONObject()
+            .put("core_version", "1.0.0")
+            .put("name", "Digital Bill Williams")
+            .put("sequence", JSONArray(listOf(
+                "BEHAVIOR", "CONTEXT", "STRUCTURE", "LOCATION",
+                "MOMENTUM", "PRICE_PROOF", "ENTRY", "ADD",
+                "CAMPAIGN", "EXHAUSTION", "EXIT"
+            )))
+            .put("williams_tools", JSONArray(listOf(
+                "Alligator", "Angulation", "First Wise Man",
+                "AO/Second Wise Man", "Fractal/Third Wise Man",
+                "AC", "MFI/Profitunity Windows",
+                "Elliott/MTF", "Zone", "Balance Line"
+            )))
+            .put("binance_inputs", JSONObject()
+                .put("market_rest", JSONArray(listOf(
+                    "exchangeInfo", "klines", "ticker_price",
+                    "book_ticker", "depth", "aggTrades", "ticker_24h", "server_time"
+                )))
+                .put("account_rest", JSONArray(listOf(
+                    "account", "myTrades", "openOrders", "allOrders", "orderLists"
+                )))
+                .put("realtime", JSONArray(listOf(
+                    "kline", "bookTicker", "depth", "aggTrade",
+                    "executionReport", "outboundAccountPosition", "listStatus"
+                )))
+                .put("execution", JSONArray(listOf(
+                    "BUY_STOP", "SELL_STOP_PROTECTION",
+                    "CANCEL_REPLACE_STOP", "MARKET_SELL",
+                    "REST_RECONCILIATION"
+                )))
+            )
+            .put("campaign", JSONObject()
+                .put("initial_entry", "BUY_STOP")
+                .put("add_on", "BUY_STOP;same_campaign")
+                .put("hard_stop", "SELL_STOP")
+                .put("trailing", "structural_only;never_loosen")
+                .put("exit", "cancel_protection -> MARKET_SELL -> authoritative_fill -> reconcile")
+                .put("fixed_take_profit_primary", false)
+            )
+            .put("safety", JSONObject()
+                .put("execution_barrier", true)
+                .put("reconcile_required_fail_closed", true)
+                .put("no_blind_order_retry", true)
+                .put("kill_switch", true)
+                .put("self_healing_safe_only", true)
+                .put("diagnostic_archive", true))
+
     fun diagnostics(): JSONObject {
         // Diagnostics stay local and responsive even when market/history/scanner
         // network work is slow or blocked.
@@ -8154,7 +8206,8 @@ private class NativeEngine(
             .put("configuration_sanitized", settings())
             .put("tests", tests)
             .put("self_tests", tests)
-            .put("diagnostic_contract_version", 6)
+            .put("diagnostic_contract_version", 7)
+            .put("digital_williams_core", coreContract())
             .put("execution_gate", JSONObject()
                 .put("ready", executionReady())
                 .put("reasons", JSONArray(executionBlockers()))
