@@ -425,3 +425,61 @@ def test_restart_adopts_protective_stop_after_ambiguous_setup_response_without_d
         assert len(stops_after) == 1
         assert stops_after[0]["clientOrderId"] == existing_client_id
         assert float(stops_after[0]["origQty"]) == campaign.position_qty
+
+
+
+def test_ambiguous_entry_submit_recovers_same_client_id_without_duplicate_buy():
+    with tempfile.TemporaryDirectory() as d:
+        db_path = os.path.join(d, "campaign.sqlite3")
+        db = Database(db_path)
+        client = MockExchange()
+        original_order_safe = client.order_safe
+
+        def accepted_then_timeout(*args, **kwargs):
+            original_order_safe(*args, **kwargs)
+            raise TimeoutError("response lost after exchange accepted entry")
+
+        client.order_safe = accepted_then_timeout
+        svc = service(db, client)
+        try:
+            svc.arm_initial_entry(
+                signal(trigger=101.0),
+                equity_quote=10_000,
+                candidate_risk_pct=0.004,
+            )
+            raise AssertionError("ambiguous submission should surface reconciliation")
+        except Exception as exc:
+            assert "response lost" in str(exc) or "ExecutionBarrier" in str(exc)
+
+        buy_orders = [
+            o for o in client.orders
+            if o.get("side") == "BUY" and o.get("type") == "STOP_LOSS"
+        ]
+        assert len(buy_orders) == 1
+        client_id = buy_orders[0]["clientOrderId"]
+        persisted_id = db.state_get("entry_client_order_id:BTCUSDT")
+        assert persisted_id == client_id
+
+        client.order_safe = original_order_safe
+        db_after_restart = Database(db_path)
+        svc_after_restart = service(db_after_restart, client)
+        pending = svc_after_restart.reconcile_pending_entries()
+        assert pending[0]["state"] == "ENTRY_PENDING"
+        assert svc_after_restart.engine.load_campaign(
+            pending[0]["campaign_id"]
+        ).state == CampaignState.ENTRY_PENDING
+        assert len([
+            o for o in client.orders
+            if o.get("side") == "BUY" and o.get("type") == "STOP_LOSS"
+        ]) == 1
+
+        client.set_price("BTCUSDT", 101.5)
+        recovered = svc_after_restart.reconcile_pending_entries()
+        assert recovered[0]["state"] == "OPEN"
+        campaign = svc_after_restart.engine.load_campaign(pending[0]["campaign_id"])
+        assert campaign.position_qty > 0
+        assert len([
+            o for o in client.open_orders("BTCUSDT")
+            if o.get("side") == "SELL" and str(o.get("clientOrderId", "")).startswith(svc_after_restart.STOP_PREFIX)
+        ]) == 1
+        assert svc_after_restart.reconcile_pending_entries() == []
