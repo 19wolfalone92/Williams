@@ -255,24 +255,32 @@ class FuturesCampaignExecutionService:
 
     def _assert_isolated_1x(self, symbol: str) -> dict[str, Any]:
         self.client.ensure_one_way_mode()
-        row = self._position_row(symbol)
-        isolated_raw = row.get("isolated")
-        isolated = isolated_raw is True or str(isolated_raw).lower() in {"true", "1"}
         try:
-            leverage = int(row.get("leverage"))
+            configuration = self.client.symbol_configuration(symbol)
+        except Exception as exc:
+            raise FuturesCampaignExecutionError(
+                f"{symbol}: margin/leverage configuration could not be verified"
+            ) from exc
+        if str(configuration.get("symbol", "")).upper() != str(symbol).upper():
+            raise FuturesCampaignExecutionError(
+                f"{symbol}: symbolConfig returned a different symbol"
+            )
+        margin_type = str(configuration.get("marginType", "") or "").upper()
+        if margin_type != "ISOLATED":
+            raise FuturesCampaignExecutionError(
+                f"{symbol}: isolated margin is required; symbolConfig reports {margin_type or 'UNKNOWN'}"
+            )
+        try:
+            leverage = int(configuration.get("leverage"))
         except (TypeError, ValueError) as exc:
             raise FuturesCampaignExecutionError(
-                f"{symbol}: Futures leverage is not available from positionRisk"
+                f"{symbol}: symbolConfig leverage is missing/invalid"
             ) from exc
-        if not isolated:
-            raise FuturesCampaignExecutionError(
-                f"{symbol}: isolated margin is required; configure it before trading"
-            )
         if leverage != 1:
             raise FuturesCampaignExecutionError(
                 f"{symbol}: current leverage is {leverage}x; this build requires 1x"
             )
-        return row
+        return configuration
 
     def _active_rows(self) -> list[dict[str, Any]]:
         rows = self.db.open_campaigns()
