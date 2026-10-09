@@ -466,8 +466,12 @@ class MarketScanner:
                 tick_size=tick_size,
                 htf_confirmed=False,
             )
+            now_ms = int(time.time() * 1000)
             campaign_specs = sorted(
-                long_specs + short_specs,
+                (
+                    spec for spec in long_specs + short_specs
+                    if not spec.expires_at_ms or int(spec.expires_at_ms) >= now_ms
+                ),
                 key=lambda s: (
                     s.signal_bar_time_ms,
                     s.created_at_ms,
