@@ -82,3 +82,17 @@ def test_invalid_ohlc_and_parameters_fail_closed():
         Backtester(fee_rate=float("nan"))
     with pytest.raises(ValueError, match="position_fraction"):
         Backtester(position_fraction=1.1)
+
+
+def test_gap_through_stop_remains_adverse_when_target_is_also_touched():
+    data = candles([
+        (100, 101, 99, 100, True),
+        (100, 101, 99, 100, False),
+        (90, 110, 85, 100, False),
+    ])
+    bt = Backtester(starting_capital=1000, fee_rate=0, slippage_rate=0,
+                    position_fraction=1, stop_loss_pct=0.05, take_profit_pct=0.05,
+                    intrabar_exit_policy="stop_first")
+    _, trades = bt.run(data)
+    assert trades.iloc[0].reason == "STOP"
+    assert trades.iloc[0].exit_price == 90
