@@ -2208,6 +2208,286 @@ internal class FuturesNativeEngine(
         return verified
     }
 
+    /**
+     * Exit is write-ahead and idempotent: keep the exchange-side closePosition
+     * stop live until the reduce-only market exit is verified flat. Unknown
+     * mutation results are reconciled by the persisted client order ID.
+     */
+    private fun exitPosition(
+        exchange: BinanceUsdmFuturesClient,
+        campaignInput: JSONObject,
+        reason: String
+    ): JSONObject {
+        val campaign = JSONObject(campaignInput.toString())
+        val symbol = campaign.optString("symbol").uppercase(Locale.US)
+        val direction = campaign.optString("direction").uppercase(Locale.US)
+        if (direction !in setOf("LONG", "SHORT")) {
+            return setCampaignState(campaign, "RECONCILE_REQUIRED", "Exit direction is invalid")
+        }
+
+        val pos = try {
+            position(exchange, symbol)
+        } catch (x: Exception) {
+            return setCampaignState(campaign, "RECONCILE_REQUIRED", "Exit position lookup failed: ${x.message}")
+        }
+        val amount = pos.optString("positionAmt").toDoubleOrNull()
+            ?: return setCampaignState(campaign, "RECONCILE_REQUIRED", "Exit positionAmt is missing or malformed")
+        if (!amount.isFinite()) {
+            return setCampaignState(campaign, "RECONCILE_REQUIRED", "Exit positionAmt is non-finite")
+        }
+        if (abs(amount) <= 1e-12) {
+            return setCampaignState(campaign, "RECONCILE_REQUIRED", "Exchange is flat but exit/fill history is not yet reconciled")
+        }
+        if ((direction == "LONG" && amount < 0.0) || (direction == "SHORT" && amount > 0.0)) {
+            return setCampaignState(campaign, "RECONCILE_REQUIRED", "Exit blocked: live position direction conflicts with campaign")
+        }
+
+        var clientId = campaign.optString("pending_exit_client_order_id")
+        var response: JSONObject
+        if (clientId.isNotBlank()) {
+            response = try {
+                exchange.getOrder(symbol, clientOrderId = clientId)
+            } catch (x: Exception) {
+                return setCampaignState(campaign, "RECONCILE_REQUIRED", "Pending exit lookup is ambiguous: ${x.message}")
+            }
+            val priorStatus = response.optString("status").uppercase(Locale.US)
+            if (priorStatus in setOf("NEW", "PARTIALLY_FILLED", "PENDING_NEW")) {
+                return setCampaignState(campaign, "RECONCILE_REQUIRED", "Prior reduce-only exit remains $priorStatus")
+            }
+            if (priorStatus !in setOf("FILLED", "CANCELED", "CANCELLED", "EXPIRED", "REJECTED")) {
+                return setCampaignState(campaign, "RECONCILE_REQUIRED", "Prior reduce-only exit status is ambiguous")
+            }
+            val refreshed = try { position(exchange, symbol) } catch (x: Exception) {
+                return setCampaignState(campaign, "RECONCILE_REQUIRED", "Position refresh after prior exit failed: ${x.message}")
+            }
+            val residual = refreshed.optString("positionAmt").toDoubleOrNull()
+                ?: return setCampaignState(campaign, "RECONCILE_REQUIRED", "Position after prior exit is malformed")
+            if (!residual.isFinite()) return setCampaignState(campaign, "RECONCILE_REQUIRED", "Position after prior exit is non-finite")
+            if (abs(residual) > 1e-12) {
+                if ((direction == "LONG" && residual < 0.0) || (direction == "SHORT" && residual > 0.0)) {
+                    return setCampaignState(campaign, "RECONCILE_REQUIRED", "Position direction changed after prior exit")
+                }
+                if (priorStatus == "FILLED") {
+                    return setCampaignState(campaign, "RECONCILE_REQUIRED", "Prior exit reports FILLED but a residual position remains")
+                }
+                // Terminal but non-filled order: keep the original intent in the
+                // audit trail and allow a new reduce-only attempt for the residual.
+                campaign.put("last_terminal_exit_client_order_id", clientId)
+                campaign.remove("pending_exit_client_order_id")
+                campaign.remove("pending_exit_reason")
+                campaign.remove("pending_exit_expected_qty")
+                clientId = ""
+            } else {
+                if (priorStatus != "FILLED") {
+                    return setCampaignState(campaign, "RECONCILE_REQUIRED", "Position is flat but prior exit did not confirm a fill")
+                }
+                val cleanup = verifyFlatProtectionCleanup(exchange, campaign)
+                if (cleanup != null) return setCampaignState(campaign, "RECONCILE_REQUIRED", cleanup)
+                return try {
+                    recordMarketExit(exchange, campaign, response, campaign.optString("pending_exit_reason", reason))
+                    campaign.put("state", "CLOSED")
+                    campaign.put("position_amt", 0.0)
+                    campaign.put("protection_active", false)
+                    campaign.put("closed_at_ms", System.currentTimeMillis())
+                    campaign.remove("pending_exit_client_order_id")
+                    campaign.remove("pending_exit_reason")
+                    campaign.remove("pending_exit_expected_qty")
+                    auditStore.saveFuturesCampaign(symbol, campaign)
+                    JSONObject().put("symbol", symbol).put("direction", direction).put("action", "CLOSED")
+                        .put("order_id", response.optString("orderId")).put("reason", reason)
+                } catch (x: Exception) {
+                    setCampaignState(campaign, "RECONCILE_REQUIRED", "Prior exit accounting failed: ${x.message}")
+                }
+            }
+        }
+
+        val side = exchange.directionToExitSide(direction)
+        val quantity = try { exchange.normalizeQuantity(symbol, abs(amount), market = true) } catch (x: Exception) {
+            return setCampaignState(campaign, "RECONCILE_REQUIRED", "Exit quantity normalization failed: ${x.message}")
+        }
+        clientId = clientOrderId("W2FX_")
+        campaign.put("pending_exit_client_order_id", clientId)
+        campaign.put("pending_exit_reason", reason)
+        campaign.put("pending_exit_expected_qty", abs(amount))
+        campaign.put("exit_cycle_original_qty", campaign.optDouble("exit_cycle_original_qty", abs(amount)))
+        campaign.put("position_amt", amount)
+        auditStore.saveFuturesCampaign(symbol, campaign)
+
+        val params = JSONObject().put("symbol", symbol).put("side", side).put("type", "MARKET")
+            .put("quantity", quantity).put("reduceOnly", true).put("clientOrderId", clientId)
+            .put("reason", reason)
+        response = try {
+            executeMutation(exchange, symbol, "EXIT", direction, side, clientId, params) {
+                exchange.submitMarket(symbol, side, quantity, clientId, reduceOnly = true)
+            }
+        } catch (x: Exception) {
+            // Never retry with a new client ID when the mutation result is unknown.
+            return setCampaignState(campaign, "RECONCILE_REQUIRED", "Reduce-only exit outcome requires lookup by $clientId: ${x.message}")
+        }
+
+        val authoritative = try {
+            exchange.getOrder(symbol, clientOrderId = clientId)
+        } catch (x: Exception) {
+            return setCampaignState(campaign, "RECONCILE_REQUIRED", "Submitted exit cannot be verified: ${x.message}")
+        }
+        val status = authoritative.optString("status").uppercase(Locale.US)
+        if (authoritative.optString("symbol").uppercase(Locale.US) != symbol ||
+            authoritative.optString("clientOrderId") != clientId ||
+            authoritative.optString("side").uppercase(Locale.US) != side) {
+            return setCampaignState(campaign, "RECONCILE_REQUIRED", "Submitted exit identity verification failed")
+        }
+        if (status != "FILLED") {
+            return setCampaignState(campaign, "RECONCILE_REQUIRED", "Reduce-only exit is not fully filled: ${status.ifBlank { "UNKNOWN" }}")
+        }
+
+        val refreshed = try { position(exchange, symbol) } catch (x: Exception) {
+            return setCampaignState(campaign, "RECONCILE_REQUIRED", "Post-exit position lookup failed: ${x.message}")
+        }
+        val residual = refreshed.optString("positionAmt").toDoubleOrNull()
+            ?: return setCampaignState(campaign, "RECONCILE_REQUIRED", "Post-exit positionAmt is malformed")
+        if (!residual.isFinite() || abs(residual) > 1e-12) {
+            if (residual.isFinite()) campaign.put("position_amt", residual)
+            return setCampaignState(campaign, "RECONCILE_REQUIRED", "Reduce-only exit left residual or invalid position quantity")
+        }
+        val cleanup = verifyFlatProtectionCleanup(exchange, campaign)
+        if (cleanup != null) return setCampaignState(campaign, "RECONCILE_REQUIRED", cleanup)
+        return try {
+            recordMarketExit(exchange, campaign, authoritative, reason)
+            campaign.put("state", "CLOSED")
+            campaign.put("position_amt", 0.0)
+            campaign.put("protection_active", false)
+            campaign.put("closed_at_ms", System.currentTimeMillis())
+            campaign.remove("pending_exit_client_order_id")
+            campaign.remove("pending_exit_reason")
+            campaign.remove("pending_exit_expected_qty")
+            auditStore.saveFuturesCampaign(symbol, campaign)
+            updateIntentByClientId(clientId, "CONFIRMED", authoritative.toString())
+            JSONObject().put("symbol", symbol).put("direction", direction).put("action", "CLOSED")
+                .put("order_id", authoritative.optString("orderId")).put("reason", reason)
+        } catch (x: Exception) {
+            setCampaignState(campaign, "RECONCILE_REQUIRED", "Exit accounting/fill reconciliation failed: ${x.message}")
+        }
+    }
+
+    private fun cancelOwnedProtection(exchange: BinanceUsdmFuturesClient, campaign: JSONObject, targetClientId: String) {
+        val symbol = campaign.optString("symbol").uppercase(Locale.US)
+        val lookup = exchange.getAlgoOrder(symbol, clientAlgoId = targetClientId)
+        if (lookup.optString("symbol").uppercase(Locale.US) != symbol ||
+            lookup.optString("clientAlgoId") != targetClientId) {
+            throw FuturesApiException("Protective cancellation identity mismatch")
+        }
+        val current = lookup.optString("algoStatus").uppercase(Locale.US)
+        if (current in setOf("CANCELED", "CANCELLED", "EXPIRED", "REJECTED")) return
+        if (current in setOf("TRIGGERED", "FINISHED")) {
+            throw FuturesApiException("Protective order already triggered; child execution must be reconciled")
+        }
+        val actionId = clientOrderId("W2FC_")
+        executeMutation(
+            exchange, symbol, "CANCEL_PROTECTION", campaign.optString("direction"),
+            exchange.directionToProtectiveSide(campaign.optString("direction")), actionId,
+            JSONObject().put("targetClientAlgoId", targetClientId)
+        ) { exchange.cancelAlgo(symbol, targetClientId) }
+        val verified = exchange.getAlgoOrder(symbol, clientAlgoId = targetClientId)
+        val status = verified.optString("algoStatus").uppercase(Locale.US)
+        if (verified.optString("symbol").uppercase(Locale.US) != symbol ||
+            verified.optString("clientAlgoId") != targetClientId ||
+            status !in setOf("CANCELED", "CANCELLED", "EXPIRED", "REJECTED")) {
+            throw FuturesApiException("Protective cancellation was not authoritatively confirmed")
+        }
+        updateIntentByClientId(actionId, status, verified.toString())
+    }
+
+    private fun cancelPendingEntries(exchange: BinanceUsdmFuturesClient, reason: String): JSONArray {
+        val results = JSONArray()
+        for (campaign in auditStore.activeFuturesCampaigns()) {
+            val state = campaign.optString("state").uppercase(Locale.US)
+            val hasPending = campaign.optString("entry_client_algo_id").isNotBlank() &&
+                (state == "ENTRY_PENDING" || (state == "RECONCILE_REQUIRED" &&
+                    campaign.optBoolean("entry_fill_reconciliation_pending", false)))
+            if (!hasPending) continue
+            try {
+                cancelPendingEntry(exchange, campaign, reason)
+                results.put(JSONObject().put("symbol", campaign.optString("symbol"))
+                    .put("state", campaign.optString("state")).put("action", "ENTRY_CANCELLED"))
+            } catch (x: Exception) {
+                reconcileRequired = true
+                val detail = "Pending Futures entry cancellation unresolved: ${x.message ?: x.javaClass.simpleName}"
+                lastError = detail
+                setCampaignState(campaign, "RECONCILE_REQUIRED", detail)
+                results.put(JSONObject().put("symbol", campaign.optString("symbol"))
+                    .put("state", "RECONCILE_REQUIRED").put("action", "CANCEL_UNVERIFIED").put("reason", detail))
+            }
+        }
+        return results
+    }
+
+    private fun cancelPendingEntry(exchange: BinanceUsdmFuturesClient, campaign: JSONObject, reason: String) {
+        val symbol = campaign.optString("symbol").uppercase(Locale.US)
+        val target = campaign.optString("entry_client_algo_id")
+        if (target.isBlank()) throw FuturesApiException("Pending entry clientAlgoId is missing")
+        val existing = exchange.getAlgoOrder(symbol, clientAlgoId = target)
+        if (existing.optString("symbol").uppercase(Locale.US) != symbol ||
+            existing.optString("clientAlgoId") != target) {
+            throw FuturesApiException("Pending entry identity mismatch")
+        }
+        val status = existing.optString("algoStatus").uppercase(Locale.US)
+        if (status in setOf("TRIGGERED", "FINISHED")) {
+            val amount = position(exchange, symbol).optString("positionAmt").toDoubleOrNull()
+                ?: throw FuturesApiException("Triggered entry position quantity is invalid")
+            if (!amount.isFinite()) throw FuturesApiException("Triggered entry position quantity is non-finite")
+            if (abs(amount) > 1e-12) {
+                campaign.put("state", "ENTRY_PENDING")
+                auditStore.saveFuturesCampaign(symbol, campaign)
+                throw FuturesApiException("Pending entry triggered before cancellation; position reconciliation required")
+            }
+            throw FuturesApiException("Pending entry triggered but position is flat; child order reconciliation required")
+        }
+        if (status !in setOf("CANCELED", "CANCELLED", "EXPIRED", "REJECTED")) {
+            val actionId = clientOrderId("W2FC_")
+            executeMutation(exchange, symbol, "CANCEL_ENTRY", campaign.optString("direction"),
+                exchange.directionToEntrySide(campaign.optString("direction")), actionId,
+                JSONObject().put("targetClientAlgoId", target).put("reason", reason)) {
+                exchange.cancelAlgo(symbol, target)
+            }
+        }
+        val verified = exchange.getAlgoOrder(symbol, clientAlgoId = target)
+        val finalStatus = verified.optString("algoStatus").uppercase(Locale.US)
+        val amount = position(exchange, symbol).optString("positionAmt").toDoubleOrNull()
+            ?: throw FuturesApiException("Position quantity invalid after entry cancellation")
+        if (!amount.isFinite() || abs(amount) > 1e-12 ||
+            finalStatus !in setOf("CANCELED", "CANCELLED", "EXPIRED", "REJECTED")) {
+            throw FuturesApiException("Entry cancellation not verified (status=$finalStatus positionAmt=$amount)")
+        }
+        campaign.put("state", "CLOSED")
+        campaign.put("reason", reason)
+        campaign.put("entry_cancel_status", finalStatus)
+        campaign.put("closed_at_ms", System.currentTimeMillis())
+        campaign.remove("entry_fill_reconciliation_pending")
+        auditStore.saveFuturesCampaign(symbol, campaign)
+        updateIntentByClientId(target, finalStatus, verified.toString())
+    }
+
+    private fun manageExistingCampaigns(exchange: BinanceUsdmFuturesClient) {
+        for (row in auditStore.activeFuturesCampaigns()) {
+            val symbol = row.optString("symbol").uppercase(Locale.US)
+            val campaign = JSONObject(row.toString())
+            try {
+                val pos = position(exchange, symbol)
+                val amount = pos.optString("positionAmt").toDoubleOrNull()
+                    ?: throw FuturesApiException("$symbol positionAmt is missing during management")
+                if (!amount.isFinite()) throw FuturesApiException("$symbol positionAmt is non-finite during management")
+                if (abs(amount) <= 1e-12) continue
+                val timeframe = campaign.optString("timeframe", interval())
+                val frame = analyseFrame(exchange, symbol, timeframe)
+                if (frame != null) manageStructuralExit(exchange, campaign, frame)
+            } catch (x: Exception) {
+                lastError = "$symbol position management: ${x.message ?: x.javaClass.simpleName}"
+                reconcileRequired = true
+                setCampaignState(campaign, "RECONCILE_REQUIRED", lastError!!)
+            }
+        }
+    }
+
     private fun manageStructuralExit(exchange: BinanceUsdmFuturesClient, campaign: JSONObject, frame: Frame) {
         val symbol = campaign.optString("symbol").uppercase(Locale.US)
         val direction = campaign.optString("direction").uppercase(Locale.US)
