@@ -180,7 +180,7 @@ def test_prepare_symbol_fails_if_exchange_does_not_apply_one_x(monkeypatch):
     monkeypatch.setattr(
         client,
         "_request",
-        lambda method, path, params, signed=False: responses[path],
+        lambda method, path, params=None, signed=False: responses[path],
     )
 
     with pytest.raises(FuturesAPIError, match="did not confirm 1x"):
