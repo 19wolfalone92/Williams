@@ -2143,28 +2143,69 @@ class FuturesCampaignExecutionService:
         """
         symbol = campaign.symbol.upper()
         order_id = actual_order.get("orderId") or protection.get("actualOrderId")
+        if not order_id or str(actual_order.get("status", "") or "").upper() != "FILLED":
+            raise FuturesCampaignExecutionError(
+                f"{symbol}: protective child order is not authoritatively FILLED"
+            )
+        try:
+            response_qty = float(actual_order.get("executedQty", 0) or 0)
+            expected_qty = float(campaign.position_qty or 0)
+        except (TypeError, ValueError) as exc:
+            raise FuturesCampaignExecutionError(
+                f"{symbol}: protective exit quantity is invalid"
+            ) from exc
+        if not all(math.isfinite(value) and value > 0 for value in (response_qty, expected_qty)):
+            raise FuturesCampaignExecutionError(
+                f"{symbol}: protective exit quantity is missing or non-finite"
+            )
         trades = self.client.user_trades(symbol, order_id=order_id, limit=1000)
         if not trades:
             raise FuturesCampaignExecutionError(
                 f"{symbol}: protective exit is filled but authoritative userTrades are unavailable"
             )
 
-        executed_qty = sum(float(row.get("qty", 0) or 0) for row in trades)
-        if not math.isfinite(executed_qty) or executed_qty <= 0:
-            raise FuturesCampaignExecutionError(
-                f"{symbol}: protective exit has no positive authoritative trade quantity"
-            )
-
-        realized_pnl = sum(float(row.get("realizedPnl", 0) or 0) for row in trades)
+        executed_qty = 0.0
+        realized_pnl = 0.0
         quote_commission = 0.0
         other_commission: dict[str, float] = {}
         for row in trades:
+            trade_order_id = row.get("orderId")
+            if trade_order_id is not None and str(trade_order_id) != str(order_id):
+                raise FuturesCampaignExecutionError(
+                    f"{symbol}: protective userTrades contain a different orderId"
+                )
+            try:
+                qty = float(row.get("qty", 0) or 0)
+                price = float(row.get("price", 0) or 0)
+                pnl = float(row.get("realizedPnl", 0) or 0)
+                commission = float(row.get("commission", 0) or 0)
+            except (TypeError, ValueError) as exc:
+                raise FuturesCampaignExecutionError(
+                    f"{symbol}: protective userTrades contain invalid numeric values"
+                ) from exc
+            if (
+                not all(math.isfinite(value) for value in (qty, price, pnl, commission))
+                or qty <= 0 or price <= 0 or commission < 0
+            ):
+                raise FuturesCampaignExecutionError(
+                    f"{symbol}: protective userTrades contain non-finite/invalid values"
+                )
+            executed_qty += qty
+            realized_pnl += pnl
             asset = str(row.get("commissionAsset", "") or "").upper()
-            commission = max(0.0, float(row.get("commission", 0) or 0))
             if asset in {"USDT", "USDC"}:
                 quote_commission += commission
             elif asset:
                 other_commission[asset] = other_commission.get(asset, 0.0) + commission
+        tolerance = max(1e-8, expected_qty * 1e-6)
+        if (
+            abs(executed_qty - response_qty) > tolerance
+            or abs(executed_qty - expected_qty) > tolerance
+        ):
+            raise FuturesCampaignExecutionError(
+                f"{symbol}: protective userTrades qty {executed_qty} does not match "
+                f"order qty {response_qty} and campaign qty {expected_qty}"
+            )
 
         net_known_quote = realized_pnl - quote_commission
         campaign.realized_pnl_quote = float(campaign.realized_pnl_quote or 0.0) + net_known_quote
@@ -2185,6 +2226,14 @@ class FuturesCampaignExecutionService:
         campaign.pending_risk_quote = 0.0
         campaign.capital_reserved_quote = 0.0
         campaign.tags["protection_active"] = False
+        for key in (
+            "protective_client_algo_id", "protective_algo_id",
+            "previous_protective_client_algo_id", "previous_protective_algo_id",
+            "previous_protective_stop_price", "protection_replace_reconcile_required",
+            "pending_protective_client_algo_id", "pending_protective_algo_id",
+            "pending_protective_stop_price",
+        ):
+            campaign.tags.pop(key, None)
         campaign.exit_reason = "EXCHANGE_PROTECTIVE_STOP_FILLED"
         campaign.tags["last_exit_reason"] = campaign.exit_reason
 
