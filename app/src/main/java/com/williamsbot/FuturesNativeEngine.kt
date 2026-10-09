@@ -2163,8 +2163,35 @@ internal class FuturesNativeEngine(
         // query the exchange's authoritative algo state and position after it.
         val verified = exchange.getAlgoOrder(symbol, clientAlgoId = target)
         val status = verified.optString("algoStatus").uppercase(Locale.US)
+        val childId = verified.optString("actualOrderId")
+        if (childId.isNotBlank() && childId != "0") {
+            val child = runCatching { exchange.getOrder(symbol, orderId = childId) }.getOrElse {
+                val detail = "Entry cancel returned a child order whose status cannot be verified: ${it.message}"
+                setCampaignState(campaign, "RECONCILE_REQUIRED", detail)
+                throw IllegalStateException(detail, it)
+            }
+            val childStatus = child.optString("status").uppercase(Locale.US)
+            val childQty = child.optString("executedQty").toDoubleOrNull()
+            if (
+                child.optString("symbol").uppercase(Locale.US) != symbol ||
+                child.optString("orderId") != childId ||
+                child.optString("side").uppercase(Locale.US) != exchange.directionToEntrySide(campaign.optString("direction")) ||
+                childQty == null || !childQty.isFinite() || childQty < 0.0 ||
+                childStatus !in setOf("FILLED", "CANCELED", "CANCELLED", "EXPIRED", "REJECTED")
+            ) {
+                val detail = "Entry cancel child order identity/status/quantity is invalid"
+                setCampaignState(campaign, "RECONCILE_REQUIRED", detail)
+                throw IllegalStateException(detail)
+            }
+            if (childQty > 0.0) {
+                val detail = "Entry cancel found executed child quantity; position/fill reconciliation is required"
+                setCampaignState(campaign, "RECONCILE_REQUIRED", detail)
+                throw IllegalStateException(detail)
+            }
+        }
         val amount = position(exchange, symbol).optString("positionAmt").toDoubleOrNull()
             ?: throw IllegalStateException("Exchange position amount is invalid after entry cancellation")
+        if (!amount.isFinite()) throw IllegalStateException("Exchange position amount is non-finite after entry cancellation")
         if (status !in setOf("CANCELED", "CANCELLED", "EXPIRED", "REJECTED") || kotlin.math.abs(amount) > 1e-12) {
             val detail = "Entry cancellation not verified (algoStatus=$status, positionAmt=$amount)"
             setCampaignState(campaign, "RECONCILE_REQUIRED", detail)
