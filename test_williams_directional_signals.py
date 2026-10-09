@@ -2,6 +2,7 @@ import pandas as pd
 
 from campaign_model import SignalRole, SignalSpec, SignalType
 from digital_williams_core import DigitalWilliamsCore
+from strategy import calculate_indicators, config_from_env
 from williams_signals import extract_long_signal_specs, extract_short_signal_specs
 
 
@@ -143,3 +144,39 @@ def test_fractal_signal_uses_configured_confirmation_delay_not_hardcoded_two_bar
     assert len(fractals) == 1
     assert fractals[0].protective_reference == float(data.loc[8, "high"])
     assert fractals[0].trigger_price < float(data.loc[8, "low"])
+
+
+def test_strict_short_signal_requires_sell_fractal_outside_teeth():
+    # A falling trend plus one bearish reversal can satisfy the short Wise-Man
+    # count when MIN_WISE_MEN_CONFIRMATIONS=1. Without the sell-fractal/Teeth
+    # gate, that reversal alone incorrectly became a strict short signal.
+    rows = []
+    for i in range(300):
+        close = 300.0 - i
+        rows.append({
+            "open": close + 0.2,
+            "high": close + 0.5,
+            "low": close - 0.5,
+            "close": close,
+            "volume": 100.0 + (i % 7),
+        })
+    # Keep the reversal bar's low above the preceding declining lows so it
+    # cannot manufacture a sell fractal; then break its low on the next bar.
+    rows[297] = {"open": 5.0, "high": 24.0, "low": 4.0, "close": 6.0, "volume": 100.0}
+    rows[298] = {"open": 3.0, "high": 4.0, "low": 1.5, "close": 2.0, "volume": 101.0}
+    rows[299] = {"open": 1.8, "high": 2.2, "low": 0.5, "close": 1.0, "volume": 102.0}
+    data = pd.DataFrame(rows, index=pd.date_range("2025-01-01", periods=len(rows), freq="5min", tz="UTC"))
+    cfg = config_from_env({
+        "ALLIGATOR_JAW": "13", "ALLIGATOR_TEETH": "8", "ALLIGATOR_LIPS": "5",
+        "JAW_SHIFT": "8", "TEETH_SHIFT": "5", "LIPS_SHIFT": "3",
+        "AO_FAST": "5", "AO_SLOW": "34", "AC_PERIOD": "5",
+        "FRACTAL_LEFT": "2", "FRACTAL_RIGHT": "2", "SUPER_AO_BARS": "3",
+        "MIN_WISE_MEN_CONFIRMATIONS": "1", "ALLOW_COUNTERTREND_WISE_MAN": "false",
+        "MIN_ALLIGATOR_SPREAD_PCT": "0.0001",
+    })
+    result = calculate_indicators(data, cfg)
+    latest = result.iloc[-1]
+    assert bool(latest["bearish_alligator"])
+    assert bool(latest["short_wise_reversal_entry"])
+    assert not bool(latest["short_fractal_outside"])
+    assert not bool(latest["short_signal"])
