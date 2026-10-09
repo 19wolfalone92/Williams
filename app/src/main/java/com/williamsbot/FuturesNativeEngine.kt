@@ -424,10 +424,11 @@ internal class FuturesNativeEngine(
                 }
             }
             val unresolvedIntents = unresolvedIntentCount(exchange)
-            if (reconciliation.optInt("unresolved", 0) > 0 || unresolvedIntents > 0 || anyPosition) {
+            val unmanagedOrders = runCatching { hasUnmanagedFuturesOrders(exchange) }.getOrDefault(true)
+            if (reconciliation.optInt("unresolved", 0) > 0 || unresolvedIntents > 0 || anyPosition || unmanagedOrders) {
                 reconcileRequired = true
                 throw IllegalStateException(
-                    "Recovery reset denied: positions/intents remain unresolved; flat and verified state is required"
+                    "Recovery reset denied: positions, open orders, or intents remain unresolved; flat and verified state is required"
                 )
             }
             check(prefs.edit().putBoolean("futures_kill_latched", false).commit()) {
