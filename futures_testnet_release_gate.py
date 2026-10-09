@@ -125,9 +125,14 @@ def run_futures_testnet_read_only(symbols: Iterable[str] = ("BTCUSDT",)) -> dict
     if can_trade is not True and str(can_trade).strip().lower() != "true":
         raise RuntimeError("Futures Demo account does not confirm canTrade=true")
     positions = client.position_risk()
-    if not isinstance(positions, list):
-        raise RuntimeError("Futures positionRisk endpoint returned an unexpected payload")
+    if not isinstance(positions, list) or not positions:
+        raise RuntimeError(
+            "Futures positionRisk endpoint returned no verifiable rows; account cleanliness cannot be confirmed"
+        )
+    if any(not isinstance(row, dict) for row in positions):
+        raise RuntimeError("Futures positionRisk contains a malformed row")
 
+    symbol_nonzero_positions: list[dict[str, Any]] = []
     market_checks = []
     for symbol in configured:
         info = client.exchange_info(symbol)
@@ -160,6 +165,17 @@ def run_futures_testnet_read_only(symbols: Iterable[str] = ("BTCUSDT",)) -> dict
         position = next(iter(position_rows), None)
         if position is None:
             raise RuntimeError(f"{symbol}: positionRisk omitted the configured symbol")
+        try:
+            symbol_amount = float(position.get("positionAmt", 0) or 0)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(f"{symbol}: positionRisk contains a non-numeric positionAmt") from exc
+        if not math.isfinite(symbol_amount):
+            raise RuntimeError(f"{symbol}: positionRisk contains a non-finite positionAmt")
+        if abs(symbol_amount) > 1e-12:
+            symbol_nonzero_positions.append({
+                "symbol": symbol,
+                "position_amt": symbol_amount,
+            })
         isolated_raw = position.get("isolated")
         isolated = isolated_raw is True or str(isolated_raw).strip().lower() in {"true", "1"}
         try:
@@ -223,6 +239,19 @@ def run_futures_testnet_read_only(symbols: Iterable[str] = ("BTCUSDT",)) -> dict
                 "symbol": str(row.get("symbol", "")).upper(),
                 "position_amt": amount,
             })
+
+    # Include both account-wide and symbol-scoped observations. If the two
+    # endpoint views disagree, a configured symbol's nonzero position must not
+    # be hidden by an incomplete account-wide response.
+    seen_position_keys = {
+        (item["symbol"], round(item["position_amt"], 12))
+        for item in nonzero_positions
+    }
+    for item in symbol_nonzero_positions:
+        key = (item["symbol"], round(item["position_amt"], 12))
+        if key not in seen_position_keys:
+            nonzero_positions.append(item)
+            seen_position_keys.add(key)
 
     # A read-only preflight may inspect a dirty account, but it must not report
     # that account as release-ready. Leftover positions/orders can mutate risk
