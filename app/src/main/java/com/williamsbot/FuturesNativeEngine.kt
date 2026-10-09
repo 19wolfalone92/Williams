@@ -1726,12 +1726,23 @@ internal class FuturesNativeEngine(
         } catch (x: Exception) {
             val latest = runCatching { position(exchange, symbol) }.getOrNull()
             val residual = latest?.optString("positionAmt")?.toDoubleOrNull()
-            var protectionRestored = !protectionCancelConfirmed
-            if (residual != null && residual.isFinite() && abs(residual) > 1e-12 && protectionCancelConfirmed) {
-                protectionRestored = runCatching {
-                    placeProtection(exchange, campaign)
-                    true
-                }.getOrDefault(false)
+            var protectionRestored = false
+            if (residual != null && residual.isFinite() && abs(residual) > 1e-12) {
+                val stopStatus = if (protectionClientId.isNotBlank()) {
+                    runCatching {
+                        exchange.getAlgoOrder(symbol, clientAlgoId = protectionClientId)
+                            .optString("algoStatus").uppercase(Locale.US)
+                    }.getOrNull()
+                } else null
+                val activeStop = stopStatus in setOf("NEW", "WORKING", "PENDING", "PENDING_NEW")
+                val terminalStop = stopStatus in setOf("CANCELED", "CANCELLED", "EXPIRED", "REJECTED", "FINISHED")
+                protectionRestored = activeStop
+                if (!activeStop && (protectionCancelConfirmed || terminalStop || protectionClientId.isBlank())) {
+                    protectionRestored = runCatching {
+                        placeProtection(exchange, campaign)
+                        true
+                    }.getOrDefault(false)
+                }
             }
             val detail = buildString {
                 append("Reduce-only exit submission failed or is ambiguous: ")
