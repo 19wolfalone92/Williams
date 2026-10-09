@@ -161,7 +161,7 @@ def test_add_on_uses_existing_campaign_and_reserves_only_remaining_risk():
             assert armed.state == CampaignState.ADD_ON_PENDING
             assert armed.pending_risk_quote == 1.0
             assert len([
-                row for row in db.list_campaigns()
+                row for row in db.open_campaigns()
                 if row.get("symbol") == "BTCUSDT"
             ]) == 1
         finally:
