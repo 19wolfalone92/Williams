@@ -686,3 +686,29 @@ def test_execution_barrier_requires_reconciliation_when_oco_cancel_has_fill():
     with pytest.raises(RuntimeError, match="OCO cancellation"):
         barrier.execute(intent, lambda: response)
     assert db.intents[intent.intent_id][0] == "AMBIGUOUS"
+
+
+@pytest.mark.parametrize(
+    "quantity,client_id",
+    [("1", ""), ("nan", "WTEST_SELL_1")],
+)
+def test_execution_barrier_rejects_malformed_non_entry_orders(quantity, client_id):
+    cache = ContextCache()
+    cache.publish(context())
+    db = IntentDB()
+    barrier = ExecutionBarrier(cache, db)
+    intent = OrderIntent.new(
+        "BTCUSDT",
+        "SELL",
+        "MARKET",
+        {},
+        purpose="EXIT",
+        quantity=quantity,
+        client_order_id=client_id,
+    )
+    calls = []
+    result = barrier.execute(
+        intent, lambda: calls.append("submitted") or {"status": "FILLED", "executedQty": "1"}
+    )
+    assert not result.accepted
+    assert calls == []
