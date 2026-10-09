@@ -545,6 +545,8 @@ def test_execution_barrier_accepts_only_authoritative_oco_response():
         {},
         purpose="EXIT",
         quantity="1",
+        client_order_id="WTEST_OCO_2",
+        client_order_id="WTEST_OCO_1",
     )
     response = {
         "orderListId": 77,
