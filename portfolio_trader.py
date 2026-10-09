@@ -713,6 +713,30 @@ class MultiPositionTrader:
         except Exception as exc:
             raise RuntimeError(f"{asset}: cannot value Binance commission in USDT") from exc
 
+    @staticmethod
+    def _entry_fee_quote(summary):
+        """Return fees not already reflected in net base quantity.
+
+        Base-asset commission reduces the acquired inventory and is therefore
+        already reflected in the exit proceeds. Subtracting its quote equivalent
+        again from PnL would double-count it. Quote/third-asset fees remain costs.
+        """
+        try:
+            total_fee_equivalent = float(summary.fee_quote_equivalent)
+            base_commission = float(summary.commission_base)
+            fill_price = float(summary.avg_price)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise RuntimeError("entry commission data is invalid") from exc
+        if not all(math.isfinite(value) for value in (
+            total_fee_equivalent, base_commission, fill_price
+        )) or base_commission < 0 or fill_price <= 0:
+            raise RuntimeError("entry commission data is invalid")
+        base_fee_equivalent = base_commission * fill_price
+        fee_quote = total_fee_equivalent - base_fee_equivalent
+        if not math.isfinite(fee_quote) or fee_quote < -max(1e-8, total_fee_equivalent * 1e-8):
+            raise RuntimeError("entry fee components are inconsistent")
+        return max(0.0, fee_quote)
+
     def _authoritative_execution(self, symbol, order):
         payload = dict(order or {})
         fills = list(payload.get("fills") or [])
@@ -1178,7 +1202,7 @@ class MultiPositionTrader:
                             order.get("orderId")
                         ),
                         entry_client_order_id=client_id,
-                        fees=float(execution.fee_quote_equivalent),
+                        fees=self._entry_fee_quote(execution),
                     )
                     trade = self.db.open_trade(symbol)
                     trade_id = int(trade["id"])
