@@ -418,7 +418,7 @@ class FuturesRuntime:
 
     def _manage_existing_positions(self) -> list[dict[str, Any]]:
         """Run protective management before any new-entry lockout decision."""
-        results = []
+        results = self._cancel_pending_entries(reason="KILL_SWITCH")
         for row in self.execution._active_rows():
             if self.execution._row_tags(row).get("execution_mode") != "FUTURES":
                 continue
@@ -706,20 +706,71 @@ class FuturesRuntime:
             )
             return self.status()
 
+    def _cancel_pending_entries(self, *, reason: str) -> list[dict[str, Any]]:
+        results: list[dict[str, Any]] = []
+        for row in self.execution._active_rows():
+            if self.execution._row_tags(row).get("execution_mode") != "FUTURES":
+                continue
+            if str(row.get("state", "")).upper() != "ENTRY_PENDING":
+                continue
+            campaign_id = str(row.get("campaign_id", ""))
+            try:
+                campaign = self.execution.engine.load_campaign(campaign_id)
+                if campaign is None:
+                    raise RuntimeError("pending-entry campaign could not be loaded")
+                results.append(
+                    self.execution.cancel_pending_entry(campaign, reason=reason)
+                )
+            except Exception as exc:
+                detail = f"{reason}: pending-entry cancellation failed: {type(exc).__name__}: {exc}"
+                self.db.log_event(
+                    "ERROR",
+                    "futures_pending_entry_cancel_failed",
+                    detail,
+                    {"campaign_id": campaign_id},
+                )
+                results.append({
+                    "symbol": str(row.get("symbol", "")).upper(),
+                    "state": "RECONCILE_REQUIRED",
+                    "action": "CANCEL_UNVERIFIED",
+                    "reason": detail,
+                })
+        return results
+
     def pause(self) -> dict[str, Any]:
-        with self._lock:
-            self._paused = True
-            state = "PAUSED"
+        # Serialize with a scan so no conditional entry can be submitted after
+        # pause begins. Existing-position management remains enabled.
+        with self._cycle_lock:
+            with self._lock:
+                self._paused = True
+            cancellations = self._cancel_pending_entries(reason="PAUSE")
+            unresolved = [
+                item for item in cancellations
+                if str(item.get("state", "")).upper() == "RECONCILE_REQUIRED"
+            ]
             self.db.log_event(
                 "WARNING",
                 "futures_runtime_paused",
-                "New Futures entries paused; open protective orders remain active",
-                {},
+                "New entries paused; pending entries cancelled or flagged for reconciliation",
+                {"pending_entry_cancellations": cancellations},
             )
-        return {**self.status(), "state": state}
+            result = {**self.status(), "state": "PAUSED", "pending_entry_cancellations": cancellations}
+            if unresolved:
+                result["management_only_monitor_required"] = True
+                result["warning"] = (
+                    "At least one pending entry cancellation is unresolved. Keep the runtime "
+                    "monitor alive until exchange state and any resulting exposure are reconciled."
+                )
+            return result
 
     def stop(self) -> dict[str, Any]:
-        self.pause()
+        paused = self.pause()
+        if paused.get("management_only_monitor_required"):
+            return {
+                **paused,
+                "state": "MANAGEMENT_ONLY",
+                "thread_alive": bool(self._thread is not None and self._thread.is_alive()),
+            }
         self._stop.set()
         thread = self._thread
         if thread is not None and thread is not threading.current_thread():
@@ -756,7 +807,16 @@ class FuturesRuntime:
                     raise RuntimeError("campaign row disappeared")
                 amount = self.execution._position_amount(symbol)
                 if abs(amount) <= 1e-12:
-                    results.append({"symbol": symbol, "state": "NO_POSITION", "action": "RECONCILE"})
+                    if campaign.state == CampaignState.ENTRY_PENDING:
+                        results.append(
+                            self.execution.cancel_pending_entry(campaign, reason="KILL_SWITCH")
+                        )
+                    else:
+                        results.append({
+                            "symbol": symbol,
+                            "state": "NO_POSITION",
+                            "action": "RECONCILE",
+                        })
                     continue
                 results.append(self.execution.exit_position(campaign, reason="KILL_SWITCH"))
             except Exception as exc:
