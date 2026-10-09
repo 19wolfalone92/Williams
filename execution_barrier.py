@@ -554,6 +554,12 @@ class ExecutionBarrier:
                     self._persist(intent, "AMBIGUOUS", reason)
                     self._record("ERROR", "execution_ambiguous", intent, reason)
                     raise RuntimeError(f"ExecutionBarrier: {reason}")
+                if completed_oco:
+                    order_fsm.state = OrderState.RECONCILE_REQUIRED
+                    reason = "OCO became terminal during placement; position/order reconciliation required"
+                    self._persist(intent, "AMBIGUOUS", reason)
+                    self._record("ERROR", "execution_ambiguous", intent, reason)
+                    raise RuntimeError(f"ExecutionBarrier: {reason}")
                 order_fsm.state = OrderState.OPEN
             elif str(intent.order_type).strip().upper() != "CANCEL":
                 status = str(
