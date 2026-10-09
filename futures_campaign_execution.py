@@ -1429,36 +1429,57 @@ class FuturesCampaignExecutionService:
                     raise FuturesCampaignExecutionError(
                         f"prior exit status is ambiguous: {prior_status or 'UNKNOWN'}"
                     )
-                # A terminal order is safe to reconcile against the live
-                # position. FILLED with residual exposure may require a new
-                # reduce-only order, but only after the previous order is proven
-                # terminal by this authoritative lookup.
-                if prior_status == "FILLED":
-                    position_after_prior = self._position_row(symbol)
-                    try:
-                        remaining_after_prior = float(position_after_prior.get("positionAmt", 0) or 0)
-                    except (TypeError, ValueError):
-                        remaining_after_prior = float("nan")
-                    if not math.isfinite(remaining_after_prior):
-                        raise FuturesCampaignExecutionError(
-                            "prior exit is FILLED but the refreshed position quantity is invalid"
-                        )
-                    if abs(remaining_after_prior) <= 1e-12:
+                # Always refresh the live position after a terminal prior
+                # exit; the quantity read before the order lookup may be stale.
+                position_after_prior = self._position_row(symbol)
+                try:
+                    remaining_after_prior = float(position_after_prior.get("positionAmt", 0) or 0)
+                except (TypeError, ValueError):
+                    remaining_after_prior = float("nan")
+                if not math.isfinite(remaining_after_prior):
+                    raise FuturesCampaignExecutionError(
+                        "prior exit is terminal but the refreshed position quantity is invalid"
+                    )
+                if abs(remaining_after_prior) <= 1e-12:
+                    if prior_status == "FILLED":
                         return self._finalize_verified_market_exit(
                             campaign,
                             prior_exit,
                             reason=str(campaign.tags.get("pending_exit_reason", reason) or reason),
                         )
-                    if (direction == "LONG" and remaining_after_prior < 0) or (
-                        direction == "SHORT" and remaining_after_prior > 0
-                    ):
-                        raise FuturesCampaignExecutionError(
-                            "prior exit is FILLED but exchange position direction changed"
-                        )
+                    reason_text = (
+                        f"{symbol}: prior exit is {prior_status} and position is flat, but "
+                        "the exit fill history is not reconciled; retaining the durable intent"
+                    )
+                    self.engine.mark_reconcile_required(campaign, reason_text)
+                    self.db.save_campaign(campaign)
+                    self.db.state_set(f"campaign_state:{campaign.campaign_id}", CampaignState.RECONCILE_REQUIRED.value)
+                    self.db.state_set(f"position_state:{symbol}", CampaignState.RECONCILE_REQUIRED.value)
+                    return {
+                        "symbol": symbol,
+                        "direction": direction,
+                        "action": "RECONCILE_REQUIRED",
+                        "client_order_id": pending_exit_id,
+                        "status": prior_status,
+                        "reason": reason_text,
+                    }
+                if (direction == "LONG" and remaining_after_prior < 0) or (
+                    direction == "SHORT" and remaining_after_prior > 0
+                ):
+                    raise FuturesCampaignExecutionError(
+                        "prior exit is terminal but exchange position direction changed"
+                    )
+                position = position_after_prior
+                amount = remaining_after_prior
+                if prior_status == "FILLED":
+                    # The old order is terminal but left residual exposure. Its
+                    # fills must be retained in the ledger before a new exit.
+                    self._record_terminal_exit_fill(campaign, prior_exit)
                 campaign.tags["last_terminal_exit_client_order_id"] = pending_exit_id
                 campaign.tags["last_terminal_exit_status"] = prior_status
                 campaign.tags.pop("pending_exit_client_order_id", None)
                 campaign.tags.pop("pending_exit_reason", None)
+                campaign.tags.pop("pending_exit_expected_qty", None)
                 self.db.save_campaign(campaign)
             except Exception as exc:
                 reason_text = (
