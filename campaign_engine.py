@@ -442,8 +442,20 @@ class CampaignEngine:
     ) -> TradingCampaign:
         if campaign.state != CampaignState.ENTRY_TRIGGERED:
             raise ValueError(f"Cannot record initial fill from {campaign.state.value}")
+        values = (quantity, average_entry_price, initial_stop_price, risk_quote, fee_quote)
+        try:
+            normalized = tuple(float(value) for value in values)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Invalid initial fill/protection data") from exc
+        if not all(math.isfinite(value) for value in normalized):
+            raise ValueError("Initial fill/protection values must be finite")
+        quantity, average_entry_price, initial_stop_price, risk_quote, fee_quote = normalized
         if quantity <= 0 or average_entry_price <= 0 or initial_stop_price <= 0:
             raise ValueError("Invalid initial fill/protection data")
+        if risk_quote <= 0 or fee_quote < 0:
+            raise ValueError("Initial fill risk must be positive and fee must be non-negative")
+        if not str(fill_order_id or "").strip():
+            raise ValueError("Initial fill requires a stable exchange order ID")
 
         campaign.position_qty = float(quantity)
         campaign.average_entry_price = float(average_entry_price)
