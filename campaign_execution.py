@@ -1395,6 +1395,9 @@ class CampaignExecutionService:
                     )
                 self.db.save_campaign_signal(signal, campaign.campaign_id, state=SignalState.DETECTED.value)
                 previous_campaign_state = campaign.state
+                previous_next_action = campaign.next_action
+                previous_pending_risk_quote = campaign.pending_risk_quote
+                previous_capital_reserved_quote = campaign.capital_reserved_quote
                 campaign.tags["last_signal_time_ms"] = int(signal.signal_bar_time_ms)
                 campaign.tags["pending_add_signal_id"] = signal.signal_id
                 campaign.tags["pending_add_signal_expires_at_ms"] = int(pending_signal.expires_at_ms)
@@ -1427,10 +1430,10 @@ class CampaignExecutionService:
                 capital_reserved_quote=qty * trigger,
             )
         except Exception as exc:
-            campaign.pending_risk_quote = 0.0
-            campaign.capital_reserved_quote = 0.0
+            campaign.pending_risk_quote = previous_pending_risk_quote
+            campaign.capital_reserved_quote = previous_capital_reserved_quote
             campaign.state = previous_campaign_state
-            campaign.next_action = "MONITOR_CAMPAIGN"
+            campaign.next_action = previous_next_action
             self.db.set_campaign_signal_state(signal.signal_id, SignalState.INVALIDATED.value)
             self.db.state_delete(f"entry_client_order_id:{signal.symbol}")
             self.db.save_campaign(campaign)
@@ -1463,13 +1466,14 @@ class CampaignExecutionService:
                     signal.signal_id,
                     SignalState.EXPIRED.value if pending_signal.is_expired() else SignalState.INVALIDATED.value,
                 )
-                campaign.pending_risk_quote = 0.0
-                campaign.capital_reserved_quote = 0.0
-                if campaign.state == CampaignState.ADD_ON_PENDING:
-                    campaign.transition(
-                        CampaignState.TREND_ACTIVE,
-                        reason="add-on admission rejected before exchange submission",
-                    )
+                campaign.pending_risk_quote = previous_pending_risk_quote
+                campaign.capital_reserved_quote = previous_capital_reserved_quote
+                campaign.state = previous_campaign_state
+                campaign.next_action = previous_next_action
+                self.db.set_campaign_signal_state(
+                    signal.signal_id,
+                    SignalState.EXPIRED.value if pending_signal.is_expired() else SignalState.INVALIDATED.value,
+                )
                 self.db.state_delete(f"entry_client_order_id:{signal.symbol}")
                 self.db.save_campaign(campaign)
             else:
