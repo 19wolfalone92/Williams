@@ -1012,6 +1012,28 @@ class Database:
 
     def save_campaign_signal(self, signal, campaign_id, state="DETECTED", supersedes_signal_id=""):
         data = signal.to_dict() if hasattr(signal, "to_dict") else dict(signal)
+        for field in (
+            "trigger_price", "protective_reference", "invalidation_price",
+            "teeth_at_detection", "angulation_score", "wave_confidence",
+            "wave_exhaustion_risk",
+        ):
+            data[field] = self._require_finite_number(
+                data.get(field, 0) or 0, f"campaign_signal.{field}", minimum=0.0
+                if field in {"trigger_price", "protective_reference"} else None
+            )
+        if data["trigger_price"] <= 0 or data["protective_reference"] <= 0:
+            raise ValueError("campaign signal trigger/protective reference must be positive")
+        try:
+            signal_bar_time_ms = int(data["signal_bar_time_ms"])
+            expires_at_ms = int(data.get("expires_at_ms", 0) or 0)
+            source_candle_index = int(
+                -1 if data.get("source_candle_index", -1) is None
+                else data.get("source_candle_index", -1)
+            )
+        except (KeyError, TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("campaign signal timestamps/index are invalid") from exc
+        if signal_bar_time_ms <= 0 or expires_at_ms < 0:
+            raise ValueError("campaign signal timestamps are invalid")
         st = data.get("signal_type")
         role = data.get("role")
         self.conn.execute(
@@ -1024,12 +1046,12 @@ class Database:
             (
                 data["signal_id"], str(campaign_id), data["symbol"], data["side"],
                 st.value if hasattr(st,"value") else st, role.value if hasattr(role,"value") else role,
-                data["timeframe"], int(data["signal_bar_time_ms"]), float(data["trigger_price"]),
+                data["timeframe"], signal_bar_time_ms, float(data["trigger_price"]),
                 float(data["protective_reference"]), float(data.get("invalidation_price",0) or 0),
                 float(data.get("teeth_at_detection",0) or 0), float(data.get("angulation_score",0) or 0),
                 float(data.get("wave_confidence",0) or 0), float(data.get("wave_exhaustion_risk",0) or 0),
-                1 if data.get("htf_confirmed") else 0, state, int(data.get("source_candle_index",-1) or -1),
-                int(data.get("expires_at_ms",0) or 0), json.dumps(data.get("context_versions",{}),sort_keys=True),
+                1 if data.get("htf_confirmed") else 0, state, source_candle_index,
+                expires_at_ms, json.dumps(data.get("context_versions",{}),sort_keys=True),
                 data.get("reason",""), supersedes_signal_id or None,
             ),
         )
