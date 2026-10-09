@@ -296,14 +296,21 @@ internal class FuturesNativeEngine(
         // still open exposure even after the scanner has paused.
         paused = true
         val cancellations = synchronized(cycleLock) {
-            runCatching { cancelPendingEntries(api(), "PAUSE") }.getOrElse { error ->
-                reconcileRequired = true
-                lastError = "Pause could not verify pending-entry cancellation: ${error.message}"
-                JSONArray().put(
-                    JSONObject()
-                        .put("state", "RECONCILE_REQUIRED")
-                        .put("reason", lastError)
-                )
+            val hasPendingEntries = auditStore.activeFuturesCampaigns().any {
+                it.optString("state") == "ENTRY_PENDING"
+            }
+            if (!hasPendingEntries) {
+                JSONArray()
+            } else {
+                runCatching { cancelPendingEntries(api(), "PAUSE") }.getOrElse { error ->
+                    reconcileRequired = true
+                    lastError = "Pause could not verify pending-entry cancellation: ${error.message}"
+                    JSONArray().put(
+                        JSONObject()
+                            .put("state", "RECONCILE_REQUIRED")
+                            .put("reason", lastError)
+                    )
+                }
             }
         }
         val unresolved = (0 until cancellations.length()).any {
