@@ -78,6 +78,9 @@ class FakeReadOnlyFuturesClient:
     def account(self):
         return {"canTrade": self.can_trade}
 
+    def account_permissions(self):
+        return {"canTrade": self.can_trade}
+
     def position_risk(self, symbol=None):
         rows = [{
             "symbol": "BTCUSDT",
