@@ -528,10 +528,14 @@ def test_execution_barrier_stale_intent_only_blocks_new_exposure():
 
 
 @pytest.mark.parametrize(
-    "campaign_state",
-    ["ADD_ON_ARMING", "ADD_ON_PENDING", "POSITION_EXPANDING"],
+    ("campaign_state", "expected_state"),
+    [
+        ("ADD_ON_ARMING", "ADD_ON_PENDING"),
+        ("ADD_ON_PENDING", "ADD_ON_PENDING"),
+        ("POSITION_EXPANDING", "RECONCILE_REQUIRED"),
+    ],
 )
-def test_unresolved_add_on_state_fails_closed_after_protection_check(campaign_state):
+def test_add_on_reconciliation_uses_exchange_order_and_position_state(campaign_state, expected_state):
     from types import SimpleNamespace
     from campaign_model import CampaignState
 
@@ -541,9 +545,26 @@ def test_unresolved_add_on_state_fails_closed_after_protection_check(campaign_st
         symbol="BTCUSDT",
         state=CampaignState(campaign_state),
         position_qty=0.5,
-        tags={"protective_client_algo_id": "stop-1"},
-        current_stop_price=95.0,
-        initial_stop_price=95.0,
+        open_risk_quote=10.0,
+        pending_risk_quote=2.0,
+        capital_reserved_quote=20.0,
+        current_signal_id="signal-add",
+        tags={
+            "direction": "LONG",
+            "protective_client_algo_id": "stop-1",
+            "protective_algo_id": "stop-algo-1",
+            "protection_active": True,
+            "pending_add_on_client_algo_id": "add-on-1",
+            "pending_add_on_algo_id": "add-algo-1",
+            "pending_add_on_original_qty": 0.5,
+            "pending_add_on_trigger_price": 105.0,
+            "pending_add_on_stop_price": 95.0,
+            "pending_add_on_quantity": 0.1,
+            "pending_add_on_risk_quote": 2.0,
+            "pending_add_on_original_entry": 100.0,
+            "pending_add_on_direction": "LONG",
+        },
+        transition=lambda state, reason="": setattr(campaign, "state", state),
     )
     position = {
         "symbol": "BTCUSDT",
@@ -552,10 +573,23 @@ def test_unresolved_add_on_state_fails_closed_after_protection_check(campaign_st
     }
     db = SimpleNamespace(
         state_set=lambda key, value: calls.append((key, value)),
+        save_campaign=lambda camp: calls.append(("save_campaign", camp.state.value)),
     )
-    client = SimpleNamespace(
-        get_algo_order=lambda *args, **kwargs: {"algoStatus": "NEW", "clientAlgoId": "stop-1"},
-    )
+
+    def get_algo_order(symbol, *, algo_id=None, client_algo_id=None):
+        if client_algo_id == "stop-1" or algo_id == "stop-algo-1":
+            return {
+                "symbol": symbol, "algoId": "stop-algo-1", "clientAlgoId": "stop-1",
+                "algoStatus": "NEW", "side": "SELL", "type": "STOP_MARKET",
+                "closePosition": True, "triggerPrice": "95.0",
+            }
+        return {
+            "symbol": symbol, "algoId": "add-algo-1", "clientAlgoId": "add-on-1",
+            "algoStatus": "NEW", "side": "BUY", "type": "STOP_MARKET",
+            "closePosition": False, "triggerPrice": "105.0",
+        }
+
+    client = SimpleNamespace(get_algo_order=get_algo_order)
     engine = SimpleNamespace(
         mark_reconcile_required=lambda camp, reason: (
             setattr(camp, "state", CampaignState.RECONCILE_REQUIRED),
@@ -572,10 +606,13 @@ def test_unresolved_add_on_state_fails_closed_after_protection_check(campaign_st
 
     result = service.reconcile_symbol("BTCUSDT")
 
-    assert result["state"] == "RECONCILE_REQUIRED"
-    assert result["protection"] == "CONFIRMED"
-    assert campaign.state == CampaignState.RECONCILE_REQUIRED
-    assert any(key == "position_state:BTCUSDT" and value == "RECONCILE_REQUIRED" for key, value in calls)
+    assert result["state"] == expected_state
+    if expected_state == "RECONCILE_REQUIRED":
+        assert any(key == "position_state:BTCUSDT" and value == "RECONCILE_REQUIRED" for key, value in calls)
+    else:
+        assert result["client_algo_id"] == "add-on-1"
+        assert result["protection"] == "CONFIRMED"
+
 
 
 def test_reconcile_detects_exchange_local_quantity_drift_after_confirming_protection():
