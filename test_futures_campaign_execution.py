@@ -974,6 +974,7 @@ def test_exit_does_not_close_campaign_when_post_exit_quantity_is_non_finite(tmp_
         client._position["positionAmt"] = "0.5"
         client._position["entryPrice"] = "102.0"
         campaign.state = CampaignState.TREND_ACTIVE
+        campaign.tags.pop("entry_fill_reconciliation_pending", None)
         campaign.position_qty = 0.5
         campaign.average_entry_price = 102.0
         campaign.open_risk_quote = 10.0
@@ -1000,6 +1001,7 @@ def test_exit_keeps_campaign_in_reconciliation_when_protection_cancel_is_unconfi
         client._position["entryPrice"] = "102.0"
         client.algo_status = "NEW"
         campaign.state = CampaignState.TREND_ACTIVE
+        campaign.tags.pop("entry_fill_reconciliation_pending", None)
         campaign.position_qty = 0.5
         campaign.average_entry_price = 102.0
         campaign.open_risk_quote = 10.0
@@ -1207,6 +1209,7 @@ def _prepare_open_campaign_for_add_on(tmp_path, direction="LONG"):
     campaign.pending_risk_quote = 0.0
     campaign.capital_reserved_quote = 50.0
     campaign.tags["direction"] = direction
+    campaign.tags.pop("entry_fill_reconciliation_pending", None)
     campaign.tags["risk_budget_quote"] = 50.0
     campaign.tags["last_signal_time_ms"] = 1000
     campaign.tags["protective_client_algo_id"] = "protective-test-id"
@@ -1302,6 +1305,7 @@ def test_filled_market_exit_requires_matching_trade_history_and_records_pnl(tmp_
         client._position["positionAmt"] = "0.5"
         client._position["entryPrice"] = "102.0"
         campaign.state = CampaignState.OPEN_INITIAL
+        campaign.tags.pop("entry_fill_reconciliation_pending", None)
         campaign.position_qty = 0.5
         campaign.average_entry_price = 102.0
         campaign.open_risk_quote = 1.0
@@ -1409,6 +1413,7 @@ def test_partial_terminal_exit_is_aggregated_with_residual_exit(tmp_path):
         client._position["positionAmt"] = "0.5"
         client._position["entryPrice"] = "102.0"
         campaign.state = CampaignState.OPEN_INITIAL
+        campaign.tags.pop("entry_fill_reconciliation_pending", None)
         campaign.position_qty = 0.5
         campaign.average_entry_price = 102.0
         campaign.open_risk_quote = 1.0
