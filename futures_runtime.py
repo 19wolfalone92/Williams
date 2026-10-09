@@ -633,6 +633,8 @@ class FuturesRuntime:
             can_trade = permissions.get("canTrade") if isinstance(permissions, dict) else None
             if can_trade is not True:
                 preflight_errors.append("Futures account canTrade is not explicitly true")
+            if permissions.get("multiAssetsMargin") is not False:
+                preflight_errors.append("Futures single-asset mode is not explicitly confirmed")
         except Exception as exc:
             preflight_errors.append(
                 f"Futures account permissions unavailable: {type(exc).__name__}: {exc}"
@@ -881,6 +883,8 @@ class FuturesRuntime:
                 can_trade = permissions.get("canTrade") if isinstance(permissions, dict) else None
                 if can_trade is not True:
                     startup_blockers.append("Futures account canTrade is not explicitly true")
+                if permissions.get("multiAssetsMargin") is not False:
+                    startup_blockers.append("Futures single-asset mode is not explicitly confirmed")
             except Exception as exc:
                 startup_blockers.append(
                     f"Futures account permissions unavailable: {type(exc).__name__}: {exc}"
