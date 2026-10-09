@@ -207,22 +207,38 @@ class FuturesRuntime:
         return result
 
     def _daily_loss_allows_entry(self, equity: float) -> tuple[bool, str]:
+        # Invalid account equity must never reset the daily baseline or permit
+        # new exposure. NaN is particularly dangerous because comparisons with
+        # it are false and can otherwise bypass ordinary threshold checks.
+        try:
+            current_equity = float(equity)
+        except (TypeError, ValueError):
+            return False, "invalid account equity; new entries blocked"
+        if not math.isfinite(current_equity) or current_equity <= 0:
+            return False, "account equity must be finite and positive; new entries blocked"
+
         day = datetime.now(timezone.utc).date().isoformat()
         day_key = "futures_day_start_date"
         equity_key = "futures_day_start_equity_quote"
         old_day = str(self.db.state_get(day_key, "") or "")
         if old_day != day:
             self.db.state_set(day_key, day)
-            self.db.state_set(equity_key, repr(float(equity)))
+            self.db.state_set(equity_key, repr(current_equity))
             return True, "new UTC trading day baseline"
+
+        raw_baseline = self.db.state_get(equity_key, None)
         try:
-            baseline = float(self.db.state_get(equity_key, "0") or 0)
+            baseline = float(raw_baseline)
         except (TypeError, ValueError):
-            baseline = 0.0
-        if baseline <= 0:
-            self.db.state_set(equity_key, repr(float(equity)))
-            return True, "daily baseline initialized"
-        loss_fraction = max(0.0, (baseline - float(equity)) / baseline)
+            baseline = float("nan")
+        if not math.isfinite(baseline) or baseline <= 0:
+            # Corrupt/missing same-day baseline is not permission to reset the
+            # loss counter. Require recovery/reconciliation before new entries.
+            return False, "daily equity baseline is missing or invalid; new entries blocked"
+
+        loss_fraction = max(0.0, (baseline - current_equity) / baseline)
+        if not math.isfinite(loss_fraction):
+            return False, "daily loss calculation is invalid; new entries blocked"
         if loss_fraction >= self.max_daily_loss_pct:
             return False, (
                 f"daily loss limit reached: {loss_fraction:.2%} >= "
