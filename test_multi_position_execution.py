@@ -380,3 +380,14 @@ def test_daily_pnl_query_rejects_legacy_closed_trade_with_missing_pnl(tmp_path):
             db.pnl_today_all()
     finally:
         db.conn.close()
+
+
+def test_entry_fee_quote_does_not_double_count_base_asset_commission():
+    from types import SimpleNamespace
+
+    summary = SimpleNamespace(
+        fee_quote_equivalent=2.0,
+        commission_base=0.01,
+        avg_price=100.0,
+    )
+    assert MultiPositionTrader._entry_fee_quote(summary) == pytest.approx(1.0)
