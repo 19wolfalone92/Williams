@@ -922,7 +922,7 @@ def test_place_protection_rejects_invalid_live_position_quantity(tmp_path, bad_a
     try:
         client._position["positionAmt"] = bad_amount
         client._position["entryPrice"] = "102.0"
-        with pytest.raises(FuturesCampaignExecutionError, match="position quantity"):
+        with pytest.raises(FuturesCampaignExecutionError, match="positionAmt"):
             service.place_protection(campaign, stop_price=100.0)
         assert client.protective_stops == []
     finally:
@@ -1072,7 +1072,7 @@ def test_exit_refuses_to_submit_when_live_position_quantity_is_invalid(tmp_path,
         campaign.state = CampaignState.TREND_ACTIVE
         campaign.position_qty = 0.5
         service.db.save_campaign(campaign)
-        with pytest.raises(FuturesCampaignExecutionError, match="exchange quantity"):
+        with pytest.raises(FuturesCampaignExecutionError, match="positionAmt"):
             service.exit_position(campaign, reason="TEST_INVALID_POSITION")
         assert client.market_exits == []
         assert db.state_get(f"campaign_state:{campaign.campaign_id}") == "RECONCILE_REQUIRED"
