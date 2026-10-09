@@ -2650,26 +2650,6 @@ class FuturesCampaignExecutionService:
         ):
             return self._reconcile_pending_initial_entry(campaign, position, amount)
         if abs(amount) <= 1e-12:
-            if campaign.state == CampaignState.ENTRY_PENDING and entry_client_algo_id:
-                try:
-                    algo = self.client.get_algo_order(symbol, client_algo_id=entry_client_algo_id)
-                except Exception as exc:
-                    self.engine.mark_reconcile_required(campaign, f"pending entry lookup failed: {exc}")
-                    self.db.state_set(f"campaign_state:{campaign.campaign_id}", CampaignState.RECONCILE_REQUIRED.value)
-                    return {"symbol": symbol, "state": "RECONCILE_REQUIRED", "reason": str(exc)}
-                status = str(algo.get("algoStatus", "")).upper()
-                if status in {"NEW", "WORKING", "PENDING"}:
-                    return {"symbol": symbol, "state": "ENTRY_PENDING", "algo_status": status}
-                if status in {"CANCELED", "EXPIRED", "REJECTED"}:
-                    campaign.state = CampaignState.CLOSED
-                    campaign.next_action = "WAIT"
-                    campaign.pending_risk_quote = 0.0
-                    campaign.capital_reserved_quote = 0.0
-                    self.db.save_campaign(campaign)
-                    self.db.set_campaign_signal_state(campaign.current_signal_id, SignalState.CANCELLED.value)
-                    self.db.state_delete(f"futures_entry_pending:{symbol}")
-                    self.db.state_delete(f"campaign_state:{campaign.campaign_id}")
-                    return {"symbol": symbol, "state": "CLOSED", "algo_status": status}
             protective_client_id = str(
                 campaign.tags.get("protective_client_algo_id", "") or ""
             )
@@ -2718,41 +2698,6 @@ class FuturesCampaignExecutionService:
             self.db.state_set(f"campaign_state:{campaign.campaign_id}", CampaignState.RECONCILE_REQUIRED.value)
             self.db.state_set(f"position_state:{symbol}", CampaignState.RECONCILE_REQUIRED.value)
             return {"symbol": symbol, "state": "RECONCILE_REQUIRED", "reason": "direction mismatch"}
-
-        if campaign.state == CampaignState.ENTRY_PENDING:
-            self.engine.mark_triggered(campaign, campaign.current_signal_id, str(campaign.tags.get("pending_algo_id", "")))
-            campaign.tags["position_confirmed_by_exchange"] = True
-            try:
-                self.place_protection(campaign, stop_price=float(campaign.tags.get("initial_stop_price", 0) or 0))
-            except Exception as exc:
-                self.engine.mark_reconcile_required(campaign, f"entry filled but hard protection failed: {exc}")
-                self.db.state_set(f"campaign_state:{campaign.campaign_id}", CampaignState.RECONCILE_REQUIRED.value)
-                self.db.state_set(f"position_state:{symbol}", CampaignState.RECONCILE_REQUIRED.value)
-                return {"symbol": symbol, "state": "RECONCILE_REQUIRED", "reason": f"protection failed: {exc}"}
-            entry = float(position.get("entryPrice", 0) or 0)
-            if entry <= 0:
-                self.engine.mark_reconcile_required(campaign, "positionRisk omitted entryPrice after entry trigger")
-                return {"symbol": symbol, "state": "RECONCILE_REQUIRED", "reason": "missing entryPrice"}
-            self.engine.record_initial_fill(
-                campaign,
-                quantity=abs(amount),
-                average_entry_price=entry,
-                initial_stop_price=float(campaign.current_stop_price),
-                fill_order_id=str(campaign.tags.get("pending_algo_id", "") or entry_client_algo_id),
-                risk_quote=float(campaign.pending_risk_quote),
-                fee_quote=0.0,
-            )
-            self.db.state_delete(f"futures_entry_pending:{symbol}")
-            self.db.state_set(f"position_state:{symbol}", "OPEN")
-            self.db.state_delete(f"campaign_state:{campaign.campaign_id}")
-            return {
-                "symbol": symbol,
-                "state": "OPEN",
-                "direction": direction,
-                "position_qty": abs(amount),
-                "average_entry_price": entry,
-                "protective_client_algo_id": campaign.tags.get("protective_client_algo_id", ""),
-            }
 
         if campaign.position_qty > 0:
             # If stop replacement was interrupted after the new stop was
