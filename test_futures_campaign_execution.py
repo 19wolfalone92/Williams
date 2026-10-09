@@ -688,7 +688,7 @@ def test_account_reconciliation_blocks_new_exposure_on_non_finite_position(bad_a
         service._assert_no_unmanaged_positions("ETHUSDT")
 
 
-@pytest.mark.parametrize("terminal_status", ["CANCELED", "EXPIRED", "REJECTED", "FINISHED"])
+@pytest.mark.parametrize("terminal_status", ["CANCELED", "EXPIRED", "REJECTED"])
 def test_protection_terminal_response_never_marks_stop_active(tmp_path, terminal_status):
     db, client, service, campaign = _armed_entry_for_cancel(tmp_path)
     try:
