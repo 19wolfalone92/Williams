@@ -71,7 +71,7 @@ class PortfolioController:
                     analysed.append(Selection(
                         candidate=candidate,
                         risk=risk,
-                        action=f"{direction}_ALLOWED",
+                        action=("BUY_ALLOWED" if direction == "LONG" else "SHORT_ALLOWED"),
                         reason=f"STRICT_SIGNAL + {direction} risk checks passed",
                     ))
             except Exception as exc:
@@ -148,7 +148,7 @@ class PortfolioController:
             selections.append(Selection(
                 candidate=base.candidate,
                 risk=r,
-                action=f"{direction}_ALLOWED",
+                action=("BUY_ALLOWED" if direction == "LONG" else "SHORT_ALLOWED"),
                 reason=f"STRICT_SIGNAL + {direction} portfolio risk allocation {allocation_pct:.2%}",
             ))
             remaining_pct -= allocation_pct
