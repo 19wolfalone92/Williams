@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import math
 import os
 import time
 from decimal import Decimal, InvalidOperation, ROUND_DOWN, ROUND_UP
@@ -65,18 +66,38 @@ class BinanceUsdmFuturesClient:
             raise ValueError(
                 "Mainnet futures is disabled: require allow_live=True and ALLOW_LIVE=true"
             )
-        if int(max_leverage) != 1:
-            raise ValueError("Initial Williams futures build is capped at 1x leverage")
-        if not 1000 <= int(recv_window) <= 60000:
-            raise ValueError("recv_window must be in [1000, 60000]")
+        try:
+            leverage_value = Decimal(str(max_leverage))
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            raise ValueError("max_leverage must be the integer 1") from exc
+        if not leverage_value.is_finite() or leverage_value != Decimal("1"):
+            raise ValueError("Initial Williams futures build is capped at exactly 1x leverage")
+
+        try:
+            recv_window_value = Decimal(str(recv_window))
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            raise ValueError("recv_window must be an integer in [1000, 60000]") from exc
+        if (
+            not recv_window_value.is_finite()
+            or recv_window_value != recv_window_value.to_integral_value()
+            or not Decimal("1000") <= recv_window_value <= Decimal("60000")
+        ):
+            raise ValueError("recv_window must be an integer in [1000, 60000]")
+
+        try:
+            timeout_value = float(timeout)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("timeout must be finite and positive") from exc
+        if not math.isfinite(timeout_value) or timeout_value <= 0:
+            raise ValueError("timeout must be finite and positive")
 
         self.api_key = str(api_key).strip()
         self.api_secret = str(api_secret).strip()
         self.testnet = bool(testnet)
         self.base_url = self.DEMO_BASE_URL if self.testnet else self.LIVE_BASE_URL
-        self.max_leverage = int(max_leverage)
-        self.recv_window = int(recv_window)
-        self.timeout = float(timeout)
+        self.max_leverage = 1
+        self.recv_window = int(recv_window_value)
+        self.timeout = timeout_value
         self.session = session or requests.Session()
         self.session.headers.update({"X-MBX-APIKEY": self.api_key})
         self.time_offset_ms = 0
