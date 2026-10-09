@@ -68,16 +68,35 @@ class ExecutionBarrier:
     is performed by this layer.
     """
 
-    def __init__(self, context_cache: ContextCache, db=None) -> None:
+    def __init__(
+        self,
+        context_cache: ContextCache,
+        db=None,
+        *,
+        require_durable_intent: bool = True,
+    ) -> None:
         self.context_cache = context_cache
         self.db = db
+        # Volatile execution is permitted only when explicitly requested by
+        # deterministic tests. Production callers must have a durable store.
+        self.require_durable_intent = bool(require_durable_intent)
 
-    def _persist(self, intent: OrderIntent, status: str, reason: str = "") -> None:
-        if self.db is not None and hasattr(self.db, "save_execution_intent"):
-            try:
-                self.db.save_execution_intent(intent, status, reason)
-            except Exception:
-                pass
+    def _persist(self, intent: OrderIntent, status: str, reason: str = "") -> bool:
+        """Persist an intent state and report failure to the caller.
+
+        A failed write is never treated as a successful durable intent. The
+        caller must abort before submit or require exchange reconciliation
+        after a submit has already been attempted.
+        """
+        if self.db is None or not callable(
+            getattr(self.db, "save_execution_intent", None)
+        ):
+            return False
+        try:
+            self.db.save_execution_intent(intent, status, reason)
+        except Exception:
+            return False
+        return True
 
     def _record(self, level: str, event: str, intent: OrderIntent, message: str, raw=None) -> None:
         if self.db is not None and hasattr(self.db, "log_event"):
@@ -148,7 +167,6 @@ class ExecutionBarrier:
         with self.context_cache.execution_lock:
             order_fsm = OrderStateMachine()
             order_fsm.transition(OrderState.ADMISSION)
-            self._persist(intent, "PENDING")
             if self.db is not None and hasattr(self.db, "save_execution_event"):
                 try:
                     self.db.save_execution_event(intent.intent_id, "ADMISSION_STARTED", dict(intent.required_context_versions))
@@ -178,7 +196,19 @@ class ExecutionBarrier:
                     self._record("WARNING", "execution_blocked", intent, reason)
                     return ExecutionResult(intent.intent_id, False, reason=reason)
 
-            order_fsm.transition(OrderState.SUBMITTING)
+            # Durable intent must exist before the first exchange mutation.
+            # When storage is unavailable, fail closed and never call submit().
+            persisted = self._persist(intent, "PENDING")
+            if not persisted and (
+                self.db is not None or self.require_durable_intent
+            ):
+                reason = (
+                    "execution_intent_persistence_failed: submission aborted; "
+                    "durable PENDING intent could not be confirmed"
+                )
+                self._record("ERROR", "execution_intent_persistence_failed", intent, reason)
+                return ExecutionResult(intent.intent_id, False, reason=reason)
+
             order_fsm.transition(OrderState.SUBMITTING)
             self._record(
                 "INFO",
@@ -284,7 +314,22 @@ class ExecutionBarrier:
                     raise RuntimeError(
                         "ExecutionBarrier: exchange response lacks authoritative order state"
                     )
-            self._persist(intent, "SUBMITTED")
+            submitted_persisted = self._persist(intent, "SUBMITTED")
+            if not submitted_persisted and (
+                self.db is not None or self.require_durable_intent
+            ):
+                reason = (
+                    "exchange_response_received_but_SUBMITTED_state_persistence_failed; "
+                    "reconcile by stable client_order_id before any further mutation"
+                )
+                self._record(
+                    "ERROR",
+                    "execution_submission_persistence_failed",
+                    intent,
+                    reason,
+                    {"intent_id": intent.intent_id, "client_order_id": intent.client_order_id},
+                )
+                raise RuntimeError(f"ExecutionBarrier: {reason}")
             if self.db is not None and hasattr(self.db, "save_execution_event"):
                 try:
                     self.db.save_execution_event(intent.intent_id, "BINANCE_SUBMITTED", {"symbol": intent.symbol, "side": intent.side})
