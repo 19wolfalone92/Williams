@@ -1992,6 +1992,45 @@ def test_orphan_open_algo_order_blocks_new_entry_when_position_is_flat(tmp_path)
         db.conn.close()
 
 
+def test_unconfigured_symbol_orphan_order_blocks_new_entry_account_wide(tmp_path):
+    db = Database(str(tmp_path / "account-wide-orphan-order.sqlite3"))
+    try:
+        cache = ContextCache()
+        make_context(cache, allow_long=True, allow_short=False)
+        client = FakeFuturesClient(102.0)
+        client.open_orders = lambda symbol=None: []
+        client.open_algo_orders = lambda symbol=None: [{
+            "symbol": "XRPUSDT",
+            "algoId": "99001",
+            "clientAlgoId": "unowned-order-on-unconfigured-symbol",
+            "algoStatus": "NEW",
+            "side": "SELL",
+            "type": "STOP_MARKET",
+            "closePosition": True,
+        }]
+        service = FuturesCampaignExecutionService(
+            client,
+            db,
+            execution_barrier=ExecutionBarrier(cache, db),
+            max_open_positions=3,
+            portfolio_risk_limit_pct=0.01,
+            campaign_risk_limit_pct=0.005,
+        )
+
+        with pytest.raises(FuturesCampaignExecutionError, match="orphan/unowned open exchange orders"):
+            service.arm_initial_entry(
+                make_signal("LONG"),
+                equity_quote=10000.0,
+                atr=2.0,
+                candidate_risk_fraction=0.005,
+            )
+
+        assert client.stop_entries == []
+        assert db.state_get("position_state:XRPUSDT") == "RECONCILE_REQUIRED"
+    finally:
+        db.conn.close()
+
+
 def test_triggered_protective_algo_without_child_order_id_stays_unresolved(tmp_path):
     db, client, service, campaign = _prepare_open_campaign_for_add_on(tmp_path, "LONG")
     try:
