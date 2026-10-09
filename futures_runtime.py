@@ -693,10 +693,11 @@ class FuturesRuntime:
             }
             return self._last_scan_summary
 
-        # Repeat the account-wide ownership check on every scan: external
-        # positions/orders may appear after startup and must block new exposure.
+        # Repeat ownership checks for every configured symbol on every scan:
+        # an orphan order on a non-first symbol must also block new exposure.
         try:
-            self.execution._assert_no_unmanaged_positions(self.symbols[0])
+            for symbol in self.symbols:
+                self.execution._assert_no_unmanaged_positions(symbol)
         except Exception as exc:
             blocked_reconciliation = True
             management.append({
@@ -1207,8 +1208,8 @@ class FuturesRuntime:
         if active_positions:
             raise RuntimeError("Kill reset denied: Futures positions are still open")
         try:
-            # A flat position is not enough: orphan conditional entries/orders
-            # can recreate exposure immediately after the kill latch is cleared.
+            # A flat position is not enough: orphan conditional entries/orders on
+            # any configured symbol can recreate exposure after latch reset.
             self.execution._assert_no_unmanaged_positions(self.symbols[0])
         except Exception as exc:
             raise RuntimeError(
