@@ -1398,6 +1398,7 @@ class CampaignExecutionService:
                 previous_next_action = campaign.next_action
                 previous_pending_risk_quote = campaign.pending_risk_quote
                 previous_capital_reserved_quote = campaign.capital_reserved_quote
+                previous_tags = dict(campaign.tags)
                 campaign.tags["last_signal_time_ms"] = int(signal.signal_bar_time_ms)
                 campaign.tags["pending_add_signal_id"] = signal.signal_id
                 campaign.tags["pending_add_signal_expires_at_ms"] = int(pending_signal.expires_at_ms)
@@ -1434,6 +1435,7 @@ class CampaignExecutionService:
             campaign.capital_reserved_quote = previous_capital_reserved_quote
             campaign.state = previous_campaign_state
             campaign.next_action = previous_next_action
+            campaign.tags = previous_tags
             self.db.set_campaign_signal_state(signal.signal_id, SignalState.INVALIDATED.value)
             self.db.state_delete(f"entry_client_order_id:{signal.symbol}")
             self.db.save_campaign(campaign)
@@ -1470,6 +1472,7 @@ class CampaignExecutionService:
                 campaign.capital_reserved_quote = previous_capital_reserved_quote
                 campaign.state = previous_campaign_state
                 campaign.next_action = previous_next_action
+                campaign.tags = previous_tags
                 self.db.set_campaign_signal_state(
                     signal.signal_id,
                     SignalState.EXPIRED.value if pending_signal.is_expired() else SignalState.INVALIDATED.value,
