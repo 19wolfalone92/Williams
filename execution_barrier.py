@@ -351,7 +351,36 @@ class ExecutionBarrier:
                 )
                 raise
 
-            if str(intent.order_type).strip().upper() == "OCO":
+            if str(intent.order_type).strip().upper() == "CANCEL":
+                status = str(response.get("status", "")).upper() if isinstance(response, dict) else ""
+                try:
+                    executed_qty = float(response.get("executedQty", 0) or 0) if isinstance(response, dict) else float("nan")
+                except (TypeError, ValueError, OverflowError):
+                    executed_qty = float("nan")
+                if not status or not math.isfinite(executed_qty) or executed_qty < 0:
+                    order_fsm.state = OrderState.RECONCILE_REQUIRED
+                    reason = "cancel response lacks authoritative status/fill quantity; reconciliation required"
+                    self._persist(intent, "AMBIGUOUS", reason)
+                    self._record("ERROR", "execution_ambiguous", intent, reason)
+                    raise RuntimeError(f"ExecutionBarrier: {reason}")
+                if status == "CANCELED" and executed_qty == 0:
+                    order_fsm.observe_exchange_status(status, executed_qty)
+                elif status == "REJECTED":
+                    self._persist(intent, "REJECTED", "Binance rejected cancellation; original order state must be reconciled")
+                    self._record("WARNING", "cancel_rejected", intent, "Binance rejected cancellation")
+                    return ExecutionResult(
+                        intent.intent_id,
+                        False,
+                        response=response,
+                        reason="Binance rejected cancellation; reconciliation required",
+                    )
+                else:
+                    order_fsm.state = OrderState.RECONCILE_REQUIRED
+                    reason = f"cancel did not confirm an unfilled CANCELED order (status={status}, executedQty={executed_qty}); reconciliation required"
+                    self._persist(intent, "AMBIGUOUS", reason)
+                    self._record("ERROR", "execution_ambiguous", intent, reason)
+                    raise RuntimeError(f"ExecutionBarrier: {reason}")
+            elif str(intent.order_type).strip().upper() == "OCO":
                 reports = response.get("orderReports") if isinstance(response, dict) else None
                 try:
                     order_list_id = int(response.get("orderListId", -1)) if isinstance(response, dict) else -1
