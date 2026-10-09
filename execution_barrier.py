@@ -160,7 +160,9 @@ class ExecutionBarrier:
         # SELL means opening SHORT only for an ENTRY/ADD-ON intent; on exits it
         # is simply an order side and must not be interpreted as a short signal.
         if is_new_exposure:
-            permission_tf = (intent.permission_interval or "").lower()
+            permission_tf = str(intent.permission_interval or "").strip()
+            if permission_tf != "1M":
+                permission_tf = permission_tf.lower()
             permission_ctx = snapshot.context(intent.symbol, permission_tf) if permission_tf else None
             if permission_ctx is None:
                 return f"missing permission context {intent.symbol} {permission_tf}"
