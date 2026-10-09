@@ -71,8 +71,6 @@ class BinanceUsdmFuturesClientTest {
             )
         )
     }
-}
-
 
     @Test
     fun ambiguousMutationResponsesIncludeTimeoutAndUnknownExchangeExecutionCodes() {
@@ -87,3 +85,4 @@ class BinanceUsdmFuturesClientTest {
         assertEquals(false, BinanceUsdmFuturesClient.isAmbiguousMutationOutcome(400, -1100))
         assertEquals(false, BinanceUsdmFuturesClient.isAmbiguousMutationOutcome(200, 0))
     }
+}
