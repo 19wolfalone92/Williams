@@ -137,6 +137,8 @@ class FakeFuturesClient:
             "clientAlgoId": client_algo_id,
             "algoStatus": self.algo_status,
             "side": side,
+            "type": "STOP_MARKET",
+            "closePosition": True,
         }
         if prior:
             response["triggerPrice"] = prior[2]
