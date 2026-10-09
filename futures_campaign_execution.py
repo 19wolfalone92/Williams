@@ -779,6 +779,45 @@ class FuturesCampaignExecutionService:
             raise FuturesCampaignExecutionError(
                 f"{reason}; reconciliation required before further exposure"
             )
+        if status not in {"NEW", "WORKING", "PENDING_NEW"}:
+            # A syntactically valid exchange response is not proof of active
+            # protection. Terminal/rejected states must never be persisted as
+            # an armed stop; preserve the client ID for authoritative recovery.
+            reason = (
+                f"{symbol}: protective algo order is not confirmed active "
+                f"(status={status or 'MISSING'}, algo_id={algo_id or 'MISSING'})"
+            )
+            campaign.tags["protection_response_unidentified"] = {
+                "client_algo_id": client_algo_id,
+                "algo_id": algo_id,
+                "status": status,
+                "stop_price": normalized_stop,
+            }
+            campaign.mark_reconcile_required(reason)
+            self.db.save_campaign(campaign)
+            self.db.state_set(
+                f"campaign_state:{campaign.campaign_id}",
+                CampaignState.RECONCILE_REQUIRED.value,
+            )
+            self.db.state_set(
+                f"position_state:{symbol}",
+                CampaignState.RECONCILE_REQUIRED.value,
+            )
+            self.db.log_event(
+                "ERROR",
+                "futures_protection_not_active",
+                reason,
+                {
+                    "campaign_id": campaign.campaign_id,
+                    "client_algo_id": client_algo_id,
+                    "algo_id": algo_id,
+                    "status": status,
+                },
+            )
+            raise FuturesCampaignExecutionError(
+                f"{reason}; reconciliation required before further exposure"
+            )
+
         campaign.tags["protective_client_algo_id"] = client_algo_id
         campaign.tags["protective_algo_id"] = algo_id
         campaign.tags.pop("pending_protective_client_algo_id", None)
