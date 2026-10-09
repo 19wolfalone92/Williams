@@ -2393,34 +2393,218 @@ class FuturesCampaignExecutionService:
                     self.db.state_set(f"campaign_state:{campaign.campaign_id}", CampaignState.RECONCILE_REQUIRED.value)
                     self.db.state_set(f"position_state:{symbol}", CampaignState.RECONCILE_REQUIRED.value)
                     return {"symbol": symbol, "state": "RECONCILE_REQUIRED", "reason": "missing protection"}
-            # Add-on order placement/fill reconciliation is not yet implemented as
-            # a complete exchange lifecycle. Never silently report an expanding
-            # campaign as healthy merely because its original protective stop is
-            # active: a crash/partial fill could leave local quantity and risk
-            # reservations inconsistent with the authoritative exchange position.
             if campaign.state in {
                 CampaignState.ADD_ON_ARMING,
                 CampaignState.ADD_ON_PENDING,
                 CampaignState.POSITION_EXPANDING,
             }:
-                reason = (
-                    "add-on lifecycle is unresolved; exchange position and add-on "
-                    "order/fill history require explicit reconciliation"
+                client_add_id = str(campaign.tags.get("pending_add_on_client_algo_id", "") or "")
+                original_qty = float(campaign.tags.get("pending_add_on_original_qty", 0) or 0)
+                trigger_price = float(campaign.tags.get("pending_add_on_trigger_price", 0) or 0)
+                stop_price = float(campaign.tags.get("pending_add_on_stop_price", 0) or 0)
+                if not client_add_id or not all(
+                    math.isfinite(value) and value > 0
+                    for value in (original_qty, trigger_price, stop_price)
+                ):
+                    raise FuturesCampaignExecutionError(
+                        f"{symbol}: durable add-on intent is missing stable ID/quantity/price data"
+                    )
+
+                algo = self.client.get_algo_order(symbol, client_algo_id=client_add_id)
+                algo_status = str(algo.get("algoStatus", "") or "").upper()
+                active_add_statuses = {"NEW", "WORKING", "PENDING_NEW", "PENDING"}
+                terminal_add_statuses = {"CANCELED", "CANCELLED", "EXPIRED", "REJECTED", "FINISHED"}
+                if algo_status in active_add_statuses:
+                    if abs(abs(amount) - original_qty) > max(1e-8, original_qty * 1e-6):
+                        raise FuturesCampaignExecutionError(
+                            f"{symbol}: exchange quantity changed while add-on algo remains active"
+                        )
+                    return {
+                        "symbol": symbol,
+                        "state": "ADD_ON_PENDING",
+                        "algo_status": algo_status,
+                        "client_algo_id": client_add_id,
+                        "position_qty": abs(amount),
+                        "protection": "CONFIRMED",
+                    }
+
+                actual_order_id = algo.get("actualOrderId")
+                actual_order: dict[str, Any] = {}
+                executed = 0.0
+                average_fill = 0.0
+                order_status = ""
+                if actual_order_id:
+                    actual_order = self.client.get_order(symbol, order_id=actual_order_id)
+                    order_status = str(actual_order.get("status", "") or "").upper()
+                    try:
+                        executed = float(actual_order.get("executedQty", 0) or 0)
+                    except (TypeError, ValueError):
+                        executed = float("nan")
+                    if not math.isfinite(executed) or executed < 0:
+                        raise FuturesCampaignExecutionError(
+                            f"{symbol}: add-on actual order has invalid executedQty"
+                        )
+
+                    if order_status == "PARTIALLY_FILLED":
+                        # Do not leave a residual add-on capable of expanding
+                        # risk after the local campaign has moved on. Cancel the
+                        # remainder, then re-read authoritative order state.
+                        self.client.cancel_order_safe(
+                            symbol, order_id=actual_order_id
+                        )
+                        actual_order = self.client.get_order(symbol, order_id=actual_order_id)
+                        order_status = str(actual_order.get("status", "") or "").upper()
+                        try:
+                            executed = float(actual_order.get("executedQty", 0) or 0)
+                        except (TypeError, ValueError):
+                            executed = float("nan")
+                        if not math.isfinite(executed) or executed < 0:
+                            raise FuturesCampaignExecutionError(
+                                f"{symbol}: add-on executedQty invalid after remainder cancellation"
+                            )
+
+                    if order_status in {"NEW", "PARTIALLY_FILLED", "PENDING_NEW"}:
+                        if executed <= 0 and abs(abs(amount) - original_qty) <= max(1e-8, original_qty * 1e-6):
+                            return {
+                                "symbol": symbol,
+                                "state": "ADD_ON_PENDING",
+                                "algo_status": algo_status,
+                                "order_status": order_status,
+                                "client_algo_id": client_add_id,
+                                "position_qty": abs(amount),
+                                "protection": "CONFIRMED",
+                            }
+                        raise FuturesCampaignExecutionError(
+                            f"{symbol}: add-on actual order remains nonterminal after reconciliation"
+                        )
+
+                    if order_status not in terminal_add_statuses | {"FILLED"}:
+                        raise FuturesCampaignExecutionError(
+                            f"{symbol}: add-on actual order status is ambiguous ({order_status or 'UNKNOWN'})"
+                        )
+                    if executed > 0:
+                        try:
+                            average_fill = float(actual_order.get("avgPrice", 0) or 0)
+                        except (TypeError, ValueError):
+                            average_fill = 0.0
+                        if average_fill <= 0:
+                            try:
+                                cumulative_quote = float(
+                                    actual_order.get("cumQuote", actual_order.get("cumQuoteQty", 0)) or 0
+                                )
+                            except (TypeError, ValueError):
+                                cumulative_quote = 0.0
+                            if math.isfinite(cumulative_quote) and cumulative_quote > 0:
+                                average_fill = cumulative_quote / executed
+                        if not math.isfinite(average_fill) or average_fill <= 0:
+                            raise FuturesCampaignExecutionError(
+                                f"{symbol}: add-on fill has no authoritative average price"
+                            )
+                elif algo_status not in terminal_add_statuses:
+                    raise FuturesCampaignExecutionError(
+                        f"{symbol}: add-on algo status is unresolved ({algo_status or 'UNKNOWN'})"
+                    )
+
+                if executed <= 0:
+                    if abs(abs(amount) - original_qty) > max(1e-8, original_qty * 1e-6):
+                        raise FuturesCampaignExecutionError(
+                            f"{symbol}: add-on is unfilled but exchange quantity differs from its baseline"
+                        )
+                    if algo_status not in terminal_add_statuses:
+                        raise FuturesCampaignExecutionError(
+                            f"{symbol}: add-on has no actual order and is not authoritatively terminal"
+                        )
+                    campaign.pending_risk_quote = 0.0
+                    campaign.capital_reserved_quote = 0.0
+                    campaign.transition(
+                        CampaignState.TREND_ACTIVE,
+                        reason=f"add-on ended without a fill ({algo_status})",
+                    )
+                    campaign.tags["last_add_on_terminal_status"] = algo_status
+                    for key in (
+                        "pending_add_on_client_algo_id", "pending_add_on_algo_id",
+                        "pending_add_on_trigger_price", "pending_add_on_stop_price",
+                        "pending_add_on_quantity", "pending_add_on_risk_quote",
+                        "pending_add_on_original_qty", "pending_add_on_original_entry",
+                        "pending_add_on_direction",
+                    ):
+                        campaign.tags.pop(key, None)
+                    self.db.save_campaign(campaign)
+                    self.db.set_campaign_signal_state(campaign.current_signal_id, SignalState.CANCELLED.value)
+                    self.db.state_delete(f"futures_entry_pending:{symbol}")
+                    self.db.state_set(f"campaign_state:{campaign.campaign_id}", CampaignState.TREND_ACTIVE.value)
+                    self.db.state_set(f"position_state:{symbol}", CampaignState.TREND_ACTIVE.value)
+                    return {
+                        "symbol": symbol,
+                        "state": CampaignState.TREND_ACTIVE.value,
+                        "action": "ADD_ON_TERMINAL_UNFILLED",
+                        "algo_status": algo_status,
+                    }
+
+                expected_qty = original_qty + executed
+                if abs(abs(amount) - expected_qty) > max(1e-8, expected_qty * 1e-6):
+                    raise FuturesCampaignExecutionError(
+                        f"{symbol}: add-on fill/position mismatch; expected={expected_qty}, exchange={abs(amount)}"
+                    )
+                if order_status not in {"FILLED", "CANCELED", "CANCELLED", "EXPIRED", "REJECTED"}:
+                    raise FuturesCampaignExecutionError(
+                        f"{symbol}: partial add-on fill is not terminal after cancellation"
+                    )
+                fill_risk = self._actual_risk_quote(executed, average_fill, stop_price)
+                if not math.isfinite(fill_risk) or fill_risk <= 0:
+                    raise FuturesCampaignExecutionError(f"{symbol}: actual add-on fill risk is invalid")
+                fee_quote = 0.0
+                fee_by_asset: dict[str, float] = {}
+                trades = self.client.user_trades(symbol, order_id=actual_order_id, limit=1000)
+                if not trades:
+                    raise FuturesCampaignExecutionError(
+                        f"{symbol}: add-on fill is confirmed but authoritative userTrades are not yet available"
+                    )
+                for trade in trades:
+                    commission = float(trade.get("commission", 0) or 0)
+                    if not math.isfinite(commission) or commission < 0:
+                        raise FuturesCampaignExecutionError(f"{symbol}: invalid add-on trade commission")
+                    asset = str(trade.get("commissionAsset", "") or "").upper()
+                    if asset in {"USDT", "USDC"}:
+                        fee_quote += commission
+                    elif asset:
+                        fee_by_asset[asset] = fee_by_asset.get(asset, 0.0) + commission
+
+                if campaign.state in {CampaignState.ADD_ON_ARMING, CampaignState.ADD_ON_PENDING}:
+                    if campaign.state == CampaignState.ADD_ON_ARMING:
+                        campaign.transition(CampaignState.ADD_ON_PENDING, reason="recovered durable add-on intent")
+                    campaign.transition(CampaignState.POSITION_EXPANDING, reason="exchange confirms add-on execution")
+                self.engine.record_add_on_fill(
+                    campaign,
+                    quantity=executed,
+                    average_entry_price=average_fill,
+                    fill_order_id=str(actual_order_id),
+                    risk_quote=fill_risk,
+                    fee_quote=fee_quote,
                 )
-                self.engine.mark_reconcile_required(campaign, reason)
-                self.db.state_set(
-                    f"campaign_state:{campaign.campaign_id}",
-                    CampaignState.RECONCILE_REQUIRED.value,
-                )
-                self.db.state_set(
-                    f"position_state:{symbol}",
-                    CampaignState.RECONCILE_REQUIRED.value,
-                )
+                campaign.tags["last_add_on_exchange_order_id"] = str(actual_order_id)
+                campaign.tags["last_add_on_fee_by_asset"] = fee_by_asset
+                campaign.tags["last_add_on_order_status"] = order_status
+                for key in (
+                    "pending_add_on_client_algo_id", "pending_add_on_algo_id",
+                    "pending_add_on_trigger_price", "pending_add_on_stop_price",
+                    "pending_add_on_quantity", "pending_add_on_risk_quote",
+                    "pending_add_on_original_qty", "pending_add_on_original_entry",
+                    "pending_add_on_direction",
+                ):
+                    campaign.tags.pop(key, None)
+                self.db.save_campaign(campaign)
+                self.db.set_campaign_signal_state(campaign.current_signal_id, SignalState.FILLED.value)
+                self.db.state_delete(f"futures_entry_pending:{symbol}")
+                self.db.state_set(f"campaign_state:{campaign.campaign_id}", CampaignState.TREND_ACTIVE.value)
+                self.db.state_set(f"position_state:{symbol}", CampaignState.TREND_ACTIVE.value)
                 return {
                     "symbol": symbol,
-                    "state": "RECONCILE_REQUIRED",
-                    "reason": reason,
-                    "position_qty": abs(amount),
+                    "state": CampaignState.TREND_ACTIVE.value,
+                    "action": "ADD_ON_FILLED",
+                    "filled_quantity": executed,
+                    "average_fill_price": average_fill,
+                    "order_status": order_status,
                     "protection": "CONFIRMED",
                 }
 
