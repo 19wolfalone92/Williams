@@ -67,3 +67,13 @@ def test_explicitly_expired_signal_is_not_revived_by_late_creation_time():
     decision = core.compose([stale], now_ms=15_000)
     assert decision.action == "BLOCK"
     assert decision.pending.expires_at_ms == 9_999
+
+
+def test_pending_signal_with_missing_or_negative_expiry_is_not_actionable():
+    from pending_signal import PendingSignal
+
+    valid = signal(1_000, expires_at_ms=20_000)
+    pending = PendingSignal.from_spec(valid)
+    assert pending.actionable(now_ms=10_000)
+    assert not PendingSignal(**{**pending.to_dict(), "expires_at_ms": 0}).actionable(now_ms=10_000)
+    assert not PendingSignal(**{**pending.to_dict(), "expires_at_ms": -1}).actionable(now_ms=10_000)
