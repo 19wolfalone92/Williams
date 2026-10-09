@@ -1711,6 +1711,14 @@ class FuturesCampaignExecutionService:
                                 raise FuturesCampaignExecutionError(
                                     f"{symbol}: prior stop cancellation remains uncertain: {cancel_result.reason}"
                                 )
+                            cancel_response = cancel_result.response if isinstance(cancel_result.response, dict) else {}
+                            cancel_status = str(
+                                cancel_response.get("algoStatus", "") or cancel_response.get("status", "")
+                            ).upper()
+                            if cancel_status not in {"CANCELED", "EXPIRED"}:
+                                raise FuturesCampaignExecutionError(
+                                    f"{symbol}: prior stop cancellation is not confirmed terminal: {cancel_status or 'UNKNOWN'}"
+                                )
                         # The new stop is authoritative and active.
                     elif old_status in active_statuses:
                         # New stop is terminal, but old protection is still live.
