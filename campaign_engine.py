@@ -424,8 +424,20 @@ class CampaignEngine:
         campaign.capital_reserved_quote = 0.0
         campaign.tags["last_add_on_fee_quote"] = fill_fee
         campaign.tags["last_add_on_fill_id"] = fill_id
+        campaign.tags["last_add_on_exchange_order_id"] = fill_id
         campaign.next_action = "MONITOR_CAMPAIGN"
         campaign.transition(CampaignState.TREND_ACTIVE, reason="add-on filled and position revalued")
+        # Clear the durable pending intent in the same campaign save that
+        # books the fill. Otherwise a crash after booking but before the caller's
+        # cleanup could replay the same child order and double the position.
+        for key in (
+            "pending_add_on_client_algo_id", "pending_add_on_algo_id",
+            "pending_add_on_trigger_price", "pending_add_on_stop_price",
+            "pending_add_on_quantity", "pending_add_on_risk_quote",
+            "pending_add_on_original_qty", "pending_add_on_original_entry",
+            "pending_add_on_direction",
+        ):
+            campaign.tags.pop(key, None)
         self.db.save_campaign(campaign)
         self.db.log_campaign_event(
             campaign.campaign_id,
@@ -479,7 +491,10 @@ class CampaignEngine:
         campaign.tranche_index = 1
         campaign.next_action = "MONITOR_CAMPAIGN"
         campaign.tags["entry_fee_quote"] = float(fee_quote)
-        campaign.transition(CampaignState.OPEN_INITIAL, reason="entry fully filled and hard stop initialized")
+        campaign.transition(CampaignState.OPEN_INITIAL, reason="entry fill and hard stop initialized")
+        # Persist the entry fill and release the pending-entry reconciliation
+        # marker atomically at the campaign-record level.
+        campaign.tags.pop("entry_fill_reconciliation_pending", None)
         self.db.save_campaign(campaign)
         self.db.log_campaign_event(
             campaign.campaign_id,
