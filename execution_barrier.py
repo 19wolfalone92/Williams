@@ -261,7 +261,7 @@ class ExecutionBarrier:
                         f"{prior.get('intent_id')} is {prior.get('status') or 'UNKNOWN'}; "
                         "reconcile the existing Binance order before retrying"
                     )
-                    self._persist(intent, "BLOCKED", reason)
+                    self._persist(intent, "IDEMPOTENCY_BLOCKED", reason)
                     self._record("ERROR", "execution_duplicate_client_order_id", intent, reason, {
                         "prior_intent_id": prior.get("intent_id"),
                         "prior_status": prior.get("status"),
