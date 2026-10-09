@@ -1895,16 +1895,16 @@ internal class FuturesNativeEngine(
     }
 
     private fun enforceKillOnCampaigns(exchange: BinanceUsdmFuturesClient): JSONArray {
-        val results = JSONArray()
+        val results = cancelPendingEntries(exchange, "KILL_SWITCH_RETRY")
         for (row in auditStore.activeFuturesCampaigns()) {
             val symbol = row.optString("symbol").uppercase(Locale.US)
             val campaign = JSONObject(row.toString())
             try {
-                val live = position(exchange, symbol).optString("positionAmt").toDoubleOrNull() ?: 0.0
-                if (abs(live) > 1e-12) {                    results.put(exitPosition(exchange, campaign, "KILL_SWITCH_RETRY"))
-                } else if (campaign.optString("state") == "ENTRY_PENDING") {
-                    cancelPendingEntry(exchange, campaign, "KILL_SWITCH_RETRY")
-                    results.put(JSONObject().put("symbol", symbol).put("action", "ENTRY_CANCEL_CONFIRMED"))
+                val live = position(exchange, symbol).optString("positionAmt").toDoubleOrNull()
+                    ?: throw FuturesApiException("$symbol positionAmt is invalid during kill enforcement")
+                if (!live.isFinite()) throw FuturesApiException("$symbol positionAmt is non-finite during kill enforcement")
+                if (abs(live) > 1e-12) {
+                    results.put(exitPosition(exchange, campaign, "KILL_SWITCH_RETRY"))
                 }
             } catch (x: Exception) {
                 reconcileRequired = true
@@ -1920,7 +1920,9 @@ internal class FuturesNativeEngine(
         val symbol = campaign.optString("symbol").uppercase(Locale.US)
         val direction = campaign.optString("direction").uppercase(Locale.US)
         val pos = position(exchange, symbol)
-        val amount = pos.optString("positionAmt").toDoubleOrNull() ?: 0.0
+        val amount = pos.optString("positionAmt").toDoubleOrNull()
+            ?: throw FuturesApiException("$symbol positionAmt is missing or malformed while placing protection")
+        if (!amount.isFinite()) throw FuturesApiException("$symbol positionAmt is non-finite while placing protection")
         if (abs(amount) <= 1e-12) throw FuturesApiException("$symbol has no live Futures position to protect")
         if ((amount > 0.0) != (direction == "LONG")) {
             throw FuturesApiException("$symbol live position direction changed before protection")
