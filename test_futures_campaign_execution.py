@@ -1492,7 +1492,8 @@ def test_flat_position_cancels_orphan_stop_and_does_not_guess_closed(tmp_path):
         result = service.reconcile_symbol("BTCUSDT")
 
         assert result["state"] == "RECONCILE_REQUIRED"
-        assert campaign.state.value == "RECONCILE_REQUIRED"
+        saved = service.engine.load_campaign(campaign.campaign_id)
+        assert saved.state.value == "RECONCILE_REQUIRED"
         assert db.state_get("position_state:BTCUSDT") == "RECONCILE_REQUIRED"
         # The fake exchange reports cancellation terminal on the stable stop ID;
         # without a verified child fill, the campaign must not be marked closed.
