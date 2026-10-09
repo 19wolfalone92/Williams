@@ -1845,6 +1845,22 @@ def test_position_payload_missing_quantity_blocks_new_entry_fail_closed(tmp_path
         db.conn.close()
 
 
+def test_empty_v3_position_risk_is_authoritative_flat_snapshot(tmp_path):
+    db = Database(str(tmp_path / "empty-position-risk.sqlite3"))
+    try:
+        client = FakeFuturesClient(102.0)
+        client.position_risk = lambda symbol=None: []
+        service = FuturesCampaignExecutionService(client, db)
+
+        row = service._position_row("BTCUSDT")
+
+        assert row["symbol"] == "BTCUSDT"
+        assert row["positionAmt"] == "0"
+        assert row["_position_risk_empty"] is True
+    finally:
+        db.conn.close()
+
+
 def test_malformed_position_payload_blocks_new_entry_fail_closed(tmp_path):
     db = Database(str(tmp_path / "malformed-position-risk.sqlite3"))
     try:
