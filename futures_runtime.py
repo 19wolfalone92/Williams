@@ -714,8 +714,13 @@ class FuturesRuntime:
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=3.0)
         with self._lock:
-            self._running = False
-        return {**self.status(), "state": "STOPPED"}
+            still_alive = bool(thread is not None and thread.is_alive())
+            self._running = still_alive
+        return {
+            **self.status(),
+            "state": "STOPPING" if still_alive else "STOPPED",
+            "thread_alive": still_alive,
+        }
 
     def kill(self) -> dict[str, Any]:
         """Latch entries off, attempt exits, and retain a management-only monitor."""
@@ -750,7 +755,8 @@ class FuturesRuntime:
                     "error": f"{type(exc).__name__}: {exc}",
                 })
         with self._lock:
-            if not self._running:
+            thread_alive = bool(self._thread is not None and self._thread.is_alive())
+            if not thread_alive:
                 # A kill invoked after STOPPED still starts a management-only
                 # monitor; the latched gate prevents every new entry.
                 self._stop.clear()
@@ -761,6 +767,11 @@ class FuturesRuntime:
                     daemon=True,
                 )
                 self._thread.start()
+            else:
+                # Do not create a duplicate monitor if a slow network operation
+                # outlived stop()'s bounded join timeout.
+                self._stop.clear()
+                self._running = True
         self.db.log_event(
             "ERROR",
             "futures_runtime_kill_switch",
