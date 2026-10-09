@@ -217,10 +217,20 @@ class FuturesCampaignExecutionService:
     def _position_row(self, symbol: str) -> dict[str, Any]:
         symbol = str(symbol).upper()
         rows = self._rows(self.client.position_risk(symbol))
+        # Binance positionRisk V3 only returns symbols with positions or open
+        # orders. A valid empty list for a symbol therefore means flat; transport
+        # errors and malformed payloads are raised by the client/row parser.
+        if not rows:
+            return {
+                "symbol": symbol,
+                "positionAmt": "0",
+                "entryPrice": "0",
+                "_position_risk_empty": True,
+            }
         row = next((x for x in rows if str(x.get("symbol", "")).upper() == symbol), None)
         if row is None:
             raise FuturesCampaignExecutionError(
-                f"{symbol}: authoritative positionRisk response omitted the symbol"
+                f"{symbol}: authoritative positionRisk response returned a different symbol"
             )
         raw_amount = row.get("positionAmt")
         if raw_amount is None or str(raw_amount).strip() == "":
