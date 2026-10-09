@@ -1220,7 +1220,7 @@ internal class FuturesNativeEngine(
                 verified.optString("algoId") != responseAlgoId ||
                 verified.optString("side").uppercase(Locale.US) != side ||
                 verified.optString("orderType", verified.optString("type")).uppercase(Locale.US) != "STOP_MARKET" ||
-                verified.optBoolean("closePosition", true) ||
+                verified.optBoolean("closePosition", false) ||
                 verified.optBoolean("reduceOnly", false) ||
                 verifiedTrigger == null || !verifiedTrigger.isFinite() ||
                 abs(verifiedTrigger - triggerValue) > 1e-8 ||
@@ -1602,7 +1602,7 @@ internal class FuturesNativeEngine(
                 algo.optString("clientAlgoId") != clientId ||
                 algo.optString("side").uppercase(Locale.US) != expectedSide ||
                 algo.optString("orderType", algo.optString("type")).uppercase(Locale.US) != "STOP_MARKET" ||
-                algo.optBoolean("closePosition", true) ||
+                algo.optBoolean("closePosition", false) ||
                 actualTrigger == null || !actualTrigger.isFinite() ||
                 expectedTrigger <= 0.0 || abs(actualTrigger - expectedTrigger) > 1e-8 ||
                 actualQty == null || !actualQty.isFinite() ||
