@@ -897,7 +897,22 @@ class FuturesCampaignExecutionService:
     def place_protection(self, campaign, *, stop_price: float | None = None) -> dict[str, Any]:
         symbol = campaign.symbol.upper()
         direction = self._campaign_direction(campaign)
-        position = self._position_row(symbol)
+        try:
+            position = self._position_row(symbol)
+        except Exception as exc:
+            reason = (
+                "live position quantity/identity is invalid or unavailable; "
+                "protective stop cannot be verified"
+            )
+            self.engine.mark_reconcile_required(campaign, reason)
+            self.db.state_set(
+                f"campaign_state:{campaign.campaign_id}",
+                CampaignState.RECONCILE_REQUIRED.value,
+            )
+            self.db.state_set(f"position_state:{symbol}", CampaignState.RECONCILE_REQUIRED.value)
+            raise FuturesCampaignExecutionError(
+                f"{symbol}: {reason}: {type(exc).__name__}: {exc}"
+            ) from exc
         try:
             amount = float(position.get("positionAmt", 0) or 0)
         except (TypeError, ValueError) as exc:
