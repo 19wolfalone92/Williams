@@ -525,6 +525,22 @@ internal class FuturesNativeEngine(
         return normalized
     }
 
+    private fun intervalMillis(value: String): Long = when (normalizeInterval(value)) {
+        "1m" -> 60_000L
+        "3m" -> 180_000L
+        "5m" -> 300_000L
+        "15m" -> 900_000L
+        "30m" -> 1_800_000L
+        "1h" -> 3_600_000L
+        "2h" -> 7_200_000L
+        "4h" -> 14_400_000L
+        "6h" -> 21_600_000L
+        "8h" -> 28_800_000L
+        "12h" -> 43_200_000L
+        "1d" -> 86_400_000L
+        else -> throw IllegalArgumentException("Unsupported interval: $value")
+    }
+
     private fun parentInterval(value: String): String = when (normalizeInterval(value)) {
         "1m", "3m", "5m" -> "15m"
         "15m", "30m" -> "1h"
@@ -786,12 +802,22 @@ internal class FuturesNativeEngine(
         val primary = analyseFrame(exchange, symbol, tf) ?: return null
         val higherTf = parentInterval(tf)
         val higher = analyseFrame(exchange, symbol, higherTf) ?: return null
+        val currentClosedBarTime = primary.bars.lastOrNull()?.openTime ?: return null
         val candidates = listOfNotNull(primary.lastSignal)
             .filter { signal ->
-                // Native mode has no pyramiding. The first valid WM1/WM2/WM3
-                // signal may start a campaign; existing campaigns are skipped
-                // before this function is called.
-                if (signal.direction == "LONG") {
+                // Conditional entries are exchange-side and do not inherit the
+                // local signal expiry. Reject stale signal bars before arming.
+                val pendingBars = when (signal.type) {
+                    "REVERSAL" -> 2
+                    "SUPER_AO" -> 2
+                    "FRACTAL" -> 8
+                    else -> 0
+                }
+                val expiresAt = signal.signalBarTime + intervalMillis(tf) * pendingBars
+                val fresh = pendingBars > 0 && currentClosedBarTime < expiresAt
+                if (!fresh) {
+                    false
+                } else if (signal.direction == "LONG") {
                     higher.bullish && higher.ao > 0.0 && higher.ac > 0.0
                 } else {
                     higher.bearish && higher.ao < 0.0 && higher.ac < 0.0
