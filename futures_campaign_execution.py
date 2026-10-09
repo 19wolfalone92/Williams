@@ -3717,20 +3717,51 @@ class FuturesCampaignExecutionService:
                     raise FuturesCampaignExecutionError(f"{symbol}: actual add-on fill risk is invalid")
                 fee_quote = 0.0
                 fee_by_asset: dict[str, float] = {}
+                trade_qty = 0.0
+                trade_quote = 0.0
                 trades = self.client.user_trades(symbol, order_id=actual_order_id, limit=1000)
                 if not trades:
                     raise FuturesCampaignExecutionError(
                         f"{symbol}: add-on fill is confirmed but authoritative userTrades are not yet available"
                     )
                 for trade in trades:
-                    commission = float(trade.get("commission", 0) or 0)
-                    if not math.isfinite(commission) or commission < 0:
-                        raise FuturesCampaignExecutionError(f"{symbol}: invalid add-on trade commission")
+                    if trade.get("orderId") is not None and str(trade.get("orderId")) != str(actual_order_id):
+                        raise FuturesCampaignExecutionError(
+                            f"{symbol}: add-on userTrades contain a different orderId"
+                        )
+                    try:
+                        trade_quantity = float(trade.get("qty", 0) or 0)
+                        trade_price = float(trade.get("price", 0) or 0)
+                        commission = float(trade.get("commission", 0) or 0)
+                    except (TypeError, ValueError) as exc:
+                        raise FuturesCampaignExecutionError(
+                            f"{symbol}: add-on userTrades contain invalid numeric values"
+                        ) from exc
+                    if (
+                        not all(math.isfinite(value) for value in (trade_quantity, trade_price, commission))
+                        or trade_quantity <= 0
+                        or trade_price <= 0
+                        or commission < 0
+                    ):
+                        raise FuturesCampaignExecutionError(
+                            f"{symbol}: add-on userTrades contain non-finite/invalid values"
+                        )
+                    trade_qty += trade_quantity
+                    trade_quote += trade_quantity * trade_price
                     asset = str(trade.get("commissionAsset", "") or "").upper()
                     if asset in {"USDT", "USDC"}:
                         fee_quote += commission
                     elif asset:
                         fee_by_asset[asset] = fee_by_asset.get(asset, 0.0) + commission
+                if abs(trade_qty - executed) > max(1e-8, executed * 1e-6):
+                    raise FuturesCampaignExecutionError(
+                        f"{symbol}: add-on userTrades quantity disagrees with triggered order"
+                    )
+                trade_average = trade_quote / trade_qty
+                if not math.isclose(trade_average, average_fill, rel_tol=1e-5, abs_tol=1e-8):
+                    raise FuturesCampaignExecutionError(
+                        f"{symbol}: add-on userTrades average price disagrees with child order"
+                    )
 
                 if campaign.state in {CampaignState.ADD_ON_ARMING, CampaignState.ADD_ON_PENDING}:
                     if campaign.state == CampaignState.ADD_ON_ARMING:
