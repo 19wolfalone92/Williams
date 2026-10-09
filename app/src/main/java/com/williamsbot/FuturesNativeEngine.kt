@@ -2251,11 +2251,22 @@ internal class FuturesNativeEngine(
                 return setCampaignState(campaign, "RECONCILE_REQUIRED", "Pending exit lookup is ambiguous: ${x.message}")
             }
             val priorStatus = response.optString("status").uppercase(Locale.US)
+            val expectedSide = exchange.directionToExitSide(direction)
+            if (response.optString("symbol").uppercase(Locale.US) != symbol ||
+                response.optString("clientOrderId") != clientId ||
+                response.optString("side").uppercase(Locale.US) != expectedSide) {
+                return setCampaignState(campaign, "RECONCILE_REQUIRED", "Prior exit identity/symbol/side mismatch")
+            }
             if (priorStatus in setOf("NEW", "PARTIALLY_FILLED", "PENDING_NEW")) {
                 return setCampaignState(campaign, "RECONCILE_REQUIRED", "Prior reduce-only exit remains $priorStatus")
             }
             if (priorStatus !in setOf("FILLED", "CANCELED", "CANCELLED", "EXPIRED", "REJECTED")) {
                 return setCampaignState(campaign, "RECONCILE_REQUIRED", "Prior reduce-only exit status is ambiguous")
+            }
+            val priorExecuted = response.optString("executedQty").toDoubleOrNull()
+                ?: return setCampaignState(campaign, "RECONCILE_REQUIRED", "Prior exit executedQty is missing or invalid")
+            if (!priorExecuted.isFinite() || priorExecuted < 0.0) {
+                return setCampaignState(campaign, "RECONCILE_REQUIRED", "Prior exit executedQty is non-finite or negative")
             }
             val refreshed = try { position(exchange, symbol) } catch (x: Exception) {
                 return setCampaignState(campaign, "RECONCILE_REQUIRED", "Position refresh after prior exit failed: ${x.message}")
@@ -2267,22 +2278,50 @@ internal class FuturesNativeEngine(
                 if ((direction == "LONG" && residual < 0.0) || (direction == "SHORT" && residual > 0.0)) {
                     return setCampaignState(campaign, "RECONCILE_REQUIRED", "Position direction changed after prior exit")
                 }
-                if (priorStatus == "FILLED") {
-                    return setCampaignState(campaign, "RECONCILE_REQUIRED", "Prior exit reports FILLED but a residual position remains")
+                if (priorExecuted > 0.0) {
+                    val orderId = response.optString("orderId")
+                    if (orderId.isBlank()) {
+                        return setCampaignState(campaign, "RECONCILE_REQUIRED", "Prior exit has fills but no stable order ID")
+                    }
+                    val ledger = campaign.optJSONArray("unreconciled_terminal_exit_orders") ?: JSONArray()
+                    val known = (0 until ledger.length()).any { i ->
+                        ledger.optJSONObject(i)?.optString("order_id") == orderId
+                    }
+                    if (!known) {
+                        ledger.put(JSONObject()
+                            .put("order_id", orderId)
+                            .put("client_order_id", clientId)
+                            .put("status", priorStatus)
+                            .put("executed_qty", priorExecuted))
+                    }
+                    campaign.put("unreconciled_terminal_exit_orders", ledger)
+                    campaign.put("exit_cycle_original_qty", campaign.optDouble("exit_cycle_original_qty", abs(amount)))
                 }
-                // Terminal but non-filled order: keep the original intent in the
-                // audit trail and allow a new reduce-only attempt for the residual.
+                // Reduce the live residual with a fresh reduce-only intent, but
+                // retain the prior partial/terminal fill ledger. Until both
+                // orders' userTrades can be aggregated, the campaign must not
+                // be marked CLOSED or its PnL finalized.
                 campaign.put("last_terminal_exit_client_order_id", clientId)
+                campaign.put("last_terminal_exit_status", priorStatus)
                 campaign.remove("pending_exit_client_order_id")
                 campaign.remove("pending_exit_reason")
                 campaign.remove("pending_exit_expected_qty")
                 clientId = ""
+                auditStore.saveFuturesCampaign(symbol, campaign)
             } else {
                 if (priorStatus != "FILLED") {
                     return setCampaignState(campaign, "RECONCILE_REQUIRED", "Position is flat but prior exit did not confirm a fill")
                 }
                 val cleanup = verifyFlatProtectionCleanup(exchange, campaign)
                 if (cleanup != null) return setCampaignState(campaign, "RECONCILE_REQUIRED", cleanup)
+                val priorLedger = campaign.optJSONArray("unreconciled_terminal_exit_orders")
+                if (priorLedger != null && priorLedger.length() > 0) {
+                    return setCampaignState(
+                        campaign,
+                        "RECONCILE_REQUIRED",
+                        "Multiple market-exit orders have fills; aggregate userTrades accounting is required before closure"
+                    )
+                }
                 return try {
                     recordMarketExit(exchange, campaign, response, campaign.optString("pending_exit_reason", reason))
                     campaign.put("state", "CLOSED")
@@ -2351,6 +2390,14 @@ internal class FuturesNativeEngine(
         }
         val cleanup = verifyFlatProtectionCleanup(exchange, campaign)
         if (cleanup != null) return setCampaignState(campaign, "RECONCILE_REQUIRED", cleanup)
+        val priorLedger = campaign.optJSONArray("unreconciled_terminal_exit_orders")
+        if (priorLedger != null && priorLedger.length() > 0) {
+            return setCampaignState(
+                campaign,
+                "RECONCILE_REQUIRED",
+                "Multiple market-exit orders have fills; aggregate userTrades accounting is required before closure"
+            )
+        }
         return try {
             recordMarketExit(exchange, campaign, authoritative, reason)
             campaign.put("state", "CLOSED")
