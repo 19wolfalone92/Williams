@@ -53,6 +53,7 @@ jobs:
           set -o pipefail
           python -m pytest -q \
             test_backtester.py \
+            test_data_validation.py \
             test_production_architecture.py \
             test_android_remote_only.py \
             test_l2_slippage.py \
