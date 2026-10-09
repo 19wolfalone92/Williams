@@ -111,12 +111,23 @@ class ExecutionBarrier:
             if age > intent.max_age_ms:
                 return f"stale intent age={age}ms"
 
-        # Campaign orders may be armed from a freshly constructed signal before
-        # the context service has assigned persistent versions.  They still
-        # require at least one live snapshot; the campaign pre-submit validator
-        # is responsible for the exact strategy/risk re-check.
-        if not intent.required_context_versions:
-            if not intent.purpose.upper().startswith("CAMPAIGN_"):
+        purpose = intent.purpose.upper()
+        entry_purposes = {
+            "ENTRY",
+            "ADD_ON",
+            "CAMPAIGN_ENTRY",
+            "CAMPAIGN_ADD_ON",
+            "REVERSE_ENTRY",
+            "CAMPAIGN_REVERSE_ENTRY",
+        }
+        is_new_exposure = purpose in entry_purposes
+
+        # Missing context must block new exposure, not cancellation, protection,
+        # exit, or recovery. Any context versions that are supplied are still
+        # validated below. Campaign entry paths may be armed before persistent
+        # versions exist, but must perform their own final risk/context check.
+        if is_new_exposure and not intent.required_context_versions:
+            if not purpose.startswith("CAMPAIGN_"):
                 return "missing required_context_versions"
         for tf, required in intent.required_context_versions.items():
             ctx = snapshot.context(intent.symbol, tf)
@@ -132,17 +143,6 @@ class ExecutionBarrier:
         # All declared TFs are version dependencies, but the permission
         # decision belongs to one operative/entry timeframe. Higher TFs provide
         # structural context and must not be required to emit a duplicate trigger.
-        purpose = intent.purpose.upper()
-        entry_purposes = {
-            "ENTRY",
-            "ADD_ON",
-            "CAMPAIGN_ENTRY",
-            "CAMPAIGN_ADD_ON",
-            "REVERSE_ENTRY",
-            "CAMPAIGN_REVERSE_ENTRY",
-        }
-        is_new_exposure = purpose in entry_purposes
-
         # New exposure must pass the operative timeframe's directional gate.
         # SELL means opening SHORT only for an ENTRY/ADD-ON intent; on exits it
         # is simply an order side and must not be interpreted as a short signal.
