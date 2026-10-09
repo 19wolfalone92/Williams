@@ -208,6 +208,62 @@ internal class BinanceUsdmFuturesClient(
 
     fun account(): JSONObject = objectRequest("GET", "/fapi/v3/account", signed = true)
 
+    fun requireTradePermissionAndSingleAssetMode(): JSONObject {
+        val result = objectRequest("GET", "/fapi/v2/account", signed = true)
+        fun strictBoolean(name: String): Boolean {
+            if (!result.has(name) || result.isNull(name)) {
+                throw FuturesApiException("Futures account permissions omitted $name")
+            }
+            return when (result.optString(name).trim().lowercase(Locale.US)) {
+                "true", "1" -> true
+                "false", "0" -> false
+                else -> throw FuturesApiException("Futures account permission $name is ambiguous")
+            }
+        }
+        if (!strictBoolean("canTrade")) {
+            throw FuturesApiException("Binance Futures account canTrade=false; new exposure is blocked")
+        }
+        if (strictBoolean("multiAssetsMargin")) {
+            throw FuturesApiException("Multi-Assets Margin mode is unsupported; single-asset mode is required")
+        }
+        return result
+    }
+
+    fun symbolConfiguration(symbol: String): JSONObject {
+        val wanted = symbol.uppercase(Locale.US)
+        val raw = requestRaw(
+            "GET",
+            "/fapi/v1/symbolConfig",
+            linkedMapOf("symbol" to wanted),
+            signed = true,
+            mutation = false
+        )
+        val array = runCatching { JSONArray(raw) }.getOrNull()
+        val row = if (array != null) {
+            val matches = (0 until array.length()).mapNotNull { array.optJSONObject(it) }
+                .filter { it.optString("symbol").uppercase(Locale.US) == wanted }
+            if (matches.size != 1) {
+                throw FuturesApiException("$wanted symbolConfig did not return exactly one row")
+            }
+            matches.single()
+        } else {
+            runCatching { JSONObject(raw) }.getOrElse {
+                throw FuturesApiException("$wanted symbolConfig payload is malformed", cause = it)
+            }
+        }
+        if (row.optString("symbol").uppercase(Locale.US) != wanted) {
+            throw FuturesApiException("$wanted symbolConfig returned a different symbol")
+        }
+        val marginType = row.optString("marginType").uppercase(Locale.US)
+        val leverageText = row.optString("leverage")
+        val leverage = leverageText.toIntOrNull()
+            ?: throw FuturesApiException("$wanted symbolConfig leverage is missing or non-integral")
+        if (marginType.isBlank() || leverage < 1) {
+            throw FuturesApiException("$wanted symbolConfig marginType/leverage is invalid")
+        }
+        return row
+    }
+
     fun positionMode(): JSONObject =
         objectRequest("GET", "/fapi/v1/positionSide/dual", signed = true)
 
@@ -270,6 +326,7 @@ internal class BinanceUsdmFuturesClient(
 
     fun prepareFlatSymbol(symbol: String) {
         requireOneWayMode()
+        requireTradePermissionAndSingleAssetMode()
         val positions = positionRisk(symbol)
         for (i in 0 until positions.length()) {
             val item = positions.optJSONObject(i) ?: continue
@@ -297,6 +354,12 @@ internal class BinanceUsdmFuturesClient(
             signed = true,
             mutation = true
         )
+        val configuration = symbolConfiguration(symbol)
+        if (configuration.optString("marginType").uppercase(Locale.US) != "ISOLATED" ||
+            configuration.optString("leverage").toIntOrNull() != 1
+        ) {
+            throw FuturesApiException("$symbol did not confirm isolated 1x settings after preparation")
+        }
     }
 
     fun submitConditional(
