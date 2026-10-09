@@ -954,7 +954,7 @@ class Database:
                 float(data["protective_reference"]), float(data.get("invalidation_price",0) or 0),
                 float(data.get("teeth_at_detection",0) or 0), float(data.get("angulation_score",0) or 0),
                 float(data.get("wave_confidence",0) or 0), float(data.get("wave_exhaustion_risk",0) or 0),
-                1 if data.get("htf_confirmed") else 0, state, int(data.get("source_candle_index",-1) or -1),
+                1 if data.get("htf_confirmed") else 0, state, (-1 if data.get("source_candle_index", -1) is None else int(data.get("source_candle_index", -1))),
                 int(data.get("expires_at_ms",0) or 0), json.dumps(data.get("context_versions",{}),sort_keys=True),
                 data.get("reason",""), supersedes_signal_id or None,
             ),
