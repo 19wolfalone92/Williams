@@ -221,6 +221,14 @@ class FuturesRuntime:
         self.controller.risk_engine.balance = equity
         return result
 
+    def _assert_configured_symbol_ownership(self) -> None:
+        """Fail closed if any configured symbol has unmanaged positions or orders."""
+        symbols = tuple(dict.fromkeys(str(symbol).upper() for symbol in self.symbols if str(symbol).strip()))
+        if not symbols:
+            raise RuntimeError("No configured Futures symbols; account ownership cannot be verified")
+        for symbol in symbols:
+            self.execution._assert_no_unmanaged_positions(symbol)
+
     def _daily_loss_allows_entry(self, equity: float) -> tuple[bool, str]:
         # Invalid account equity must never reset the daily baseline or permit
         # new exposure. NaN is particularly dangerous because comparisons with
@@ -696,8 +704,7 @@ class FuturesRuntime:
         # Repeat ownership checks for every configured symbol on every scan:
         # an orphan order on a non-first symbol must also block new exposure.
         try:
-            for symbol in self.symbols:
-                self.execution._assert_no_unmanaged_positions(symbol)
+            self._assert_configured_symbol_ownership()
         except Exception as exc:
             blocked_reconciliation = True
             management.append({
@@ -905,8 +912,7 @@ class FuturesRuntime:
             # Unknown exposure/orders must block entries, but must not prevent
             # the management-only monitor from starting after a process restart.
             try:
-                for symbol in self.symbols:
-                    self.execution._assert_no_unmanaged_positions(symbol)
+                self._assert_configured_symbol_ownership()
             except Exception as exc:
                 startup_blockers.append(f"{type(exc).__name__}: {exc}")
 
@@ -1211,8 +1217,7 @@ class FuturesRuntime:
         try:
             # A flat position is not enough: orphan conditional entries/orders on
             # any configured symbol can recreate exposure after latch reset.
-            for symbol in self.symbols:
-                self.execution._assert_no_unmanaged_positions(symbol)
+            self._assert_configured_symbol_ownership()
         except Exception as exc:
             raise RuntimeError(
                 f"Kill reset denied: account-wide positions/orders are not clean ({type(exc).__name__}: {exc})"
