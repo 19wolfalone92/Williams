@@ -83,13 +83,12 @@ class EquityCircuitBreaker:
         if not math.isfinite(realized):
             return False, "non-finite realized PnL; new entries blocked"
 
-        # Realized trade PnL is net of entry and exit fees. fees_quote must
-        # contain only costs not already represented in realized PnL (e.g.
-        # entry fees on positions that are still open).
-        net_daily_pnl = realized + unrealized - fees
-        if not math.isfinite(net_daily_pnl):
-            return False, "non-finite daily PnL; new entries blocked"
-
+        # Current equity already includes realized PnL, open-position marks and
+        # fees through the account balances. Summing realized + lifetime
+        # unrealized PnL here double-counts closed trades and misstates positions
+        # carried over from previous days. Use equity delta as the primary daily
+        # PnL source. A separate realized-loss guard protects a late process
+        # start/restart when the day's equity baseline is initialized afterward.
         try:
             start_equity = self._today_start_equity(db, equity)
         except Exception as exc:
@@ -103,9 +102,17 @@ class EquityCircuitBreaker:
         loss_limit = start_equity * self.max_daily_loss_pct
         if not math.isfinite(loss_limit):
             return False, "daily loss limit invalid; new entries blocked"
-        if net_daily_pnl <= -loss_limit:
+        equity_delta = equity - start_equity
+        if not math.isfinite(equity_delta):
+            return False, "non-finite daily equity change; new entries blocked"
+        if equity_delta <= -loss_limit:
             return False, (
                 "daily equity loss circuit breaker tripped: "
-                f"net_pnl={net_daily_pnl:.8f}, limit={-loss_limit:.8f}"
+                f"equity_delta={equity_delta:.8f}, limit={-loss_limit:.8f}"
+            )
+        if realized <= -loss_limit:
+            return False, (
+                "daily realized-loss circuit breaker tripped: "
+                f"realized_pnl={realized:.8f}, limit={-loss_limit:.8f}"
             )
         return True, "ok"
