@@ -334,7 +334,7 @@ def extract_long_signal_specs(
     if super_ao is not None:
         i, trigger_base, protective = super_ao
         trigger = trigger_base + tick
-        if current_close < trigger and _invalidation_intact(ind, i, side="LONG", protective_level=protective):
+        if current_close < trigger and _trigger_unbroken(ind, i, side="LONG", trigger_price=trigger) and _invalidation_intact(ind, i, side="LONG", protective_level=protective):
             row = ind.iloc[i]
             specs.append(
                 SignalSpec.new(
@@ -494,7 +494,7 @@ def extract_short_signal_specs(
     if super_ao is not None:
         i, trigger_base, protective = super_ao
         trigger = trigger_base - tick
-        if current_close > trigger and _invalidation_intact(ind, i, side="SHORT", protective_level=protective):
+        if current_close > trigger and _trigger_unbroken(ind, i, side="SHORT", trigger_price=trigger) and _invalidation_intact(ind, i, side="SHORT", protective_level=protective):
             row = ind.iloc[i]
             specs.append(
                 SignalSpec.new(
