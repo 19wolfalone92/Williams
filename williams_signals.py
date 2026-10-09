@@ -181,7 +181,15 @@ def _latest_confirmed_fractal(
     if level_col not in ind.columns or fractal_col not in ind.columns:
         return None
 
-    right = 2
+    # Use the same confirmation delay that produced confirmed_*_level.
+    # Older/synthetic frames without this metadata retain the canonical 2-bar default.
+    right_value = ind.iloc[-1].get("fractal_right_bars", 2)
+    try:
+        right = int(right_value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if right < 1 or isinstance(right_value, float) and not right_value.is_integer():
+        return None
     start = max(0, len(ind) - max(3, int(max_age_bars)))
     for confirmation_i in range(len(ind) - 1, start - 1, -1):
         row = ind.iloc[confirmation_i]
