@@ -134,12 +134,16 @@ class ExecutionBarrier:
         if is_new_exposure and not intent.required_context_versions:
             if not purpose.startswith("CAMPAIGN_"):
                 return "missing required_context_versions"
-        for tf, required in intent.required_context_versions.items():
-            ctx = snapshot.context(intent.symbol, tf)
-            if ctx is None:
-                return f"missing context {intent.symbol} {tf}"
-            if int(ctx.version) != int(required):
-                return f"stale context {tf}: required={required} current={ctx.version}"
+        # Market-context versions are admission dependencies for new exposure
+        # only. Protective actions, cancellations, exits and recovery must remain
+        # available when strategy context is stale or temporarily unavailable.
+        if is_new_exposure:
+            for tf, required in intent.required_context_versions.items():
+                ctx = snapshot.context(intent.symbol, tf)
+                if ctx is None:
+                    return f"missing context {intent.symbol} {tf}"
+                if int(ctx.version) != int(required):
+                    return f"stale context {tf}: required={required} current={ctx.version}"
 
         direction = "long" if intent.side == "BUY" else "short" if intent.side == "SELL" else ""
         if not direction:
