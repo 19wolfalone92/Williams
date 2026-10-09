@@ -1471,9 +1471,15 @@ class FuturesCampaignExecutionService:
                     )
                 position = position_after_prior
                 amount = remaining_after_prior
-                if prior_status == "FILLED":
-                    # The old order is terminal but left residual exposure. Its
-                    # fills must be retained in the ledger before a new exit.
+                try:
+                    prior_executed_qty = float(prior_exit.get("executedQty", 0) or 0)
+                except (TypeError, ValueError):
+                    prior_executed_qty = float("nan")
+                if not math.isfinite(prior_executed_qty) or prior_executed_qty < 0:
+                    raise FuturesCampaignExecutionError("prior exit executedQty is invalid")
+                if prior_executed_qty > 0:
+                    # Preserve fills from terminal partial exits before creating
+                    # a new reduce-only order for the refreshed residual amount.
                     self._record_terminal_exit_fill(campaign, prior_exit)
                 campaign.tags["last_terminal_exit_client_order_id"] = pending_exit_id
                 campaign.tags["last_terminal_exit_status"] = prior_status
@@ -1551,6 +1557,8 @@ class FuturesCampaignExecutionService:
 
         quantity = self.client.normalize_quantity(symbol, abs(amount), market=True)
         client_order_id = "W2FX_" + uuid.uuid4().hex[:24]
+        if not campaign.tags.get("exit_cycle_original_qty"):
+            campaign.tags["exit_cycle_original_qty"] = abs(amount)
         campaign.tags["pending_exit_client_order_id"] = client_order_id
         campaign.tags["pending_exit_reason"] = str(reason)
         campaign.tags["pending_exit_expected_qty"] = abs(amount)
