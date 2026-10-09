@@ -541,6 +541,17 @@ class FuturesCampaignExecutionService:
             order = result.response or {}
             order_id = str(order.get("algoId", "") or "")
             status = str(order.get("algoStatus", "") or order.get("status", "NEW")).upper()
+            if status not in {"NEW", "WORKING", "PENDING_NEW"}:
+                reason = f"{symbol}: entry algo status is not active: {status or 'MISSING'}"
+                campaign.tags["entry_response_not_active"] = {
+                    "client_algo_id": client_algo_id,
+                    "algo_id": order_id,
+                    "status": status,
+                }
+                self.engine.mark_reconcile_required(campaign, reason)
+                self.db.state_set(f"campaign_state:{campaign.campaign_id}", CampaignState.RECONCILE_REQUIRED.value)
+                self.db.state_set(f"position_state:{symbol}", CampaignState.RECONCILE_REQUIRED.value)
+                raise FuturesCampaignExecutionError(f"{reason}; reconciliation required before retry")
             self.db.save_campaign_order(PendingOrderRecord(
                 order_id=order_id,
                 client_order_id=client_algo_id,
