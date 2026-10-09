@@ -104,6 +104,7 @@ def test_backtester_rejects_missing_or_ambiguous_signal_values():
         (100, 101, 99, 100, False),
     ])
     missing = base.copy()
+    missing["long_signal"] = missing["long_signal"].astype(object)
     missing.iloc[0, missing.columns.get_loc("long_signal")] = np.nan
     with pytest.raises(ValueError, match="missing values"):
         Backtester().run(missing)
