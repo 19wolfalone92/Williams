@@ -735,6 +735,7 @@ class FuturesCampaignExecutionService:
                 "entry_fill_reconciliation_pending": True,
                 "initial_stop_price": stop,
                 "last_signal_time_ms": int(signal.signal_bar_time_ms),
+                "entry_expires_at_ms": int(signal.expires_at_ms or 0),
                 "position_side_mode": "ONE_WAY",
                 "leverage": 1,
                 "isolated_margin": True,
@@ -3434,6 +3435,13 @@ class FuturesCampaignExecutionService:
             active_statuses = {"NEW", "WORKING", "PENDING", "PENDING_NEW"}
             terminal_no_fill = {"CANCELED", "CANCELLED", "EXPIRED", "REJECTED"}
             actual_order_id = algo.get("actualOrderId")
+            expires_at_ms = int(campaign.tags.get("entry_expires_at_ms", 0) or 0)
+            if algo_status in active_statuses and expires_at_ms and int(time.time() * 1000) >= expires_at_ms:
+                # Exchange-side stop entries do not inherit the local SignalSpec
+                # expiry. Cancel an expired armed order before it can create a
+                # stale position; cancellation is verified through the normal
+                # durable client-ID reconciliation path.
+                return self.cancel_pending_entry(campaign, reason="SIGNAL_EXPIRED")
             if algo_status in active_statuses and not actual_order_id:
                 if abs(amount) <= 1e-12 and campaign.state == CampaignState.ENTRY_PENDING:
                     return {"symbol": symbol, "state": "ENTRY_PENDING", "algo_status": algo_status}
