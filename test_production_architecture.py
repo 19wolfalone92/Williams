@@ -1,4 +1,5 @@
 import json
+import pytest
 import threading
 import time
 
@@ -459,8 +460,6 @@ def test_execution_barrier_fails_closed_without_durable_intent_store():
     ],
 )
 def test_execution_barrier_marks_malformed_exchange_state_ambiguous(response):
-    import pytest
-
     cache = ContextCache()
     cache.publish(context())
     db = IntentDB()
