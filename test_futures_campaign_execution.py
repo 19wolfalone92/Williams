@@ -271,3 +271,37 @@ def test_futures_entry_is_blocked_when_available_margin_is_insufficient(tmp_path
         assert pending == 0
     finally:
         db.conn.close()
+
+def test_kill_latch_keeps_existing_position_management_enabled():
+    import threading
+    from types import MethodType, SimpleNamespace
+    from futures_runtime import FuturesRuntime
+
+    runtime = object.__new__(FuturesRuntime)
+    runtime._cycle_lock = threading.RLock()
+    runtime._kill_latched = True
+    runtime._paused = True
+    runtime.client = SimpleNamespace(sync_time=lambda: {})
+    runtime._last_account = {"equity_quote": 1000.0, "available_quote": 500.0}
+    runtime._last_scan_summary = {}
+    runtime._account = MethodType(
+        lambda self: self._last_account,
+        runtime,
+    )
+    runtime._recover = MethodType(lambda self: [], runtime)
+    managed = []
+    runtime._manage_existing_positions = MethodType(
+        lambda self: managed.append("managed") or [{"symbol": "BTCUSDT", "action": "HOLD_PROTECTION"}],
+        runtime,
+    )
+    runtime._daily_loss_allows_entry = MethodType(
+        lambda self, equity: (True, "within limit"),
+        runtime,
+    )
+
+    result = runtime.scan_once()
+
+    assert managed == ["managed"]
+    assert result["state"] == "KILL_SWITCH_LATCHED"
+    assert result["new_entries"] == 0
+    assert result["management"][0]["action"] == "HOLD_PROTECTION"
