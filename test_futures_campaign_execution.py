@@ -122,12 +122,25 @@ class FakeFuturesClient:
         }
 
     def get_algo_order(self, symbol, *, algo_id=None, client_algo_id=None):
-        return {
+        prior = next(
+            (row for row in self.protective_stops if row[3] == client_algo_id),
+            None,
+        )
+        side = (
+            "SELL" if prior[1] == "LONG" else "BUY"
+        ) if prior else (
+            "SELL" if float(self._position.get("positionAmt", 0) or 0) > 0 else "BUY"
+        )
+        response = {
             "symbol": symbol,
             "algoId": algo_id or 456,
             "clientAlgoId": client_algo_id,
             "algoStatus": self.algo_status,
+            "side": side,
         }
+        if prior:
+            response["triggerPrice"] = prior[2]
+        return response
 
     def cancel_algo_order_safe(self, symbol, *, algo_id=None, client_algo_id=None):
         if self.cancel_confirms:
@@ -968,3 +981,32 @@ def test_daily_loss_lockout_still_manages_open_positions_and_blocks_entries():
     assert result["state"] == "DAILY_RISK_LOCKOUT"
     assert result["new_entries"] == 0
     assert result["management"][0]["action"] == "PROTECTION_MAINTAINED"
+
+
+def test_pending_protection_recovers_same_exchange_order_without_duplicate_submit(tmp_path):
+    db, client, service, campaign = _armed_entry_for_cancel(tmp_path)
+    try:
+        from campaign_model import CampaignState
+        client._position["positionAmt"] = "0.5"
+        client._position["entryPrice"] = "102.0"
+        client.algo_status = "NEW"
+        client.protective_stops.append(("BTCUSDT", "LONG", "100.00", "pending-stop-client"))
+        campaign.state = CampaignState.OPEN_INITIAL
+        campaign.position_qty = 0.5
+        campaign.average_entry_price = 102.0
+        campaign.initial_stop_price = 100.0
+        campaign.current_stop_price = 100.0
+        campaign.tags["pending_protective_client_algo_id"] = "pending-stop-client"
+        campaign.tags["pending_protective_stop_price"] = 100.0
+        service.db.save_campaign(campaign)
+
+        result = service.place_protection(campaign, stop_price=100.0)
+
+        assert result["recovered_existing_order"] is True
+        assert result["client_algo_id"] == "pending-stop-client"
+        assert campaign.tags["protective_client_algo_id"] == "pending-stop-client"
+        assert campaign.tags["protection_active"] is True
+        assert len(client.protective_stops) == 1
+        assert db.state_get(f"position_state:{campaign.symbol}") is None
+    finally:
+        db.conn.close()
