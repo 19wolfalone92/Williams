@@ -2383,6 +2383,7 @@ internal class FuturesNativeEngine(
                 status = protection.optString("algoStatus").uppercase(Locale.US)
             }
             if (status in setOf("CANCELED", "CANCELLED", "EXPIRED", "REJECTED")) {
+                updateIntentByClientId(clientId, status, protection.toString())
                 null
             } else if (status in setOf("TRIGGERED", "FINISHED")) {
                 val childId = protection.optString("actualOrderId")
