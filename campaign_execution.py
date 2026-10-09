@@ -294,14 +294,33 @@ class CampaignExecutionService:
             )
         if signal.side != "BUY":
             raise CampaignExecutionError("Current Spot campaign executor only arms LONG entries")
+        try:
+            equity_quote = float(equity_quote)
+            candidate_risk_pct = float(candidate_risk_pct)
+            capital_fraction = float(capital_fraction)
+            portfolio_limit = float(self.engine.portfolio_risk_limit_pct)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise CampaignExecutionError("entry equity/risk configuration is invalid") from exc
+        if (
+            not all(math.isfinite(v) for v in (
+                equity_quote, candidate_risk_pct, capital_fraction, portfolio_limit
+            ))
+            or equity_quote <= 0
+            or candidate_risk_pct <= 0
+            or not 0 < capital_fraction <= 1
+            or not 0 < portfolio_limit <= 1
+        ):
+            raise CampaignExecutionError("entry equity/risk configuration is invalid")
 
         reserved = self.engine.portfolio_reserved_risk_quote()
-        capacity = max(0.0, float(equity_quote) * self.engine.portfolio_risk_limit_pct)
+        capacity = equity_quote * portfolio_limit
+        if not math.isfinite(reserved) or reserved < 0 or not math.isfinite(capacity):
+            raise CampaignExecutionError("portfolio risk reservation is invalid")
         remaining_risk = max(0.0, capacity - reserved)
         requested_risk = min(
-            float(candidate_risk_pct),
+            candidate_risk_pct,
             self.engine.initial_risk_pct(),
-            remaining_risk / max(float(equity_quote), 1e-12),
+            remaining_risk / max(equity_quote, 1e-12),
         )
         if requested_risk <= 0:
             raise CampaignExecutionError("No portfolio risk capacity for campaign entry")
@@ -332,9 +351,11 @@ class CampaignExecutionService:
             + 2.0 * float(os.getenv("FEE_BUFFER_PER_SIDE_PCT", "0.001"))
             + float(os.getenv("RISK_SLIPPAGE_BUFFER_PCT", "0.0015"))
         )
-        risk_quote = float(equity_quote) * requested_risk
+        if not math.isfinite(effective_loss_fraction) or effective_loss_fraction <= 0:
+            raise CampaignExecutionError("entry effective loss fraction is invalid")
+        risk_quote = equity_quote * requested_risk
         notional = min(
-            float(equity_quote) * capital_fraction,
+            equity_quote * capital_fraction,
             risk_quote / max(effective_loss_fraction, 1e-12),
         )
         qty = self._normalized_entry_qty(signal.symbol, notional, trigger)
