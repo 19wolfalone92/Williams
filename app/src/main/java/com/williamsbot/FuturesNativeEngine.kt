@@ -2230,7 +2230,7 @@ internal class FuturesNativeEngine(
         } catch (x: Exception) {
             return setCampaignState(campaign, "RECONCILE_REQUIRED", "Exit position lookup failed: ${x.message}")
         }
-        val amount = pos.optString("positionAmt").toDoubleOrNull()
+        var amount = pos.optString("positionAmt").toDoubleOrNull()
             ?: return setCampaignState(campaign, "RECONCILE_REQUIRED", "Exit positionAmt is missing or malformed")
         if (!amount.isFinite()) {
             return setCampaignState(campaign, "RECONCILE_REQUIRED", "Exit positionAmt is non-finite")
@@ -2301,6 +2301,8 @@ internal class FuturesNativeEngine(
                 // retain the prior partial/terminal fill ledger. Until both
                 // orders' userTrades can be aggregated, the campaign must not
                 // be marked CLOSED or its PnL finalized.
+                amount = residual
+                campaign.put("position_amt", residual)
                 campaign.put("last_terminal_exit_client_order_id", clientId)
                 campaign.put("last_terminal_exit_status", priorStatus)
                 campaign.remove("pending_exit_client_order_id")
