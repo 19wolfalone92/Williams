@@ -3144,11 +3144,19 @@ class FuturesCampaignExecutionService:
             # created but before the old stop was confirmed cancelled, reconcile
             # both stable IDs before doing any other campaign mutation.
             if campaign.tags.get("protection_replace_reconcile_required"):
-                new_client_id = str(campaign.tags.get("protective_client_algo_id", "") or "")
-                new_algo_id = campaign.tags.get("protective_algo_id")
-                old_client_id = str(campaign.tags.get("previous_protective_client_algo_id", "") or "")
-                old_algo_id = campaign.tags.get("previous_protective_algo_id")
                 try:
+                    pending_stop_client_id = str(
+                        campaign.tags.get("pending_protective_client_algo_id", "") or ""
+                    )
+                    if pending_stop_client_id:
+                        pending_stop_price = float(
+                            campaign.tags.get("pending_protective_stop_price", 0) or 0
+                        )
+                        self.place_protection(campaign, stop_price=pending_stop_price)
+                    new_client_id = str(campaign.tags.get("protective_client_algo_id", "") or "")
+                    new_algo_id = campaign.tags.get("protective_algo_id")
+                    old_client_id = str(campaign.tags.get("previous_protective_client_algo_id", "") or "")
+                    old_algo_id = campaign.tags.get("previous_protective_algo_id")
                     new_order = self.client.get_algo_order(
                         symbol,
                         algo_id=new_algo_id or None,
@@ -3173,6 +3181,25 @@ class FuturesCampaignExecutionService:
                                 f"{symbol}: prior stop status is ambiguous ({old_status or 'UNKNOWN'})"
                             )
                     if new_status in active_statuses:
+                        expected_new_side = "SELL" if direction == "LONG" else "BUY"
+                        try:
+                            new_trigger = float(new_order.get("triggerPrice"))
+                            expected_new_trigger = float(campaign.current_stop_price or campaign.initial_stop_price or 0)
+                        except (TypeError, ValueError):
+                            new_trigger = expected_new_trigger = float("nan")
+                        if (
+                            str(new_order.get("clientAlgoId", "") or "") != new_client_id
+                            or str(new_order.get("side", "") or "").upper() != expected_new_side
+                            or str(new_order.get("orderType", new_order.get("type", "")) or "").upper() != "STOP_MARKET"
+                            or str(new_order.get("closePosition", "")).lower() not in {"true", "1"}
+                            or not math.isfinite(new_trigger)
+                            or not math.isfinite(expected_new_trigger)
+                            or not math.isclose(new_trigger, expected_new_trigger, rel_tol=0.0, abs_tol=1e-8)
+                        ):
+                            raise FuturesCampaignExecutionError(
+                                f"{symbol}: replacement stop identity/side/type/trigger mismatch; "
+                                "old protection must not be cancelled"
+                            )
                         if old_status in active_statuses:
                             cancel_intent = OrderIntent.new(
                                 symbol,
@@ -3217,9 +3244,13 @@ class FuturesCampaignExecutionService:
                                 )
                         # The new stop is authoritative and active.
                     elif old_status in active_statuses:
-                        # New stop is terminal, but old protection is still live.
-                        # Restore the old stop as canonical; the next cycle may
-                        # safely retry tightening from this confirmed baseline.
+                        if new_status in {"TRIGGERED", "FINISHED"}:
+                            raise FuturesCampaignExecutionError(
+                                f"{symbol}: replacement stop triggered while prior stop is still active; "
+                                "child fill reconciliation is required before clearing either identity"
+                            )
+                        # New stop is terminal without a trigger, but old
+                        # protection is still live. Restore the old stop.
                         campaign.tags["protective_client_algo_id"] = old_client_id
                         campaign.tags["protective_algo_id"] = old_algo_id
                         previous_stop = float(campaign.tags.get("previous_protective_stop_price", 0) or 0)
