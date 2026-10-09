@@ -525,14 +525,23 @@ class ExecutionBarrier:
                     and len(report_states) == len(reports)
                     and all(status in {"NEW", "PENDING_NEW"} for status in report_states)
                 )
+                filled_indexes = [
+                    index for index, status in enumerate(report_states)
+                    if status == "FILLED"
+                ]
                 completed_oco = (
                     list_type == "ALL_DONE"
                     and list_status == "ALL_DONE"
                     and reports_valid
                     and len(report_states) == 2
-                    and report_states.count("FILLED") == 1
+                    and len(filled_indexes) == 1
                     and all(status in {"FILLED", "CANCELED", "EXPIRED"} for status in report_states)
-                    and max(report_fills) >= requested_qty - max(1e-12, requested_qty * 1e-8)
+                    and report_fills[filled_indexes[0]] >= requested_qty - max(1e-12, requested_qty * 1e-8)
+                    and all(
+                        report_fills[index] == 0
+                        for index in range(len(report_fills))
+                        if index != filled_indexes[0]
+                    )
                 )
                 if (
                     order_list_id < 0
