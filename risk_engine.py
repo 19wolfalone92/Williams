@@ -173,14 +173,26 @@ class RiskEngine:
             stop_price = structural_stop if structural_stop > entry else entry + fallback_stop_distance
             take_profit_price = entry - target_distance
 
-        if stop_price <= 0 or take_profit_price <= 0:
-            return self._blocked(symbol, side, entry, "calculated stop price is invalid")
+        if (
+            not math.isfinite(stop_price) or not math.isfinite(take_profit_price)
+            or stop_price <= 0 or take_profit_price <= 0
+            or stop_price == entry or take_profit_price == entry
+        ):
+            return self._blocked(symbol, side, entry, "calculated stop/target prices are invalid")
 
         stop_distance = abs(entry - stop_price)
+        target_distance_actual = abs(take_profit_price - entry)
+        if (
+            not math.isfinite(stop_distance) or stop_distance <= 0
+            or not math.isfinite(target_distance_actual) or target_distance_actual <= 0
+        ):
+            return self._blocked(symbol, side, entry, "calculated stop/target distance is invalid")
         stop_pct = stop_distance / entry
-        target_pct = abs(take_profit_price - entry) / entry
+        target_pct = target_distance_actual / entry
 
-        rr = abs(take_profit_price - entry) / stop_distance
+        rr = target_distance_actual / stop_distance
+        if not math.isfinite(rr):
+            return self._blocked(symbol, side, entry, "calculated risk/reward is non-finite")
 
         if rr < self.min_rr:
             return self._blocked(symbol, side, entry, f"R:R {rr:.3f} below minimum {self.min_rr:.3f}")
@@ -197,18 +209,27 @@ class RiskEngine:
             + (2.0 * self.fee_buffer_per_side_pct)
             + self.slippage_buffer_pct
         )
+        if (
+            not math.isfinite(risk_quote) or risk_quote <= 0
+            or not math.isfinite(effective_loss_fraction) or effective_loss_fraction <= 0
+        ):
+            return self._blocked(symbol, side, entry, "risk budget or loss fraction is invalid")
 
         # Position size based on stop + execution-cost reserve.
         risk_based_position = risk_quote / max(effective_loss_fraction, 1e-9)
 
         # Hard portfolio exposure cap.
         max_position_quote = self.balance * self.max_position_fraction
+        if not math.isfinite(risk_based_position) or not math.isfinite(max_position_quote):
+            return self._blocked(symbol, side, entry, "calculated risk/position cap is non-finite")
 
         position_quote = min(
             risk_based_position,
             max_position_quote,
         )
 
+        if not math.isfinite(position_quote):
+            return self._blocked(symbol, side, entry, "calculated position size is non-finite")
         if position_quote <= 0:
             return self._blocked(symbol, side, entry, "calculated position size is zero")
         if minimum_notional > 0 and position_quote < minimum_notional:
