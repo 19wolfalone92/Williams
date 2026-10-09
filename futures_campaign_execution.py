@@ -1293,9 +1293,6 @@ class FuturesCampaignExecutionService:
                 # child order, so terminal algo status alone cannot release risk.
                 reconciled = self.reconcile_symbol(symbol)
                 if str(reconciled.get("state", "")).upper() == "CLOSED":
-                    campaign.tags["pending_entry_cancel_reason"] = str(reason)
-                    campaign.tags["pending_entry_cancel_status"] = status
-                    self.db.save_campaign(campaign)
                     return {
                         "symbol": symbol,
                         "state": "CLOSED",
