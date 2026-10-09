@@ -1186,6 +1186,7 @@ internal class FuturesNativeEngine(
             .put("atr_at_entry", signal.atr)
             .put("entry_price", 0.0)
             .put("position_amt", 0.0)
+            .put("entry_fill_reconciliation_pending", true)
             .put("protection_active", false)
             .put("reason", signal.reason)
             .put("created_at_ms", System.currentTimeMillis())
@@ -1575,7 +1576,10 @@ internal class FuturesNativeEngine(
         campaign.put("position_amt", amount)
         campaign.put("entry_price", position.optString("entryPrice").toDoubleOrNull() ?: campaign.optDouble("entry_price", 0.0))
         if (campaign.optString("state") in setOf("ENTRY_PENDING", "OPEN", "OPEN_UNPROTECTED")) {
-            val wasPendingEntry = campaign.optString("state") == "ENTRY_PENDING"
+            val needsEntryFillVerification = campaign.optBoolean(
+                "entry_fill_reconciliation_pending",
+                campaign.optString("state") == "ENTRY_PENDING"
+            )
             campaign.put("state", "OPEN_UNPROTECTED")
             campaign.put("entry_filled_at_ms", System.currentTimeMillis())
             auditStore.saveFuturesCampaign(symbol, campaign)
@@ -1594,7 +1598,7 @@ internal class FuturesNativeEngine(
                 return JSONObject().put("symbol", symbol).put("state", "CLOSED").put("reason", "emergency exit after failed protection")
             }
             val protectedCampaign = auditStore.futuresCampaign(symbol) ?: campaign
-            if (wasPendingEntry) {
+            if (needsEntryFillVerification) {
                 val fillProblem = verifyInitialEntryFill(exchange, protectedCampaign, position, amount)
                 if (fillProblem != null) {
                     if (fillProblem.startsWith("Actual initial fill risk exceeds")) {
@@ -1743,6 +1747,7 @@ internal class FuturesNativeEngine(
             campaign.put("entry_fee_quote", entryFeeQuote)
             campaign.put("entry_fee_unknown", feeUnknown)
             campaign.put("entry_fill_verified", true)
+            campaign.put("entry_fill_reconciliation_pending", false)
             auditStore.saveFuturesCampaign(symbol, campaign)
             null
         } catch (x: Exception) {
