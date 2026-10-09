@@ -2598,6 +2598,32 @@ class FuturesCampaignExecutionService:
 
                 algo = self.client.get_algo_order(symbol, client_algo_id=client_add_id)
                 algo_status = str(algo.get("algoStatus", "") or "").upper()
+                algo_client_id = str(algo.get("clientAlgoId", "") or "")
+                algo_side = str(algo.get("side", "") or "").upper()
+                algo_type = str(algo.get("type", "") or "").upper()
+                algo_close_position_raw = str(algo.get("closePosition", "")).lower()
+                try:
+                    algo_trigger = float(algo.get("triggerPrice"))
+                    algo_quantity = float(algo.get("quantity"))
+                    expected_add_quantity = float(campaign.tags.get("pending_add_on_quantity", 0) or 0)
+                except (TypeError, ValueError):
+                    algo_trigger = algo_quantity = expected_add_quantity = float("nan")
+                expected_add_side = "BUY" if direction == "LONG" else "SELL"
+                if (
+                    algo_client_id != client_add_id
+                    or algo_side != expected_add_side
+                    or algo_type != "STOP_MARKET"
+                    or algo_close_position_raw not in {"false", "0"}
+                    or not math.isfinite(algo_trigger)
+                    or not math.isclose(algo_trigger, trigger_price, rel_tol=0.0, abs_tol=1e-8)
+                    or not math.isfinite(algo_quantity)
+                    or not math.isfinite(expected_add_quantity)
+                    or expected_add_quantity <= 0
+                    or not math.isclose(algo_quantity, expected_add_quantity, rel_tol=0.0, abs_tol=1e-8)
+                ):
+                    raise FuturesCampaignExecutionError(
+                        f"{symbol}: add-on algo identity/side/type/quantity/trigger does not match durable intent"
+                    )
                 active_add_statuses = {"NEW", "WORKING", "PENDING_NEW", "PENDING"}
                 terminal_add_statuses = {"CANCELED", "CANCELLED", "EXPIRED", "REJECTED"}
                 if algo_status in active_add_statuses:
@@ -2652,6 +2678,14 @@ class FuturesCampaignExecutionService:
                 if actual_order_id:
                     actual_order = self.client.get_order(symbol, order_id=actual_order_id)
                     order_status = str(actual_order.get("status", "") or "").upper()
+                    if (
+                        str(actual_order.get("clientOrderId", "") or "") != client_add_id
+                        or str(actual_order.get("side", "") or "").upper() != expected_add_side
+                        or str(actual_order.get("type", "") or "").upper() != "MARKET"
+                    ):
+                        raise FuturesCampaignExecutionError(
+                            f"{symbol}: triggered add-on actual order identity/side/type mismatch"
+                        )
                     try:
                         executed = float(actual_order.get("executedQty", 0) or 0)
                     except (TypeError, ValueError):
@@ -2670,6 +2704,14 @@ class FuturesCampaignExecutionService:
                         )
                         actual_order = self.client.get_order(symbol, order_id=actual_order_id)
                         order_status = str(actual_order.get("status", "") or "").upper()
+                        if (
+                            str(actual_order.get("clientOrderId", "") or "") != client_add_id
+                            or str(actual_order.get("side", "") or "").upper() != expected_add_side
+                            or str(actual_order.get("type", "") or "").upper() != "MARKET"
+                        ):
+                            raise FuturesCampaignExecutionError(
+                                f"{symbol}: post-cancel add-on actual order identity/side/type mismatch"
+                            )
                         try:
                             executed = float(actual_order.get("executedQty", 0) or 0)
                         except (TypeError, ValueError):
