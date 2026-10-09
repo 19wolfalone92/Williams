@@ -134,6 +134,8 @@ class FakeClient:
         return {
             "orderListId": self.oco_counter,
             "listClientOrderId": list_client_order_id,
+            "listStatusType": "EXEC_STARTED",
+            "listOrderStatus": "EXECUTING",
             "orderReports": [
                 {"symbol": symbol, "orderId": self.oco_counter * 10, "orderListId": self.oco_counter,
                  "clientOrderId": "TP", "status": "NEW", "side": "SELL", "type": "TAKE_PROFIT_LIMIT",
