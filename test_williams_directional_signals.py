@@ -180,3 +180,44 @@ def test_strict_short_signal_requires_sell_fractal_outside_teeth():
     assert bool(latest["short_wise_reversal_entry"])
     assert not bool(latest["short_fractal_outside"])
     assert not bool(latest["short_signal"])
+
+
+def test_first_live_wise_man_signal_can_start_long_or_short_campaign():
+    from futures_runtime import choose_initial_williams_signal
+
+    for direction, side in (("LONG", "BUY"), ("SHORT", "SELL")):
+        wm2 = SignalSpec.new(
+            symbol="BTCUSDT",
+            side=side,
+            direction=direction,
+            signal_type=SignalType.SUPER_AO,
+            role=SignalRole.ADD_ON,
+            timeframe="5m",
+            signal_bar_time_ms=100,
+            trigger_price=101.0 if direction == "LONG" else 99.0,
+            protective_reference=99.0 if direction == "LONG" else 101.0,
+            expires_at_ms=10_000,
+        )
+        selected = choose_initial_williams_signal([wm2], direction, now_ms=1_000)
+        assert selected is not None
+        assert selected.signal_type is SignalType.SUPER_AO
+        assert selected.role is SignalRole.ENTRY
+        assert selected.direction == direction
+
+
+def test_expired_wise_man_signal_cannot_start_campaign():
+    from futures_runtime import choose_initial_williams_signal
+
+    expired = SignalSpec.new(
+        symbol="BTCUSDT",
+        side="BUY",
+        direction="LONG",
+        signal_type=SignalType.FRACTAL,
+        role=SignalRole.ADD_ON,
+        timeframe="5m",
+        signal_bar_time_ms=100,
+        trigger_price=101.0,
+        protective_reference=99.0,
+        expires_at_ms=999,
+    )
+    assert choose_initial_williams_signal([expired], "LONG", now_ms=1_000) is None
