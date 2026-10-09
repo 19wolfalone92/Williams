@@ -165,6 +165,7 @@ def test_read_only_release_gate_passes_only_when_demo_policy_is_verified(monkeyp
         ("missing_market_filter", True, "LOT_SIZE and MARKET_LOT_SIZE"),
         ("bad_filter_step", True, "MARKET_LOT_SIZE bounds/stepSize are invalid"),
         ("crossed_book", True, "best bid/ask is invalid"),
+        ("position_amt", None, "omitted positionAmt"),
     ],
 )
 def test_read_only_release_gate_fails_closed_on_invalid_demo_policy(monkeypatch, setting, value, message):
