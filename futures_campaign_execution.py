@@ -2477,8 +2477,24 @@ class FuturesCampaignExecutionService:
             active_statuses = {"NEW", "WORKING", "PENDING", "PENDING_NEW"}
             terminal_no_fill = {"CANCELED", "CANCELLED", "EXPIRED", "REJECTED"}
             actual_order_id = algo.get("actualOrderId")
-            if abs(amount) <= 1e-12 and algo_status in active_statuses and not actual_order_id:
-                return {"symbol": symbol, "state": "ENTRY_PENDING", "algo_status": algo_status}
+            if algo_status in active_statuses and not actual_order_id:
+                if abs(amount) <= 1e-12 and campaign.state == CampaignState.ENTRY_PENDING:
+                    return {"symbol": symbol, "state": "ENTRY_PENDING", "algo_status": algo_status}
+                # A live position with an apparently untriggered entry, or a
+                # RECONCILE_REQUIRED campaign with a still-live entry, must not
+                # leave another exposure-increasing trigger armed.
+                self.client.cancel_algo_order_safe(
+                    symbol,
+                    algo_id=algo.get("algoId") or campaign.tags.get("pending_algo_id") or None,
+                    client_algo_id=client_id,
+                )
+                algo = self.client.get_algo_order(symbol, client_algo_id=client_id)
+                algo_status = str(algo.get("algoStatus", "") or "").upper()
+                actual_order_id = algo.get("actualOrderId")
+                if algo_status in active_statuses and not actual_order_id:
+                    return unresolved(
+                        f"{symbol}: pending entry remains active after cancellation/re-query"
+                    )
             if not actual_order_id:
                 if abs(amount) <= 1e-12 and algo_status in terminal_no_fill:
                     campaign.state = CampaignState.CLOSED
