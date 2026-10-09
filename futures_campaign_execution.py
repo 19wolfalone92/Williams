@@ -1288,36 +1288,20 @@ class FuturesCampaignExecutionService:
             status = str(verified.get("algoStatus", "")).upper()
             position = self._position_amount(symbol)
             if status in {"CANCELED", "CANCELLED", "EXPIRED", "REJECTED"} and abs(position) <= 1e-12:
-                campaign.state = CampaignState.CLOSED
-                campaign.next_action = "WAIT"
-                campaign.pending_risk_quote = 0.0
-                campaign.capital_reserved_quote = 0.0
-                campaign.tags["pending_entry_cancel_reason"] = str(reason)
-                campaign.tags["pending_entry_cancel_status"] = status
-                self.db.save_campaign(campaign)
-                self.db.set_campaign_signal_state(
-                    campaign.current_signal_id,
-                    SignalState.CANCELLED.value,
-                )
-                self.db.state_delete(f"futures_entry_pending:{symbol}")
-                self.db.state_delete(f"campaign_state:{campaign.campaign_id}")
-                self.db.log_campaign_event(
-                    campaign.campaign_id,
-                    CampaignEventType.CAMPAIGN_CLOSED.value,
-                    order_id=str(algo_id or client_algo_id),
-                    reason=f"Pending entry verified {status.lower()} during {reason}",
-                    payload={
-                        "client_algo_id": client_algo_id,
+                # Reuse the same child-order/userTrades reconciliation used at
+                # startup. A terminal algo may still have a partially filled
+                # child order, so terminal algo status alone cannot release risk.
+                reconciled = self.reconcile_symbol(symbol)
+                if str(reconciled.get("state", "")).upper() == "CLOSED":
+                    campaign.tags["pending_entry_cancel_reason"] = str(reason)
+                    campaign.tags["pending_entry_cancel_status"] = status
+                    self.db.save_campaign(campaign)
+                    return {
+                        "symbol": symbol,
+                        "state": "CLOSED",
+                        "action": "ENTRY_CANCELLED",
                         "algo_status": status,
-                        "exchange_position_amount": position,
-                    },
-                )
-                return {
-                    "symbol": symbol,
-                    "state": "CLOSED",
-                    "action": "ENTRY_CANCELLED",
-                    "algo_status": status,
-                }
+                    }
 
             detail = (
                 f"{reason}: entry cancel not conclusively verified "
