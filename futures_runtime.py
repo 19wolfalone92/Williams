@@ -364,6 +364,18 @@ class FuturesRuntime:
                 else pd.Timestamp(candle_open_ms + _interval_seconds(interval) * 1000, unit="ms", tz="UTC")
             )
             close_ms = int(pd.Timestamp(close_time).timestamp() * 1000)
+            now_ms = int(time.time() * 1000)
+            candle_age_ms = now_ms - close_ms
+            max_candle_age_ms = max(120_000, 2 * _interval_seconds(interval) * 1000)
+            if (
+                close_ms <= 0
+                or candle_age_ms < -60_000
+                or candle_age_ms > max_candle_age_ms
+            ):
+                raise RuntimeError(
+                    f"{symbol}/{interval}: last closed candle is stale or has an invalid timestamp "
+                    f"(age_ms={candle_age_ms}, max_age_ms={max_candle_age_ms})"
+                )
             state = "BULLISH" if bullish else "BEARISH" if bearish else "SLEEP"
             decision = "LONG" if allow_long else "SHORT" if allow_short else "NO_TRADE"
             context = TFMarketContext(
@@ -630,6 +642,21 @@ class FuturesRuntime:
                 closed = frame.iloc[:-1].copy() if len(frame) > 1 else frame.iloc[0:0].copy()
                 if len(closed) < 100:
                     raise RuntimeError("insufficient closed candles for safe structural management")
+                if "close_time" in closed.columns:
+                    last_close = pd.to_datetime(closed["close_time"], utc=True, errors="coerce").iloc[-1]
+                    if pd.isna(last_close):
+                        raise RuntimeError("last closed candle has an invalid close_time")
+                    close_ms = int(last_close.timestamp() * 1000)
+                else:
+                    close_ms = int(pd.Timestamp(closed.index[-1]).timestamp() * 1000) + _interval_seconds(self.interval) * 1000
+                now_ms = int(time.time() * 1000)
+                candle_age_ms = now_ms - close_ms
+                max_candle_age_ms = max(120_000, 2 * _interval_seconds(self.interval) * 1000)
+                if close_ms <= 0 or candle_age_ms < -60_000 or candle_age_ms > max_candle_age_ms:
+                    raise RuntimeError(
+                        f"{symbol}/{self.interval}: stale/invalid candle blocks structural management "
+                        f"(age_ms={candle_age_ms}, max_age_ms={max_candle_age_ms})"
+                    )
                 indicators = calculate_indicators(closed, config_from_env())
                 atr = self._atr(closed, self.config.atr_period)
                 result = self.execution.manage_campaign(campaign, indicators, atr=atr)
