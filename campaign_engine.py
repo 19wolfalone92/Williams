@@ -9,6 +9,7 @@ an exchange order and verifying the resulting state.
 from __future__ import annotations
 
 from dataclasses import asdict
+import math
 from typing import Any, Iterable
 import json
 import time
@@ -265,8 +266,16 @@ class CampaignEngine:
             raise ValueError("add-on requires an open campaign position")
         if signal.side != campaign.side:
             raise ValueError("add-on side does not match campaign")
+        if signal.role != SignalRole.ADD_ON:
+            raise ValueError("later Wise-Men signals must be explicitly classified as ADD_ON")
+        if signal.signal_type not in {SignalType.SUPER_AO, SignalType.FRACTAL}:
+            raise ValueError("only second/third Wise-Men signals may add to an existing campaign")
+        if campaign.additions >= 2:
+            raise ValueError("campaign has reached the maximum of two Wise-Men add-ons")
         if signal.signal_bar_time_ms <= 0:
             raise ValueError("add-on signal has no valid signal time")
+        if signal.signal_id in {campaign.origin_signal_id, campaign.current_signal_id}:
+            raise ValueError("duplicate signal cannot create another add-on")
         if campaign.state not in {
             CampaignState.OPEN_INITIAL,
             CampaignState.TREND_ACTIVE,
@@ -275,12 +284,31 @@ class CampaignEngine:
         }:
             raise ValueError(f"Cannot arm add-on from {campaign.state.value}")
 
+        requested_risk = float(risk_quote)
+        requested_capital = float(capital_reserved_quote)
+        if not math.isfinite(requested_risk) or requested_risk <= 0:
+            raise ValueError("add-on risk reservation must be finite and positive")
+        if not math.isfinite(requested_capital) or requested_capital <= 0:
+            raise ValueError("add-on capital reservation must be finite and positive")
+
+        # The campaign-level budget is a hard ceiling, not a weighting target.
+        # Refuse to arm if the durable budget is missing or the combined open
+        # and pending reservations would exceed it.
+        budget = float(campaign.tags.get("risk_budget_quote", 0.0) or 0.0)
+        if not math.isfinite(budget) or budget <= 0:
+            raise ValueError("campaign risk budget is missing or invalid; add-on blocked")
+        already_reserved = max(0.0, float(campaign.open_risk_quote)) + max(
+            0.0, float(campaign.pending_risk_quote)
+        )
+        if already_reserved + requested_risk > budget + max(1e-8, budget * 1e-9):
+            raise ValueError("add-on would exceed the campaign's remaining risk budget")
+
         # The book continues the same campaign with later Wise-Men signals.
         # A new signal becomes an add-on, never a second independent campaign.
         campaign.current_signal_id = signal.signal_id
         campaign.current_signal_type = signal.signal_type.value
-        campaign.pending_risk_quote = max(0.0, float(risk_quote))
-        campaign.capital_reserved_quote = max(0.0, float(capital_reserved_quote))
+        campaign.pending_risk_quote = requested_risk
+        campaign.capital_reserved_quote = requested_capital
         campaign.next_action = "SUBMIT_ADD_ON"
         campaign.transition(CampaignState.ADD_ON_ARMING, reason=f"{signal.signal_type.value} confirmation")
         campaign.transition(CampaignState.ADD_ON_PENDING, reason="conditional add-on admitted")
