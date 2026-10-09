@@ -297,14 +297,16 @@ def test_mutation_timeout_or_binance_unknown_execution_code_is_ambiguous(
     client = make_client()
 
     class Response:
-        status_code = status_code
-        text = str(payload)
+        def __init__(self, status, body):
+            self.status_code = status
+            self.text = str(body)
+            self.body = body
 
         def json(self):
-            return payload
+            return self.body
 
     client.session = SimpleNamespace(
-        request=lambda *args, **kwargs: Response()
+        request=lambda *args, **kwargs: Response(status_code, payload)
     )
 
     with pytest.raises(FuturesAPIError) as exc_info:
