@@ -7,6 +7,7 @@ from typing import Dict, List, Optional, Tuple
 import pandas as pd
 
 from data import fetch_klines
+from campaign_model import SignalRole
 from strategy import calculate_indicators, config_from_env
 from wave_engine import DIRECTION_NEUTRAL, MultiTimeframeWaveEngine
 from feature_store import FeatureStore, build_market_feature_vector
@@ -474,6 +475,12 @@ class MarketScanner:
                     s.signal_type.value,
                 ),
             )
+            # Only WM1 reversal may start a new campaign. Super AO and valid
+            # fractal signals remain explicit ADD_ON candidates and must never
+            # be silently promoted to fresh initial entries.
+            initial_entry_specs = [
+                spec for spec in campaign_specs if spec.role == SignalRole.ENTRY
+            ]
             # Pick the active direction from the earliest valid signal.
             # If no trigger exists yet, surface the stronger directional watch
             # state without treating either watch state as an entry command.
@@ -515,7 +522,7 @@ class MarketScanner:
             legacy_strict_signal = bool(
                 last.get("short_signal" if primary_direction == "SHORT" else "long_signal", False)
             )
-            campaign_signal = bool(campaign_specs)
+            campaign_signal = bool(initial_entry_specs)
             setup_score = float(
                 last.get("short_setup_score" if primary_direction == "SHORT" else "long_setup_score", 0.0)
                 or 0.0
@@ -598,20 +605,20 @@ class MarketScanner:
                 base_score=round(base_score, 2),
                 campaign_ready=campaign_signal,
                 direction=(
-                    str(getattr(campaign_specs[0], "direction", "") or "").upper()
-                    if campaign_specs else ""
+                    str(getattr(initial_entry_specs[0], "direction", "") or "").upper()
+                    if initial_entry_specs else ""
                 ),
                 entry_signal_type=(
-                    campaign_specs[0].signal_type.value if campaign_specs else ""
+                    initial_entry_specs[0].signal_type.value if initial_entry_specs else ""
                 ),
                 entry_trigger_price=(
-                    float(campaign_specs[0].trigger_price) if campaign_specs else 0.0
+                    float(initial_entry_specs[0].trigger_price) if initial_entry_specs else 0.0
                 ),
                 entry_protective_reference=(
-                    float(campaign_specs[0].protective_reference) if campaign_specs else 0.0
+                    float(initial_entry_specs[0].protective_reference) if initial_entry_specs else 0.0
                 ),
                 entry_signal_time_ms=(
-                    int(campaign_specs[0].signal_bar_time_ms) if campaign_specs else 0
+                    int(initial_entry_specs[0].signal_bar_time_ms) if initial_entry_specs else 0
                 ),
                 campaign_signal_specs=[s.to_dict() for s in campaign_specs],
             )
