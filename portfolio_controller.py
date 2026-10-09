@@ -87,13 +87,20 @@ class PortfolioController:
             -selection.risk.stop_distance_pct,
         )
 
-    def select_portfolio(self, open_risk_quote: float = 0.0, open_positions: int = 0):
-        """Return candidates for new campaigns and, in campaign mode, later add-ons."""
+    def select_portfolio(
+        self,
+        open_risk_quote: float = 0.0,
+        open_positions: int = 0,
+        *,
+        include_existing_campaigns: bool = False,
+    ):
+        """Return new-campaign candidates and optionally candidates for active-campaign add-ons."""
         campaign_mode = os.getenv("CAMPAIGN_ENGINE", "false").lower() == "true"
         if (
             self.max_open_positions > 0
             and open_positions >= self.max_open_positions
             and not campaign_mode
+            and not include_existing_campaigns
         ):
             return []
         analysed = self._analyse_candidates(self.scanner.scan())
@@ -108,7 +115,7 @@ class PortfolioController:
         selections = []
         remaining_slots = (
             len(analysed)
-            if campaign_mode
+            if campaign_mode or include_existing_campaigns
             else (
                 max(0, self.max_open_positions - int(open_positions))
                 if self.max_open_positions > 0
