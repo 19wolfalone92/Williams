@@ -2230,3 +2230,38 @@ def test_reconciliation_lockout_cancels_already_armed_entries():
     assert result["state"] == "RECONCILE_REQUIRED"
     assert result["new_entries"] == 0
     assert result["pending_order_cancellations"][0]["action"] == "ENTRY_CANCELLED"
+
+
+def test_lockout_cancels_reconcile_required_entry_with_durable_pending_flag():
+    from types import SimpleNamespace
+    from campaign_model import CampaignState
+    from futures_runtime import FuturesRuntime
+
+    row = {
+        "campaign_id": "campaign-uncertain-entry",
+        "symbol": "BTCUSDT",
+        "state": "RECONCILE_REQUIRED",
+        "tags": {
+            "execution_mode": "FUTURES",
+            "entry_fill_reconciliation_pending": True,
+            "entry_client_algo_id": "pending-entry-client",
+        },
+    }
+    campaign = SimpleNamespace(state=CampaignState.RECONCILE_REQUIRED)
+    calls = []
+    runtime = object.__new__(FuturesRuntime)
+    runtime.execution = SimpleNamespace(
+        _active_rows=lambda: [row],
+        _row_tags=lambda item: item["tags"],
+        engine=SimpleNamespace(load_campaign=lambda campaign_id: campaign),
+        cancel_pending_entry=lambda loaded, reason: calls.append((loaded, reason)) or {
+            "symbol": "BTCUSDT", "state": "RECONCILE_REQUIRED", "action": "CANCEL_UNVERIFIED"
+        },
+        cancel_pending_add_on=lambda *args, **kwargs: pytest.fail("wrong cancellation path"),
+    )
+    runtime.db = SimpleNamespace(log_event=lambda *args, **kwargs: None)
+
+    results = runtime._cancel_pending_entries(reason="RECONCILE_REQUIRED")
+
+    assert calls == [(campaign, "RECONCILE_REQUIRED")]
+    assert results[0]["action"] == "CANCEL_UNVERIFIED"
