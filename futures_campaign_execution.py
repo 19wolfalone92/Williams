@@ -1287,16 +1287,17 @@ class FuturesCampaignExecutionService:
             )
             status = str(verified.get("algoStatus", "")).upper()
             position = self._position_amount(symbol)
-            if status in {"CANCELED", "CANCELLED", "EXPIRED", "REJECTED"} and abs(position) <= 1e-12:
+            if status in {"CANCELED", "CANCELLED", "EXPIRED", "REJECTED"}:
                 # Reuse the same child-order/userTrades reconciliation used at
                 # startup. A terminal algo may still have a partially filled
                 # child order, so terminal algo status alone cannot release risk.
                 reconciled = self.reconcile_symbol(symbol)
-                if str(reconciled.get("state", "")).upper() == "CLOSED":
+                reconciled_state = str(reconciled.get("state", "")).upper()
+                if reconciled_state not in {"RECONCILE_REQUIRED", "ENTRY_PENDING"}:
+                    action = "ENTRY_CANCELLED" if reconciled_state == "CLOSED" else "ENTRY_FILL_RECONCILED"
                     return {
-                        "symbol": symbol,
-                        "state": "CLOSED",
-                        "action": "ENTRY_CANCELLED",
+                        **reconciled,
+                        "action": action,
                         "algo_status": status,
                     }
 
