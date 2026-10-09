@@ -713,7 +713,12 @@ class FuturesRuntime:
             for item in reconciliations
         )
         management_blocked = any(
-            str(item.get("action", "")).upper() in {"MANAGEMENT_ERROR", "RECONCILE_REQUIRED"}
+            # WAIT means an active campaign could not complete its management
+            # pass (for example, ATR/closed candles unavailable). It is not a
+            # successful protection check, so do not compound exposure.
+            str(item.get("action", "")).upper() in {
+                "MANAGEMENT_ERROR", "RECONCILE_REQUIRED", "WAIT"
+            }
             or str(item.get("state", "")).upper() == "RECONCILE_REQUIRED"
             for item in management
         )
