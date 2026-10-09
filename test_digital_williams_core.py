@@ -77,3 +77,16 @@ def test_pending_signal_with_missing_or_negative_expiry_is_not_actionable():
     assert pending.actionable(now_ms=10_000)
     assert not PendingSignal(**{**pending.to_dict(), "expires_at_ms": 0}).actionable(now_ms=10_000)
     assert not PendingSignal(**{**pending.to_dict(), "expires_at_ms": -1}).actionable(now_ms=10_000)
+
+
+def test_negative_expiry_on_signal_spec_is_not_replaced_with_a_default():
+    core = DigitalWilliamsCore()
+    malformed = SignalSpec.new(
+        symbol="BTCUSDT", side="BUY", signal_type=SignalType.REVERSAL,
+        role=SignalRole.ENTRY, timeframe="5m", signal_bar_time_ms=1_000,
+        trigger_price=101.0, protective_reference=95.0,
+        created_at_ms=1_000, expires_at_ms=-1,
+    )
+    decision = core.compose([malformed], now_ms=10_000)
+    assert decision.action == "BLOCK"
+    assert decision.pending.expires_at_ms == -1
