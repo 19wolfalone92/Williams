@@ -2025,6 +2025,111 @@ class FuturesCampaignExecutionService:
             "reason": reason,
         }
 
+    def _reconcile_flat_position_protection(self, campaign) -> dict[str, Any] | None:
+        """Cancel orphaned protection on a flat position and reconcile any stop fill."""
+        symbol = campaign.symbol.upper()
+        direction = self._campaign_direction(campaign)
+        stop_side = "SELL" if direction == "LONG" else "BUY"
+        candidates: list[tuple[dict[str, Any], dict[str, Any]]] = []
+        seen: set[tuple[str, str]] = set()
+        identifiers = [
+            (
+                campaign.tags.get("protective_client_algo_id"),
+                campaign.tags.get("protective_algo_id"),
+            ),
+            (
+                campaign.tags.get("previous_protective_client_algo_id"),
+                campaign.tags.get("previous_protective_algo_id"),
+            ),
+            (
+                campaign.tags.get("pending_protective_client_algo_id"),
+                campaign.tags.get("pending_protective_algo_id"),
+            ),
+        ]
+        for raw_client_id, raw_algo_id in identifiers:
+            client_id = str(raw_client_id or "")
+            algo_id = raw_algo_id or None
+            if not client_id and not algo_id:
+                continue
+            key = (client_id, str(algo_id or ""))
+            if key in seen:
+                continue
+            seen.add(key)
+            protection = self.client.get_algo_order(
+                symbol,
+                algo_id=algo_id,
+                client_algo_id=client_id or None,
+            )
+            status = str(protection.get("algoStatus", "") or "").upper()
+            active_statuses = {"NEW", "WORKING", "PENDING", "PENDING_NEW"}
+            terminal_statuses = {"CANCELED", "CANCELLED", "EXPIRED", "REJECTED", "FINISHED", "TRIGGERED"}
+            if status in active_statuses:
+                self._cancel_algo_via_barrier(
+                    campaign, symbol, stop_side,
+                    algo_id=protection.get("algoId") or algo_id,
+                    client_algo_id=str(protection.get("clientAlgoId", "") or client_id) or None,
+                    purpose="CAMPAIGN_FLAT_ORPHAN_PROTECTION_CANCEL",
+                )
+                protection = self.client.get_algo_order(
+                    symbol,
+                    algo_id=protection.get("algoId") or algo_id,
+                    client_algo_id=str(protection.get("clientAlgoId", "") or client_id) or None,
+                )
+                status = str(protection.get("algoStatus", "") or "").upper()
+                if status in active_statuses:
+                    raise FuturesCampaignExecutionError(
+                        f"{symbol}: orphan protective algo remains active after cancellation"
+                    )
+            if status not in terminal_statuses:
+                raise FuturesCampaignExecutionError(
+                    f"{symbol}: protective algo has ambiguous flat-position status ({status or 'UNKNOWN'})"
+                )
+            actual_order_id = protection.get("actualOrderId")
+            if not actual_order_id:
+                continue
+            actual_order = self.client.get_order(symbol, order_id=actual_order_id)
+            order_status = str(actual_order.get("status", "") or "").upper()
+            child_active = {"NEW", "PARTIALLY_FILLED", "PENDING_NEW"}
+            child_terminal = {"FILLED", "CANCELED", "CANCELLED", "EXPIRED", "REJECTED"}
+            if order_status in child_active:
+                self._cancel_child_order_via_barrier(
+                    campaign, symbol, stop_side, order_id=actual_order_id,
+                    purpose="CAMPAIGN_FLAT_ORPHAN_PROTECTION_CHILD_CANCEL",
+                )
+                actual_order = self.client.get_order(symbol, order_id=actual_order_id)
+                order_status = str(actual_order.get("status", "") or "").upper()
+                if order_status in child_active:
+                    raise FuturesCampaignExecutionError(
+                        f"{symbol}: protective child order remains active while position is flat"
+                    )
+            if order_status not in child_terminal:
+                raise FuturesCampaignExecutionError(
+                    f"{symbol}: protective child order has ambiguous status ({order_status or 'UNKNOWN'})"
+                )
+            try:
+                executed = float(actual_order.get("executedQty", 0) or 0)
+            except (TypeError, ValueError) as exc:
+                raise FuturesCampaignExecutionError(
+                    f"{symbol}: protective child order executedQty is invalid"
+                ) from exc
+            if not math.isfinite(executed) or executed < 0:
+                raise FuturesCampaignExecutionError(
+                    f"{symbol}: protective child order executedQty is non-finite"
+                )
+            if executed > 0:
+                candidates.append((protection, actual_order))
+
+        if len(candidates) > 1:
+            raise FuturesCampaignExecutionError(
+                f"{symbol}: multiple protective child orders report fills while position is flat"
+            )
+        if not candidates:
+            campaign.tags["protection_active"] = False
+            self.db.save_campaign(campaign)
+            return None
+        protection, actual_order = candidates[0]
+        return self._finalize_verified_protective_exit(campaign, protection, actual_order)
+
     def _finalize_verified_protective_exit(
         self,
         campaign,
