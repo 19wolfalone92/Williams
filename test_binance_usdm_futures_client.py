@@ -131,6 +131,20 @@ def test_symbol_configuration_rejects_missing_symbol_or_leverage(monkeypatch):
         client.symbol_configuration("BTCUSDT")
 
 
+def test_symbol_configuration_rejects_fractional_leverage(monkeypatch):
+    client = make_client()
+    monkeypatch.setattr(
+        client,
+        "_request",
+        lambda *args, **kwargs: [{
+            "symbol": "BTCUSDT", "marginType": "ISOLATED", "leverage": 1.5,
+        }],
+    )
+
+    with pytest.raises(FuturesAPIError, match="invalid leverage"):
+        client.symbol_configuration("BTCUSDT")
+
+
 def test_prepare_symbol_verifies_applied_isolated_one_x_policy(monkeypatch):
     client = make_client()
     responses = {
