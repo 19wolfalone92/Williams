@@ -61,6 +61,45 @@ def assert_futures_testnet_opt_in() -> None:
         raise RuntimeError("Futures Demo gate requires BINANCE_API_KEY and BINANCE_API_SECRET.")
 
 
+def _filter_number(filter_row: dict[str, Any], key: str, symbol: str, filter_name: str) -> float:
+    try:
+        value = float(filter_row[key])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RuntimeError(f"{symbol}: {filter_name}.{key} is not numeric") from exc
+    if not math.isfinite(value):
+        raise RuntimeError(f"{symbol}: {filter_name}.{key} must be finite")
+    return value
+
+
+def _validate_symbol_filters(symbol: str, filters: dict[str, Any]) -> dict[str, Any]:
+    """Validate numeric exchange filters, not merely their presence."""
+    price_filter = filters.get("PRICE_FILTER")
+    if not isinstance(price_filter, dict):
+        raise RuntimeError(f"{symbol}: PRICE_FILTER is malformed")
+    min_price = _filter_number(price_filter, "minPrice", symbol, "PRICE_FILTER")
+    max_price = _filter_number(price_filter, "maxPrice", symbol, "PRICE_FILTER")
+    tick_size = _filter_number(price_filter, "tickSize", symbol, "PRICE_FILTER")
+    if min_price < 0 or max_price <= 0 or max_price < min_price or tick_size <= 0:
+        raise RuntimeError(f"{symbol}: PRICE_FILTER bounds/tickSize are invalid")
+
+    validated: dict[str, dict[str, float]] = {
+        "PRICE_FILTER": {
+            "min": min_price, "max": max_price, "step": tick_size,
+        }
+    }
+    for name in ("LOT_SIZE", "MARKET_LOT_SIZE"):
+        lot = filters.get(name)
+        if not isinstance(lot, dict):
+            raise RuntimeError(f"{symbol}: {name} is malformed")
+        minimum = _filter_number(lot, "minQty", symbol, name)
+        maximum = _filter_number(lot, "maxQty", symbol, name)
+        step = _filter_number(lot, "stepSize", symbol, name)
+        if minimum < 0 or maximum <= 0 or maximum < minimum or step <= 0:
+            raise RuntimeError(f"{symbol}: {name} bounds/stepSize are invalid")
+        validated[name] = {"min": minimum, "max": maximum, "step": step}
+    return validated
+
+
 def run_futures_testnet_read_only(symbols: Iterable[str] = ("BTCUSDT",)) -> dict[str, Any]:
     """Check authenticated Futures Demo state without submitting/cancelling orders."""
     assert_futures_testnet_opt_in()
@@ -107,6 +146,7 @@ def run_futures_testnet_read_only(symbols: Iterable[str] = ("BTCUSDT",)) -> dict
         filters = client.symbol_filters(symbol)
         if not {"PRICE_FILTER", "LOT_SIZE", "MARKET_LOT_SIZE"}.issubset(set(filters)):
             raise RuntimeError(f"{symbol}: PRICE_FILTER, LOT_SIZE and MARKET_LOT_SIZE are required")
+        validated_filters = _validate_symbol_filters(symbol, filters)
         symbol_positions = client.position_risk(symbol)
         if isinstance(symbol_positions, dict):
             position_rows = [symbol_positions] if str(symbol_positions.get("symbol", "")).upper() == symbol else []
@@ -137,15 +177,30 @@ def run_futures_testnet_read_only(symbols: Iterable[str] = ("BTCUSDT",)) -> dict
             raise RuntimeError(f"{symbol}: invalid mark price payload") from exc
         if not math.isfinite(mark) or mark <= 0:
             raise RuntimeError(f"{symbol}: mark price is not finite and positive")
+        book_payload = client.book_ticker(symbol)
+        try:
+            bid = float(book_payload.get("bidPrice"))
+            ask = float(book_payload.get("askPrice"))
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise RuntimeError(f"{symbol}: invalid Futures book ticker payload") from exc
+        if not math.isfinite(bid) or not math.isfinite(ask) or bid <= 0 or ask < bid:
+            raise RuntimeError(f"{symbol}: Futures best bid/ask is invalid")
+        spread_pct = (ask - bid) / ((ask + bid) / 2.0)
+        if not math.isfinite(spread_pct) or spread_pct < 0:
+            raise RuntimeError(f"{symbol}: Futures spread is invalid")
         market_checks.append({
             "symbol": symbol,
             "status": meta.get("status"),
             "contract_type": meta.get("contractType"),
             "mark_price": mark,
+            "best_bid": bid,
+            "best_ask": ask,
+            "spread_pct": spread_pct,
             "quote_asset": str(meta.get("quoteAsset", "")).upper(),
             "margin_asset": str(meta.get("marginAsset", "")).upper(),
             "isolated_margin": isolated,
             "leverage": leverage,
+            "validated_filters": validated_filters,
             "filters": sorted(filters),
         })
 
@@ -153,16 +208,38 @@ def run_futures_testnet_read_only(symbols: Iterable[str] = ("BTCUSDT",)) -> dict
     algo_orders = client.open_algo_orders()
     if not isinstance(standard_orders, list) or not isinstance(algo_orders, list):
         raise RuntimeError("Futures open-order endpoints returned unexpected payloads")
+    nonzero_positions = []
+    for row in positions:
+        if not isinstance(row, dict):
+            raise RuntimeError("Futures positionRisk contains a malformed row")
+        try:
+            amount = float(row.get("positionAmt", 0) or 0)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("Futures positionRisk contains a non-numeric positionAmt") from exc
+        if not math.isfinite(amount):
+            raise RuntimeError("Futures positionRisk contains a non-finite positionAmt")
+        if abs(amount) > 1e-12:
+            nonzero_positions.append({
+                "symbol": str(row.get("symbol", "")).upper(),
+                "position_amt": amount,
+            })
+
+    # A read-only preflight may inspect a dirty account, but it must not report
+    # that account as release-ready. Leftover positions/orders can mutate risk
+    # or interfere with the separately controlled E2E lifecycle.
+    account_clean = not nonzero_positions and not standard_orders and not algo_orders
     return {
-        "status": "PASS_READ_ONLY",
+        "status": "PASS_READ_ONLY" if account_clean else "BLOCKED_ACCOUNT_NOT_CLEAN",
+        "release_gate_passed": account_clean,
         "endpoint": client.base_url,
         "time_sync": time_sync,
         "one_way_mode": mode,
         "account_can_trade": can_trade,
         "positions_seen": len(positions),
+        "nonzero_positions": nonzero_positions,
         "open_standard_orders_seen": len(standard_orders),
         "open_algo_orders_seen": len(algo_orders),
         "markets": market_checks,
         "mutations_submitted": 0,
-        "warning": "This is read-only preflight, not proof of a full Testnet trade lifecycle.",
+        "warning": "Read-only preflight only; a clean account is not proof of a full Testnet trade lifecycle.",
     }
