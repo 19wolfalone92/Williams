@@ -741,8 +741,39 @@ class FuturesCampaignExecutionService:
         algo_id = str(response.get("algoId", "") or "")
         status = str(response.get("algoStatus", "") or response.get("status", "")).upper()
         if not algo_id and not response.get("clientAlgoId"):
+            # The exchange may have accepted the protection order even when its
+            # response is malformed. Never return to ordinary management with
+            # an assumed-safe position: persist an explicit reconciliation lock.
+            reason = (
+                f"{symbol}: protection submission may have succeeded, but the "
+                "response contains no authoritative algo identifier"
+            )
+            campaign.mark_reconcile_required(reason)
+            campaign.tags["protection_response_unidentified"] = {
+                "client_algo_id": client_algo_id,
+                "stop_price": normalized_stop,
+            }
+            self.db.save_campaign(campaign)
+            self.db.state_set(
+                f"campaign_state:{campaign.campaign_id}",
+                CampaignState.RECONCILE_REQUIRED.value,
+            )
+            self.db.state_set(
+                f"position_state:{symbol}",
+                CampaignState.RECONCILE_REQUIRED.value,
+            )
+            self.db.log_event(
+                "ERROR",
+                "futures_protection_response_unidentified",
+                reason,
+                {
+                    "campaign_id": campaign.campaign_id,
+                    "client_algo_id": client_algo_id,
+                    "stop_price": normalized_stop,
+                },
+            )
             raise FuturesCampaignExecutionError(
-                f"{symbol}: protection response has no authoritative algo identifier"
+                f"{reason}; reconciliation required before further exposure"
             )
         campaign.tags["protective_client_algo_id"] = client_algo_id
         campaign.tags["protective_algo_id"] = algo_id
