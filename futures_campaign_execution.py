@@ -135,14 +135,8 @@ class FuturesCampaignExecutionService:
             if any(not isinstance(row, dict) for row in value):
                 raise FuturesCampaignExecutionError("Futures positionRisk contains a malformed row")
             return value
-        if isinstance(value, dict):
-            if isinstance(value.get("positions"), list):
-                rows = value["positions"]
-                if any(not isinstance(row, dict) for row in rows):
-                    raise FuturesCampaignExecutionError("Futures positionRisk contains a malformed row")
-                return rows
-            if "symbol" in value:
-                return [value]
+        if isinstance(value, dict) and "symbol" in value:
+            return [value]
         raise FuturesCampaignExecutionError("Futures positionRisk returned a malformed payload")
 
     def _cancel_algo_via_barrier(
