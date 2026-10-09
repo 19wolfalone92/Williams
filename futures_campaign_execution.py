@@ -1067,6 +1067,9 @@ class FuturesCampaignExecutionService:
             )
             verified_status = str(verified_order.get("algoStatus", "") or "").upper()
             verified_client_id = str(verified_order.get("clientAlgoId", "") or "")
+            verified_algo_id = str(verified_order.get("algoId", "") or "")
+            if not algo_id and verified_algo_id:
+                algo_id = verified_algo_id
             verified_side = str(verified_order.get("side", "") or "").upper()
             verified_type = str(
                 verified_order.get("orderType", verified_order.get("type", "")) or ""
@@ -1081,10 +1084,8 @@ class FuturesCampaignExecutionService:
                 or not verified_close_position
                 or not math.isfinite(verified_trigger)
                 or not math.isclose(verified_trigger, normalized_stop, rel_tol=0.0, abs_tol=1e-8)
-                or (
-                    verified_order.get("algoId") is not None
-                    and str(verified_order.get("algoId")) != algo_id
-                )
+                or not verified_algo_id
+                or verified_algo_id != algo_id
             ):
                 raise FuturesCampaignExecutionError(
                     f"{symbol}: submitted protection failed authoritative identity/side/type/trigger verification"
