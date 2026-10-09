@@ -165,8 +165,11 @@ def run_futures_testnet_read_only(symbols: Iterable[str] = ("BTCUSDT",)) -> dict
         position = next(iter(position_rows), None)
         if position is None:
             raise RuntimeError(f"{symbol}: positionRisk omitted the configured symbol")
+        raw_symbol_amount = position.get("positionAmt")
+        if raw_symbol_amount is None or str(raw_symbol_amount).strip() == "":
+            raise RuntimeError(f"{symbol}: positionRisk omitted positionAmt")
         try:
-            symbol_amount = float(position.get("positionAmt", 0) or 0)
+            symbol_amount = float(raw_symbol_amount)
         except (TypeError, ValueError) as exc:
             raise RuntimeError(f"{symbol}: positionRisk contains a non-numeric positionAmt") from exc
         if not math.isfinite(symbol_amount):
@@ -228,8 +231,11 @@ def run_futures_testnet_read_only(symbols: Iterable[str] = ("BTCUSDT",)) -> dict
     for row in positions:
         if not isinstance(row, dict):
             raise RuntimeError("Futures positionRisk contains a malformed row")
+        raw_amount = row.get("positionAmt")
+        if raw_amount is None or str(raw_amount).strip() == "":
+            raise RuntimeError("Futures positionRisk omitted positionAmt")
         try:
-            amount = float(row.get("positionAmt", 0) or 0)
+            amount = float(raw_amount)
         except (TypeError, ValueError) as exc:
             raise RuntimeError("Futures positionRisk contains a non-numeric positionAmt") from exc
         if not math.isfinite(amount):
