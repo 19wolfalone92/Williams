@@ -221,3 +221,38 @@ def test_legacy_quantity_and_price_normalization_fail_closed_on_missing_filters(
             service._normalize_price("BTCUSDT", 100.0)
     finally:
         db.conn.close()
+
+
+def test_reconcile_required_campaign_remains_in_portfolio_risk_reservation(tmp_path):
+    db = Database(str(tmp_path / "unresolved-risk.sqlite3"))
+    try:
+        db.save_campaign({
+            "campaign_id": "campaign-open",
+            "symbol": "BTCUSDT",
+            "side": "LONG",
+            "execution_timeframe": "5m",
+            "state": "TREND_ACTIVE",
+            "open_risk_quote": 12.0,
+            "pending_risk_quote": 3.0,
+        })
+        db.save_campaign({
+            "campaign_id": "campaign-unknown",
+            "symbol": "ETHUSDT",
+            "side": "LONG",
+            "execution_timeframe": "5m",
+            "state": "RECONCILE_REQUIRED",
+            "open_risk_quote": 20.0,
+            "pending_risk_quote": 5.0,
+        })
+        db.save_campaign({
+            "campaign_id": "campaign-closed",
+            "symbol": "SOLUSDT",
+            "side": "LONG",
+            "execution_timeframe": "5m",
+            "state": "CLOSED",
+            "open_risk_quote": 100.0,
+            "pending_risk_quote": 100.0,
+        })
+        assert db.campaign_risk_reserved_quote() == 40.0
+    finally:
+        db.conn.close()
