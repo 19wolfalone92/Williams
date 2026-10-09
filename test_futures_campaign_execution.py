@@ -522,6 +522,7 @@ def test_execution_barrier_stale_intent_only_blocks_new_exposure():
         order_type="STOP_MARKET",
         required_context_versions={},
         purpose="CAMPAIGN_ENTRY",
+        client_order_id="stale-entry-client",
         created_at_ms=stale_at,
         max_age_ms=1_000,
     )
@@ -541,6 +542,7 @@ def test_execution_barrier_stale_intent_only_blocks_new_exposure():
             # must not depend on strategy-context freshness.
             required_context_versions={"1m": 999},
             purpose=purpose,
+            client_order_id=f"stale-safety-{purpose.lower()}",
             created_at_ms=stale_at,
             max_age_ms=1_000,
         )
@@ -702,6 +704,7 @@ def test_execution_barrier_executes_stale_safety_intents_without_market_context(
             order_type=order_type,
             required_context_versions={"1m": 999},
             purpose=purpose,
+            client_order_id=f"integration-safety-{purpose.lower()}",
             created_at_ms=stale_at,
             max_age_ms=1_000,
         )
@@ -717,6 +720,7 @@ def test_execution_barrier_executes_stale_safety_intents_without_market_context(
         order_type="STOP_MARKET",
         required_context_versions={},
         purpose="CAMPAIGN_ENTRY",
+        client_order_id="integration-stale-entry-client",
         created_at_ms=stale_at,
         max_age_ms=1_000,
     )
