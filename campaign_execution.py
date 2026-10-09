@@ -161,11 +161,21 @@ class CampaignExecutionService:
             raise CampaignExecutionError(f"{symbol}: required PRICE_FILTER missing")
         try:
             tick = float(pf["tickSize"])
+            minimum = float(pf.get("minPrice", "0") or 0)
+            maximum = float(pf.get("maxPrice", "0") or 0)
         except (KeyError, TypeError, ValueError, OverflowError) as exc:
-            raise CampaignExecutionError(f"{symbol}: PRICE_FILTER.tickSize unavailable") from exc
-        if not math.isfinite(tick) or tick <= 0:
-            raise CampaignExecutionError(f"{symbol}: PRICE_FILTER.tickSize must be finite and positive")
-        return self._floor(price, tick)
+            raise CampaignExecutionError(f"{symbol}: malformed PRICE_FILTER") from exc
+        if (
+            not math.isfinite(tick) or tick <= 0
+            or not math.isfinite(minimum) or minimum < 0
+            or not math.isfinite(maximum) or maximum < 0
+            or (maximum > 0 and maximum < minimum)
+        ):
+            raise CampaignExecutionError(f"{symbol}: invalid PRICE_FILTER bounds")
+        normalized = self._floor(price, tick)
+        if (minimum > 0 and normalized < minimum) or (maximum > 0 and normalized > maximum):
+            raise CampaignExecutionError(f"{symbol}: normalized price violates PRICE_FILTER bounds")
+        return normalized
 
     def _check_buy_position_capacity(self, symbol: str, quantity: float) -> None:
         filters = self._rules(symbol)
