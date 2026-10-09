@@ -158,7 +158,7 @@ def test_prepare_symbol_verifies_applied_isolated_one_x_policy(monkeypatch):
     monkeypatch.setattr(
         client,
         "_request",
-        lambda method, path, params, signed=False: responses[path],
+        lambda method, path, params=None, signed=False: responses[path],
     )
 
     result = client.prepare_symbol("BTCUSDT")
