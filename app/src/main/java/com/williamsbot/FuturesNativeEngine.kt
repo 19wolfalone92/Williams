@@ -291,11 +291,35 @@ internal class FuturesNativeEngine(
     }
 
     fun pause(): JSONObject {
-        // Flip the admission flag immediately. The scan loop checks it before
-        // each new symbol and immediately before persisting/submitting entry.
+        // Flip the admission flag immediately, then serialize cancellation
+        // against the active scan. An already-armed conditional entry can
+        // still open exposure even after the scanner has paused.
         paused = true
-        auditEvent("futures_paused", JSONObject().put("reason", "new entries disabled; open exposure remains managed"))
-        return status().put("state", "PAUSED")
+        val cancellations = synchronized(cycleLock) {
+            runCatching { cancelPendingEntries(api(), "PAUSE") }.getOrElse { error ->
+                reconcileRequired = true
+                lastError = "Pause could not verify pending-entry cancellation: ${error.message}"
+                JSONArray().put(
+                    JSONObject()
+                        .put("state", "RECONCILE_REQUIRED")
+                        .put("reason", lastError)
+                )
+            }
+        }
+        val unresolved = (0 until cancellations.length()).any {
+            cancellations.optJSONObject(it)?.optString("state") == "RECONCILE_REQUIRED"
+        }
+        auditEvent(
+            "futures_paused",
+            JSONObject()
+                .put("reason", "new entries disabled; pending entries cancelled or reconciled")
+                .put("pending_entry_cancellations", cancellations)
+                .put("unresolved", unresolved)
+        )
+        return status()
+            .put("state", "PAUSED")
+            .put("pending_entry_cancellations", cancellations)
+            .put("management_only_monitor_required", unresolved)
     }
 
     fun resume(): JSONObject {
@@ -305,9 +329,13 @@ internal class FuturesNativeEngine(
     }
 
     fun stop(): JSONObject {
-        // Disable admission immediately; interruption below is only to wake
-        // the worker from its poll sleep, not to retry any exchange mutation.
-        paused = true
+        // Do not stop the monitor if a pending entry could still trigger. The
+        // worker stays paused and continues reconciliation/protection instead.
+        val pauseResult = pause()
+        if (pauseResult.optBoolean("management_only_monitor_required", false)) {
+            lastError = "Stop blocked: pending-entry cancellation is unresolved; Futures monitor remains active"
+            throw IllegalStateException(lastError!!)
+        }
         running = false
         stopLoop.set(true)
         val active = worker
@@ -337,7 +365,7 @@ internal class FuturesNativeEngine(
         }
         synchronized(cycleLock) {
             val exchange = api()
-            val results = JSONArray()
+            val results = cancelPendingEntries(exchange, "KILL_SWITCH")
             val campaigns = auditStore.activeFuturesCampaigns()
             for (campaign in campaigns) {
                 val symbol = campaign.optString("symbol").uppercase(Locale.US)
@@ -1612,12 +1640,44 @@ internal class FuturesNativeEngine(
         }
     }
 
+    private fun cancelPendingEntries(
+        exchange: BinanceUsdmFuturesClient,
+        reason: String
+    ): JSONArray {
+        val results = JSONArray()
+        for (campaign in auditStore.activeFuturesCampaigns()) {
+            if (campaign.optString("state") != "ENTRY_PENDING") continue
+            try {
+                cancelPendingEntry(exchange, campaign, reason)
+                results.put(
+                    JSONObject()
+                        .put("symbol", campaign.optString("symbol"))
+                        .put("state", campaign.optString("state"))
+                        .put("action", if (campaign.optString("state") == "CLOSED") "ENTRY_CANCELLED" else "CANCEL_UNVERIFIED")
+                )
+            } catch (x: Exception) {
+                reconcileRequired = true
+                val detail = "Pending Futures entry cancellation unresolved: ${x.message ?: x.javaClass.simpleName}"
+                lastError = detail
+                setCampaignState(campaign, "RECONCILE_REQUIRED", detail)
+                results.put(
+                    JSONObject()
+                        .put("symbol", campaign.optString("symbol"))
+                        .put("state", "RECONCILE_REQUIRED")
+                        .put("action", "CANCEL_UNVERIFIED")
+                        .put("reason", detail)
+                )
+            }
+        }
+        return results
+    }
+
     private fun cancelPendingEntry(exchange: BinanceUsdmFuturesClient, campaign: JSONObject, reason: String) {
         val symbol = campaign.optString("symbol").uppercase(Locale.US)
         val target = campaign.optString("entry_client_algo_id")
         if (target.isBlank()) {
             setCampaignState(campaign, "RECONCILE_REQUIRED", "Cannot cancel pending entry: clientAlgoId missing")
-            return
+            throw IllegalStateException("Cannot cancel pending entry: clientAlgoId missing")
         }
         val actionId = clientOrderId("W2FC_")
         executeMutation(
@@ -1628,8 +1688,22 @@ internal class FuturesNativeEngine(
         ) {
             exchange.cancelAlgo(symbol, target)
         }
+
+        // A successful DELETE response alone is not sufficient to release risk:
+        // query the exchange's authoritative algo state and position after it.
+        val verified = exchange.getAlgoOrder(symbol, clientAlgoId = target)
+        val status = verified.optString("algoStatus").uppercase(Locale.US)
+        val amount = position(exchange, symbol).optString("positionAmt").toDoubleOrNull()
+            ?: throw IllegalStateException("Exchange position amount is invalid after entry cancellation")
+        if (status !in setOf("CANCELED", "CANCELLED", "EXPIRED", "REJECTED") || kotlin.math.abs(amount) > 1e-12) {
+            val detail = "Entry cancellation not verified (algoStatus=$status, positionAmt=$amount)"
+            setCampaignState(campaign, "RECONCILE_REQUIRED", detail)
+            reconcileRequired = true
+            throw IllegalStateException(detail)
+        }
         campaign.put("state", "CLOSED")
         campaign.put("reason", reason)
+        campaign.put("entry_cancel_status", status)
         campaign.put("closed_at_ms", System.currentTimeMillis())
         auditStore.saveFuturesCampaign(symbol, campaign)
     }
