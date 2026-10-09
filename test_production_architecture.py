@@ -291,3 +291,23 @@ def test_symbol_specific_reconciliation_lock_blocks_new_campaign_exposure():
     assert result.reason == "RECONCILE_REQUIRED"
     assert submissions == []
 
+
+
+def test_mutating_order_without_stable_client_id_is_blocked():
+    cache = ContextCache()
+    cache.publish(context(allow_long=True, allow_short=True))
+    db = MemoryIntentDB()
+    barrier = ExecutionBarrier(cache, db)
+    snapshot = cache.snapshot()
+    intent = OrderIntent.new(
+        "BTCUSDT", "BUY", "STOP_MARKET",
+        {"1h": snapshot.context("BTCUSDT", "1h").version},
+        purpose="CAMPAIGN_ENTRY", permission_interval="1h",
+    )
+    submissions = []
+
+    result = barrier.execute(intent, lambda: submissions.append("submitted") or {"status": "NEW"})
+
+    assert not result.accepted
+    assert result.reason == "missing stable client_order_id"
+    assert submissions == []
