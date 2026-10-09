@@ -2640,6 +2640,52 @@ class FuturesCampaignExecutionService:
                 raise FuturesCampaignExecutionError(f"{reason}; recovery must query clientAlgoId={client_algo_id}")
 
             campaign.tags["pending_add_on_algo_id"] = algo_id
+            self.db.save_campaign(campaign)
+            try:
+                verified_add_on = self.client.get_algo_order(
+                    symbol,
+                    algo_id=algo_id,
+                    client_algo_id=client_algo_id,
+                )
+                verified_status = str(verified_add_on.get("algoStatus", "") or "").upper()
+                verified_id = str(verified_add_on.get("algoId", "") or "")
+                verified_client_id = str(verified_add_on.get("clientAlgoId", "") or "")
+                verified_side = str(verified_add_on.get("side", "") or "").upper()
+                verified_type = str(
+                    verified_add_on.get("orderType", verified_add_on.get("type", "")) or ""
+                ).upper()
+                verified_close_position = str(verified_add_on.get("closePosition", "")).lower() in {"true", "1"}
+                verified_reduce_only = str(verified_add_on.get("reduceOnly", "")).lower() in {"true", "1"}
+                verified_trigger = float(verified_add_on.get("triggerPrice"))
+                verified_quantity = float(verified_add_on.get("quantity"))
+                if (
+                    verified_status not in {"NEW", "WORKING", "PENDING", "PENDING_NEW"}
+                    or verified_id != algo_id
+                    or verified_client_id != client_algo_id
+                    or str(verified_add_on.get("symbol", symbol)).upper() != symbol
+                    or verified_side != order_side
+                    or verified_type != "STOP_MARKET"
+                    or verified_close_position
+                    or verified_reduce_only
+                    or not math.isfinite(verified_trigger)
+                    or not math.isclose(verified_trigger, trigger, rel_tol=0.0, abs_tol=1e-8)
+                    or not math.isfinite(verified_quantity)
+                    or not math.isclose(verified_quantity, quantity, rel_tol=0.0, abs_tol=1e-8)
+                ):
+                    raise FuturesCampaignExecutionError(
+                        f"{symbol}: add-on algo failed authoritative identity/side/type/trigger/quantity verification"
+                    )
+                status = verified_status
+            except Exception as exc:
+                reason = (
+                    f"{symbol}: add-on submission could not be authoritatively verified: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+                self.engine.mark_reconcile_required(campaign, reason)
+                self.db.save_campaign(campaign)
+                self.db.state_set(f"campaign_state:{campaign.campaign_id}", CampaignState.RECONCILE_REQUIRED.value)
+                self.db.state_set(f"position_state:{symbol}", CampaignState.RECONCILE_REQUIRED.value)
+                raise FuturesCampaignExecutionError(reason) from exc
             self.db.save_campaign_order(PendingOrderRecord(
                 order_id=algo_id,
                 client_order_id=client_algo_id,
