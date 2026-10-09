@@ -3112,8 +3112,8 @@ class FuturesCampaignExecutionService:
                         algo_id=old_algo_id or None,
                         client_algo_id=old_client_id or None,
                     ) if (old_client_id or old_algo_id) else {}
-                    active_statuses = {"NEW", "WORKING", "PENDING"}
-                    terminal_statuses = {"CANCELED", "CANCELLED", "EXPIRED", "REJECTED", "FINISHED"}
+                    active_statuses = {"NEW", "WORKING", "PENDING", "PENDING_NEW"}
+                    terminal_statuses = {"CANCELED", "CANCELLED", "EXPIRED", "REJECTED", "FINISHED", "TRIGGERED"}
                     new_status = str(new_order.get("algoStatus", "")).upper()
                     old_status = str(old_order.get("algoStatus", "")).upper()
                     if new_status not in active_statuses | terminal_statuses:
