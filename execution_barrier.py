@@ -120,6 +120,43 @@ class ExecutionBarrier:
             return f"unsupported order_type {order_type or '<empty>'}"
         if str(intent.order_type).strip() != order_type:
             return "order_type must be canonical uppercase"
+
+        for field in ("risk_quote", "capital_reserved_quote", "trigger_price", "invalidation_level"):
+            try:
+                value = float(getattr(intent, field, 0.0) or 0.0)
+            except (TypeError, ValueError, OverflowError):
+                return f"invalid {field}"
+            if not math.isfinite(value) or value < 0:
+                return f"{field} must be finite and non-negative"
+
+        if order_type not in {"CANCEL", "OCO_CANCEL"}:
+            quantity_text = str(intent.quantity or "").strip()
+            quote_quantity_text = str(intent.quote_order_quantity or "").strip()
+            if quantity_text:
+                try:
+                    quantity_value = float(quantity_text)
+                except (TypeError, ValueError, OverflowError):
+                    return "invalid base quantity"
+                if not math.isfinite(quantity_value) or quantity_value <= 0:
+                    return "base quantity must be finite and positive"
+            elif purpose not in entry_purposes or not quote_quantity_text:
+                return "missing base quantity"
+            if quote_quantity_text:
+                try:
+                    quote_quantity_value = float(quote_quantity_text)
+                except (TypeError, ValueError, OverflowError):
+                    return "invalid quote order quantity"
+                if not math.isfinite(quote_quantity_value) or quote_quantity_value <= 0:
+                    return "quote order quantity must be finite and positive"
+
+        if side == "SELL" and order_type in {"STOP_LOSS", "STOP_LOSS_LIMIT", "TAKE_PROFIT", "TAKE_PROFIT_LIMIT"}:
+            try:
+                stop_reference = float(intent.invalidation_level)
+            except (TypeError, ValueError, OverflowError):
+                return "protective order requires a valid stop reference"
+            if not math.isfinite(stop_reference) or stop_reference <= 0:
+                return "protective order requires a positive finite stop reference"
+
         if isinstance(intent.created_at_ms, bool) or not isinstance(intent.created_at_ms, int) or intent.created_at_ms <= 0:
             return "invalid or missing created_at_ms"
         if isinstance(intent.max_age_ms, bool) or not isinstance(intent.max_age_ms, int) or intent.max_age_ms <= 0:
