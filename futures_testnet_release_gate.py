@@ -121,6 +121,7 @@ def run_futures_testnet_read_only(symbols: Iterable[str] = ("BTCUSDT",)) -> dict
     permissions = client.account_permissions()
     if not isinstance(permissions, dict) or permissions.get("canTrade") is not True:
         raise RuntimeError("Futures Demo account does not confirm canTrade=true")
+    can_trade = permissions["canTrade"]
     if permissions.get("multiAssetsMargin") is not False:
         raise RuntimeError("Futures Demo account must explicitly confirm single-asset margin mode")
     positions = client.position_risk()
@@ -192,6 +193,7 @@ def run_futures_testnet_read_only(symbols: Iterable[str] = ("BTCUSDT",)) -> dict
         margin_type = str(configuration.get("marginType", "") or "").upper()
         if margin_type != "ISOLATED":
             raise RuntimeError(f"{symbol}: isolated margin is required before trading")
+        isolated = True
         try:
             leverage_value = float(configuration.get("leverage"))
         except (TypeError, ValueError) as exc:
