@@ -1,3 +1,4 @@
+import math
 from dataclasses import dataclass
 
 
@@ -42,11 +43,7 @@ class RiskAnalysis:
 
 
 class RiskEngine:
-    """
-    Calculates pair-specific trade risk.
-
-    This class DOES NOT place orders.
-    """
+    """Pure position-risk calculation; this class never places orders."""
 
     def __init__(
         self,
@@ -59,14 +56,39 @@ class RiskEngine:
         fee_buffer_per_side_pct: float = 0.001,
         slippage_buffer_pct: float = 0.0015,
     ):
-        self.balance = float(balance_quote)
-        self.risk_per_trade_pct = float(risk_per_trade_pct)
-        self.max_position_fraction = float(max_position_fraction)
-        self.max_daily_loss_pct = float(max_daily_loss_pct)
-        self.min_rr = float(min_rr)
-        self.max_atr_pct = float(max_atr_pct)
-        self.fee_buffer_per_side_pct = max(0.0, float(fee_buffer_per_side_pct))
-        self.slippage_buffer_pct = max(0.0, float(slippage_buffer_pct))
+        names = (
+            "balance_quote", "risk_per_trade_pct", "max_position_fraction",
+            "max_daily_loss_pct", "min_rr", "max_atr_pct",
+            "fee_buffer_per_side_pct", "slippage_buffer_pct",
+        )
+        raw = (
+            balance_quote, risk_per_trade_pct, max_position_fraction,
+            max_daily_loss_pct, min_rr, max_atr_pct,
+            fee_buffer_per_side_pct, slippage_buffer_pct,
+        )
+        try:
+            values = {name: float(value) for name, value in zip(names, raw)}
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("RiskEngine configuration must be numeric and finite") from exc
+        if not all(math.isfinite(value) for value in values.values()):
+            raise ValueError("RiskEngine configuration must be numeric and finite")
+        if values["balance_quote"] <= 0:
+            raise ValueError("balance_quote must be positive")
+        for name in ("risk_per_trade_pct", "max_position_fraction", "max_daily_loss_pct"):
+            if not 0.0 <= values[name] <= 1.0:
+                raise ValueError(f"{name} must be in [0, 1]")
+        if values["min_rr"] <= 0 or values["max_atr_pct"] <= 0:
+            raise ValueError("min_rr and max_atr_pct must be positive")
+        if values["fee_buffer_per_side_pct"] < 0 or values["slippage_buffer_pct"] < 0:
+            raise ValueError("fee and slippage buffers cannot be negative")
+        self.balance = values["balance_quote"]
+        self.risk_per_trade_pct = values["risk_per_trade_pct"]
+        self.max_position_fraction = values["max_position_fraction"]
+        self.max_daily_loss_pct = values["max_daily_loss_pct"]
+        self.min_rr = values["min_rr"]
+        self.max_atr_pct = values["max_atr_pct"]
+        self.fee_buffer_per_side_pct = values["fee_buffer_per_side_pct"]
+        self.slippage_buffer_pct = values["slippage_buffer_pct"]
 
     @staticmethod
     def _clamp(value, low, high):
@@ -88,35 +110,56 @@ class RiskEngine:
         invalidation_price: float = 0.0,
         min_notional: float = 0.0,
     ) -> RiskAnalysis:
-
-        entry = float(entry_price)
-        atr = float(atr)
         side = str(side or "LONG").upper()
+        try:
+            entry = float(entry_price)
+            atr_value = float(atr)
+            strength = float(signal_strength)
+            spread = float(spread_pct)
+            spread_limit = float(max_spread_pct)
+            stop_mult = float(stop_atr_multiplier)
+            target_mult = float(target_atr_multiplier)
+            structural_stop = float(invalidation_price or 0.0)
+            minimum_notional = float(min_notional)
+            override = None if risk_pct_override is None else float(risk_pct_override)
+        except (TypeError, ValueError, OverflowError):
+            return self._blocked(symbol, side, 0.0, "non-numeric risk input")
 
+        numeric = (
+            entry, atr_value, strength, spread, spread_limit, stop_mult,
+            target_mult, structural_stop, minimum_notional,
+        ) + (() if override is None else (override,))
+        if not all(math.isfinite(value) for value in numeric):
+            return self._blocked(symbol, side, entry, "non-finite risk input")
         if side not in {"LONG", "SHORT"}:
             return self._blocked(symbol, side, entry, "unsupported side")
-
         if entry <= 0:
             return self._blocked(symbol, side, entry, "invalid entry price")
-
-        if atr <= 0:
+        if atr_value <= 0:
             return self._blocked(symbol, side, entry, "invalid ATR")
+        if spread < 0 or spread_limit <= 0:
+            return self._blocked(symbol, side, entry, "invalid spread input")
+        if stop_mult <= 0 or target_mult <= 0:
+            return self._blocked(symbol, side, entry, "invalid ATR multipliers")
+        if minimum_notional < 0:
+            return self._blocked(symbol, side, entry, "invalid minimum notional")
 
-        atr_pct = atr / entry
-
+        atr_pct = atr_value / entry
+        if not math.isfinite(atr_pct):
+            return self._blocked(symbol, side, entry, "invalid ATR percentage")
         if atr_pct > self.max_atr_pct:
             return self._blocked(symbol, side, entry, "ATR exceeds maximum allowed volatility")
-
-        if spread_pct > max_spread_pct:
+        if spread > spread_limit:
             return self._blocked(symbol, side, entry, "spread exceeds maximum allowed")
 
-        fallback_stop_distance = atr * stop_atr_multiplier
-        target_distance = atr * target_atr_multiplier
+        fallback_stop_distance = atr_value * stop_mult
+        target_distance = atr_value * target_mult
+        if (
+            not math.isfinite(fallback_stop_distance) or fallback_stop_distance <= 0
+            or not math.isfinite(target_distance) or target_distance <= 0
+        ):
+            return self._blocked(symbol, side, entry, "invalid stop/target distance")
 
-        if fallback_stop_distance <= 0:
-            return self._blocked(symbol, side, entry, "invalid stop distance")
-
-        structural_stop = float(invalidation_price or 0.0)
         if side == "LONG":
             stop_price = structural_stop if 0.0 < structural_stop < entry else entry - fallback_stop_distance
             take_profit_price = entry + target_distance
@@ -124,106 +167,60 @@ class RiskEngine:
             stop_price = structural_stop if structural_stop > entry else entry + fallback_stop_distance
             take_profit_price = entry - target_distance
 
-        if stop_price <= 0 or take_profit_price <= 0:
-            return self._blocked(symbol, side, entry, "calculated stop price is invalid")
+        if (
+            not math.isfinite(stop_price) or not math.isfinite(take_profit_price)
+            or stop_price <= 0 or take_profit_price <= 0
+        ):
+            return self._blocked(symbol, side, entry, "calculated stop/target price is invalid")
 
         stop_distance = abs(entry - stop_price)
+        if not math.isfinite(stop_distance) or stop_distance <= 0:
+            return self._blocked(symbol, side, entry, "invalid stop distance")
         stop_pct = stop_distance / entry
         target_pct = abs(take_profit_price - entry) / entry
-
         rr = abs(take_profit_price - entry) / stop_distance
-
+        if not all(math.isfinite(value) for value in (stop_pct, target_pct, rr)):
+            return self._blocked(symbol, side, entry, "non-finite stop/target metrics")
         if rr < self.min_rr:
             return self._blocked(symbol, side, entry, f"R:R {rr:.3f} below minimum {self.min_rr:.3f}")
 
-        # Maximum money we are allowed to lose on this trade. Size against the
-        # protective stop plus bounded fee/slippage reserve.
-        effective_risk_pct = self.risk_per_trade_pct if risk_pct_override is None else float(risk_pct_override)
-        if effective_risk_pct <= 0:
-            return self._blocked(symbol, side, entry, "risk allocation is zero")
+        effective_risk_pct = self.risk_per_trade_pct if override is None else override
+        if not math.isfinite(effective_risk_pct) or effective_risk_pct <= 0:
+            return self._blocked(symbol, side, entry, "risk allocation is zero or invalid")
+        if effective_risk_pct > self.risk_per_trade_pct:
+            return self._blocked(symbol, side, entry, "risk override exceeds configured per-trade limit")
+
         risk_quote = self.balance * effective_risk_pct
         effective_loss_fraction = (
-            stop_pct
-            + (2.0 * self.fee_buffer_per_side_pct)
-            + self.slippage_buffer_pct
+            stop_pct + (2.0 * self.fee_buffer_per_side_pct) + self.slippage_buffer_pct
         )
-
-        # Position size based on stop + execution-cost reserve.
-        risk_based_position = risk_quote / max(effective_loss_fraction, 1e-9)
-
-        # Hard portfolio exposure cap.
+        if not math.isfinite(effective_loss_fraction) or effective_loss_fraction <= 0:
+            return self._blocked(symbol, side, entry, "invalid effective loss fraction")
+        risk_based_position = risk_quote / effective_loss_fraction
         max_position_quote = self.balance * self.max_position_fraction
-
-        position_quote = min(
-            risk_based_position,
-            max_position_quote,
-        )
-
-        if position_quote <= 0:
-            return self._blocked(symbol, side, entry, "calculated position size is zero")
-        if min_notional > 0 and position_quote < float(min_notional):
-            return self._blocked(symbol, side, entry, f"position notional {position_quote:.8f} below Binance minimum {float(min_notional):.8f}")
+        position_quote = min(risk_based_position, max_position_quote)
+        if not math.isfinite(position_quote) or position_quote <= 0:
+            return self._blocked(symbol, side, entry, "calculated position size is zero or invalid")
+        if minimum_notional > 0 and position_quote < minimum_notional:
+            return self._blocked(symbol, side, entry, f"position notional {position_quote:.8f} below Binance minimum {minimum_notional:.8f}")
 
         position_fraction = position_quote / self.balance
-
-        # Score components.
-        #
-        # Signal strength: 30
-        # R:R:             25
-        # Risk efficiency: 20
-        # HTF:             15
-        # Spread:          5
-        # ATR quality:     5
-
-        signal_score = 30.0 * self._clamp(
-            float(signal_strength),
-            0.0,
-            1.0,
-        )
-
+        signal_score = 30.0 * self._clamp(strength, 0.0, 1.0)
         rr_score = 25.0 * self._clamp(
-            (rr - self.min_rr) / max(3.0 - self.min_rr, 0.0001),
-            0.0,
-            1.0,
+            (rr - self.min_rr) / max(3.0 - self.min_rr, 0.0001), 0.0, 1.0
         )
-
-        risk_efficiency = self._clamp(
-            1.0 - (stop_pct / self.max_atr_pct),
-            0.0,
-            1.0,
-        )
-
+        risk_efficiency = self._clamp(1.0 - (stop_pct / self.max_atr_pct), 0.0, 1.0)
         risk_score = 20.0 * risk_efficiency
-
         htf_score = 15.0 if htf_confirmed else 0.0
-
-        spread_score = 5.0 * self._clamp(
-            1.0 - (spread_pct / max(max_spread_pct, 1e-9)),
+        spread_score = 5.0 * self._clamp(1.0 - (spread / max(spread_limit, 1e-9)), 0.0, 1.0)
+        atr_quality = self._clamp(1.0 - (atr_pct / self.max_atr_pct), 0.0, 1.0)
+        score = self._clamp(
+            signal_score + rr_score + risk_score + htf_score + spread_score + 5.0 * atr_quality,
             0.0,
-            1.0,
+            100.0,
         )
-
-        atr_quality = self._clamp(
-            1.0 - (atr_pct / self.max_atr_pct),
-            0.0,
-            1.0,
-        )
-
-        atr_score = 5.0 * atr_quality
-
-        score = (
-            signal_score
-            + rr_score
-            + risk_score
-            + htf_score
-            + spread_score
-            + atr_score
-        )
-
-        score = self._clamp(score, 0.0, 100.0)
-
         result = RiskAnalysis(
-            symbol=symbol.upper(),
+            symbol=str(symbol).upper(),
             side=side,
             entry_price=entry,
             stop_price=stop_price,
@@ -242,10 +239,16 @@ class RiskEngine:
         return result
 
     def _blocked(self, symbol, side, entry, reason):
+        try:
+            safe_entry = float(entry)
+        except (TypeError, ValueError, OverflowError):
+            safe_entry = 0.0
+        if not math.isfinite(safe_entry):
+            safe_entry = 0.0
         return RiskAnalysis(
-            symbol=symbol.upper(),
-            side=str(side).upper(),
-            entry_price=float(entry),
+            symbol=str(symbol or "").upper(),
+            side=str(side or "").upper(),
+            entry_price=safe_entry,
             stop_price=0.0,
             take_profit_price=0.0,
             stop_distance_pct=0.0,
