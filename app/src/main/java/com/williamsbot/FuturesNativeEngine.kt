@@ -1597,6 +1597,12 @@ internal class FuturesNativeEngine(
             if (wasPendingEntry) {
                 val fillProblem = verifyInitialEntryFill(exchange, protectedCampaign, position, amount)
                 if (fillProblem != null) {
+                    if (fillProblem.startsWith("Actual initial fill risk exceeds")) {
+                        val emergency = runCatching {
+                            exitPosition(exchange, protectedCampaign, "ENTRY_RISK_OVERRUN")
+                        }.getOrNull()
+                        if (emergency?.optString("action") == "CLOSED") return emergency
+                    }
                     return setCampaignState(protectedCampaign, "RECONCILE_REQUIRED", fillProblem)
                 }
             }
