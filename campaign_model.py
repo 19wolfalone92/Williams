@@ -167,6 +167,11 @@ class SignalSpec:
             raise ValueError("SignalSpec requires direction LONG or SHORT")
         if normalized_side not in {"BUY", "SELL", "LONG", "SHORT"}:
             raise ValueError("SignalSpec side must be BUY/SELL or LONG/SHORT")
+        side_direction = "LONG" if normalized_side in {"BUY", "LONG"} else "SHORT"
+        if direction != side_direction:
+            raise ValueError(
+                f"SignalSpec side/direction conflict: side={normalized_side} direction={direction}"
+            )
         signal_id = (
             f"{str(symbol).upper()}:{str(timeframe).lower()}:"
             f"{signal_type.value}:{direction}:{int(signal_bar_time_ms)}"
