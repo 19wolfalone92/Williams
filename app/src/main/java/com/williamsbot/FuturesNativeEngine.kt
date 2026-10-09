@@ -1649,8 +1649,9 @@ internal class FuturesNativeEngine(
         }
 
         val stateBeforeQuantitySync = campaign.optString("state").uppercase(Locale.US)
-        val quantitySyncRelevant = stateBeforeQuantitySync in setOf("OPEN_PROTECTED", "RECONCILE_REQUIRED", "EXIT_PENDING") &&
-            !campaign.optBoolean("entry_fill_reconciliation_pending", false)
+        val quantitySyncRelevant = stateBeforeQuantitySync in setOf(
+            "OPEN_PROTECTED", "OPEN_UNPROTECTED", "RECONCILE_REQUIRED", "EXIT_PENDING"
+        ) && !campaign.optBoolean("entry_fill_reconciliation_pending", false)
         if (quantitySyncRelevant) {
             val tracked = trackedAmountBeforeReconcile
             val mismatch = tracked == null || !tracked.isFinite() || abs(tracked) <= 1e-12 ||
