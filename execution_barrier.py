@@ -169,8 +169,14 @@ class ExecutionBarrier:
         # must not disable exits, cancellation, protection or recovery. Those
         # paths still need their own reduce-only / ownership guarantees.
         if is_new_exposure and self.db is not None and hasattr(self.db, "state_get"):
-            state = str(self.db.state_get("position_state", "FLAT"))
-            if state == "RECONCILE_REQUIRED":
+            # Reconciliation locks are persisted per symbol by the Futures
+            # runtime. Checking only the legacy global key allowed a fresh
+            # campaign to miss an orphan-position lock for its own symbol.
+            symbol_state = str(
+                self.db.state_get(f"position_state:{intent.symbol}", "FLAT")
+            ).upper()
+            global_state = str(self.db.state_get("position_state", "FLAT")).upper()
+            if "RECONCILE_REQUIRED" in {symbol_state, global_state}:
                 return "RECONCILE_REQUIRED"
             campaign_state = str(
                 self.db.state_get(
