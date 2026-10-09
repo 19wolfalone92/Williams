@@ -2278,7 +2278,8 @@ class FuturesCampaignExecutionService:
         for key in (
             "protective_client_algo_id", "protective_algo_id",
             "previous_protective_client_algo_id", "previous_protective_algo_id",
-            "previous_protective_stop_price", "protection_replace_reconcile_required",
+            "previous_protective_stop_price", "protection_replace_target_stop_price",
+            "protection_replace_reconcile_required",
             "pending_protective_client_algo_id", "pending_protective_algo_id",
             "pending_protective_stop_price",
         ):
