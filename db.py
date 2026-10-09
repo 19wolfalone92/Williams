@@ -6,7 +6,7 @@ from contextlib import contextmanager
 
 
 class Database:
-    SCHEMA_VERSION = 7
+    SCHEMA_VERSION = 8
 
     def __init__(self, path=None):
         path = path or os.getenv('WILLIAMS_DB_PATH') or 'data/trader.sqlite3'
@@ -78,6 +78,7 @@ class Database:
             entry_price REAL,
             exit_price REAL,
             quantity REAL,
+            gross_entry_qty REAL DEFAULT 0,
             pnl REAL,
             pnl_pct REAL,
             reason TEXT,
@@ -277,6 +278,7 @@ class Database:
             'stop_price': 'REAL',
             'take_profit_price': 'REAL',
             'risk_pct': 'REAL',
+            'gross_entry_qty': 'REAL DEFAULT 0',
             'updated_at': 'TEXT',
         }
         for name, sql_type in additions.items():
@@ -588,6 +590,13 @@ class Database:
             raise ValueError("quantity must be positive")
         if "entry_price" in kwargs and kwargs["entry_price"] <= 0:
             raise ValueError("entry_price must be positive")
+        if (
+            "gross_entry_qty" in kwargs
+            and kwargs["gross_entry_qty"] > 0
+            and "quantity" in kwargs
+            and kwargs["gross_entry_qty"] + 1e-12 < kwargs["quantity"]
+        ):
+            raise ValueError("gross_entry_qty cannot be smaller than net quantity")
         now = datetime.now(timezone.utc).isoformat()
         kwargs.setdefault('updated_at', now)
         cols = ','.join(kwargs)
