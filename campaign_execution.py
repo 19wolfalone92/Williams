@@ -358,36 +358,36 @@ class CampaignExecutionService:
                         f"{signal.symbol}: aggregate portfolio risk changed before reservation; entry blocked"
                     )
     
-            claimed = self.db.try_claim_state(
-                f"entry_client_order_id:{signal.symbol}",
-                client_id,
-            )
-            if not claimed:
-                raise CampaignExecutionError(
-                    f"{signal.symbol}: another conditional entry is already reserved"
+                claimed = self.db.try_claim_state(
+                    f"entry_client_order_id:{signal.symbol}",
+                    client_id,
                 )
-    
-            campaign = self.engine.create_campaign(
-                signal,
-                initial_risk_pct=requested_risk,
-            )
-            campaign.tags["signal_role"] = signal.role.value
-            campaign.tags["decision_trace"] = DecisionTrace.from_signal(signal).to_dict()
-            campaign.tags["pending_signal_expires_at_ms"] = int(pending_signal.expires_at_ms)
-            campaign.tags["pending_signal"] = pending_signal.to_dict()
-            campaign.tags["initial_stop_price"] = stop
-            campaign.initial_stop_price = stop
-            campaign.current_stop_price = stop
-            campaign.pending_risk_quote = risk_quote
-            campaign.capital_reserved_quote = qty * trigger
-            self.db.save_campaign(campaign)
-            campaign.tags["pending_order_client_id"] = client_id
-            campaign.tags["pending_order_quantity"] = qty
-            campaign.tags["pending_order_trigger"] = trigger
-            # IMPORTANT: persist ENTRY_PENDING before touching Binance. A fast
-            # conditional fill can arrive on the user stream immediately.
-            self.engine.arm_entry(campaign, signal)
-            self.db.state_set(f"campaign_state:{campaign.campaign_id}", campaign.state.value)
+                if not claimed:
+                    raise CampaignExecutionError(
+                        f"{signal.symbol}: another conditional entry is already reserved"
+                    )
+        
+                campaign = self.engine.create_campaign(
+                    signal,
+                    initial_risk_pct=requested_risk,
+                )
+                campaign.tags["signal_role"] = signal.role.value
+                campaign.tags["decision_trace"] = DecisionTrace.from_signal(signal).to_dict()
+                campaign.tags["pending_signal_expires_at_ms"] = int(pending_signal.expires_at_ms)
+                campaign.tags["pending_signal"] = pending_signal.to_dict()
+                campaign.tags["initial_stop_price"] = stop
+                campaign.initial_stop_price = stop
+                campaign.current_stop_price = stop
+                campaign.pending_risk_quote = risk_quote
+                campaign.capital_reserved_quote = qty * trigger
+                self.db.save_campaign(campaign)
+                campaign.tags["pending_order_client_id"] = client_id
+                campaign.tags["pending_order_quantity"] = qty
+                campaign.tags["pending_order_trigger"] = trigger
+                # IMPORTANT: persist ENTRY_PENDING before touching Binance. A fast
+                # conditional fill can arrive on the user stream immediately.
+                self.engine.arm_entry(campaign, signal)
+                self.db.state_set(f"campaign_state:{campaign.campaign_id}", campaign.state.value)
 
         intent = OrderIntent.new(
             signal.symbol,
