@@ -992,7 +992,8 @@ internal class FuturesNativeEngine(
 
     private fun isSignalStillValid(bars: List<Bar>, signal: Signal): Boolean {
         val sourceIndex = bars.indexOfFirst { it.openTime == signal.signalBarTime }
-        if (sourceIndex < 0 || sourceIndex >= bars.lastIndex) return sourceIndex == bars.lastIndex
+        if (sourceIndex < 0 || sourceIndex > bars.lastIndex) return false
+        if (sourceIndex == bars.lastIndex) return true
         val sourceBar = bars[sourceIndex]
         for (index in sourceIndex + 1..bars.lastIndex) {
             val later = bars[index]
