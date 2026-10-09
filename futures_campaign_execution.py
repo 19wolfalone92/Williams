@@ -2072,13 +2072,14 @@ class FuturesCampaignExecutionService:
             )
         expected_client_id = str(campaign.tags.get("pending_exit_client_order_id", "") or "")
         expected_side = "SELL" if self._campaign_direction(campaign) == "LONG" else "BUY"
-        response_symbol = str(order.get("symbol", symbol) or "").upper()
+        response_symbol = str(order.get("symbol", "") or "").upper()
         response_side = str(order.get("side", "") or "").upper()
         response_client_id = str(order.get("clientOrderId", "") or "")
         if (
             response_symbol != symbol
-            or (response_side and response_side != expected_side)
-            or (response_client_id and expected_client_id and response_client_id != expected_client_id)
+            or response_side != expected_side
+            or not response_client_id
+            or (expected_client_id and response_client_id != expected_client_id)
             or (expected_client_id and current_client_id != expected_client_id)
         ):
             raise FuturesCampaignExecutionError(
@@ -2120,15 +2121,12 @@ class FuturesCampaignExecutionService:
                 raise FuturesCampaignExecutionError(
                     f"{symbol}: prior exit order {record_order_id} is not terminal ({exchange_status or 'UNKNOWN'})"
                 )
-            if str(exchange_order.get("orderId", record_order_id)) != record_order_id:
-                raise FuturesCampaignExecutionError(f"{symbol}: exit order lookup returned a different orderId")
-            exchange_symbol = str(exchange_order.get("symbol", symbol) or "").upper()
+            if str(exchange_order.get("orderId", "") or "") != record_order_id:
+                raise FuturesCampaignExecutionError(f"{symbol}: exit order lookup returned a missing/different orderId")
+            exchange_symbol = str(exchange_order.get("symbol", "") or "").upper()
             exchange_side = str(exchange_order.get("side", "") or "").upper()
             expected_exit_side = "SELL" if self._campaign_direction(campaign) == "LONG" else "BUY"
-            if (
-                exchange_symbol != symbol
-                or (exchange_side and exchange_side != expected_exit_side)
-            ):
+            if exchange_symbol != symbol or exchange_side != expected_exit_side:
                 raise FuturesCampaignExecutionError(
                     f"{symbol}: exit order symbol/side does not match campaign direction"
                 )
