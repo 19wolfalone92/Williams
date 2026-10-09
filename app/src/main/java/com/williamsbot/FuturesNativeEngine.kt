@@ -1533,6 +1533,14 @@ internal class FuturesNativeEngine(
                     if (cleanupProblem != null) {
                         return setCampaignState(campaign, "RECONCILE_REQUIRED", cleanupProblem)
                     }
+                    val priorExitLedger = campaign.optJSONArray("unreconciled_terminal_exit_orders")
+                    if (priorExitLedger != null && priorExitLedger.length() > 0) {
+                        return setCampaignState(
+                            campaign,
+                            "RECONCILE_REQUIRED",
+                            "Prior partial market-exit fills remain unaggregated; refusing automatic CLOSED transition"
+                        )
+                    }
                     recordMarketExit(exchange, campaign, exitOrder!!, reason)
                     campaign.put("state", "CLOSED")
                     campaign.put("position_amt", 0.0)
