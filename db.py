@@ -450,6 +450,11 @@ class Database:
             return None
 
     def save_order(self, data):
+        for field in ("price", "stopPrice", "origQty", "executedQty", "cummulativeQuoteQty"):
+            if field in data and data[field] not in (None, ""):
+                self._require_finite_number(
+                    data[field], f"order.{field}", minimum=0.0
+                )
         oid = (
             str(data.get('orderId'))
             if data.get('orderId') is not None
@@ -603,6 +608,18 @@ class Database:
         take_profit_price=None,
         risk_pct=None,
     ):
+        if stop_price is not None:
+            stop_price = self._require_finite_number(stop_price, "stop_price", minimum=0.0)
+            if stop_price <= 0:
+                raise ValueError("stop_price must be positive")
+        if take_profit_price is not None:
+            take_profit_price = self._require_finite_number(
+                take_profit_price, "take_profit_price", minimum=0.0
+            )
+            if take_profit_price <= 0:
+                raise ValueError("take_profit_price must be positive")
+        if risk_pct is not None:
+            risk_pct = self._require_finite_number(risk_pct, "risk_pct", minimum=0.0)
         self.conn.execute(
             'UPDATE trades SET '
             'exit_order_list_id=?, '
@@ -1019,7 +1036,7 @@ class Database:
         ):
             data[field] = self._require_finite_number(
                 data.get(field, 0) or 0, f"campaign_signal.{field}", minimum=0.0
-                if field in {"trigger_price", "protective_reference"} else None
+                if field in {"trigger_price", "protective_reference", "invalidation_price", "teeth_at_detection", "wave_confidence", "wave_exhaustion_risk"} else None
             )
         if data["trigger_price"] <= 0 or data["protective_reference"] <= 0:
             raise ValueError("campaign signal trigger/protective reference must be positive")
