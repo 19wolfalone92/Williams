@@ -27,7 +27,7 @@ FUTURES_GATE_STEPS = (
     FuturesGateStep("F02", "environment", "Mainnet remains disabled without dual explicit opt-in", "OFFLINE"),
     FuturesGateStep("F03", "auth", "Demo API credentials and signed timestamp are accepted", "TESTNET_READ_ONLY"),
     FuturesGateStep("F04", "account", "Futures account endpoint is reachable", "TESTNET_READ_ONLY"),
-    FuturesGateStep("F05", "account", "One-way mode is active; Hedge Mode is rejected", "TESTNET_READ_ONLY"),
+    FuturesGateStep("F05", "account", "One-way mode, isolated margin and 1x leverage are confirmed", "TESTNET_READ_ONLY"),
     FuturesGateStep("F06", "account", "Existing positions and open standard orders are enumerated", "TESTNET_READ_ONLY"),
     FuturesGateStep("F07", "account", "Open Algo orders are enumerated for orphan-stop detection", "TESTNET_READ_ONLY"),
     FuturesGateStep("F08", "market", "Every configured symbol is TRADING perpetual with quote/margin metadata", "TESTNET_READ_ONLY"),
@@ -82,6 +82,9 @@ def run_futures_testnet_read_only(symbols: Iterable[str] = ("BTCUSDT",)) -> dict
     account = client.account()
     if not isinstance(account, dict):
         raise RuntimeError("Futures account endpoint returned an unexpected payload")
+    can_trade = account.get("canTrade")
+    if can_trade is not True and str(can_trade).strip().lower() != "true":
+        raise RuntimeError("Futures Demo account does not confirm canTrade=true")
     positions = client.position_risk()
     if not isinstance(positions, list):
         raise RuntimeError("Futures positionRisk endpoint returned an unexpected payload")
@@ -97,9 +100,36 @@ def run_futures_testnet_read_only(symbols: Iterable[str] = ("BTCUSDT",)) -> dict
             raise RuntimeError(f"{symbol}: exchange status is not TRADING")
         if str(meta.get("contractType", "")).upper() != "PERPETUAL":
             raise RuntimeError(f"{symbol}: expected a perpetual contract")
+        if str(meta.get("quoteAsset", "")).upper() != "USDT":
+            raise RuntimeError(f"{symbol}: configured Futures quote asset must be USDT")
+        if str(meta.get("marginAsset", "")).upper() != "USDT":
+            raise RuntimeError(f"{symbol}: configured Futures margin asset must be USDT")
         filters = client.symbol_filters(symbol)
-        if "PRICE_FILTER" not in filters or not ({"LOT_SIZE", "MARKET_LOT_SIZE"} & set(filters)):
-            raise RuntimeError(f"{symbol}: required price/lot filters are missing")
+        if not {"PRICE_FILTER", "LOT_SIZE", "MARKET_LOT_SIZE"}.issubset(set(filters)):
+            raise RuntimeError(f"{symbol}: PRICE_FILTER, LOT_SIZE and MARKET_LOT_SIZE are required")
+        symbol_positions = client.position_risk(symbol)
+        if isinstance(symbol_positions, dict):
+            position_rows = [symbol_positions] if str(symbol_positions.get("symbol", "")).upper() == symbol else []
+        elif isinstance(symbol_positions, list):
+            position_rows = [
+                row for row in symbol_positions
+                if isinstance(row, dict) and str(row.get("symbol", "")).upper() == symbol
+            ]
+        else:
+            raise RuntimeError(f"{symbol}: positionRisk returned an unexpected payload")
+        position = next(iter(position_rows), None)
+        if position is None:
+            raise RuntimeError(f"{symbol}: positionRisk omitted the configured symbol")
+        isolated_raw = position.get("isolated")
+        isolated = isolated_raw is True or str(isolated_raw).strip().lower() in {"true", "1"}
+        try:
+            leverage = int(position.get("leverage"))
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(f"{symbol}: Futures leverage is unavailable") from exc
+        if not isolated:
+            raise RuntimeError(f"{symbol}: isolated margin is required before trading")
+        if leverage != 1:
+            raise RuntimeError(f"{symbol}: Futures leverage must be 1x, observed {leverage}x")
         mark_payload = client.mark_price(symbol)
         try:
             mark = float(mark_payload.get("markPrice"))
@@ -112,6 +142,10 @@ def run_futures_testnet_read_only(symbols: Iterable[str] = ("BTCUSDT",)) -> dict
             "status": meta.get("status"),
             "contract_type": meta.get("contractType"),
             "mark_price": mark,
+            "quote_asset": str(meta.get("quoteAsset", "")).upper(),
+            "margin_asset": str(meta.get("marginAsset", "")).upper(),
+            "isolated_margin": isolated,
+            "leverage": leverage,
             "filters": sorted(filters),
         })
 
@@ -124,7 +158,7 @@ def run_futures_testnet_read_only(symbols: Iterable[str] = ("BTCUSDT",)) -> dict
         "endpoint": client.base_url,
         "time_sync": time_sync,
         "one_way_mode": mode,
-        "account_can_trade": account.get("canTrade"),
+        "account_can_trade": can_trade,
         "positions_seen": len(positions),
         "open_standard_orders_seen": len(standard_orders),
         "open_algo_orders_seen": len(algo_orders),
