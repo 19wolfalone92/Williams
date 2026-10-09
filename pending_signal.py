@@ -37,8 +37,10 @@ def _bar_ms(timeframe: str) -> int:
 
 
 def default_expiry_ms(signal: SignalSpec) -> int:
-    if signal.expires_at_ms > signal.created_at_ms:
-        return signal.expires_at_ms
+    # Preserve any explicit expiry, including one that is already in the past.
+    # Recomputing from created_at would silently revive an expired signal.
+    if signal.expires_at_ms > 0:
+        return int(signal.expires_at_ms)
 
     if signal.signal_type.value == "REVERSAL":
         bars = max(1, int(os.getenv("WILLIAMS_PENDING_REVERSAL_BARS", "2")))
