@@ -191,3 +191,10 @@ Repository inspection confirms that `DigitalWilliamsCore` is used by the API/ser
 Native quantity sizing used the raw signal trigger/stop. The final order path then normalized trigger and stop to the exchange tick size but did not recompute the risk using the actual submitted prices. On symbols with coarse ticks, normalization can widen the stop distance and increase worst-case loss above the admitted risk budget.
 
 **Correction:** immediately before the durable entry intent/order submission, the native engine recomputes stop distance, fee/slippage reserve, risk and equity notional using normalized submitted prices and normalized quantity. Invalid or over-budget results fail closed instead of sending the order.
+
+
+### 25. Python Futures initial-signal expiry boundary differed from the canonical/native rules — corrected
+
+The Python Futures selector rejected a candidate only when `expires_at_ms < now`, making a signal actionable at the exact expiry timestamp. The canonical `PendingSignal` and native Android paths treat `now >= expiry` as expired.
+
+**Correction:** Python now rejects `expires_at_ms <= now`. Added a boundary regression test proving an expired-at-this-millisecond candidate cannot hide a later live signal.
