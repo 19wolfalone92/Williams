@@ -580,3 +580,39 @@ def test_execution_barrier_marks_incomplete_oco_response_ambiguous():
         barrier.execute(intent, lambda: {"orderListId": 77})
 
     assert db.intents[intent.intent_id][0] == "AMBIGUOUS"
+
+
+def test_execution_barrier_requires_authoritative_cancel_confirmation():
+    cache = ContextCache()
+    cache.publish(context())
+    db = IntentDB()
+    barrier = ExecutionBarrier(cache, db)
+    intent = OrderIntent.new(
+        "BTCUSDT", "SELL", "CANCEL", {}, purpose="CAMPAIGN_CANCEL"
+    )
+    result = barrier.execute(
+        intent, lambda: {"status": "CANCELED", "executedQty": "0"}
+    )
+    assert result.accepted
+    assert db.intents[intent.intent_id][0] == "CANCELED"
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        {},
+        {"status": "CANCELED", "executedQty": "0.25"},
+        {"status": "NEW", "executedQty": "0"},
+    ],
+)
+def test_execution_barrier_blocks_ambiguous_or_partial_cancel(response):
+    cache = ContextCache()
+    cache.publish(context())
+    db = IntentDB()
+    barrier = ExecutionBarrier(cache, db)
+    intent = OrderIntent.new(
+        "BTCUSDT", "SELL", "CANCEL", {}, purpose="CAMPAIGN_CANCEL"
+    )
+    with pytest.raises(RuntimeError, match="ExecutionBarrier"):
+        barrier.execute(intent, lambda: response)
+    assert db.intents[intent.intent_id][0] == "AMBIGUOUS"
