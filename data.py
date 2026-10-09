@@ -14,13 +14,60 @@ def _normalize_interval(value):
     return "1M" if text == "1M" else text.lower()
 
 
+def validate_ohlcv_frame(frame):
+    """Validate historical OHLCV without silently dropping or repairing bad rows."""
+    if not isinstance(frame, pd.DataFrame):
+        raise TypeError("OHLCV data must be a pandas DataFrame")
+    if frame.empty:
+        return frame.copy()
+    required = {"open", "high", "low", "close", "volume"}
+    missing = required - set(frame.columns)
+    if missing:
+        raise ValueError(f"OHLCV data missing columns: {sorted(missing)}")
+
+    out = frame.copy()
+    out.index = pd.to_datetime(out.index, utc=True, errors="coerce")
+    if out.index.isna().any():
+        raise ValueError("OHLCV open timestamps contain invalid values")
+    if not out.index.is_monotonic_increasing or not out.index.is_unique:
+        raise ValueError("OHLCV timestamps must be strictly increasing and unique")
+
+    for column in ("open", "high", "low", "close", "volume"):
+        out[column] = pd.to_numeric(out[column], errors="coerce")
+    values = out[["open", "high", "low", "close", "volume"]].to_numpy(dtype=float)
+    if not pd.notna(values).all() or not pd.Series(values.ravel()).map(lambda v: pd.notna(v) and abs(v) != float("inf")).all():
+        raise ValueError("OHLCV data contains non-numeric or non-finite values")
+    prices = out[["open", "high", "low", "close"]]
+    if (prices <= 0).any().any():
+        raise ValueError("OHLC prices must be positive")
+    if (out["volume"] < 0).any():
+        raise ValueError("OHLCV volume cannot be negative")
+    if (out["high"] < prices[["open", "close", "low"]].max(axis=1)).any():
+        raise ValueError("OHLC invariant failed: high does not contain open/close/low")
+    if (out["low"] > prices[["open", "close", "high"]].min(axis=1)).any():
+        raise ValueError("OHLC invariant failed: low does not contain open/close/high")
+
+    if "close_time" in out.columns:
+        out["close_time"] = pd.to_datetime(out["close_time"], utc=True, errors="coerce")
+        if out["close_time"].isna().any() or (out["close_time"] < out.index).any():
+            raise ValueError("OHLCV close timestamps are invalid or precede open timestamps")
+    return out
+
+
 def _frame(rows):
     cols=['open_time','open','high','low','close','volume','close_time','quote_volume','trades','taker_buy_base','taker_buy_quote','ignore']
     df=pd.DataFrame(rows,columns=cols)
-    if df.empty:return df
-    for c in ['open','high','low','close','volume']:df[c]=pd.to_numeric(df[c],errors='coerce')
-    df['open_time']=pd.to_datetime(df['open_time'],unit='ms',utc=True);df['close_time']=pd.to_datetime(df['close_time'],unit='ms',utc=True)
-    return df.set_index('open_time')[['open','high','low','close','volume','close_time']].dropna()
+    if df.empty:
+        return pd.DataFrame(columns=['open','high','low','close','volume','close_time'], index=pd.DatetimeIndex([], name="open_time", tz="UTC"))
+    for c in ['open','high','low','close','volume']:
+        df[c]=pd.to_numeric(df[c],errors='coerce')
+    for c in ['open_time','close_time']:
+        timestamps = pd.to_numeric(df[c], errors='coerce')
+        if timestamps.isna().any() or not (timestamps % 1 == 0).all():
+            raise ValueError(f"Binance kline {c} contains invalid millisecond timestamps")
+        df[c]=pd.to_datetime(timestamps.astype('int64'),unit='ms',utc=True,errors='coerce')
+    result = df.set_index('open_time')[['open','high','low','close','volume','close_time']]
+    return validate_ohlcv_frame(result)
 
 def fetch_klines(client_or_symbol, symbol_or_interval, interval=None, limit=200, start=None, end=None):
     """Live: fetch_klines(client, symbol, interval, limit=200). Historical: fetch_klines(symbol, interval, start, end)."""
@@ -107,6 +154,8 @@ def fetch_klines_cached_history(client, symbol, interval, cache_dir=None):
     merged = pd.concat([cached, fresh]) if not fresh.empty else cached
     if merged.empty:
         return merged
-    merged = merged[~merged.index.duplicated(keep="last")].sort_index()
+    # Do not silently sort away timestamp disorder or collapse duplicate bars:
+    # either condition invalidates reproducible historical results.
+    merged = validate_ohlcv_frame(merged)
     merged.reset_index().to_csv(path, index=False)
     return merged
