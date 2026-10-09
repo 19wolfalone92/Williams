@@ -798,3 +798,38 @@ def test_runtime_recovery_persists_campaign_and_position_reconcile_locks_on_exce
     assert state["campaign_state:c-1"] == "RECONCILE_REQUIRED"
     assert state["position_state:BTCUSDT"] == "RECONCILE_REQUIRED"
     assert events and "invalid fill data" in events[0][1]
+
+@pytest.mark.parametrize("bad_amount", ["NaN", "Infinity", "not-a-number"])
+def test_runtime_skips_strategy_management_when_exchange_quantity_is_invalid(bad_amount):
+    from types import SimpleNamespace
+    from campaign_model import CampaignState
+
+    state = {}
+    events = []
+    campaign = SimpleNamespace(campaign_id="c-2", state=CampaignState.TREND_ACTIVE)
+    engine = SimpleNamespace(
+        load_campaign=lambda campaign_id: campaign,
+        mark_reconcile_required=lambda loaded, reason: (
+            setattr(loaded, "state", CampaignState.RECONCILE_REQUIRED),
+            events.append(reason),
+        ),
+    )
+    row = {"symbol": "BTCUSDT", "campaign_id": "c-2", "tags": {"execution_mode": "FUTURES"}}
+    execution = SimpleNamespace(
+        _active_rows=lambda: [row],
+        _row_tags=lambda item: item["tags"],
+        _position_row=lambda symbol: {"symbol": symbol, "positionAmt": bad_amount},
+        engine=engine,
+    )
+    runtime = object.__new__(FuturesRuntime)
+    runtime.execution = execution
+    runtime.db = SimpleNamespace(state_set=lambda key, value: state.__setitem__(key, value))
+    runtime._cancel_pending_entries = lambda reason: []
+
+    results = runtime._manage_existing_positions()
+
+    assert results[0]["action"] == "RECONCILE_REQUIRED"
+    assert campaign.state == CampaignState.RECONCILE_REQUIRED
+    assert state["campaign_state:c-2"] == "RECONCILE_REQUIRED"
+    assert state["position_state:BTCUSDT"] == "RECONCILE_REQUIRED"
+    assert events
