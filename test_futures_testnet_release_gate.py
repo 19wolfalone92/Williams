@@ -79,7 +79,7 @@ class FakeReadOnlyFuturesClient:
         return {"canTrade": self.can_trade}
 
     def account_permissions(self):
-        return {"canTrade": self.can_trade}
+        return {"canTrade": self.can_trade, "multiAssetsMargin": False}
 
     def position_risk(self, symbol=None):
         rows = [{
