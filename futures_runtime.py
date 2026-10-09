@@ -226,8 +226,9 @@ class FuturesRuntime:
         symbols = tuple(dict.fromkeys(str(symbol).upper() for symbol in self.symbols if str(symbol).strip()))
         if not symbols:
             raise RuntimeError("No configured Futures symbols; account ownership cannot be verified")
-        for symbol in symbols:
-            self.execution._assert_no_unmanaged_positions(symbol)
+        # The execution guard checks account-wide positions and open orders;
+        # pass one configured symbol as the reconciliation context only.
+        self.execution._assert_no_unmanaged_positions(symbols[0])
 
     def _daily_loss_allows_entry(self, equity: float) -> tuple[bool, str]:
         # Invalid account equity must never reset the daily baseline or permit
