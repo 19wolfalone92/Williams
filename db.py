@@ -964,12 +964,16 @@ class Database:
             "capital_reserved_quote",
         )
         for field in nonnegative_fields:
+            if field in data and data[field] in (None, ""):
+                raise ValueError(f"campaign.{field} cannot be missing")
             data[field] = self._require_finite_number(
-                data.get(field, 0) or 0, f"campaign.{field}", minimum=0.0
+                data.get(field, 0), f"campaign.{field}", minimum=0.0
             )
         for field in ("realized_pnl_quote", "unrealized_pnl_quote"):
+            if field in data and data[field] in (None, ""):
+                raise ValueError(f"campaign.{field} cannot be missing")
             data[field] = self._require_finite_number(
-                data.get(field, 0) or 0, f"campaign.{field}"
+                data.get(field, 0), f"campaign.{field}"
             )
         try:
             data["additions"] = int(data.get("additions", 0) or 0)
