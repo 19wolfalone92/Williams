@@ -1730,7 +1730,6 @@ class FuturesCampaignExecutionService:
             CampaignState.OPEN_INITIAL,
             CampaignState.TREND_ACTIVE,
             CampaignState.TRAILING,
-            CampaignState.EXHAUSTION_WATCH,
         }:
             raise FuturesCampaignExecutionError(
                 f"{symbol}: campaign state {campaign.state.value} does not admit an add-on"
