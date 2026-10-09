@@ -22,6 +22,7 @@ class FakeFuturesClient:
         self.protective_stops = []
         self.protection_response_missing_ids = False
         self.protection_response_status = "NEW"
+        self.entry_response_status = "NEW"
         self.algo_status = "NEW"
         self.cancel_confirms = True
         self._position = {
@@ -90,7 +91,7 @@ class FakeFuturesClient:
             "symbol": symbol,
             "algoId": 123,
             "clientAlgoId": client_algo_id,
-            "algoStatus": "NEW",
+            "algoStatus": self.entry_response_status,
             "side": "BUY" if direction == "LONG" else "SELL",
         }
 
@@ -739,5 +740,28 @@ def test_place_protection_rejects_invalid_live_entry_price(tmp_path, bad_entry):
         with pytest.raises(FuturesCampaignExecutionError, match="entry price"):
             service.place_protection(campaign, stop_price=100.0)
         assert client.protective_stops == []
+    finally:
+        db.conn.close()
+
+@pytest.mark.parametrize("terminal_status", ["EXPIRED", "REJECTED"])
+def test_terminal_entry_response_is_not_reported_as_armed(tmp_path, terminal_status):
+    db = Database(str(tmp_path / "terminal-entry.sqlite3"))
+    try:
+        cache = ContextCache()
+        make_context(cache, allow_long=True, allow_short=False)
+        client = FakeFuturesClient(mark_price=102.0)
+        client.entry_response_status = terminal_status
+        service = FuturesCampaignExecutionService(
+            client, db, execution_barrier=ExecutionBarrier(cache, db),
+            max_open_positions=3, portfolio_risk_limit_pct=0.01, campaign_risk_limit_pct=0.005,
+        )
+        with pytest.raises(FuturesCampaignExecutionError, match="entry algo status is not active"):
+            service.arm_initial_entry(
+                make_signal("LONG"), equity_quote=10000.0, atr=2.0, candidate_risk_fraction=0.005,
+            )
+        campaigns = db.open_campaigns()
+        assert campaigns
+        assert campaigns[0]["state"] == "RECONCILE_REQUIRED"
+        assert db.state_get("position_state:BTCUSDT") == "RECONCILE_REQUIRED"
     finally:
         db.conn.close()
