@@ -10,11 +10,10 @@ def canonical_version(server_text: str) -> str:
     for line in server_text.splitlines():
         key, separator, value = line.partition("=")
         if separator and key.strip() == "VERSION":
-            version = value.strip().strip("\\'\\\"")
+            version = value.strip().strip("'").strip('"')
             assert version, "server.py: VERSION must not be empty"
             return version
     raise AssertionError("server.py: missing canonical VERSION declaration")
-
 
 def read(path: str) -> str:
     p = ROOT / path
