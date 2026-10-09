@@ -250,18 +250,28 @@ class BinanceUsdmFuturesClient:
         return self._request("GET", "/fapi/v3/account", signed=True)
 
     def account_permissions(self) -> dict[str, Any]:
-        """Read canTrade from Account Information V2, where Binance exposes it."""
+        """Read trade permission and margin mode from Account Information V2."""
         result = self._request("GET", "/fapi/v2/account", signed=True)
-        if not isinstance(result, dict) or "canTrade" not in result:
+        if not isinstance(result, dict):
+            raise FuturesAPIError("Binance Futures account permissions payload is malformed")
+        missing = [key for key in ("canTrade", "multiAssetsMargin") if key not in result]
+        if missing:
             raise FuturesAPIError(
-                "Binance Futures account permissions response omitted canTrade"
+                f"Binance Futures account permissions omitted: {', '.join(missing)}"
             )
-        value = result.get("canTrade")
-        if value is not True and str(value).strip().lower() != "true":
-            if value is False or str(value).strip().lower() == "false":
-                return {"canTrade": False}
-            raise FuturesAPIError("Binance Futures canTrade permission is ambiguous")
-        return {"canTrade": True}
+
+        def strict_bool(value: Any, label: str) -> bool:
+            normalized = str(value).strip().lower()
+            if value is True or normalized in {"true", "1"}:
+                return True
+            if value is False or normalized in {"false", "0"}:
+                return False
+            raise FuturesAPIError(f"Binance Futures {label} value is ambiguous")
+
+        return {
+            "canTrade": strict_bool(result.get("canTrade"), "canTrade"),
+            "multiAssetsMargin": strict_bool(result.get("multiAssetsMargin"), "multiAssetsMargin"),
+        }
 
     def balance(self) -> Any:
         return self._request("GET", "/fapi/v3/balance", signed=True)
