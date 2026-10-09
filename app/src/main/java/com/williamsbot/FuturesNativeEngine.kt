@@ -1007,8 +1007,12 @@ internal class FuturesNativeEngine(
         val normalized = quantity.toDouble()
         val notional = normalized * signal.trigger
         val filters = exchange.symbolFilters(symbol)
-        val minimum = (filters["NOTIONAL"] ?: filters["MIN_NOTIONAL"])?.optString("minNotional")
-            ?.toDoubleOrNull() ?: 0.0
+        val notionalFilter = filters["NOTIONAL"] ?: filters["MIN_NOTIONAL"]
+        val minimum = notionalFilter?.let { filter ->
+            (filter.optString("minNotional").toDoubleOrNull()
+                ?: filter.optString("notional").toDoubleOrNull()
+                ?: filter.optString("minNotionalValue").toDoubleOrNull())
+        } ?: 0.0
         if (notional < minimum) throw FuturesApiException("$symbol rounded quantity is below minimum notional")
         val actualRisk = normalized * (stopDistance + costReserve)
         if (actualRisk > riskBudget * 1.000001) throw FuturesApiException("$symbol rounded quantity exceeds risk budget")
@@ -1099,7 +1103,8 @@ internal class FuturesNativeEngine(
                     triggerPrice = trigger,
                     clientAlgoId = clientAlgoId,
                     closePosition = false,
-                    reduceOnly = false
+                    reduceOnly = false,
+                    workingType = "CONTRACT_PRICE"
                 )
             }
             campaign.put("entry_algo_id", response.optString("algoId"))
