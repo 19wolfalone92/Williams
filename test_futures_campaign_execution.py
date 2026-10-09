@@ -1040,3 +1040,47 @@ def test_unknown_pending_protection_outcome_never_retries_with_new_id(tmp_path):
         assert db.state_get("position_state:BTCUSDT") == "RECONCILE_REQUIRED"
     finally:
         db.conn.close()
+
+
+def test_exit_submission_timeout_persists_stable_client_id_and_blocks_duplicate(tmp_path):
+    db, client, service, campaign = _armed_entry_for_cancel(tmp_path)
+    try:
+        from campaign_model import CampaignState
+        client._position["positionAmt"] = "0.5"
+        client._position["entryPrice"] = "102.0"
+        campaign.state = CampaignState.OPEN_INITIAL
+        campaign.position_qty = 0.5
+        campaign.average_entry_price = 102.0
+        campaign.open_risk_quote = 1.0
+        campaign.current_stop_price = 100.0
+        service.db.save_campaign(campaign)
+
+        submit_calls = []
+        def timed_out_exit(*args, **kwargs):
+            submit_calls.append((args, kwargs))
+            raise TimeoutError("simulated timeout after request may have reached Binance")
+        client.market_exit = timed_out_exit
+
+        first = service.exit_position(campaign, reason="TEST_EXIT")
+        assert first["action"] == "RECONCILE_REQUIRED"
+        stable_id = first["client_order_id"]
+        assert stable_id.startswith("W2FX_")
+        saved = service.engine.load_campaign(campaign.campaign_id)
+        assert saved.tags["pending_exit_client_order_id"] == stable_id
+        assert db.state_get(f"campaign_state:{campaign.campaign_id}") == "RECONCILE_REQUIRED"
+        assert len(submit_calls) == 1
+
+        lookup_calls = []
+        def unknown_lookup(*args, **kwargs):
+            lookup_calls.append((args, kwargs))
+            raise TimeoutError("simulated order lookup timeout")
+        client.get_order = unknown_lookup
+
+        second = service.exit_position(saved, reason="RETRY_SHOULD_NOT_DUPLICATE")
+        assert second["action"] == "RECONCILE_REQUIRED"
+        assert second["client_order_id"] == stable_id
+        assert len(submit_calls) == 1, "must not submit a second MARKET exit with a new ID"
+        assert len(lookup_calls) == 1
+        assert db.state_get(f"position_state:{campaign.symbol}") == "RECONCILE_REQUIRED"
+    finally:
+        db.conn.close()
