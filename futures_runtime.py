@@ -657,11 +657,17 @@ class FuturesRuntime:
             return self._last_scan_summary
 
         if not daily_ok:
+            # Daily loss lockout blocks all new exposure, including already
+            # armed conditional entries/add-ons, while open-position management
+            # and emergency exits remain available.
+            cancellations = self._cancel_pending_entries(reason="DAILY_RISK_LOCKOUT")
+            management.extend(cancellations)
             self._last_scan_summary = {
                 "state": "DAILY_RISK_LOCKOUT",
                 "reason": daily_reason,
                 "reconciliation": reconciliations,
                 "management": management,
+                "pending_order_cancellations": cancellations,
                 "new_entries": 0,
             }
             return self._last_scan_summary
