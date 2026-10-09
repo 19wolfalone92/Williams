@@ -864,3 +864,45 @@ def test_stop_replacement_requires_confirmed_old_stop_cancellation(tmp_path):
         assert db.state_get("position_state:BTCUSDT") == "RECONCILE_REQUIRED"
     finally:
         db.conn.close()
+
+@pytest.mark.parametrize("bad_amount", ["NaN", "Infinity", "not-a-number"])
+def test_exit_refuses_to_submit_when_live_position_quantity_is_invalid(tmp_path, bad_amount):
+    db, client, service, campaign = _armed_entry_for_cancel(tmp_path)
+    try:
+        from campaign_model import CampaignState
+        client._position["positionAmt"] = bad_amount
+        campaign.state = CampaignState.TREND_ACTIVE
+        campaign.position_qty = 0.5
+        service.db.save_campaign(campaign)
+        with pytest.raises(FuturesCampaignExecutionError, match="exchange quantity"):
+            service.exit_position(campaign, reason="TEST_INVALID_POSITION")
+        assert client.market_exits == []
+        assert db.state_get(f"campaign_state:{campaign.campaign_id}") == "RECONCILE_REQUIRED"
+        assert db.state_get("position_state:BTCUSDT") == "RECONCILE_REQUIRED"
+    finally:
+        db.conn.close()
+
+def test_exit_does_not_close_campaign_when_post_exit_quantity_is_non_finite(tmp_path):
+    db, client, service, campaign = _armed_entry_for_cancel(tmp_path)
+    try:
+        from campaign_model import CampaignState
+        client._position["positionAmt"] = "0.5"
+        client._position["entryPrice"] = "102.0"
+        campaign.state = CampaignState.TREND_ACTIVE
+        campaign.position_qty = 0.5
+        campaign.average_entry_price = 102.0
+        campaign.open_risk_quote = 10.0
+        campaign.pending_risk_quote = 0.0
+        campaign.capital_reserved_quote = 0.0
+        service.db.save_campaign(campaign)
+        service._position_amount = lambda symbol: float("nan")
+
+        result = service.exit_position(campaign, reason="TEST_UNCONFIRMED_EXIT")
+
+        assert result["action"] == "RECONCILE_REQUIRED"
+        assert campaign.state == CampaignState.RECONCILE_REQUIRED
+        assert db.state_get(f"campaign_state:{campaign.campaign_id}") == "RECONCILE_REQUIRED"
+        assert db.state_get("position_state:BTCUSDT") == "RECONCILE_REQUIRED"
+        assert client.market_exits
+    finally:
+        db.conn.close()
