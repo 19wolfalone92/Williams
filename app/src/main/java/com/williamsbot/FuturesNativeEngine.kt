@@ -330,9 +330,12 @@ internal class FuturesNativeEngine(
                 JSONArray()
             }
         }
-        val unresolved = (0 until cancellations.length()).any {
+        val unresolvedCancellation = (0 until cancellations.length()).any {
             cancellations.optJSONObject(it)?.optString("state") == "RECONCILE_REQUIRED"
         }
+        val activeCampaignsRemain = auditStore.activeFuturesCampaigns().isNotEmpty()
+        val unresolvedIntentRemain = auditStore.pendingFuturesIntents().any { isUnresolvedIntent(it) }
+        val unresolved = unresolvedCancellation || activeCampaignsRemain || unresolvedIntentRemain
         auditEvent(
             "futures_paused",
             JSONObject()
