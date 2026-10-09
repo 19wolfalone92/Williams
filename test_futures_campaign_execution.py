@@ -715,3 +715,29 @@ def test_protection_terminal_response_never_marks_stop_active(tmp_path, terminal
         assert db.state_get("position_state:BTCUSDT") == "RECONCILE_REQUIRED"
     finally:
         db.conn.close()
+
+
+@pytest.mark.parametrize("bad_amount", ["NaN", "Infinity", "-Infinity", "not-a-number"])
+def test_place_protection_rejects_invalid_live_position_quantity(tmp_path, bad_amount):
+    db, client, service, campaign = _armed_entry_for_cancel(tmp_path)
+    try:
+        client._position["positionAmt"] = bad_amount
+        client._position["entryPrice"] = "102.0"
+        with pytest.raises(FuturesCampaignExecutionError, match="position quantity"):
+            service.place_protection(campaign, stop_price=100.0)
+        assert client.protective_stops == []
+    finally:
+        db.conn.close()
+
+
+@pytest.mark.parametrize("bad_entry", ["NaN", "Infinity", "not-a-number"])
+def test_place_protection_rejects_invalid_live_entry_price(tmp_path, bad_entry):
+    db, client, service, campaign = _armed_entry_for_cancel(tmp_path)
+    try:
+        client._position["positionAmt"] = "0.5"
+        client._position["entryPrice"] = bad_entry
+        with pytest.raises(FuturesCampaignExecutionError, match="entry price"):
+            service.place_protection(campaign, stop_price=100.0)
+        assert client.protective_stops == []
+    finally:
+        db.conn.close()
