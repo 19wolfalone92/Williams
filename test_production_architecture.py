@@ -90,6 +90,7 @@ def test_execution_barrier_serializes_publish_and_submit():
         "MARKET",
         {"1h": version},
         permission_interval="1h",
+        client_order_id="stable-serial-test",
     )
     result = barrier.execute(intent, submit)
     t.join()
@@ -135,6 +136,7 @@ def test_execution_barrier_fails_closed_when_pending_intent_cannot_be_persisted(
         "MARKET",
         {"1h": version},
         permission_interval="1h",
+        client_order_id="stable-persistence-failure",
     )
     calls = []
 
@@ -159,6 +161,7 @@ def test_execution_barrier_requires_durable_store_by_default():
         "MARKET",
         {"1h": version},
         permission_interval="1h",
+        client_order_id="stable-no-store",
     )
     calls = []
 
@@ -226,6 +229,7 @@ def test_campaign_entry_checks_directional_permission_for_long_and_short():
             {"1h": snapshot.context("BTCUSDT", "1h").version},
             purpose="CAMPAIGN_ENTRY",
             permission_interval="1h",
+            client_order_id=f"stable-entry-{side.lower()}",
         )
         result = barrier.execute(intent, lambda: {"status": "NEW"})
         assert not result.accepted
