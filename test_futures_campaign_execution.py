@@ -1385,3 +1385,78 @@ def test_initial_conditional_partial_fill_is_cancelled_and_reconciled(tmp_path):
         assert db.state_get("position_state:BTCUSDT") == "OPEN_INITIAL"
     finally:
         db.conn.close()
+
+
+def test_partial_terminal_exit_is_aggregated_with_residual_exit(tmp_path):
+    db, client, service, campaign = _armed_entry_for_cancel(tmp_path)
+    try:
+        from campaign_model import CampaignState
+        client._position["positionAmt"] = "0.5"
+        client._position["entryPrice"] = "102.0"
+        campaign.state = CampaignState.OPEN_INITIAL
+        campaign.position_qty = 0.5
+        campaign.average_entry_price = 102.0
+        campaign.open_risk_quote = 1.0
+        campaign.current_stop_price = 100.0
+        service.db.save_campaign(campaign)
+
+        exit_orders = {}
+        def first_partial_exit(symbol, direction, quantity, client_order_id):
+            exit_orders[client_order_id] = {
+                "symbol": symbol, "orderId": 789, "clientOrderId": client_order_id,
+                "side": "SELL", "type": "MARKET", "status": "CANCELED",
+                "executedQty": "0.2", "avgPrice": "101.5", "cumQuote": "20.3",
+            }
+            client._position["positionAmt"] = "0.3"
+            return exit_orders[client_order_id]
+        client.market_exit = first_partial_exit
+        first = service.exit_position(campaign, reason="TEST_PARTIAL_EXIT")
+        assert first["action"] == "RECONCILE_REQUIRED"
+        first_client_id = campaign.tags["pending_exit_client_order_id"]
+
+        def second_exit(symbol, direction, quantity, client_order_id):
+            exit_orders[client_order_id] = {
+                "symbol": symbol, "orderId": 790, "clientOrderId": client_order_id,
+                "side": "SELL", "type": "MARKET", "status": "FILLED",
+                "executedQty": "0.3", "avgPrice": "101.0", "cumQuote": "30.3",
+            }
+            client._position["positionAmt"] = "0"
+            return exit_orders[client_order_id]
+
+        def get_order(symbol, *, order_id=None, orig_client_order_id=None):
+            if orig_client_order_id == first_client_id:
+                return exit_orders[first_client_id]
+            if str(order_id) == "789":
+                return exit_orders[first_client_id]
+            if str(order_id) == "790":
+                return next(v for v in exit_orders.values() if str(v["orderId"]) == "790")
+            raise TimeoutError("unknown order lookup")
+
+        def user_trades(symbol, *, order_id=None, limit=1000):
+            if str(order_id) == "789":
+                return [{
+                    "symbol": symbol, "orderId": 789, "qty": "0.2", "price": "101.5",
+                    "realizedPnl": "-0.1", "commission": "0.02", "commissionAsset": "USDT",
+                }]
+            if str(order_id) == "790":
+                return [{
+                    "symbol": symbol, "orderId": 790, "qty": "0.3", "price": "101.0",
+                    "realizedPnl": "-0.2", "commission": "0.03", "commissionAsset": "USDT",
+                }]
+            return []
+        client.get_order = get_order
+        client.user_trades = user_trades
+        client.market_exit = second_exit
+
+        saved = service.engine.load_campaign(campaign.campaign_id)
+        result = service.exit_position(saved, reason="TEST_RESIDUAL_EXIT")
+
+        assert result["action"] == "CLOSED"
+        assert result["realized_pnl_quote_net_known_fees"] == pytest.approx(-0.35)
+        closed = service.engine.load_campaign(campaign.campaign_id)
+        assert closed.state.value == "CLOSED"
+        assert closed.position_qty == 0.0
+        assert len(closed.tags["last_market_exit"]["orders"]) == 2
+        assert db.state_get("position_state:BTCUSDT") == "FLAT"
+    finally:
+        db.conn.close()
