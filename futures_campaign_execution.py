@@ -1621,7 +1621,7 @@ class FuturesCampaignExecutionService:
                 quantity=abs(amount),
                 average_entry_price=entry,
                 initial_stop_price=float(campaign.current_stop_price),
-                fill_order_id=str(campaign.tags.get("pending_algo_id", "")),
+                fill_order_id=str(campaign.tags.get("pending_algo_id", "") or entry_client_algo_id),
                 risk_quote=float(campaign.pending_risk_quote),
                 fee_quote=0.0,
             )
