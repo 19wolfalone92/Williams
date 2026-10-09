@@ -1974,7 +1974,11 @@ internal class FuturesNativeEngine(
         val symbol = campaign.optString("symbol").uppercase(Locale.US)
         val direction = campaign.optString("direction").uppercase(Locale.US)
         val position = position(exchange, symbol)
-        val amount = position.optString("positionAmt").toDoubleOrNull() ?: 0.0
+        val amount = position.optString("positionAmt").toDoubleOrNull()
+            ?: return setCampaignState(campaign, "RECONCILE_REQUIRED", "Exit blocked: positionAmt is missing or malformed")
+        if (!amount.isFinite()) {
+            return setCampaignState(campaign, "RECONCILE_REQUIRED", "Exit blocked: positionAmt is non-finite")
+        }
         if (abs(amount) <= 1e-12) {
             return JSONObject().put("symbol", symbol).put("action", "FLAT").put("reason", "exchange position already flat")
         }
@@ -2379,8 +2383,13 @@ internal class FuturesNativeEngine(
         if (!executed.isFinite() || executed <= 0.0) {
             throw FuturesApiException("$symbol market exit executedQty is non-finite or non-positive")
         }
-        val expectedQty = campaign.optDouble("position_amt", 0.0).let { abs(it) }
-        if (expectedQty > 0.0 && abs(executed - expectedQty) > max(1e-8, expectedQty * 1e-6)) {
+        val persistedAmount = campaign.optString("position_amt").toDoubleOrNull()
+            ?: throw FuturesApiException("$symbol persisted position_amt is missing or invalid")
+        if (!persistedAmount.isFinite() || abs(persistedAmount) <= 0.0) {
+            throw FuturesApiException("$symbol persisted position_amt is non-finite or non-positive")
+        }
+        val expectedQty = abs(persistedAmount)
+        if (abs(executed - expectedQty) > max(1e-8, expectedQty * 1e-6)) {
             throw FuturesApiException(
                 "$symbol market exit executedQty does not equal the persisted position quantity; protective fills may have raced"
             )
@@ -2470,8 +2479,13 @@ internal class FuturesNativeEngine(
         if (actualOrder.optString("status").uppercase(Locale.US) != "FILLED" ||
             !executed.isFinite() || executed <= 0.0
         ) throw FuturesApiException("$symbol protective child is not an authoritative fill")
-        val expectedQty = abs(campaign.optDouble("position_amt", 0.0))
-        if (expectedQty > 0.0 && abs(executed - expectedQty) > max(1e-8, expectedQty * 1e-6)) {
+        val persistedAmount = campaign.optString("position_amt").toDoubleOrNull()
+            ?: throw FuturesApiException("$symbol persisted position_amt is missing or invalid")
+        if (!persistedAmount.isFinite() || abs(persistedAmount) <= 0.0) {
+            throw FuturesApiException("$symbol persisted position_amt is non-finite or non-positive")
+        }
+        val expectedQty = abs(persistedAmount)
+        if (abs(executed - expectedQty) > max(1e-8, expectedQty * 1e-6)) {
             throw FuturesApiException("$symbol protective exit quantity differs from persisted position; another exit may have raced")
         }
         val trades = exchange.getUserTrades(symbol, orderId)
