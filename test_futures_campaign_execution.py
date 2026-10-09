@@ -43,6 +43,13 @@ class FakeFuturesClient:
         rows = [dict(self._position)]
         return [x for x in rows if symbol is None or x["symbol"] == symbol.upper()]
 
+    def symbol_configuration(self, symbol):
+        return {
+            "symbol": symbol.upper(),
+            "marginType": "ISOLATED" if self._position.get("isolated") is True else "CROSSED",
+            "leverage": int(self._position.get("leverage", 0)),
+        }
+
     def open_orders(self, symbol=None):
         return []
 
