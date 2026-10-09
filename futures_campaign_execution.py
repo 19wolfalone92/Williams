@@ -878,6 +878,137 @@ class FuturesCampaignExecutionService:
         )
         return {**new_protection, "previous_stop_price": old_stop}
 
+    def cancel_pending_entry(self, campaign, *, reason: str) -> dict[str, Any]:
+        """Cancel a bot-owned conditional ENTRY and verify it is terminal.
+
+        Pausing or killing the runtime must not leave an armed entry capable of
+        opening new exposure later. A missing/ambiguous exchange confirmation
+        leaves the campaign in RECONCILE_REQUIRED; it is never treated as a
+        successful cancellation.
+        """
+        symbol = campaign.symbol.upper()
+        if campaign.state != CampaignState.ENTRY_PENDING:
+            return {
+                "symbol": symbol,
+                "state": campaign.state.value,
+                "action": "NO_PENDING_ENTRY",
+            }
+
+        client_algo_id = str(campaign.tags.get("entry_client_algo_id", "") or "")
+        algo_id = campaign.tags.get("pending_algo_id")
+        if not client_algo_id and not algo_id:
+            self.engine.mark_reconcile_required(
+                campaign,
+                f"{reason}: ENTRY_PENDING campaign has no stable exchange algo identifier",
+            )
+            self.db.state_set(
+                f"campaign_state:{campaign.campaign_id}",
+                CampaignState.RECONCILE_REQUIRED.value,
+            )
+            return {
+                "symbol": symbol,
+                "state": "RECONCILE_REQUIRED",
+                "action": "CANCEL_UNVERIFIED",
+                "reason": "missing bot-owned entry algo identifier",
+            }
+
+        intent = OrderIntent.new(
+            symbol,
+            "BUY" if self._campaign_direction(campaign) == "LONG" else "SELL",
+            "CANCEL",
+            {},
+            purpose="CANCEL_PENDING_FUTURES_ENTRY",
+            campaign_id=campaign.campaign_id,
+            signal_id=campaign.current_signal_id,
+            client_order_id=str(client_algo_id or algo_id),
+        )
+        try:
+            result = self.barrier.execute(
+                intent,
+                lambda: self.client.cancel_algo_order_safe(
+                    symbol,
+                    algo_id=algo_id or None,
+                    client_algo_id=client_algo_id or None,
+                ),
+            )
+            # Whether cancel returned accepted or reported a possibly-terminal
+            # order, query the exchange's authoritative algo state before
+            # releasing campaign risk or declaring the entry cancelled.
+            verified = self.client.get_algo_order(
+                symbol,
+                algo_id=algo_id or None,
+                client_algo_id=client_algo_id or None,
+            )
+            status = str(verified.get("algoStatus", "")).upper()
+            position = self._position_amount(symbol)
+            if status in {"CANCELED", "CANCELLED", "EXPIRED", "REJECTED"} and abs(position) <= 1e-12:
+                campaign.state = CampaignState.CLOSED
+                campaign.next_action = "WAIT"
+                campaign.pending_risk_quote = 0.0
+                campaign.capital_reserved_quote = 0.0
+                campaign.tags["pending_entry_cancel_reason"] = str(reason)
+                campaign.tags["pending_entry_cancel_status"] = status
+                self.db.save_campaign(campaign)
+                self.db.set_campaign_signal_state(
+                    campaign.current_signal_id,
+                    SignalState.CANCELLED.value,
+                )
+                self.db.state_delete(f"futures_entry_pending:{symbol}")
+                self.db.state_delete(f"campaign_state:{campaign.campaign_id}")
+                self.db.log_campaign_event(
+                    campaign.campaign_id,
+                    CampaignEventType.CAMPAIGN_CLOSED.value,
+                    order_id=str(algo_id or client_algo_id),
+                    reason=f"Pending entry verified {status.lower()} during {reason}",
+                    payload={
+                        "client_algo_id": client_algo_id,
+                        "algo_status": status,
+                        "exchange_position_amount": position,
+                    },
+                )
+                return {
+                    "symbol": symbol,
+                    "state": "CLOSED",
+                    "action": "ENTRY_CANCELLED",
+                    "algo_status": status,
+                }
+
+            detail = (
+                f"{reason}: entry cancel not conclusively verified "
+                f"(barrier_accepted={result.accepted}, algo_status={status}, "
+                f"position_amount={position})"
+            )
+            self.engine.mark_reconcile_required(campaign, detail)
+            self.db.state_set(
+                f"campaign_state:{campaign.campaign_id}",
+                CampaignState.RECONCILE_REQUIRED.value,
+            )
+            return {
+                "symbol": symbol,
+                "state": "RECONCILE_REQUIRED",
+                "action": "CANCEL_UNVERIFIED",
+                "reason": detail,
+            }
+        except Exception as exc:
+            detail = f"{reason}: pending entry cancellation/reconciliation failed: {type(exc).__name__}: {exc}"
+            self.engine.mark_reconcile_required(campaign, detail)
+            self.db.state_set(
+                f"campaign_state:{campaign.campaign_id}",
+                CampaignState.RECONCILE_REQUIRED.value,
+            )
+            self.db.log_event(
+                "ERROR",
+                "futures_pending_entry_cancel_failed",
+                detail,
+                {"campaign_id": campaign.campaign_id, "symbol": symbol},
+            )
+            return {
+                "symbol": symbol,
+                "state": "RECONCILE_REQUIRED",
+                "action": "CANCEL_UNVERIFIED",
+                "reason": detail,
+            }
+
     def exit_position(self, campaign, *, reason: str) -> dict[str, Any]:
         """Reduce-only market exit; it remains available while entries are blocked."""
         symbol = campaign.symbol.upper()
