@@ -341,7 +341,6 @@ class ExecutionBarrier:
                     response = submit()
             except Exception as exc:
                 order_fsm.state = OrderState.AMBIGUOUS
-                order_fsm.state = OrderState.AMBIGUOUS
                 self._persist(intent, "AMBIGUOUS", f"{type(exc).__name__}: {exc}")
                 self._record(
                     "ERROR",
@@ -359,14 +358,22 @@ class ExecutionBarrier:
                     else ""
                 ).upper()
                 if status:
-                    order_fsm.observe_exchange_status(
-                        status,
-                        float(
-                            response.get("executedQty", 0) or 0
-                            if isinstance(response, dict)
-                            else 0
-                        ),
-                    )
+                    try:
+                        executed_qty = float(response.get("executedQty", 0) or 0)
+                    except (TypeError, ValueError, OverflowError) as exc:
+                        executed_qty = float("nan")
+                    if not math.isfinite(executed_qty) or executed_qty < 0:
+                        order_fsm.state = OrderState.RECONCILE_REQUIRED
+                        reason = "exchange response has invalid executedQty; reconciliation required"
+                        self._persist(intent, "AMBIGUOUS", reason)
+                        self._record("ERROR", "execution_ambiguous", intent, reason)
+                        raise RuntimeError(f"ExecutionBarrier: {reason}")
+                    order_fsm.observe_exchange_status(status, executed_qty)
+                    if order_fsm.state == OrderState.RECONCILE_REQUIRED:
+                        reason = f"exchange returned unrecognized or inconsistent order status {status!r}; reconciliation required"
+                        self._persist(intent, "AMBIGUOUS", reason)
+                        self._record("ERROR", "execution_ambiguous", intent, reason)
+                        raise RuntimeError(f"ExecutionBarrier: {reason}")
                 elif (
                     isinstance(response, dict)
                     and str(response.get("newOrderResult", "")).upper() == "SUCCESS"
