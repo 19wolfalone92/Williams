@@ -1277,3 +1277,21 @@ def test_filled_market_exit_requires_matching_trade_history_and_records_pnl(tmp_
         assert db.state_get("position_state:BTCUSDT") == "FLAT"
     finally:
         db.conn.close()
+
+
+def test_protection_lookup_timeout_does_not_create_duplicate_stop(tmp_path):
+    db, client, service, campaign = _prepare_open_campaign_for_add_on(tmp_path, "LONG")
+    try:
+        original_count = len(client.protective_stops)
+        def lookup_timeout(*args, **kwargs):
+            raise TimeoutError("simulated Binance algo lookup timeout")
+        client.get_algo_order = lookup_timeout
+
+        result = service.reconcile_symbol("BTCUSDT")
+
+        assert result["state"] == "RECONCILE_REQUIRED"
+        assert len(client.protective_stops) == original_count
+        assert db.state_get(f"campaign_state:{campaign.campaign_id}") == "RECONCILE_REQUIRED"
+        assert db.state_get("position_state:BTCUSDT") == "RECONCILE_REQUIRED"
+    finally:
+        db.conn.close()
