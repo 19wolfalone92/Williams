@@ -1753,6 +1753,26 @@ def test_triggered_protective_stop_with_residual_position_forces_reduce_only_exi
         db.conn.close()
 
 
+@pytest.mark.parametrize("missing_field", ["commissionAsset", "realizedPnl"])
+def test_exit_trade_reconciliation_rejects_missing_accounting_fields(missing_field):
+    row = {
+        "qty": "0.5",
+        "price": "101.0",
+        "commission": "0.1",
+        "commissionAsset": "USDT",
+        "realizedPnl": "-0.5",
+    }
+    row.pop(missing_field)
+
+    with pytest.raises(FuturesCampaignExecutionError, match=f"omitted required fields: {missing_field}"):
+        FuturesCampaignExecutionService._validate_user_trade_row(
+            row,
+            "BTCUSDT",
+            "market exit",
+            require_realized_pnl=True,
+        )
+
+
 def test_position_payload_missing_quantity_blocks_new_entry_fail_closed(tmp_path):
     db = Database(str(tmp_path / "missing-position-amount.sqlite3"))
     try:
