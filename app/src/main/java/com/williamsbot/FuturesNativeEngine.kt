@@ -1405,10 +1405,41 @@ internal class FuturesNativeEngine(
                     auditStore.saveFuturesCampaign(symbol, campaign)
                     return JSONObject().put("symbol", symbol).put("state", "ENTRY_PENDING").put("algo_status", status)
                 }
-                if (status in setOf("CANCELED", "EXPIRED", "REJECTED")) {
+                if (status in setOf("CANCELED", "CANCELLED", "EXPIRED", "REJECTED")) {
+                    val childId = algo.optString("actualOrderId")
+                    if (childId.isNotBlank() && childId != "0") {
+                        val child = runCatching { exchange.getOrder(symbol, orderId = childId) }.getOrNull()
+                            ?: return setCampaignState(
+                                campaign,
+                                "RECONCILE_REQUIRED",
+                                "Terminal entry algo has a child order whose status cannot be verified"
+                            )
+                        val childStatus = child.optString("status").uppercase(Locale.US)
+                        val childQty = child.optString("executedQty").toDoubleOrNull()
+                        if (
+                            child.optString("symbol").uppercase(Locale.US) != symbol ||
+                            child.optString("orderId") != childId ||
+                            child.optString("side").uppercase(Locale.US) != exchange.directionToEntrySide(direction) ||
+                            childQty == null || !childQty.isFinite() || childQty < 0.0 ||
+                            childStatus !in setOf("FILLED", "CANCELED", "CANCELLED", "EXPIRED", "REJECTED")
+                        ) {
+                            return setCampaignState(
+                                campaign,
+                                "RECONCILE_REQUIRED",
+                                "Terminal entry child order identity/status/quantity is invalid"
+                            )
+                        }
+                        if (childQty > 0.0) {
+                            return setCampaignState(
+                                campaign,
+                                "RECONCILE_REQUIRED",
+                                "Entry child has executed quantity despite a flat position; fill history must be reconciled"
+                            )
+                        }
+                    }
                     campaign.put("state", "CLOSED")
                     campaign.put("protection_active", false)
-                    campaign.put("reason", "Entry algorithm reached terminal state $status")
+                    campaign.put("reason", "Entry algorithm reached terminal no-fill state $status")
                     auditStore.saveFuturesCampaign(symbol, campaign)
                     updateIntentByClientId(campaign.optString("entry_client_algo_id"), status, algo.toString())
                     return JSONObject().put("symbol", symbol).put("state", "CLOSED").put("algo_status", status)
