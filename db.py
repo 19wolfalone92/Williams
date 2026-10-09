@@ -1,5 +1,5 @@
 import os
-import json, sqlite3
+import json, math, sqlite3
 from pathlib import Path
 from datetime import datetime, timezone
 from contextlib import contextmanager
@@ -513,9 +513,22 @@ class Database:
         if v in (None, ''):
             return None
         try:
-            return float(v)
-        except (TypeError, ValueError):
+            value = float(v)
+        except (TypeError, ValueError, OverflowError):
             return None
+        return value if math.isfinite(value) else None
+
+    @staticmethod
+    def _require_finite_number(value, field, *, minimum=None):
+        try:
+            number = float(value)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(f"{field} must be a finite number") from exc
+        if not math.isfinite(number):
+            raise ValueError(f"{field} must be a finite number")
+        if minimum is not None and number < minimum:
+            raise ValueError(f"{field} must be >= {minimum}")
+        return number
 
     def open_trade(self, symbol=None):
         if symbol:
@@ -551,6 +564,25 @@ class Database:
         return dict(r) if r else None
 
     def save_trade(self, **kwargs):
+        numeric_fields = {
+            "quantity": 0.0,
+            "entry_price": 0.0,
+            "stop_price": 0.0,
+            "take_profit_price": 0.0,
+            "fees": 0.0,
+            "pnl": None,
+            "pnl_pct": None,
+            "risk_pct": None,
+        }
+        for field, minimum in numeric_fields.items():
+            if field in kwargs and kwargs[field] is not None:
+                kwargs[field] = self._require_finite_number(
+                    kwargs[field], field, minimum=minimum
+                )
+        if "quantity" in kwargs and kwargs["quantity"] <= 0:
+            raise ValueError("quantity must be positive")
+        if "entry_price" in kwargs and kwargs["entry_price"] <= 0:
+            raise ValueError("entry_price must be positive")
         now = datetime.now(timezone.utc).isoformat()
         kwargs.setdefault('updated_at', now)
         cols = ','.join(kwargs)
@@ -617,6 +649,14 @@ class Database:
         exit_order_list_id=None,
         fees=0,
     ):
+        if not str(exit_time or "").strip():
+            raise ValueError("exit_time is required")
+        exit_price = self._require_finite_number(exit_price, "exit_price", minimum=0.0)
+        pnl = self._require_finite_number(pnl, "pnl")
+        pnl_pct = self._require_finite_number(pnl_pct, "pnl_pct")
+        fees = self._require_finite_number(fees, "fees", minimum=0.0)
+        if exit_price <= 0:
+            raise ValueError("exit_price must be positive")
         self.conn.execute(
             'UPDATE trades SET '
             'exit_time=?,exit_price=?,pnl=?,pnl_pct=?,reason=?,'
