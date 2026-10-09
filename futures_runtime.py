@@ -62,6 +62,28 @@ def _interval_seconds(interval: str) -> int:
     return number * factors[unit]
 
 
+def _assert_fresh_closed_candle(
+    symbol: str,
+    interval: str,
+    close_time_ms: int,
+    *,
+    now_ms: int | None = None,
+) -> None:
+    """Reject stale, future-dated, or invalid last-closed-candle timestamps."""
+    try:
+        close_ms = int(close_time_ms)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise RuntimeError(f"{symbol}/{interval}: invalid closed-candle timestamp") from exc
+    now = int(time.time() * 1000) if now_ms is None else int(now_ms)
+    age_ms = now - close_ms
+    max_age_ms = max(120_000, 2 * _interval_seconds(interval) * 1000)
+    if close_ms <= 0 or age_ms < -60_000 or age_ms > max_age_ms:
+        raise RuntimeError(
+            f"{symbol}/{interval}: last closed candle is stale or has an invalid timestamp "
+            f"(age_ms={age_ms}, max_age_ms={max_age_ms})"
+        )
+
+
 def choose_initial_williams_signal(
     signals: Iterable[SignalSpec],
     direction: str,
@@ -364,18 +386,7 @@ class FuturesRuntime:
                 else pd.Timestamp(candle_open_ms + _interval_seconds(interval) * 1000, unit="ms", tz="UTC")
             )
             close_ms = int(pd.Timestamp(close_time).timestamp() * 1000)
-            now_ms = int(time.time() * 1000)
-            candle_age_ms = now_ms - close_ms
-            max_candle_age_ms = max(120_000, 2 * _interval_seconds(interval) * 1000)
-            if (
-                close_ms <= 0
-                or candle_age_ms < -60_000
-                or candle_age_ms > max_candle_age_ms
-            ):
-                raise RuntimeError(
-                    f"{symbol}/{interval}: last closed candle is stale or has an invalid timestamp "
-                    f"(age_ms={candle_age_ms}, max_age_ms={max_candle_age_ms})"
-                )
+            _assert_fresh_closed_candle(symbol, interval, close_ms)
             state = "BULLISH" if bullish else "BEARISH" if bearish else "SLEEP"
             decision = "LONG" if allow_long else "SHORT" if allow_short else "NO_TRADE"
             context = TFMarketContext(
@@ -649,14 +660,7 @@ class FuturesRuntime:
                     close_ms = int(last_close.timestamp() * 1000)
                 else:
                     close_ms = int(pd.Timestamp(closed.index[-1]).timestamp() * 1000) + _interval_seconds(self.interval) * 1000
-                now_ms = int(time.time() * 1000)
-                candle_age_ms = now_ms - close_ms
-                max_candle_age_ms = max(120_000, 2 * _interval_seconds(self.interval) * 1000)
-                if close_ms <= 0 or candle_age_ms < -60_000 or candle_age_ms > max_candle_age_ms:
-                    raise RuntimeError(
-                        f"{symbol}/{self.interval}: stale/invalid candle blocks structural management "
-                        f"(age_ms={candle_age_ms}, max_age_ms={max_candle_age_ms})"
-                    )
+                _assert_fresh_closed_candle(symbol, self.interval, close_ms)
                 indicators = calculate_indicators(closed, config_from_env())
                 atr = self._atr(closed, self.config.atr_period)
                 result = self.execution.manage_campaign(campaign, indicators, atr=atr)
