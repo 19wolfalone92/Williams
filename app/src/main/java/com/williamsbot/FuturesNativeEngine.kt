@@ -644,6 +644,7 @@ internal class FuturesNativeEngine(
             }
         if (candidates.isEmpty()) return null
         val chosen = candidates.minByOrNull { it.signalBarTime } ?: return null
+        currentProcessingSymbol.set(symbol)
         val mark = exchange.markPrice(symbol)
         if (chosen.direction == "LONG" && !(chosen.stop < mark && mark < chosen.trigger)) return null
         if (chosen.direction == "SHORT" && !(chosen.trigger < mark && mark < chosen.stop)) return null
@@ -729,8 +730,7 @@ internal class FuturesNativeEngine(
             // pending stop-entry, never a MARKET chase after the trigger passed.
             if (signal == null && configLong && upFractal != null) {
                 val (center, level) = upFractal
-                val trigger = level + tickSizeFromSymbol(symbol = "", fallback = 0.0)
-                // Actual tick-size normalization is done by the execution preflight.
+                // Actual exchange tick/price filters are enforced again before submission.
                 val tick = max(0.0, tickSizeFromPrice(level))
                 val entryTrigger = level + tick
                 val stop = bars[center].low - tick
@@ -1456,14 +1456,22 @@ internal class FuturesNativeEngine(
         val opposite = if (direction == "LONG") {
             lastTwo.all { bar ->
                 val index = frame.bars.indexOf(bar)
-                val (_, _, _, ao, _, ac, _) = indicatorTuple(frame.bars, index)
-                bar.close < frame.teeth && ao < 0.0 && ac < 0.0
+                val values = indicatorTuple(frame.bars, index)
+                val teethAtBar = values[1]
+                val aoAtBar = values[3]
+                val acAtBar = values[5]
+                bar.close < teethAtBar && aoAtBar.isFinite() && acAtBar.isFinite() &&
+                    aoAtBar < 0.0 && acAtBar < 0.0
             }
         } else {
             lastTwo.all { bar ->
                 val index = frame.bars.indexOf(bar)
-                val (_, _, _, ao, _, ac, _) = indicatorTuple(frame.bars, index)
-                bar.close > frame.teeth && ao > 0.0 && ac > 0.0
+                val values = indicatorTuple(frame.bars, index)
+                val teethAtBar = values[1]
+                val aoAtBar = values[3]
+                val acAtBar = values[5]
+                bar.close > teethAtBar && aoAtBar.isFinite() && acAtBar.isFinite() &&
+                    aoAtBar > 0.0 && acAtBar > 0.0
             }
         }
         if (opposite) {
@@ -1691,35 +1699,6 @@ internal class FuturesNativeEngine(
             auditStore.recordRestCall("EVENT", type, 200, null, payload.toString())
         }
     }
-
-    private fun tickSizeFromPrice(price: Double): Double {
-        if (!price.isFinite() || price <= 0.0) return 1e-8
-        return when {
-            price >= 1000.0 -> 0.1
-            price >= 100.0 -> 0.01
-            price >= 1.0 -> 0.0001
-            price >= 0.01 -> 0.000001
-            else -> 0.00000001
-        }
-    }
-
-    private fun tickSizeFromSymbol(symbol: String, fallback: Double): Double = fallback
-
-    private fun signalSymbolFromSignal(signal: Signal): String =
-        currentProcessingSymbol.get()
-            ?: throw IllegalStateException("Signal lost its symbol binding")
-
-    private val currentProcessingSymbol = ThreadLocal<String?>()
-
-    private fun tickSizeFromPrice(price: Double): Double = when {
-        price >= 1000.0 -> 0.1
-        price >= 100.0 -> 0.01
-        price >= 1.0 -> 0.0001
-        price >= 0.01 -> 0.000001
-        else -> 1e-8
-    }
-
-    private fun tickSizeFromSymbol(symbol: String, fallback: Double): Double = fallback
 
     companion object {
         private const val MIN_ALLIGATOR_SPREAD_PCT = 0.001
