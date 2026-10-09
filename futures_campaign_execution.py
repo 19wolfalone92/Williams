@@ -3069,6 +3069,7 @@ class FuturesCampaignExecutionService:
                 campaign.tags.pop("pending_add_on_stop_price", None)
                 campaign.tags.pop("pending_add_on_quantity", None)
                 campaign.tags.pop("pending_add_on_risk_quote", None)
+                campaign.tags.pop("pending_add_on_expires_at_ms", None)
                 campaign.tags.pop("pending_add_on_original_qty", None)
                 campaign.tags.pop("pending_add_on_original_entry", None)
                 campaign.tags.pop("pending_add_on_direction", None)
@@ -4223,7 +4224,7 @@ class FuturesCampaignExecutionService:
                     for key in (
                         "pending_add_on_client_algo_id", "pending_add_on_algo_id",
                         "pending_add_on_trigger_price", "pending_add_on_stop_price",
-                        "pending_add_on_quantity", "pending_add_on_risk_quote",
+                        "pending_add_on_quantity", "pending_add_on_risk_quote", "pending_add_on_expires_at_ms",
                         "pending_add_on_original_qty", "pending_add_on_original_entry",
                         "pending_add_on_direction",
                     ):
