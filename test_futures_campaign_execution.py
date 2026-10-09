@@ -293,6 +293,40 @@ def test_persistent_kill_latch_survives_restart_and_fails_closed_on_corruption(t
         db.conn.close()
 
 
+def test_account_zero_margin_equity_does_not_fallback_to_wallet_balance():
+    from types import SimpleNamespace
+
+    runtime = object.__new__(FuturesRuntime)
+    runtime.client = SimpleNamespace(account=lambda: {
+        "availableBalance": "500",
+        "totalMarginBalance": 0.0,
+        "totalWalletBalance": "1000",
+    })
+    runtime.controller = SimpleNamespace(risk_engine=SimpleNamespace(balance=1.0))
+    runtime._last_account = {}
+
+    with pytest.raises(RuntimeError, match="invalid equity/availableBalance"):
+        runtime._account()
+
+
+def test_account_uses_wallet_equity_only_when_margin_equity_is_absent():
+    from types import SimpleNamespace
+
+    runtime = object.__new__(FuturesRuntime)
+    runtime.client = SimpleNamespace(account=lambda: {
+        "availableBalance": "500",
+        "totalWalletBalance": "1000",
+    })
+    runtime.controller = SimpleNamespace(risk_engine=SimpleNamespace(balance=1.0))
+    runtime._last_account = {}
+
+    result = runtime._account()
+
+    assert result["totalWalletBalance"] == "1000"
+    assert runtime._last_account["equity_quote"] == pytest.approx(1000.0)
+    assert runtime._last_account["available_quote"] == pytest.approx(500.0)
+
+
 @pytest.mark.parametrize(
     ("direction", "mark", "allow_long", "allow_short", "expected_side"),
     [
