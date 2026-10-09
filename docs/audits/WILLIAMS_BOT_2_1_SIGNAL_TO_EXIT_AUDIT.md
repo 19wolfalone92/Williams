@@ -184,3 +184,10 @@ The native engine built a list of structurally valid WM1/WM2/WM3 candidates, sel
 Repository inspection confirms that `DigitalWilliamsCore` is used by the API/server path, but the Python Futures runtime independently runs `MarketScanner → PortfolioController → FuturesCampaignExecutionService`, while Android `FuturesNativeEngine` has its own Kotlin signal/risk/lifecycle implementation. The three paths do not all consume the same decision object or emit the same structured stage-by-stage `DecisionTrace`. Therefore, passing tests for the canonical core do not prove identical signal selection or Williams semantics across the Futures runtime and native Android engine.
 
 **Status: OPEN ARCHITECTURE GAP, not represented as fixed.** The native stale-signal issue above was corrected directly in its active path. Before claiming strategy parity, create shared LONG/SHORT golden vectors for WM1 reversal, WM2 Super AO, WM3 fractal, expiry, trigger-cross, invalidation, context veto, and exit reason; run equivalent assertions against Python Futures and Android native code. Add a persisted trace linking source candle, context versions, risk decision, client order IDs, fills, protection changes and final exit accounting. No live approval until this gap and the documented Android partial/racing-exit ledger are resolved.
+
+
+### 24. Android native entry sizing did not re-check risk after tick normalization — corrected
+
+Native quantity sizing used the raw signal trigger/stop. The final order path then normalized trigger and stop to the exchange tick size but did not recompute the risk using the actual submitted prices. On symbols with coarse ticks, normalization can widen the stop distance and increase worst-case loss above the admitted risk budget.
+
+**Correction:** immediately before the durable entry intent/order submission, the native engine recomputes stop distance, fee/slippage reserve, risk and equity notional using normalized submitted prices and normalized quantity. Invalid or over-budget results fail closed instead of sending the order.
