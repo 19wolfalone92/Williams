@@ -619,9 +619,13 @@ class FuturesRuntime:
         except Exception as exc:
             preflight_errors.append(f"Futures time sync failed: {type(exc).__name__}: {exc}")
 
+        account_payload: dict[str, Any] = {}
         try:
-            self._account()
+            account_payload = self._account()
             equity = self._last_account["equity_quote"]
+            can_trade = account_payload.get("canTrade")
+            if can_trade is not True and str(can_trade).strip().lower() != "true":
+                preflight_errors.append("Futures account canTrade is not explicitly true")
         except Exception as exc:
             # Account/equity failure blocks new exposure, but must not prevent
             # attempts to reconcile, repair protection, or reduce existing risk.
@@ -850,11 +854,15 @@ class FuturesRuntime:
             self.client.ensure_one_way_mode()
             account = self._account()
             reconciliation = self._recover()
-            startup_blockers = [
+            startup_blockers = []
+            can_trade = account.get("canTrade") if isinstance(account, dict) else None
+            if can_trade is not True and str(can_trade).strip().lower() != "true":
+                startup_blockers.append("Futures account canTrade is not explicitly true")
+            startup_blockers.extend(
                 f"{item.get('symbol', 'UNKNOWN')}: {item.get('reason', 'reconciliation required')}"
                 for item in reconciliation
                 if str(item.get("state", "")).upper() == "RECONCILE_REQUIRED"
-            ]
+            )
             # Unknown exposure/orders must block entries, but must not prevent
             # the management-only monitor from starting after a process restart.
             try:
