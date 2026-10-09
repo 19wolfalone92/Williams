@@ -1,6 +1,8 @@
 import os
 import tempfile
 
+import pytest
+
 from campaign_engine import CampaignEngine
 from campaign_model import (
     CampaignState,
@@ -98,3 +100,69 @@ def test_portfolio_risk_includes_pending_campaign():
         db.save_campaign(campaign)
         assert engine.portfolio_reserved_risk_quote() == 40.0
         assert engine.portfolio_reserved_capital_quote() == 500.0
+
+
+def _open_campaign_for_add_on(db, engine, *, open_risk=4.0, budget=5.0):
+    initial = make_signal(SignalType.REVERSAL, role=SignalRole.ENTRY, bar=100)
+    campaign = engine.create_campaign(initial, initial_risk_pct=0.002)
+    campaign.tags["risk_budget_quote"] = budget
+    engine.arm_entry(campaign, initial)
+    engine.mark_triggered(campaign, initial.signal_id, "entry-1")
+    campaign = engine.record_initial_fill(
+        campaign,
+        quantity=0.1,
+        average_entry_price=101.0,
+        initial_stop_price=97.0,
+        fill_order_id="entry-1",
+        risk_quote=open_risk,
+    )
+    campaign.tags["risk_budget_quote"] = budget
+    db.save_campaign(campaign)
+    return campaign
+
+
+def test_add_on_stays_in_campaign_and_respects_remaining_risk_budget():
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "w.sqlite3"))
+        engine = CampaignEngine(db)
+        campaign = _open_campaign_for_add_on(db, engine, open_risk=4.0, budget=5.0)
+        signal = make_signal(SignalType.SUPER_AO, role=SignalRole.ADD_ON, trigger=103.0, bar=200)
+
+        try:
+            with pytest.raises(ValueError, match="exceed the campaign"):
+                engine.arm_add_on(
+                    campaign,
+                    signal,
+                    risk_quote=1.1,
+                    capital_reserved_quote=25.0,
+                )
+            assert campaign.campaign_id == db.get_campaign(campaign.campaign_id)["campaign_id"]
+            assert campaign.state == CampaignState.OPEN_INITIAL
+        finally:
+            db.conn.close()
+
+
+def test_add_on_uses_existing_campaign_and_reserves_only_remaining_risk():
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "w.sqlite3"))
+        engine = CampaignEngine(db)
+        campaign = _open_campaign_for_add_on(db, engine, open_risk=4.0, budget=5.0)
+        campaign_id = campaign.campaign_id
+        signal = make_signal(SignalType.FRACTAL, role=SignalRole.ADD_ON, trigger=104.0, bar=201)
+
+        try:
+            armed = engine.arm_add_on(
+                campaign,
+                signal,
+                risk_quote=1.0,
+                capital_reserved_quote=25.0,
+            )
+            assert armed.campaign_id == campaign_id
+            assert armed.state == CampaignState.ADD_ON_PENDING
+            assert armed.pending_risk_quote == 1.0
+            assert len([
+                row for row in db.list_campaigns()
+                if row.get("symbol") == "BTCUSDT"
+            ]) == 1
+        finally:
+            db.conn.close()
