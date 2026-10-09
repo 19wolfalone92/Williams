@@ -603,6 +603,13 @@ class FuturesRuntime:
         equity = self._last_account["equity_quote"]
         reconciliations = self._recover()
         management = self._manage_existing_positions()
+        # A single cancel attempt is not enough after an unknown Binance
+        # response. While paused/killed, keep reconciling/cancelling stable
+        # pending entry and add-on IDs on each cycle; normal scans never cancel
+        # valid conditional entries.
+        if kill_latched or self._paused:
+            cancel_reason = "KILL_SWITCH" if kill_latched else "PAUSE"
+            management.extend(self._cancel_pending_entries(reason=cancel_reason))
         daily_ok, daily_reason = self._daily_loss_allows_entry(equity)
         blocked_reconciliation = any(
             str(item.get("state", "")).upper() == "RECONCILE_REQUIRED"
