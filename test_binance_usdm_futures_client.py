@@ -280,6 +280,40 @@ def test_protective_stop_uses_close_position_and_correct_opposite_side(monkeypat
     assert all("quantity" not in c[2] and "reduceOnly" not in c[2] for c in calls)
 
 
+@pytest.mark.parametrize(
+    ("status_code", "payload"),
+    [
+        (408, {"code": 408, "msg": "request timeout"}),
+        (425, {"code": 425, "msg": "too early"}),
+        (400, {"code": -1006, "msg": "execution status unknown"}),
+        (400, {"code": -1007, "msg": "timeout; execution status unknown"}),
+    ],
+)
+def test_mutation_timeout_or_binance_unknown_execution_code_is_ambiguous(
+    status_code, payload
+):
+    from types import SimpleNamespace
+
+    client = make_client()
+
+    class Response:
+        status_code = status_code
+        text = str(payload)
+
+        def json(self):
+            return payload
+
+    client.session = SimpleNamespace(
+        request=lambda *args, **kwargs: Response()
+    )
+
+    with pytest.raises(FuturesAPIError) as exc_info:
+        client._request("POST", "/fapi/v1/order", {}, signed=True)
+
+    assert exc_info.value.unknown_execution is True
+    assert exc_info.value.status_code == status_code
+
+
 def test_ambiguous_order_post_is_reconciled_and_never_blindly_retried(monkeypatch):
     client = make_client()
     calls = []
