@@ -848,21 +848,28 @@ class FuturesRuntime:
         for row in self.execution._active_rows():
             if self.execution._row_tags(row).get("execution_mode") != "FUTURES":
                 continue
-            if str(row.get("state", "")).upper() != "ENTRY_PENDING":
+            campaign_state = str(row.get("state", "")).upper()
+            row_tags = self.execution._row_tags(row)
+            pending_add_on = bool(row_tags.get("pending_add_on_client_algo_id")) or campaign_state in {
+                "ADD_ON_ARMING", "ADD_ON_PENDING", "POSITION_EXPANDING"
+            }
+            if campaign_state != "ENTRY_PENDING" and not pending_add_on:
                 continue
             campaign_id = str(row.get("campaign_id", ""))
             try:
                 campaign = self.execution.engine.load_campaign(campaign_id)
                 if campaign is None:
-                    raise RuntimeError("pending-entry campaign could not be loaded")
-                results.append(
-                    self.execution.cancel_pending_entry(campaign, reason=reason)
-                )
+                    raise RuntimeError("pending-order campaign could not be loaded")
+                if pending_add_on:
+                    result = self.execution.cancel_pending_add_on(campaign, reason=reason)
+                else:
+                    result = self.execution.cancel_pending_entry(campaign, reason=reason)
+                results.append(result)
             except Exception as exc:
-                detail = f"{reason}: pending-entry cancellation failed: {type(exc).__name__}: {exc}"
+                detail = f"{reason}: pending order cancellation failed: {type(exc).__name__}: {exc}"
                 self.db.log_event(
                     "ERROR",
-                    "futures_pending_entry_cancel_failed",
+                    "futures_pending_order_cancel_failed",
                     detail,
                     {"campaign_id": campaign_id},
                 )
