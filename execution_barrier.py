@@ -120,6 +120,10 @@ class ExecutionBarrier:
             return f"unsupported order_type {order_type or '<empty>'}"
         if str(intent.order_type).strip() != order_type:
             return "order_type must be canonical uppercase"
+        if order_type not in {"CANCEL", "OCO_CANCEL"}:
+            client_order_id = str(intent.client_order_id or "")
+            if not re.fullmatch(r"[A-Za-z0-9_-]{1,36}", client_order_id):
+                return "new order requires a valid unique client_order_id"
 
         for field in ("risk_quote", "capital_reserved_quote", "trigger_price", "invalidation_level"):
             try:
