@@ -591,8 +591,11 @@ internal class FuturesNativeEngine(
             exchange.prepareFlatSymbol(symbol)
             JSONObject().put("symbol", symbol).put("marginType", "ISOLATED").put("leverage", 1)
         }
-        val row = position(exchange, symbol)
-        require(isolated(row) && row.optString("leverage").toIntOrNull() == 1) {
+        val configuration = exchange.symbolConfiguration(symbol)
+        require(
+            configuration.optString("marginType").equals("ISOLATED", true) &&
+                configuration.optString("leverage").toIntOrNull() == 1
+        ) {
             "$symbol did not confirm isolated 1x settings after preparation"
         }
     }
@@ -607,11 +610,16 @@ internal class FuturesNativeEngine(
             val recovered = reconcileAll(exchange)
             val unowned = hasUnmanagedFuturesPositions(exchange)
             val unownedOrders = runCatching { hasUnmanagedFuturesOrders(exchange) }.getOrDefault(true)
+            val permissionError = runCatching { exchange.requireTradePermissionAndSingleAssetMode() }.exceptionOrNull()
             val unknownIntents = unresolvedIntentCount(exchange)
             reconcileRequired = recovered.optInt("unresolved", 0) > 0 || unowned || unownedOrders || unknownIntents > 0
             if (unowned) lastError = "Unmanaged or malformed Futures position blocks new entries"
             if (unownedOrders) lastError = "Unmanaged or unverified account-wide Futures orders block new entries"
             manageExistingCampaigns(exchange)
+            if (permissionError != null) {
+                reconcileRequired = true
+                lastError = "Futures account permission/margin preflight blocked new entries: ${permissionError.message}"
+            }
             val baselinePersisted = updateDailyBaseline(equity)
             val dailyLoss = if (baselinePersisted) dailyLossFraction(equity) else 1.0
             if (killLatched) {
