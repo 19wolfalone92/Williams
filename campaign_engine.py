@@ -359,19 +359,60 @@ class CampaignEngine:
             raise ValueError(f"Cannot record add-on fill from {campaign.state.value}")
         old_qty = float(campaign.position_qty)
         old_entry = float(campaign.average_entry_price)
-        if quantity <= 0 or average_entry_price <= 0:
-            raise ValueError("Invalid add-on fill")
-        new_qty = old_qty + float(quantity)
+        fill_qty = float(quantity)
+        fill_price = float(average_entry_price)
+        fill_risk = float(risk_quote)
+        fill_fee = float(fee_quote)
+        fill_id = str(fill_order_id or "").strip()
+
+        # Exchange responses and persisted state are external inputs. Reject
+        # NaN/Inf explicitly: ordinary <= comparisons do not reject NaN.
+        if (
+            not math.isfinite(old_qty)
+            or not math.isfinite(old_entry)
+            or old_qty <= 0
+            or old_entry <= 0
+            or not math.isfinite(fill_qty)
+            or not math.isfinite(fill_price)
+            or fill_qty <= 0
+            or fill_price <= 0
+        ):
+            raise ValueError("Invalid add-on fill quantity/price or existing position")
+        if not fill_id:
+            raise ValueError("add-on fill requires a stable exchange order/fill identifier")
+        if not math.isfinite(fill_risk) or fill_risk <= 0:
+            raise ValueError("add-on fill risk must be finite and positive")
+        if not math.isfinite(fill_fee) or fill_fee < 0:
+            raise ValueError("add-on fee must be finite and non-negative")
+
+        # Never silently turn a larger-than-authorized fill into accepted
+        # exposure. A fill whose risk exceeds its durable reservation requires
+        # reconciliation and operator-safe recovery rather than local booking.
+        pending_risk = float(campaign.pending_risk_quote)
+        risk_budget = float(campaign.tags.get("risk_budget_quote", 0.0) or 0.0)
+        if not math.isfinite(pending_risk) or pending_risk <= 0:
+            raise ValueError("add-on fill has no valid pending risk reservation")
+        if fill_risk > pending_risk + max(1e-8, pending_risk * 1e-9):
+            raise ValueError("actual add-on risk exceeds its pending reservation")
+        if not math.isfinite(risk_budget) or risk_budget <= 0:
+            raise ValueError("campaign risk budget is missing or invalid at fill time")
+        if old_qty and (not math.isfinite(float(campaign.open_risk_quote)) or float(campaign.open_risk_quote) < 0):
+            raise ValueError("existing campaign risk is invalid")
+        if float(campaign.open_risk_quote) + fill_risk > risk_budget + max(1e-8, risk_budget * 1e-9):
+            raise ValueError("actual add-on fill would exceed campaign risk budget")
+
+        new_qty = old_qty + fill_qty
         campaign.average_entry_price = (
-            (old_qty * old_entry) + (float(quantity) * float(average_entry_price))
+            (old_qty * old_entry) + (fill_qty * fill_price)
         ) / max(new_qty, 1e-12)
         campaign.position_qty = new_qty
         campaign.additions += 1
         campaign.tranche_index = min(4, campaign.tranche_index + 1)
-        campaign.open_risk_quote += max(0.0, float(risk_quote))
+        campaign.open_risk_quote += fill_risk
         campaign.pending_risk_quote = 0.0
         campaign.capital_reserved_quote = 0.0
-        campaign.tags["last_add_on_fee_quote"] = float(fee_quote)
+        campaign.tags["last_add_on_fee_quote"] = fill_fee
+        campaign.tags["last_add_on_fill_id"] = fill_id
         campaign.next_action = "MONITOR_CAMPAIGN"
         campaign.transition(CampaignState.TREND_ACTIVE, reason="add-on filled and position revalued")
         self.db.save_campaign(campaign)
@@ -380,9 +421,10 @@ class CampaignEngine:
             CampaignEventType.ADD_ON_FILLED.value,
             order_id=fill_order_id,
             payload={
-                "quantity": quantity,
-                "average_entry_price": average_entry_price,
-                "risk_quote": risk_quote,
+                "quantity": fill_qty,
+                "average_entry_price": fill_price,
+                "risk_quote": fill_risk,
+                "fee_quote": fill_fee,
             },
         )
         return campaign
