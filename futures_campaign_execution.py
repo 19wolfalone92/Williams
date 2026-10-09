@@ -3067,18 +3067,9 @@ class FuturesCampaignExecutionService:
                             )
 
                     if order_status in {"NEW", "PARTIALLY_FILLED", "PENDING_NEW"}:
-                        if executed <= 0 and abs(abs(amount) - original_qty) <= max(1e-8, original_qty * 1e-6):
-                            return {
-                                "symbol": symbol,
-                                "state": "ADD_ON_PENDING",
-                                "algo_status": algo_status,
-                                "order_status": order_status,
-                                "client_algo_id": client_add_id,
-                                "position_qty": abs(amount),
-                                "protection": "CONFIRMED",
-                            }
                         raise FuturesCampaignExecutionError(
-                            f"{symbol}: add-on actual order remains nonterminal after reconciliation"
+                            f"{symbol}: add-on child order remains active after cancellation attempt; "
+                            "exposure can still increase and must remain locked"
                         )
 
                     if order_status not in terminal_add_statuses | {"FILLED"}:
