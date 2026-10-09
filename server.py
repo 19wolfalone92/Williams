@@ -18,6 +18,8 @@ from feature_store import FeatureStore
 from binance_client import BinanceSpotClient
 from digital_williams_core import DigitalWilliamsCore
 from diagnostics import DiagnosticManager
+from binance_usdm_futures_client import BinanceUsdmFuturesClient
+from futures_runtime import FuturesRuntime
 
 load_dotenv()
 API_TOKEN = os.getenv('MOBILE_API_TOKEN', '').strip()
@@ -380,7 +382,155 @@ class ControlState:
         }
 
 
+class FuturesControlState:
+    """Separate, explicitly configured control plane for USDⓈ-M Futures."""
+
+    def __init__(self):
+        self.lock = threading.RLock()
+        self.api_key = ""
+        self.api_secret = ""
+        self.testnet = True
+        self.allow_live = False
+        self.symbols = None
+        self.interval = "5m"
+        self.runtime = None
+        self.last_error = ""
+
+    def configure(
+        self,
+        key: str,
+        secret: str,
+        *,
+        testnet: bool = True,
+        allow_live: bool = False,
+        symbols=None,
+        interval: str = "5m",
+    ):
+        key = str(key or "").strip()
+        secret = str(secret or "").strip()
+        if not key or not secret:
+            raise RuntimeError("Futures API key and secret are required")
+        if not testnet and not (
+            allow_live and os.getenv("ALLOW_LIVE", "").strip().lower() == "true"
+        ):
+            raise RuntimeError(
+                "Futures mainnet is disabled; require request allow_live=true and ALLOW_LIVE=true"
+            )
+
+        candidate = BinanceUsdmFuturesClient(
+            key,
+            secret,
+            testnet=bool(testnet),
+            allow_live=bool(allow_live),
+            max_leverage=1,
+        )
+        try:
+            candidate.sync_time()
+            account = candidate.account()
+            if not isinstance(account, dict) or "availableBalance" not in account:
+                raise RuntimeError("Futures account response was not authoritative")
+            candidate.ensure_one_way_mode()
+        except Exception as exc:
+            raise RuntimeError(f"Binance Futures credential validation failed: {exc}") from exc
+
+        with self.lock:
+            current = self.runtime
+            if current is not None and current.running:
+                if (
+                    key != self.api_key
+                    or secret != self.api_secret
+                    or bool(testnet) != self.testnet
+                    or bool(allow_live) != self.allow_live
+                ):
+                    raise RuntimeError("Stop the Futures runtime before changing credentials")
+            self.api_key = key
+            self.api_secret = secret
+            self.testnet = bool(testnet)
+            self.allow_live = bool(allow_live)
+            self.symbols = list(symbols) if symbols else None
+            self.interval = str(interval or "5m").lower()
+            if current is None or not current.running:
+                self.runtime = FuturesRuntime(
+                    self.api_key,
+                    self.api_secret,
+                    testnet=self.testnet,
+                    allow_live=self.allow_live,
+                    symbols=self.symbols,
+                    interval=self.interval,
+                )
+            self.last_error = ""
+        # Secrets are deliberately kept in memory only here; no plaintext log or
+        # reuse of the Spot CredentialStore is allowed.
+        return self.status()
+
+    def _ensure_runtime(self):
+        with self.lock:
+            if not self.api_key or not self.api_secret:
+                raise RuntimeError("Futures credentials are not configured")
+            if self.runtime is None:
+                self.runtime = FuturesRuntime(
+                    self.api_key,
+                    self.api_secret,
+                    testnet=self.testnet,
+                    allow_live=self.allow_live,
+                    symbols=self.symbols,
+                    interval=self.interval,
+                )
+            return self.runtime
+
+    def start(self):
+        runtime = self._ensure_runtime()
+        try:
+            result = runtime.start()
+            self.last_error = ""
+            return result
+        except Exception as exc:
+            self.last_error = f"{type(exc).__name__}: {exc}"
+            raise
+
+    def pause(self):
+        return self._ensure_runtime().pause()
+
+    def stop(self):
+        with self.lock:
+            runtime = self.runtime
+        return runtime.stop() if runtime is not None else self.status()
+
+    def kill(self):
+        return self._ensure_runtime().kill()
+
+    def recover(self):
+        return self._ensure_runtime().recover_and_reset_kill()
+
+    def status(self):
+        with self.lock:
+            runtime = self.runtime
+            result = runtime.status() if runtime is not None else {
+                "runtime": "BINANCE_USDM_FUTURES",
+                "state": "NOT_CONFIGURED",
+                "configured": bool(self.api_key and self.api_secret),
+                "testnet": self.testnet,
+                "running": False,
+                "paused": True,
+                "kill_latched": False,
+                "allow_long": _server_env_bool("ALLOW_LONG", True),
+                "allow_short": _server_env_bool("ALLOW_SHORT", True),
+                "symbols": self.symbols or [],
+                "interval": self.interval,
+                "max_leverage": 1,
+                "open_campaigns": [],
+            }
+            result["configured"] = bool(self.api_key and self.api_secret)
+            result["control_last_error"] = self.last_error
+            return result
+
+
+def _server_env_bool(key: str, default: bool) -> bool:
+    return str(os.getenv(key, str(default))).strip().lower() in {"1", "true", "yes", "on"}
+
+
 state = ControlState()
+futures_state = FuturesControlState()
 
 scanner_lock = threading.RLock()
 scanner_cache = {
@@ -627,6 +777,7 @@ def shutdown():
     mtf_service.stop()
     hub.stop()
     state.stop()
+    futures_state.stop()
 
 
 def auth(authorization: Optional[str] = Header(None)):
@@ -717,6 +868,7 @@ def health():
         'open_positions': len(open_positions),
         'execution_enabled': execution_enabled,
         'testnet': t.client.testnet,
+        'futures_runtime': futures_state.status(),
     }
 
 @app.get('/api/v1/williams/core', dependencies=[Depends(auth)])
@@ -758,6 +910,75 @@ def configure(payload: CredentialPayload):
         'configured': True,
         'testnet': payload.testnet,
     }
+
+
+class FuturesCredentialPayload(BaseModel):
+    api_key: str
+    api_secret: str
+    testnet: bool = True
+    allow_live: bool = False
+    symbols: list[str] | None = None
+    interval: str = "5m"
+
+
+@app.get("/api/v1/futures/status", dependencies=[Depends(auth)])
+def futures_status():
+    return futures_state.status()
+
+
+@app.post("/api/v1/futures/configure", dependencies=[Depends(auth)])
+def configure_futures(payload: FuturesCredentialPayload):
+    try:
+        return futures_state.configure(
+            payload.api_key,
+            payload.api_secret,
+            testnet=payload.testnet,
+            allow_live=payload.allow_live,
+            symbols=payload.symbols,
+            interval=payload.interval,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc))
+
+
+@app.post("/api/v1/futures/start", dependencies=[Depends(auth)])
+def start_futures():
+    try:
+        return futures_state.start()
+    except Exception as exc:
+        raise HTTPException(409, f"Futures start blocked: {type(exc).__name__}: {exc}")
+
+
+@app.post("/api/v1/futures/pause", dependencies=[Depends(auth)])
+def pause_futures():
+    try:
+        return futures_state.pause()
+    except Exception as exc:
+        raise HTTPException(409, f"Futures pause failed: {type(exc).__name__}: {exc}")
+
+
+@app.post("/api/v1/futures/stop", dependencies=[Depends(auth)])
+def stop_futures():
+    try:
+        return futures_state.stop()
+    except Exception as exc:
+        raise HTTPException(409, f"Futures stop failed: {type(exc).__name__}: {exc}")
+
+
+@app.post("/api/v1/futures/kill", dependencies=[Depends(auth)])
+def kill_futures():
+    try:
+        return futures_state.kill()
+    except Exception as exc:
+        raise HTTPException(409, f"Futures kill switch reported error: {type(exc).__name__}: {exc}")
+
+
+@app.post("/api/v1/futures/recover", dependencies=[Depends(auth)])
+def recover_futures():
+    try:
+        return futures_state.recover()
+    except Exception as exc:
+        raise HTTPException(409, f"Futures recovery blocked: {type(exc).__name__}: {exc}")
 
 
 @app.delete(
