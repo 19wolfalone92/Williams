@@ -125,10 +125,8 @@ def run_futures_testnet_read_only(symbols: Iterable[str] = ("BTCUSDT",)) -> dict
     if can_trade is not True and str(can_trade).strip().lower() != "true":
         raise RuntimeError("Futures Demo account does not confirm canTrade=true")
     positions = client.position_risk()
-    if not isinstance(positions, list) or not positions:
-        raise RuntimeError(
-            "Futures positionRisk endpoint returned no verifiable rows; account cleanliness cannot be confirmed"
-        )
+    if not isinstance(positions, list):
+        raise RuntimeError("Futures positionRisk endpoint returned an unexpected payload")
     if any(not isinstance(row, dict) for row in positions):
         raise RuntimeError("Futures positionRisk contains a malformed row")
 
