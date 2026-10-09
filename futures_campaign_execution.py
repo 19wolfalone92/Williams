@@ -1296,6 +1296,93 @@ class FuturesCampaignExecutionService:
             raise FuturesCampaignExecutionError(f"{symbol}: direction mismatch; exit blocked for reconciliation")
         order_side = "SELL" if direction == "LONG" else "BUY"
 
+        # Resolve a durable prior exit intent before creating another one.
+        # A timeout after Binance accepted a MARKET order must never cause a
+        # restart to generate a fresh clientOrderId and duplicate the exit.
+        pending_exit_id = str(campaign.tags.get("pending_exit_client_order_id", "") or "")
+        if pending_exit_id:
+            try:
+                prior_exit = self.client.get_order(
+                    symbol, orig_client_order_id=pending_exit_id
+                )
+                prior_status = str(prior_exit.get("status", "") or "").upper()
+                if prior_status in {"NEW", "PARTIALLY_FILLED", "PENDING_NEW"}:
+                    reason_text = (
+                        f"{symbol}: prior reduce-only exit {pending_exit_id} is "
+                        f"still {prior_status}; waiting for authoritative completion"
+                    )
+                    self.engine.mark_reconcile_required(campaign, reason_text)
+                    self.db.save_campaign(campaign)
+                    self.db.state_set(
+                        f"campaign_state:{campaign.campaign_id}",
+                        CampaignState.RECONCILE_REQUIRED.value,
+                    )
+                    self.db.state_set(
+                        f"position_state:{symbol}",
+                        CampaignState.RECONCILE_REQUIRED.value,
+                    )
+                    return {
+                        "symbol": symbol,
+                        "direction": direction,
+                        "action": "RECONCILE_REQUIRED",
+                        "client_order_id": pending_exit_id,
+                        "status": prior_status,
+                        "reason": reason_text,
+                    }
+                if prior_status not in {"FILLED", "CANCELED", "CANCELLED", "EXPIRED", "REJECTED"}:
+                    raise FuturesCampaignExecutionError(
+                        f"prior exit status is ambiguous: {prior_status or 'UNKNOWN'}"
+                    )
+                # A terminal order is safe to reconcile against the live
+                # position. FILLED with residual exposure may require a new
+                # reduce-only order, but only after the previous order is proven
+                # terminal by this authoritative lookup.
+                campaign.tags["last_terminal_exit_client_order_id"] = pending_exit_id
+                campaign.tags["last_terminal_exit_status"] = prior_status
+                campaign.tags.pop("pending_exit_client_order_id", None)
+                campaign.tags.pop("pending_exit_reason", None)
+                self.db.save_campaign(campaign)
+                if prior_status == "FILLED":
+                    position_after_prior = self._position_row(symbol)
+                    try:
+                        remaining_after_prior = float(position_after_prior.get("positionAmt", 0) or 0)
+                    except (TypeError, ValueError):
+                        remaining_after_prior = float("nan")
+                    if not math.isfinite(remaining_after_prior):
+                        raise FuturesCampaignExecutionError(
+                            "prior exit is FILLED but the refreshed position quantity is invalid"
+                        )
+                    if abs(remaining_after_prior) <= 1e-12:
+                        return self.reconcile_symbol(symbol)
+                    if (direction == "LONG" and remaining_after_prior < 0) or (
+                        direction == "SHORT" and remaining_after_prior > 0
+                    ):
+                        raise FuturesCampaignExecutionError(
+                            "prior exit is FILLED but exchange position direction changed"
+                        )
+            except Exception as exc:
+                reason_text = (
+                    f"{symbol}: previous reduce-only exit outcome cannot be "
+                    f"authoritatively reconciled ({pending_exit_id}): {type(exc).__name__}: {exc}"
+                )
+                self.engine.mark_reconcile_required(campaign, reason_text)
+                self.db.save_campaign(campaign)
+                self.db.state_set(
+                    f"campaign_state:{campaign.campaign_id}",
+                    CampaignState.RECONCILE_REQUIRED.value,
+                )
+                self.db.state_set(
+                    f"position_state:{symbol}",
+                    CampaignState.RECONCILE_REQUIRED.value,
+                )
+                return {
+                    "symbol": symbol,
+                    "direction": direction,
+                    "action": "RECONCILE_REQUIRED",
+                    "client_order_id": pending_exit_id,
+                    "reason": reason_text,
+                }
+
         # A cancel timeout must not prevent the reduce-only exit. A lingering
         # closePosition order cannot reverse exposure, but is reconciled after exit.
         protective_client_id = str(campaign.tags.get("protective_client_algo_id", "") or "")
@@ -1343,6 +1430,9 @@ class FuturesCampaignExecutionService:
 
         quantity = self.client.normalize_quantity(symbol, abs(amount), market=True)
         client_order_id = "W2FX_" + uuid.uuid4().hex[:24]
+        campaign.tags["pending_exit_client_order_id"] = client_order_id
+        campaign.tags["pending_exit_reason"] = str(reason)
+        self.db.save_campaign(campaign)
         intent = OrderIntent.new(
             symbol,
             order_side,
@@ -1356,12 +1446,41 @@ class FuturesCampaignExecutionService:
             signal_id=campaign.current_signal_id,
             risk_quote=campaign.open_risk_quote,
         )
-        result = self.barrier.execute(
-            intent,
-            lambda: self.client.market_exit(
-                symbol, direction, quantity, client_order_id
-            ),
-        )
+        try:
+            result = self.barrier.execute(
+                intent,
+                lambda: self.client.market_exit(
+                    symbol, direction, quantity, client_order_id
+                ),
+            )
+        except Exception as exc:
+            reason_text = (
+                f"{symbol}: reduce-only exit submission outcome is unknown; "
+                f"clientOrderId={client_order_id}; reconcile before retry: {exc}"
+            )
+            self.engine.mark_reconcile_required(campaign, reason_text)
+            self.db.save_campaign(campaign)
+            self.db.state_set(
+                f"campaign_state:{campaign.campaign_id}",
+                CampaignState.RECONCILE_REQUIRED.value,
+            )
+            self.db.state_set(
+                f"position_state:{symbol}",
+                CampaignState.RECONCILE_REQUIRED.value,
+            )
+            self.db.log_event(
+                "ERROR",
+                "futures_exit_submit_ambiguous",
+                reason_text,
+                {"campaign_id": campaign.campaign_id, "client_order_id": client_order_id},
+            )
+            return {
+                "symbol": symbol,
+                "direction": direction,
+                "action": "RECONCILE_REQUIRED",
+                "client_order_id": client_order_id,
+                "reason": reason_text,
+            }
         if not result.accepted:
             self.engine.mark_reconcile_required(campaign, f"Futures reduce-only exit blocked: {result.reason}")
             raise FuturesCampaignExecutionError(f"{symbol}: exit blocked: {result.reason}")
@@ -1421,6 +1540,8 @@ class FuturesCampaignExecutionService:
         campaign.pending_risk_quote = 0.0
         campaign.capital_reserved_quote = 0.0
         campaign.tags["protection_active"] = False
+        campaign.tags.pop("pending_exit_client_order_id", None)
+        campaign.tags.pop("pending_exit_reason", None)
         campaign.tags["last_exit_reason"] = str(reason)
         campaign.exit_reason = str(reason)
         if campaign.state not in {CampaignState.EXIT_PENDING, CampaignState.RECONCILE_REQUIRED}:
