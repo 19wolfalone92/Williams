@@ -301,7 +301,8 @@ internal class FuturesNativeEngine(
         paused = true
         val cancellations = synchronized(cycleLock) {
             val hasPendingEntries = auditStore.activeFuturesCampaigns().any {
-                it.optString("state") == "ENTRY_PENDING"
+                it.optString("state").uppercase(Locale.US) in setOf("ENTRY_PENDING", "RECONCILE_REQUIRED") &&
+                    it.optString("entry_client_algo_id").isNotBlank()
             }
             if (!hasPendingEntries) {
                 JSONArray()
