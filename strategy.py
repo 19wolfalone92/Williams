@@ -277,10 +277,30 @@ def calculate_indicators(df, cfg):
     )
     x["long_wise_man_score"] = x["long_wise_man_count"] / 3.0 * 100.0
 
-    # Distance to the confirmed breakout level.
+    # Directional mirror for Futures SHORT. These are separate diagnostic
+    # fields; they do not convert a failed LONG into a SHORT signal.
+    short_components = [
+        "short_bearish",
+        "short_awake",
+        "short_fractal_outside",
+        "short_super_ao_signal",
+        "short_fractal_signal",
+        "short_reversal_signal",
+    ]
+    x["short_setup_score"] = (
+        x[short_components].astype(int).sum(axis=1) / len(short_components) * 100.0
+    )
+    x["short_wise_man_score"] = x["short_wise_man_count"] / 3.0 * 100.0
+
+    # Distance to confirmed directional breakout levels.
     x["long_breakout_distance_pct"] = np.where(
         x["last_up_level"].notna() & (x["last_up_level"] > 0),
         (x["close"] / x["last_up_level"] - 1.0) * 100.0,
+        np.nan,
+    )
+    x["short_breakout_distance_pct"] = np.where(
+        x["last_down_level"].notna() & (x["last_down_level"] > 0),
+        (x["close"] / x["last_down_level"] - 1.0) * 100.0,
         np.nan,
     )
 
