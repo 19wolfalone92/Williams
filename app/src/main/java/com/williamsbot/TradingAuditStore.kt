@@ -13,7 +13,7 @@ import org.json.JSONObject
  * Binance told the bot, without relying on RAM or SharedPreferences.
  */
 class TradingAuditStore(context: Context) :
-    SQLiteOpenHelper(context, "williams_trading_audit.db", null, 3) {
+    SQLiteOpenHelper(context, "williams_trading_audit.db", null, 4) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("""
@@ -106,6 +106,8 @@ class TradingAuditStore(context: Context) :
                 created_at INTEGER NOT NULL
             )
         """.trimIndent())
+
+        createFuturesTables(db)
     }
 
     override fun onUpgrade(
@@ -175,6 +177,240 @@ class TradingAuditStore(context: Context) :
                 created_at INTEGER NOT NULL
             )
         """.trimIndent())
+
+        createFuturesTables(db)
+    }
+
+    private fun createFuturesTables(db: SQLiteDatabase) {
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS futures_intents(
+                intent_id TEXT PRIMARY KEY,
+                client_id TEXT NOT NULL UNIQUE,
+                symbol TEXT NOT NULL,
+                operation TEXT NOT NULL,
+                direction TEXT NOT NULL,
+                side TEXT NOT NULL,
+                status TEXT NOT NULL,
+                params_json TEXT NOT NULL,
+                response_json TEXT,
+                error TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            )
+        """.trimIndent())
+        db.execSQL("""
+            CREATE INDEX IF NOT EXISTS idx_futures_intents_status
+            ON futures_intents(status, updated_at)
+        """.trimIndent())
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS futures_campaigns(
+                symbol TEXT PRIMARY KEY,
+                campaign_id TEXT NOT NULL,
+                direction TEXT NOT NULL,
+                state TEXT NOT NULL,
+                entry_client_algo_id TEXT,
+                protection_client_algo_id TEXT,
+                raw_json TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
+            )
+        """.trimIndent())
+        db.execSQL("""
+            CREATE INDEX IF NOT EXISTS idx_futures_campaigns_state
+            ON futures_campaigns(state, updated_at)
+        """.trimIndent())
+    }
+
+    /**
+     * A Futures mutation is allowed only after this synchronous durable row
+     * has committed. A crash in SUBMITTING/UNKNOWN must be reconciled, never
+     * resolved by generating a fresh client ID and retrying blindly.
+     */
+    @Synchronized
+    fun saveFuturesIntentBeforeMutation(
+        intentId: String,
+        clientId: String,
+        symbol: String,
+        operation: String,
+        direction: String,
+        side: String,
+        paramsJson: String
+    ) {
+        require(intentId.isNotBlank() && clientId.isNotBlank())
+        val now = System.currentTimeMillis()
+        val values = ContentValues().apply {
+            put("intent_id", intentId)
+            put("client_id", clientId)
+            put("symbol", symbol.uppercase())
+            put("operation", operation.uppercase())
+            put("direction", direction.uppercase())
+            put("side", side.uppercase())
+            put("status", "PENDING")
+            put("params_json", paramsJson)
+            put("created_at", now)
+            put("updated_at", now)
+        }
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            db.insertOrThrow("futures_intents", null, values)
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        val saved = futuresIntentById(intentId)
+        check(saved != null && saved.optString("status") == "PENDING") {
+            "Durable Futures intent could not be read back; mutation aborted"
+        }
+    }
+
+    @Synchronized
+    fun updateFuturesIntent(
+        intentId: String,
+        status: String,
+        responseJson: String? = null,
+        error: String? = null
+    ) {
+        require(intentId.isNotBlank())
+        val values = ContentValues().apply {
+            put("status", status.uppercase())
+            if (responseJson != null) put("response_json", responseJson)
+            put("error", error)
+            put("updated_at", System.currentTimeMillis())
+        }
+        val changed = writableDatabase.update(
+            "futures_intents",
+            values,
+            "intent_id=?",
+            arrayOf(intentId)
+        )
+        check(changed == 1) { "Futures intent update lost durable row: $intentId" }
+    }
+
+    @Synchronized
+    fun futuresIntentById(intentId: String): JSONObject? =
+        writableDatabase.query(
+            "futures_intents",
+            arrayOf(
+                "intent_id", "client_id", "symbol", "operation", "direction",
+                "side", "status", "params_json", "response_json", "error",
+                "created_at", "updated_at"
+            ),
+            "intent_id=?",
+            arrayOf(intentId),
+            null,
+            null,
+            null,
+            "1"
+        ).use { cursor ->
+            if (!cursor.moveToFirst()) return@use null
+            JSONObject().apply {
+                put("intent_id", cursor.getString(0))
+                put("client_id", cursor.getString(1))
+                put("symbol", cursor.getString(2))
+                put("operation", cursor.getString(3))
+                put("direction", cursor.getString(4))
+                put("side", cursor.getString(5))
+                put("status", cursor.getString(6))
+                put("params_json", cursor.getString(7))
+                if (!cursor.isNull(8)) put("response_json", cursor.getString(8))
+                if (!cursor.isNull(9)) put("error", cursor.getString(9))
+                put("created_at", cursor.getLong(10))
+                put("updated_at", cursor.getLong(11))
+            }
+        }
+
+    @Synchronized
+    fun pendingFuturesIntents(): List<JSONObject> {
+        val rows = mutableListOf<JSONObject>()
+        writableDatabase.query(
+            "futures_intents",
+            arrayOf(
+                "intent_id", "client_id", "symbol", "operation", "direction",
+                "side", "status", "params_json", "response_json", "error",
+                "created_at", "updated_at"
+            ),
+            "status IN ('PENDING','SUBMITTING','SUBMITTED','UNKNOWN','RECONCILE_REQUIRED')",
+            null,
+            null,
+            null,
+            "created_at ASC"
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                rows += JSONObject().apply {
+                    put("intent_id", cursor.getString(0))
+                    put("client_id", cursor.getString(1))
+                    put("symbol", cursor.getString(2))
+                    put("operation", cursor.getString(3))
+                    put("direction", cursor.getString(4))
+                    put("side", cursor.getString(5))
+                    put("status", cursor.getString(6))
+                    put("params_json", cursor.getString(7))
+                    if (!cursor.isNull(8)) put("response_json", cursor.getString(8))
+                    if (!cursor.isNull(9)) put("error", cursor.getString(9))
+                    put("created_at", cursor.getLong(10))
+                    put("updated_at", cursor.getLong(11))
+                }
+            }
+        }
+        return rows
+    }
+
+    @Synchronized
+    fun saveFuturesCampaign(symbol: String, campaign: JSONObject) {
+        val normalized = symbol.uppercase()
+        require(normalized.isNotBlank())
+        val campaignId = campaign.optString("campaign_id")
+        val direction = campaign.optString("direction").uppercase()
+        val state = campaign.optString("state").uppercase()
+        require(campaignId.isNotBlank() && direction in setOf("LONG","SHORT") && state.isNotBlank())
+        val values = ContentValues().apply {
+            put("symbol", normalized)
+            put("campaign_id", campaignId)
+            put("direction", direction)
+            put("state", state)
+            put("entry_client_algo_id", campaign.optString("entry_client_algo_id"))
+            put("protection_client_algo_id", campaign.optString("protection_client_algo_id"))
+            put("raw_json", campaign.toString())
+            put("updated_at", System.currentTimeMillis())
+        }
+        writableDatabase.insertWithOnConflict(
+            "futures_campaigns",
+            null,
+            values,
+            SQLiteDatabase.CONFLICT_REPLACE
+        )
+    }
+
+    @Synchronized
+    fun futuresCampaign(symbol: String): JSONObject? =
+        writableDatabase.query(
+            "futures_campaigns",
+            arrayOf("raw_json"),
+            "symbol=?",
+            arrayOf(symbol.uppercase()),
+            null,
+            null,
+            null,
+            "1"
+        ).use { cursor ->
+            if (!cursor.moveToFirst()) null else JSONObject(cursor.getString(0))
+        }
+
+    @Synchronized
+    fun activeFuturesCampaigns(): List<JSONObject> {
+        val rows = mutableListOf<JSONObject>()
+        writableDatabase.query(
+            "futures_campaigns",
+            arrayOf("raw_json"),
+            "state NOT IN ('CLOSED','FLAT')",
+            null,
+            null,
+            null,
+            "updated_at ASC"
+        ).use { cursor ->
+            while (cursor.moveToNext()) rows += JSONObject(cursor.getString(0))
+        }
+        return rows
     }
 
     @Synchronized
