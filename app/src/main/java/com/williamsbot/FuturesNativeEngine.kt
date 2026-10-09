@@ -1940,8 +1940,6 @@ internal class FuturesNativeEngine(
         }
         val pendingProtectionRecovery = reconcilePendingProtectionState(exchange, campaign)
         if (pendingProtectionRecovery != null) return pendingProtectionRecovery
-        val pendingProtectionRecovery = reconcilePendingProtectionState(exchange, campaign)
-        if (pendingProtectionRecovery != null) return pendingProtectionRecovery
         val unresolvedExit = auditStore.pendingFuturesIntents().firstOrNull { intent ->
             intent.optString("symbol").equals(symbol, true) &&
                 intent.optString("operation").equals("EXIT", true) &&
