@@ -576,6 +576,7 @@ class FuturesRuntime:
                     equity_quote=equity,
                     atr=atr,
                     candidate_risk_fraction=float(selection.risk.risk_pct) / 100.0,
+                    available_quote=float(self._last_account["available_quote"]),
                 )
                 results.append(entry)
                 active_count += 1
