@@ -51,7 +51,13 @@ def _row_time_ms(row: pd.Series) -> int:
         return int(idx) if isinstance(idx, (int, float)) else 0
 
 
-def _angulation(ind: pd.DataFrame, index: int, *, window: int = 5) -> tuple[float, bool]:
+def _angulation(
+    ind: pd.DataFrame,
+    index: int,
+    *,
+    window: int = 5,
+    side: str | None = None,
+) -> tuple[float, bool]:
     """Approximate increasing separation of price from the Alligator Jaw."""
     if index < 1 or "jaw_shifted" not in ind.columns:
         return 0.0, False
@@ -96,10 +102,16 @@ def _angulation(ind: pd.DataFrame, index: int, *, window: int = 5) -> tuple[floa
 
     bull_slope = slope(bullish_distance)
     bear_slope = slope(bearish_distance)
-    valid = (
-        (bull_delta > 0 and bull_slope > 0)
-        or (bear_delta > 0 and bear_slope > 0)
-    )
+    side_key = str(side or "").upper()
+    if side_key == "LONG":
+        valid = bull_delta > 0 and bull_slope > 0
+    elif side_key == "SHORT":
+        valid = bear_delta > 0 and bear_slope > 0
+    else:
+        valid = (
+            (bull_delta > 0 and bull_slope > 0)
+            or (bear_delta > 0 and bear_slope > 0)
+        )
     return float(max(score, 0.0)), bool(valid)
 
 
@@ -116,7 +128,7 @@ def _latest_reversal(
     for i in range(len(ind) - 1, start - 1, -1):
         if bool(ind.iloc[i].get(column, False)):
             row = ind.iloc[i]
-            score, valid = _angulation(ind, i)
+            score, valid = _angulation(ind, i, side=side)
             if not valid:
                 continue
             extreme = float(row["low"] if side == "LONG" else row["high"])
@@ -324,6 +336,166 @@ def extract_long_signal_specs(
                     htf_confirmed=bool(htf_confirmed),
                     context_versions=versions,
                     reason="WM3 buy fractal; trigger only while price/trigger remains above Teeth",
+                    source_candle_index=center_i,
+                    expires_at_ms=(
+                        _row_time_ms(row)
+                        + _timeframe_ms(timeframe) * max(
+                            1, int(os.getenv("WILLIAMS_PENDING_FRACTAL_BARS", "8"))
+                        )
+                    ),
+                )
+            )
+
+    # Deduplicate by signal type + signal bar.  The same signal must not
+    # create a new order on every scan.
+    unique: dict[tuple[str, int], SignalSpec] = {}
+    for spec in specs:
+        unique[(spec.signal_type.value, spec.signal_bar_time_ms)] = spec
+    return sorted(unique.values(), key=lambda x: (x.signal_bar_time_ms, x.signal_type.value))
+
+
+# Mirror the long detector. Direction is explicit and is kept separate from
+# the Binance order side used later by the Futures adapter.
+
+def extract_short_signal_specs(
+    symbol: str,
+    ind: pd.DataFrame,
+    *,
+    timeframe: str,
+    tick_size: float,
+    htf_confirmed: bool = False,
+    wave_confidence: float = 0.0,
+    wave_exhaustion_risk: float = 0.0,
+    wave_invalidation_price: float = 0.0,
+    context_versions: dict[str, int] | None = None,
+    max_reversal_age_bars: int = 20,
+) -> list[SignalSpec]:
+    """Extract all presently armable SHORT signals from closed candles."""
+    if ind is None or ind.empty:
+        return []
+
+    specs: list[SignalSpec] = []
+    current = ind.iloc[-1]
+    current_close = float(current.get("close", 0.0) or 0.0)
+    current_teeth = float(current.get("teeth_shifted", 0.0) or 0.0)
+    if current_close <= 0:
+        return []
+
+    tick = max(float(tick_size), 1e-12)
+    current_time = _row_time_ms(current)
+    versions = dict(context_versions or {})
+
+    # Prefer the earliest still-active signal: the book describes the first
+    # signal as the initial entry, with later Wise Men becoming adds.
+    reversal = _latest_reversal(
+        ind,
+        side="SHORT",
+        max_age_bars=max_reversal_age_bars,
+    )
+    if reversal is not None:
+        i, trigger_base, protective = reversal
+        trigger = trigger_base - tick
+        if current_close > trigger:
+            row = ind.iloc[i]
+            score, _ = _angulation(ind, i)
+            specs.append(
+                SignalSpec.new(
+                    symbol=symbol,
+                    side="SELL",
+                    signal_type=SignalType.REVERSAL,
+                    role=SignalRole.ENTRY,
+                    timeframe=timeframe,
+                    signal_bar_time_ms=_row_time_ms(row),
+                    trigger_price=trigger,
+                    protective_reference=protective,
+                    trigger_buffer_ticks=1,
+                    invalidation_price=float(wave_invalidation_price or protective),
+                    teeth_at_detection=float(row.get("teeth_shifted", 0.0) or 0.0),
+                    alligator_bullish=bool(row.get("bullish_alligator", False)),
+                    alligator_bearish=bool(row.get("bearish_alligator", False)),
+                    alligator_awake=bool(row.get("alligator_awake", False)),
+                    angulation_score=score,
+                    wave_confidence=float(wave_confidence),
+                    wave_exhaustion_risk=float(wave_exhaustion_risk),
+                    htf_confirmed=bool(htf_confirmed),
+                    context_versions=versions,
+                    reason="WM1 bearish reversal + increasing bearish separation; SELL STOP below signal bar",
+                    source_candle_index=i,
+                    expires_at_ms=(
+                        _row_time_ms(row)
+                        + _timeframe_ms(timeframe) * max(
+                            1, int(os.getenv("WILLIAMS_PENDING_REVERSAL_BARS", "2"))
+                        )
+                    ),
+                )
+            )
+
+    super_ao = _latest_super_ao(ind, side="LONG")
+    if super_ao is not None:
+        i, trigger_base, protective = super_ao
+        trigger = trigger_base + tick
+        if current_close < trigger:
+            row = ind.iloc[i]
+            specs.append(
+                SignalSpec.new(
+                    symbol=symbol,
+                    side="BUY",
+                    signal_type=SignalType.SUPER_AO,
+                    role=SignalRole.ENTRY,
+                    timeframe=timeframe,
+                    signal_bar_time_ms=_row_time_ms(row),
+                    trigger_price=trigger,
+                    protective_reference=protective,
+                    trigger_buffer_ticks=1,
+                    invalidation_price=float(wave_invalidation_price or protective),
+                    teeth_at_detection=float(row.get("teeth_shifted", 0.0) or 0.0),
+                    alligator_bullish=bool(row.get("bullish_alligator", False)),
+                    alligator_awake=bool(row.get("alligator_awake", False)),
+                    wave_confidence=float(wave_confidence),
+                    wave_exhaustion_risk=float(wave_exhaustion_risk),
+                    htf_confirmed=bool(htf_confirmed),
+                    context_versions=versions,
+                    reason="WM2 Super AO: third red AO bar; SELL STOP below corresponding price bar",
+                    source_candle_index=i,
+                    expires_at_ms=(
+                        _row_time_ms(row)
+                        + _timeframe_ms(timeframe) * max(
+                            1, int(os.getenv("WILLIAMS_PENDING_SUPER_AO_BARS", "2"))
+                        )
+                    ),
+                )
+            )
+
+    fractal = _latest_confirmed_fractal(ind, side="LONG")
+    if fractal is not None:
+        confirmation_i, center_i, trigger_base, protective, teeth = fractal
+        # Formation can be anywhere; trigger validity belongs to current
+        # price/Teeth.  At arm time the trigger must still be above Teeth.
+        trigger = trigger_base + tick
+        current_trigger_valid = current_teeth > 0.0 and trigger < current_teeth
+        if current_close < trigger and current_trigger_valid:
+            row = ind.iloc[center_i]
+            specs.append(
+                SignalSpec.new(
+                    symbol=symbol,
+                    side="BUY",
+                    signal_type=SignalType.FRACTAL,
+                    role=SignalRole.ENTRY,
+                    timeframe=timeframe,
+                    signal_bar_time_ms=_row_time_ms(row),
+                    trigger_price=trigger,
+                    protective_reference=protective,
+                    trigger_buffer_ticks=1,
+                    invalidation_price=float(wave_invalidation_price or protective),
+                    teeth_at_detection=float(teeth),
+                    alligator_bullish=bool(current.get("bullish_alligator", False)),
+                    alligator_bearish=bool(current.get("bearish_alligator", False)),
+                    alligator_awake=bool(current.get("alligator_awake", False)),
+                    wave_confidence=float(wave_confidence),
+                    wave_exhaustion_risk=float(wave_exhaustion_risk),
+                    htf_confirmed=bool(htf_confirmed),
+                    context_versions=versions,
+                    reason="WM3 sell fractal; trigger only while price/trigger remains below Teeth",
                     source_candle_index=center_i,
                     expires_at_ms=(
                         _row_time_ms(row)
