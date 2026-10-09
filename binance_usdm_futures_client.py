@@ -198,8 +198,17 @@ class BinanceUsdmFuturesClient:
                 and int(result.get("code", 0)) < 0
             )
             if status >= 400 or api_error:
+                # Binance error codes -1006/-1007 explicitly mean that
+                # execution status is unknown. Intermediary request timeouts
+                # (408/425) are also ambiguous even if the HTTP response is 4xx.
+                unknown_api_execution = (
+                    isinstance(result, dict)
+                    and result.get("code") in {-1006, -1007}
+                )
                 uncertain = mutation and (
-                    status >= 500 or status in {418, 429}
+                    status >= 500
+                    or status in {408, 418, 425, 429}
+                    or unknown_api_execution
                 )
                 if method == "GET" and status in {418, 429, 500, 502, 503, 504} and attempt < safe_get_attempts:
                     time.sleep(min(0.25 * (2 ** (attempt - 1)), 1.0))
