@@ -1758,13 +1758,46 @@ class MultiPositionTrader:
             list_client = str(
                 trade.get("exit_order_list_client_id") or ""
             )
+            open_sell_orders = [
+                row for row in self.client.open_orders(symbol)
+                if str(row.get("side", "")).upper() == "SELL"
+            ]
             if list_id or list_client:
                 cancel = getattr(self.client, "cancel_oco", None)
-                if cancel is not None:
-                    if list_id:
+                if not callable(cancel):
+                    raise RuntimeError(
+                        f"{symbol}: OCO cancellation API unavailable; manual exit blocked"
+                    )
+                cancel_intent = OrderIntent.new(
+                    symbol,
+                    "SELL",
+                    "OCO_CANCEL",
+                    {},
+                    client_order_id=f"{self.MANUAL_PREFIX}CANCEL_{uuid.uuid4().hex[:16]}",
+                    purpose="MANUAL_EXIT_CANCEL_PROTECTION",
+                    signal_id=str(trade["id"]),
+                )
+                self._submit_via_barrier(
+                    cancel_intent,
+                    lambda: (
                         cancel(symbol, order_list_id=list_id)
-                    else:
-                        cancel(symbol, list_client_order_id=list_client)
+                        if list_id
+                        else cancel(symbol, list_client_order_id=list_client)
+                    ),
+                )
+            elif open_sell_orders:
+                raise RuntimeError(
+                    f"{symbol}: open SELL orders exist but persisted OCO identity is missing; reconciliation required"
+                )
+
+            remaining_sell_orders = [
+                row for row in self.client.open_orders(symbol)
+                if str(row.get("side", "")).upper() == "SELL"
+            ]
+            if remaining_sell_orders:
+                raise RuntimeError(
+                    f"{symbol}: SELL orders remain after protection cancellation; manual exit blocked"
+                )
 
             account = self.client.account()
             free_qty = self._asset_balance(
@@ -1781,12 +1814,27 @@ class MultiPositionTrader:
                     f"{symbol}: managed quantity is no longer available"
                 )
 
-            sell = self.client.order_safe(
+            client_id = f"{self.MANUAL_PREFIX}{uuid.uuid4().hex[:20]}"
+            quantity_text = self.client.decimal_format(sell_qty)
+            sell_intent = OrderIntent.new(
                 symbol,
                 "SELL",
                 "MARKET",
-                quantity=self.client.decimal_format(sell_qty),
-                new_client_order_id=f"{self.MANUAL_PREFIX}{uuid.uuid4().hex[:20]}",
+                {},
+                quantity=quantity_text,
+                client_order_id=client_id,
+                purpose="MANUAL_EXIT",
+                signal_id=str(trade["id"]),
+            )
+            sell = self._submit_via_barrier(
+                sell_intent,
+                lambda: self.client.order_safe(
+                    symbol,
+                    "SELL",
+                    "MARKET",
+                    quantity=quantity_text,
+                    new_client_order_id=client_id,
+                ),
             )
             self.db.save_order(sell)
 
