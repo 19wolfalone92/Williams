@@ -129,7 +129,8 @@ class RiskEngine:
             max_spread = float(max_spread_pct)
             stop_multiplier = float(stop_atr_multiplier)
             target_multiplier = float(target_atr_multiplier)
-                minimum_notional = float(min_notional)
+            structural_stop = float(invalidation_price or 0.0)
+            minimum_notional = float(min_notional)
             effective_risk_pct = self.risk_per_trade_pct if risk_pct_override is None else float(risk_pct_override)
         except (TypeError, ValueError, OverflowError):
             return self._blocked(symbol, side, float("nan"), "risk inputs contain non-numeric values")
@@ -165,7 +166,6 @@ class RiskEngine:
         if fallback_stop_distance <= 0:
             return self._blocked(symbol, side, entry, "invalid stop distance")
 
-        structural_stop = float(invalidation_price or 0.0)
         if side == "LONG":
             stop_price = structural_stop if 0.0 < structural_stop < entry else entry - fallback_stop_distance
             take_profit_price = entry + target_distance
