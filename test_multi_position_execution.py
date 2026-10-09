@@ -355,3 +355,28 @@ def test_database_rejects_non_finite_trade_and_campaign_risk_values(tmp_path):
             })
     finally:
         db.conn.close()
+
+
+def test_daily_pnl_query_rejects_legacy_closed_trade_with_missing_pnl(tmp_path):
+    db = Database(str(tmp_path / "missing-pnl.sqlite3"))
+    try:
+        trade_id = db.save_trade(
+            symbol="BTCUSDT",
+            side="BUY",
+            entry_time=time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()),
+            entry_price=100.0,
+            quantity=1.0,
+        )
+        db.conn.execute(
+            "UPDATE trades SET exit_time=?, exit_price=?, pnl=NULL WHERE id=?",
+            (
+                time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()),
+                101.0,
+                trade_id,
+            ),
+        )
+        db.conn.commit()
+        with pytest.raises(ValueError, match="missing or invalid"):
+            db.pnl_today_all()
+    finally:
+        db.conn.close()
