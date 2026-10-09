@@ -663,6 +663,17 @@ class FuturesRuntime:
             }
             return self._last_scan_summary
 
+        # Repeat the account-wide ownership check on every scan: external
+        # positions/orders may appear after startup and must block new exposure.
+        try:
+            self.execution._assert_no_unmanaged_positions(self.symbols[0])
+        except Exception as exc:
+            blocked_reconciliation = True
+            management.append({
+                "action": "RECONCILE_REQUIRED",
+                "reason": f"account-wide exposure/order ownership check failed: {type(exc).__name__}: {exc}",
+            })
+
         if blocked_reconciliation:
             if not daily_ok:
                 cancellations = self._cancel_pending_entries(reason="DAILY_RISK_LOCKOUT")
@@ -812,29 +823,35 @@ class FuturesRuntime:
 
     def start(self) -> dict[str, Any]:
         with self._lock:
-            if self._kill_latched:
-                raise RuntimeError("Futures kill switch is latched; explicit recovery/reset is required")
             if self._running:
-                self._paused = False
+                # Explicit start never clears a persistent kill switch.
+                if not self._kill_latched:
+                    self._paused = False
                 return self.status()
             self.client.sync_time()
             self.client.ensure_one_way_mode()
             account = self._account()
             reconciliation = self._recover()
-            if any(str(x.get("state", "")).upper() == "RECONCILE_REQUIRED" for x in reconciliation):
-                raise RuntimeError("Futures start blocked: reconciliation required")
-            # An exchange-side position must already have a matching Futures
-            # campaign; never adopt an unexplained position automatically.
-            for symbol in self.symbols:
-                self.execution._assert_no_unmanaged_positions(symbol)
+            startup_blockers = [
+                f"{item.get('symbol', 'UNKNOWN')}: {item.get('reason', 'reconciliation required')}"
+                for item in reconciliation
+                if str(item.get("state", "")).upper() == "RECONCILE_REQUIRED"
+            ]
+            # Unknown exposure/orders must block entries, but must not prevent
+            # the management-only monitor from starting after a process restart.
+            try:
+                self.execution._assert_no_unmanaged_positions(self.symbols[0])
+            except Exception as exc:
+                startup_blockers.append(f"{type(exc).__name__}: {exc}")
 
             # Testnet can prepare flat symbols for the initial 1x isolated
             # policy automatically. Mainnet changes require a separate explicit
             # FUTURES_AUTO_PREPARE_SYMBOLS=true opt-in and only touch flat,
             # order-free symbols.
-            auto_prepare = _env_bool(
-                "FUTURES_AUTO_PREPARE_SYMBOLS",
-                self.testnet,
+            auto_prepare = (
+                _env_bool("FUTURES_AUTO_PREPARE_SYMBOLS", self.testnet)
+                and not self._kill_latched
+                and not startup_blockers
             )
             if auto_prepare:
                 prepared = []
@@ -860,7 +877,7 @@ class FuturesRuntime:
                     {"symbols": prepared, "testnet": self.testnet},
                 )
             self._daily_loss_allows_entry(self._last_account["equity_quote"])
-            self._paused = False
+            self._paused = bool(self._kill_latched or startup_blockers)
             self._stop.clear()
             self._running = True
             self._thread = threading.Thread(
@@ -883,7 +900,23 @@ class FuturesRuntime:
                     "equity_quote": self._last_account["equity_quote"],
                 },
             )
-            return self.status()
+            started = self.status()
+            if self._kill_latched:
+                started["state"] = "KILL_SWITCH_LATCHED"
+                started["warning"] = (
+                    "Persistent kill switch remains latched. Management/reconciliation "
+                    "monitor is running; new exposure remains disabled."
+                )
+            elif startup_blockers:
+                started["state"] = "MANAGEMENT_ONLY"
+                started["startup_blockers"] = startup_blockers
+                started["warning"] = (
+                    "Startup reconciliation is unresolved. The monitor remains active "
+                    "in paused mode; new exposure is blocked."
+                )
+            else:
+                started["state"] = "RUNNING"
+            return started
 
     def _cancel_pending_entries(self, *, reason: str) -> list[dict[str, Any]]:
         results: list[dict[str, Any]] = []
