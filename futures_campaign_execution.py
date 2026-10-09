@@ -275,11 +275,16 @@ class FuturesCampaignExecutionService:
                 f"{symbol}: isolated margin is required; symbolConfig reports {margin_type or 'UNKNOWN'}"
             )
         try:
-            leverage = int(configuration.get("leverage"))
+            leverage_value = float(configuration.get("leverage"))
         except (TypeError, ValueError) as exc:
             raise FuturesCampaignExecutionError(
                 f"{symbol}: symbolConfig leverage is missing/invalid"
             ) from exc
+        if not math.isfinite(leverage_value) or not leverage_value.is_integer() or leverage_value < 1:
+            raise FuturesCampaignExecutionError(
+                f"{symbol}: symbolConfig leverage is not a valid positive integer"
+            )
+        leverage = int(leverage_value)
         if leverage != 1:
             raise FuturesCampaignExecutionError(
                 f"{symbol}: current leverage is {leverage}x; this build requires 1x"
