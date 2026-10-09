@@ -151,6 +151,18 @@ def test_conditional_stop_requires_valid_close_position_contract():
         )
 
 
+def test_user_trades_rejects_malformed_rows(monkeypatch):
+    client = make_client()
+    monkeypatch.setattr(
+        client,
+        "_request",
+        lambda *args, **kwargs: [{"orderId": 1, "qty": "0.1"}, None],
+    )
+
+    with pytest.raises(FuturesAPIError, match="userTrades contains a malformed row"):
+        client.user_trades("BTCUSDT", order_id=1)
+
+
 @pytest.mark.parametrize("method_name", ["open_orders", "open_algo_orders"])
 def test_open_order_listing_malformed_payload_fails_closed(monkeypatch, method_name):
     client = make_client()
