@@ -3012,6 +3012,7 @@ class FuturesCampaignExecutionService:
             "pending_add_on_stop_price": stop,
             "pending_add_on_quantity": quantity,
             "pending_add_on_risk_quote": actual_risk,
+            "pending_add_on_expires_at_ms": int(signal.expires_at_ms or 0),
             "pending_add_on_original_qty": old_qty,
             "pending_add_on_original_entry": old_entry,
             "pending_add_on_direction": direction,
@@ -4053,6 +4054,9 @@ class FuturesCampaignExecutionService:
                 active_add_statuses = {"NEW", "WORKING", "PENDING_NEW", "PENDING"}
                 terminal_add_statuses = {"CANCELED", "CANCELLED", "EXPIRED", "REJECTED"}
                 actual_order_id = algo.get("actualOrderId")
+                add_on_expires_at_ms = int(campaign.tags.get("pending_add_on_expires_at_ms", 0) or 0)
+                if algo_status in active_add_statuses and add_on_expires_at_ms and int(time.time() * 1000) >= add_on_expires_at_ms:
+                    return self.cancel_pending_add_on(campaign, reason="SIGNAL_EXPIRED")
                 if algo_status in active_add_statuses and not actual_order_id:
                     if campaign.state in {
                         CampaignState.RECONCILE_REQUIRED,
