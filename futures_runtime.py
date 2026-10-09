@@ -665,7 +665,8 @@ class FuturesRuntime:
         # enforces capacity for genuinely new campaigns.
         selections = self.controller.select_portfolio(
             open_risk_quote=self.execution.engine.portfolio_reserved_risk_quote(),
-            open_positions=0,
+            open_positions=active_count,
+            include_existing_campaigns=True,
         )
         results = []
         for selection in selections:
