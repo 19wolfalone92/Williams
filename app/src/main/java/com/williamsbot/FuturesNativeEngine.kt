@@ -1557,6 +1557,14 @@ internal class FuturesNativeEngine(
                         exchange.getOrder(symbol, orderId = actualOrderId)
                     }.getOrNull()
                     if (actualOrder?.optString("status").equals("FILLED", true)) {
+                        val cleanupProblem = verifyFlatProtectionCleanup(
+                            exchange,
+                            campaign,
+                            allowedFilledChildOrderId = actualOrderId
+                        )
+                        if (cleanupProblem != null) {
+                            return setCampaignState(campaign, "RECONCILE_REQUIRED", cleanupProblem)
+                        }
                         recordExchangeExit(exchange, campaign, protection!!, actualOrder!!, "EXCHANGE_PROTECTIVE_STOP_FILLED")
                         return JSONObject().put("symbol", symbol).put("state", "CLOSED").put("reason", "exchange protective stop filled")
                     }
@@ -2372,7 +2380,8 @@ internal class FuturesNativeEngine(
      */
     private fun verifyFlatProtectionCleanup(
         exchange: BinanceUsdmFuturesClient,
-        campaign: JSONObject
+        campaign: JSONObject,
+        allowedFilledChildOrderId: String? = null
     ): String? {
         val symbol = campaign.optString("symbol").uppercase(Locale.US)
         val ids = listOf(
@@ -2410,7 +2419,7 @@ internal class FuturesNativeEngine(
                         executed == null || !executed.isFinite() || executed < 0.0 ||
                         childStatus !in setOf("FILLED", "CANCELED", "CANCELLED", "EXPIRED", "REJECTED")
                     ) return "Protective child order cannot be authoritatively reconciled after exit"
-                    if (executed > 0.0) {
+                    if (executed > 0.0 && childId != allowedFilledChildOrderId) {
                         return "Protective child filled during market exit; both executions require aggregate reconciliation"
                     }
                     updateIntentByClientId(clientId, childStatus, child.toString())
