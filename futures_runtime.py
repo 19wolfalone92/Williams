@@ -644,6 +644,11 @@ class FuturesRuntime:
             return self._last_scan_summary
 
         if blocked_reconciliation:
+            if not daily_ok:
+                cancellations = self._cancel_pending_entries(reason="DAILY_RISK_LOCKOUT")
+                management.extend(cancellations)
+            else:
+                cancellations = []
             self._last_scan_summary = {
                 "state": "RECONCILE_REQUIRED",
                 "reason": (
@@ -652,6 +657,7 @@ class FuturesRuntime:
                 ),
                 "reconciliation": reconciliations,
                 "management": management,
+                "pending_order_cancellations": cancellations,
                 "new_entries": 0,
             }
             return self._last_scan_summary
