@@ -2566,9 +2566,39 @@ class FuturesCampaignExecutionService:
                 active_add_statuses = {"NEW", "WORKING", "PENDING_NEW", "PENDING"}
                 terminal_add_statuses = {"CANCELED", "CANCELLED", "EXPIRED", "REJECTED"}
                 if algo_status in active_add_statuses:
+                    if campaign.state == CampaignState.POSITION_EXPANDING:
+                        reason = (
+                            f"{symbol}: local state is POSITION_EXPANDING while the add-on "
+                            "order is still active; execution/position history is inconsistent"
+                        )
+                        self.engine.mark_reconcile_required(campaign, reason)
+                        self.db.state_set(
+                            f"campaign_state:{campaign.campaign_id}",
+                            CampaignState.RECONCILE_REQUIRED.value,
+                        )
+                        self.db.state_set(
+                            f"position_state:{symbol}",
+                            CampaignState.RECONCILE_REQUIRED.value,
+                        )
+                        return {
+                            "symbol": symbol,
+                            "state": "RECONCILE_REQUIRED",
+                            "reason": reason,
+                            "protection": "CONFIRMED",
+                        }
                     if abs(abs(amount) - original_qty) > max(1e-8, original_qty * 1e-6):
                         raise FuturesCampaignExecutionError(
                             f"{symbol}: exchange quantity changed while add-on algo remains active"
+                        )
+                    if campaign.state == CampaignState.ADD_ON_ARMING:
+                        campaign.transition(
+                            CampaignState.ADD_ON_PENDING,
+                            reason="recovered active add-on order by stable clientAlgoId",
+                        )
+                        self.db.save_campaign(campaign)
+                        self.db.state_set(
+                            f"campaign_state:{campaign.campaign_id}",
+                            CampaignState.ADD_ON_PENDING.value,
                         )
                     return {
                         "symbol": symbol,
