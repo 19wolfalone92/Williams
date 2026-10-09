@@ -291,10 +291,20 @@ class BinanceUsdmFuturesClient:
 
     def ensure_one_way_mode(self) -> dict[str, Any]:
         mode = self._request("GET", "/fapi/v1/positionSide/dual", signed=True)
-        if bool(mode.get("dualSidePosition", False)):
+        if not isinstance(mode, dict) or "dualSidePosition" not in mode:
+            raise FuturesAPIError(
+                "Futures position mode response is malformed; one-way mode is not confirmed"
+            )
+        raw = mode.get("dualSidePosition")
+        normalized = str(raw).strip().lower()
+        if raw is True or normalized in {"true", "1"}:
             raise FuturesAPIError(
                 "Hedge Mode is not supported by this execution contract; "
                 "disable new exposure and reconcile account mode manually"
+            )
+        if raw is not False and normalized not in {"false", "0"}:
+            raise FuturesAPIError(
+                "Futures position mode is ambiguous; one-way mode is not confirmed"
             )
         return mode
 
