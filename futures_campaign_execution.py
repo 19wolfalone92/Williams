@@ -3052,7 +3052,8 @@ class FuturesCampaignExecutionService:
                     actual_order = self.client.get_order(symbol, order_id=actual_order_id)
                     order_status = str(actual_order.get("status", "") or "").upper()
                     if (
-                        str(actual_order.get("clientOrderId", "") or "") != client_add_id
+                        str(actual_order.get("symbol", symbol)).upper() != symbol
+                        or str(actual_order.get("orderId", "")) != str(actual_order_id)
                         or str(actual_order.get("side", "") or "").upper() != expected_add_side
                         or str(actual_order.get("type", "") or "").upper() != "MARKET"
                     ):
@@ -3078,7 +3079,8 @@ class FuturesCampaignExecutionService:
                         actual_order = self.client.get_order(symbol, order_id=actual_order_id)
                         order_status = str(actual_order.get("status", "") or "").upper()
                         if (
-                            str(actual_order.get("clientOrderId", "") or "") != client_add_id
+                            str(actual_order.get("symbol", symbol)).upper() != symbol
+                            or str(actual_order.get("orderId", "")) != str(actual_order_id)
                             or str(actual_order.get("side", "") or "").upper() != expected_add_side
                             or str(actual_order.get("type", "") or "").upper() != "MARKET"
                         ):
