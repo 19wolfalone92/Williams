@@ -249,6 +249,20 @@ class BinanceUsdmFuturesClient:
     def account(self) -> dict[str, Any]:
         return self._request("GET", "/fapi/v3/account", signed=True)
 
+    def account_permissions(self) -> dict[str, Any]:
+        """Read canTrade from Account Information V2, where Binance exposes it."""
+        result = self._request("GET", "/fapi/v2/account", signed=True)
+        if not isinstance(result, dict) or "canTrade" not in result:
+            raise FuturesAPIError(
+                "Binance Futures account permissions response omitted canTrade"
+            )
+        value = result.get("canTrade")
+        if value is not True and str(value).strip().lower() != "true":
+            if value is False or str(value).strip().lower() == "false":
+                return {"canTrade": False}
+            raise FuturesAPIError("Binance Futures canTrade permission is ambiguous")
+        return {"canTrade": True}
+
     def balance(self) -> Any:
         return self._request("GET", "/fapi/v3/balance", signed=True)
 
