@@ -167,7 +167,9 @@ class Backtester:
                     if self.intrabar_policy == "target_first":
                         exit_trigger, reason = target_price, "TARGET"
                     else:
-                        exit_trigger, reason = stop_price, "STOP"
+                        # If the candle opens through the stop, the stop was
+                        # already crossed before any later intrabar target touch.
+                        exit_trigger, reason = min(stop_price, open_price), "STOP"
                 elif stop_hit:
                     # Gap-through stop: model the open, not the unreachable stop.
                     exit_trigger = min(stop_price, open_price)
