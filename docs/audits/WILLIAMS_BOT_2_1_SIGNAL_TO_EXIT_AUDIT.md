@@ -198,3 +198,10 @@ Native quantity sizing used the raw signal trigger/stop. The final order path th
 The Python Futures selector rejected a candidate only when `expires_at_ms < now`, making a signal actionable at the exact expiry timestamp. The canonical `PendingSignal` and native Android paths treat `now >= expiry` as expired.
 
 **Correction:** Python now rejects `expires_at_ms <= now`. Added a boundary regression test proving an expired-at-this-millisecond candidate cannot hide a later live signal.
+
+
+### 26. PendingSignal expiry fallback could revive an explicitly expired signal — corrected
+
+`default_expiry_ms()` preserved an explicit expiry only when it was later than `created_at_ms`. If a stale source signal was reconstructed after its expiry, the function could replace the old expiry with a new window based on reconstruction time and make the old signal actionable again.
+
+**Correction:** any positive explicit `expires_at_ms` is now authoritative even when it is already in the past. A new default expiry is calculated only when the signal has no explicit expiry (zero sentinel). Added a regression test for a signal created/reconstructed after its source-derived expiry.
