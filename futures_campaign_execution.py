@@ -2503,8 +2503,8 @@ class FuturesCampaignExecutionService:
             if executed <= 0:
                 if abs(amount) > 1e-12:
                     return unresolved(f"{symbol}: live position exists but the entry child order has no fills")
-                if algo_status not in terminal_no_fill:
-                    return unresolved(f"{symbol}: no fill confirmed but algo status is not terminal")
+                if order_status not in terminal_no_fill:
+                    return unresolved(f"{symbol}: no fill confirmed but child order is not terminal")
                 campaign.state = CampaignState.CLOSED
                 campaign.next_action = "WAIT"
                 campaign.pending_risk_quote = 0.0
@@ -3086,7 +3086,12 @@ class FuturesCampaignExecutionService:
                         raise FuturesCampaignExecutionError(
                             f"{symbol}: add-on is unfilled but exchange quantity differs from its baseline"
                         )
-                    if algo_status not in terminal_add_statuses:
+                    if actual_order_id:
+                        if order_status not in terminal_add_statuses:
+                            raise FuturesCampaignExecutionError(
+                                f"{symbol}: add-on child order is not terminal despite zero execution"
+                            )
+                    elif algo_status not in terminal_add_statuses:
                         raise FuturesCampaignExecutionError(
                             f"{symbol}: add-on has no actual order and is not authoritatively terminal"
                         )
