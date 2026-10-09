@@ -208,6 +208,9 @@ internal class FuturesNativeEngine(
             require(futuresKey().isNotBlank() && futuresSecret().isNotBlank()) {
                 "Configure separate Futures Demo credentials before START"
             }
+            if (worker?.isAlive == true && !running) {
+                throw IllegalStateException("Previous Futures worker is still shutting down; refusing to start a second loop")
+            }
             if (killLatched) {
                 throw IllegalStateException("KILL_SWITCH_LATCHED; use explicit recovery after exchange reconciliation")
             }
@@ -300,7 +303,15 @@ internal class FuturesNativeEngine(
         }
         val active = worker
         if (active != null && active !== Thread.currentThread()) {
-            runCatching { active.join(2500L) }
+            active.interrupt()
+            val stopped = runCatching {
+                active.join(5000L)
+                !active.isAlive
+            }.getOrDefault(false)
+            if (!stopped) {
+                lastError = "Futures worker did not stop cleanly; restart is blocked until it exits"
+                throw IllegalStateException(lastError!!)
+            }
         }
         return status().put("state", "STOPPED").put("note", "Exchange-side protective orders remain active")
     }
