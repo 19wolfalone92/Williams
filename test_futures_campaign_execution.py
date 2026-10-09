@@ -1136,6 +1136,50 @@ def test_exit_keeps_campaign_in_reconciliation_when_protection_cancel_is_unconfi
         db.conn.close()
 
 
+def test_account_preflight_failure_does_not_skip_existing_position_management():
+    import threading
+    from types import MethodType, SimpleNamespace
+
+    runtime = object.__new__(FuturesRuntime)
+    runtime._cycle_lock = threading.RLock()
+    runtime._kill_latched = False
+    runtime._paused = False
+    runtime.client = SimpleNamespace(sync_time=lambda: {})
+    runtime.controller = SimpleNamespace(
+        balance_quote=1000.0, risk_engine=SimpleNamespace(balance=1000.0)
+    )
+    runtime._last_scan_summary = {}
+    runtime._recover = MethodType(lambda self: [], runtime)
+    runtime.execution = SimpleNamespace(_assert_no_unmanaged_positions=lambda symbol: None)
+    runtime.symbols = ("BTCUSDT",)
+    managed = []
+    runtime._manage_existing_positions = MethodType(
+        lambda self: managed.append("managed") or [
+            {"symbol": "BTCUSDT", "action": "PROTECTION_MAINTAINED"}
+        ],
+        runtime,
+    )
+
+    def account_failure(self):
+        raise RuntimeError("simulated account endpoint outage")
+
+    runtime._account = MethodType(account_failure, runtime)
+    runtime._daily_loss_allows_entry = MethodType(
+        lambda self, equity: (True, "otherwise within limit"),
+        runtime,
+    )
+    runtime._cancel_pending_entries = MethodType(lambda self, reason: [], runtime)
+
+    result = runtime.scan_once()
+
+    assert managed == ["managed"]
+    assert result["state"] == "DAILY_RISK_LOCKOUT"
+    assert "account endpoint outage" in result["reason"]
+    assert result["new_entries"] == 0
+    assert runtime.controller.balance_quote == pytest.approx(1000.0)
+    assert runtime.controller.risk_engine.balance == pytest.approx(1000.0)
+
+
 def test_daily_loss_lockout_still_manages_open_positions_and_blocks_entries():
     import threading
     from types import MethodType, SimpleNamespace
