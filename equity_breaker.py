@@ -1,6 +1,8 @@
 """Backend equity/daily-loss circuit breaker with realized + unrealized PnL."""
 from __future__ import annotations
 
+import math
+
 
 class EquityCircuitBreaker:
     def __init__(self, max_daily_loss_pct: float = 0.03):
@@ -25,9 +27,19 @@ class EquityCircuitBreaker:
         unrealized_pnl_quote: float = 0.0,
         fees_quote: float = 0.0,
     ) -> tuple[bool, str]:
-        equity = max(0.0, float(current_equity_quote))
+        try:
+            equity = float(current_equity_quote)
+            unrealized = float(unrealized_pnl_quote)
+            fees = float(fees_quote)
+        except (TypeError, ValueError, OverflowError):
+            return False, "invalid daily-risk input; new entries blocked"
+
+        if not all(math.isfinite(value) for value in (equity, unrealized, fees)):
+            return False, "non-finite daily-risk input; new entries blocked"
         if equity <= 0:
             return False, "equity is zero"
+        if fees < 0:
+            return False, "fees must be non-negative"
 
         try:
             realized = float(
@@ -39,10 +51,20 @@ class EquityCircuitBreaker:
                 db.pnl_today(symbol) if symbol is not None else 0.0
             )
 
+        if not math.isfinite(realized):
+            return False, "non-finite realized PnL; new entries blocked"
+
         # Fees are a real loss and must be included even if legacy trade PnL
         # records were written before fee accounting was enabled.
-        net_daily_pnl = realized + float(unrealized_pnl_quote) - abs(float(fees_quote))
-        start_equity = self._today_start_equity(db, equity)
+        net_daily_pnl = realized + unrealized - fees
+        if not math.isfinite(net_daily_pnl):
+            return False, "non-finite daily PnL; new entries blocked"
+        try:
+            start_equity = self._today_start_equity(db, equity)
+        except (TypeError, ValueError, OverflowError):
+            return False, "daily start equity unavailable; new entries blocked"
+        if not math.isfinite(start_equity) or start_equity <= 0:
+            return False, "daily start equity invalid; new entries blocked"
         loss_limit = start_equity * self.max_daily_loss_pct
 
         if net_daily_pnl <= -loss_limit:
