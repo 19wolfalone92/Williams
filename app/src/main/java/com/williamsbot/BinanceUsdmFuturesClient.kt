@@ -525,11 +525,7 @@ internal class BinanceUsdmFuturesClient(
                         allowTimestampRetry = false
                     )
                 }
-                val unknown = mutation && (
-                    response.code >= 500 ||
-                        response.code == 418 ||
-                        response.code == 429
-                    )
+                val unknown = mutation && isAmbiguousMutationOutcome(response.code, code)
                 throw FuturesApiException(
                     "Binance Futures HTTP ${response.code} ${if (code != 0) "($code)" else ""}: $message",
                     statusCode = response.code,
@@ -568,6 +564,11 @@ internal class BinanceUsdmFuturesClient(
     companion object {
         const val BASE_URL = "https://demo-fapi.binance.com"
         private val FORM_MEDIA_TYPE = "application/x-www-form-urlencoded".toMediaType()
+
+        internal fun isAmbiguousMutationOutcome(httpStatus: Int, exchangeCode: Int): Boolean =
+            httpStatus in setOf(408, 418, 425, 429) ||
+                httpStatus >= 500 ||
+                exchangeCode in setOf(-1006, -1007)
 
         internal fun formEncode(values: Map<String, String>): String =
             values.entries.joinToString("&") { (key, value) ->
