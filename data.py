@@ -1,4 +1,4 @@
-import os, time, pandas as pd, requests
+import os, time, numpy as np, pandas as pd, requests
 
 # Legacy historical mode is retained for research/backtests only. Its
 # endpoint follows the same TESTNET switch as the trading client so a live
@@ -35,7 +35,7 @@ def validate_ohlcv_frame(frame):
     for column in ("open", "high", "low", "close", "volume"):
         out[column] = pd.to_numeric(out[column], errors="coerce")
     values = out[["open", "high", "low", "close", "volume"]].to_numpy(dtype=float)
-    if not pd.notna(values).all() or not pd.Series(values.ravel()).map(lambda v: pd.notna(v) and abs(v) != float("inf")).all():
+    if not np.isfinite(values).all():
         raise ValueError("OHLCV data contains non-numeric or non-finite values")
     prices = out[["open", "high", "low", "close"]]
     if (prices <= 0).any().any():
