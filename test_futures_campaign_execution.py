@@ -1315,3 +1315,16 @@ def test_protection_lookup_timeout_does_not_create_duplicate_stop(tmp_path):
         assert db.state_get("position_state:BTCUSDT") == "RECONCILE_REQUIRED"
     finally:
         db.conn.close()
+
+
+def test_normal_management_scan_does_not_cancel_pending_entries():
+    from types import SimpleNamespace
+    runtime = object.__new__(FuturesRuntime)
+    calls = []
+    runtime.execution = SimpleNamespace(_active_rows=lambda: [], _row_tags=lambda row: {})
+    runtime._cancel_pending_entries = lambda **kwargs: calls.append(kwargs) or []
+
+    result = runtime._manage_existing_positions()
+
+    assert result == []
+    assert calls == [], "pending entries are cancelled only on explicit pause/kill"
