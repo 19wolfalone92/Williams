@@ -2197,7 +2197,11 @@ class FuturesCampaignExecutionService:
                     order_trade_qty += qty
                     realized_pnl += pnl
                     asset = str(trade.get("commissionAsset", "") or "").upper()
-                    if asset in {"USDT", "USDC"}:
+                    if commission > 0 and not asset:
+                        raise FuturesCampaignExecutionError(
+                            f"{symbol}: userTrades commission has no asset"
+                        )
+                    if asset == "USDT":
                         quote_commission += commission
                     elif asset:
                         other_commission[asset] = other_commission.get(asset, 0.0) + commission
@@ -2304,7 +2308,11 @@ class FuturesCampaignExecutionService:
                     order_trade_qty += qty
                     realized_pnl += pnl
                     asset = str(trade.get("commissionAsset", "") or "").upper()
-                    if asset in {"USDT", "USDC"}:
+                    if commission > 0 and not asset:
+                        raise FuturesCampaignExecutionError(
+                            f"{symbol}: userTrades commission has no asset"
+                        )
+                    if asset == "USDT":
                         quote_commission += commission
                     elif asset:
                         other_commission[asset] = other_commission.get(asset, 0.0) + commission
@@ -2359,7 +2367,7 @@ class FuturesCampaignExecutionService:
             "unconverted_commission_by_asset": other_commission,
             "market_exit_executed_qty": market_exit_executed_qty,
             "protective_stop_executed_qty": protective_exit_executed_qty,
-            "pnl_basis": "Binance Futures userTrades across market exits and protective stop children; non-USDT/USDC fees separately recorded",
+            "pnl_basis": "Binance Futures userTrades across market exits and protective stop children; non-USDT fees separately recorded",
         }
         campaign.position_qty = 0.0
         campaign.open_risk_quote = 0.0
@@ -2660,7 +2668,11 @@ class FuturesCampaignExecutionService:
             executed_qty += qty
             realized_pnl += pnl
             asset = str(row.get("commissionAsset", "") or "").upper()
-            if asset in {"USDT", "USDC"}:
+            if commission > 0 and not asset:
+                raise FuturesCampaignExecutionError(
+                    f"{symbol}: userTrades commission has no asset"
+                )
+            if asset == "USDT":
                 quote_commission += commission
             elif asset:
                 other_commission[asset] = other_commission.get(asset, 0.0) + commission
@@ -2686,7 +2698,7 @@ class FuturesCampaignExecutionService:
             "realized_pnl_quote_before_commission": realized_pnl,
             "quote_commission": quote_commission,
             "unconverted_commission_by_asset": other_commission,
-            "pnl_basis": "exchange userTrades; non-USDT/USDC fees are separately recorded, not converted",
+            "pnl_basis": "exchange userTrades; non-USDT fees are separately recorded, not converted",
         }
         campaign.position_qty = 0.0
         campaign.open_risk_quote = 0.0
@@ -3481,7 +3493,11 @@ class FuturesCampaignExecutionService:
                 trade_qty += qty
                 trade_quote += qty * price
                 asset = str(trade.get("commissionAsset", "") or "").upper()
-                if asset in {"USDT", "USDC"}:
+                if commission > 0 and not asset:
+                    raise FuturesCampaignExecutionError(
+                        f"{symbol}: userTrades commission has no asset"
+                    )
+                if asset == "USDT":
                     fee_quote += commission
                 elif asset:
                     fee_by_asset[asset] = fee_by_asset.get(asset, 0.0) + commission
@@ -4184,7 +4200,11 @@ class FuturesCampaignExecutionService:
                     trade_qty += trade_quantity
                     trade_quote += trade_quantity * trade_price
                     asset = str(trade.get("commissionAsset", "") or "").upper()
-                    if asset in {"USDT", "USDC"}:
+                    if commission > 0 and not asset:
+                        raise FuturesCampaignExecutionError(
+                            f"{symbol}: userTrades commission has no asset"
+                        )
+                    if asset == "USDT":
                         fee_quote += commission
                     elif asset:
                         fee_by_asset[asset] = fee_by_asset.get(asset, 0.0) + commission
