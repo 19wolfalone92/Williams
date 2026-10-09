@@ -833,3 +833,34 @@ def test_runtime_skips_strategy_management_when_exchange_quantity_is_invalid(bad
     assert state["campaign_state:c-2"] == "RECONCILE_REQUIRED"
     assert state["position_state:BTCUSDT"] == "RECONCILE_REQUIRED"
     assert events
+
+def test_stop_replacement_requires_confirmed_old_stop_cancellation(tmp_path):
+    db, client, service, campaign = _armed_entry_for_cancel(tmp_path, cancel_confirms=False)
+    try:
+        from campaign_model import CampaignState
+        client._position["positionAmt"] = "0.5"
+        client._position["entryPrice"] = "102.0"
+        campaign.state = CampaignState.OPEN_INITIAL
+        campaign.position_qty = 0.5
+        campaign.average_entry_price = 102.0
+        campaign.open_risk_quote = 10.0
+        campaign.pending_risk_quote = 0.0
+        campaign.capital_reserved_quote = 0.0
+        campaign.initial_stop_price = 100.0
+        campaign.current_stop_price = 100.0
+        campaign.tags["protective_client_algo_id"] = "old-stop-client"
+        campaign.tags["protective_algo_id"] = 111
+        campaign.tags["protection_active"] = True
+        service.db.save_campaign(campaign)
+
+        with pytest.raises(FuturesCampaignExecutionError, match="cancellation is not confirmed terminal"):
+            service.replace_protection(campaign, stop_price=101.0)
+
+        saved = service.engine.load_campaign(campaign.campaign_id)
+        assert saved.state == CampaignState.RECONCILE_REQUIRED
+        assert saved.tags.get("protection_replace_reconcile_required") is True
+        assert saved.tags.get("previous_protective_client_algo_id") == "old-stop-client"
+        assert db.state_get(f"campaign_state:{campaign.campaign_id}") == "RECONCILE_REQUIRED"
+        assert db.state_get("position_state:BTCUSDT") == "RECONCILE_REQUIRED"
+    finally:
+        db.conn.close()
