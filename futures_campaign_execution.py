@@ -3433,6 +3433,19 @@ class FuturesCampaignExecutionService:
                 }
 
             self.db.state_set(f"position_state:{symbol}", campaign.state.value)
+            self.db.state_set(f"campaign_state:{campaign.campaign_id}", campaign.state.value)
+            if (
+                not campaign.tags.get("entry_fill_reconciliation_pending")
+                and not campaign.tags.get("pending_add_on_client_algo_id")
+                and campaign.state not in {
+                    CampaignState.ENTRY_PENDING,
+                    CampaignState.ADD_ON_ARMING,
+                    CampaignState.ADD_ON_PENDING,
+                    CampaignState.POSITION_EXPANDING,
+                }
+            ):
+                # Recover a stale claim left by a crash after campaign save.
+                self.db.state_delete(f"futures_entry_pending:{symbol}")
             return {
                 "symbol": symbol,
                 "state": campaign.state.value,
