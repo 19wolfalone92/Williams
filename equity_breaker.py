@@ -18,34 +18,48 @@ class EquityCircuitBreaker:
         from datetime import datetime, timezone
 
         today = datetime.now(timezone.utc).date().isoformat()
+
+        def parse_baseline(value) -> float:
+            try:
+                baseline_value = float(value)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError("stored daily start equity is invalid") from exc
+            if not math.isfinite(baseline_value) or baseline_value <= 0:
+                raise ValueError("stored daily start equity is invalid")
+            return baseline_value
+
         stored_day = db.state_get("daily_risk_day")
         stored_equity = db.state_get("daily_start_equity")
-
         if stored_day == today and stored_equity is None:
             raise ValueError("daily start equity missing for an already initialized UTC day")
+        if stored_day == today:
+            return parse_baseline(stored_equity)
 
-        if stored_day != today:
-            # Persist the day and baseline together where the DB supports atomic
-            # transactions, so a partial write cannot silently reset the baseline.
-            baseline = float(current_equity_quote)
-            if not math.isfinite(baseline) or baseline <= 0:
-                raise ValueError("cannot initialize daily baseline from invalid equity")
-            transaction = getattr(db, "transaction", None)
-            if callable(transaction):
-                with transaction():
-                    db.state_set("daily_risk_day", today)
-                    db.state_set("daily_start_equity", repr(baseline))
-            else:
+        # Re-read under a write lock: two workers starting at UTC rollover
+        # must not race and overwrite the first valid baseline.
+        transaction = getattr(db, "transaction", None)
+        if callable(transaction):
+            with transaction(immediate=True):
+                latest_day = db.state_get("daily_risk_day")
+                latest_equity = db.state_get("daily_start_equity")
+                if latest_day == today:
+                    if latest_equity is None:
+                        raise ValueError("daily start equity missing for an already initialized UTC day")
+                    return parse_baseline(latest_equity)
+                baseline = float(current_equity_quote)
+                if not math.isfinite(baseline) or baseline <= 0:
+                    raise ValueError("cannot initialize daily baseline from invalid equity")
                 db.state_set("daily_risk_day", today)
                 db.state_set("daily_start_equity", repr(baseline))
-            return baseline
+                return baseline
 
-        try:
-            baseline = float(stored_equity)
-        except (TypeError, ValueError, OverflowError) as exc:
-            raise ValueError("stored daily start equity is invalid") from exc
+        # Generic adapters without transactions are accepted only for the
+        # single-writer path. They cannot provide cross-worker atomicity.
+        baseline = float(current_equity_quote)
         if not math.isfinite(baseline) or baseline <= 0:
-            raise ValueError("stored daily start equity is invalid")
+            raise ValueError("cannot initialize daily baseline from invalid equity")
+        db.state_set("daily_risk_day", today)
+        db.state_set("daily_start_equity", repr(baseline))
         return baseline
 
     def check(
