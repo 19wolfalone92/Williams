@@ -1394,6 +1394,7 @@ class CampaignExecutionService:
                         f"{signal.symbol}: another pending conditional order exists"
                     )
                 self.db.save_campaign_signal(signal, campaign.campaign_id, state=SignalState.DETECTED.value)
+                previous_campaign_state = campaign.state
                 campaign.tags["last_signal_time_ms"] = int(signal.signal_bar_time_ms)
                 campaign.tags["pending_add_signal_id"] = signal.signal_id
                 campaign.tags["pending_add_signal_expires_at_ms"] = int(pending_signal.expires_at_ms)
@@ -1405,24 +1406,37 @@ class CampaignExecutionService:
                     risk_quote=requested,
                     capital_reserved_quote=qty * trigger,
                 )
-        intent = OrderIntent.new(
-            signal.symbol,
-            "BUY",
-            "STOP_LOSS",
-            required_context_versions=dict(signal.context_versions),
-            hypothesis_id=f"WILLIAMS_ADD_{signal.signal_type.value}",
-            invalidation_level=stop,
-            trigger_price=trigger,
-            quantity=self.client.decimal_format(qty),
-            client_order_id=cid,
-            purpose="CAMPAIGN_ADD_ON",
-            permission_interval=signal.timeframe,
-            campaign_id=campaign.campaign_id,
-            signal_id=signal.signal_id,
-            signal_expires_at_ms=pending_signal.expires_at_ms,
-            risk_quote=requested,
-            capital_reserved_quote=qty * trigger,
-        )
+        try:
+            quantity_text = self.client.decimal_format(qty)
+            intent = OrderIntent.new(
+                signal.symbol,
+                "BUY",
+                "STOP_LOSS",
+                required_context_versions=dict(signal.context_versions),
+                hypothesis_id=f"WILLIAMS_ADD_{signal.signal_type.value}",
+                invalidation_level=stop,
+                trigger_price=trigger,
+                quantity=quantity_text,
+                client_order_id=cid,
+                purpose="CAMPAIGN_ADD_ON",
+                permission_interval=signal.timeframe,
+                campaign_id=campaign.campaign_id,
+                signal_id=signal.signal_id,
+                signal_expires_at_ms=pending_signal.expires_at_ms,
+                risk_quote=requested,
+                capital_reserved_quote=qty * trigger,
+            )
+        except Exception as exc:
+            campaign.pending_risk_quote = 0.0
+            campaign.capital_reserved_quote = 0.0
+            campaign.state = previous_campaign_state
+            campaign.next_action = "MONITOR_CAMPAIGN"
+            self.db.set_campaign_signal_state(signal.signal_id, SignalState.INVALIDATED.value)
+            self.db.state_delete(f"entry_client_order_id:{signal.symbol}")
+            self.db.save_campaign(campaign)
+            raise CampaignExecutionError(
+                f"{signal.symbol}: could not construct durable add-on intent"
+            ) from exc
         def check_add_on(snapshot):
             if pending_signal.is_expired():
                 raise CampaignExecutionError(
@@ -1437,7 +1451,7 @@ class CampaignExecutionService:
                     signal.symbol,
                     "BUY",
                     "STOP_LOSS",
-                    quantity=self.client.decimal_format(qty),
+                    quantity=quantity_text,
                     stop_price=self.client.decimal_format(trigger),
                     new_client_order_id=cid,
                 ),
