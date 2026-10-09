@@ -1618,7 +1618,10 @@ class FuturesCampaignExecutionService:
         successful cancellation.
         """
         symbol = campaign.symbol.upper()
-        if campaign.state != CampaignState.ENTRY_PENDING:
+        if campaign.state != CampaignState.ENTRY_PENDING and not (
+            campaign.state == CampaignState.RECONCILE_REQUIRED
+            and campaign.tags.get("entry_fill_reconciliation_pending")
+        ):
             return {
                 "symbol": symbol,
                 "state": campaign.state.value,
