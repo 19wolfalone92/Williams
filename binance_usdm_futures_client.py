@@ -279,9 +279,14 @@ class BinanceUsdmFuturesClient:
             params["endTime"] = int(end_time)
         result = self._request("GET", "/fapi/v1/userTrades", params, signed=True)
         if isinstance(result, list):
-            return [row for row in result if isinstance(row, dict)]
+            if any(not isinstance(row, dict) for row in result):
+                raise FuturesAPIError("Binance Futures userTrades contains a malformed row")
+            return result
         if isinstance(result, dict) and isinstance(result.get("trades"), list):
-            return [row for row in result["trades"] if isinstance(row, dict)]
+            rows = result["trades"]
+            if any(not isinstance(row, dict) for row in rows):
+                raise FuturesAPIError("Binance Futures userTrades contains a malformed row")
+            return rows
         raise FuturesAPIError("Binance Futures userTrades response is not a list")
 
     def ensure_one_way_mode(self) -> dict[str, Any]:
