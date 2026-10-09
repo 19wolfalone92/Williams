@@ -934,3 +934,37 @@ def test_exit_keeps_campaign_in_reconciliation_when_protection_cancel_is_unconfi
         assert client.market_exits
     finally:
         db.conn.close()
+
+
+def test_daily_loss_lockout_still_manages_open_positions_and_blocks_entries():
+    import threading
+    from types import MethodType, SimpleNamespace
+    from futures_runtime import FuturesRuntime
+
+    runtime = object.__new__(FuturesRuntime)
+    runtime._cycle_lock = threading.RLock()
+    runtime._kill_latched = False
+    runtime._paused = False
+    runtime.client = SimpleNamespace(sync_time=lambda: {})
+    runtime._last_account = {"equity_quote": 970.0, "available_quote": 400.0}
+    runtime._last_scan_summary = {}
+    runtime._account = MethodType(lambda self: self._last_account, runtime)
+    runtime._recover = MethodType(lambda self: [], runtime)
+    managed = []
+    runtime._manage_existing_positions = MethodType(
+        lambda self: managed.append("managed") or [
+            {"symbol": "BTCUSDT", "action": "PROTECTION_MAINTAINED"}
+        ],
+        runtime,
+    )
+    runtime._daily_loss_allows_entry = MethodType(
+        lambda self, equity: (False, "daily loss limit reached"),
+        runtime,
+    )
+
+    result = runtime.scan_once()
+
+    assert managed == ["managed"]
+    assert result["state"] == "DAILY_RISK_LOCKOUT"
+    assert result["new_entries"] == 0
+    assert result["management"][0]["action"] == "PROTECTION_MAINTAINED"
