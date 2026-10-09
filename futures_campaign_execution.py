@@ -2260,6 +2260,20 @@ class FuturesCampaignExecutionService:
                 algo_id=algo_id,
                 client_algo_id=client_id or None,
             )
+            # A successful lookup is not enough: verify it resolved the exact
+            # durable protection identity before cancelling or booking its fill.
+            response_symbol = str(protection.get("symbol", symbol) or "").upper()
+            response_algo_id = str(protection.get("algoId", "") or "")
+            response_client_id = str(protection.get("clientAlgoId", "") or "")
+            if (
+                response_symbol != symbol
+                or (algo_id is not None and response_algo_id and response_algo_id != str(algo_id))
+                or (client_id and response_client_id != client_id)
+            ):
+                raise FuturesCampaignExecutionError(
+                    f"{symbol}: protective lookup returned an identity mismatch; flat-position "
+                    "reconciliation cannot safely continue"
+                )
             status = str(protection.get("algoStatus", "") or "").upper()
             active_statuses = {"NEW", "WORKING", "PENDING", "PENDING_NEW"}
             terminal_statuses = {"CANCELED", "CANCELLED", "EXPIRED", "REJECTED", "FINISHED", "TRIGGERED"}
@@ -2286,8 +2300,28 @@ class FuturesCampaignExecutionService:
                 )
             actual_order_id = protection.get("actualOrderId")
             if not actual_order_id:
+                if status in {"TRIGGERED", "FINISHED"}:
+                    # A triggered stop without its child order ID is not proof
+                    # that the protective execution is absent. Binance's child
+                    # order/fills may still be propagating; never close a
+                    # campaign based only on the position being momentarily flat.
+                    raise FuturesCampaignExecutionError(
+                        f"{symbol}: protective algo is {status} but actualOrderId is missing; "
+                        "child execution and trade history must be reconciled"
+                    )
                 continue
             actual_order = self.client.get_order(symbol, order_id=actual_order_id)
+            child_symbol = str(actual_order.get("symbol", symbol) or "").upper()
+            child_order_id = str(actual_order.get("orderId", actual_order_id) or "")
+            child_side = str(actual_order.get("side", stop_side) or "").upper()
+            if (
+                child_symbol != symbol
+                or child_order_id != str(actual_order_id)
+                or child_side != stop_side
+            ):
+                raise FuturesCampaignExecutionError(
+                    f"{symbol}: protective child lookup returned a symbol/order/side mismatch"
+                )
             order_status = str(actual_order.get("status", "") or "").upper()
             child_active = {"NEW", "PARTIALLY_FILLED", "PENDING_NEW"}
             child_terminal = {"FILLED", "CANCELED", "CANCELLED", "EXPIRED", "REJECTED"}
@@ -3290,6 +3324,45 @@ class FuturesCampaignExecutionService:
                     "symbol": symbol,
                     "state": "RECONCILE_REQUIRED",
                     "reason": "exchange Futures position has no matching managed campaign",
+                }
+            # A zero position does not prove that the symbol is safe when no
+            # durable campaign owns its exchange orders. A leftover conditional
+            # entry can create exposure after this scan, so require manual/order
+            # reconciliation rather than reporting a false FLAT state.
+            try:
+                standard_orders = self.client.open_orders(symbol)
+                algo_orders = self.client.open_algo_orders(symbol)
+                if not isinstance(standard_orders, list) or not isinstance(algo_orders, list):
+                    raise FuturesCampaignExecutionError(
+                        "exchange open-order endpoints returned malformed responses"
+                    )
+                if standard_orders or algo_orders:
+                    self.db.state_set(
+                        f"position_state:{symbol}",
+                        CampaignState.RECONCILE_REQUIRED.value,
+                    )
+                    return {
+                        "symbol": symbol,
+                        "state": "RECONCILE_REQUIRED",
+                        "reason": (
+                            "flat exchange position has live standard/Algo orders but no "
+                            "matching managed campaign"
+                        ),
+                        "open_standard_orders": len(standard_orders),
+                        "open_algo_orders": len(algo_orders),
+                    }
+            except Exception as exc:
+                self.db.state_set(
+                    f"position_state:{symbol}",
+                    CampaignState.RECONCILE_REQUIRED.value,
+                )
+                return {
+                    "symbol": symbol,
+                    "state": "RECONCILE_REQUIRED",
+                    "reason": (
+                        "cannot confirm that a flat symbol with no campaign is free of "
+                        f"open exchange orders: {type(exc).__name__}: {exc}"
+                    ),
                 }
             self.db.state_set(f"position_state:{symbol}", "FLAT")
             return {"symbol": symbol, "state": "FLAT"}
