@@ -720,6 +720,8 @@ class FuturesCampaignExecutionService:
 
             pending_status = str(pending_order.get("algoStatus", "") or "").upper()
             pending_side = str(pending_order.get("side", "") or "").upper()
+            pending_type = str(pending_order.get("type", "") or "").upper()
+            pending_close_position = str(pending_order.get("closePosition", "")).lower() in {"true", "1"}
             pending_trigger = pending_order.get("triggerPrice")
             active_statuses = {"NEW", "WORKING", "PENDING_NEW"}
             safe_terminal_statuses = {"CANCELED", "CANCELLED", "EXPIRED", "REJECTED"}
@@ -738,6 +740,8 @@ class FuturesCampaignExecutionService:
                 if (
                     str(pending_order.get("clientAlgoId", "")) != pending_client_id
                     or pending_side != order_side
+                    or pending_type != "STOP_MARKET"
+                    or not pending_close_position
                     or not trigger_matches
                 ):
                     reason = (
@@ -2369,9 +2373,36 @@ class FuturesCampaignExecutionService:
                         client_algo_id=campaign.tags.get("protective_client_algo_id") or None,
                     )
                     status = str(protection.get("algoStatus", "")).upper()
-                    if status not in {"NEW", "WORKING", "PENDING"}:
+                    expected_side = "SELL" if direction == "LONG" else "BUY"
+                    actual_side = str(protection.get("side", "") or "").upper()
+                    actual_type = str(protection.get("type", "") or "").upper()
+                    close_position = str(protection.get("closePosition", "")).lower() in {"true", "1"}
+                    actual_client_id = str(protection.get("clientAlgoId", "") or "")
+                    expected_client_id = str(campaign.tags.get("protective_client_algo_id", "") or "")
+                    try:
+                        actual_trigger = float(protection.get("triggerPrice"))
+                        expected_trigger = float(
+                            campaign.current_stop_price or campaign.initial_stop_price or 0
+                        )
+                    except (TypeError, ValueError):
+                        actual_trigger = expected_trigger = float("nan")
+                    if (
+                        status not in {"NEW", "WORKING", "PENDING", "PENDING_NEW"}
+                        or actual_side != expected_side
+                        or actual_type != "STOP_MARKET"
+                        or not close_position
+                        or not actual_client_id
+                        or actual_client_id != expected_client_id
+                        or not math.isfinite(actual_trigger)
+                        or not math.isfinite(expected_trigger)
+                        or expected_trigger <= 0
+                        or not math.isclose(actual_trigger, expected_trigger, rel_tol=0.0, abs_tol=1e-8)
+                    ):
                         raise FuturesCampaignExecutionError(
-                            f"protective algo order status is {status or 'UNKNOWN'}"
+                            f"protective algo order identity/side/type/closePosition/trigger/status "
+                            f"mismatch (status={status or 'UNKNOWN'}, side={actual_side or 'UNKNOWN'}, "
+                            f"type={actual_type or 'UNKNOWN'}, closePosition={close_position}, "
+                            f"trigger={actual_trigger}, expected_trigger={expected_trigger})"
                         )
                 except Exception as exc:
                     try:
