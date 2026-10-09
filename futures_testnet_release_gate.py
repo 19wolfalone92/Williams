@@ -231,6 +231,8 @@ def run_futures_testnet_read_only(symbols: Iterable[str] = ("BTCUSDT",)) -> dict
     for row in positions:
         if not isinstance(row, dict):
             raise RuntimeError("Futures positionRisk contains a malformed row")
+        if not str(row.get("symbol", "") or "").strip():
+            raise RuntimeError("Futures positionRisk contains a row without symbol identity")
         raw_amount = row.get("positionAmt")
         if raw_amount is None or str(raw_amount).strip() == "":
             raise RuntimeError("Futures positionRisk omitted positionAmt")
