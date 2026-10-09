@@ -938,6 +938,26 @@ class Database:
 
     def save_campaign(self, campaign):
         data = campaign.to_dict() if hasattr(campaign, "to_dict") else dict(campaign)
+        nonnegative_fields = (
+            "position_qty", "average_entry_price", "initial_stop_price",
+            "current_stop_price", "open_risk_quote", "pending_risk_quote",
+            "capital_reserved_quote",
+        )
+        for field in nonnegative_fields:
+            data[field] = self._require_finite_number(
+                data.get(field, 0) or 0, f"campaign.{field}", minimum=0.0
+            )
+        for field in ("realized_pnl_quote", "unrealized_pnl_quote"):
+            data[field] = self._require_finite_number(
+                data.get(field, 0) or 0, f"campaign.{field}"
+            )
+        try:
+            data["additions"] = int(data.get("additions", 0) or 0)
+            data["tranche_index"] = int(data.get("tranche_index", 0) or 0)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("campaign additions/tranche_index must be integers") from exc
+        if data["additions"] < 0 or data["tranche_index"] < 0:
+            raise ValueError("campaign additions/tranche_index cannot be negative")
         self.conn.execute(
             """INSERT INTO campaigns(
                 campaign_id,updated_at,symbol,side,execution_timeframe,state,
@@ -1030,6 +1050,10 @@ class Database:
 
     def save_campaign_order(self, record):
         data=record.to_dict() if hasattr(record,"to_dict") else dict(record)
+        for field in ("price", "stop_price", "quantity", "risk_quote", "capital_reserved_quote"):
+            data[field] = self._require_finite_number(
+                data.get(field, 0) or 0, f"campaign_order.{field}", minimum=0.0
+            )
         self.conn.execute(
             """INSERT INTO campaign_orders(
                 campaign_id,signal_id,symbol,side,purpose,order_type,order_id,order_list_id,
@@ -1049,6 +1073,12 @@ class Database:
 
     def save_campaign_fill(self, fill):
         data=fill if isinstance(fill,dict) else dict(fill)
+        for field in ("quantity", "price", "quote_quantity", "fee_quote", "commission_base"):
+            data[field] = self._require_finite_number(
+                data.get(field, 0) or 0, f"campaign_fill.{field}", minimum=0.0
+            )
+        if data["quantity"] > 0 and data["price"] <= 0:
+            raise ValueError("campaign fill price must be positive for a non-zero fill")
         self.conn.execute(
             """INSERT INTO campaign_fills(
                 campaign_id,order_id,symbol,side,quantity,price,quote_quantity,
