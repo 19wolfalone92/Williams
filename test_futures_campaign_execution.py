@@ -1204,6 +1204,8 @@ def _make_add_on_signal(direction="LONG", signal_time=2000):
 def _prepare_open_campaign_for_add_on(tmp_path, direction="LONG"):
     db, client, service, campaign = _armed_entry_for_cancel(tmp_path)
     from campaign_model import CampaignState
+    if direction == "SHORT":
+        make_context(service.barrier.context_cache, allow_long=False, allow_short=True)
     client.mark = 102.0 if direction == "LONG" else 98.0
     client._position["positionAmt"] = "0.5" if direction == "LONG" else "-0.5"
     client._position["entryPrice"] = "102.0" if direction == "LONG" else "98.0"
@@ -1231,18 +1233,20 @@ def _prepare_open_campaign_for_add_on(tmp_path, direction="LONG"):
     return db, client, service, campaign
 
 
-def test_futures_add_on_reserves_risk_and_arms_directionally(tmp_path):
-    db, client, service, campaign = _prepare_open_campaign_for_add_on(tmp_path, "LONG")
+@pytest.mark.parametrize("direction", ["LONG", "SHORT"])
+def test_futures_add_on_reserves_risk_and_arms_directionally(tmp_path, direction):
+    db, client, service, campaign = _prepare_open_campaign_for_add_on(tmp_path, direction)
     try:
         initial_entry_count = len(client.stop_entries)
         result = service.arm_add_on(
-            _make_add_on_signal("LONG"),
+            _make_add_on_signal(direction),
             equity_quote=10000.0,
             candidate_risk_fraction=0.001,
             available_quote=5000.0,
         )
         assert result["action"] == "ADD_ON_ARMED"
-        assert result["direction"] == "LONG"
+        assert result["direction"] == direction
+        assert client.stop_entries[-1]["direction"] == direction
         assert result["client_algo_id"].startswith("W2FA_")
         saved = service.engine.load_campaign(campaign.campaign_id)
         assert saved.state.value == "ADD_ON_PENDING"
