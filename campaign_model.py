@@ -129,6 +129,10 @@ class SignalSpec:
     created_at_ms: int = field(default_factory=lambda: int(time.time() * 1000))
     expires_at_ms: int = 0
     source_candle_index: int = -1
+    # Direction describes intended exposure, not exchange order side.
+    # LONG entry=BUY/exit=SELL; SHORT entry=SELL/exit=BUY.
+    direction: str = ""
+    alligator_bearish: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -150,20 +154,34 @@ class SignalSpec:
         protective_reference: float,
         **kwargs: Any,
     ) -> "SignalSpec":
+        normalized_side = str(side).upper()
+        direction = str(kwargs.pop("direction", "") or "").upper()
+        if not direction:
+            direction = {
+                "BUY": "LONG",
+                "LONG": "LONG",
+                "SELL": "SHORT",
+                "SHORT": "SHORT",
+            }.get(normalized_side, "")
+        if direction not in {"LONG", "SHORT"}:
+            raise ValueError("SignalSpec requires direction LONG or SHORT")
+        if normalized_side not in {"BUY", "SELL", "LONG", "SHORT"}:
+            raise ValueError("SignalSpec side must be BUY/SELL or LONG/SHORT")
         signal_id = (
             f"{str(symbol).upper()}:{str(timeframe).lower()}:"
-            f"{signal_type.value}:{int(signal_bar_time_ms)}"
+            f"{signal_type.value}:{direction}:{int(signal_bar_time_ms)}"
         )
         return cls(
             signal_id=signal_id,
             symbol=str(symbol).upper(),
-            side=str(side).upper(),
+            side=normalized_side,
             signal_type=signal_type,
             role=role,
             timeframe=str(timeframe).lower(),
             signal_bar_time_ms=int(signal_bar_time_ms),
             trigger_price=float(trigger_price),
             protective_reference=float(protective_reference),
+            direction=direction,
             **kwargs,
         )
 
