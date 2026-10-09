@@ -390,19 +390,33 @@ class BinanceUsdmFuturesClient:
         params = {"symbol": str(symbol).upper()} if symbol else {}
         result = self._request("GET", "/fapi/v1/openOrders", params, signed=True)
         if isinstance(result, list):
-            return [x for x in result if isinstance(x, dict)]
+            if any(not isinstance(row, dict) for row in result):
+                raise FuturesAPIError("Binance Futures openOrders contains a malformed row")
+            return result
         if isinstance(result, dict) and isinstance(result.get("orders"), list):
-            return [x for x in result["orders"] if isinstance(x, dict)]
-        return [result] if isinstance(result, dict) and result.get("orderId") else []
+            rows = result["orders"]
+            if any(not isinstance(row, dict) for row in rows):
+                raise FuturesAPIError("Binance Futures openOrders contains a malformed row")
+            return rows
+        if isinstance(result, dict) and result.get("orderId") is not None:
+            return [result]
+        raise FuturesAPIError("Binance Futures openOrders returned a malformed payload")
 
     def open_algo_orders(self, symbol: str | None = None) -> list[dict[str, Any]]:
         params = {"symbol": str(symbol).upper()} if symbol else {}
         result = self._request("GET", "/fapi/v1/openAlgoOrders", params, signed=True)
         if isinstance(result, list):
-            return [x for x in result if isinstance(x, dict)]
+            if any(not isinstance(row, dict) for row in result):
+                raise FuturesAPIError("Binance Futures openAlgoOrders contains a malformed row")
+            return result
         if isinstance(result, dict) and isinstance(result.get("orders"), list):
-            return [x for x in result["orders"] if isinstance(x, dict)]
-        return [result] if isinstance(result, dict) and result.get("algoId") else []
+            rows = result["orders"]
+            if any(not isinstance(row, dict) for row in rows):
+                raise FuturesAPIError("Binance Futures openAlgoOrders contains a malformed row")
+            return rows
+        if isinstance(result, dict) and result.get("algoId") is not None:
+            return [result]
+        raise FuturesAPIError("Binance Futures openAlgoOrders returned a malformed payload")
 
     def normalize_price(
         self,
