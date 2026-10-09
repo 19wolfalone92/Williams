@@ -765,3 +765,36 @@ def test_terminal_entry_response_is_not_reported_as_armed(tmp_path, terminal_sta
         assert db.state_get("position_state:BTCUSDT") == "RECONCILE_REQUIRED"
     finally:
         db.conn.close()
+
+def test_runtime_recovery_persists_campaign_and_position_reconcile_locks_on_exception():
+    from types import SimpleNamespace
+    from campaign_model import CampaignState
+
+    events = []
+    campaign = SimpleNamespace(state=CampaignState.ENTRY_PENDING)
+    engine = SimpleNamespace(
+        load_campaign=lambda campaign_id: campaign,
+        mark_reconcile_required=lambda loaded, reason: (
+            setattr(loaded, "state", CampaignState.RECONCILE_REQUIRED),
+            events.append(("campaign", reason)),
+        ),
+    )
+    row = {"symbol": "BTCUSDT", "campaign_id": "c-1", "tags": {"execution_mode": "FUTURES"}}
+    execution = SimpleNamespace(
+        _active_rows=lambda: [row],
+        _row_tags=lambda item: item["tags"],
+        reconcile_symbol=lambda symbol: (_ for _ in ()).throw(ValueError("invalid fill data")),
+        engine=engine,
+    )
+    state = {}
+    runtime = object.__new__(FuturesRuntime)
+    runtime.execution = execution
+    runtime.db = SimpleNamespace(state_set=lambda key, value: state.__setitem__(key, value))
+
+    result = runtime._recover()
+
+    assert result[0]["state"] == "RECONCILE_REQUIRED"
+    assert campaign.state == CampaignState.RECONCILE_REQUIRED
+    assert state["campaign_state:c-1"] == "RECONCILE_REQUIRED"
+    assert state["position_state:BTCUSDT"] == "RECONCILE_REQUIRED"
+    assert events and "invalid fill data" in events[0][1]
