@@ -51,7 +51,7 @@ def main():
 
  bt=Backtester(a.capital,a.fee,a.slippage,a.position_fraction,a.stop,a.target)
  eq,tr=bt.run(ind)
- m=calculate_metrics(eq,tr,a.interval)
+ m=calculate_metrics(eq,tr,a.interval,starting_capital=a.capital)
 
  if not a.skip_cpcv and len(ind) >= 60:
   samples=[]
