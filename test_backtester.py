@@ -96,3 +96,18 @@ def test_gap_through_stop_remains_adverse_when_target_is_also_touched():
     _, trades = bt.run(data)
     assert trades.iloc[0].reason == "STOP"
     assert trades.iloc[0].exit_price == 90
+
+
+def test_backtester_rejects_missing_or_ambiguous_signal_values():
+    base = candles([
+        (100, 101, 99, 100, False),
+        (100, 101, 99, 100, False),
+    ])
+    missing = base.copy()
+    missing.iloc[0, missing.columns.get_loc("long_signal")] = np.nan
+    with pytest.raises(ValueError, match="missing values"):
+        Backtester().run(missing)
+    ambiguous = base.copy()
+    ambiguous["long_signal"] = ["false", "true"]
+    with pytest.raises(ValueError, match="booleans or 0/1"):
+        Backtester().run(ambiguous)
