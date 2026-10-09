@@ -612,8 +612,8 @@ internal class FuturesNativeEngine(
             if (unowned) lastError = "Unmanaged or malformed Futures position blocks new entries"
             if (unownedOrders) lastError = "Unmanaged or unverified account-wide Futures orders block new entries"
             manageExistingCampaigns(exchange)
-            updateDailyBaseline(equity)
-            val dailyLoss = dailyLossFraction(equity)
+            val baselinePersisted = updateDailyBaseline(equity)
+            val dailyLoss = if (baselinePersisted) dailyLossFraction(equity) else 1.0
             if (killLatched) {
                 val exits = enforceKillOnCampaigns(exchange)
                 lastScanSummary = JSONObject()
@@ -724,18 +724,21 @@ internal class FuturesNativeEngine(
         return value.takeIf { it.isFinite() && it > 0.0 } ?: 0.0
     }
 
-    private fun updateDailyBaseline(equity: Double) {
+    private fun updateDailyBaseline(equity: Double): Boolean {
+        if (!equity.isFinite() || equity <= 0.0) return false
         val day = Instant.ofEpochMilli(System.currentTimeMillis())
             .atZone(ZoneOffset.UTC).toLocalDate().toString()
         val savedDay = prefs.getString("futures_daily_day", "")
         if (savedDay != day) {
-            prefs.edit()
+            // A failed synchronous commit must block entries this cycle.
+            return prefs.edit()
                 .putString("futures_daily_day", day)
                 .putString("futures_daily_equity", equity.toString())
                 .commit()
         }
         // If today's baseline is missing/corrupt, do not replace it with the
-        // current equity: that would erase the loss history and reopen entries.
+        // current equity: dailyLossFraction() returns a lockout instead.
+        return true
     }
 
     private fun dailyLossFraction(equity: Double): Double {
@@ -1949,22 +1952,67 @@ internal class FuturesNativeEngine(
     private fun recordMarketExit(exchange: BinanceUsdmFuturesClient, campaign: JSONObject, response: JSONObject, reason: String) {
         val symbol = campaign.optString("symbol").uppercase(Locale.US)
         val orderId = response.optString("orderId")
+        val clientOrderId = response.optString("clientOrderId")
+        val side = exchange.directionToExitSide(campaign.optString("direction"))
+        if (orderId.isBlank() || clientOrderId.isBlank() ||
+            response.optString("status").uppercase(Locale.US) != "FILLED" ||
+            response.optString("symbol").uppercase(Locale.US) != symbol ||
+            response.optString("side").uppercase(Locale.US) != side
+        ) {
+            throw FuturesApiException("$symbol market exit identity/status is not authoritatively FILLED")
+        }
+        val executed = response.optString("executedQty").toDoubleOrNull()
+            ?: throw FuturesApiException("$symbol market exit executedQty is missing or invalid")
+        if (!executed.isFinite() || executed <= 0.0) {
+            throw FuturesApiException("$symbol market exit executedQty is non-finite or non-positive")
+        }
+        val trades = exchange.getUserTrades(symbol, orderId)
+        if (trades.length() == 0) {
+            throw FuturesApiException("$symbol market exit has no authoritative userTrades yet")
+        }
         var realized = 0.0
         var feesQuote = 0.0
         var feeUnknown = false
-        runCatching {
-            val trades = exchange.getUserTrades(symbol, orderId)
-            for (i in 0 until trades.length()) {
-                val row = trades.optJSONObject(i) ?: continue
-                realized += row.optString("realizedPnl").toDoubleOrNull() ?: 0.0
-                val fee = row.optString("commission").toDoubleOrNull() ?: 0.0
-                when (row.optString("commissionAsset").uppercase(Locale.US)) {
-                    "USDT", "USDC" -> feesQuote += fee
-                    "" -> Unit
-                    else -> feeUnknown = true
-                }
+        var tradeQty = 0.0
+        for (i in 0 until trades.length()) {
+            val row = trades.optJSONObject(i)
+                ?: throw FuturesApiException("$symbol market exit userTrades contains a malformed row")
+            if (row.optString("symbol").uppercase(Locale.US) != symbol ||
+                (row.has("orderId") && row.optString("orderId") != orderId)
+            ) {
+                throw FuturesApiException("$symbol market exit userTrades identity mismatch")
             }
-        }.onFailure { feeUnknown = true }
+            val qty = row.optString("qty").toDoubleOrNull()
+                ?: throw FuturesApiException("$symbol market exit trade quantity is invalid")
+            val price = row.optString("price").toDoubleOrNull()
+                ?: throw FuturesApiException("$symbol market exit trade price is invalid")
+            val pnl = row.optString("realizedPnl").toDoubleOrNull()
+                ?: throw FuturesApiException("$symbol market exit realizedPnl is missing or invalid")
+            val fee = row.optString("commission").toDoubleOrNull()
+                ?: throw FuturesApiException("$symbol market exit commission is missing or invalid")
+            if (!listOf(qty, price, pnl, fee).all(Double::isFinite) ||
+                qty <= 0.0 || price <= 0.0 || fee < 0.0
+            ) {
+                throw FuturesApiException("$symbol market exit userTrades contains invalid numeric values")
+            }
+            val feeAsset = row.optString("commissionAsset").uppercase(Locale.US)
+            if (fee > 0.0 && feeAsset.isBlank()) {
+                throw FuturesApiException("$symbol market exit commission asset is missing")
+            }
+            tradeQty += qty
+            realized += pnl
+            when (feeAsset) {
+                "USDT", "USDC" -> feesQuote += fee
+                "" -> Unit
+                else -> feeUnknown = true
+            }
+        }
+        if (!tradeQty.isFinite() || abs(tradeQty - executed) > max(1e-8, executed * 1e-6)) {
+            throw FuturesApiException("$symbol market exit executedQty disagrees with userTrades")
+        }
+        if (!realized.isFinite() || !feesQuote.isFinite()) {
+            throw FuturesApiException("$symbol market exit accounting totals are non-finite")
+        }
         campaign.put("realized_pnl_quote", campaign.optDouble("realized_pnl_quote", 0.0) + realized - feesQuote)
         campaign.put("last_exit_order_id", orderId)
         campaign.put("last_exit_fee_quote", feesQuote)
@@ -1981,19 +2029,46 @@ internal class FuturesNativeEngine(
     ) {
         val symbol = campaign.optString("symbol").uppercase(Locale.US)
         val orderId = actualOrder.optString("orderId")
+        val executed = actualOrder.optString("executedQty").toDoubleOrNull()
+            ?: throw FuturesApiException("$symbol protective exit executedQty is invalid")
+        if (orderId.isBlank() || actualOrder.optString("status").uppercase(Locale.US) != "FILLED" ||
+            !executed.isFinite() || executed <= 0.0
+        ) throw FuturesApiException("$symbol protective child is not an authoritative fill")
         val trades = exchange.getUserTrades(symbol, orderId)
+        if (trades.length() == 0) throw FuturesApiException("$symbol protective exit has no authoritative userTrades")
         var realized = 0.0
         var feeQuote = 0.0
         var unknown = false
+        var tradeQty = 0.0
         for (i in 0 until trades.length()) {
-            val row = trades.optJSONObject(i) ?: continue
-            realized += row.optString("realizedPnl").toDoubleOrNull() ?: 0.0
-            val fee = row.optString("commission").toDoubleOrNull() ?: 0.0
-            when (row.optString("commissionAsset").uppercase(Locale.US)) {
+            val row = trades.optJSONObject(i)
+                ?: throw FuturesApiException("$symbol protective userTrades contains a malformed row")
+            if (row.optString("symbol").uppercase(Locale.US) != symbol ||
+                (row.has("orderId") && row.optString("orderId") != orderId)
+            ) throw FuturesApiException("$symbol protective userTrades identity mismatch")
+            val qty = row.optString("qty").toDoubleOrNull()
+                ?: throw FuturesApiException("$symbol protective trade quantity is invalid")
+            val price = row.optString("price").toDoubleOrNull()
+                ?: throw FuturesApiException("$symbol protective trade price is invalid")
+            val pnl = row.optString("realizedPnl").toDoubleOrNull()
+                ?: throw FuturesApiException("$symbol protective realizedPnl is invalid")
+            val fee = row.optString("commission").toDoubleOrNull()
+                ?: throw FuturesApiException("$symbol protective commission is invalid")
+            if (!listOf(qty, price, pnl, fee).all(Double::isFinite) ||
+                qty <= 0.0 || price <= 0.0 || fee < 0.0
+            ) throw FuturesApiException("$symbol protective userTrades has invalid numeric values")
+            val asset = row.optString("commissionAsset").uppercase(Locale.US)
+            if (fee > 0.0 && asset.isBlank()) throw FuturesApiException("$symbol protective commission asset is missing")
+            tradeQty += qty
+            realized += pnl
+            when (asset) {
                 "USDT", "USDC" -> feeQuote += fee
                 "" -> Unit
                 else -> unknown = true
             }
+        }
+        if (!tradeQty.isFinite() || abs(tradeQty - executed) > max(1e-8, executed * 1e-6)) {
+            throw FuturesApiException("$symbol protective executedQty disagrees with userTrades")
         }
         campaign.put("realized_pnl_quote", campaign.optDouble("realized_pnl_quote", 0.0) + realized - feeQuote)
         campaign.put("exit_reason", reason)
