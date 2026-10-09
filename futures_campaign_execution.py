@@ -615,7 +615,7 @@ class FuturesCampaignExecutionService:
             order = result.response or {}
             order_id = str(order.get("algoId", "") or "")
             status = str(order.get("algoStatus", "") or order.get("status", "NEW")).upper()
-            if status not in {"NEW", "WORKING", "PENDING_NEW"}:
+            if status not in {"NEW", "WORKING", "PENDING", "PENDING_NEW"}:
                 reason = f"{symbol}: entry algo status is not active: {status or 'MISSING'}"
                 campaign.tags["entry_response_not_active"] = {
                     "client_algo_id": client_algo_id,
@@ -852,7 +852,7 @@ class FuturesCampaignExecutionService:
             pending_type = str(pending_order.get("orderType", pending_order.get("type", "")) or "").upper()
             pending_close_position = str(pending_order.get("closePosition", "")).lower() in {"true", "1"}
             pending_trigger = pending_order.get("triggerPrice")
-            active_statuses = {"NEW", "WORKING", "PENDING_NEW"}
+            active_statuses = {"NEW", "WORKING", "PENDING", "PENDING_NEW"}
             safe_terminal_statuses = {"CANCELED", "CANCELLED", "EXPIRED", "REJECTED"}
             try:
                 trigger_matches = (
@@ -1075,7 +1075,7 @@ class FuturesCampaignExecutionService:
             raise FuturesCampaignExecutionError(
                 f"{reason}; reconciliation required before further exposure"
             )
-        if status not in {"NEW", "WORKING", "PENDING_NEW"}:
+        if status not in {"NEW", "WORKING", "PENDING", "PENDING_NEW"}:
             # A syntactically valid exchange response is not proof of active
             # protection. Terminal/rejected states must never be persisted as
             # an armed stop; preserve the client ID for authoritative recovery.
@@ -2632,7 +2632,7 @@ class FuturesCampaignExecutionService:
             response = result.response or {}
             status = str(response.get("algoStatus", "") or response.get("status", "")).upper()
             algo_id = str(response.get("algoId", "") or "")
-            if status not in {"NEW", "WORKING", "PENDING_NEW"} or not algo_id:
+            if status not in {"NEW", "WORKING", "PENDING", "PENDING_NEW"} or not algo_id:
                 reason = f"{symbol}: add-on order response is not confirmed active (status={status or 'UNKNOWN'})"
                 self.engine.mark_reconcile_required(campaign, reason)
                 self.db.state_set(f"campaign_state:{campaign.campaign_id}", CampaignState.RECONCILE_REQUIRED.value)
