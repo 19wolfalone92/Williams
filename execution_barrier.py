@@ -232,6 +232,43 @@ class ExecutionBarrier:
                     self._record("WARNING", "execution_blocked", intent, reason)
                     return ExecutionResult(intent.intent_id, False, reason=reason)
 
+            # A stable client ID is the exchange-side idempotency key. If
+            # any earlier non-cancel intent with this ID reached PENDING or
+            # beyond, do not issue another POST: resolve the original request
+            # by querying Binance first. A BLOCKED row is safe to retry because
+            # validation guarantees submit() was never called.
+            if (
+                intent.order_type.upper() != "CANCEL"
+                and self.db is not None
+                and callable(getattr(self.db, "find_execution_intent_by_client_order_id", None))
+                and str(intent.client_order_id or "").strip()
+            ):
+                try:
+                    prior = self.db.find_execution_intent_by_client_order_id(
+                        intent.client_order_id,
+                        symbol=intent.symbol,
+                    )
+                except Exception as exc:
+                    reason = (
+                        "execution_idempotency_lookup_failed: submission aborted; "
+                        f"cannot prove client ID is unused ({type(exc).__name__}: {exc})"
+                    )
+                    self._record("ERROR", "execution_idempotency_lookup_failed", intent, reason)
+                    return ExecutionResult(intent.intent_id, False, reason=reason)
+                if prior and str(prior.get("status", "")).upper() != "BLOCKED":
+                    reason = (
+                        "duplicate client_order_id refused; prior durable intent "
+                        f"{prior.get('intent_id')} is {prior.get('status') or 'UNKNOWN'}; "
+                        "reconcile the existing Binance order before retrying"
+                    )
+                    self._persist(intent, "BLOCKED", reason)
+                    self._record("ERROR", "execution_duplicate_client_order_id", intent, reason, {
+                        "prior_intent_id": prior.get("intent_id"),
+                        "prior_status": prior.get("status"),
+                        "client_order_id": intent.client_order_id,
+                    })
+                    return ExecutionResult(intent.intent_id, False, reason=reason)
+
             # Durable intent must exist before the first exchange mutation.
             # When storage is unavailable, fail closed and never call submit().
             persisted = self._persist(intent, "PENDING")
