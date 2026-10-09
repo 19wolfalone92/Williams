@@ -200,6 +200,21 @@ class FuturesCampaignExecutionService:
             raise FuturesCampaignExecutionError(
                 f"{symbol}: authoritative positionRisk response omitted the symbol"
             )
+        raw_amount = row.get("positionAmt")
+        if raw_amount is None or str(raw_amount).strip() == "":
+            raise FuturesCampaignExecutionError(
+                f"{symbol}: authoritative positionRisk omitted positionAmt"
+            )
+        try:
+            amount = float(raw_amount)
+        except (TypeError, ValueError) as exc:
+            raise FuturesCampaignExecutionError(
+                f"{symbol}: invalid positionAmt in authoritative positionRisk"
+            ) from exc
+        if not math.isfinite(amount):
+            raise FuturesCampaignExecutionError(
+                f"{symbol}: non-finite positionAmt in authoritative positionRisk"
+            )
         return row
 
     def _position_amount(self, symbol: str) -> float:
@@ -275,12 +290,17 @@ class FuturesCampaignExecutionService:
         unmanaged = []
         for row in rows:
             sym = str(row.get("symbol", "")).upper()
+            raw_amount = row.get("positionAmt")
+            if raw_amount is None or str(raw_amount).strip() == "":
+                raise FuturesCampaignExecutionError(
+                    f"{sym}: positionRisk omitted positionAmt during account-wide reconciliation"
+                )
             try:
-                amount = float(row.get("positionAmt", 0) or 0)
-            except (TypeError, ValueError):
+                amount = float(raw_amount)
+            except (TypeError, ValueError) as exc:
                 raise FuturesCampaignExecutionError(
                     f"{sym}: invalid positionAmt during account-wide reconciliation"
-                )
+                ) from exc
             if not math.isfinite(amount):
                 raise FuturesCampaignExecutionError(
                     f"{sym}: non-finite positionAmt during account-wide reconciliation"
