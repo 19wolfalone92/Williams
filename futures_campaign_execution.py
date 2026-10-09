@@ -3444,6 +3444,26 @@ class FuturesCampaignExecutionService:
                     return {"symbol": symbol, "state": "RECONCILE_REQUIRED", "reason": reason}
 
                 status = str(protection.get("algoStatus", "")).upper()
+                if status in {"TRIGGERED", "FINISHED"}:
+                    # A triggered/finished closePosition stop may have only
+                    # partially closed the live position. Do not silently arm
+                    # another stop and lose the old child's fill history. Force
+                    # a reduce-only residual exit; its durable order and trade
+                    # history must reconcile before the campaign can close.
+                    reason = (
+                        f"{symbol}: protective stop is {status} while exchange position remains open; "
+                        "residual position requires emergency reduction and fill reconciliation"
+                    )
+                    self.engine.mark_reconcile_required(campaign, reason)
+                    self.db.state_set(
+                        f"campaign_state:{campaign.campaign_id}",
+                        CampaignState.RECONCILE_REQUIRED.value,
+                    )
+                    self.db.state_set(f"position_state:{symbol}", CampaignState.RECONCILE_REQUIRED.value)
+                    return self.exit_position(
+                        campaign,
+                        reason="PROTECTIVE_STOP_TRIGGERED_WITH_RESIDUAL_POSITION",
+                    )
                 if status not in {"NEW", "WORKING", "PENDING", "PENDING_NEW"}:
                     try:
                         self.place_protection(campaign)
