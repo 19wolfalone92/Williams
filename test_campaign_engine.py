@@ -231,3 +231,20 @@ def test_initial_fill_rejects_invalid_numeric_values_and_missing_order_id(overri
                 engine.record_initial_fill(campaign, **values)
         finally:
             db.conn.close()
+
+
+def test_reconcile_required_campaign_retains_risk_and_capital_reservations():
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "w.sqlite3"))
+        engine = CampaignEngine(db)
+        try:
+            campaign = _open_campaign_for_add_on(db, engine, open_risk=4.0, budget=5.0)
+            campaign.pending_risk_quote = 1.0
+            campaign.capital_reserved_quote = 25.0
+            campaign.mark_reconcile_required("simulated unknown exchange execution")
+            db.save_campaign(campaign)
+
+            assert engine.portfolio_reserved_risk_quote() == pytest.approx(5.0)
+            assert engine.portfolio_reserved_capital_quote() == pytest.approx(25.0)
+        finally:
+            db.conn.close()
