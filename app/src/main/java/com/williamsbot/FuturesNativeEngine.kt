@@ -277,19 +277,23 @@ internal class FuturesNativeEngine(
     }
 
     fun pause(): JSONObject {
-        paused = true
-        auditEvent("futures_paused", JSONObject().put("reason", "new entries disabled; open exposure remains managed"))
+        synchronized(cycleLock) {
+            paused = true
+            auditEvent("futures_paused", JSONObject().put("reason", "new entries disabled; open exposure remains managed"))
+        }
         return status().put("state", "PAUSED")
     }
 
     fun resume(): JSONObject {
-        require(!killLatched) { "KILL_SWITCH_LATCHED; recover before resume" }
-        paused = false
+        synchronized(cycleLock) {
+            require(!killLatched) { "KILL_SWITCH_LATCHED; recover before resume" }
+            paused = false
+        }
         return status().put("state", if (running) "RUNNING" else "STOPPED")
     }
 
     fun stop(): JSONObject {
-        synchronized(lock) {
+        synchronized(cycleLock) {
             paused = true
             running = false
             stopLoop.set(true)
@@ -571,6 +575,7 @@ internal class FuturesNativeEngine(
                 return
             }
             val available = account.optString("availableBalance").toDoubleOrNull() ?: 0.0
+            var reservedRiskQuote = active.sumOf { it.optDouble("risk_quote", 0.0).coerceAtLeast(0.0) }
             var newEntries = 0
             val decisions = JSONArray()
             for (symbol in symbols()) {
@@ -586,8 +591,8 @@ internal class FuturesNativeEngine(
                         decisions.put(JSONObject().put("symbol", symbol).put("action", "WAIT").put("reason", "no valid directional Williams trigger"))
                         continue
                     }
-                    val riskUsed = active.sumOf { it.optDouble("risk_quote", 0.0) }
-                    val riskBudget = min(equity * perCampaignRiskFraction, max(0.0, equity * portfolioRiskFraction - riskUsed))
+                    val remainingPortfolioRisk = max(0.0, equity * portfolioRiskFraction - reservedRiskQuote)
+                    val riskBudget = min(equity * perCampaignRiskFraction, remainingPortfolioRisk)
                     if (riskBudget <= 0.0) {
                         decisions.put(JSONObject().put("symbol", symbol).put("action", "BLOCKED").put("reason", "portfolio risk budget exhausted"))
                         continue
@@ -595,12 +600,23 @@ internal class FuturesNativeEngine(
                     val quantity = sizePosition(exchange, symbol, signal, equity, available, riskBudget)
                     val result = armEntry(exchange, signal, quantity, riskBudget, equity)
                     decisions.put(result)
-                    if (result.optString("action") == "ENTRY_ARMED") newEntries++
+                    if (result.optString("action") == "ENTRY_ARMED") {
+                        newEntries++
+                        // Reserve budget immediately inside the same scan cycle;
+                        // otherwise every symbol could spend the same remaining 1%.
+                        reservedRiskQuote += riskBudget
+                    }
                     if (active.size + newEntries >= maxPositions) break
                 } catch (x: Exception) {
                     decisions.put(JSONObject().put("symbol", symbol).put("action", "WAIT").put("reason", x.message ?: x.javaClass.simpleName))
-                    if (x is FuturesApiException && x.outcomeUnknown) reconcileRequired = true
+                    if (x is FuturesApiException && x.outcomeUnknown) {
+                        reconcileRequired = true
+                        lastError = x.message ?: "Ambiguous exchange mutation"
+                    }
                 }
+                // An ambiguous exchange result freezes the rest of this scan;
+                // never open another symbol until order/position reconciliation.
+                if (reconcileRequired) break
             }
             scanCount++
             lastScanAtMs = System.currentTimeMillis()
