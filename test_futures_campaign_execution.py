@@ -1562,7 +1562,7 @@ def test_flat_position_recovers_filled_pending_market_exit_before_new_submit(tmp
             "realizedPnl": "-0.5", "commission": "0.1", "commissionAsset": "USDT",
         }]
 
-        result = service.exit_position(campaign, reason="RECOVERY_RETRY")
+        result = service.reconcile_symbol("BTCUSDT")
 
         assert result["action"] == "CLOSED"
         assert result["realized_pnl_quote_net_known_fees"] == pytest.approx(-0.6)
