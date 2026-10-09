@@ -905,10 +905,36 @@ class FuturesRuntime:
                 prepared = []
                 for symbol in self.symbols:
                     pos_rows = self._rows(self.client.position_risk(symbol))
-                    live_position = any(
-                        abs(float(row.get("positionAmt", 0) or 0)) > 1e-12
-                        for row in pos_rows
-                    )
+                    live_position = False
+                    if pos_rows:
+                        position_row = next(
+                            (row for row in pos_rows if str(row.get("symbol", "")).upper() == symbol),
+                            None,
+                        )
+                        if position_row is None:
+                            startup_blockers.append(
+                                f"{symbol}: symbol-scoped positionRisk returned a different symbol"
+                            )
+                            continue
+                        raw_amount = position_row.get("positionAmt")
+                        if raw_amount is None or str(raw_amount).strip() == "":
+                            startup_blockers.append(
+                                f"{symbol}: symbol-scoped positionRisk omitted positionAmt"
+                            )
+                            continue
+                        try:
+                            amount = float(raw_amount)
+                        except (TypeError, ValueError):
+                            startup_blockers.append(
+                                f"{symbol}: symbol-scoped positionRisk has invalid positionAmt"
+                            )
+                            continue
+                        if not math.isfinite(amount):
+                            startup_blockers.append(
+                                f"{symbol}: symbol-scoped positionRisk has non-finite positionAmt"
+                            )
+                            continue
+                        live_position = abs(amount) > 1e-12
                     has_orders = bool(
                         self.client.open_orders(symbol)
                         or self.client.open_algo_orders(symbol)
