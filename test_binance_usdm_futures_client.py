@@ -46,15 +46,19 @@ def test_account_permissions_reads_explicit_can_trade_from_v2(monkeypatch):
 
     def fake_request(method, path, params=None, signed=False):
         calls.append((method, path, signed))
-        return {"canTrade": True}
+        return {"canTrade": True, "multiAssetsMargin": False}
 
     monkeypatch.setattr(client, "_request", fake_request)
 
-    assert client.account_permissions() == {"canTrade": True}
+    assert client.account_permissions() == {"canTrade": True, "multiAssetsMargin": False}
     assert calls == [("GET", "/fapi/v2/account", True)]
 
 
-@pytest.mark.parametrize("payload", [{}, {"canTrade": None}, {"canTrade": "unknown"}])
+@pytest.mark.parametrize("payload", [
+    {"multiAssetsMargin": False},
+    {"canTrade": None, "multiAssetsMargin": False},
+    {"canTrade": "unknown", "multiAssetsMargin": False},
+])
 def test_account_permissions_rejects_missing_or_ambiguous_can_trade(monkeypatch, payload):
     client = make_client()
     monkeypatch.setattr(client, "_request", lambda *args, **kwargs: payload)
@@ -66,10 +70,33 @@ def test_account_permissions_rejects_missing_or_ambiguous_can_trade(monkeypatch,
 def test_account_permissions_returns_false_when_exchange_disables_trading(monkeypatch):
     client = make_client()
     monkeypatch.setattr(
-        client, "_request", lambda *args, **kwargs: {"canTrade": False}
+        client, "_request", lambda *args, **kwargs: {"canTrade": False, "multiAssetsMargin": False}
     )
 
-    assert client.account_permissions() == {"canTrade": False}
+    assert client.account_permissions() == {"canTrade": False, "multiAssetsMargin": False}
+
+
+def test_account_permissions_requires_explicit_single_asset_mode(monkeypatch):
+    client = make_client()
+    monkeypatch.setattr(
+        client,
+        "_request",
+        lambda *args, **kwargs: {"canTrade": True},
+    )
+
+    with pytest.raises(FuturesAPIError, match="multiAssetsMargin"):
+        client.account_permissions()
+
+
+def test_account_permissions_reports_multi_asset_mode_when_enabled(monkeypatch):
+    client = make_client()
+    monkeypatch.setattr(
+        client,
+        "_request",
+        lambda *args, **kwargs: {"canTrade": True, "multiAssetsMargin": True},
+    )
+
+    assert client.account_permissions() == {"canTrade": True, "multiAssetsMargin": True}
 
 
 def test_symbol_configuration_reads_margin_and_leverage_from_symbol_config(monkeypatch):
