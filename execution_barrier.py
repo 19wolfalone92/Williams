@@ -374,17 +374,20 @@ class ExecutionBarrier:
                     order_list_id = -1
                 list_type = str(response.get("listStatusType", "")).upper() if isinstance(response, dict) else ""
                 list_status = str(response.get("listOrderStatus", "")).upper() if isinstance(response, dict) else ""
-                reports_valid = (
-                    isinstance(reports, list)
-                    and len(reports) >= 2
-                    and all(
-                        isinstance(row, dict)
-                        and str(row.get("status", "")).upper() == "CANCELED"
-                        and math.isfinite(float(row.get("executedQty", 0) or 0))
-                        and float(row.get("executedQty", 0) or 0) == 0
-                        for row in reports
-                    )
-                )
+                reports_valid = isinstance(reports, list) and len(reports) >= 2
+                if reports_valid:
+                    for row in reports:
+                        if not isinstance(row, dict) or str(row.get("status", "")).upper() != "CANCELED":
+                            reports_valid = False
+                            break
+                        try:
+                            leg_executed = float(row.get("executedQty", 0) or 0)
+                        except (TypeError, ValueError, OverflowError):
+                            reports_valid = False
+                            break
+                        if not math.isfinite(leg_executed) or leg_executed != 0:
+                            reports_valid = False
+                            break
                 if (
                     order_list_id < 0
                     or list_type != "ALL_DONE"
