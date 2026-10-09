@@ -959,6 +959,14 @@ class FuturesCampaignExecutionService:
                 raise FuturesCampaignExecutionError(
                     f"{symbol}: old protective order cancellation blocked: {result.reason}"
                 )
+            cancel_response = result.response if isinstance(result.response, dict) else {}
+            cancel_status = str(
+                cancel_response.get("algoStatus", "") or cancel_response.get("status", "")
+            ).upper()
+            if cancel_status not in {"CANCELED", "EXPIRED"}:
+                raise FuturesCampaignExecutionError(
+                    f"{symbol}: old protective order cancellation is not confirmed terminal: {cancel_status or 'UNKNOWN'}"
+                )
         except Exception as exc:
             reason = (
                 f"{symbol}: new stop {new_protection.get('stop_price')} is active, "
