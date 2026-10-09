@@ -1876,6 +1876,32 @@ def test_empty_v3_position_risk_is_authoritative_flat_snapshot(tmp_path):
         db.conn.close()
 
 
+def test_position_risk_wrapper_payload_is_not_treated_as_empty(tmp_path):
+    db = Database(str(tmp_path / "wrapped-position-risk.sqlite3"))
+    try:
+        cache = ContextCache()
+        make_context(cache, allow_long=True, allow_short=False)
+        client = FakeFuturesClient(102.0)
+        client.position_risk = lambda symbol=None: {"positions": []}
+        service = FuturesCampaignExecutionService(
+            client,
+            db,
+            execution_barrier=ExecutionBarrier(cache, db),
+        )
+
+        with pytest.raises(FuturesCampaignExecutionError, match="malformed payload"):
+            service.arm_initial_entry(
+                make_signal("LONG"),
+                equity_quote=10000.0,
+                atr=2.0,
+                candidate_risk_fraction=0.005,
+            )
+
+        assert client.stop_entries == []
+    finally:
+        db.conn.close()
+
+
 def test_malformed_position_payload_blocks_new_entry_fail_closed(tmp_path):
     db = Database(str(tmp_path / "malformed-position-risk.sqlite3"))
     try:
