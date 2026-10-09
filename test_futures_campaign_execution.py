@@ -246,6 +246,7 @@ def test_futures_campaign_arms_correct_directional_conditional_entry(
             campaign_risk_limit_pct=0.005,
         )
 
+        initial_entry_count = len(client.stop_entries)
         result = service.arm_initial_entry(
             make_signal(direction),
             equity_quote=10000.0,
@@ -360,6 +361,7 @@ def test_kill_latch_keeps_existing_position_management_enabled():
         lambda self, equity: (True, "within limit"),
         runtime,
     )
+    runtime._cancel_pending_entries = MethodType(lambda self, reason: [], runtime)
 
     result = runtime.scan_once()
 
@@ -1246,7 +1248,7 @@ def test_futures_add_on_reserves_risk_and_arms_directionally(tmp_path):
         assert saved.state.value == "ADD_ON_PENDING"
         assert saved.pending_risk_quote > 0
         assert saved.tags["pending_add_on_client_algo_id"] == result["client_algo_id"]
-        assert len(client.stop_entries) == 1
+        assert len(client.stop_entries) == initial_entry_count + 1
     finally:
         db.conn.close()
 
