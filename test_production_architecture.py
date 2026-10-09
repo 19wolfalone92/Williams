@@ -712,3 +712,31 @@ def test_execution_barrier_rejects_malformed_non_entry_orders(quantity, client_i
     )
     assert not result.accepted
     assert calls == []
+
+
+def test_execution_barrier_rejects_oco_that_is_all_done_without_fill():
+    cache = ContextCache()
+    cache.publish(context())
+    db = IntentDB()
+    barrier = ExecutionBarrier(cache, db)
+    intent = OrderIntent.new(
+        "BTCUSDT",
+        "SELL",
+        "OCO",
+        {},
+        purpose="EXIT",
+        quantity="1",
+        client_order_id="WTEST_OCO_DEAD",
+    )
+    response = {
+        "orderListId": 93,
+        "listStatusType": "ALL_DONE",
+        "listOrderStatus": "ALL_DONE",
+        "orderReports": [
+            {"orderId": 921, "status": "CANCELED", "executedQty": "0"},
+            {"orderId": 922, "status": "EXPIRED", "executedQty": "0"},
+        ],
+    }
+    with pytest.raises(RuntimeError, match="OCO response"):
+        barrier.execute(intent, lambda: response)
+    assert db.intents[intent.intent_id][0] == "AMBIGUOUS"
