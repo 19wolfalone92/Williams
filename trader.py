@@ -810,6 +810,28 @@ class Trader:
     def _atr(df,period=14):
         prev=df['close'].shift(1); tr=__import__('pandas').concat([df['high']-df['low'],(df['high']-prev).abs(),(df['low']-prev).abs()],axis=1).max(axis=1); return float(tr.rolling(period).mean().iloc[-1])
 
+    def _portfolio_equity_quote(self):
+        """Use the same managed Spot-equity definition as MultiPositionTrader."""
+        account = self.client.account()
+        equity = sum(
+            float(row.get("free", 0) or 0) + float(row.get("locked", 0) or 0)
+            for row in account.get("balances", [])
+            if str(row.get("asset", "")).upper() == "USDT"
+        )
+        for trade in self.db.open_trades():
+            symbol = str(trade.get("symbol", "")).upper()
+            try:
+                quantity = float(trade.get("quantity", 0) or 0)
+                mark = float(self.client.ticker_price(symbol)["price"])
+            except (TypeError, ValueError, KeyError, OverflowError) as exc:
+                raise RuntimeError(f"{symbol}: portfolio mark unavailable") from exc
+            if not math.isfinite(quantity) or quantity < 0 or not math.isfinite(mark) or mark <= 0:
+                raise RuntimeError(f"{symbol}: invalid portfolio equity inputs")
+            equity += quantity * mark
+        if not math.isfinite(equity) or equity <= 0:
+            raise RuntimeError("portfolio equity unavailable or invalid")
+        return equity
+
     def _risk_gate(self, closed):
         if self.state()=='RECONCILE_REQUIRED': return False,'RECONCILE_REQUIRED'
         if self.state()!='FLAT': return False,f'state={self.state()}'
@@ -825,8 +847,12 @@ class Trader:
             return False, 'daily realized PnL invalid; new entries blocked'
         # Reuse the durable equity breaker on this legacy single-symbol path;
         # otherwise this path would bypass portfolio-wide daily-loss controls.
+        try:
+            portfolio_equity = self._portfolio_equity_quote()
+        except Exception as exc:
+            return False, f"portfolio equity unavailable; new entries blocked ({type(exc).__name__})"
         equity_ok, equity_reason = self.equity_breaker.check(
-            self.db, balance, self.symbol, unrealized_pnl_quote=0.0, fees_quote=0.0
+            self.db, portfolio_equity, self.symbol, unrealized_pnl_quote=0.0, fees_quote=0.0
         )
         if not equity_ok:
             return False, equity_reason
