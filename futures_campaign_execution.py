@@ -688,8 +688,131 @@ class FuturesCampaignExecutionService:
         normalized_stop = float(
             self.client.normalize_price(symbol, stop, direction=direction, purpose="STOP")
         )
-        client_algo_id = "W2FP_" + uuid.uuid4().hex[:24]
         order_side = "SELL" if direction == "LONG" else "BUY"
+
+        # A persisted pending clientAlgoId means a prior request may have reached
+        # Binance even if this process never received the response. Never mint a
+        # second ID until that exact order has been authoritatively reconciled.
+        pending_client_id = str(
+            campaign.tags.get("pending_protective_client_algo_id", "") or ""
+        )
+        if pending_client_id:
+            try:
+                pending_order = self.client.get_algo_order(
+                    symbol, client_algo_id=pending_client_id
+                )
+            except Exception as exc:
+                reason = (
+                    f"{symbol}: prior protective submission {pending_client_id} "
+                    f"cannot be reconciled; refusing duplicate submission: {exc}"
+                )
+                self.engine.mark_reconcile_required(campaign, reason)
+                self.db.save_campaign(campaign)
+                self.db.state_set(
+                    f"campaign_state:{campaign.campaign_id}",
+                    CampaignState.RECONCILE_REQUIRED.value,
+                )
+                self.db.state_set(
+                    f"position_state:{symbol}",
+                    CampaignState.RECONCILE_REQUIRED.value,
+                )
+                raise FuturesCampaignExecutionError(reason) from exc
+
+            pending_status = str(pending_order.get("algoStatus", "") or "").upper()
+            pending_side = str(pending_order.get("side", "") or "").upper()
+            pending_trigger = pending_order.get("triggerPrice")
+            active_statuses = {"NEW", "WORKING", "PENDING_NEW"}
+            safe_terminal_statuses = {"CANCELED", "CANCELLED", "EXPIRED", "REJECTED"}
+            try:
+                trigger_matches = (
+                    pending_trigger is not None
+                    and math.isclose(
+                        float(pending_trigger), normalized_stop,
+                        rel_tol=0.0, abs_tol=1e-8,
+                    )
+                )
+            except (TypeError, ValueError):
+                trigger_matches = False
+
+            if pending_status in active_statuses:
+                if (
+                    str(pending_order.get("clientAlgoId", "")) != pending_client_id
+                    or pending_side != order_side
+                    or not trigger_matches
+                ):
+                    reason = (
+                        f"{symbol}: pending protective order identity/side/trigger "
+                        "does not match the persisted intent; reconciliation required"
+                    )
+                    self.engine.mark_reconcile_required(campaign, reason)
+                    self.db.save_campaign(campaign)
+                    self.db.state_set(
+                        f"campaign_state:{campaign.campaign_id}",
+                        CampaignState.RECONCILE_REQUIRED.value,
+                    )
+                    self.db.state_set(
+                        f"position_state:{symbol}",
+                        CampaignState.RECONCILE_REQUIRED.value,
+                    )
+                    raise FuturesCampaignExecutionError(reason)
+                algo_id = str(pending_order.get("algoId", "") or "")
+                if not algo_id:
+                    reason = f"{symbol}: active pending protective order has no algoId"
+                    self.engine.mark_reconcile_required(campaign, reason)
+                    self.db.save_campaign(campaign)
+                    self.db.state_set(
+                        f"campaign_state:{campaign.campaign_id}",
+                        CampaignState.RECONCILE_REQUIRED.value,
+                    )
+                    self.db.state_set(
+                        f"position_state:{symbol}",
+                        CampaignState.RECONCILE_REQUIRED.value,
+                    )
+                    raise FuturesCampaignExecutionError(reason)
+                campaign.tags["protective_client_algo_id"] = pending_client_id
+                campaign.tags["protective_algo_id"] = algo_id
+                campaign.tags["protection_active"] = True
+                campaign.tags.pop("pending_protective_client_algo_id", None)
+                campaign.tags.pop("pending_protective_stop_price", None)
+                campaign.current_stop_price = normalized_stop
+                if campaign.initial_stop_price <= 0:
+                    campaign.initial_stop_price = normalized_stop
+                self.db.save_campaign(campaign)
+                return {
+                    "symbol": symbol,
+                    "direction": direction,
+                    "algo_id": algo_id,
+                    "client_algo_id": pending_client_id,
+                    "stop_price": normalized_stop,
+                    "status": pending_status,
+                    "recovered_existing_order": True,
+                }
+
+            if pending_status not in safe_terminal_statuses:
+                reason = (
+                    f"{symbol}: prior protective order {pending_client_id} has "
+                    f"ambiguous/non-retryable status {pending_status or 'UNKNOWN'}"
+                )
+                self.engine.mark_reconcile_required(campaign, reason)
+                self.db.save_campaign(campaign)
+                self.db.state_set(
+                    f"campaign_state:{campaign.campaign_id}",
+                    CampaignState.RECONCILE_REQUIRED.value,
+                )
+                self.db.state_set(
+                    f"position_state:{symbol}",
+                    CampaignState.RECONCILE_REQUIRED.value,
+                )
+                raise FuturesCampaignExecutionError(reason)
+
+            # Binance has authoritatively confirmed that the prior order is
+            # terminal and cannot protect the position. A new intent may now be
+            # created, but the terminal order remains in the event/order history.
+            campaign.tags.pop("pending_protective_client_algo_id", None)
+            campaign.tags.pop("pending_protective_stop_price", None)
+            self.db.save_campaign(campaign)
+
+        client_algo_id = "W2FP_" + uuid.uuid4().hex[:24]
         # Persist the clientAlgoId before the request. After a timeout, recovery
         # can query the exact conditional order instead of risking a duplicate.
         campaign.tags["pending_protective_client_algo_id"] = client_algo_id
