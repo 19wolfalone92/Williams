@@ -813,11 +813,18 @@ class Trader:
     def _portfolio_equity_quote(self):
         """Use the same managed Spot-equity definition as MultiPositionTrader."""
         account = self.client.account()
-        equity = sum(
-            float(row.get("free", 0) or 0) + float(row.get("locked", 0) or 0)
-            for row in account.get("balances", [])
-            if str(row.get("asset", "")).upper() == "USDT"
-        )
+        equity = 0.0
+        for balance in account.get("balances", []):
+            if str(balance.get("asset", "")).upper() != "USDT":
+                continue
+            try:
+                free = float(balance.get("free", 0) or 0)
+                locked = float(balance.get("locked", 0) or 0)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise RuntimeError("USDT balance is invalid; portfolio risk blocked") from exc
+            if not math.isfinite(free) or not math.isfinite(locked) or free < 0 or locked < 0:
+                raise RuntimeError("USDT balance is invalid; portfolio risk blocked")
+            equity += free + locked
         for trade in self.db.open_trades():
             symbol = str(trade.get("symbol", "")).upper()
             try:
