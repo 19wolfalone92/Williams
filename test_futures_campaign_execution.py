@@ -906,3 +906,31 @@ def test_exit_does_not_close_campaign_when_post_exit_quantity_is_non_finite(tmp_
         assert client.market_exits
     finally:
         db.conn.close()
+
+def test_exit_keeps_campaign_in_reconciliation_when_protection_cancel_is_unconfirmed(tmp_path):
+    db, client, service, campaign = _armed_entry_for_cancel(tmp_path, cancel_confirms=False)
+    try:
+        from campaign_model import CampaignState
+        client._position["positionAmt"] = "0.5"
+        client._position["entryPrice"] = "102.0"
+        client.algo_status = "NEW"
+        campaign.state = CampaignState.TREND_ACTIVE
+        campaign.position_qty = 0.5
+        campaign.average_entry_price = 102.0
+        campaign.open_risk_quote = 10.0
+        campaign.pending_risk_quote = 0.0
+        campaign.capital_reserved_quote = 0.0
+        campaign.tags["protective_client_algo_id"] = "old-stop-client"
+        campaign.tags["protective_algo_id"] = 456
+        service.db.save_campaign(campaign)
+
+        result = service.exit_position(campaign, reason="TEST_ORPHANED_STOP")
+
+        assert result["action"] == "RECONCILE_REQUIRED"
+        assert "cancellation is unconfirmed" in result["reason"]
+        assert campaign.state == CampaignState.RECONCILE_REQUIRED
+        assert db.state_get(f"campaign_state:{campaign.campaign_id}") == "RECONCILE_REQUIRED"
+        assert db.state_get("position_state:BTCUSDT") == "RECONCILE_REQUIRED"
+        assert client.market_exits
+    finally:
+        db.conn.close()
