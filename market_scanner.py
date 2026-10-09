@@ -80,6 +80,7 @@ class Candidate:
     # Campaign entry contract. These fields describe a conditional entry,
     # not an instruction to submit a MARKET order.
     campaign_ready: bool = False
+    direction: str = ""
     entry_signal_type: str = ""
     entry_trigger_price: float = 0.0
     entry_protective_reference: float = 0.0
@@ -260,6 +261,15 @@ class MarketScanner:
             return False
         if item.get("quoteAsset") != "USDT":
             return False
+
+        # USDⓈ-M Futures exchangeInfo uses contractType/marginAsset and does
+        # not promise Spot permissions. Do not apply the Spot gate to Futures.
+        if bool(getattr(self.client, "is_usdm_futures", False)):
+            return (
+                str(item.get("contractType", "")).upper() == "PERPETUAL"
+                and str(item.get("marginAsset", "USDT")).upper() == "USDT"
+            )
+
         if item.get("isSpotTradingAllowed") is False:
             return False
 
@@ -337,9 +347,13 @@ class MarketScanner:
 
         return list(self.symbols)
 
-    def _htf_confirmation(self, symbol):
+    def _htf_confirmation(self, symbol, direction="LONG"):
         if not self.require_htf_confirmation:
             return True
+
+        direction = str(direction or "LONG").upper()
+        if direction not in {"LONG", "SHORT"}:
+            return False
 
         htf = fetch_klines(
             self.client,
@@ -358,7 +372,10 @@ class MarketScanner:
             config_from_env(),
         )
         last = ind.iloc[-1]
-        return bool(last.get("bullish_alligator", False)) and float(last.get("ao", 0) or 0) > 0
+        ao = float(last.get("ao", 0) or 0)
+        if direction == "LONG":
+            return bool(last.get("bullish_alligator", False)) and ao > 0
+        return bool(last.get("bearish_alligator", False)) and ao < 0
 
     def _setup_state(self, last):
         strict_signal = bool(last.get("long_signal", False))
@@ -538,6 +555,10 @@ class MarketScanner:
                 signal_family=str(last.get("long_signal_family", "NONE") or "NONE"),
                 base_score=round(base_score, 2),
                 campaign_ready=campaign_signal,
+                direction=(
+                    str(getattr(campaign_specs[0], "direction", "") or "").upper()
+                    if campaign_specs else ""
+                ),
                 entry_signal_type=(
                     campaign_specs[0].signal_type.value if campaign_specs else ""
                 ),
@@ -671,6 +692,30 @@ class MarketScanner:
         enriched_signal_specs = []
         from campaign_model import SignalRole, SignalSpec, SignalType
         frame_setup = report.frames.get(self.interval)
+        direction_htf: dict[str, bool] = {}
+        for raw in candidate.campaign_signal_specs:
+            raw_direction = str(raw.get("direction", "") or "").upper()
+            if raw_direction not in {"LONG", "SHORT"}:
+                raw_direction = {
+                    "BUY": "LONG", "LONG": "LONG",
+                    "SELL": "SHORT", "SHORT": "SHORT",
+                }.get(str(raw.get("side", "")).upper(), "")
+            if raw_direction in {"LONG", "SHORT"} and raw_direction not in direction_htf:
+                try:
+                    direction_htf[raw_direction] = self._htf_confirmation(
+                        candidate.symbol,
+                        direction=raw_direction,
+                    )
+                except Exception as exc:
+                    log.warning(
+                        "Directional HTF confirmation failed for %s/%s: %s",
+                        candidate.symbol, raw_direction, exc,
+                    )
+                    direction_htf[raw_direction] = False
+        candidate_direction = str(candidate.direction or "").upper()
+        directional_htf_confirmed = (
+            direction_htf.get(candidate_direction, bool(report.htf_confirmed))
+        )
         for raw in candidate.campaign_signal_specs:
             try:
                 spec = SignalSpec(
@@ -693,7 +738,12 @@ class MarketScanner:
                     angulation_score=float(raw.get("angulation_score", 0.0) or 0.0),
                     wave_confidence=float(report.wave_score),
                     wave_exhaustion_risk=float(report.exhaustion_risk),
-                    htf_confirmed=bool(htf_confirmed),
+                    htf_confirmed=bool(
+                        direction_htf.get(
+                            str(raw.get("direction", "") or "").upper(),
+                            bool(htf_confirmed),
+                        )
+                    ),
                     context_versions=dict(raw.get("context_versions", {}) or {}),
                     reason=str(raw.get("reason", "")),
                     created_at_ms=int(raw.get("created_at_ms", 0) or 0),
@@ -707,7 +757,7 @@ class MarketScanner:
         return replace(
             candidate,
             score=round(final_score, 2),
-            htf_confirmed=htf_confirmed,
+            htf_confirmed=directional_htf_confirmed,
             reason=reason,
             base_score=round(float(candidate.base_score), 2),
             quant_rank_adjustment=round(float(quant_adjustment), 4),
