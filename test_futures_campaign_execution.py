@@ -1518,7 +1518,8 @@ def test_protective_exit_closes_only_when_trade_qty_matches_live_campaign(tmp_pa
         client._position["positionAmt"] = "0"
         client.algo_status = "FINISHED"
         client.get_algo_order = lambda symbol, *, algo_id=None, client_algo_id=None: {
-            "symbol": symbol, "algoId": "456", "clientAlgoId": "protective-test-id",
+            "symbol": symbol, "algoId": str(algo_id or "456"),
+            "clientAlgoId": client_algo_id or "protective-test-id",
             "algoStatus": "FINISHED", "actualOrderId": 789, "side": "SELL",
             "type": "STOP_MARKET", "orderType": "STOP_MARKET",
             "closePosition": True, "triggerPrice": "100.0",
@@ -1636,3 +1637,68 @@ def test_orphan_open_algo_order_blocks_new_entry_when_position_is_flat(tmp_path)
         assert db.state_get("position_state:BTCUSDT") == "RECONCILE_REQUIRED"
     finally:
         db.conn.close()
+
+
+def test_triggered_protective_algo_without_child_order_id_stays_unresolved(tmp_path):
+    db, client, service, campaign = _prepare_open_campaign_for_add_on(tmp_path, "LONG")
+    try:
+        client._position["positionAmt"] = "0"
+
+        def triggered_without_child(symbol, *, algo_id=None, client_algo_id=None):
+            return {
+                "symbol": symbol,
+                "algoId": str(algo_id or campaign.tags.get("protective_algo_id") or "456"),
+                "clientAlgoId": client_algo_id or campaign.tags["protective_client_algo_id"],
+                "algoStatus": "FINISHED",
+                "side": "SELL",
+                "type": "STOP_MARKET",
+                "orderType": "STOP_MARKET",
+                "closePosition": True,
+                "triggerPrice": str(campaign.current_stop_price),
+                # actualOrderId deliberately absent: exchange child execution
+                # history has not yet been authoritatively linked.
+            }
+
+        client.get_algo_order = triggered_without_child
+        result = service.reconcile_symbol("BTCUSDT")
+
+        assert result["state"] == "RECONCILE_REQUIRED"
+        assert "actualOrderId is missing" in result["reason"]
+        saved = service.engine.load_campaign(campaign.campaign_id)
+        assert saved.state.value == "RECONCILE_REQUIRED"
+        assert saved.position_qty > 0
+        assert client.market_exits == []
+        assert db.state_get("position_state:BTCUSDT") == "RECONCILE_REQUIRED"
+    finally:
+        db.conn.close()
+
+
+def test_reconcile_does_not_report_flat_when_unowned_orders_exist_without_campaign(tmp_path):
+    db = Database(str(tmp_path / "flat-orphan-reconcile.sqlite3"))
+    try:
+        client = FakeFuturesClient(102.0)
+        client.open_orders = lambda symbol=None: []
+        client.open_algo_orders = lambda symbol=None: [{
+            "symbol": symbol or "BTCUSDT",
+            "algoId": "9002",
+            "clientAlgoId": "unowned-triggered-entry",
+            "algoStatus": "NEW",
+            "side": "BUY",
+            "type": "STOP_MARKET",
+            "closePosition": False,
+        }]
+        cache = ContextCache()
+        service = FuturesCampaignExecutionService(
+            client,
+            db,
+            execution_barrier=ExecutionBarrier(cache, db),
+        )
+
+        result = service.reconcile_symbol("BTCUSDT")
+
+        assert result["state"] == "RECONCILE_REQUIRED"
+        assert result["open_algo_orders"] == 1
+        assert db.state_get("position_state:BTCUSDT") == "RECONCILE_REQUIRED"
+    finally:
+        db.conn.close()
+
