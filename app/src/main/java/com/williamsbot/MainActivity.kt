@@ -1352,34 +1352,6 @@ private fun DiagnosticsScreen(
     onExport: () -> Unit,
     message: String
 ) {
-    var confirmFuturesKill by remember { mutableStateOf(false) }
-
-    if (confirmFuturesKill) {
-        AlertDialog(
-            onDismissRequest = { confirmFuturesKill = false },
-            title = { Text("Подтвердить Futures Kill Switch") },
-            text = {
-                Text(
-                    "Бот запретит новые входы и отправит reduce-only рыночные выходы для управляемых Futures-позиций. " +
-                        "Это может зафиксировать убыток. Защитные и открытые ордера будут сверены с Binance."
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    confirmFuturesKill = false
-                    onFuturesKill()
-                }) {
-                    Text("ПОДТВЕРДИТЬ ВЫХОД")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmFuturesKill = false }) {
-                    Text("ОТМЕНА")
-                }
-            }
-        )
-    }
-
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -2498,6 +2470,34 @@ private fun SettingsScreen(
     diagnosticsMessage: String,
     message: String
 ) {
+    var confirmFuturesKill by remember { mutableStateOf(false) }
+
+    if (confirmFuturesKill) {
+        AlertDialog(
+            onDismissRequest = { confirmFuturesKill = false },
+            title = { Text("Подтвердить Futures Kill Switch") },
+            text = {
+                Text(
+                    "Бот запретит новые входы и отправит reduce-only рыночные выходы для управляемых Futures-позиций. " +
+                        "Это может зафиксировать убыток. Защитные и открытые ордера будут сверены с Binance."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmFuturesKill = false
+                    onFuturesKill()
+                }) {
+                    Text("ПОДТВЕРДИТЬ ВЫХОД")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmFuturesKill = false }) {
+                    Text("ОТМЕНА")
+                }
+            }
+        )
+    }
+
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
