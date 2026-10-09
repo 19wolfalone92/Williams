@@ -300,13 +300,16 @@ internal class FuturesNativeEngine(
         // still open exposure even after the scanner has paused.
         paused = true
         val cancellations = synchronized(cycleLock) {
-            val hasPendingEntries = auditStore.activeFuturesCampaigns().any {
+            val campaigns = auditStore.activeFuturesCampaigns()
+            val hasPendingEntries = campaigns.any {
                 it.optString("state").uppercase(Locale.US) in setOf("ENTRY_PENDING", "RECONCILE_REQUIRED") &&
                     it.optString("entry_client_algo_id").isNotBlank()
             }
-            if (!hasPendingEntries) {
-                JSONArray()
-            } else {
+            val hasUnresolvedCampaign = campaigns.any {
+                it.optString("state").uppercase(Locale.US) == "RECONCILE_REQUIRED"
+            }
+            val hasUnresolvedIntent = auditStore.pendingFuturesIntents().any { isUnresolvedIntent(it) }
+            if (hasPendingEntries) {
                 runCatching { cancelPendingEntries(api(), "PAUSE") }.getOrElse { error ->
                     reconcileRequired = true
                     lastError = "Pause could not verify pending-entry cancellation: ${error.message}"
@@ -316,6 +319,15 @@ internal class FuturesNativeEngine(
                             .put("reason", lastError)
                     )
                 }
+            } else if (hasUnresolvedCampaign || hasUnresolvedIntent) {
+                reconcileRequired = true
+                JSONArray().put(
+                    JSONObject()
+                        .put("state", "RECONCILE_REQUIRED")
+                        .put("reason", "Unresolved Futures campaign/intent requires the management monitor to remain active")
+                )
+            } else {
+                JSONArray()
             }
         }
         val unresolved = (0 until cancellations.length()).any {
