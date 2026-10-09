@@ -905,7 +905,8 @@ class FuturesRuntime:
             # Unknown exposure/orders must block entries, but must not prevent
             # the management-only monitor from starting after a process restart.
             try:
-                self.execution._assert_no_unmanaged_positions(self.symbols[0])
+                for symbol in self.symbols:
+                    self.execution._assert_no_unmanaged_positions(symbol)
             except Exception as exc:
                 startup_blockers.append(f"{type(exc).__name__}: {exc}")
 
@@ -1210,7 +1211,8 @@ class FuturesRuntime:
         try:
             # A flat position is not enough: orphan conditional entries/orders on
             # any configured symbol can recreate exposure after latch reset.
-            self.execution._assert_no_unmanaged_positions(self.symbols[0])
+            for symbol in self.symbols:
+                self.execution._assert_no_unmanaged_positions(symbol)
         except Exception as exc:
             raise RuntimeError(
                 f"Kill reset denied: account-wide positions/orders are not clean ({type(exc).__name__}: {exc})"
