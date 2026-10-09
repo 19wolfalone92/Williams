@@ -1573,3 +1573,24 @@ def test_flat_position_recovers_filled_pending_market_exit_before_new_submit(tmp
         assert len(client.market_exits) == 0, "must not submit a second market exit"
     finally:
         db.conn.close()
+
+
+def test_triggered_protective_stop_with_residual_position_forces_reduce_only_exit(tmp_path):
+    db, client, service, campaign = _prepare_open_campaign_for_add_on(tmp_path, "LONG")
+    try:
+        client.protection_algo_status = "TRIGGERED"
+        client.user_trades = lambda symbol, *, order_id=None, limit=1000: [{
+            "symbol": symbol, "orderId": order_id, "qty": "0.5", "price": "101.0",
+            "realizedPnl": "-0.5", "commission": "0.1", "commissionAsset": "USDT",
+        }]
+
+        result = service.reconcile_symbol("BTCUSDT")
+
+        assert result["action"] == "CLOSED"
+        assert result["realized_pnl_quote_net_known_fees"] == pytest.approx(-0.6)
+        assert len(client.market_exits) == 1
+        assert client.protective_stops
+        saved = service.engine.load_campaign(campaign.campaign_id)
+        assert saved.state.value == "CLOSED"
+    finally:
+        db.conn.close()
