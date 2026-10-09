@@ -377,20 +377,30 @@ class MarketScanner:
             return bool(last.get("bullish_alligator", False)) and ao > 0
         return bool(last.get("bearish_alligator", False)) and ao < 0
 
-    def _setup_state(self, last):
-        strict_signal = bool(last.get("long_signal", False))
+    def _setup_state(self, last, direction="LONG"):
+        direction = str(direction or "LONG").upper()
+        prefix = "short" if direction == "SHORT" else "long"
+        strict_signal = bool(last.get(f"{prefix}_signal", False))
         if strict_signal:
             return "STRONG_SIGNAL"
 
-        bullish = bool(last.get("long_bullish", False))
-        awake = bool(last.get("long_awake", False))
-        ao = bool(last.get("long_ao_positive", False))
-        ac = bool(last.get("long_ac_positive", False))
-        fractal = bool(last.get("long_fractal_ready", False))
+        directional = bool(
+            last.get("short_bearish" if prefix == "short" else "long_bullish", False)
+        )
+        awake = bool(last.get(f"{prefix}_awake", False))
+        ao = bool(
+            last.get("short_ao_negative" if prefix == "short" else "long_ao_positive", False)
+        )
+        ac = bool(
+            last.get("short_ac_negative" if prefix == "short" else "long_ac_positive", False)
+        )
+        fractal = bool(
+            last.get("short_fractal_ready" if prefix == "short" else "long_fractal_ready", False)
+        )
 
-        if bullish and awake and ao and ac and fractal:
+        if directional and awake and ao and ac and fractal:
             return "SETUP_READY"
-        if bullish or (ao and ac) or (bullish and awake):
+        if directional or (ao and ac) or (directional and awake):
             return "WATCHING"
         return "NONE"
 
@@ -464,7 +474,22 @@ class MarketScanner:
                     s.signal_type.value,
                 ),
             )
-            setup_state = self._setup_state(last)
+            # Pick the active direction from the earliest valid signal.
+            # If no trigger exists yet, surface the stronger directional watch
+            # state without treating either watch state as an entry command.
+            if campaign_specs:
+                primary_direction = str(campaign_specs[0].direction).upper()
+            else:
+                long_state = self._setup_state(last, "LONG")
+                short_state = self._setup_state(last, "SHORT")
+                long_rank = {"NONE": 0, "WATCHING": 1, "SETUP_READY": 2, "STRONG_SIGNAL": 3}
+                short_rank = {"NONE": 0, "WATCHING": 1, "SETUP_READY": 2, "STRONG_SIGNAL": 3}
+                primary_direction = (
+                    "SHORT"
+                    if short_rank.get(short_state, 0) > long_rank.get(long_state, 0)
+                    else "LONG"
+                )
+            setup_state = self._setup_state(last, primary_direction)
             if setup_state == "NONE" and not campaign_specs:
                 return None
 
@@ -487,10 +512,21 @@ class MarketScanner:
             if rr < self.min_rr:
                 return None
 
-            legacy_strict_signal = bool(last.get("long_signal", False))
+            legacy_strict_signal = bool(
+                last.get("short_signal" if primary_direction == "SHORT" else "long_signal", False)
+            )
             campaign_signal = bool(campaign_specs)
-            setup_score = float(last.get("long_setup_score", 0.0))
-            breakout_distance_pct = float(last.get("long_breakout_distance_pct", 0.0))
+            setup_score = float(
+                last.get("short_setup_score" if primary_direction == "SHORT" else "long_setup_score", 0.0)
+                or 0.0
+            )
+            breakout_distance_pct = float(
+                last.get(
+                    "short_breakout_distance_pct" if primary_direction == "SHORT" else "long_breakout_distance_pct",
+                    0.0,
+                )
+                or 0.0
+            )
 
             if campaign_signal:
                 signal_strength = 1.0
@@ -531,9 +567,9 @@ class MarketScanner:
             if campaign_signal:
                 reason = "Williams campaign signal detected; conditional entry candidate"
             elif setup_state == "SETUP_READY":
-                reason = "bullish setup ready; waiting for strict fractal breakout"
+                reason = f"{primary_direction.lower()} setup ready; waiting for valid price trigger"
             else:
-                reason = "bullish setup being monitored"
+                reason = f"{primary_direction.lower()} setup being monitored"
 
             candidate = Candidate(
                 symbol=symbol,
@@ -551,8 +587,14 @@ class MarketScanner:
                 htf_confirmed=False,
                 setup_state=setup_state,
                 reason=reason,
-                wise_man_count=int(last.get("long_wise_man_count", 0) or 0),
-                signal_family=str(last.get("long_signal_family", "NONE") or "NONE"),
+                wise_man_count=int(
+                    last.get("short_wise_man_count" if primary_direction == "SHORT" else "long_wise_man_count", 0)
+                    or 0
+                ),
+                signal_family=str(
+                    last.get("short_signal_family" if primary_direction == "SHORT" else "long_signal_family", "NONE")
+                    or "NONE"
+                ),
                 base_score=round(base_score, 2),
                 campaign_ready=campaign_signal,
                 direction=(
@@ -934,7 +976,7 @@ class MarketScanner:
         for candidate, enriched_candidate, exc in wave_results:
             if enriched_candidate is not None:
                 if candidate.signal and self.require_htf_confirmation and not enriched_candidate.htf_confirmed:
-                    log.info("AUTO-SCAN HTF BLOCK: %s strict signal has no bullish HTF confirmation", candidate.symbol)
+                    log.info("AUTO-SCAN HTF BLOCK: %s %s strict signal lacks directional HTF confirmation", candidate.symbol, candidate.direction or "UNKNOWN")
                     blocked_symbols.add(candidate.symbol)
                     continue
                 if candidate.signal and not enriched_candidate.wave_entry_allowed:
@@ -951,7 +993,10 @@ class MarketScanner:
             neutral = replace(
                 candidate,
                 htf_confirmed=(
-                    self._htf_confirmation(candidate.symbol)
+                    self._htf_confirmation(
+                        candidate.symbol,
+                        direction=str(candidate.direction or "LONG").upper(),
+                    )
                     if candidate.signal and self.require_htf_confirmation
                     else False
                 ),
