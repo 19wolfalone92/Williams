@@ -118,6 +118,75 @@ class FuturesCampaignExecutionService:
                 return [value]
         return []
 
+    def _cancel_algo_via_barrier(
+        self,
+        campaign,
+        symbol: str,
+        side: str,
+        *,
+        algo_id: str | int | None,
+        client_algo_id: str | None,
+        purpose: str,
+    ) -> dict[str, Any]:
+        target_id = str(client_algo_id or algo_id or "").strip()
+        if not target_id:
+            raise FuturesCampaignExecutionError(f"{symbol}: algo cancellation lacks stable target identity")
+        intent = OrderIntent.new(
+            symbol,
+            side,
+            "CANCEL",
+            {},
+            purpose=purpose,
+            campaign_id=campaign.campaign_id,
+            signal_id=campaign.current_signal_id,
+            client_order_id=target_id,
+        )
+        result = self.barrier.execute(
+            intent,
+            lambda: self.client.cancel_algo_order_safe(
+                symbol,
+                algo_id=algo_id or None,
+                client_algo_id=client_algo_id or None,
+            ),
+        )
+        if not result.accepted:
+            raise FuturesCampaignExecutionError(
+                f"{symbol}: durable algo cancellation intent was blocked: {result.reason}"
+            )
+        return result.response if isinstance(result.response, dict) else {}
+
+    def _cancel_child_order_via_barrier(
+        self,
+        campaign,
+        symbol: str,
+        side: str,
+        *,
+        order_id: str | int,
+        purpose: str,
+    ) -> dict[str, Any]:
+        target_id = str(order_id or "").strip()
+        if not target_id:
+            raise FuturesCampaignExecutionError(f"{symbol}: child-order cancellation lacks orderId")
+        intent = OrderIntent.new(
+            symbol,
+            side,
+            "CANCEL",
+            {},
+            purpose=purpose,
+            campaign_id=campaign.campaign_id,
+            signal_id=campaign.current_signal_id,
+            client_order_id=target_id,
+        )
+        result = self.barrier.execute(
+            intent,
+            lambda: self.client.cancel_order_safe(symbol, order_id=order_id),
+        )
+        if not result.accepted:
+            raise FuturesCampaignExecutionError(
+                f"{symbol}: durable child-order cancellation intent was blocked: {result.reason}"
+            )
+        return result.response if isinstance(result.response, dict) else {}
+
     def _position_row(self, symbol: str) -> dict[str, Any]:
         symbol = str(symbol).upper()
         rows = self._rows(self.client.position_risk(symbol))
@@ -1164,10 +1233,11 @@ class FuturesCampaignExecutionService:
             algo = self.client.get_algo_order(symbol, client_algo_id=client_id)
             status = str(algo.get("algoStatus", "") or "").upper()
             if status in {"NEW", "WORKING", "PENDING", "PENDING_NEW"}:
-                self.client.cancel_algo_order_safe(
-                    symbol,
+                self._cancel_algo_via_barrier(
+                    campaign, symbol, "BUY" if self._campaign_direction(campaign) == "LONG" else "SELL",
                     algo_id=algo.get("algoId") or campaign.tags.get("pending_add_on_algo_id") or None,
                     client_algo_id=client_id,
+                    purpose="CAMPAIGN_ADD_ON_CANCEL",
                 )
                 algo = self.client.get_algo_order(symbol, client_algo_id=client_id)
                 status = str(algo.get("algoStatus", "") or "").upper()
@@ -2595,10 +2665,11 @@ class FuturesCampaignExecutionService:
                 # A live position with an apparently untriggered entry, or a
                 # RECONCILE_REQUIRED campaign with a still-live entry, must not
                 # leave another exposure-increasing trigger armed.
-                self.client.cancel_algo_order_safe(
-                    symbol,
+                self._cancel_algo_via_barrier(
+                    campaign, symbol, expected_side,
                     algo_id=algo.get("algoId") or campaign.tags.get("pending_algo_id") or None,
                     client_algo_id=client_id,
+                    purpose="CAMPAIGN_ENTRY_CANCEL_RECOVERY",
                 )
                 algo = self.client.get_algo_order(symbol, client_algo_id=client_id)
                 algo_status = str(algo.get("algoStatus", "") or "").upper()
@@ -2641,7 +2712,10 @@ class FuturesCampaignExecutionService:
                 return unresolved(f"{symbol}: triggered initial order has invalid executedQty")
 
             if order_status in {"NEW", "PARTIALLY_FILLED", "PENDING_NEW"}:
-                self.client.cancel_order_safe(symbol, order_id=actual_order_id)
+                self._cancel_child_order_via_barrier(
+                    campaign, symbol, expected_side, order_id=actual_order_id,
+                    purpose="CAMPAIGN_ENTRY_CHILD_CANCEL_RECOVERY",
+                )
                 actual_order = self.client.get_order(symbol, order_id=actual_order_id)
                 order_status = str(actual_order.get("status", "") or "").upper()
                 try:
@@ -3085,10 +3159,11 @@ class FuturesCampaignExecutionService:
                         CampaignState.RECONCILE_REQUIRED,
                         CampaignState.POSITION_EXPANDING,
                     }:
-                        self.client.cancel_algo_order_safe(
-                            symbol,
+                        self._cancel_algo_via_barrier(
+                            campaign, symbol, expected_add_side,
                             algo_id=algo.get("algoId") or campaign.tags.get("pending_add_on_algo_id") or None,
                             client_algo_id=client_add_id,
+                            purpose="CAMPAIGN_ADD_ON_CANCEL_RECOVERY",
                         )
                         algo = self.client.get_algo_order(symbol, client_algo_id=client_add_id)
                         algo_status = str(algo.get("algoStatus", "") or "").upper()
@@ -3148,8 +3223,9 @@ class FuturesCampaignExecutionService:
                     if order_status in {"NEW", "PARTIALLY_FILLED", "PENDING_NEW"}:
                         # Do not leave a residual child order capable of
                         # expanding risk after the local campaign has moved on.
-                        self.client.cancel_order_safe(
-                            symbol, order_id=actual_order_id
+                        self._cancel_child_order_via_barrier(
+                            campaign, symbol, expected_add_side, order_id=actual_order_id,
+                            purpose="CAMPAIGN_ADD_ON_CHILD_CANCEL_RECOVERY",
                         )
                         actual_order = self.client.get_order(symbol, order_id=actual_order_id)
                         order_status = str(actual_order.get("status", "") or "").upper()
