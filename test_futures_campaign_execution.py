@@ -1481,3 +1481,53 @@ def test_partial_terminal_exit_is_aggregated_with_residual_exit(tmp_path):
         assert db.state_get("position_state:BTCUSDT") == "FLAT"
     finally:
         db.conn.close()
+
+
+def test_flat_position_cancels_orphan_stop_and_does_not_guess_closed(tmp_path):
+    db, client, service, campaign = _prepare_open_campaign_for_add_on(tmp_path, "LONG")
+    try:
+        client._position["positionAmt"] = "0"
+        client.algo_status = "NEW"
+
+        result = service.reconcile_symbol("BTCUSDT")
+
+        assert result["state"] == "RECONCILE_REQUIRED"
+        assert campaign.state.value == "RECONCILE_REQUIRED"
+        assert db.state_get("position_state:BTCUSDT") == "RECONCILE_REQUIRED"
+        # The fake exchange reports cancellation terminal on the stable stop ID;
+        # without a verified child fill, the campaign must not be marked closed.
+    finally:
+        db.conn.close()
+
+
+def test_protective_exit_closes_only_when_trade_qty_matches_live_campaign(tmp_path):
+    db, client, service, campaign = _prepare_open_campaign_for_add_on(tmp_path, "LONG")
+    try:
+        client._position["positionAmt"] = "0"
+        client.algo_status = "FINISHED"
+        client.get_algo_order = lambda symbol, *, algo_id=None, client_algo_id=None: {
+            "symbol": symbol, "algoId": "456", "clientAlgoId": "protective-test-id",
+            "algoStatus": "FINISHED", "actualOrderId": 789, "side": "SELL",
+            "type": "STOP_MARKET", "orderType": "STOP_MARKET",
+            "closePosition": True, "triggerPrice": "100.0",
+        }
+        client.get_order = lambda symbol, *, order_id=None, orig_client_order_id=None: {
+            "symbol": symbol, "orderId": 789, "clientOrderId": "child-stop-order",
+            "side": "SELL", "type": "MARKET", "status": "FILLED",
+            "executedQty": "0.5", "avgPrice": "100.0", "cumQuote": "50.0",
+        }
+        client.user_trades = lambda symbol, *, order_id=None, limit=1000: [{
+            "symbol": symbol, "orderId": 789, "qty": "0.5", "price": "100.0",
+            "realizedPnl": "-1.0", "commission": "0.1", "commissionAsset": "USDT",
+        }]
+
+        result = service.reconcile_symbol("BTCUSDT")
+
+        assert result["state"] == "CLOSED"
+        assert result["realized_pnl_quote_net_known_fees"] == pytest.approx(-1.1)
+        saved = service.engine.load_campaign(campaign.campaign_id)
+        assert saved.state.value == "CLOSED"
+        assert saved.position_qty == 0.0
+        assert db.state_get("position_state:BTCUSDT") == "FLAT"
+    finally:
+        db.conn.close()
