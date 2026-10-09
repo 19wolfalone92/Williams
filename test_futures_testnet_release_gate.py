@@ -58,6 +58,7 @@ class FakeReadOnlyFuturesClient:
     def __init__(self, api_key, api_secret, *, testnet, allow_live, max_leverage):
         self.base_url = self.DEMO_BASE_URL
         self.can_trade = True
+        self.multi_assets_margin = False
         self.isolated = True
         self.leverage = 1
         self.quote_asset = "USDT"
@@ -79,7 +80,10 @@ class FakeReadOnlyFuturesClient:
         return {"canTrade": self.can_trade}
 
     def account_permissions(self):
-        return {"canTrade": self.can_trade, "multiAssetsMargin": False}
+        return {
+            "canTrade": self.can_trade,
+            "multiAssetsMargin": self.multi_assets_margin,
+        }
 
     def position_risk(self, symbol=None):
         rows = [{
@@ -162,6 +166,14 @@ def test_read_only_release_gate_passes_only_when_demo_policy_is_verified(monkeyp
     assert result["markets"][0]["leverage"] == 1
     assert result["markets"][0]["validated_filters"]["MARKET_LOT_SIZE"]["step"] == pytest.approx(0.001)
     assert 0 <= result["markets"][0]["spread_pct"] < 0.001
+
+
+def test_read_only_gate_blocks_multi_asset_margin_mode(monkeypatch):
+    client = _enable_fake_demo_gate(monkeypatch)
+    client.multi_assets_margin = True
+
+    with pytest.raises(RuntimeError, match="single-asset margin mode"):
+        gate.run_futures_testnet_read_only(["BTCUSDT"])
 
 
 @pytest.mark.parametrize(
