@@ -1533,7 +1533,12 @@ internal class FuturesNativeEngine(
                         // Binance conditional orders do not expire with the local
                         // Signal object. Cancel the stable Algo identity and
                         // reconcile any triggered child before releasing risk.
-                        return cancelPendingEntry(exchange, campaign, "SIGNAL_EXPIRED")
+                        cancelPendingEntry(exchange, campaign, "SIGNAL_EXPIRED")
+                        return JSONObject()
+                            .put("symbol", symbol)
+                            .put("state", campaign.optString("state", "CLOSED"))
+                            .put("action", "ENTRY_CANCELLED")
+                            .put("reason", "SIGNAL_EXPIRED")
                     }
                     campaign.put("entry_status", status)
                     auditStore.saveFuturesCampaign(symbol, campaign)
