@@ -626,6 +626,63 @@ class FuturesCampaignExecutionService:
                 self.db.state_set(f"campaign_state:{campaign.campaign_id}", CampaignState.RECONCILE_REQUIRED.value)
                 self.db.state_set(f"position_state:{symbol}", CampaignState.RECONCILE_REQUIRED.value)
                 raise FuturesCampaignExecutionError(f"{reason}; reconciliation required before retry")
+            response_client_id = str(order.get("clientAlgoId", "") or "")
+            if response_client_id and response_client_id != client_algo_id:
+                reason = f"{symbol}: entry response clientAlgoId does not match durable intent"
+                self.engine.mark_reconcile_required(campaign, reason)
+                self.db.state_set(f"campaign_state:{campaign.campaign_id}", CampaignState.RECONCILE_REQUIRED.value)
+                self.db.state_set(f"position_state:{symbol}", CampaignState.RECONCILE_REQUIRED.value)
+                raise FuturesCampaignExecutionError(reason)
+            if order_id:
+                campaign.tags["pending_algo_id"] = order_id
+            self.db.save_campaign(campaign)
+            try:
+                verified_entry = self.client.get_algo_order(
+                    symbol,
+                    algo_id=order_id or None,
+                    client_algo_id=client_algo_id,
+                )
+                verified_status = str(verified_entry.get("algoStatus", "") or "").upper()
+                verified_id = str(verified_entry.get("algoId", "") or "")
+                verified_client_id = str(verified_entry.get("clientAlgoId", "") or "")
+                verified_side = str(verified_entry.get("side", "") or "").upper()
+                verified_type = str(
+                    verified_entry.get("orderType", verified_entry.get("type", "")) or ""
+                ).upper()
+                verified_close_position = str(verified_entry.get("closePosition", "")).lower() in {"true", "1"}
+                verified_trigger = float(verified_entry.get("triggerPrice"))
+                verified_quantity = float(verified_entry.get("quantity"))
+                if (
+                    verified_status not in {"NEW", "WORKING", "PENDING", "PENDING_NEW"}
+                    or not verified_id
+                    or (order_id and verified_id != order_id)
+                    or verified_client_id != client_algo_id
+                    or str(verified_entry.get("symbol", symbol)).upper() != symbol
+                    or verified_side != order_side
+                    or verified_type != "STOP_MARKET"
+                    or verified_close_position
+                    or not math.isfinite(verified_trigger)
+                    or not math.isclose(verified_trigger, trigger, rel_tol=0.0, abs_tol=1e-8)
+                    or not math.isfinite(verified_quantity)
+                    or not math.isclose(verified_quantity, quantity, rel_tol=0.0, abs_tol=1e-8)
+                ):
+                    raise FuturesCampaignExecutionError(
+                        f"{symbol}: entry algo failed authoritative identity/side/type/trigger/quantity verification"
+                    )
+                order_id = verified_id
+                status = verified_status
+                campaign.tags["pending_algo_id"] = order_id
+                self.db.save_campaign(campaign)
+            except Exception as exc:
+                reason = (
+                    f"{symbol}: entry submission response could not be authoritatively verified: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+                self.engine.mark_reconcile_required(campaign, reason)
+                self.db.save_campaign(campaign)
+                self.db.state_set(f"campaign_state:{campaign.campaign_id}", CampaignState.RECONCILE_REQUIRED.value)
+                self.db.state_set(f"position_state:{symbol}", CampaignState.RECONCILE_REQUIRED.value)
+                raise FuturesCampaignExecutionError(reason) from exc
             self.db.save_campaign_order(PendingOrderRecord(
                 order_id=order_id,
                 client_order_id=client_algo_id,
@@ -641,8 +698,6 @@ class FuturesCampaignExecutionService:
                 signal_id=signal.signal_id,
                 campaign_id=campaign.campaign_id,
             ))
-            campaign.tags["pending_algo_id"] = order_id
-            self.db.save_campaign(campaign)
             self.db.log_campaign_event(
                 campaign.campaign_id,
                 CampaignEventType.ENTRY_ARMED.value,
