@@ -39,7 +39,11 @@ def frame():
 def test_short_reversal_uses_low_minus_tick_and_high_as_invalidation():
     data = frame()
     data.loc[8, "bearish_reversal_bar"] = True
-    data.loc[11, "close"] = 115.0
+    # Keep all post-signal highs below the structural invalidation and all
+    # post-signal lows above the untriggered SELL STOP.
+    data.loc[9, ["open", "high", "low", "close"]] = [112.2, 112.8, 111.8, 112.4]
+    data.loc[10, ["open", "high", "low", "close"]] = [112.0, 112.6, 111.6, 112.2]
+    data.loc[11, ["open", "high", "low", "close"]] = [111.8, 112.4, 111.4, 112.0]
 
     signals = extract_short_signal_specs(
         "BTCUSDT", data, timeframe="5m", tick_size=0.1
@@ -59,11 +63,17 @@ def test_short_super_ao_and_fractal_use_bearish_trigger_geometry():
     data = frame()
     data.loc[8, "ao_red_streak"] = 3
     data.loc[7, "short_fractal_outside"] = True
+    # The WM3 center is just below the preceding low but remains above the
+    # WM2 stop-entry trigger, so neither trigger was crossed before arming.
+    data.loc[7, ["open", "high", "low", "close"]] = [111.8, 112.4, 111.3, 111.7]
+    data.loc[8, ["open", "high", "low", "close"]] = [112.4, 113.0, 111.0, 112.0]
+    data.loc[9, ["open", "high", "low", "close"]] = [111.5, 112.8, 110.95, 111.8]
+    data.loc[10, ["open", "high", "low", "close"]] = [111.4, 112.6, 111.1, 111.5]
+    data.loc[11, ["open", "high", "low", "close"]] = [111.3, 112.4, 111.2, 111.5]
     data.loc[9, "fractal_down"] = True
     data.loc[11, "confirmed_down_level"] = float(data.loc[9, "low"])
     # A bearish Teeth context places the trigger below the Alligator mouth.
     data.loc[11, "teeth_shifted"] = 120.0
-    data.loc[11, "close"] = 115.0
 
     signals = extract_short_signal_specs(
         "BTCUSDT", data, timeframe="5m", tick_size=0.1
@@ -113,10 +123,15 @@ def test_long_super_ao_and_fractal_are_add_ons_not_initial_entries():
     data = frame()
     data.loc[8, "ao_green_streak"] = 3
     data.loc[7, "long_fractal_outside"] = True
+    # WM3's high is above the prior bar by less than one tick, so the WM2
+    # trigger is still unbroken and both structures remain valid.
+    data.loc[8, ["open", "high", "low", "close"]] = [112.5, 113.0, 111.0, 112.4]
+    data.loc[9, ["open", "high", "low", "close"]] = [112.5, 113.05, 111.5, 112.8]
+    data.loc[10, ["open", "high", "low", "close"]] = [112.4, 112.95, 111.6, 112.7]
+    data.loc[11, ["open", "high", "low", "close"]] = [112.2, 112.85, 111.7, 112.5]
     data.loc[9, "fractal_up"] = True
     data.loc[11, "confirmed_up_level"] = float(data.loc[9, "high"])
     data.loc[11, "teeth_shifted"] = 100.0
-    data.loc[11, "close"] = 110.0
 
     signals = extract_long_signal_specs(
         "BTCUSDT", data, timeframe="5m", tick_size=0.1
@@ -221,3 +236,39 @@ def test_expired_wise_man_signal_cannot_start_campaign():
         expires_at_ms=999,
     )
     assert choose_initial_williams_signal([expired], "LONG", now_ms=1_000) is None
+
+
+def test_long_reversal_is_rejected_if_later_candle_crossed_trigger_or_stop():
+    data = frame()
+    data.loc[8, "bullish_reversal_bar"] = True
+    # The close remains below the BUY STOP, but a later high already crossed it.
+    data.loc[11, ["open", "high", "low", "close"]] = [112.0, 113.5, 111.5, 112.5]
+    signals = extract_long_signal_specs("BTCUSDT", data, timeframe="5m", tick_size=0.1)
+    assert not [s for s in signals if s.signal_type is SignalType.REVERSAL]
+
+    data = frame()
+    data.loc[8, "bullish_reversal_bar"] = True
+    # Structural low was breached after the reversal, so the setup is invalid.
+    data.loc[10, ["open", "high", "low", "close"]] = [112.0, 113.0, 110.5, 112.0]
+    data.loc[11, ["open", "high", "low", "close"]] = [112.0, 112.8, 111.5, 112.2]
+    signals = extract_long_signal_specs("BTCUSDT", data, timeframe="5m", tick_size=0.1)
+    assert not [s for s in signals if s.signal_type is SignalType.REVERSAL]
+
+
+def test_short_reversal_is_rejected_if_later_candle_crossed_trigger_or_stop():
+    data = frame()
+    data.loc[8, "bearish_reversal_bar"] = True
+    data.loc[9, ["open", "high", "low", "close"]] = [112.2, 112.8, 110.5, 112.0]
+    data.loc[10, ["open", "high", "low", "close"]] = [112.0, 112.6, 111.0, 112.2]
+    data.loc[11, ["open", "high", "low", "close"]] = [111.8, 112.4, 111.4, 112.0]
+    signals = extract_short_signal_specs("BTCUSDT", data, timeframe="5m", tick_size=0.1)
+    assert not [s for s in signals if s.signal_type is SignalType.REVERSAL]
+
+    data = frame()
+    data.loc[8, "bearish_reversal_bar"] = True
+    # Structural high was breached after the reversal.
+    data.loc[9, ["open", "high", "low", "close"]] = [112.2, 113.5, 111.8, 112.4]
+    data.loc[10, ["open", "high", "low", "close"]] = [112.0, 112.6, 111.6, 112.2]
+    data.loc[11, ["open", "high", "low", "close"]] = [111.8, 112.4, 111.4, 112.0]
+    signals = extract_short_signal_specs("BTCUSDT", data, timeframe="5m", tick_size=0.1)
+    assert not [s for s in signals if s.signal_type is SignalType.REVERSAL]
