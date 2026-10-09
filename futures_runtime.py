@@ -205,12 +205,16 @@ class FuturesRuntime:
         result = self.client.account()
         if not isinstance(result, dict):
             raise RuntimeError("Futures account endpoint returned an invalid payload")
-        available = float(result.get("availableBalance", 0) or 0)
-        equity = float(
-            result.get("totalMarginBalance")
-            or result.get("totalWalletBalance")
-            or available
-        )
+        available_raw = result.get("availableBalance", 0)
+        available = float(0 if available_raw is None or str(available_raw).strip() == "" else available_raw)
+        # Fall back only when a field is absent, never when an authoritative
+        # equity field explicitly reports zero (zero equity must fail closed).
+        equity_raw = result.get("totalMarginBalance")
+        if equity_raw is None or str(equity_raw).strip() == "":
+            equity_raw = result.get("totalWalletBalance")
+        if equity_raw is None or str(equity_raw).strip() == "":
+            equity_raw = available
+        equity = float(equity_raw)
         if not math.isfinite(available) or not math.isfinite(equity) or available < 0 or equity <= 0:
             raise RuntimeError("Futures account has invalid equity/availableBalance")
         self._last_account = {"equity_quote": equity, "available_quote": available}
