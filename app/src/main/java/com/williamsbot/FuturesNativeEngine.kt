@@ -528,10 +528,12 @@ internal class FuturesNativeEngine(
             updateDailyBaseline(equity)
             val dailyLoss = dailyLossFraction(equity)
             if (killLatched) {
+                val exits = enforceKillOnCampaigns(exchange)
                 lastScanSummary = JSONObject()
                     .put("state", "KILL_SWITCH_LATCHED")
                     .put("new_entries", 0)
                     .put("reconciliation", recovered)
+                    .put("exit_actions", exits)
                 return
             }
             if (paused) {
@@ -1072,7 +1074,7 @@ internal class FuturesNativeEngine(
                 .put("quantity", quantity)
                 .put("risk_quote", riskQuote)
         } catch (x: Exception) {
-            campaign.put("state", if (x is FuturesApiException && x.outcomeUnknown) "RECONCILE_REQUIRED" else "CLOSED")
+            campaign.put("state", if (x is FuturesApiException && x.outcomeUnknown) "ENTRY_PENDING" else "CLOSED")
             campaign.put("reason", x.message ?: x.javaClass.simpleName)
             auditStore.saveFuturesCampaign(symbol, campaign)
             throw x
@@ -1242,29 +1244,121 @@ internal class FuturesNativeEngine(
                 .put("position_amt", amount)
         }
 
-        if (campaign.optString("state") == "OPEN_PROTECTED") {
-            try {
-                val protection = exchange.getAlgoOrder(
-                    symbol,
-                    clientAlgoId = campaign.optString("protection_client_algo_id")
-                )
+        if (campaign.optString("state") in setOf("OPEN_PROTECTED", "RECONCILE_REQUIRED", "EXIT_PENDING")) {
+            return verifyOrRestoreLiveProtection(exchange, campaign)
+        }
+
+        // A position without a recognized campaign state is never left open on
+        // the assumption that an old in-memory object is still authoritative.
+        val emergency = runCatching { exitPosition(exchange, campaign, "UNKNOWN_CAMPAIGN_STATE") }.getOrNull()
+        if (emergency?.optString("action") == "CLOSED") {
+            return JSONObject().put("symbol", symbol).put("state", "CLOSED").put("reason", "exited unknown campaign state")
+        }
+        return setCampaignState(campaign, "RECONCILE_REQUIRED", "Unknown campaign state: ${campaign.optString("state")}")
+    }
+
+    private fun verifyOrRestoreLiveProtection(
+        exchange: BinanceUsdmFuturesClient,
+        campaignInput: JSONObject
+    ): JSONObject {
+        val campaign = JSONObject(campaignInput.toString())
+        val symbol = campaign.optString("symbol").uppercase(Locale.US)
+        val direction = campaign.optString("direction").uppercase(Locale.US)
+        var clientId = campaign.optString("protection_client_algo_id")
+
+        // Recover a crash after a stop POST but before its response was linked
+        // to the campaign row, using the durable intent's stable clientAlgoId.
+        if (clientId.isBlank()) {
+            val pendingProtection = auditStore.pendingFuturesIntents().firstOrNull { row ->
+                row.optString("symbol").equals(symbol, true) &&
+                    row.optString("operation").uppercase(Locale.US) in setOf("PROTECTION", "PROTECTION_REPLACE") &&
+                    row.optString("status").uppercase(Locale.US) in setOf("PENDING", "SUBMITTING", "UNKNOWN", "SUBMITTED", "RECONCILE_REQUIRED")
+            }
+            if (pendingProtection != null) clientId = pendingProtection.optString("client_id")
+        }
+
+        if (clientId.isNotBlank()) {
+            val protection = runCatching {
+                exchange.getAlgoOrder(symbol, clientAlgoId = clientId)
+            }.getOrNull()
+            if (protection != null) {
                 val status = protection.optString("algoStatus").uppercase(Locale.US)
-                if (status !in setOf("NEW", "WORKING", "PENDING")) {
-                    return setCampaignState(campaign, "RECONCILE_REQUIRED", "Protective algo status is $status")
+                if (status in setOf("NEW", "WORKING", "PENDING")) {
+                    campaign.put("protection_client_algo_id", clientId)
+                    campaign.put("protection_algo_id", protection.optString("algoId"))
+                    campaign.put("protection_active", true)
+                    campaign.put("state", "OPEN_PROTECTED")
+                    auditStore.saveFuturesCampaign(symbol, campaign)
+                    updateIntentByClientId(clientId, "SUBMITTED", protection.toString())
+                    return JSONObject().put("symbol", symbol).put("state", "OPEN_PROTECTED").put("protection_status", status)
                 }
-                campaign.put("protection_active", true)
-                auditStore.saveFuturesCampaign(symbol, campaign)
-                return JSONObject().put("symbol", symbol).put("state", "OPEN_PROTECTED").put("protection_status", status)
-            } catch (x: Exception) {
-                return setCampaignState(
-                    campaign,
-                    "RECONCILE_REQUIRED",
-                    "Cannot authoritatively verify Futures protection: ${x.message}"
-                )
+
+                if (status in setOf("CANCELED", "EXPIRED", "REJECTED")) {
+                    val open = exchange.openAlgoOrders(symbol)
+                    val stillOpen = (0 until open.length()).any { i ->
+                        open.optJSONObject(i)?.optString("clientAlgoId") == clientId
+                    }
+                    if (!stillOpen) {
+                        campaign.put("state", "OPEN_UNPROTECTED")
+                        campaign.put("protection_active", false)
+                        auditStore.saveFuturesCampaign(symbol, campaign)
+                        return try {
+                            val replacement = placeProtection(exchange, campaign)
+                            JSONObject().put("symbol", symbol).put("state", "OPEN_PROTECTED")
+                                .put("reason", "replaced terminal protective order")
+                                .put("protection", replacement)
+                        } catch (x: Exception) {
+                            val exit = runCatching { exitPosition(exchange, campaign, "PROTECTION_LOST") }.getOrNull()
+                            if (exit?.optString("action") == "CLOSED") {
+                                JSONObject().put("symbol", symbol).put("state", "CLOSED").put("reason", "exit after lost protection")
+                            } else {
+                                setCampaignState(campaign, "RECONCILE_REQUIRED", "Protection was terminal and replacement failed: ${x.message}")
+                            }
+                        }
+                    }
+                }
+
+                // A triggered/finished stop with exposure still present may
+                // have partially reduced the position. Finish with reduce-only.
+                if (status in setOf("TRIGGERED", "FINISHED")) {
+                    val exit = runCatching { exitPosition(exchange, campaign, "PROTECTIVE_STOP_TRIGGERED_RESIDUAL") }.getOrNull()
+                    if (exit?.optString("action") == "CLOSED") return exit
+                    return setCampaignState(campaign, "RECONCILE_REQUIRED", "Protective stop triggered but exchange exposure remains")
+                }
             }
         }
 
-        return setCampaignState(campaign, "RECONCILE_REQUIRED", "Unknown campaign state: ${campaign.optString("state")}")
+        // If the stop state cannot be verified, reduce exposure rather than
+        // leaving a live position dependent on an in-memory watchdog.
+        val emergency = runCatching { exitPosition(exchange, campaign, "PROTECTION_STATE_UNVERIFIED") }.getOrNull()
+        if (emergency?.optString("action") == "CLOSED") return emergency
+        return setCampaignState(
+            campaign,
+            "RECONCILE_REQUIRED",
+            "Live position has no authoritatively confirmed protective stop; emergency reduce-only exit also needs reconciliation"
+        )
+    }
+
+    private fun enforceKillOnCampaigns(exchange: BinanceUsdmFuturesClient): JSONArray {
+        val results = JSONArray()
+        for (row in auditStore.activeFuturesCampaigns()) {
+            val symbol = row.optString("symbol").uppercase(Locale.US)
+            val campaign = JSONObject(row.toString())
+            try {
+                val live = position(exchange, symbol).optString("positionAmt").toDoubleOrNull() ?: 0.0
+                if (abs(live) > 1e-12) {
+                    results.put(exitPosition(exchange, campaign, "KILL_SWITCH_RETRY"))
+                } else if (campaign.optString("state") == "ENTRY_PENDING") {
+                    cancelPendingEntry(exchange, campaign, "KILL_SWITCH_RETRY")
+                    results.put(JSONObject().put("symbol", symbol).put("action", "ENTRY_CANCEL_CONFIRMED"))
+                }
+            } catch (x: Exception) {
+                reconcileRequired = true
+                results.put(JSONObject().put("symbol", symbol).put("state", "RECONCILE_REQUIRED")
+                    .put("error", x.message ?: x.javaClass.simpleName))
+            }
+        }
+        return results
     }
 
     private fun placeProtection(exchange: BinanceUsdmFuturesClient, campaignInput: JSONObject): JSONObject {
