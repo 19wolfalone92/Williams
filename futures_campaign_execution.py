@@ -1704,6 +1704,35 @@ class FuturesCampaignExecutionService:
                 "reason": reason_text,
             }
 
+    def _record_terminal_exit_fill(self, campaign, order: dict[str, Any]) -> None:
+        """Durably retain a terminal prior exit so a later exit cannot lose its fills."""
+        order_id = str(order.get("orderId", "") or "")
+        status = str(order.get("status", "") or "").upper()
+        try:
+            executed = float(order.get("executedQty", 0) or 0)
+        except (TypeError, ValueError) as exc:
+            raise FuturesCampaignExecutionError("prior exit has invalid executedQty") from exc
+        if not order_id or status not in {"FILLED", "CANCELED", "CANCELLED", "EXPIRED", "REJECTED"}:
+            raise FuturesCampaignExecutionError("prior exit is not a stable terminal exchange order")
+        if not math.isfinite(executed) or executed < 0:
+            raise FuturesCampaignExecutionError("prior exit executedQty is invalid")
+        if executed <= 0:
+            return
+        records = list(campaign.tags.get("unreconciled_terminal_exit_orders", []) or [])
+        if not any(str(item.get("order_id", "")) == order_id for item in records if isinstance(item, dict)):
+            records.append({
+                "order_id": order_id,
+                "client_order_id": str(order.get("clientOrderId", "") or ""),
+                "status": status,
+                "executed_qty": executed,
+            })
+        campaign.tags["unreconciled_terminal_exit_orders"] = records
+        campaign.tags.setdefault(
+            "exit_cycle_original_qty",
+            float(campaign.tags.get("pending_exit_expected_qty", campaign.position_qty) or campaign.position_qty),
+        )
+        self.db.save_campaign(campaign)
+
     def _finalize_verified_market_exit(
         self,
         campaign,
@@ -1711,69 +1740,123 @@ class FuturesCampaignExecutionService:
         *,
         reason: str,
     ) -> dict[str, Any]:
-        """Finalize a reduce-only exit only from matching Binance order and trade evidence."""
+        """Finalize only after all market-exit child orders and userTrades reconcile."""
         symbol = campaign.symbol.upper()
-        order_id = order.get("orderId")
-        client_order_id = str(
+        current_order_id = str(order.get("orderId", "") or "")
+        current_client_id = str(
             order.get("clientOrderId", "") or campaign.tags.get("pending_exit_client_order_id", "") or ""
         )
         if campaign.tags.get("pending_add_on_client_algo_id") or campaign.tags.get("entry_fill_reconciliation_pending"):
             raise FuturesCampaignExecutionError(
                 f"{symbol}: cannot finalize exit while an entry/add-on order may still be live"
             )
-        if order_id is None or not client_order_id:
+        if not current_order_id or not current_client_id:
             raise FuturesCampaignExecutionError(
                 f"{symbol}: filled exit lacks stable exchange order/client identity"
             )
         if str(order.get("status", "") or "").upper() != "FILLED":
-            raise FuturesCampaignExecutionError(f"{symbol}: exit is not authoritatively FILLED")
-        trades = self.client.user_trades(symbol, order_id=order_id, limit=1000)
-        if not trades:
-            raise FuturesCampaignExecutionError(
-                f"{symbol}: exit is FILLED but authoritative userTrades are not yet available"
-            )
+            raise FuturesCampaignExecutionError(f"{symbol}: current exit is not authoritatively FILLED")
 
-        executed_qty = 0.0
+        records = list(campaign.tags.get("unreconciled_terminal_exit_orders", []) or [])
+        if not any(
+            isinstance(item, dict) and str(item.get("order_id", "")) == current_order_id
+            for item in records
+        ):
+            records.append({
+                "order_id": current_order_id,
+                "client_order_id": current_client_id,
+                "status": "FILLED",
+                "executed_qty": order.get("executedQty", 0),
+            })
+
+        total_executed = 0.0
         realized_pnl = 0.0
         quote_commission = 0.0
         other_commission: dict[str, float] = {}
-        for trade in trades:
-            trade_order_id = trade.get("orderId")
-            if trade_order_id is not None and str(trade_order_id) != str(order_id):
+        reconciled_orders: list[dict[str, Any]] = []
+        for record in records:
+            if not isinstance(record, dict):
+                raise FuturesCampaignExecutionError(f"{symbol}: malformed prior exit ledger record")
+            record_order_id = str(record.get("order_id", "") or "")
+            if not record_order_id:
+                raise FuturesCampaignExecutionError(f"{symbol}: terminal exit ledger lacks orderId")
+            if record_order_id == current_order_id:
+                exchange_order = order
+            else:
+                exchange_order = self.client.get_order(symbol, order_id=record_order_id)
+            exchange_status = str(exchange_order.get("status", "") or "").upper()
+            if exchange_status not in {"FILLED", "CANCELED", "CANCELLED", "EXPIRED", "REJECTED"}:
                 raise FuturesCampaignExecutionError(
-                    f"{symbol}: userTrades returned a fill for a different order"
+                    f"{symbol}: prior exit order {record_order_id} is not terminal ({exchange_status or 'UNKNOWN'})"
                 )
+            if str(exchange_order.get("orderId", record_order_id)) != record_order_id:
+                raise FuturesCampaignExecutionError(f"{symbol}: exit order lookup returned a different orderId")
             try:
-                qty = float(trade.get("qty", 0) or 0)
-                price = float(trade.get("price", 0) or 0)
-                pnl = float(trade.get("realizedPnl", 0) or 0)
-                commission = float(trade.get("commission", 0) or 0)
+                order_executed = float(exchange_order.get("executedQty", 0) or 0)
             except (TypeError, ValueError) as exc:
-                raise FuturesCampaignExecutionError(f"{symbol}: invalid exit userTrades row") from exc
-            if (
-                not all(math.isfinite(value) for value in (qty, price, pnl, commission))
-                or qty <= 0 or price <= 0 or commission < 0
-            ):
-                raise FuturesCampaignExecutionError(f"{symbol}: non-finite/invalid exit userTrades values")
-            executed_qty += qty
-            realized_pnl += pnl
-            asset = str(trade.get("commissionAsset", "") or "").upper()
-            if asset in {"USDT", "USDC"}:
-                quote_commission += commission
-            elif asset:
-                other_commission[asset] = other_commission.get(asset, 0.0) + commission
+                raise FuturesCampaignExecutionError(f"{symbol}: exit order executedQty is invalid") from exc
+            if not math.isfinite(order_executed) or order_executed < 0:
+                raise FuturesCampaignExecutionError(f"{symbol}: exit order executedQty is non-finite")
+            order_trade_qty = 0.0
+            if order_executed > 0:
+                trades = self.client.user_trades(symbol, order_id=record_order_id, limit=1000)
+                if not trades:
+                    raise FuturesCampaignExecutionError(
+                        f"{symbol}: exit order {record_order_id} has execution but no authoritative userTrades"
+                    )
+                for trade in trades:
+                    trade_order_id = trade.get("orderId")
+                    if trade_order_id is not None and str(trade_order_id) != record_order_id:
+                        raise FuturesCampaignExecutionError(
+                            f"{symbol}: userTrades returned a fill for a different exit order"
+                        )
+                    try:
+                        qty = float(trade.get("qty", 0) or 0)
+                        price = float(trade.get("price", 0) or 0)
+                        pnl = float(trade.get("realizedPnl", 0) or 0)
+                        commission = float(trade.get("commission", 0) or 0)
+                    except (TypeError, ValueError) as exc:
+                        raise FuturesCampaignExecutionError(f"{symbol}: invalid exit userTrades row") from exc
+                    if (
+                        not all(math.isfinite(value) for value in (qty, price, pnl, commission))
+                        or qty <= 0 or price <= 0 or commission < 0
+                    ):
+                        raise FuturesCampaignExecutionError(
+                            f"{symbol}: non-finite/invalid exit userTrades values"
+                        )
+                    order_trade_qty += qty
+                    realized_pnl += pnl
+                    asset = str(trade.get("commissionAsset", "") or "").upper()
+                    if asset in {"USDT", "USDC"}:
+                        quote_commission += commission
+                    elif asset:
+                        other_commission[asset] = other_commission.get(asset, 0.0) + commission
+                if abs(order_trade_qty - order_executed) > max(1e-8, order_executed * 1e-6):
+                    raise FuturesCampaignExecutionError(
+                        f"{symbol}: exit order {record_order_id} executedQty disagrees with userTrades"
+                    )
+            total_executed += order_executed
+            reconciled_orders.append({
+                "order_id": record_order_id,
+                "status": exchange_status,
+                "executed_qty": order_executed,
+                "user_trades_qty": order_trade_qty,
+            })
 
         try:
-            expected_qty = float(campaign.tags.get("pending_exit_expected_qty", campaign.position_qty) or 0)
-            response_qty = float(order.get("executedQty", executed_qty) or executed_qty)
+            original_qty = float(
+                campaign.tags.get(
+                    "exit_cycle_original_qty",
+                    campaign.tags.get("pending_exit_expected_qty", campaign.position_qty),
+                ) or 0
+            )
         except (TypeError, ValueError) as exc:
-            raise FuturesCampaignExecutionError(f"{symbol}: exit executed quantity is invalid") from exc
-        if not all(math.isfinite(value) and value > 0 for value in (expected_qty, response_qty, executed_qty)):
-            raise FuturesCampaignExecutionError(f"{symbol}: exit executed quantity is missing or invalid")
-        tolerance = max(1e-8, expected_qty * 1e-6)
-        if abs(executed_qty - expected_qty) > tolerance or abs(response_qty - executed_qty) > tolerance:
+            raise FuturesCampaignExecutionError(f"{symbol}: original exit quantity is invalid") from exc
+        if not math.isfinite(original_qty) or original_qty <= 0:
+            raise FuturesCampaignExecutionError(f"{symbol}: original exit quantity is missing or invalid")
+        if abs(total_executed - original_qty) > max(1e-8, original_qty * 1e-6):
             raise FuturesCampaignExecutionError(
-                f"{symbol}: exit fill mismatch expected={expected_qty}, response={response_qty}, trades={executed_qty}"
+                f"{symbol}: aggregate exit fills {total_executed} do not reconcile to original quantity {original_qty}"
             )
         position = self._position_row(symbol)
         try:
@@ -1788,10 +1871,8 @@ class FuturesCampaignExecutionService:
         net_known_quote = realized_pnl - quote_commission
         campaign.realized_pnl_quote = float(campaign.realized_pnl_quote or 0.0) + net_known_quote
         campaign.tags["last_market_exit"] = {
-            "order_id": str(order_id),
-            "client_order_id": client_order_id,
-            "status": "FILLED",
-            "executed_qty": executed_qty,
+            "orders": reconciled_orders,
+            "executed_qty": total_executed,
             "realized_pnl_quote_before_commission": realized_pnl,
             "quote_commission": quote_commission,
             "unconverted_commission_by_asset": other_commission,
@@ -1802,14 +1883,16 @@ class FuturesCampaignExecutionService:
         campaign.pending_risk_quote = 0.0
         campaign.capital_reserved_quote = 0.0
         campaign.tags["protection_active"] = False
-        campaign.tags.pop("pending_exit_client_order_id", None)
-        campaign.tags.pop("pending_exit_reason", None)
-        campaign.tags.pop("pending_exit_expected_qty", None)
+        for key in (
+            "pending_exit_client_order_id", "pending_exit_reason", "pending_exit_expected_qty",
+            "exit_cycle_original_qty", "unreconciled_terminal_exit_orders",
+        ):
+            campaign.tags.pop(key, None)
         campaign.tags["last_exit_reason"] = str(reason)
         campaign.exit_reason = str(reason)
-        campaign.mark_reconcile_required("Reduce-only exit and userTrades verified; exchange position is flat")
-        campaign.transition(CampaignState.EXIT_PENDING, reason="market exit FILLED and trade history reconciled")
-        campaign.transition(CampaignState.CLOSED, reason="authoritative Futures position and fills confirm flat")
+        campaign.mark_reconcile_required("Reduce-only exit orders and userTrades verified; exchange position is flat")
+        campaign.transition(CampaignState.EXIT_PENDING, reason="market exit fills and trade history reconciled")
+        campaign.transition(CampaignState.CLOSED, reason="authoritative Futures position and aggregate exit fills confirm flat")
         campaign.next_action = "WAIT"
         self.db.save_campaign(campaign)
         self.db.state_set(f"position_state:{symbol}", "FLAT")
@@ -1819,14 +1902,14 @@ class FuturesCampaignExecutionService:
         self.db.log_campaign_event(
             campaign.campaign_id,
             CampaignEventType.EXIT_FILLED.value,
-            order_id=str(order_id),
+            order_id=current_order_id,
             reason=reason,
             payload=campaign.tags["last_market_exit"],
         )
         self.db.log_campaign_event(
             campaign.campaign_id,
             CampaignEventType.CAMPAIGN_CLOSED.value,
-            order_id=str(order_id),
+            order_id=current_order_id,
             reason=reason,
             payload={"realized_pnl_quote_net_known_fees": net_known_quote},
         )
@@ -1834,8 +1917,8 @@ class FuturesCampaignExecutionService:
             "symbol": symbol,
             "direction": self._campaign_direction(campaign),
             "action": "CLOSED",
-            "order_id": str(order_id),
-            "client_order_id": client_order_id,
+            "order_id": current_order_id,
+            "client_order_id": current_client_id,
             "status": "FILLED",
             "realized_pnl_quote_net_known_fees": net_known_quote,
             "unconverted_commission_by_asset": other_commission,
