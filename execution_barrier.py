@@ -103,7 +103,7 @@ class ExecutionBarrier:
         client_order_id = str(intent.client_order_id or "").strip()
         allowed_order_types = {
             "MARKET", "LIMIT", "LIMIT_MAKER", "STOP_LOSS",
-            "STOP_LOSS_LIMIT", "TAKE_PROFIT", "TAKE_PROFIT_LIMIT", "OCO",
+            "STOP_LOSS_LIMIT", "TAKE_PROFIT", "TAKE_PROFIT_LIMIT", "OCO", "OCO_CANCEL",
         }
 
         if not str(intent.intent_id or "").strip():
@@ -273,7 +273,7 @@ class ExecutionBarrier:
             entry_purposes = {"ENTRY", "CAMPAIGN_ENTRY", "CAMPAIGN_ADD_ON"}
             durability_required = (
                 purpose in entry_purposes
-                or order_type in {"CANCEL", "OCO"}
+                or order_type in {"CANCEL", "OCO", "OCO_CANCEL"}
                 or purpose in {
                     "CAMPAIGN_PROTECTION",
                     "CAMPAIGN_PROTECTION_CANCEL",
@@ -283,7 +283,7 @@ class ExecutionBarrier:
                 }
             )
             durability_required_before_submit = (
-                purpose in entry_purposes or order_type == "CANCEL"
+                purpose in entry_purposes or order_type in {"CANCEL", "OCO_CANCEL"}
             )
             durable = self._persist(intent, "PENDING")
             if durability_required_before_submit and not durable:
@@ -366,7 +366,40 @@ class ExecutionBarrier:
                 )
                 raise
 
-            if str(intent.order_type).strip().upper() == "CANCEL":
+            if str(intent.order_type).strip().upper() == "OCO_CANCEL":
+                reports = response.get("orderReports") if isinstance(response, dict) else None
+                try:
+                    order_list_id = int(response.get("orderListId", -1)) if isinstance(response, dict) else -1
+                except (TypeError, ValueError, OverflowError):
+                    order_list_id = -1
+                list_type = str(response.get("listStatusType", "")).upper() if isinstance(response, dict) else ""
+                list_status = str(response.get("listOrderStatus", "")).upper() if isinstance(response, dict) else ""
+                reports_valid = (
+                    isinstance(reports, list)
+                    and len(reports) >= 2
+                    and all(
+                        isinstance(row, dict)
+                        and str(row.get("status", "")).upper() == "CANCELED"
+                        and math.isfinite(float(row.get("executedQty", 0) or 0))
+                        and float(row.get("executedQty", 0) or 0) == 0
+                        for row in reports
+                    )
+                )
+                if (
+                    order_list_id < 0
+                    or list_type != "ALL_DONE"
+                    or list_status != "ALL_DONE"
+                    or not reports_valid
+                ):
+                    order_fsm.state = OrderState.RECONCILE_REQUIRED
+                    reason = "OCO cancellation lacks authoritative no-fill confirmation; reconciliation required"
+                    self._persist(intent, "AMBIGUOUS", reason)
+                    self._record("ERROR", "execution_ambiguous", intent, reason)
+                    raise RuntimeError(f"ExecutionBarrier: {reason}")
+                self._persist(intent, "CANCELED", "Binance confirmed OCO cancellation with no fills")
+                self._record("INFO", "oco_cancel_confirmed", intent, "Binance confirmed OCO cancellation with no fills")
+                return ExecutionResult(intent.intent_id, True, response=response)
+            elif str(intent.order_type).strip().upper() == "CANCEL":
                 status = str(response.get("status", "")).upper() if isinstance(response, dict) else ""
                 try:
                     executed_qty = float(response.get("executedQty", 0) or 0) if isinstance(response, dict) else float("nan")
