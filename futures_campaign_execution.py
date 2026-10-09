@@ -3217,6 +3217,20 @@ class FuturesCampaignExecutionService:
             and campaign.tags.get("entry_fill_reconciliation_pending")
         ):
             return self._reconcile_pending_initial_entry(campaign, position, amount)
+        pending_exit_id = str(campaign.tags.get("pending_exit_client_order_id", "") or "")
+        if (
+            pending_exit_id
+            and not campaign.tags.get("pending_add_on_client_algo_id")
+            and campaign.state not in {
+                CampaignState.ADD_ON_ARMING,
+                CampaignState.ADD_ON_PENDING,
+                CampaignState.POSITION_EXPANDING,
+            }
+        ):
+            return self.exit_position(
+                campaign,
+                reason=str(campaign.tags.get("pending_exit_reason", "RECOVERY_PENDING_EXIT") or "RECOVERY_PENDING_EXIT"),
+            )
         if abs(amount) <= 1e-12:
             try:
                 protective_result = self._reconcile_flat_position_protection(campaign)
