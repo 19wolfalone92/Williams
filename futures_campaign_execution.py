@@ -207,6 +207,10 @@ class FuturesCampaignExecutionService:
                 raise FuturesCampaignExecutionError(
                     f"{sym}: invalid positionAmt during account-wide reconciliation"
                 )
+            if not math.isfinite(amount):
+                raise FuturesCampaignExecutionError(
+                    f"{sym}: non-finite positionAmt during account-wide reconciliation"
+                )
             if abs(amount) > 0.0 and sym not in managed_symbols:
                 unmanaged.append(sym)
         if unmanaged:
