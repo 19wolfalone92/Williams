@@ -1850,7 +1850,10 @@ def test_isolated_one_x_policy_uses_symbol_config_when_position_risk_is_empty(tm
     try:
         client = FakeFuturesClient(102.0)
         client.position_risk = lambda symbol=None: []
-        service = FuturesCampaignExecutionService(client, db)
+        cache = ContextCache()
+        service = FuturesCampaignExecutionService(
+            client, db, execution_barrier=ExecutionBarrier(cache, db)
+        )
 
         configuration = service._assert_isolated_1x("BTCUSDT")
 
@@ -1865,7 +1868,10 @@ def test_empty_v3_position_risk_is_authoritative_flat_snapshot(tmp_path):
     try:
         client = FakeFuturesClient(102.0)
         client.position_risk = lambda symbol=None: []
-        service = FuturesCampaignExecutionService(client, db)
+        cache = ContextCache()
+        service = FuturesCampaignExecutionService(
+            client, db, execution_barrier=ExecutionBarrier(cache, db)
+        )
 
         row = service._position_row("BTCUSDT")
 
