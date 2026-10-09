@@ -149,9 +149,11 @@ def test_fractal_signal_uses_configured_confirmation_delay_not_hardcoded_two_bar
     data = frame()
     data["fractal_right_bars"] = 3
     data.loc[8, "fractal_down"] = True
+    data.loc[9, ["open", "high", "low", "close"]] = [112.0, 112.8, 111.5, 112.1]
+    data.loc[10, ["open", "high", "low", "close"]] = [111.8, 112.6, 111.2, 111.6]
+    data.loc[11, ["open", "high", "low", "close"]] = [111.5, 112.4, 111.1, 111.4]
     data.loc[11, "confirmed_down_level"] = float(data.loc[8, "low"])
     data.loc[11, "teeth_shifted"] = 120.0
-    data.loc[11, "close"] = 115.0
 
     signals = extract_short_signal_specs(
         "BTCUSDT", data, timeframe="5m", tick_size=0.1
