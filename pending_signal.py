@@ -100,7 +100,9 @@ class PendingSignal:
 
     def is_expired(self, now_ms: int | None = None) -> bool:
         now = int(now_ms if now_ms is not None else time.time() * 1000)
-        return self.expires_at_ms > 0 and now >= self.expires_at_ms
+        # Expiry is mandatory for an actionable exchange-side conditional.
+        # Zero/negative timestamps are malformed, not "never expires".
+        return self.expires_at_ms <= 0 or now >= self.expires_at_ms
 
     def actionable(self, now_ms: int | None = None) -> bool:
         return (
