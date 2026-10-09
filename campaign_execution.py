@@ -1250,6 +1250,29 @@ class CampaignExecutionService:
             raise CampaignExecutionError(
                 f"{signal.symbol}: add-on signal expired or invalid"
             )
+        try:
+            equity_quote = float(equity_quote)
+            candidate_risk_pct = float(candidate_risk_pct)
+            add_risk_cap = float(os.getenv("CAMPAIGN_ADD_RISK_MAX_PCT", "0.002"))
+            add_capital_fraction = float(os.getenv("CAMPAIGN_ADD_CAPITAL_FRACTION", "0.25"))
+            campaign_limit = float(self.engine.campaign_risk_limit_pct)
+            portfolio_limit = float(self.engine.portfolio_risk_limit_pct)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise CampaignExecutionError("add-on equity/risk configuration is invalid") from exc
+        if (
+            not all(math.isfinite(v) for v in (
+                equity_quote, candidate_risk_pct, add_risk_cap,
+                add_capital_fraction, campaign_limit, portfolio_limit,
+            ))
+            or equity_quote <= 0
+            or candidate_risk_pct <= 0
+            or add_risk_cap <= 0
+            or not 0 < add_capital_fraction <= 1
+            or not 0 < campaign_limit <= 1
+            or not 0 < portfolio_limit <= 1
+        ):
+            raise CampaignExecutionError("add-on equity/risk configuration is invalid")
+
         campaign = self._active_campaign_for_symbol(signal.symbol)
         if campaign is None or campaign.position_qty <= 0:
             raise CampaignExecutionError(f"{signal.symbol}: no active campaign for add-on")
@@ -1258,18 +1281,24 @@ class CampaignExecutionService:
         if signal.signal_bar_time_ms <= int(campaign.tags.get("last_signal_time_ms", 0) or 0):
             raise CampaignExecutionError("signal is not newer than current campaign signal")
 
-        reserved = float(campaign.open_risk_quote or 0) + float(campaign.pending_risk_quote or 0)
-        campaign_capacity = float(equity_quote) * self.engine.campaign_risk_limit_pct
-        remaining = max(0.0, campaign_capacity - reserved)
+        campaign_reserved = float(campaign.open_risk_quote or 0) + float(campaign.pending_risk_quote or 0)
+        portfolio_reserved = self.engine.portfolio_reserved_risk_quote()
+        campaign_capacity = equity_quote * campaign_limit
+        portfolio_capacity = equity_quote * portfolio_limit
+        if (
+            not all(math.isfinite(v) for v in (
+                campaign_reserved, portfolio_reserved, campaign_capacity, portfolio_capacity
+            ))
+            or campaign_reserved < 0 or portfolio_reserved < 0
+        ):
+            raise CampaignExecutionError("add-on risk reservation is invalid")
         requested = min(
-            remaining,
-            float(equity_quote) * min(
-                float(candidate_risk_pct),
-                float(os.getenv("CAMPAIGN_ADD_RISK_MAX_PCT", "0.002")),
-            ),
+            max(0.0, campaign_capacity - campaign_reserved),
+            max(0.0, portfolio_capacity - portfolio_reserved),
+            equity_quote * min(candidate_risk_pct, add_risk_cap),
         )
-        if requested <= 0:
-            raise CampaignExecutionError("campaign risk budget exhausted")
+        if not math.isfinite(requested) or requested <= 0:
+            raise CampaignExecutionError("campaign/portfolio risk budget exhausted")
 
         current = self._current_price(signal.symbol)
         trigger = self._normalize_price(signal.symbol, signal.trigger_price)
@@ -1291,52 +1320,77 @@ class CampaignExecutionService:
 
         stop_fraction = (trigger - stop) / trigger
         effective_loss_fraction = stop_fraction + 0.002 + float(os.getenv("RISK_SLIPPAGE_BUFFER_PCT", "0.0015"))
+        if not math.isfinite(effective_loss_fraction) or effective_loss_fraction <= 0:
+            raise CampaignExecutionError("add-on effective loss fraction is invalid")
         notional = min(
-            equity_quote * float(os.getenv("CAMPAIGN_ADD_CAPITAL_FRACTION", "0.25")),
-            requested / max(effective_loss_fraction, 1e-12),
+            equity_quote * add_capital_fraction,
+            requested / effective_loss_fraction,
         )
         qty = self._normalized_entry_qty(signal.symbol, notional, trigger)
         cid = f"{self.ENTRY_PREFIX}ADD_{uuid.uuid4().hex[:16]}"
 
-        prior = self.db.conn.execute(
-            "SELECT state FROM campaign_signals WHERE campaign_id=? AND signal_id=?",
-            (campaign.campaign_id, signal.signal_id),
-        ).fetchone()
-        if prior and str(prior["state"]).upper() in {"ARMED", "TRIGGERED", "FILLED"}:
-            raise CampaignExecutionError("signal is already active or filled for this campaign")
-        self.db.save_campaign_signal(signal, campaign.campaign_id, state=SignalState.DETECTED.value)
-        campaign.tags["last_signal_time_ms"] = int(signal.signal_bar_time_ms)
-        campaign.tags["pending_add_signal_id"] = signal.signal_id
-        campaign.tags["pending_add_signal_expires_at_ms"] = int(pending_signal.expires_at_ms)
-        campaign.pending_risk_quote = requested
-        campaign.capital_reserved_quote = qty * trigger
-        self.engine.arm_add_on(
-            campaign,
-            signal,
-            risk_quote=requested,
-            capital_reserved_quote=qty * trigger,
-        )
-        # Reuse the same durable per-symbol pending key. Only one conditional
-        # order for a symbol may be waiting at a time; this keeps startup
-        # recovery idempotent and avoids a second persistence protocol.
-        claimed = self.db.try_claim_state(
-            f"entry_client_order_id:{signal.symbol}",
-            cid,
-        )
-        if not claimed:
-            campaign.pending_risk_quote = 0.0
-            campaign.capital_reserved_quote = 0.0
-            try:
-                campaign.transition(
+        # The aggregate risk check, per-symbol claim and durable campaign
+        # transition must commit together before the conditional order exists.
+        with self._reservation_lock:
+            with self.db.transaction(immediate=True):
+                campaign = self.engine.load_campaign(campaign.campaign_id)
+                if campaign is None or campaign.position_qty <= 0:
+                    raise CampaignExecutionError(f"{signal.symbol}: campaign disappeared before add-on reservation")
+                allowed_states = {
+                    CampaignState.OPEN_INITIAL,
                     CampaignState.TREND_ACTIVE,
-                    reason="another pending order already exists for symbol",
+                    CampaignState.TRAILING,
+                    CampaignState.EXHAUSTION_WATCH,
+                }
+                if campaign.state not in allowed_states:
+                    raise CampaignExecutionError(
+                        f"{signal.symbol}: add-on blocked from state {campaign.state.value}"
+                    )
+                if signal.signal_bar_time_ms <= int(campaign.tags.get("last_signal_time_ms", 0) or 0):
+                    raise CampaignExecutionError("signal is no longer newer than the current campaign")
+                campaign_reserved_now = float(campaign.open_risk_quote or 0) + float(campaign.pending_risk_quote or 0)
+                portfolio_reserved_now = self.engine.portfolio_reserved_risk_quote()
+                campaign_capacity_now = equity_quote * campaign_limit
+                portfolio_capacity_now = equity_quote * portfolio_limit
+                if (
+                    not all(math.isfinite(v) for v in (
+                        campaign_reserved_now, portfolio_reserved_now,
+                        campaign_capacity_now, portfolio_capacity_now,
+                    ))
+                    or campaign_reserved_now < 0
+                    or portfolio_reserved_now < 0
+                    or campaign_reserved_now + requested > campaign_capacity_now + max(1e-8, campaign_capacity_now * 1e-9)
+                    or portfolio_reserved_now + requested > portfolio_capacity_now + max(1e-8, portfolio_capacity_now * 1e-9)
+                ):
+                    raise CampaignExecutionError(
+                        f"{signal.symbol}: campaign/portfolio risk changed before add-on reservation"
+                    )
+                prior = self.db.conn.execute(
+                    "SELECT state FROM campaign_signals WHERE campaign_id=? AND signal_id=?",
+                    (campaign.campaign_id, signal.signal_id),
+                ).fetchone()
+                if prior and str(prior["state"]).upper() in {"ARMED", "TRIGGERED", "FILLED"}:
+                    raise CampaignExecutionError("signal is already active or filled for this campaign")
+                claimed = self.db.try_claim_state(
+                    f"entry_client_order_id:{signal.symbol}",
+                    cid,
                 )
-            except ValueError:
-                pass
-            self.db.save_campaign(campaign)
-            raise CampaignExecutionError(
-                f"{signal.symbol}: another pending conditional order exists"
-            )
+                if not claimed:
+                    raise CampaignExecutionError(
+                        f"{signal.symbol}: another pending conditional order exists"
+                    )
+                self.db.save_campaign_signal(signal, campaign.campaign_id, state=SignalState.DETECTED.value)
+                campaign.tags["last_signal_time_ms"] = int(signal.signal_bar_time_ms)
+                campaign.tags["pending_add_signal_id"] = signal.signal_id
+                campaign.tags["pending_add_signal_expires_at_ms"] = int(pending_signal.expires_at_ms)
+                campaign.pending_risk_quote = requested
+                campaign.capital_reserved_quote = qty * trigger
+                self.engine.arm_add_on(
+                    campaign,
+                    signal,
+                    risk_quote=requested,
+                    capital_reserved_quote=qty * trigger,
+                )
         intent = OrderIntent.new(
             signal.symbol,
             "BUY",
