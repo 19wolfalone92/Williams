@@ -2618,7 +2618,30 @@ class FuturesCampaignExecutionService:
                         algo_id=campaign.tags.get("protective_algo_id") or None,
                         client_algo_id=campaign.tags.get("protective_client_algo_id") or None,
                     )
-                    status = str(protection.get("algoStatus", "")).upper()
+                except Exception as exc:
+                    reason = (
+                        f"{symbol}: existing protective stop lookup is unavailable; "
+                        f"refusing to submit a duplicate stop: {type(exc).__name__}: {exc}"
+                    )
+                    self.engine.mark_reconcile_required(campaign, reason)
+                    self.db.state_set(f"campaign_state:{campaign.campaign_id}", CampaignState.RECONCILE_REQUIRED.value)
+                    self.db.state_set(f"position_state:{symbol}", CampaignState.RECONCILE_REQUIRED.value)
+                    return {"symbol": symbol, "state": "RECONCILE_REQUIRED", "reason": reason}
+
+                status = str(protection.get("algoStatus", "")).upper()
+                if status not in {"NEW", "WORKING", "PENDING", "PENDING_NEW"}:
+                    try:
+                        self.place_protection(campaign)
+                    except Exception as protect_exc:
+                        reason = (
+                            f"live position lacks confirmed protection: prior status={status or 'UNKNOWN'}; "
+                            f"replacement submit={type(protect_exc).__name__}: {protect_exc}"
+                        )
+                        self.engine.mark_reconcile_required(campaign, reason)
+                        self.db.state_set(f"campaign_state:{campaign.campaign_id}", CampaignState.RECONCILE_REQUIRED.value)
+                        self.db.state_set(f"position_state:{symbol}", CampaignState.RECONCILE_REQUIRED.value)
+                        return {"symbol": symbol, "state": "RECONCILE_REQUIRED", "reason": "protective stop not confirmed"}
+                else:
                     expected_side = "SELL" if direction == "LONG" else "BUY"
                     actual_side = str(protection.get("side", "") or "").upper()
                     actual_type = str(protection.get("type", "") or "").upper()
@@ -2633,8 +2656,7 @@ class FuturesCampaignExecutionService:
                     except (TypeError, ValueError):
                         actual_trigger = expected_trigger = float("nan")
                     if (
-                        status not in {"NEW", "WORKING", "PENDING", "PENDING_NEW"}
-                        or actual_side != expected_side
+                        actual_side != expected_side
                         or actual_type != "STOP_MARKET"
                         or not close_position
                         or not actual_client_id
@@ -2644,23 +2666,14 @@ class FuturesCampaignExecutionService:
                         or expected_trigger <= 0
                         or not math.isclose(actual_trigger, expected_trigger, rel_tol=0.0, abs_tol=1e-8)
                     ):
-                        raise FuturesCampaignExecutionError(
-                            f"protective algo order identity/side/type/closePosition/trigger/status "
-                            f"mismatch (status={status or 'UNKNOWN'}, side={actual_side or 'UNKNOWN'}, "
-                            f"type={actual_type or 'UNKNOWN'}, closePosition={close_position}, "
-                            f"trigger={actual_trigger}, expected_trigger={expected_trigger})"
+                        reason = (
+                            f"{symbol}: active protective stop identity/side/type/closePosition/trigger mismatch; "
+                            "refusing to create another stop until the existing order is reconciled"
                         )
-                except Exception as exc:
-                    try:
-                        self.place_protection(campaign)
-                    except Exception as protect_exc:
-                        self.engine.mark_reconcile_required(
-                            campaign,
-                            f"live position lacks confirmed protection: lookup={exc}; new_stop={protect_exc}",
-                        )
+                        self.engine.mark_reconcile_required(campaign, reason)
                         self.db.state_set(f"campaign_state:{campaign.campaign_id}", CampaignState.RECONCILE_REQUIRED.value)
                         self.db.state_set(f"position_state:{symbol}", CampaignState.RECONCILE_REQUIRED.value)
-                        return {"symbol": symbol, "state": "RECONCILE_REQUIRED", "reason": "protective stop not confirmed"}
+                        return {"symbol": symbol, "state": "RECONCILE_REQUIRED", "reason": reason}
             else:
                 try:
                     self.place_protection(campaign)
