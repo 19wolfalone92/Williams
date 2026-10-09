@@ -115,6 +115,32 @@ def _angulation(
     return float(max(score, 0.0)), bool(valid)
 
 
+def _invalidation_intact(
+    ind: pd.DataFrame,
+    source_index: int,
+    *,
+    side: str,
+    protective_level: float,
+) -> bool:
+    """Reject a pending trigger if price already crossed its structural stop."""
+    if source_index < 0 or source_index >= len(ind):
+        return False
+    if not math.isfinite(float(protective_level)) or protective_level <= 0:
+        return False
+    if side not in {"LONG", "SHORT"}:
+        return False
+    later = ind.iloc[source_index + 1 :]
+    if later.empty:
+        return True
+    column = "low" if side == "LONG" else "high"
+    values = pd.to_numeric(later[column], errors="coerce").to_numpy(dtype=float)
+    if not all(math.isfinite(float(value)) for value in values):
+        return False
+    if side == "LONG":
+        return bool((values > protective_level).all())
+    return bool((values < protective_level).all())
+
+
 def _latest_reversal(
     ind: pd.DataFrame,
     *,
@@ -245,7 +271,7 @@ def extract_long_signal_specs(
     if reversal is not None:
         i, trigger_base, protective, score = reversal
         trigger = trigger_base + tick
-        if current_close < trigger:
+        if current_close < trigger and _invalidation_intact(ind, i, side="LONG", protective_level=protective):
             row = ind.iloc[i]
             specs.append(
                 SignalSpec.new(
@@ -282,7 +308,7 @@ def extract_long_signal_specs(
     if super_ao is not None:
         i, trigger_base, protective = super_ao
         trigger = trigger_base + tick
-        if current_close < trigger:
+        if current_close < trigger and _invalidation_intact(ind, i, side="LONG", protective_level=protective):
             row = ind.iloc[i]
             specs.append(
                 SignalSpec.new(
@@ -321,7 +347,7 @@ def extract_long_signal_specs(
         # price/Teeth. At arm time a SHORT trigger must remain below Teeth.
         trigger = trigger_base + tick
         current_trigger_valid = trigger > max(current_teeth, 0.0)
-        if current_close < trigger and current_trigger_valid:
+        if current_close < trigger and current_trigger_valid and _invalidation_intact(ind, center_i, side="LONG", protective_level=protective):
             row = ind.iloc[center_i]
             specs.append(
                 SignalSpec.new(
@@ -404,7 +430,7 @@ def extract_short_signal_specs(
     if reversal is not None:
         i, trigger_base, protective, score = reversal
         trigger = trigger_base - tick
-        if current_close > trigger:
+        if current_close > trigger and _invalidation_intact(ind, i, side="SHORT", protective_level=protective):
             row = ind.iloc[i]
             specs.append(
                 SignalSpec.new(
@@ -442,7 +468,7 @@ def extract_short_signal_specs(
     if super_ao is not None:
         i, trigger_base, protective = super_ao
         trigger = trigger_base - tick
-        if current_close > trigger:
+        if current_close > trigger and _invalidation_intact(ind, i, side="SHORT", protective_level=protective):
             row = ind.iloc[i]
             specs.append(
                 SignalSpec.new(
@@ -482,7 +508,7 @@ def extract_short_signal_specs(
         # price/Teeth.  At arm time the trigger must still be above Teeth.
         trigger = trigger_base - tick
         current_trigger_valid = current_teeth > 0.0 and trigger < current_teeth
-        if current_close > trigger and current_trigger_valid:
+        if current_close > trigger and current_trigger_valid and _invalidation_intact(ind, center_i, side="SHORT", protective_level=protective):
             row = ind.iloc[center_i]
             specs.append(
                 SignalSpec.new(
