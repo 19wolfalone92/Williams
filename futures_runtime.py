@@ -619,18 +619,24 @@ class FuturesRuntime:
         except Exception as exc:
             preflight_errors.append(f"Futures time sync failed: {type(exc).__name__}: {exc}")
 
-        account_payload: dict[str, Any] = {}
         try:
-            account_payload = self._account()
+            self._account()
             equity = self._last_account["equity_quote"]
-            can_trade = account_payload.get("canTrade")
-            if can_trade is not True and str(can_trade).strip().lower() != "true":
-                preflight_errors.append("Futures account canTrade is not explicitly true")
         except Exception as exc:
             # Account/equity failure blocks new exposure, but must not prevent
             # attempts to reconcile, repair protection, or reduce existing risk.
             equity = float("nan")
             preflight_errors.append(f"Futures account/equity unavailable: {type(exc).__name__}: {exc}")
+
+        try:
+            permissions = self.client.account_permissions()
+            can_trade = permissions.get("canTrade") if isinstance(permissions, dict) else None
+            if can_trade is not True:
+                preflight_errors.append("Futures account canTrade is not explicitly true")
+        except Exception as exc:
+            preflight_errors.append(
+                f"Futures account permissions unavailable: {type(exc).__name__}: {exc}"
+            )
 
         # PortfolioController uses this value to size and rank risk allocations.
         # Never overwrite its last valid equity with NaN/zero from a failed read.
@@ -870,9 +876,15 @@ class FuturesRuntime:
                 startup_blockers.append(
                     f"Futures account/equity unavailable: {type(exc).__name__}: {exc}"
                 )
-            can_trade = account.get("canTrade") if isinstance(account, dict) else None
-            if can_trade is not True and str(can_trade).strip().lower() != "true":
-                startup_blockers.append("Futures account canTrade is not explicitly true")
+            try:
+                permissions = self.client.account_permissions()
+                can_trade = permissions.get("canTrade") if isinstance(permissions, dict) else None
+                if can_trade is not True:
+                    startup_blockers.append("Futures account canTrade is not explicitly true")
+            except Exception as exc:
+                startup_blockers.append(
+                    f"Futures account permissions unavailable: {type(exc).__name__}: {exc}"
+                )
             try:
                 reconciliation = self._recover()
             except Exception as exc:
