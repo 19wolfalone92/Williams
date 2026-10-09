@@ -205,3 +205,10 @@ The Python Futures selector rejected a candidate only when `expires_at_ms < now`
 `default_expiry_ms()` preserved an explicit expiry only when it was later than `created_at_ms`. If a stale source signal was reconstructed after its expiry, the function could replace the old expiry with a new window based on reconstruction time and make the old signal actionable again.
 
 **Correction:** any positive explicit `expires_at_ms` is now authoritative even when it is already in the past. A new default expiry is calculated only when the signal has no explicit expiry (zero sentinel). Added a regression test for a signal created/reconstructed after its source-derived expiry.
+
+
+### 27. Missing/negative PendingSignal expiry was treated as "never expires" — corrected
+
+The pending-signal object previously considered only positive expiry timestamps eligible for expiry checks. A directly restored object with zero or negative expiry could therefore remain actionable indefinitely even though exchange-side conditional orders require an explicit finite lifetime.
+
+**Correction:** zero/negative expiry is now invalid/expired for actionability. The canonical factory computes a default only when no positive explicit expiry was supplied, and explicit positive timestamps remain authoritative even when already expired. Added tests for zero and negative persisted expiry.
