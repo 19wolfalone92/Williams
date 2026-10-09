@@ -256,6 +256,34 @@ class BinanceUsdmFuturesClient:
         params = {"symbol": str(symbol).upper()} if symbol else {}
         return self._request("GET", "/fapi/v3/positionRisk", params, signed=True)
 
+    def user_trades(
+        self,
+        symbol: str,
+        *,
+        order_id: int | str | None = None,
+        start_time: int | None = None,
+        end_time: int | None = None,
+        limit: int = 1000,
+    ) -> list[dict[str, Any]]:
+        if not 1 <= int(limit) <= 1000:
+            raise ValueError("user_trades limit must be in [1, 1000]")
+        params: dict[str, Any] = {
+            "symbol": str(symbol).upper(),
+            "limit": int(limit),
+        }
+        if order_id is not None:
+            params["orderId"] = order_id
+        if start_time is not None:
+            params["startTime"] = int(start_time)
+        if end_time is not None:
+            params["endTime"] = int(end_time)
+        result = self._request("GET", "/fapi/v1/userTrades", params, signed=True)
+        if isinstance(result, list):
+            return [row for row in result if isinstance(row, dict)]
+        if isinstance(result, dict) and isinstance(result.get("trades"), list):
+            return [row for row in result["trades"] if isinstance(row, dict)]
+        raise FuturesAPIError("Binance Futures userTrades response is not a list")
+
     def ensure_one_way_mode(self) -> dict[str, Any]:
         mode = self._request("GET", "/fapi/v1/positionSide/dual", signed=True)
         if bool(mode.get("dualSidePosition", False)):
