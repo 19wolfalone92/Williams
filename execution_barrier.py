@@ -365,6 +365,9 @@ class ExecutionBarrier:
                     raise RuntimeError(f"ExecutionBarrier: {reason}")
                 if status == "CANCELED" and executed_qty == 0:
                     order_fsm.observe_exchange_status(status, executed_qty)
+                    self._persist(intent, "CANCELED", "Binance confirmed cancellation with no fills")
+                    self._record("INFO", "cancel_confirmed", intent, "Binance confirmed cancellation with no fills")
+                    return ExecutionResult(intent.intent_id, True, response=response)
                 elif status == "REJECTED":
                     self._persist(intent, "REJECTED", "Binance rejected cancellation; original order state must be reconciled")
                     self._record("WARNING", "cancel_rejected", intent, "Binance rejected cancellation")
