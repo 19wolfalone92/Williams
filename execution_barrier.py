@@ -367,7 +367,7 @@ class ExecutionBarrier:
                         and row.get("orderId") is not None
                         and str(row.get("status", "")).upper() in {
                             "NEW", "PENDING_NEW", "PARTIALLY_FILLED", "FILLED",
-                            "CANCELED", "EXPIRED", "REJECTED",
+                            "CANCELED", "EXPIRED",
                         }
                         for row in reports
                     )
@@ -401,7 +401,23 @@ class ExecutionBarrier:
                         self._persist(intent, "AMBIGUOUS", reason)
                         self._record("ERROR", "execution_ambiguous", intent, reason)
                         raise RuntimeError(f"ExecutionBarrier: {reason}")
-                    order_fsm.observe_exchange_status(status, executed_qty)
+                    if status in {"NEW", "PENDING_NEW"} and executed_qty > 0:
+                        order_fsm.state = OrderState.RECONCILE_REQUIRED
+                    elif status == "PARTIALLY_FILLED" and executed_qty <= 0:
+                        order_fsm.state = OrderState.RECONCILE_REQUIRED
+                    elif status == "FILLED" and executed_qty <= 0:
+                        order_fsm.state = OrderState.RECONCILE_REQUIRED
+                    elif status in {"CANCELED", "EXPIRED"} and executed_qty > 0:
+                        # A terminal order can still have changed inventory. A
+                        # partial fill must be reconciled before risk is released.
+                        order_fsm.state = OrderState.RECONCILE_REQUIRED
+                    else:
+                        order_fsm.observe_exchange_status(status, executed_qty)
+                    if order_fsm.state == OrderState.REJECTED:
+                        reason = "Binance authoritatively rejected the order"
+                        self._persist(intent, "REJECTED", reason)
+                        self._record("WARNING", "execution_rejected", intent, reason)
+                        return ExecutionResult(intent.intent_id, False, response=response, reason=reason)
                     if order_fsm.state == OrderState.RECONCILE_REQUIRED:
                         reason = f"exchange returned unrecognized or inconsistent order status {status!r}; reconciliation required"
                         self._persist(intent, "AMBIGUOUS", reason)
