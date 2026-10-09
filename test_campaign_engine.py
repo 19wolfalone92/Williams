@@ -196,3 +196,38 @@ def test_add_on_uses_existing_campaign_and_reserves_only_remaining_risk():
             ]) == 1
         finally:
             db.conn.close()
+
+@pytest.mark.parametrize(
+    "overrides,match",
+    [
+        ({"quantity": float("nan")}, "finite"),
+        ({"average_entry_price": float("inf")}, "finite"),
+        ({"initial_stop_price": float("nan")}, "finite"),
+        ({"risk_quote": float("inf")}, "finite"),
+        ({"fee_quote": float("nan")}, "finite"),
+        ({"risk_quote": 0.0}, "positive"),
+        ({"fill_order_id": ""}, "stable exchange order ID"),
+    ],
+)
+def test_initial_fill_rejects_invalid_numeric_values_and_missing_order_id(overrides, match):
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "initial-fill-validation.sqlite3"))
+        try:
+            engine = CampaignEngine(db)
+            signal = make_signal()
+            campaign = engine.create_campaign(signal, initial_risk_pct=0.002)
+            engine.arm_entry(campaign, signal)
+            engine.mark_triggered(campaign, signal.signal_id, "entry-1")
+            values = {
+                "quantity": 0.01,
+                "average_entry_price": 101.0,
+                "initial_stop_price": 97.0,
+                "fill_order_id": "entry-1",
+                "risk_quote": 2.0,
+                "fee_quote": 0.0,
+            }
+            values.update(overrides)
+            with pytest.raises(ValueError, match=match):
+                engine.record_initial_fill(campaign, **values)
+        finally:
+            db.conn.close()
