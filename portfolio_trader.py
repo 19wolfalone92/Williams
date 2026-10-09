@@ -1838,30 +1838,39 @@ class MultiPositionTrader:
     def _daily_entry_guard(self):
         """Block new entries on daily loss, trade count, streak or cooldown."""
         from datetime import datetime, timezone
-        account = self.client.account()
-        equity = self._portfolio_equity_quote(account)
-        unrealized = 0.0
-        for trade in self.open_trades():
-            symbol = str(trade["symbol"]).upper()
-            try:
+        try:
+            account = self.client.account()
+            equity = self._portfolio_equity_quote(account)
+            unrealized = 0.0
+            for trade in self.open_trades():
+                symbol = str(trade["symbol"]).upper()
                 mark = float(self.client.ticker_price(symbol)["price"])
-            except Exception:
-                continue
-            qty = float(trade.get("quantity", 0) or 0)
-            unrealized += (mark - float(trade.get("entry_price", 0) or 0)) * qty
+                qty = float(trade.get("quantity", 0) or 0)
+                entry = float(trade.get("entry_price", 0) or 0)
+                if (
+                    not math.isfinite(mark) or mark <= 0
+                    or not math.isfinite(qty) or qty <= 0
+                    or not math.isfinite(entry) or entry <= 0
+                ):
+                    return False, f"{symbol}: invalid mark/position data; new entries blocked"
+                unrealized += (mark - entry) * qty
+            if not math.isfinite(equity) or equity <= 0 or not math.isfinite(unrealized):
+                return False, "portfolio equity/unrealized PnL invalid; new entries blocked"
 
-        realized = float(self.db.conn.execute(
-            "SELECT COALESCE(SUM(pnl),0) FROM trades WHERE exit_time IS NOT NULL AND exit_time >= date('now')"
-        ).fetchone()[0] or 0.0)
-        fees = float(self.db.conn.execute(
-            "SELECT COALESCE(SUM(fees),0) FROM trades WHERE exit_time IS NOT NULL AND exit_time >= date('now')"
-        ).fetchone()[0] or 0.0)
-        trades_today = int(self.db.conn.execute(
-            "SELECT COUNT(*) FROM trades WHERE entry_time >= date('now')"
-        ).fetchone()[0])
-        recent = self.db.conn.execute(
-            "SELECT pnl, exit_time FROM trades WHERE exit_time IS NOT NULL ORDER BY id DESC LIMIT 20"
-        ).fetchall()
+            # Closed-trade PnL is already net of fees. Only subtract entry fees
+            # belonging to positions still open; closed fees would be double-counted.
+            fees = float(self.db.conn.execute(
+                "SELECT COALESCE(SUM(fees),0) FROM trades "
+                "WHERE exit_time IS NULL AND entry_time >= date('now')"
+            ).fetchone()[0] or 0.0)
+            trades_today = int(self.db.conn.execute(
+                "SELECT COUNT(*) FROM trades WHERE entry_time >= date('now')"
+            ).fetchone()[0])
+            recent = self.db.conn.execute(
+                "SELECT pnl, exit_time FROM trades WHERE exit_time IS NOT NULL ORDER BY id DESC LIMIT 20"
+            ).fetchall()
+        except Exception as exc:
+            return False, f"daily-risk inputs unavailable; new entries blocked ({type(exc).__name__})"
 
         if self.max_trades_per_day and trades_today >= self.max_trades_per_day:
             return False, f"MAX_TRADES_PER_DAY reached: {trades_today}"
@@ -1879,8 +1888,8 @@ class MultiPositionTrader:
                 elapsed = (datetime.now(timezone.utc) - ts).total_seconds()
                 if elapsed < self.cooldown_minutes * 60:
                     return False, f"COOLDOWN active: {self.cooldown_minutes * 60 - elapsed:.0f}s remaining"
-            except ValueError:
-                pass
+            except (TypeError, ValueError, OverflowError):
+                return False, "latest exit timestamp invalid; cooldown cannot be verified"
         ok, reason = self.equity_breaker.check(self.db, equity, None, unrealized, fees)
         return ok, reason
     # ------------------------------------------------------------------
