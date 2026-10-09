@@ -160,12 +160,21 @@ class RiskEngine:
         ):
             return self._blocked(symbol, side, entry, "invalid stop/target distance")
 
-        if side == "LONG":
-            stop_price = structural_stop if 0.0 < structural_stop < entry else entry - fallback_stop_distance
-            take_profit_price = entry + target_distance
+        if structural_stop > 0:
+            if side == "LONG" and structural_stop >= entry:
+                return self._blocked(symbol, side, entry, "long structural invalidation must be below entry")
+            if side == "SHORT" and structural_stop <= entry:
+                return self._blocked(symbol, side, entry, "short structural invalidation must be above entry")
+            stop_price = structural_stop
+        elif side == "LONG":
+            stop_price = entry - fallback_stop_distance
         else:
-            stop_price = structural_stop if structural_stop > entry else entry + fallback_stop_distance
-            take_profit_price = entry - target_distance
+            stop_price = entry + fallback_stop_distance
+
+        take_profit_price = (
+            entry + target_distance if side == "LONG"
+            else entry - target_distance
+        )
 
         if (
             not math.isfinite(stop_price) or not math.isfinite(take_profit_price)
