@@ -264,8 +264,20 @@ class CampaignEngine:
     def arm_add_on(self, campaign: TradingCampaign, signal: SignalSpec, *, risk_quote: float, capital_reserved_quote: float) -> TradingCampaign:
         if campaign.position_qty <= 0:
             raise ValueError("add-on requires an open campaign position")
-        if signal.side != campaign.side:
-            raise ValueError("add-on side does not match campaign")
+        signal_direction = str(getattr(signal, "direction", "") or "").upper()
+        if signal_direction not in {"LONG", "SHORT"}:
+            signal_direction = {
+                "BUY": "LONG", "LONG": "LONG",
+                "SELL": "SHORT", "SHORT": "SHORT",
+            }.get(str(signal.side).upper(), "")
+        campaign_direction = str(campaign.tags.get("direction", "") or "").upper()
+        if campaign_direction not in {"LONG", "SHORT"}:
+            campaign_direction = {
+                "BUY": "LONG", "LONG": "LONG",
+                "SELL": "SHORT", "SHORT": "SHORT",
+            }.get(str(campaign.side).upper(), "")
+        if not signal_direction or signal_direction != campaign_direction:
+            raise ValueError("add-on direction does not match campaign")
         if signal.role != SignalRole.ADD_ON:
             raise ValueError("later Wise-Men signals must be explicitly classified as ADD_ON")
         if signal.signal_type not in {SignalType.SUPER_AO, SignalType.FRACTAL}:
@@ -280,7 +292,6 @@ class CampaignEngine:
             CampaignState.OPEN_INITIAL,
             CampaignState.TREND_ACTIVE,
             CampaignState.TRAILING,
-            CampaignState.EXHAUSTION_WATCH,
         }:
             raise ValueError(f"Cannot arm add-on from {campaign.state.value}")
 
