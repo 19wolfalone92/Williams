@@ -27,6 +27,7 @@ def frame():
             "confirmed_down_level": float("nan"),
             "fractal_up": False,
             "fractal_down": False,
+            "fractal_right_bars": 2,
             "bullish_alligator": False,
             "bearish_alligator": True,
             "alligator_awake": True,
@@ -125,3 +126,20 @@ def test_long_super_ao_and_fractal_are_add_ons_not_initial_entries():
     assert by_type[SignalType.SUPER_AO].role is SignalRole.ADD_ON
     assert by_type[SignalType.FRACTAL].role is SignalRole.ADD_ON
     assert not [signal for signal in signals if signal.role is SignalRole.ENTRY]
+
+
+def test_fractal_signal_uses_configured_confirmation_delay_not_hardcoded_two_bars():
+    data = frame()
+    data["fractal_right_bars"] = 3
+    data.loc[8, "fractal_down"] = True
+    data.loc[11, "confirmed_down_level"] = float(data.loc[8, "low"])
+    data.loc[11, "teeth_shifted"] = 120.0
+    data.loc[11, "close"] = 115.0
+
+    signals = extract_short_signal_specs(
+        "BTCUSDT", data, timeframe="5m", tick_size=0.1
+    )
+    fractals = [signal for signal in signals if signal.signal_type is SignalType.FRACTAL]
+    assert len(fractals) == 1
+    assert fractals[0].protective_reference == float(data.loc[8, "high"])
+    assert fractals[0].trigger_price < float(data.loc[8, "low"])
