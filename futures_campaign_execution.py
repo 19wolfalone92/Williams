@@ -3169,9 +3169,25 @@ class FuturesCampaignExecutionService:
                         algo_status = str(algo.get("algoStatus", "") or "").upper()
                         actual_order_id = algo.get("actualOrderId")
                         if algo_status in active_add_statuses and not actual_order_id:
-                            raise FuturesCampaignExecutionError(
-                                f"{symbol}: add-on remains active after cancellation/re-query"
+                            reason = (
+                                f"{symbol}: add-on remains active after cancellation/re-query; "
+                                "exposure-increasing order remains unresolved"
                             )
+                            self.engine.mark_reconcile_required(campaign, reason)
+                            self.db.state_set(
+                                f"campaign_state:{campaign.campaign_id}",
+                                CampaignState.RECONCILE_REQUIRED.value,
+                            )
+                            self.db.state_set(
+                                f"position_state:{symbol}",
+                                CampaignState.RECONCILE_REQUIRED.value,
+                            )
+                            return {
+                                "symbol": symbol,
+                                "state": "RECONCILE_REQUIRED",
+                                "reason": reason,
+                                "protection": "CONFIRMED",
+                            }
                     else:
                         if abs(abs(amount) - original_qty) > max(1e-8, original_qty * 1e-6):
                             raise FuturesCampaignExecutionError(
