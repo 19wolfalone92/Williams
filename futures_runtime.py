@@ -62,6 +62,41 @@ def _interval_seconds(interval: str) -> int:
     return number * factors[unit]
 
 
+def choose_initial_williams_signal(
+    signals: Iterable[SignalSpec],
+    direction: str,
+    *,
+    now_ms: int | None = None,
+) -> SignalSpec | None:
+    """Select the earliest live Wise-Man signal as campaign entry.
+
+    Signal extraction labels WM2/WM3 as ADD_ON so they can only add to an
+    existing campaign. With no active campaign, any first valid Wise-Man
+    signal may start one; promotion is local to this initial-entry decision.
+    """
+    direction = str(direction or "").upper()
+    if direction not in {"LONG", "SHORT"}:
+        return None
+    now = int(time.time() * 1000) if now_ms is None else int(now_ms)
+    candidates = []
+    for signal in signals:
+        if signal.role not in {SignalRole.ENTRY, SignalRole.ADD_ON}:
+            continue
+        if str(signal.direction).upper() != direction:
+            continue
+        try:
+            trigger = float(signal.trigger_price)
+            expires = int(signal.expires_at_ms or 0)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if not math.isfinite(trigger) or trigger <= 0:
+            continue
+        if expires and expires < now:
+            continue
+        candidates.append(replace(signal, role=SignalRole.ENTRY))
+    return CampaignEngine.choose_initial_signal(candidates)
+
+
 def signal_spec_from_dict(raw: dict[str, Any]) -> SignalSpec:
     """Rebuild the canonical domain signal without losing direction metadata."""
     side = str(raw.get("side", "")).upper()
@@ -377,7 +412,7 @@ class FuturesRuntime:
                 # ADD_ON when a campaign already exists, but may be the first
                 # initial entry when no earlier Wise-Man signal is available.
                 parsed.append(replace(spec, role=SignalRole.ENTRY))
-        signal = CampaignEngine.choose_initial_signal(parsed)
+        signal = choose_initial_williams_signal(parsed, direction)
         if signal is None:
             raise FuturesCampaignExecutionError(
                 f"{candidate.symbol}: no valid {direction} campaign signal"
