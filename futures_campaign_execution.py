@@ -1562,48 +1562,28 @@ class FuturesCampaignExecutionService:
                 "status": status,
                 "reason": reason_text,
             }
-        return self._finalize_verified_market_exit(
-            campaign,
-            response,
-            reason=str(reason),
-        )
-
-        campaign.position_qty = 0.0
-        campaign.open_risk_quote = 0.0
-        campaign.pending_risk_quote = 0.0
-        campaign.capital_reserved_quote = 0.0
-        campaign.tags["protection_active"] = False
-        campaign.tags.pop("pending_exit_client_order_id", None)
-        campaign.tags.pop("pending_exit_reason", None)
-        campaign.tags["last_exit_reason"] = str(reason)
-        campaign.exit_reason = str(reason)
-        if campaign.state not in {CampaignState.EXIT_PENDING, CampaignState.RECONCILE_REQUIRED}:
-            if campaign.state != CampaignState.EXIT_SIGNALLED:
-                campaign.transition(CampaignState.EXIT_SIGNALLED, reason=reason)
-            campaign.transition(CampaignState.EXIT_PENDING, reason="reduce-only Futures exit submitted")
-        elif campaign.state == CampaignState.RECONCILE_REQUIRED:
-            campaign.transition(CampaignState.EXIT_PENDING, reason="reconciled reduce-only exit")
-        campaign.transition(CampaignState.CLOSED, reason="authoritative Futures position is flat")
-        campaign.next_action = "WAIT"
-        self.db.save_campaign(campaign)
-        self.db.state_delete(f"futures_entry_pending:{symbol}")
-        self.db.state_delete(f"campaign_state:{campaign.campaign_id}")
-        self.db.set_campaign_signal_state(campaign.current_signal_id, SignalState.CANCELLED.value)
-        self.db.log_campaign_event(
-            campaign.campaign_id,
-            CampaignEventType.EXIT_FILLED.value,
-            order_id=order_id,
-            reason=reason,
-            payload={"direction": direction, "status": status, "position_amt_after_exit": fresh_amount},
-        )
-        return {
-            "symbol": symbol,
-            "direction": direction,
-            "action": "CLOSED",
-            "order_id": order_id,
-            "status": status,
-            "reason": reason,
-        }
+        try:
+            return self._finalize_verified_market_exit(
+                campaign,
+                response,
+                reason=str(reason),
+            )
+        except Exception as exc:
+            reason_text = (
+                f"{symbol}: exit order is FILLED and position is flat, but trade "
+                f"history/PnL reconciliation failed: {type(exc).__name__}: {exc}"
+            )
+            self.engine.mark_reconcile_required(campaign, reason_text)
+            self.db.state_set(f"campaign_state:{campaign.campaign_id}", CampaignState.RECONCILE_REQUIRED.value)
+            self.db.state_set(f"position_state:{symbol}", CampaignState.RECONCILE_REQUIRED.value)
+            return {
+                "symbol": symbol,
+                "direction": direction,
+                "action": "RECONCILE_REQUIRED",
+                "order_id": order_id,
+                "status": status,
+                "reason": reason_text,
+            }
 
     def _finalize_verified_market_exit(
         self,
