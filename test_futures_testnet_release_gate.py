@@ -186,6 +186,7 @@ def test_read_only_gate_blocks_multi_asset_margin_mode(monkeypatch):
         ("can_trade", False, "canTrade=true"),
         ("isolated", False, "isolated margin"),
         ("leverage", 2, "must be 1x"),
+        ("leverage", 1.5, "valid positive integer"),
         ("quote_asset", "BUSD", "quote asset must be USDT"),
         ("margin_asset", "BUSD", "margin asset must be USDT"),
         ("missing_market_filter", True, "LOT_SIZE and MARKET_LOT_SIZE"),
