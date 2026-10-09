@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import math
+import threading
+
+_BASELINE_LOCK = threading.RLock()
 
 
 class EquityCircuitBreaker:
@@ -28,39 +31,40 @@ class EquityCircuitBreaker:
                 raise ValueError("stored daily start equity is invalid")
             return baseline_value
 
-        stored_day = db.state_get("daily_risk_day")
-        stored_equity = db.state_get("daily_start_equity")
-        if stored_day == today and stored_equity is None:
-            raise ValueError("daily start equity missing for an already initialized UTC day")
-        if stored_day == today:
-            return parse_baseline(stored_equity)
+        with _BASELINE_LOCK:
+            stored_day = db.state_get("daily_risk_day")
+            stored_equity = db.state_get("daily_start_equity")
+            if stored_day == today and stored_equity is None:
+                raise ValueError("daily start equity missing for an already initialized UTC day")
+            if stored_day == today:
+                return parse_baseline(stored_equity)
 
-        # Re-read under a write lock: two workers starting at UTC rollover
-        # must not race and overwrite the first valid baseline.
-        transaction = getattr(db, "transaction", None)
-        if callable(transaction):
-            with transaction(immediate=True):
-                latest_day = db.state_get("daily_risk_day")
-                latest_equity = db.state_get("daily_start_equity")
-                if latest_day == today:
-                    if latest_equity is None:
-                        raise ValueError("daily start equity missing for an already initialized UTC day")
-                    return parse_baseline(latest_equity)
-                baseline = float(current_equity_quote)
-                if not math.isfinite(baseline) or baseline <= 0:
-                    raise ValueError("cannot initialize daily baseline from invalid equity")
-                db.state_set("daily_risk_day", today)
-                db.state_set("daily_start_equity", repr(baseline))
-                return baseline
+            # Re-read under a write lock: two workers starting at UTC rollover
+            # must not race and overwrite the first valid baseline.
+            transaction = getattr(db, "transaction", None)
+            if callable(transaction):
+                with transaction(immediate=True):
+                    latest_day = db.state_get("daily_risk_day")
+                    latest_equity = db.state_get("daily_start_equity")
+                    if latest_day == today:
+                        if latest_equity is None:
+                            raise ValueError("daily start equity missing for an already initialized UTC day")
+                        return parse_baseline(latest_equity)
+                    baseline = float(current_equity_quote)
+                    if not math.isfinite(baseline) or baseline <= 0:
+                        raise ValueError("cannot initialize daily baseline from invalid equity")
+                    db.state_set("daily_risk_day", today)
+                    db.state_set("daily_start_equity", repr(baseline))
+                    return baseline
 
-        # Generic adapters without transactions are accepted only for the
-        # single-writer path. They cannot provide cross-worker atomicity.
-        baseline = float(current_equity_quote)
-        if not math.isfinite(baseline) or baseline <= 0:
-            raise ValueError("cannot initialize daily baseline from invalid equity")
-        db.state_set("daily_risk_day", today)
-        db.state_set("daily_start_equity", repr(baseline))
-        return baseline
+            # Generic adapters without transactions are accepted only for the
+            # single-writer path. They cannot provide cross-worker atomicity.
+            baseline = float(current_equity_quote)
+            if not math.isfinite(baseline) or baseline <= 0:
+                raise ValueError("cannot initialize daily baseline from invalid equity")
+            db.state_set("daily_risk_day", today)
+            db.state_set("daily_start_equity", repr(baseline))
+            return baseline
 
     def check(
         self,
