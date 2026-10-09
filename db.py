@@ -1189,21 +1189,48 @@ class Database:
         )
 
     def pnl_today(self, symbol):
+        where = (
+            "symbol=? AND exit_time IS NOT NULL AND exit_time >= date('now')"
+        )
+        params = (str(symbol).upper(),)
+        invalid = self.conn.execute(
+            "SELECT COUNT(*) FROM trades WHERE " + where + " AND ("
+            "pnl IS NULL OR typeof(pnl) NOT IN ('integer','real') "
+            "OR pnl > 1e308 OR pnl < -1e308 OR exit_price IS NULL "
+            "OR typeof(exit_price) NOT IN ('integer','real') "
+            "OR exit_price <= 0 OR exit_price > 1e308)",
+            params,
+        ).fetchone()[0]
+        if int(invalid or 0) > 0:
+            raise ValueError("closed trade has missing or invalid realized PnL/exit price")
         r = self.conn.execute(
-            "SELECT COALESCE(SUM(pnl),0) AS pnl FROM trades "
-            "WHERE symbol=? AND exit_time IS NOT NULL "
-            "AND exit_time >= date('now')",
-            (str(symbol).upper(),)
+            "SELECT COALESCE(SUM(pnl),0) AS pnl FROM trades WHERE " + where,
+            params,
         ).fetchone()
-        return float(r['pnl'] or 0)
+        value = float(r["pnl"] or 0)
+        if not math.isfinite(value):
+            raise ValueError("daily realized PnL is non-finite")
+        return value
 
     def pnl_today_all(self):
         """Return realized PnL across all symbols for the current UTC day."""
+        where = "exit_time IS NOT NULL AND exit_time >= date('now')"
+        invalid = self.conn.execute(
+            "SELECT COUNT(*) FROM trades WHERE " + where + " AND ("
+            "pnl IS NULL OR typeof(pnl) NOT IN ('integer','real') "
+            "OR pnl > 1e308 OR pnl < -1e308 OR exit_price IS NULL "
+            "OR typeof(exit_price) NOT IN ('integer','real') "
+            "OR exit_price <= 0 OR exit_price > 1e308)"
+        ).fetchone()[0]
+        if int(invalid or 0) > 0:
+            raise ValueError("closed trade has missing or invalid realized PnL/exit price")
         r = self.conn.execute(
-            "SELECT COALESCE(SUM(pnl),0) AS pnl FROM trades "
-            "WHERE exit_time IS NOT NULL AND exit_time >= date('now')"
+            "SELECT COALESCE(SUM(pnl),0) AS pnl FROM trades WHERE " + where
         ).fetchone()
-        return float(r["pnl"] or 0)
+        value = float(r["pnl"] or 0)
+        if not math.isfinite(value):
+            raise ValueError("portfolio daily realized PnL is non-finite")
+        return value
 
     def consecutive_losses(self, symbol, limit=20):
         rows = self.conn.execute(
@@ -1214,7 +1241,9 @@ class Database:
         n = 0
         for r in rows:
             try:
-                pnl = float(r["pnl"] or 0)
+                if r["pnl"] is None:
+                    raise ValueError("closed trade PnL is missing")
+                pnl = float(r["pnl"])
             except (TypeError, ValueError, OverflowError) as exc:
                 raise ValueError("consecutive-loss PnL data is invalid") from exc
             if not math.isfinite(pnl):
