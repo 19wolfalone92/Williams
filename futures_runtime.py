@@ -372,8 +372,11 @@ class FuturesRuntime:
             except Exception as exc:
                 log.warning("%s: invalid SignalSpec discarded: %s", candidate.symbol, exc)
                 continue
-            if spec.role == SignalRole.ENTRY and spec.direction == direction:
-                parsed.append(spec)
+            if spec.direction == direction and spec.role in {SignalRole.ENTRY, SignalRole.ADD_ON}:
+                # The same detector output serves two contexts: WM2/WM3 remain
+                # ADD_ON when a campaign already exists, but may be the first
+                # initial entry when no earlier Wise-Man signal is available.
+                parsed.append(replace(spec, role=SignalRole.ENTRY))
         signal = CampaignEngine.choose_initial_signal(parsed)
         if signal is None:
             raise FuturesCampaignExecutionError(
