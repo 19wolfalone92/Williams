@@ -207,6 +207,23 @@ def test_read_only_gate_detects_symbol_position_missing_from_account_wide_view(m
     assert result["nonzero_positions"] == [{"symbol": "BTCUSDT", "position_amt": 0.01}]
 
 
+def test_read_only_gate_rejects_account_position_row_without_symbol(monkeypatch):
+    class MissingSymbolClient(FakeReadOnlyFuturesClient):
+        def position_risk(self, symbol=None):
+            if symbol is None:
+                return [{
+                    "positionAmt": "0",
+                    "isolated": self.isolated,
+                    "leverage": str(self.leverage),
+                }]
+            return super().position_risk(symbol)
+
+    _enable_fake_demo_gate(monkeypatch, client_type=MissingSymbolClient)
+
+    with pytest.raises(RuntimeError, match="row without symbol identity"):
+        gate.run_futures_testnet_read_only(["BTCUSDT"])
+
+
 def test_read_only_gate_rejects_empty_account_wide_position_response(monkeypatch):
     class EmptyAccountPositionClient(FakeReadOnlyFuturesClient):
         def position_risk(self, symbol=None):
