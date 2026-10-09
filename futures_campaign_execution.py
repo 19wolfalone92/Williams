@@ -355,6 +355,7 @@ class FuturesCampaignExecutionService:
         equity_quote: float,
         atr: float,
         candidate_risk_fraction: float,
+        available_quote: float | None = None,
     ) -> dict[str, Any]:
         direction, raw_trigger, raw_stop = self._validate_signal(signal)
         symbol = signal.symbol.upper()
@@ -421,6 +422,16 @@ class FuturesCampaignExecutionService:
             raise FuturesCampaignExecutionError(
                 f"{symbol}: rounded quantity fails Futures lot/notional constraints"
             )
+        if available_quote is not None:
+            available = float(available_quote)
+            if not math.isfinite(available) or available < 0:
+                raise FuturesCampaignExecutionError("Available Futures balance must be finite and non-negative")
+            required_margin_buffer = notional * (1.0 + 2.0 * self.fee_buffer_per_side_pct)
+            if required_margin_buffer > available:
+                raise FuturesCampaignExecutionError(
+                    f"{symbol}: insufficient available Futures balance for 1x isolated margin "
+                    f"(required with fee buffer={required_margin_buffer:.8f}, available={available:.8f})"
+                )
         actual_risk = self._actual_risk_quote(quantity, trigger, stop)
         if actual_risk > equity * requested_fraction * 1.000001:
             raise FuturesCampaignExecutionError(
