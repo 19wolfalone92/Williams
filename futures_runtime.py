@@ -1043,7 +1043,11 @@ class FuturesRuntime:
             pending_add_on = bool(row_tags.get("pending_add_on_client_algo_id")) or campaign_state in {
                 "ADD_ON_ARMING", "ADD_ON_PENDING", "POSITION_EXPANDING"
             }
-            if campaign_state != "ENTRY_PENDING" and not pending_add_on:
+            pending_entry = (
+                campaign_state == "ENTRY_PENDING"
+                or bool(row_tags.get("entry_fill_reconciliation_pending"))
+            )
+            if not pending_entry and not pending_add_on:
                 continue
             campaign_id = str(row.get("campaign_id", ""))
             try:
