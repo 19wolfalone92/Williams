@@ -41,16 +41,30 @@ class DigitalWilliamsCore:
     def __init__(self) -> None:
         self.binance = BinanceDataContract()
 
-    def select_initial(self, signals: Iterable[SignalSpec]) -> SignalSpec | None:
-        candidates = [
-            s for s in signals
-            if str(s.direction).upper() in {"LONG", "SHORT"}
-            and s.role.value == "ENTRY"
-            and s.trigger_price > 0
+    @staticmethod
+    def _eligible_initial(signals: Iterable[SignalSpec]) -> list[SignalSpec]:
+        # Materialize once: callers may pass a generator rather than a list.
+        return [
+            signal for signal in signals
+            if str(signal.direction).upper() in {"LONG", "SHORT"}
+            and signal.role.value == "ENTRY"
         ]
+
+    def select_initial(
+        self,
+        signals: Iterable[SignalSpec],
+        *,
+        now_ms: int | None = None,
+    ) -> SignalSpec | None:
+        candidates = self._eligible_initial(signals)
+        actionable = [
+            signal for signal in candidates
+            if PendingSignal.from_spec(signal).actionable(now_ms)
+        ]
+        # An expired/invalid older setup must not hide a later live setup.
         return min(
-            candidates,
-            key=lambda s: (s.signal_bar_time_ms, s.created_at_ms),
+            actionable,
+            key=lambda signal: (signal.signal_bar_time_ms, signal.created_at_ms),
             default=None,
         )
 
@@ -61,15 +75,24 @@ class DigitalWilliamsCore:
         campaign_id: str = "",
         now_ms: int | None = None,
     ) -> WilliamsDecision:
-        signal = self.select_initial(signals)
+        candidates = self._eligible_initial(signals)
+        signal = self.select_initial(candidates, now_ms=now_ms)
         if signal is None:
-            return WilliamsDecision(None, None, None, "WAIT", ())
-        pending = PendingSignal.from_spec(signal, campaign_id=campaign_id)
-        if not pending.actionable(now_ms):
+            # Preserve a diagnostic BLOCK when candidate setups exist but all
+            # are expired/invalid; distinguish that from a genuine no-signal WAIT.
+            invalid = min(
+                candidates,
+                key=lambda item: (item.signal_bar_time_ms, item.created_at_ms),
+                default=None,
+            )
+            if invalid is None:
+                return WilliamsDecision(None, None, None, "WAIT", ())
+            pending = PendingSignal.from_spec(invalid, campaign_id=campaign_id)
+            trace = DecisionTrace.from_signal(invalid)
             veto = "pending_signal_expired_or_invalid"
-            trace = DecisionTrace.from_signal(signal)
             trace.veto(veto)
-            return WilliamsDecision(signal, pending, trace, "BLOCK", (veto,))
+            return WilliamsDecision(invalid, pending, trace, "BLOCK", (veto,))
+        pending = PendingSignal.from_spec(signal, campaign_id=campaign_id)
         trace = DecisionTrace.from_signal(signal)
         return WilliamsDecision(signal, pending, trace, "ARM_ENTRY", ())
 
@@ -102,7 +125,7 @@ class DigitalWilliamsCore:
                 "add_on": "directional conditional entry; same campaign and side",
                 "hard_protection": "directional Futures stop; LONG=SELL, SHORT=BUY",
                 "trailing": "structural stop only moves to reduce risk",
-                "exit": "cancel protection -> opposite-side reduce-only MARKET -> authoritative fill -> reconcile residual",
+                "exit": "keep exchange-side protection live while resolving opposite-side reduce-only MARKET; after flat, reconcile/cancel protection, reconcile all fills/fees, then finalize",
                 "fixed_take_profit": False,
                 "ambiguity": "RECONCILE_REQUIRED; no blind replay",
             },
