@@ -21,6 +21,7 @@ class FakeFuturesClient:
         self.market_exits = []
         self.protective_stops = []
         self.protection_response_missing_ids = False
+        self.protection_response_status = "NEW"
         self.algo_status = "NEW"
         self.cancel_confirms = True
         self._position = {
@@ -99,7 +100,7 @@ class FakeFuturesClient:
             "symbol": symbol,
             "algoId": 456,
             "clientAlgoId": client_algo_id,
-            "algoStatus": "NEW",
+            "algoStatus": self.protection_response_status,
             "side": "SELL" if direction == "LONG" else "BUY",
         }
         if self.protection_response_missing_ids:
@@ -685,3 +686,32 @@ def test_account_reconciliation_blocks_new_exposure_on_non_finite_position(bad_a
 
     with pytest.raises(FuturesCampaignExecutionError, match="non-finite positionAmt"):
         service._assert_no_unmanaged_positions("ETHUSDT")
+
+
+@pytest.mark.parametrize("terminal_status", ["CANCELED", "EXPIRED", "REJECTED", "FINISHED"])
+def test_protection_terminal_response_never_marks_stop_active(tmp_path, terminal_status):
+    db, client, service, campaign = _armed_entry_for_cancel(tmp_path)
+    try:
+        client._position["positionAmt"] = "0.5"
+        client._position["entryPrice"] = "102.0"
+        from campaign_model import CampaignState
+        campaign.state = CampaignState.OPEN_INITIAL
+        campaign.position_qty = 0.5
+        campaign.average_entry_price = 102.0
+        campaign.open_risk_quote = 10.0
+        campaign.pending_risk_quote = 0.0
+        campaign.capital_reserved_quote = 0.0
+        service.db.save_campaign(campaign)
+        client.protection_response_status = terminal_status
+
+        with pytest.raises(FuturesCampaignExecutionError, match="not confirmed active"):
+            service.place_protection(campaign, stop_price=100.0)
+
+        saved = service.engine.load_campaign(campaign.campaign_id)
+        assert saved.state == CampaignState.RECONCILE_REQUIRED
+        assert saved.tags.get("protection_active") is not True
+        assert saved.tags["protection_response_unidentified"]["status"] == terminal_status
+        assert db.state_get(f"campaign_state:{campaign.campaign_id}") == "RECONCILE_REQUIRED"
+        assert db.state_get("position_state:BTCUSDT") == "RECONCILE_REQUIRED"
+    finally:
+        db.conn.close()
