@@ -1119,6 +1119,8 @@ def test_daily_loss_lockout_still_manages_open_positions_and_blocks_entries():
     runtime._last_scan_summary = {}
     runtime._account = MethodType(lambda self: self._last_account, runtime)
     runtime._recover = MethodType(lambda self: [], runtime)
+    runtime.execution = SimpleNamespace(_assert_no_unmanaged_positions=lambda symbol: None)
+    runtime.symbols = ("BTCUSDT",)
     managed = []
     runtime._manage_existing_positions = MethodType(
         lambda self: managed.append("managed") or [
