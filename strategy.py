@@ -248,7 +248,10 @@ def calculate_indicators(df, cfg):
         & x["long_wise_man_count"].ge(min_wise)
     )
     x["short_signal"] = (
-        x["short_bearish"]
+        # Mirror the LONG balance-line gate: the confirmed sell fractal must
+        # be below the Teeth before any short Wise-Man signal is actionable.
+        x["short_fractal_outside"]
+        & x["short_bearish"]
         & x["short_awake"]
         & x["short_wise_man_count"].ge(min_wise)
     )
