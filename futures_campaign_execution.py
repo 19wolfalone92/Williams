@@ -1141,6 +1141,73 @@ class FuturesCampaignExecutionService:
         )
         return {**new_protection, "previous_stop_price": old_stop}
 
+    def cancel_pending_add_on(self, campaign, *, reason: str) -> dict[str, Any]:
+        """Cancel a pending exposure-increasing add-on and reconcile any raced fill."""
+        symbol = campaign.symbol.upper()
+        client_id = str(campaign.tags.get("pending_add_on_client_algo_id", "") or "")
+        if not client_id:
+            if campaign.state not in {
+                CampaignState.ADD_ON_ARMING,
+                CampaignState.ADD_ON_PENDING,
+                CampaignState.POSITION_EXPANDING,
+            }:
+                return {"symbol": symbol, "state": campaign.state.value, "action": "NO_PENDING_ADD_ON"}
+            detail = f"{reason}: add-on campaign state has no durable clientAlgoId"
+            self.engine.mark_reconcile_required(campaign, detail)
+            self.db.state_set(f"campaign_state:{campaign.campaign_id}", CampaignState.RECONCILE_REQUIRED.value)
+            self.db.state_set(f"position_state:{symbol}", CampaignState.RECONCILE_REQUIRED.value)
+            return {"symbol": symbol, "state": "RECONCILE_REQUIRED", "action": "ADD_ON_CANCEL_UNVERIFIED", "reason": detail}
+
+        try:
+            algo = self.client.get_algo_order(symbol, client_algo_id=client_id)
+            status = str(algo.get("algoStatus", "") or "").upper()
+            if status in {"NEW", "WORKING", "PENDING", "PENDING_NEW"}:
+                self.client.cancel_algo_order_safe(
+                    symbol,
+                    algo_id=algo.get("algoId") or campaign.tags.get("pending_add_on_algo_id") or None,
+                    client_algo_id=client_id,
+                )
+                algo = self.client.get_algo_order(symbol, client_algo_id=client_id)
+                status = str(algo.get("algoStatus", "") or "").upper()
+            if status in {"NEW", "WORKING", "PENDING", "PENDING_NEW"}:
+                raise FuturesCampaignExecutionError(
+                    f"add-on cancellation is not terminal after exchange re-query ({status})"
+                )
+            # Reconciliation verifies the actual triggered order, cancels any
+            # residual partial fill, and either books the fill or releases the
+            # reservation only after terminal no-fill evidence.
+            result = self.reconcile_symbol(symbol)
+            if result.get("state") == "RECONCILE_REQUIRED":
+                return {
+                    "symbol": symbol,
+                    "state": "RECONCILE_REQUIRED",
+                    "action": "ADD_ON_CANCEL_UNVERIFIED",
+                    "reason": result.get("reason", reason),
+                }
+            if result.get("action") == "ADD_ON_TERMINAL_UNFILLED":
+                return {**result, "action": "ADD_ON_CANCELLED", "cancel_reason": str(reason)}
+            return {**result, "cancel_reason": str(reason)}
+        except Exception as exc:
+            detail = (
+                f"{reason}: add-on cancel/reconciliation is ambiguous for {client_id}: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            self.engine.mark_reconcile_required(campaign, detail)
+            self.db.state_set(f"campaign_state:{campaign.campaign_id}", CampaignState.RECONCILE_REQUIRED.value)
+            self.db.state_set(f"position_state:{symbol}", CampaignState.RECONCILE_REQUIRED.value)
+            self.db.log_event(
+                "ERROR",
+                "futures_add_on_cancel_ambiguous",
+                detail,
+                {"campaign_id": campaign.campaign_id, "client_algo_id": client_id},
+            )
+            return {
+                "symbol": symbol,
+                "state": "RECONCILE_REQUIRED",
+                "action": "ADD_ON_CANCEL_UNVERIFIED",
+                "reason": detail,
+            }
+
     def cancel_pending_entry(self, campaign, *, reason: str) -> dict[str, Any]:
         """Cancel a bot-owned conditional ENTRY and verify it is terminal.
 
