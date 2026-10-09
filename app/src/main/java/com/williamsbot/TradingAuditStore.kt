@@ -4,6 +4,7 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import androidx.core.database.sqlite.transaction
 import org.json.JSONObject
 
 /**
@@ -250,12 +251,8 @@ class TradingAuditStore(context: Context) :
             put("updated_at", now)
         }
         val db = writableDatabase
-        db.beginTransaction()
-        try {
-            db.insertOrThrow("futures_intents", null, values)
-            db.setTransactionSuccessful()
-        } finally {
-            db.endTransaction()
+        db.transaction {
+            insertOrThrow("futures_intents", null, values)
         }
         val saved = futuresIntentById(intentId)
         check(saved != null && saved.optString("status") == "PENDING") {
