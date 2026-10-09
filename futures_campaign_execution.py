@@ -1670,12 +1670,71 @@ class FuturesCampaignExecutionService:
                     self.db.state_set(f"campaign_state:{campaign.campaign_id}", CampaignState.RECONCILE_REQUIRED.value)
                     self.db.state_set(f"position_state:{symbol}", CampaignState.RECONCILE_REQUIRED.value)
                     return {"symbol": symbol, "state": "RECONCILE_REQUIRED", "reason": "missing protection"}
+            # Add-on order placement/fill reconciliation is not yet implemented as
+            # a complete exchange lifecycle. Never silently report an expanding
+            # campaign as healthy merely because its original protective stop is
+            # active: a crash/partial fill could leave local quantity and risk
+            # reservations inconsistent with the authoritative exchange position.
+            if campaign.state in {
+                CampaignState.ADD_ON_ARMING,
+                CampaignState.ADD_ON_PENDING,
+                CampaignState.POSITION_EXPANDING,
+            }:
+                reason = (
+                    "add-on lifecycle is unresolved; exchange position and add-on "
+                    "order/fill history require explicit reconciliation"
+                )
+                self.engine.mark_reconcile_required(campaign, reason)
+                self.db.state_set(
+                    f"campaign_state:{campaign.campaign_id}",
+                    CampaignState.RECONCILE_REQUIRED.value,
+                )
+                self.db.state_set(
+                    f"position_state:{symbol}",
+                    CampaignState.RECONCILE_REQUIRED.value,
+                )
+                return {
+                    "symbol": symbol,
+                    "state": "RECONCILE_REQUIRED",
+                    "reason": reason,
+                    "position_qty": abs(amount),
+                    "protection": "CONFIRMED",
+                }
+
+            # For ordinary active campaigns, a live exchange quantity that
+            # differs materially from the persisted campaign quantity is also
+            # a reconciliation event, not a healthy state.
+            expected_qty = float(campaign.position_qty or 0.0)
+            live_qty = abs(amount)
+            quantity_tolerance = max(1e-8, expected_qty * 1e-6)
+            if abs(live_qty - expected_qty) > quantity_tolerance:
+                reason = (
+                    f"exchange/local quantity mismatch: exchange={live_qty} "
+                    f"campaign={expected_qty}"
+                )
+                self.engine.mark_reconcile_required(campaign, reason)
+                self.db.state_set(
+                    f"campaign_state:{campaign.campaign_id}",
+                    CampaignState.RECONCILE_REQUIRED.value,
+                )
+                self.db.state_set(
+                    f"position_state:{symbol}",
+                    CampaignState.RECONCILE_REQUIRED.value,
+                )
+                return {
+                    "symbol": symbol,
+                    "state": "RECONCILE_REQUIRED",
+                    "reason": reason,
+                    "position_qty": live_qty,
+                    "protection": "CONFIRMED",
+                }
+
             self.db.state_set(f"position_state:{symbol}", campaign.state.value)
             return {
                 "symbol": symbol,
                 "state": campaign.state.value,
                 "direction": direction,
-                "position_qty": abs(amount),
+                "position_qty": live_qty,
                 "average_entry_price": float(position.get("entryPrice", 0) or 0),
                 "protection": "CONFIRMED",
             }
