@@ -124,3 +124,26 @@ When Binance reports a protective Algo stop as triggered but does not yet expose
 ## Latest verification checkpoint
 
 The last checked exact head was `c879deebe0b3eca61a3ef7439f7337ee90dc4b95`; Python backend, Campaign CI and Android workflows had been queued after these corrections. Results for earlier SHAs do not qualify as final verification. The PR remains Draft, `main` is unchanged, and no real exchange orders were sent.
+
+
+### 15. Stale exchange-side conditional entries could outlive the signal — corrected
+
+A local `SignalSpec.expires_at_ms` only prevented a stale signal from being armed initially; Binance Algo STOP orders do not inherit that local expiry. The reconciliation path could therefore leave an expired initial entry or WM2/WM3 add-on working indefinitely, able to open exposure much later.
+
+**Correction:** Python campaigns now persist initial-entry and add-on expiry timestamps. Reconciliation cancels an expired armed Algo by its stable client ID and verifies terminal status/child fills before releasing risk. The Android native campaign stores the corresponding entry expiry and cancels expired pending entries through its reconciliation path. The scanner also excludes expired signals before portfolio ranking.
+
+### 16. A trigger or structural stop could already have been crossed before arming — corrected
+
+Signal extraction checked only the latest close against the trigger and did not reject a setup if a later closed candle had already crossed the trigger intrabar or breached the signal's structural invalidation. This could arm a stale stop-entry after the setup was no longer valid.
+
+**Correction:** the Python signal extractor now checks all bars after the source bar: LONG triggers must remain unbroken by later highs and their structural low must remain intact; SHORT triggers must remain unbroken by later lows and their structural high must remain intact. Invalid/missing price data fails closed. Regression tests cover trigger-cross and stop-breach cases in both directions. Native Android signal selection now enforces per-type freshness windows and allows the earliest valid WM1/WM2/WM3 signal to start a campaign, while still not supporting pyramiding.
+
+### 17. Native position-quantity reconciliation could overwrite the evidence before comparing — corrected with conservative exit
+
+The native reconciler copied the live Binance `positionAmt` into its local campaign object before checking whether the live quantity differed from the previously persisted quantity. That made the later comparison ineffective and could hide partial protective/market fills.
+
+**Correction:** compare the pre-sync persisted quantity with the exchange quantity first. On unexplained drift, persist a durable `unreconciled_position_quantity_mismatch` record and attempt a reduce-only exit for the observed residual. Market/protective exit accounting refuses to mark the campaign CLOSED while that mismatch ledger exists. This avoids hiding missing fills, but automatic aggregation/recovery of the missing trades remains a manual reconciliation blocker.
+
+### 18. Android CI was blocked before lint/tests by absent signing secrets — corrected for CI validation
+
+The APK workflow exited before running lint or unit tests when a persistent debug keystore secret was absent. The workflow now uses the persistent signing key when configured, otherwise it allows lint, unit tests and debug/release build validation with the default ephemeral Android debug key. That fallback is for CI validation only; it is not proof of persistent-signature continuity and does not change the live-release prohibition.
