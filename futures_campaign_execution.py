@@ -311,7 +311,11 @@ class FuturesCampaignExecutionService:
         }
         unmanaged = []
         for row in rows:
-            sym = str(row.get("symbol", "")).upper()
+            sym = str(row.get("symbol", "") or "").upper()
+            if not sym:
+                raise FuturesCampaignExecutionError(
+                    "Futures positionRisk contains a row without a symbol"
+                )
             raw_amount = row.get("positionAmt")
             if raw_amount is None or str(raw_amount).strip() == "":
                 raise FuturesCampaignExecutionError(
