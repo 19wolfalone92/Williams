@@ -1420,7 +1420,14 @@ class FuturesCampaignExecutionService:
         """Reconcile local campaign against authoritative Futures position/order state."""
         symbol = str(symbol).upper()
         position = self._position_row(symbol)
-        amount = float(position.get("positionAmt", 0) or 0)
+        try:
+            amount = float(position.get("positionAmt", 0) or 0)
+        except (TypeError, ValueError):
+            amount = float("nan")
+        if not math.isfinite(amount):
+            reason = "invalid exchange position quantity; reconciliation required"
+            self.db.state_set(f"position_state:{symbol}", CampaignState.RECONCILE_REQUIRED.value)
+            return {"symbol": symbol, "state": "RECONCILE_REQUIRED", "reason": reason}
         campaign = self._find_active_campaign(symbol)
         if campaign is None:
             if abs(amount) > 0:
