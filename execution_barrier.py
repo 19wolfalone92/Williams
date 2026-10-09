@@ -418,6 +418,20 @@ class ExecutionBarrier:
                         self._persist(intent, "REJECTED", reason)
                         self._record("WARNING", "execution_rejected", intent, reason)
                         return ExecutionResult(intent.intent_id, False, response=response, reason=reason)
+                    if status in {"CANCELED", "EXPIRED"} and executed_qty == 0:
+                        self._persist(intent, status, "exchange confirmed terminal order with no fills")
+                        self._record(
+                            "WARNING",
+                            "execution_terminal_without_fill",
+                            intent,
+                            f"Binance order status is {status} with no executed quantity",
+                        )
+                        return ExecutionResult(
+                            intent.intent_id,
+                            False,
+                            response=response,
+                            reason=f"Binance order is {status} with no fills",
+                        )
                     if order_fsm.state == OrderState.RECONCILE_REQUIRED:
                         reason = f"exchange returned unrecognized or inconsistent order status {status!r}; reconciliation required"
                         self._persist(intent, "AMBIGUOUS", reason)
