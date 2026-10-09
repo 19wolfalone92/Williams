@@ -241,3 +241,33 @@ def test_signal_side_direction_conflict_is_rejected_before_order(tmp_path):
     )
     with pytest.raises(FuturesCampaignExecutionError, match="side/direction conflict"):
         signal_direction(conflicting)
+
+def test_futures_entry_is_blocked_when_available_margin_is_insufficient(tmp_path):
+    db = Database(str(tmp_path / "futures-margin.sqlite3"))
+    try:
+        cache = ContextCache()
+        make_context(cache, allow_long=True, allow_short=False)
+        client = FakeFuturesClient(mark_price=102.0)
+        service = FuturesCampaignExecutionService(
+            client,
+            db,
+            execution_barrier=ExecutionBarrier(cache, db),
+            max_open_positions=3,
+            portfolio_risk_limit_pct=0.01,
+            campaign_risk_limit_pct=0.005,
+        )
+        with pytest.raises(FuturesCampaignExecutionError, match="insufficient available Futures balance"):
+            service.arm_initial_entry(
+                make_signal("LONG"),
+                equity_quote=10000.0,
+                atr=2.0,
+                candidate_risk_fraction=0.005,
+                available_quote=1.0,
+            )
+        assert client.stop_entries == []
+        pending = db.conn.execute(
+            "SELECT COUNT(*) AS n FROM execution_intents WHERE purpose = 'CAMPAIGN_ENTRY'"
+        ).fetchone()["n"]
+        assert pending == 0
+    finally:
+        db.conn.close()
