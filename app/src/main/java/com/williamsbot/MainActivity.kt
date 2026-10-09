@@ -56,6 +56,7 @@ import androidx.compose.material.icons.filled.Timeline
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -1351,6 +1352,34 @@ private fun DiagnosticsScreen(
     onExport: () -> Unit,
     message: String
 ) {
+    var confirmFuturesKill by remember { mutableStateOf(false) }
+
+    if (confirmFuturesKill) {
+        AlertDialog(
+            onDismissRequest = { confirmFuturesKill = false },
+            title = { Text("Подтвердить Futures Kill Switch") },
+            text = {
+                Text(
+                    "Бот запретит новые входы и отправит reduce-only рыночные выходы для управляемых Futures-позиций. " +
+                        "Это может зафиксировать убыток. Защитные и открытые ордера будут сверены с Binance."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmFuturesKill = false
+                    onFuturesKill()
+                }) {
+                    Text("ПОДТВЕРДИТЬ ВЫХОД")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmFuturesKill = false }) {
+                    Text("ОТМЕНА")
+                }
+            }
+        )
+    }
+
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -2688,7 +2717,7 @@ private fun SettingsScreen(
                         OutlinedButton(onClick = onFuturesRecover, enabled = futuresConfigured && (futuresKill || futuresReconcile), modifier = Modifier.weight(1f)) { Text("RECOVER") }
                     }
                     OutlinedButton(
-                        onClick = onFuturesKill,
+                        onClick = { confirmFuturesKill = true },
                         enabled = futuresConfigured && !futuresKill,
                         modifier = Modifier.fillMaxWidth()
                     ) { Text("FUTURES KILL SWITCH • REDUCE-ONLY EXIT") }
