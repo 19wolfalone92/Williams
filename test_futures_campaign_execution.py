@@ -1143,6 +1143,26 @@ def test_exit_keeps_campaign_in_reconciliation_when_protection_cancel_is_unconfi
         db.conn.close()
 
 
+def test_runtime_ownership_check_covers_every_configured_symbol():
+    from types import SimpleNamespace
+
+    checked = []
+    runtime = object.__new__(FuturesRuntime)
+    runtime.symbols = ("BTCUSDT", "ETHUSDT", "BTCUSDT")
+
+    def check(symbol):
+        checked.append(symbol)
+        if symbol == "ETHUSDT":
+            raise RuntimeError("orphan order on secondary symbol")
+
+    runtime.execution = SimpleNamespace(_assert_no_unmanaged_positions=check)
+
+    with pytest.raises(RuntimeError, match="secondary symbol"):
+        runtime._assert_configured_symbol_ownership()
+
+    assert checked == ["BTCUSDT", "ETHUSDT"]
+
+
 def test_account_can_trade_false_blocks_entries_but_keeps_management_active():
     import threading
     from types import MethodType, SimpleNamespace
