@@ -280,27 +280,25 @@ internal class FuturesNativeEngine(
     }
 
     fun pause(): JSONObject {
-        synchronized(cycleLock) {
-            paused = true
-            auditEvent("futures_paused", JSONObject().put("reason", "new entries disabled; open exposure remains managed"))
-        }
+        // Flip the admission flag immediately. The scan loop checks it before
+        // each new symbol and immediately before persisting/submitting entry.
+        paused = true
+        auditEvent("futures_paused", JSONObject().put("reason", "new entries disabled; open exposure remains managed"))
         return status().put("state", "PAUSED")
     }
 
     fun resume(): JSONObject {
-        synchronized(cycleLock) {
-            require(!killLatched) { "KILL_SWITCH_LATCHED; recover before resume" }
-            paused = false
-        }
+        require(!killLatched) { "KILL_SWITCH_LATCHED; recover before resume" }
+        paused = false
         return status().put("state", if (running) "RUNNING" else "STOPPED")
     }
 
     fun stop(): JSONObject {
-        synchronized(cycleLock) {
-            paused = true
-            running = false
-            stopLoop.set(true)
-        }
+        // Disable admission immediately; interruption below is only to wake
+        // the worker from its poll sleep, not to retry any exchange mutation.
+        paused = true
+        running = false
+        stopLoop.set(true)
         val active = worker
         if (active != null && active !== Thread.currentThread()) {
             active.interrupt()
@@ -317,12 +315,16 @@ internal class FuturesNativeEngine(
     }
 
     fun kill(): JSONObject {
-        synchronized(cycleLock) {
+        // Latch synchronously before waiting for the cycle lock. An in-flight
+        // scan sees the latch and cannot submit further entry orders.
+        synchronized(lock) {
             killLatched = true
             paused = true
             check(prefs.edit().putBoolean("futures_kill_latched", true).commit()) {
                 "Kill-switch latch could not be persisted; refusing to claim the kill switch is active"
             }
+        }
+        synchronized(cycleLock) {
             val exchange = api()
             val results = JSONArray()
             val campaigns = auditStore.activeFuturesCampaigns()
@@ -590,6 +592,7 @@ internal class FuturesNativeEngine(
             var newEntries = 0
             val decisions = JSONArray()
             for (symbol in symbols()) {
+                if (killLatched || paused || !running || stopLoop.get()) break
                 if (activeCampaign(symbol)) continue
                 try {
                     if (exchange.openOrders(symbol).length() > 0 || exchange.openAlgoOrders(symbol).length() > 0) {
@@ -608,7 +611,9 @@ internal class FuturesNativeEngine(
                         decisions.put(JSONObject().put("symbol", symbol).put("action", "BLOCKED").put("reason", "portfolio risk budget exhausted"))
                         continue
                     }
+                    if (killLatched || paused || !running || stopLoop.get()) break
                     val quantity = sizePosition(exchange, symbol, signal, equity, available, riskBudget)
+                    if (killLatched || paused || !running || stopLoop.get()) break
                     val result = armEntry(exchange, signal, quantity, riskBudget, equity)
                     decisions.put(result)
                     if (result.optString("action") == "ENTRY_ARMED") {
