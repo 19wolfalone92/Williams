@@ -24,6 +24,7 @@ class FakeFuturesClient:
         self.protection_response_status = "NEW"
         self.entry_response_status = "NEW"
         self.algo_status = "NEW"
+        self.entry_actual_order_id = None
         self.cancel_confirms = True
         self._position = {
             "symbol": "BTCUSDT",
@@ -126,6 +127,24 @@ class FakeFuturesClient:
             (row for row in self.protective_stops if row[3] == client_algo_id),
             None,
         )
+        entry = next(
+            (row for row in self.stop_entries if row["client_algo_id"] == client_algo_id),
+            None,
+        )
+        if entry:
+            return {
+                "symbol": symbol,
+                "algoId": algo_id or 123,
+                "clientAlgoId": client_algo_id,
+                "algoStatus": self.algo_status,
+                "side": "BUY" if entry["direction"] == "LONG" else "SELL",
+                "type": "STOP_MARKET",
+                "orderType": "STOP_MARKET",
+                "closePosition": False,
+                "triggerPrice": entry["trigger_price"],
+                "quantity": entry["quantity"],
+                **({"actualOrderId": self.entry_actual_order_id} if getattr(self, "entry_actual_order_id", None) else {}),
+            }
         side = (
             "SELL" if prior[1] == "LONG" else "BUY"
         ) if prior else (
@@ -138,6 +157,7 @@ class FakeFuturesClient:
             "algoStatus": self.algo_status,
             "side": side,
             "type": "STOP_MARKET",
+            "orderType": "STOP_MARKET",
             "closePosition": True,
         }
         if prior:
