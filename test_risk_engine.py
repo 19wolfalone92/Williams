@@ -240,3 +240,17 @@ def test_risk_engine_rejects_non_finite_or_unsafe_configuration():
         RiskEngine(balance_quote=float("nan"))
     with pytest.raises(ValueError, match="max_position_fraction"):
         RiskEngine(balance_quote=1000, max_position_fraction=1.5)
+
+
+def test_risk_engine_rejects_prices_that_collapse_stop_distance_to_zero():
+    engine = RiskEngine(balance_quote=1000.0)
+    result = engine.analyse(
+        symbol="BTCUSDT",
+        entry_price=1e308,
+        atr=1e-300,
+        side="LONG",
+        risk_pct_override=0.001,
+    )
+    assert result.allowed is False
+    assert result.position_quote == 0.0
+    assert "stop" in result.reason.lower() or "distance" in result.reason.lower()
