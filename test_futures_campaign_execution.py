@@ -1815,7 +1815,7 @@ def test_triggered_protective_stop_without_child_id_exits_residual_but_does_not_
         assert client.protective_stops
         saved = service.engine.load_campaign(campaign.campaign_id)
         assert saved.state.value == "RECONCILE_REQUIRED"
-        assert "actualOrderId is missing" in (saved.reason or "")
+        assert "actualOrderId is missing" in saved.tags.get("reconcile_reason", "")
         assert db.state_get("position_state:BTCUSDT") == "RECONCILE_REQUIRED"
     finally:
         db.conn.close()
