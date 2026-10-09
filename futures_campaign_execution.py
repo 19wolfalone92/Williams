@@ -3150,15 +3150,22 @@ class FuturesCampaignExecutionService:
                     pending_stop_client_id = str(
                         campaign.tags.get("pending_protective_client_algo_id", "") or ""
                     )
-                    if pending_stop_client_id:
-                        pending_stop_price = float(
-                            campaign.tags.get("pending_protective_stop_price", 0) or 0
-                        )
-                        self.place_protection(campaign, stop_price=pending_stop_price)
-                    new_client_id = str(campaign.tags.get("protective_client_algo_id", "") or "")
-                    new_algo_id = campaign.tags.get("protective_algo_id")
                     old_client_id = str(campaign.tags.get("previous_protective_client_algo_id", "") or "")
                     old_algo_id = campaign.tags.get("previous_protective_algo_id")
+                    current_client_id = str(campaign.tags.get("protective_client_algo_id", "") or "")
+                    target_stop_raw = (
+                        campaign.tags.get("protection_replace_target_stop_price")
+                        or campaign.tags.get("pending_protective_stop_price")
+                    )
+                    if pending_stop_client_id or not current_client_id or current_client_id == old_client_id:
+                        if target_stop_raw is None:
+                            raise FuturesCampaignExecutionError(
+                                f"{symbol}: replacement target stop was not durably recorded; "
+                                "preserving the prior protective order"
+                            )
+                        self.place_protection(campaign, stop_price=float(target_stop_raw))
+                    new_client_id = str(campaign.tags.get("protective_client_algo_id", "") or "")
+                    new_algo_id = campaign.tags.get("protective_algo_id")
                     new_order = self.client.get_algo_order(
                         symbol,
                         algo_id=new_algo_id or None,
@@ -3265,6 +3272,7 @@ class FuturesCampaignExecutionService:
                     campaign.tags.pop("previous_protective_client_algo_id", None)
                     campaign.tags.pop("previous_protective_algo_id", None)
                     campaign.tags.pop("previous_protective_stop_price", None)
+                    campaign.tags.pop("protection_replace_target_stop_price", None)
                     campaign.tags.pop("protection_replace_reconcile_required", None)
                     self.db.save_campaign(campaign)
                 except Exception as exc:
