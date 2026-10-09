@@ -1,4 +1,6 @@
 import pytest
+import threading
+import time
 import uuid
 
 @pytest.fixture(autouse=True)
@@ -256,3 +258,56 @@ def test_reconcile_required_campaign_remains_in_portfolio_risk_reservation(tmp_p
         assert db.campaign_risk_reserved_quote() == 40.0
     finally:
         db.conn.close()
+
+
+def test_immediate_transaction_serializes_portfolio_risk_reservation_across_connections(tmp_path):
+    path = str(tmp_path / "atomic-risk.sqlite3")
+    db1 = Database(path)
+    db2 = Database(path)
+    first_inside = threading.Event()
+    release_first = threading.Event()
+    second_done = threading.Event()
+    observed = []
+
+    def row(campaign_id, risk):
+        return {
+            "campaign_id": campaign_id,
+            "symbol": "BTCUSDT" if campaign_id == "first" else "ETHUSDT",
+            "side": "LONG",
+            "execution_timeframe": "5m",
+            "state": "ENTRY_PENDING",
+            "pending_risk_quote": risk,
+            "open_risk_quote": 0.0,
+        }
+
+    def first_writer():
+        with db1.transaction(immediate=True):
+            db1.save_campaign(row("first", 60.0))
+            first_inside.set()
+            assert release_first.wait(5)
+
+    def second_writer():
+        assert first_inside.wait(5)
+        with db2.transaction(immediate=True):
+            observed.append(db2.campaign_risk_reserved_quote())
+            db2.save_campaign(row("second", 30.0))
+            second_done.set()
+
+    t1 = threading.Thread(target=first_writer)
+    t2 = threading.Thread(target=second_writer)
+    t1.start()
+    t2.start()
+    assert first_inside.wait(5)
+    time.sleep(0.1)
+    assert not second_done.is_set()
+    release_first.set()
+    t1.join(5)
+    t2.join(5)
+    try:
+        assert not t1.is_alive()
+        assert not t2.is_alive()
+        assert observed == [60.0]
+        assert db1.campaign_risk_reserved_quote() == 90.0
+    finally:
+        db1.conn.close()
+        db2.conn.close()
