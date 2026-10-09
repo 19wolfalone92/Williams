@@ -108,6 +108,28 @@ class FuturesCampaignExecutionService:
         self.require_htf_confirmation = os.getenv("REQUIRE_HTF_CONFIRMATION", "true").lower() == "true"
 
     @staticmethod
+    def _validate_user_trade_row(
+        trade: dict[str, Any],
+        symbol: str,
+        source: str,
+        *,
+        require_realized_pnl: bool = True,
+    ) -> None:
+        required = ["qty", "price", "commission", "commissionAsset"]
+        if require_realized_pnl:
+            required.append("realizedPnl")
+        missing = [
+            field for field in required
+            if field not in trade
+            or trade[field] is None
+            or str(trade[field]).strip() == ""
+        ]
+        if missing:
+            raise FuturesCampaignExecutionError(
+                f"{symbol}: {source} userTrades row omitted required fields: {', '.join(missing)}"
+            )
+
+    @staticmethod
     def _rows(value: Any) -> list[dict[str, Any]]:
         if isinstance(value, list):
             if any(not isinstance(row, dict) for row in value):
@@ -2175,6 +2197,7 @@ class FuturesCampaignExecutionService:
                         f"{symbol}: exit order {record_order_id} has execution but no authoritative userTrades"
                     )
                 for trade in trades:
+                    self._validate_user_trade_row(trade, symbol, "market exit", require_realized_pnl=True)
                     trade_order_id = trade.get("orderId")
                     if trade_order_id is not None and str(trade_order_id) != record_order_id:
                         raise FuturesCampaignExecutionError(
@@ -2284,6 +2307,7 @@ class FuturesCampaignExecutionService:
                         f"{symbol}: protective child {record_order_id} has execution but no userTrades"
                     )
                 for trade in trades:
+                    self._validate_user_trade_row(trade, symbol, "protective exit", require_realized_pnl=True)
                     trade_order_id = trade.get("orderId")
                     if trade_order_id is not None and str(trade_order_id) != record_order_id:
                         raise FuturesCampaignExecutionError(
@@ -3480,6 +3504,7 @@ class FuturesCampaignExecutionService:
             fee_quote = 0.0
             fee_by_asset: dict[str, float] = {}
             for trade in trades:
+                self._validate_user_trade_row(trade, symbol, "initial entry", require_realized_pnl=False)
                 if trade.get("orderId") is not None and str(trade.get("orderId")) != str(actual_order_id):
                     return unresolved(f"{symbol}: initial userTrades contain a different order ID")
                 try:
@@ -4176,6 +4201,7 @@ class FuturesCampaignExecutionService:
                         f"{symbol}: add-on fill is confirmed but authoritative userTrades are not yet available"
                     )
                 for trade in trades:
+                    self._validate_user_trade_row(trade, symbol, "add-on entry", require_realized_pnl=False)
                     if trade.get("orderId") is not None and str(trade.get("orderId")) != str(actual_order_id):
                         raise FuturesCampaignExecutionError(
                             f"{symbol}: add-on userTrades contain a different orderId"
