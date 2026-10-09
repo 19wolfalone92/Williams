@@ -8,7 +8,6 @@ from typing import Any, Callable, Mapping
 
 from market_context import ContextCache, MarketStateSnapshot
 from order_state_machine import OrderState, OrderStateMachine
-from order_state_machine import OrderState, OrderStateMachine
 
 
 @dataclass(frozen=True)
@@ -68,16 +67,35 @@ class ExecutionBarrier:
     is performed by this layer.
     """
 
-    def __init__(self, context_cache: ContextCache, db=None) -> None:
+    def __init__(
+        self,
+        context_cache: ContextCache,
+        db=None,
+        *,
+        require_durable_intent: bool = True,
+    ) -> None:
         self.context_cache = context_cache
         self.db = db
+        # Volatile execution is permitted only when explicitly requested by
+        # deterministic tests. Production callers must have a durable store.
+        self.require_durable_intent = bool(require_durable_intent)
 
-    def _persist(self, intent: OrderIntent, status: str, reason: str = "") -> None:
-        if self.db is not None and hasattr(self.db, "save_execution_intent"):
-            try:
-                self.db.save_execution_intent(intent, status, reason)
-            except Exception:
-                pass
+    def _persist(self, intent: OrderIntent, status: str, reason: str = "") -> bool:
+        """Persist an intent state and report failure to the caller.
+
+        A failed write is never treated as a successful durable intent. The
+        caller must abort before submit or require exchange reconciliation
+        after a submit has already been attempted.
+        """
+        if self.db is None or not callable(
+            getattr(self.db, "save_execution_intent", None)
+        ):
+            return False
+        try:
+            self.db.save_execution_intent(intent, status, reason)
+        except Exception:
+            return False
+        return True
 
     def _record(self, level: str, event: str, intent: OrderIntent, message: str, raw=None) -> None:
         if self.db is not None and hasattr(self.db, "log_event"):
@@ -87,33 +105,61 @@ class ExecutionBarrier:
                 pass
 
     def _validate(self, intent: OrderIntent, snapshot: MarketStateSnapshot) -> str:
-        if intent.created_at_ms:
+        purpose = intent.purpose.upper()
+        entry_purposes = {
+            "ENTRY",
+            "ADD_ON",
+            "CAMPAIGN_ENTRY",
+            "CAMPAIGN_ADD_ON",
+            "REVERSE_ENTRY",
+            "CAMPAIGN_REVERSE_ENTRY",
+        }
+        is_new_exposure = purpose in entry_purposes
+
+        # Freshness is an admission rule for increasing exposure. A delayed
+        # protective action, cancellation, recovery operation, or reduce-only
+        # exit must not be stranded merely because its intent aged while waiting
+        # for the execution lock. These non-entry paths must enforce their own
+        # live-position/price/ownership checks before submission.
+        if is_new_exposure and intent.created_at_ms:
             age = int(time.time() * 1000) - intent.created_at_ms
             if age > intent.max_age_ms:
                 return f"stale intent age={age}ms"
 
-        # Campaign orders may be armed from a freshly constructed signal before
-        # the context service has assigned persistent versions.  They still
-        # require at least one live snapshot; the campaign pre-submit validator
-        # is responsible for the exact strategy/risk re-check.
-        if not intent.required_context_versions:
-            if not intent.purpose.upper().startswith("CAMPAIGN_"):
+        # Missing context must block new exposure, not cancellation, protection,
+        # exit, or recovery. Any context versions that are supplied are still
+        # validated below. Campaign entry paths may be armed before persistent
+        # versions exist, but must perform their own final risk/context check.
+        if is_new_exposure and not intent.required_context_versions:
+            if not purpose.startswith("CAMPAIGN_"):
                 return "missing required_context_versions"
-        for tf, required in intent.required_context_versions.items():
-            ctx = snapshot.context(intent.symbol, tf)
-            if ctx is None:
-                return f"missing context {intent.symbol} {tf}"
-            if int(ctx.version) != int(required):
-                return f"stale context {tf}: required={required} current={ctx.version}"
+        # Market-context versions are admission dependencies for new exposure
+        # only. Protective actions, cancellations, exits and recovery must remain
+        # available when strategy context is stale or temporarily unavailable.
+        if is_new_exposure:
+            for tf, required in intent.required_context_versions.items():
+                ctx = snapshot.context(intent.symbol, tf)
+                if ctx is None:
+                    return f"missing context {intent.symbol} {tf}"
+                if int(ctx.version) != int(required):
+                    return f"stale context {tf}: required={required} current={ctx.version}"
 
         direction = "long" if intent.side == "BUY" else "short" if intent.side == "SELL" else ""
         if not direction:
             return f"unsupported side {intent.side}"
+        # Every mutating non-cancel order needs a durable client identity so a
+        # timeout/restart can query the same exchange operation instead of
+        # submitting a duplicate under a new ID.
+        if intent.order_type.upper() != "CANCEL" and not str(intent.client_order_id or "").strip():
+            return "missing stable client_order_id"
 
         # All declared TFs are version dependencies, but the permission
         # decision belongs to one operative/entry timeframe. Higher TFs provide
         # structural context and must not be required to emit a duplicate trigger.
-        if intent.purpose.upper() == "ENTRY":
+        # New exposure must pass the operative timeframe's directional gate.
+        # SELL means opening SHORT only for an ENTRY/ADD-ON intent; on exits it
+        # is simply an order side and must not be interpreted as a short signal.
+        if is_new_exposure:
             permission_tf = (intent.permission_interval or "").lower()
             permission_ctx = snapshot.context(intent.symbol, permission_tf) if permission_tf else None
             if permission_ctx is None:
@@ -123,9 +169,18 @@ class ExecutionBarrier:
             if direction == "short" and not permission_ctx.allow_short:
                 return f"context {permission_tf} does not allow SHORT"
 
-        if self.db is not None and hasattr(self.db, "state_get"):
-            state = str(self.db.state_get("position_state", "FLAT"))
-            if state == "RECONCILE_REQUIRED":
+        # Reconciliation blocks any operation that can increase exposure, but
+        # must not disable exits, cancellation, protection or recovery. Those
+        # paths still need their own reduce-only / ownership guarantees.
+        if is_new_exposure and self.db is not None and hasattr(self.db, "state_get"):
+            # Reconciliation locks are persisted per symbol by the Futures
+            # runtime. Checking only the legacy global key allowed a fresh
+            # campaign to miss an orphan-position lock for its own symbol.
+            symbol_state = str(
+                self.db.state_get(f"position_state:{intent.symbol}", "FLAT")
+            ).upper()
+            global_state = str(self.db.state_get("position_state", "FLAT")).upper()
+            if "RECONCILE_REQUIRED" in {symbol_state, global_state}:
                 return "RECONCILE_REQUIRED"
             campaign_state = str(
                 self.db.state_get(
@@ -148,7 +203,6 @@ class ExecutionBarrier:
         with self.context_cache.execution_lock:
             order_fsm = OrderStateMachine()
             order_fsm.transition(OrderState.ADMISSION)
-            self._persist(intent, "PENDING")
             if self.db is not None and hasattr(self.db, "save_execution_event"):
                 try:
                     self.db.save_execution_event(intent.intent_id, "ADMISSION_STARTED", dict(intent.required_context_versions))
@@ -178,7 +232,56 @@ class ExecutionBarrier:
                     self._record("WARNING", "execution_blocked", intent, reason)
                     return ExecutionResult(intent.intent_id, False, reason=reason)
 
-            order_fsm.transition(OrderState.SUBMITTING)
+            # A stable client ID is the exchange-side idempotency key. If
+            # any earlier non-cancel intent with this ID reached PENDING or
+            # beyond, do not issue another POST: resolve the original request
+            # by querying Binance first. A BLOCKED row is safe to retry because
+            # validation guarantees submit() was never called.
+            if (
+                intent.order_type.upper() != "CANCEL"
+                and self.db is not None
+                and callable(getattr(self.db, "find_execution_intent_by_client_order_id", None))
+                and str(intent.client_order_id or "").strip()
+            ):
+                try:
+                    prior = self.db.find_execution_intent_by_client_order_id(
+                        intent.client_order_id,
+                        symbol=intent.symbol,
+                    )
+                except Exception as exc:
+                    reason = (
+                        "execution_idempotency_lookup_failed: submission aborted; "
+                        f"cannot prove client ID is unused ({type(exc).__name__}: {exc})"
+                    )
+                    self._record("ERROR", "execution_idempotency_lookup_failed", intent, reason)
+                    return ExecutionResult(intent.intent_id, False, reason=reason)
+                if prior and str(prior.get("status", "")).upper() != "BLOCKED":
+                    reason = (
+                        "duplicate client_order_id refused; prior durable intent "
+                        f"{prior.get('intent_id')} is {prior.get('status') or 'UNKNOWN'}; "
+                        "reconcile the existing Binance order before retrying"
+                    )
+                    self._persist(intent, "IDEMPOTENCY_BLOCKED", reason)
+                    self._record("ERROR", "execution_duplicate_client_order_id", intent, reason, {
+                        "prior_intent_id": prior.get("intent_id"),
+                        "prior_status": prior.get("status"),
+                        "client_order_id": intent.client_order_id,
+                    })
+                    return ExecutionResult(intent.intent_id, False, reason=reason)
+
+            # Durable intent must exist before the first exchange mutation.
+            # When storage is unavailable, fail closed and never call submit().
+            persisted = self._persist(intent, "PENDING")
+            if not persisted and (
+                self.db is not None or self.require_durable_intent
+            ):
+                reason = (
+                    "execution_intent_persistence_failed: submission aborted; "
+                    "durable PENDING intent could not be confirmed"
+                )
+                self._record("ERROR", "execution_intent_persistence_failed", intent, reason)
+                return ExecutionResult(intent.intent_id, False, reason=reason)
+
             order_fsm.transition(OrderState.SUBMITTING)
             self._record(
                 "INFO",
@@ -199,7 +302,6 @@ class ExecutionBarrier:
                 response = submit()
             except Exception as exc:
                 order_fsm.state = OrderState.AMBIGUOUS
-                order_fsm.state = OrderState.AMBIGUOUS
                 self._persist(intent, "AMBIGUOUS", f"{type(exc).__name__}: {exc}")
                 self._record(
                     "ERROR",
@@ -210,21 +312,52 @@ class ExecutionBarrier:
                 )
                 raise
 
-            if intent.order_type != "CANCEL":
-                status = str(
-                    response.get("status", "")
-                    if isinstance(response, dict)
-                    else ""
-                ).upper()
-                if status:
+            if intent.order_type.upper() != "CANCEL":
+                response_status = ""
+                if isinstance(response, dict):
+                    response_status = str(
+                        response.get("status")
+                        or response.get("algoStatus")
+                        or ""
+                    ).upper()
+
+                    # Binance Spot OCO returns an order-list envelope rather
+                    # than a top-level order status. Only treat it as accepted
+                    # when the response includes authoritative order reports.
+                    if not response_status and response.get("orderListId") is not None:
+                        reports = response.get("orderReports") or []
+                        report_statuses = [
+                            str(row.get("status", "")).upper()
+                            for row in reports
+                            if isinstance(row, dict)
+                        ]
+                        if report_statuses and all(
+                            value in {"NEW", "PARTIALLY_FILLED", "FILLED", "CANCELED", "EXPIRED"}
+                            for value in report_statuses
+                        ):
+                            response_status = (
+                                "FILLED"
+                                if all(value == "FILLED" for value in report_statuses)
+                                else "NEW"
+                            )
+
+                if response_status:
                     order_fsm.observe_exchange_status(
-                        status,
+                        response_status,
                         float(
                             response.get("executedQty", 0) or 0
                             if isinstance(response, dict)
                             else 0
                         ),
                     )
+                    if order_fsm.state == OrderState.RECONCILE_REQUIRED:
+                        reason = (
+                            f"exchange status {response_status} is not valid "
+                            "for the expected order lifecycle"
+                        )
+                        self._persist(intent, "AMBIGUOUS", reason)
+                        self._record("ERROR", "execution_ambiguous", intent, reason)
+                        raise RuntimeError(f"ExecutionBarrier: {reason}")
                 elif (
                     isinstance(response, dict)
                     and str(response.get("newOrderResult", "")).upper() == "SUCCESS"
@@ -247,44 +380,22 @@ class ExecutionBarrier:
                     raise RuntimeError(
                         "ExecutionBarrier: exchange response lacks authoritative order state"
                     )
-            if intent.order_type != "CANCEL":
-                status = str(
-                    response.get("status", "")
-                    if isinstance(response, dict)
-                    else ""
-                ).upper()
-                if status:
-                    order_fsm.observe_exchange_status(
-                        status,
-                        float(
-                            response.get("executedQty", 0) or 0
-                            if isinstance(response, dict)
-                            else 0
-                        ),
-                    )
-                elif (
-                    isinstance(response, dict)
-                    and str(response.get("newOrderResult", "")).upper() == "SUCCESS"
-                ):
-                    order_fsm.state = OrderState.OPEN
-                else:
-                    order_fsm.state = OrderState.RECONCILE_REQUIRED
-                    self._persist(
-                        intent,
-                        "AMBIGUOUS",
-                        "exchange response did not contain authoritative order state",
-                    )
-                    self._record(
-                        "ERROR",
-                        "execution_ambiguous",
-                        intent,
-                        "Exchange accepted an operation without authoritative state",
-                        {"response_keys": list(response.keys()) if isinstance(response, dict) else []},
-                    )
-                    raise RuntimeError(
-                        "ExecutionBarrier: exchange response lacks authoritative order state"
-                    )
-            self._persist(intent, "SUBMITTED")
+            submitted_persisted = self._persist(intent, "SUBMITTED")
+            if not submitted_persisted and (
+                self.db is not None or self.require_durable_intent
+            ):
+                reason = (
+                    "exchange_response_received_but_SUBMITTED_state_persistence_failed; "
+                    "reconcile by stable client_order_id before any further mutation"
+                )
+                self._record(
+                    "ERROR",
+                    "execution_submission_persistence_failed",
+                    intent,
+                    reason,
+                    {"intent_id": intent.intent_id, "client_order_id": intent.client_order_id},
+                )
+                raise RuntimeError(f"ExecutionBarrier: {reason}")
             if self.db is not None and hasattr(self.db, "save_execution_event"):
                 try:
                     self.db.save_execution_event(intent.intent_id, "BINANCE_SUBMITTED", {"symbol": intent.symbol, "side": intent.side})

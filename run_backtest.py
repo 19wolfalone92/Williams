@@ -2,7 +2,7 @@ import argparse,os
 from pathlib import Path
 import pandas as pd
 from dotenv import load_dotenv
-from data import fetch_klines,save_csv
+from data import fetch_klines,save_csv,validate_ohlcv_frame,BASE_URL
 from strategy import calculate_indicators,config_from_env
 from backtester import Backtester,calculate_metrics
 from plotting import plot_backtest
@@ -41,17 +41,40 @@ def main():
 
  out=Path(a.outdir); out.mkdir(parents=True,exist_ok=True)
  cache=Path(a.cache) if a.cache else out/f'{a.symbol}_{a.interval}.csv'
+ cache_hit=cache.exists()
  if cache.exists():
   df=pd.read_csv(cache,parse_dates=['open_time'],index_col='open_time')
   df.index=pd.to_datetime(df.index,utc=True)
  else:
   df=fetch_klines(a.symbol,a.interval,a.start,a.end); save_csv(df,cache)
  df=df[(df.index>=pd.Timestamp(a.start,tz='UTC'))&(df.index<pd.Timestamp(a.end,tz='UTC'))]
- ind=calculate_indicators(df,config_from_env()).iloc[max(100,54):].copy()
+ df=validate_ohlcv_frame(df)
+ now=pd.Timestamp.now(tz='UTC')
+ partial_count=int((df['close_time']>=now).sum()) if 'close_time' in df.columns else 0
+ if partial_count:
+  df=df[df['close_time']<now]
+ if df.empty:
+  raise ValueError("No closed, validated OHLCV candles remain in the requested date range")
+ cfg=config_from_env()
+ ind=calculate_indicators(df,cfg).iloc[max(100,54):].copy()
+ if ind.empty:
+  raise ValueError("Not enough validated candles to calculate Williams indicators")
 
  bt=Backtester(a.capital,a.fee,a.slippage,a.position_fraction,a.stop,a.target)
  eq,tr=bt.run(ind)
- m=calculate_metrics(eq,tr,a.interval)
+ m=calculate_metrics(eq,tr,a.interval,starting_capital=a.capital)
+ import hashlib,json,subprocess
+ from datetime import datetime,timezone
+ dataset_hash=hashlib.sha256(df.reset_index().to_csv(index=False).encode("utf-8")).hexdigest()
+ try:
+  commit_sha=subprocess.run(["git","rev-parse","HEAD"],capture_output=True,text=True,check=True).stdout.strip()
+ except Exception:
+  commit_sha=os.getenv("GITHUB_SHA","unknown")
+ config_payload=json.dumps(cfg,sort_keys=True,default=str,separators=(",",":"))
+ params_payload=json.dumps({"symbol":a.symbol,"interval":a.interval,"start_utc":pd.Timestamp(a.start,tz="UTC").isoformat(),"end_utc_exclusive":pd.Timestamp(a.end,tz="UTC").isoformat(),"capital":a.capital,"fee_rate":a.fee,"slippage_rate":a.slippage,"position_fraction":a.position_fraction,"stop_loss_pct":a.stop,"take_profit_pct":a.target,"intrabar_exit_policy":"stop_first","config":cfg},sort_keys=True,default=str,separators=(",",":"))
+ manifest={"created_at_utc":datetime.now(timezone.utc).isoformat(),"commit_sha":commit_sha,"symbol":a.symbol.upper(),"interval":a.interval,"date_range_semantics":"[start, end), UTC","start_utc":pd.Timestamp(a.start,tz="UTC").isoformat(),"end_utc_exclusive":pd.Timestamp(a.end,tz="UTC").isoformat(),"data_endpoint":BASE_URL if not cache_hit else "cache file (original source not independently verified)","data_source_verified":not cache_hit,"closed_candles_only":True,"partial_candles_excluded":partial_count,"row_count":int(len(df)),"dataset_sha256":dataset_hash,"config_sha256":hashlib.sha256(config_payload.encode("utf-8")).hexdigest(),"parameters_sha256":hashlib.sha256(params_payload.encode("utf-8")).hexdigest(),"parameters":{"capital":a.capital,"fee_rate":a.fee,"slippage_rate":a.slippage,"position_fraction":a.position_fraction,"stop_loss_pct":a.stop,"take_profit_pct":a.target,"intrabar_exit_policy":"stop_first"}}
+ (out/'manifest.json').write_text(json.dumps(manifest,indent=2,sort_keys=True)+"\n",encoding="utf-8")
+
 
  if not a.skip_cpcv and len(ind) >= 60:
   samples=[]

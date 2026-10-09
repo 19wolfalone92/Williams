@@ -56,6 +56,7 @@ import androidx.compose.material.icons.filled.Timeline
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -470,6 +471,10 @@ fun WilliamsApp(context: Context) {
     var logs by remember { mutableStateOf(emptyList<String>()) }
     var apiKey by remember { mutableStateOf("") }
     var apiSecret by remember { mutableStateOf("") }
+    var futuresApiKey by remember { mutableStateOf("") }
+    var futuresApiSecret by remember { mutableStateOf("") }
+    var futuresStatus by remember { mutableStateOf(JSONObject()) }
+    var futuresMessage by remember { mutableStateOf("") }
     var backendUrl by remember { mutableStateOf(api.backendUrl) }
     var mobileToken by remember { mutableStateOf(api.mobileToken) }
     var message by remember { mutableStateOf("Williams Runtime: автономный режим") }
@@ -492,6 +497,19 @@ fun WilliamsApp(context: Context) {
                     withContext(Dispatchers.Main) { status = parseStatus(json) }
                 }.onFailure {
                     failures += "status: " + (it.message ?: it.javaClass.simpleName)
+                }
+
+                runCatching {
+                    val json = JSONObject(api.get("/api/v1/futures/status"))
+                    withContext(Dispatchers.Main) { futuresStatus = json }
+                }.onFailure {
+                    withContext(Dispatchers.Main) {
+                        futuresStatus = JSONObject()
+                            .put("runtime", "BINANCE_USDM_FUTURES_NATIVE")
+                            .put("configured", false)
+                            .put("running", false)
+                            .put("last_error", it.message ?: it.javaClass.simpleName)
+                    }
                 }
 
                 runCatching {
@@ -604,6 +622,83 @@ fun WilliamsApp(context: Context) {
             message = "Backend URL и Mobile API token сохранены"
         } catch (e: Exception) {
             message = e.message ?: "Не удалось сохранить Backend"
+        }
+    }
+
+    fun saveFuturesCredentials() {
+        scope.launch(Dispatchers.IO) {
+            try {
+                require(futuresApiKey.isNotBlank()) { "Введите отдельный Futures API Key" }
+                require(futuresApiSecret.isNotBlank()) { "Введите отдельный Futures API Secret" }
+                val payload = JSONObject()
+                    .put("api_key", futuresApiKey.trim())
+                    .put("api_secret", futuresApiSecret.trim())
+                    .put("allow_live", false)
+                    .put("symbols", JSONArray(listOf("BTCUSDT", "ETHUSDT", "BNBUSDT")))
+                    .put("interval", "5m")
+                api.post("/api/v1/futures/configure", payload.toString())
+                val verified = JSONObject(api.get("/api/v1/futures/status"))
+                require(verified.optBoolean("configured", false) && verified.optBoolean("testnet", false)) {
+                    "Futures Demo configuration was not verified"
+                }
+                withContext(Dispatchers.Main) {
+                    futuresApiKey = ""
+                    futuresApiSecret = ""
+                    futuresStatus = verified
+                    futuresMessage = "USDⓈ-M Futures Demo подключён; входы LONG/SHORT доступны только после START и прохождения preflight."
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    futuresMessage = e.message ?: "Не удалось настроить Futures Demo"
+                }
+            }
+        }
+    }
+
+    fun futuresCommand(path: String) {
+        scope.launch(Dispatchers.IO) {
+            try {
+                api.post(path)
+                val verified = JSONObject(api.get("/api/v1/futures/status"))
+                withContext(Dispatchers.Main) {
+                    futuresStatus = verified
+                    futuresMessage = when (path) {
+                        "/api/v1/futures/start" -> "Futures runtime запущен или отклонён preflight; проверь состояние ниже."
+                        "/api/v1/futures/pause" -> "Новые Futures входы приостановлены; активные позиции продолжают сопровождаться."
+                        "/api/v1/futures/resume" -> "Запрошено возобновление новых входов."
+                        "/api/v1/futures/stop" -> "Сканирование остановлено; биржевые защитные ордера остаются активны."
+                        "/api/v1/futures/kill" -> "Kill switch зафиксирован; выполнены попытки reduce-only выхода."
+                        "/api/v1/futures/recover" -> "Запрошена сверка с Binance; kill latch снимается только при подтверждённой плоской позиции."
+                        else -> "Futures команда обработана."
+                    }
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    futuresMessage = e.message ?: "Futures команда завершилась ошибкой"
+                    runCatching {
+                        futuresStatus = JSONObject(api.get("/api/v1/futures/status"))
+                    }
+                }
+            }
+        }
+    }
+
+    fun clearFuturesCredentials() {
+        scope.launch(Dispatchers.IO) {
+            try {
+                api.delete("/api/v1/futures/configure")
+                val verified = JSONObject(api.get("/api/v1/futures/status"))
+                withContext(Dispatchers.Main) {
+                    futuresStatus = verified
+                    futuresApiKey = ""
+                    futuresApiSecret = ""
+                    futuresMessage = "Futures credentials removed."
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    futuresMessage = e.message ?: "Нельзя удалить Futures credentials при открытой позиции или ордере."
+                }
+            }
         }
     }
 
@@ -1050,6 +1145,20 @@ fun WilliamsApp(context: Context) {
                 onApiSecret = { apiSecret = it },
                 onSave = ::saveCredentials,
                 onClear = ::clearCredentials,
+                futuresApiKey = futuresApiKey,
+                futuresApiSecret = futuresApiSecret,
+                onFuturesApiKey = { futuresApiKey = it },
+                onFuturesApiSecret = { futuresApiSecret = it },
+                futuresStatus = futuresStatus,
+                futuresMessage = futuresMessage,
+                onSaveFutures = ::saveFuturesCredentials,
+                onFuturesStart = { futuresCommand("/api/v1/futures/start") },
+                onFuturesPause = { futuresCommand("/api/v1/futures/pause") },
+                onFuturesResume = { futuresCommand("/api/v1/futures/resume") },
+                onFuturesStop = { futuresCommand("/api/v1/futures/stop") },
+                onFuturesKill = { futuresCommand("/api/v1/futures/kill") },
+                onFuturesRecover = { futuresCommand("/api/v1/futures/recover") },
+                onClearFutures = ::clearFuturesCredentials,
                 backupPassword = backupPassword,
                 onBackupPassword = { backupPassword = it },
                 onExportBackup = ::exportBackup,
@@ -2337,6 +2446,20 @@ private fun SettingsScreen(
     onApiSecret: (String) -> Unit,
     onSave: () -> Unit,
     onClear: () -> Unit,
+    futuresApiKey: String,
+    futuresApiSecret: String,
+    onFuturesApiKey: (String) -> Unit,
+    onFuturesApiSecret: (String) -> Unit,
+    futuresStatus: JSONObject,
+    futuresMessage: String,
+    onSaveFutures: () -> Unit,
+    onFuturesStart: () -> Unit,
+    onFuturesPause: () -> Unit,
+    onFuturesResume: () -> Unit,
+    onFuturesStop: () -> Unit,
+    onFuturesKill: () -> Unit,
+    onFuturesRecover: () -> Unit,
+    onClearFutures: () -> Unit,
     backupPassword: String,
     onBackupPassword: (String) -> Unit,
     onExportBackup: () -> Unit,
@@ -2347,6 +2470,34 @@ private fun SettingsScreen(
     diagnosticsMessage: String,
     message: String
 ) {
+    var confirmFuturesKill by remember { mutableStateOf(false) }
+
+    if (confirmFuturesKill) {
+        AlertDialog(
+            onDismissRequest = { confirmFuturesKill = false },
+            title = { Text("Подтвердить Futures Kill Switch") },
+            text = {
+                Text(
+                    "Бот запретит новые входы и отправит reduce-only рыночные выходы для управляемых Futures-позиций. " +
+                        "Это может зафиксировать убыток. Защитные и открытые ордера будут сверены с Binance."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmFuturesKill = false
+                    onFuturesKill()
+                }) {
+                    Text("ПОДТВЕРДИТЬ ВЫХОД")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmFuturesKill = false }) {
+                    Text("ОТМЕНА")
+                }
+            }
+        )
+    }
+
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -2486,6 +2637,98 @@ private fun SettingsScreen(
                         color = if (status.binanceConfigured)
                             AppColors.green else AppColors.amber
                     )
+                }
+            }
+        }
+
+        item {
+            Card(
+                Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = AppColors.surface)
+            ) {
+                Column(
+                    Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Filled.ShowChart, contentDescription = null, tint = AppColors.violet)
+                        Spacer(Modifier.width(8.dp))
+                        Text("USDⓈ-M Futures • LONG / SHORT", style = MaterialTheme.typography.titleMedium)
+                    }
+                    Text(
+                        "Отдельный Futures-контур. В этой версии разрешён только Binance Futures Demo; Spot credentials и Spot SELL не используются для открытия SHORT.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AppColors.textMuted
+                    )
+                    OutlinedTextField(
+                        value = futuresApiKey,
+                        onValueChange = onFuturesApiKey,
+                        label = { Text("Futures Demo API Key") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = futuresApiSecret,
+                        onValueChange = onFuturesApiSecret,
+                        label = { Text("Futures Demo API Secret") },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Text("Demo endpoint закреплён • isolated margin • one-way mode • leverage ≤ 1x", color = AppColors.green)
+                    Button(
+                        onClick = onSaveFutures,
+                        enabled = futuresApiKey.isNotBlank() && futuresApiSecret.isNotBlank(),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("ПОДКЛЮЧИТЬ FUTURES DEMO")
+                    }
+                    val futuresConfigured = futuresStatus.optBoolean("configured", false)
+                    val futuresRunning = futuresStatus.optBoolean("running", false)
+                    val futuresPaused = futuresStatus.optBoolean("paused", true)
+                    val futuresKill = futuresStatus.optBoolean("kill_latched", false)
+                    val futuresReconcile = futuresStatus.optBoolean("reconciliation_required", false)
+                    InfoRow("Connection", if (futuresConfigured) "Demo configured" else "Not configured")
+                    InfoRow("Runtime", when {
+                        futuresKill -> "KILL SWITCH LATCHED"
+                        futuresReconcile -> "RECONCILE REQUIRED"
+                        !futuresRunning -> "STOPPED"
+                        futuresPaused -> "PAUSED"
+                        else -> "RUNNING"
+                    })
+                    InfoRow("Direction", "LONG + SHORT")
+                    InfoRow("Symbols", futuresStatus.optJSONArray("symbols")?.let { rows ->
+                        (0 until rows.length()).joinToString(", ") { rows.optString(it) }
+                    } ?: "BTCUSDT, ETHUSDT, BNBUSDT")
+                    InfoRow("Timeframe", futuresStatus.optString("interval", "5m"))
+                    InfoRow("Leverage ceiling", "1x")
+                    InfoRow("Open campaigns", futuresStatus.optJSONArray("open_campaigns")?.length()?.toString() ?: "0")
+                    val lastError = futuresStatus.optString("last_error").takeIf { it.isNotBlank() }
+                    if (lastError != null) {
+                        Text(lastError, color = AppColors.red, style = MaterialTheme.typography.bodySmall)
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = onFuturesStart, enabled = futuresConfigured && !futuresRunning && !futuresKill, modifier = Modifier.weight(1f)) { Text("START") }
+                        OutlinedButton(onClick = onFuturesPause, enabled = futuresRunning && !futuresPaused, modifier = Modifier.weight(1f)) { Text("PAUSE") }
+                        OutlinedButton(onClick = onFuturesResume, enabled = futuresRunning && futuresPaused && !futuresKill, modifier = Modifier.weight(1f)) { Text("RESUME") }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = onFuturesStop, enabled = futuresRunning, modifier = Modifier.weight(1f)) { Text("STOP") }
+                        OutlinedButton(onClick = onFuturesRecover, enabled = futuresConfigured && (futuresKill || futuresReconcile), modifier = Modifier.weight(1f)) { Text("RECOVER") }
+                    }
+                    OutlinedButton(
+                        onClick = { confirmFuturesKill = true },
+                        enabled = futuresConfigured && !futuresKill,
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("FUTURES KILL SWITCH • REDUCE-ONLY EXIT") }
+                    OutlinedButton(
+                        onClick = onClearFutures,
+                        enabled = futuresConfigured && !futuresRunning,
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("УДАЛИТЬ FUTURES CREDENTIALS") }
+                    if (futuresMessage.isNotBlank()) {
+                        Text(futuresMessage, color = AppColors.textMuted, style = MaterialTheme.typography.bodySmall)
+                    }
                 }
             }
         }

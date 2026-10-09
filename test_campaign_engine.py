@@ -1,6 +1,8 @@
 import os
 import tempfile
 
+import pytest
+
 from campaign_engine import CampaignEngine
 from campaign_model import (
     CampaignState,
@@ -98,3 +100,151 @@ def test_portfolio_risk_includes_pending_campaign():
         db.save_campaign(campaign)
         assert engine.portfolio_reserved_risk_quote() == 40.0
         assert engine.portfolio_reserved_capital_quote() == 500.0
+
+
+def _open_campaign_for_add_on(db, engine, *, open_risk=4.0, budget=5.0):
+    initial = make_signal(SignalType.REVERSAL, role=SignalRole.ENTRY, bar=100)
+    campaign = engine.create_campaign(initial, initial_risk_pct=0.002)
+    campaign.tags["risk_budget_quote"] = budget
+    engine.arm_entry(campaign, initial)
+    engine.mark_triggered(campaign, initial.signal_id, "entry-1")
+    campaign = engine.record_initial_fill(
+        campaign,
+        quantity=0.1,
+        average_entry_price=101.0,
+        initial_stop_price=97.0,
+        fill_order_id="entry-1",
+        risk_quote=open_risk,
+    )
+    campaign.tags["risk_budget_quote"] = budget
+    db.save_campaign(campaign)
+    return campaign
+
+
+def test_add_on_stays_in_campaign_and_respects_remaining_risk_budget():
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "w.sqlite3"))
+        engine = CampaignEngine(db)
+        campaign = _open_campaign_for_add_on(db, engine, open_risk=4.0, budget=5.0)
+        signal = make_signal(SignalType.SUPER_AO, role=SignalRole.ADD_ON, trigger=103.0, bar=200)
+
+        try:
+            with pytest.raises(ValueError, match="exceed the campaign"):
+                engine.arm_add_on(
+                    campaign,
+                    signal,
+                    risk_quote=1.1,
+                    capital_reserved_quote=25.0,
+                )
+            assert campaign.campaign_id == db.get_campaign(campaign.campaign_id)["campaign_id"]
+            assert campaign.state == CampaignState.OPEN_INITIAL
+        finally:
+            db.conn.close()
+
+
+def test_add_on_fill_rejects_non_finite_values_and_risk_overrun():
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "w.sqlite3"))
+        engine = CampaignEngine(db)
+        try:
+            # An armed add-on has a $1 reservation against a $5 campaign cap.
+            campaign = _open_campaign_for_add_on(db, engine, open_risk=4.0, budget=5.0)
+            signal = make_signal(SignalType.SUPER_AO, role=SignalRole.ADD_ON, trigger=103.0, bar=210)
+            engine.arm_add_on(campaign, signal, risk_quote=1.0, capital_reserved_quote=25.0)
+            campaign.transition(CampaignState.POSITION_EXPANDING, reason="test exchange fill")
+            for bad_qty, bad_price, bad_risk in [
+                (float("nan"), 103.0, 1.0),
+                (1.0, float("inf"), 1.0),
+                (1.0, 103.0, float("nan")),
+                (1.0, 103.0, 1.01),
+            ]:
+                with pytest.raises(ValueError):
+                    engine.record_add_on_fill(
+                        campaign,
+                        quantity=bad_qty,
+                        average_entry_price=bad_price,
+                        fill_order_id="test-fill-1",
+                        risk_quote=bad_risk,
+                    )
+            assert campaign.position_qty == 0.1
+            assert campaign.open_risk_quote == 4.0
+        finally:
+            db.conn.close()
+
+
+def test_add_on_uses_existing_campaign_and_reserves_only_remaining_risk():
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "w.sqlite3"))
+        engine = CampaignEngine(db)
+        campaign = _open_campaign_for_add_on(db, engine, open_risk=4.0, budget=5.0)
+        campaign_id = campaign.campaign_id
+        signal = make_signal(SignalType.FRACTAL, role=SignalRole.ADD_ON, trigger=104.0, bar=201)
+
+        try:
+            armed = engine.arm_add_on(
+                campaign,
+                signal,
+                risk_quote=1.0,
+                capital_reserved_quote=25.0,
+            )
+            assert armed.campaign_id == campaign_id
+            assert armed.state == CampaignState.ADD_ON_PENDING
+            assert armed.pending_risk_quote == 1.0
+            assert len([
+                row for row in db.open_campaigns()
+                if row.get("symbol") == "BTCUSDT"
+            ]) == 1
+        finally:
+            db.conn.close()
+
+@pytest.mark.parametrize(
+    "overrides,match",
+    [
+        ({"quantity": float("nan")}, "finite"),
+        ({"average_entry_price": float("inf")}, "finite"),
+        ({"initial_stop_price": float("nan")}, "finite"),
+        ({"risk_quote": float("inf")}, "finite"),
+        ({"fee_quote": float("nan")}, "finite"),
+        ({"risk_quote": 0.0}, "positive"),
+        ({"fill_order_id": ""}, "stable exchange order ID"),
+    ],
+)
+def test_initial_fill_rejects_invalid_numeric_values_and_missing_order_id(overrides, match):
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "initial-fill-validation.sqlite3"))
+        try:
+            engine = CampaignEngine(db)
+            signal = make_signal()
+            campaign = engine.create_campaign(signal, initial_risk_pct=0.002)
+            engine.arm_entry(campaign, signal)
+            engine.mark_triggered(campaign, signal.signal_id, "entry-1")
+            values = {
+                "quantity": 0.01,
+                "average_entry_price": 101.0,
+                "initial_stop_price": 97.0,
+                "fill_order_id": "entry-1",
+                "risk_quote": 2.0,
+                "fee_quote": 0.0,
+            }
+            values.update(overrides)
+            with pytest.raises(ValueError, match=match):
+                engine.record_initial_fill(campaign, **values)
+        finally:
+            db.conn.close()
+
+
+def test_reconcile_required_campaign_retains_risk_and_capital_reservations():
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "w.sqlite3"))
+        engine = CampaignEngine(db)
+        try:
+            campaign = _open_campaign_for_add_on(db, engine, open_risk=4.0, budget=5.0)
+            campaign.pending_risk_quote = 1.0
+            campaign.capital_reserved_quote = 25.0
+            campaign.mark_reconcile_required("simulated unknown exchange execution")
+            db.save_campaign(campaign)
+
+            assert engine.portfolio_reserved_risk_quote() == pytest.approx(5.0)
+            assert engine.portfolio_reserved_capital_quote() == pytest.approx(25.0)
+        finally:
+            db.conn.close()

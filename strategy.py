@@ -74,8 +74,13 @@ def calculate_indicators(df, cfg):
 
     # Fractals. The center must be strictly higher/lower than the two bars
     # on each side; equality therefore does not create a false fractal.
-    left = cfg["fractal_left"]
-    right = cfg["fractal_right"]
+    left = int(cfg["fractal_left"])
+    right = int(cfg["fractal_right"])
+    if left < 1 or right < 1:
+        raise ValueError("Fractal left/right confirmation windows must be positive")
+    # Preserve the configured confirmation delay in the indicator frame.
+    # Signal extraction must not silently assume the default two right bars.
+    x["fractal_right_bars"] = right
     x["fractal_up"] = False
     x["fractal_down"] = False
     for i in range(left, len(x) - right):
@@ -243,7 +248,10 @@ def calculate_indicators(df, cfg):
         & x["long_wise_man_count"].ge(min_wise)
     )
     x["short_signal"] = (
-        x["short_bearish"]
+        # Mirror the LONG balance-line gate: the confirmed sell fractal must
+        # be below the Teeth before any short Wise-Man signal is actionable.
+        x["short_fractal_outside"]
+        & x["short_bearish"]
         & x["short_awake"]
         & x["short_wise_man_count"].ge(min_wise)
     )
@@ -277,10 +285,30 @@ def calculate_indicators(df, cfg):
     )
     x["long_wise_man_score"] = x["long_wise_man_count"] / 3.0 * 100.0
 
-    # Distance to the confirmed breakout level.
+    # Directional mirror for Futures SHORT. These are separate diagnostic
+    # fields; they do not convert a failed LONG into a SHORT signal.
+    short_components = [
+        "short_bearish",
+        "short_awake",
+        "short_fractal_outside",
+        "short_super_ao_signal",
+        "short_fractal_signal",
+        "short_reversal_signal",
+    ]
+    x["short_setup_score"] = (
+        x[short_components].astype(int).sum(axis=1) / len(short_components) * 100.0
+    )
+    x["short_wise_man_score"] = x["short_wise_man_count"] / 3.0 * 100.0
+
+    # Distance to confirmed directional breakout levels.
     x["long_breakout_distance_pct"] = np.where(
         x["last_up_level"].notna() & (x["last_up_level"] > 0),
         (x["close"] / x["last_up_level"] - 1.0) * 100.0,
+        np.nan,
+    )
+    x["short_breakout_distance_pct"] = np.where(
+        x["last_down_level"].notna() & (x["last_down_level"] > 0),
+        (x["close"] / x["last_down_level"] - 1.0) * 100.0,
         np.nan,
     )
 

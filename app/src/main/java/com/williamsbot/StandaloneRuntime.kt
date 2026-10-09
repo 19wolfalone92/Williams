@@ -249,6 +249,7 @@ private class StandaloneServer(private val context: Context) {
     private val historyStore = MarketHistoryStore(context)
     private val rateGuard = BinanceRateGuard()
     private val auditStore = TradingAuditStore(context)
+    private var futuresEngine: FuturesNativeEngine? = null
     private val stateMachine = TradingStateMachine(
         onTransition = { from, to, reason ->
             auditStore.recordState(from, to, reason)
@@ -289,6 +290,7 @@ private class StandaloneServer(private val context: Context) {
         }
         socket = null
         engine?.stop()
+        futuresEngine?.stop()
     }
 
     fun autostart() {
@@ -319,6 +321,19 @@ private class StandaloneServer(private val context: Context) {
             engine = NativeEngine(context, prefs, client)
         }
         return engine!!
+    }
+
+    private fun f(): FuturesNativeEngine {
+        if (futuresEngine == null) {
+            futuresEngine = FuturesNativeEngine(
+                context = context,
+                prefs = prefs,
+                http = client,
+                auditStore = auditStore,
+                rateGuard = rateGuard
+            )
+        }
+        return futuresEngine!!
     }
 
     private fun handle(s: Socket) {
@@ -513,6 +528,33 @@ private class StandaloneServer(private val context: Context) {
                     params["symbol"]
                         ?: error("symbol is required")
                 ).toString()
+
+            method == "GET" && path == "/api/v1/futures/status" ->
+                f().status().toString()
+
+            method == "POST" && path == "/api/v1/futures/configure" ->
+                f().configureCredentials(JSONObject(body)).toString()
+
+            method == "DELETE" && path == "/api/v1/futures/configure" ->
+                f().clearCredentials().toString()
+
+            method == "POST" && path == "/api/v1/futures/start" ->
+                f().start().toString()
+
+            method == "POST" && path == "/api/v1/futures/pause" ->
+                f().pause().toString()
+
+            method == "POST" && path == "/api/v1/futures/resume" ->
+                f().resume().toString()
+
+            method == "POST" && path == "/api/v1/futures/stop" ->
+                f().stop().toString()
+
+            method == "POST" && path == "/api/v1/futures/kill" ->
+                f().kill().toString()
+
+            method == "POST" && path == "/api/v1/futures/recover" ->
+                f().recoverAndResetKill().toString()
 
             else ->
                 JSONObject().put("error", "Not found").toString()

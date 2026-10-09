@@ -44,7 +44,7 @@ class DigitalWilliamsCore:
     def select_initial(self, signals: Iterable[SignalSpec]) -> SignalSpec | None:
         candidates = [
             s for s in signals
-            if s.side == "BUY"
+            if str(s.direction).upper() in {"LONG", "SHORT"}
             and s.role.value == "ENTRY"
             and s.trigger_price > 0
         ]
@@ -98,11 +98,11 @@ class DigitalWilliamsCore:
             ],
             "binance_contract": self.binance.to_dict(),
             "execution_contract": {
-                "initial_entry": "BUY_STOP conditional; never convert missed trigger to MARKET",
-                "add_on": "BUY_STOP conditional; same campaign",
-                "hard_protection": "SELL STOP exchange-side",
+                "initial_entry": "directional conditional entry; never convert missed trigger to MARKET",
+                "add_on": "directional conditional entry; same campaign and side",
+                "hard_protection": "directional Futures stop; LONG=SELL, SHORT=BUY",
                 "trailing": "structural stop only moves to reduce risk",
-                "exit": "cancel protection -> MARKET SELL -> authoritative fill -> reconcile residual",
+                "exit": "cancel protection -> opposite-side reduce-only MARKET -> authoritative fill -> reconcile residual",
                 "fixed_take_profit": False,
                 "ambiguity": "RECONCILE_REQUIRED; no blind replay",
             },

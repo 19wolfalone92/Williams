@@ -9,6 +9,7 @@ an exchange order and verifying the resulting state.
 from __future__ import annotations
 
 from dataclasses import asdict
+import math
 from typing import Any, Iterable
 import json
 import time
@@ -168,7 +169,7 @@ class CampaignEngine:
         candidates = [
             s for s in signals
             if s.role == SignalRole.ENTRY
-            and s.side == "BUY"
+            and str(s.direction).upper() in {"LONG", "SHORT"}
             and s.trigger_price > 0
         ]
         if not candidates:
@@ -263,24 +264,62 @@ class CampaignEngine:
     def arm_add_on(self, campaign: TradingCampaign, signal: SignalSpec, *, risk_quote: float, capital_reserved_quote: float) -> TradingCampaign:
         if campaign.position_qty <= 0:
             raise ValueError("add-on requires an open campaign position")
-        if signal.side != campaign.side:
-            raise ValueError("add-on side does not match campaign")
+        signal_direction = str(getattr(signal, "direction", "") or "").upper()
+        if signal_direction not in {"LONG", "SHORT"}:
+            signal_direction = {
+                "BUY": "LONG", "LONG": "LONG",
+                "SELL": "SHORT", "SHORT": "SHORT",
+            }.get(str(signal.side).upper(), "")
+        campaign_direction = str(campaign.tags.get("direction", "") or "").upper()
+        if campaign_direction not in {"LONG", "SHORT"}:
+            campaign_direction = {
+                "BUY": "LONG", "LONG": "LONG",
+                "SELL": "SHORT", "SHORT": "SHORT",
+            }.get(str(campaign.side).upper(), "")
+        if not signal_direction or signal_direction != campaign_direction:
+            raise ValueError("add-on direction does not match campaign")
+        if signal.role != SignalRole.ADD_ON:
+            raise ValueError("later Wise-Men signals must be explicitly classified as ADD_ON")
+        if signal.signal_type not in {SignalType.SUPER_AO, SignalType.FRACTAL}:
+            raise ValueError("only second/third Wise-Men signals may add to an existing campaign")
+        if campaign.additions >= 2:
+            raise ValueError("campaign has reached the maximum of two Wise-Men add-ons")
         if signal.signal_bar_time_ms <= 0:
             raise ValueError("add-on signal has no valid signal time")
+        if signal.signal_id in {campaign.origin_signal_id, campaign.current_signal_id}:
+            raise ValueError("duplicate signal cannot create another add-on")
         if campaign.state not in {
             CampaignState.OPEN_INITIAL,
             CampaignState.TREND_ACTIVE,
             CampaignState.TRAILING,
-            CampaignState.EXHAUSTION_WATCH,
         }:
             raise ValueError(f"Cannot arm add-on from {campaign.state.value}")
+
+        requested_risk = float(risk_quote)
+        requested_capital = float(capital_reserved_quote)
+        if not math.isfinite(requested_risk) or requested_risk <= 0:
+            raise ValueError("add-on risk reservation must be finite and positive")
+        if not math.isfinite(requested_capital) or requested_capital <= 0:
+            raise ValueError("add-on capital reservation must be finite and positive")
+
+        # The campaign-level budget is a hard ceiling, not a weighting target.
+        # Refuse to arm if the durable budget is missing or the combined open
+        # and pending reservations would exceed it.
+        budget = float(campaign.tags.get("risk_budget_quote", 0.0) or 0.0)
+        if not math.isfinite(budget) or budget <= 0:
+            raise ValueError("campaign risk budget is missing or invalid; add-on blocked")
+        already_reserved = max(0.0, float(campaign.open_risk_quote)) + max(
+            0.0, float(campaign.pending_risk_quote)
+        )
+        if already_reserved + requested_risk > budget + max(1e-8, budget * 1e-9):
+            raise ValueError("add-on would exceed the campaign's remaining risk budget")
 
         # The book continues the same campaign with later Wise-Men signals.
         # A new signal becomes an add-on, never a second independent campaign.
         campaign.current_signal_id = signal.signal_id
         campaign.current_signal_type = signal.signal_type.value
-        campaign.pending_risk_quote = max(0.0, float(risk_quote))
-        campaign.capital_reserved_quote = max(0.0, float(capital_reserved_quote))
+        campaign.pending_risk_quote = requested_risk
+        campaign.capital_reserved_quote = requested_capital
         campaign.next_action = "SUBMIT_ADD_ON"
         campaign.transition(CampaignState.ADD_ON_ARMING, reason=f"{signal.signal_type.value} confirmation")
         campaign.transition(CampaignState.ADD_ON_PENDING, reason="conditional add-on admitted")
@@ -331,30 +370,84 @@ class CampaignEngine:
             raise ValueError(f"Cannot record add-on fill from {campaign.state.value}")
         old_qty = float(campaign.position_qty)
         old_entry = float(campaign.average_entry_price)
-        if quantity <= 0 or average_entry_price <= 0:
-            raise ValueError("Invalid add-on fill")
-        new_qty = old_qty + float(quantity)
+        fill_qty = float(quantity)
+        fill_price = float(average_entry_price)
+        fill_risk = float(risk_quote)
+        fill_fee = float(fee_quote)
+        fill_id = str(fill_order_id or "").strip()
+
+        # Exchange responses and persisted state are external inputs. Reject
+        # NaN/Inf explicitly: ordinary <= comparisons do not reject NaN.
+        if (
+            not math.isfinite(old_qty)
+            or not math.isfinite(old_entry)
+            or old_qty <= 0
+            or old_entry <= 0
+            or not math.isfinite(fill_qty)
+            or not math.isfinite(fill_price)
+            or fill_qty <= 0
+            or fill_price <= 0
+        ):
+            raise ValueError("Invalid add-on fill quantity/price or existing position")
+        if not fill_id:
+            raise ValueError("add-on fill requires a stable exchange order/fill identifier")
+        if not math.isfinite(fill_risk) or fill_risk <= 0:
+            raise ValueError("add-on fill risk must be finite and positive")
+        if not math.isfinite(fill_fee) or fill_fee < 0:
+            raise ValueError("add-on fee must be finite and non-negative")
+
+        # Never silently turn a larger-than-authorized fill into accepted
+        # exposure. A fill whose risk exceeds its durable reservation requires
+        # reconciliation and operator-safe recovery rather than local booking.
+        pending_risk = float(campaign.pending_risk_quote)
+        risk_budget = float(campaign.tags.get("risk_budget_quote", 0.0) or 0.0)
+        if not math.isfinite(pending_risk) or pending_risk <= 0:
+            raise ValueError("add-on fill has no valid pending risk reservation")
+        if fill_risk > pending_risk + max(1e-8, pending_risk * 1e-9):
+            raise ValueError("actual add-on risk exceeds its pending reservation")
+        if not math.isfinite(risk_budget) or risk_budget <= 0:
+            raise ValueError("campaign risk budget is missing or invalid at fill time")
+        if old_qty and (not math.isfinite(float(campaign.open_risk_quote)) or float(campaign.open_risk_quote) < 0):
+            raise ValueError("existing campaign risk is invalid")
+        if float(campaign.open_risk_quote) + fill_risk > risk_budget + max(1e-8, risk_budget * 1e-9):
+            raise ValueError("actual add-on fill would exceed campaign risk budget")
+
+        new_qty = old_qty + fill_qty
         campaign.average_entry_price = (
-            (old_qty * old_entry) + (float(quantity) * float(average_entry_price))
+            (old_qty * old_entry) + (fill_qty * fill_price)
         ) / max(new_qty, 1e-12)
         campaign.position_qty = new_qty
         campaign.additions += 1
         campaign.tranche_index = min(4, campaign.tranche_index + 1)
-        campaign.open_risk_quote += max(0.0, float(risk_quote))
+        campaign.open_risk_quote += fill_risk
         campaign.pending_risk_quote = 0.0
         campaign.capital_reserved_quote = 0.0
-        campaign.tags["last_add_on_fee_quote"] = float(fee_quote)
+        campaign.tags["last_add_on_fee_quote"] = fill_fee
+        campaign.tags["last_add_on_fill_id"] = fill_id
+        campaign.tags["last_add_on_exchange_order_id"] = fill_id
         campaign.next_action = "MONITOR_CAMPAIGN"
         campaign.transition(CampaignState.TREND_ACTIVE, reason="add-on filled and position revalued")
+        # Clear the durable pending intent in the same campaign save that
+        # books the fill. Otherwise a crash after booking but before the caller's
+        # cleanup could replay the same child order and double the position.
+        for key in (
+            "pending_add_on_client_algo_id", "pending_add_on_algo_id",
+            "pending_add_on_trigger_price", "pending_add_on_stop_price",
+            "pending_add_on_quantity", "pending_add_on_risk_quote",
+            "pending_add_on_original_qty", "pending_add_on_original_entry",
+            "pending_add_on_direction",
+        ):
+            campaign.tags.pop(key, None)
         self.db.save_campaign(campaign)
         self.db.log_campaign_event(
             campaign.campaign_id,
             CampaignEventType.ADD_ON_FILLED.value,
             order_id=fill_order_id,
             payload={
-                "quantity": quantity,
-                "average_entry_price": average_entry_price,
-                "risk_quote": risk_quote,
+                "quantity": fill_qty,
+                "average_entry_price": fill_price,
+                "risk_quote": fill_risk,
+                "fee_quote": fill_fee,
             },
         )
         return campaign
@@ -372,8 +465,20 @@ class CampaignEngine:
     ) -> TradingCampaign:
         if campaign.state != CampaignState.ENTRY_TRIGGERED:
             raise ValueError(f"Cannot record initial fill from {campaign.state.value}")
+        values = (quantity, average_entry_price, initial_stop_price, risk_quote, fee_quote)
+        try:
+            normalized = tuple(float(value) for value in values)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Invalid initial fill/protection data") from exc
+        if not all(math.isfinite(value) for value in normalized):
+            raise ValueError("Initial fill/protection values must be finite")
+        quantity, average_entry_price, initial_stop_price, risk_quote, fee_quote = normalized
         if quantity <= 0 or average_entry_price <= 0 or initial_stop_price <= 0:
             raise ValueError("Invalid initial fill/protection data")
+        if risk_quote <= 0 or fee_quote < 0:
+            raise ValueError("Initial fill risk must be positive and fee must be non-negative")
+        if not str(fill_order_id or "").strip():
+            raise ValueError("Initial fill requires a stable exchange order ID")
 
         campaign.position_qty = float(quantity)
         campaign.average_entry_price = float(average_entry_price)
@@ -386,7 +491,10 @@ class CampaignEngine:
         campaign.tranche_index = 1
         campaign.next_action = "MONITOR_CAMPAIGN"
         campaign.tags["entry_fee_quote"] = float(fee_quote)
-        campaign.transition(CampaignState.OPEN_INITIAL, reason="entry fully filled and hard stop initialized")
+        campaign.transition(CampaignState.OPEN_INITIAL, reason="entry fill and hard stop initialized")
+        # Persist the entry fill and release the pending-entry reconciliation
+        # marker atomically at the campaign-record level.
+        campaign.tags.pop("entry_fill_reconciliation_pending", None)
         self.db.save_campaign(campaign)
         self.db.log_campaign_event(
             campaign.campaign_id,

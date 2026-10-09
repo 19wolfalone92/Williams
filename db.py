@@ -142,6 +142,8 @@ class Database:
             event TEXT NOT NULL,
             payload_json TEXT
         );
+        CREATE INDEX IF NOT EXISTS idx_execution_intents_client_id
+            ON execution_intents(client_order_id, symbol, created_at);
         CREATE TABLE IF NOT EXISTS campaigns(
             campaign_id TEXT PRIMARY KEY,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -345,6 +347,27 @@ class Database:
         )
         if not self._transaction_active:
             self.conn.commit()
+
+    def find_execution_intent_by_client_order_id(self, client_order_id, *, symbol=None):
+        """Return the latest durable non-cancel intent using a client ID.
+
+        The barrier uses this before a new POST so a retry cannot create a
+        second exchange operation after an unknown response or process restart.
+        """
+        client_id = str(client_order_id or "").strip()
+        if not client_id:
+            return None
+        query = (
+            "SELECT intent_id, symbol, side, order_type, purpose, status, reason, client_order_id "
+            "FROM execution_intents WHERE client_order_id=? AND UPPER(order_type)!='CANCEL'"
+        )
+        params = [client_id]
+        if symbol:
+            query += " AND UPPER(symbol)=?"
+            params.append(str(symbol).upper())
+        query += " ORDER BY created_at DESC, rowid DESC LIMIT 1"
+        row = self.conn.execute(query, tuple(params)).fetchone()
+        return dict(row) if row is not None else None
 
     def save_execution_event(self, intent_id, event, payload=None):
         self.conn.execute(
@@ -931,7 +954,7 @@ class Database:
                 float(data["protective_reference"]), float(data.get("invalidation_price",0) or 0),
                 float(data.get("teeth_at_detection",0) or 0), float(data.get("angulation_score",0) or 0),
                 float(data.get("wave_confidence",0) or 0), float(data.get("wave_exhaustion_risk",0) or 0),
-                1 if data.get("htf_confirmed") else 0, state, int(data.get("source_candle_index",-1) or -1),
+                1 if data.get("htf_confirmed") else 0, state, (-1 if data.get("source_candle_index", -1) is None else int(data.get("source_candle_index", -1))),
                 int(data.get("expires_at_ms",0) or 0), json.dumps(data.get("context_versions",{}),sort_keys=True),
                 data.get("reason",""), supersedes_signal_id or None,
             ),
@@ -999,16 +1022,20 @@ class Database:
             self.conn.commit()
 
     def campaign_risk_reserved_quote(self):
+        # RECONCILE_REQUIRED does not release risk: the exchange may still
+        # hold the position/order even when local state is uncertain.
         row=self.conn.execute(
             "SELECT COALESCE(SUM(open_risk_quote),0)+COALESCE(SUM(pending_risk_quote),0) AS risk "
-            "FROM campaigns WHERE state NOT IN ('CLOSED','FLAT','RECONCILE_REQUIRED')"
+            "FROM campaigns WHERE state NOT IN ('CLOSED','FLAT')"
         ).fetchone()
         return float(row["risk"] or 0.0)
 
     def campaign_capital_reserved_quote(self):
+        # Unresolved campaigns retain their durable capital reservation
+        # until authoritative exchange reconciliation releases it.
         row=self.conn.execute(
             "SELECT COALESCE(SUM(capital_reserved_quote),0) AS capital "
-            "FROM campaigns WHERE state IN ('SIGNAL_DETECTED','ENTRY_ARMING','ENTRY_PENDING','ADD_ON_ARMING','ADD_ON_PENDING')"
+            "FROM campaigns WHERE state NOT IN ('CLOSED','FLAT')"
         ).fetchone()
         return float(row["capital"] or 0.0)
 
