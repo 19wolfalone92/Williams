@@ -577,7 +577,7 @@ class Database:
             "fees": 0.0,
             "pnl": None,
             "pnl_pct": None,
-            "risk_pct": None,
+            "risk_pct": 0.0,
         }
         for field, minimum in numeric_fields.items():
             if field in kwargs and kwargs[field] is not None:
