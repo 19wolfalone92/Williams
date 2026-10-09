@@ -99,6 +99,11 @@ class Backtester:
             raise ValueError(f"Backtest data missing columns: {sorted(missing)}")
         if not df.index.is_monotonic_increasing or not df.index.is_unique:
             raise ValueError("Backtest index must be strictly increasing and unique")
+        signals = df["long_signal"]
+        if signals.isna().any():
+            raise ValueError("long_signal contains missing values")
+        if not signals.map(lambda value: isinstance(value, (bool, np.bool_)) or value in (0, 1)).all():
+            raise ValueError("long_signal must contain booleans or 0/1 values")
         prices = df[["open", "high", "low", "close"]].apply(
             pd.to_numeric, errors="coerce"
         )
