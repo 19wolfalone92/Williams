@@ -19,6 +19,7 @@ class PortfolioController:
 
     def __init__(self, client, balance_quote: float, symbols=None, interval=None):
         self.client = client
+        self.balance_quote = float(balance_quote)
         self.interval = interval or os.getenv("INTERVAL", "1h")
         self.max_open_positions = max(0, int(os.getenv("MAX_OPEN_POSITIONS", "5")))
         self.max_total_risk_pct = min(0.01, max(0.0, float(os.getenv("MAX_TOTAL_RISK_PCT", "0.01"))))
@@ -34,7 +35,7 @@ class PortfolioController:
             interval=self.interval,
         )
         self.risk_engine = RiskEngine(
-            balance_quote=float(balance_quote),
+            balance_quote=self.balance_quote,
             risk_per_trade_pct=self.max_risk_per_trade_pct,
             max_position_fraction=float(os.getenv("POSITION_FRACTION", "0.25")),
             max_daily_loss_pct=float(os.getenv("MAX_DAILY_LOSS_PCT", "0.03")),
