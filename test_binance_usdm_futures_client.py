@@ -40,6 +40,38 @@ def test_one_way_mode_accepts_explicit_false_confirmation(monkeypatch, payload):
     assert client.ensure_one_way_mode() == payload
 
 
+def test_account_permissions_reads_explicit_can_trade_from_v2(monkeypatch):
+    client = make_client()
+    calls = []
+
+    def fake_request(method, path, params=None, signed=False):
+        calls.append((method, path, signed))
+        return {"canTrade": True}
+
+    monkeypatch.setattr(client, "_request", fake_request)
+
+    assert client.account_permissions() == {"canTrade": True}
+    assert calls == [("GET", "/fapi/v2/account", True)]
+
+
+@pytest.mark.parametrize("payload", [{}, {"canTrade": None}, {"canTrade": "unknown"}])
+def test_account_permissions_rejects_missing_or_ambiguous_can_trade(monkeypatch, payload):
+    client = make_client()
+    monkeypatch.setattr(client, "_request", lambda *args, **kwargs: payload)
+
+    with pytest.raises(FuturesAPIError, match="canTrade"):
+        client.account_permissions()
+
+
+def test_account_permissions_returns_false_when_exchange_disables_trading(monkeypatch):
+    client = make_client()
+    monkeypatch.setattr(
+        client, "_request", lambda *args, **kwargs: {"canTrade": False}
+    )
+
+    assert client.account_permissions() == {"canTrade": False}
+
+
 def test_symbol_configuration_reads_margin_and_leverage_from_symbol_config(monkeypatch):
     client = make_client()
     monkeypatch.setattr(
