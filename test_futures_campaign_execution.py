@@ -1010,3 +1010,33 @@ def test_pending_protection_recovers_same_exchange_order_without_duplicate_submi
         assert db.state_get(f"position_state:{campaign.symbol}") is None
     finally:
         db.conn.close()
+
+
+def test_unknown_pending_protection_outcome_never_retries_with_new_id(tmp_path):
+    db, client, service, campaign = _armed_entry_for_cancel(tmp_path)
+    try:
+        from campaign_model import CampaignState
+        client._position["positionAmt"] = "0.5"
+        client._position["entryPrice"] = "102.0"
+        campaign.state = CampaignState.OPEN_INITIAL
+        campaign.position_qty = 0.5
+        campaign.average_entry_price = 102.0
+        campaign.initial_stop_price = 100.0
+        campaign.current_stop_price = 100.0
+        campaign.tags["pending_protective_client_algo_id"] = "unknown-prior-stop"
+        campaign.tags["pending_protective_stop_price"] = 100.0
+        service.db.save_campaign(campaign)
+
+        def lookup_fails(*args, **kwargs):
+            raise TimeoutError("simulated Binance lookup timeout")
+        client.get_algo_order = lookup_fails
+
+        with pytest.raises(FuturesCampaignExecutionError, match="refusing duplicate submission"):
+            service.place_protection(campaign, stop_price=100.0)
+
+        assert client.protective_stops == []
+        assert campaign.state == CampaignState.RECONCILE_REQUIRED
+        assert db.state_get(f"campaign_state:{campaign.campaign_id}") == "RECONCILE_REQUIRED"
+        assert db.state_get("position_state:BTCUSDT") == "RECONCILE_REQUIRED"
+    finally:
+        db.conn.close()
