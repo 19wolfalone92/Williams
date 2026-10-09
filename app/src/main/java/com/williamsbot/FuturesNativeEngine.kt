@@ -1959,12 +1959,7 @@ internal class FuturesNativeEngine(
         if ((amount > 0.0) != (direction == "LONG")) {
             throw FuturesApiException("$symbol live position direction changed before protection")
         }
-        val stop = exchange.normalizePrice(
-            symbol,
-            campaign.optDouble("stop_price"),
-            direction,
-            "STOP"
-        )
+        val stop = exchange.normalizePrice(symbol, campaign.optDouble("stop_price"), direction, "STOP")
         val trigger = stop.toDouble()
         val mark = exchange.markPrice(symbol)
         if (direction == "LONG" && trigger >= mark) throw FuturesApiException("$symbol LONG protective stop is at/above mark; market exit required")
@@ -1979,6 +1974,14 @@ internal class FuturesNativeEngine(
             .put("triggerPrice", stop)
             .put("closePosition", true)
             .put("clientAlgoId", clientId)
+
+        // Persist the stable identity before submitting. A crash or ambiguous
+        // lookup must not orphan a stop that the campaign cannot later find.
+        campaign.put("pending_protection_client_algo_id", clientId)
+        campaign.put("pending_protection_trigger_price", trigger)
+        campaign.put("pending_protection_reason", "PROTECTION_REPAIR")
+        auditStore.saveFuturesCampaign(symbol, campaign)
+
         val response = executeMutation(
             exchange, symbol, "PROTECTION", direction, side, clientId, params
         ) {
@@ -1996,7 +1999,9 @@ internal class FuturesNativeEngine(
         val algoId = response.optString("algoId")
         val responseStatus = response.optString("algoStatus").uppercase(Locale.US)
         val verified = runCatching { exchange.getAlgoOrder(symbol, clientAlgoId = clientId) }
-            .getOrElse { throw FuturesApiException("$symbol protection lookup failed after submit: ${it.message}", outcomeUnknown = true, cause = it) }
+            .getOrElse {
+                throw FuturesApiException("$symbol protection lookup failed after submit: ${it.message}", outcomeUnknown = true, cause = it)
+            }
         val verifiedStatus = verified.optString("algoStatus").uppercase(Locale.US)
         val verifiedTrigger = verified.optString("triggerPrice").toDoubleOrNull()
         val expectedSide = exchange.directionToProtectiveSide(direction)
@@ -2025,298 +2030,12 @@ internal class FuturesNativeEngine(
         campaign.put("state", "OPEN_PROTECTED")
         campaign.put("position_amt", amount)
         campaign.put("entry_price", pos.optString("entryPrice").toDoubleOrNull() ?: campaign.optDouble("entry_price", 0.0))
-        campaign.put("protection_status", response.optString("algoStatus"))
+        campaign.put("protection_status", verifiedStatus)
+        campaign.remove("pending_protection_client_algo_id")
+        campaign.remove("pending_protection_trigger_price")
+        campaign.remove("pending_protection_reason")
         auditStore.saveFuturesCampaign(symbol, campaign)
-        return response
-    }
-
-    private fun exitPosition(
-        exchange: BinanceUsdmFuturesClient,
-        campaignInput: JSONObject,
-        reason: String
-    ): JSONObject {
-        val campaign = JSONObject(campaignInput.toString())
-        val symbol = campaign.optString("symbol").uppercase(Locale.US)
-        val direction = campaign.optString("direction").uppercase(Locale.US)
-        val position = position(exchange, symbol)
-        val amount = position.optString("positionAmt").toDoubleOrNull()
-            ?: return setCampaignState(campaign, "RECONCILE_REQUIRED", "Exit blocked: positionAmt is missing or malformed")
-        if (!amount.isFinite()) {
-            return setCampaignState(campaign, "RECONCILE_REQUIRED", "Exit blocked: positionAmt is non-finite")
-        }
-        if (abs(amount) <= 1e-12) {
-            return JSONObject().put("symbol", symbol).put("action", "FLAT").put("reason", "exchange position already flat")
-        }
-        if ((amount > 0.0) != (direction == "LONG")) {
-            return setCampaignState(campaign, "RECONCILE_REQUIRED", "Reduce-only exit blocked: position direction mismatch")
-        }
-
-        // Cancel the owned stop before the market exit, but remember whether
-        // cancellation was authoritatively confirmed. If exit submission fails
-        // while the position remains open, the stop must be restored before
-        // returning control to the monitor.
-        val protectionClientId = campaign.optString("protection_client_algo_id")
-        var protectionCancelConfirmed = protectionClientId.isBlank()
-        if (protectionClientId.isNotBlank()) {
-            protectionCancelConfirmed = runCatching {
-                cancelOwnedProtection(exchange, campaign, protectionClientId)
-                val verified = exchange.getAlgoOrder(symbol, clientAlgoId = protectionClientId)
-                verified.optString("algoStatus").uppercase(Locale.US) in
-                    setOf("CANCELED", "CANCELLED", "EXPIRED", "REJECTED")
-            }.getOrDefault(false)
-            if (!protectionCancelConfirmed) {
-                lastError = "Protection cancellation is unconfirmed; reduce-only exit still attempted"
-            }
-        }
-
-        val side = exchange.directionToExitSide(direction)
-        val clientId = clientOrderId("W2FX_")
-        val quantity = exchange.normalizeQuantity(symbol, abs(amount), market = true)
-        val params = JSONObject()            .put("symbol", symbol)
-            .put("side", side)
-            .put("type", "MARKET")
-            .put("quantity", quantity)
-            .put("reduceOnly", true)
-            .put("reason", reason)
-            .put("clientOrderId", clientId)
-        val response = try {
-            executeMutation(
-                exchange, symbol, "EXIT", direction, side, clientId, params
-            ) {
-                exchange.submitMarket(symbol, side, quantity, clientId, reduceOnly = true)
-            }
-        } catch (x: Exception) {
-            val latest = runCatching { position(exchange, symbol) }.getOrNull()
-            val residual = latest?.optString("positionAmt")?.toDoubleOrNull()
-            var protectionRestored = false
-            var campaignToPersist = campaign
-            if (residual != null && residual.isFinite() && abs(residual) > 1e-12) {
-                val stopStatus = if (protectionClientId.isNotBlank()) {
-                    runCatching {
-                        exchange.getAlgoOrder(symbol, clientAlgoId = protectionClientId)
-                            .optString("algoStatus").uppercase(Locale.US)
-                    }.getOrNull()
-                } else null
-                val activeStop = stopStatus != null && stopStatus in setOf("NEW", "WORKING", "PENDING", "PENDING_NEW")
-                val terminalStop = stopStatus != null && stopStatus in setOf("CANCELED", "CANCELLED", "EXPIRED", "REJECTED", "FINISHED")
-                protectionRestored = activeStop
-                if (!activeStop && (protectionCancelConfirmed || terminalStop || protectionClientId.isBlank())) {
-                    protectionRestored = runCatching {
-                        placeProtection(exchange, campaign)
-                        campaignToPersist = auditStore.futuresCampaign(symbol) ?: campaign
-                        true
-                    }.getOrDefault(false)
-                }
-            }
-            val detail = buildString {
-                append("Reduce-only exit submission failed or is ambiguous: ")
-                append(x.message ?: x.javaClass.simpleName)
-                if (residual == null || !residual.isFinite()) append("; live position could not be verified")
-                else if (abs(residual) > 1e-12 && !protectionRestored) append("; protection restoration is not confirmed")
-                else if (abs(residual) > 1e-12) append("; exchange-side protection restored")
-            }
-            setCampaignState(campaignToPersist, "RECONCILE_REQUIRED", detail)
-            throw x
-        }
-        val latestPosition = position(exchange, symbol)
-        val residual = latestPosition.optString("positionAmt").toDoubleOrNull() ?: Double.NaN
-        if (!residual.isFinite()) {
-            return setCampaignState(campaign, "RECONCILE_REQUIRED", "Exit returned but post-exit position is invalid")
-        }
-        if (abs(residual) > 1e-12) {
-            campaign.put("position_amt", residual)
-            return setCampaignState(campaign, "RECONCILE_REQUIRED", "Reduce-only exit left residual quantity $residual")
-        }
-        if (response.optString("status").uppercase(Locale.US) != "FILLED") {
-            return setCampaignState(
-                campaign,
-                "RECONCILE_REQUIRED",
-                "Exchange position is flat but market exit status is not FILLED; child fills/protective race must be reconciled"
-            )
-        }
-        val cleanupProblem = verifyFlatProtectionCleanup(exchange, campaign)
-        if (cleanupProblem != null) {
-            return setCampaignState(campaign, "RECONCILE_REQUIRED", cleanupProblem)
-        }
-        try {
-            recordMarketExit(exchange, campaign, response, reason)
-        } catch (x: Exception) {
-            return setCampaignState(
-                campaign,
-                "RECONCILE_REQUIRED",
-                "Exchange position is flat but market-exit trade accounting is incomplete: ${x.message}"
-            )
-        }
-        campaign.put("state", "CLOSED")
-        campaign.put("position_amt", 0.0)
-        campaign.put("protection_active", false)
-        campaign.put("exit_reason", reason)
-        campaign.put("closed_at_ms", System.currentTimeMillis())
-        auditStore.saveFuturesCampaign(symbol, campaign)
-        return JSONObject()
-            .put("symbol", symbol)
-            .put("direction", direction)
-            .put("action", "CLOSED")
-            .put("order_id", response.optString("orderId"))
-            .put("status", response.optString("status"))
-            .put("reason", reason)
-    }
-
-    private fun cancelOwnedProtection(exchange: BinanceUsdmFuturesClient, campaign: JSONObject, targetClientId: String) {
-        val symbol = campaign.optString("symbol").uppercase(Locale.US)
-        val actionId = clientOrderId("W2FC_")
-        executeMutation(
-            exchange, symbol, "CANCEL_PROTECTION", campaign.optString("direction"),
-            exchange.directionToProtectiveSide(campaign.optString("direction")),
-            actionId,
-            JSONObject().put("targetClientAlgoId", targetClientId)
-        ) {
-            exchange.cancelAlgo(symbol, targetClientId)
-        }
-    }
-
-    private fun cancelPendingEntries(
-        exchange: BinanceUsdmFuturesClient,
-        reason: String
-    ): JSONArray {
-        val results = JSONArray()
-        for (campaign in auditStore.activeFuturesCampaigns()) {
-            val state = campaign.optString("state").uppercase(Locale.US)
-            if (state !in setOf("ENTRY_PENDING", "RECONCILE_REQUIRED")) continue
-            val symbol = campaign.optString("symbol").uppercase(Locale.US)
-            try {
-                val clientId = campaign.optString("entry_client_algo_id")
-                if (clientId.isBlank()) {
-                    if (state == "ENTRY_PENDING") {
-                        throw IllegalStateException("Pending entry has no durable clientAlgoId")
-                    }
-                    continue
-                }
-                val liveAmount = position(exchange, symbol).optString("positionAmt").toDoubleOrNull()
-                    ?: throw IllegalStateException("$symbol positionAmt is invalid during entry lockout")
-                if (!liveAmount.isFinite()) {
-                    throw IllegalStateException("$symbol positionAmt is non-finite during entry lockout")
-                }
-                // Never cancel a triggered child as if it were an unfilled
-                // conditional entry. Open exposure is managed separately.
-                if (abs(liveAmount) > 1e-12) continue
-                val algo = exchange.getAlgoOrder(symbol, clientAlgoId = clientId)
-                val algoStatus = algo.optString("algoStatus").uppercase(Locale.US)
-                if (algoStatus in setOf("CANCELED", "CANCELLED", "EXPIRED", "REJECTED")) {
-                    continue
-                }
-                if (algoStatus !in setOf("NEW", "WORKING", "PENDING", "PENDING_NEW")) {
-                    throw IllegalStateException("$symbol entry status $algoStatus is not a cancellable pending state")
-                }
-                cancelPendingEntry(exchange, campaign, reason)
-                results.put(
-                    JSONObject()
-                        .put("symbol", symbol)
-                        .put("state", campaign.optString("state"))
-                        .put("action", if (campaign.optString("state") == "CLOSED") "ENTRY_CANCELLED" else "CANCEL_UNVERIFIED")
-                )
-            } catch (x: Exception) {
-                reconcileRequired = true
-                val detail = "Pending Futures entry cancellation unresolved: ${x.message ?: x.javaClass.simpleName}"
-                lastError = detail
-                setCampaignState(campaign, "RECONCILE_REQUIRED", detail)
-                results.put(
-                    JSONObject()
-                        .put("symbol", symbol)
-                        .put("state", "RECONCILE_REQUIRED")
-                        .put("action", "CANCEL_UNVERIFIED")
-                        .put("reason", detail)
-                )
-            }
-        }
-        return results
-    }
-
-    private fun cancelPendingEntry(exchange: BinanceUsdmFuturesClient, campaign: JSONObject, reason: String) {
-        val symbol = campaign.optString("symbol").uppercase(Locale.US)
-        val target = campaign.optString("entry_client_algo_id")
-        if (target.isBlank()) {
-            setCampaignState(campaign, "RECONCILE_REQUIRED", "Cannot cancel pending entry: clientAlgoId missing")
-            throw IllegalStateException("Cannot cancel pending entry: clientAlgoId missing")
-        }
-        val actionId = clientOrderId("W2FC_")
-        executeMutation(
-            exchange, symbol, "CANCEL_ENTRY", campaign.optString("direction"),
-            exchange.directionToEntrySide(campaign.optString("direction")),
-            actionId,
-            JSONObject().put("targetClientAlgoId", target).put("reason", reason)
-        ) {
-            exchange.cancelAlgo(symbol, target)
-        }
-
-        // A successful DELETE response alone is not sufficient to release risk:
-        // query the exchange's authoritative algo state and position after it.
-        val verified = exchange.getAlgoOrder(symbol, clientAlgoId = target)
-        val status = verified.optString("algoStatus").uppercase(Locale.US)
-        val childId = verified.optString("actualOrderId")
-        if (childId.isNotBlank() && childId != "0") {
-            val child = runCatching { exchange.getOrder(symbol, orderId = childId) }.getOrElse {
-                val detail = "Entry cancel returned a child order whose status cannot be verified: ${it.message}"
-                setCampaignState(campaign, "RECONCILE_REQUIRED", detail)
-                throw IllegalStateException(detail, it)
-            }
-            val childStatus = child.optString("status").uppercase(Locale.US)
-            val childQty = child.optString("executedQty").toDoubleOrNull()
-            if (
-                child.optString("symbol").uppercase(Locale.US) != symbol ||
-                child.optString("orderId") != childId ||
-                child.optString("side").uppercase(Locale.US) != exchange.directionToEntrySide(campaign.optString("direction")) ||
-                childQty == null || !childQty.isFinite() || childQty < 0.0 ||
-                childStatus !in setOf("FILLED", "CANCELED", "CANCELLED", "EXPIRED", "REJECTED")
-            ) {
-                val detail = "Entry cancel child order identity/status/quantity is invalid"
-                setCampaignState(campaign, "RECONCILE_REQUIRED", detail)
-                throw IllegalStateException(detail)
-            }
-            if (childQty > 0.0) {
-                val detail = "Entry cancel found executed child quantity; position/fill reconciliation is required"
-                setCampaignState(campaign, "RECONCILE_REQUIRED", detail)
-                throw IllegalStateException(detail)
-            }
-        }
-        val amount = position(exchange, symbol).optString("positionAmt").toDoubleOrNull()
-            ?: throw IllegalStateException("Exchange position amount is invalid after entry cancellation")
-        if (!amount.isFinite()) throw IllegalStateException("Exchange position amount is non-finite after entry cancellation")
-        if (status !in setOf("CANCELED", "CANCELLED", "EXPIRED", "REJECTED") || kotlin.math.abs(amount) > 1e-12) {
-            val detail = "Entry cancellation not verified (algoStatus=$status, positionAmt=$amount)"
-            setCampaignState(campaign, "RECONCILE_REQUIRED", detail)
-            reconcileRequired = true
-            throw IllegalStateException(detail)
-        }
-        campaign.put("state", "CLOSED")
-        campaign.put("reason", reason)
-        campaign.put("entry_cancel_status", status)
-        campaign.put("closed_at_ms", System.currentTimeMillis())
-        auditStore.saveFuturesCampaign(symbol, campaign)
-    }
-
-    private fun manageExistingCampaigns(exchange: BinanceUsdmFuturesClient) {
-        val campaigns = auditStore.activeFuturesCampaigns()
-        for (row in campaigns) {
-            val symbol = row.optString("symbol").uppercase(Locale.US)
-            val campaign = JSONObject(row.toString())
-            try {
-                val position = position(exchange, symbol)
-                val amount = position.optString("positionAmt").toDoubleOrNull()
-                    ?: throw FuturesApiException("$symbol positionAmt is missing or malformed during management")
-                if (!amount.isFinite()) throw FuturesApiException("$symbol positionAmt is non-finite during management")
-                if (abs(amount) <= 1e-12) continue
-                val tf = campaign.optString("timeframe", interval())
-                val frame = analyseFrame(exchange, symbol, tf)
-                if (frame != null) {
-                    manageStructuralExit(exchange, campaign, frame)
-                }
-            } catch (x: Exception) {
-                lastError = "$symbol position management: ${x.message ?: x.javaClass.simpleName}"
-                reconcileRequired = true
-                setCampaignState(campaign, "RECONCILE_REQUIRED", lastError!!)
-            }
-        }
+        return verified
     }
 
     private fun manageStructuralExit(exchange: BinanceUsdmFuturesClient, campaign: JSONObject, frame: Frame) {
