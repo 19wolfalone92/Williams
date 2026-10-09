@@ -51,8 +51,8 @@ jobs:
       - name: Run safe offline tests
         run: |
           set -o pipefail
-          python -m pytest -q \\
-            test_backtester.py \\
+          python -m pytest -q \
+            test_backtester.py \
             test_production_architecture.py \
             test_android_remote_only.py \
             test_l2_slippage.py \
