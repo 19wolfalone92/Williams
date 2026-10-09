@@ -508,3 +508,98 @@ def test_execution_barrier_stale_intent_only_blocks_new_exposure():
             max_age_ms=1_000,
         )
         assert barrier._validate(safety_intent, empty_snapshot) == ""
+
+
+@pytest.mark.parametrize(
+    "campaign_state",
+    ["ADD_ON_ARMING", "ADD_ON_PENDING", "POSITION_EXPANDING"],
+)
+def test_unresolved_add_on_state_fails_closed_after_protection_check(campaign_state):
+    from types import SimpleNamespace
+    from campaign_model import CampaignState
+
+    calls = []
+    campaign = SimpleNamespace(
+        campaign_id="campaign-1",
+        symbol="BTCUSDT",
+        state=CampaignState(campaign_state),
+        position_qty=0.5,
+        tags={"protective_client_algo_id": "stop-1"},
+        current_stop_price=95.0,
+        initial_stop_price=95.0,
+    )
+    position = {
+        "symbol": "BTCUSDT",
+        "positionAmt": "0.5",
+        "entryPrice": "100.0",
+    }
+    db = SimpleNamespace(
+        state_set=lambda key, value: calls.append((key, value)),
+    )
+    client = SimpleNamespace(
+        get_algo_order=lambda *args, **kwargs: {"algoStatus": "NEW", "clientAlgoId": "stop-1"},
+    )
+    engine = SimpleNamespace(
+        mark_reconcile_required=lambda camp, reason: (
+            setattr(camp, "state", CampaignState.RECONCILE_REQUIRED),
+            calls.append(("reconcile_reason", reason)),
+        ),
+    )
+    service = object.__new__(FuturesCampaignExecutionService)
+    service.client = client
+    service.db = db
+    service.engine = engine
+    service._position_row = lambda symbol: position
+    service._find_active_campaign = lambda symbol: campaign
+    service._campaign_direction = lambda camp: "LONG"
+
+    result = service.reconcile_symbol("BTCUSDT")
+
+    assert result["state"] == "RECONCILE_REQUIRED"
+    assert result["protection"] == "CONFIRMED"
+    assert campaign.state == CampaignState.RECONCILE_REQUIRED
+    assert any(key == "position_state:BTCUSDT" and value == "RECONCILE_REQUIRED" for key, value in calls)
+
+
+def test_reconcile_detects_exchange_local_quantity_drift_after_confirming_protection():
+    from types import SimpleNamespace
+    from campaign_model import CampaignState
+
+    calls = []
+    campaign = SimpleNamespace(
+        campaign_id="campaign-2",
+        symbol="BTCUSDT",
+        state=CampaignState.TREND_ACTIVE,
+        position_qty=0.4,
+        tags={"protective_client_algo_id": "stop-2"},
+        current_stop_price=95.0,
+        initial_stop_price=95.0,
+    )
+    position = {
+        "symbol": "BTCUSDT",
+        "positionAmt": "0.5",
+        "entryPrice": "100.0",
+    }
+    db = SimpleNamespace(state_set=lambda key, value: calls.append((key, value)))
+    client = SimpleNamespace(
+        get_algo_order=lambda *args, **kwargs: {"algoStatus": "NEW", "clientAlgoId": "stop-2"},
+    )
+    engine = SimpleNamespace(
+        mark_reconcile_required=lambda camp, reason: (
+            setattr(camp, "state", CampaignState.RECONCILE_REQUIRED),
+            calls.append(("reconcile_reason", reason)),
+        ),
+    )
+    service = object.__new__(FuturesCampaignExecutionService)
+    service.client = client
+    service.db = db
+    service.engine = engine
+    service._position_row = lambda symbol: position
+    service._find_active_campaign = lambda symbol: campaign
+    service._campaign_direction = lambda camp: "LONG"
+
+    result = service.reconcile_symbol("BTCUSDT")
+
+    assert result["state"] == "RECONCILE_REQUIRED"
+    assert "quantity mismatch" in result["reason"]
+    assert result["protection"] == "CONFIRMED"
