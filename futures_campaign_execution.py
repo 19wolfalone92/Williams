@@ -1143,7 +1143,16 @@ class FuturesCampaignExecutionService:
         symbol = campaign.symbol.upper()
         direction = self._campaign_direction(campaign)
         position = self._position_row(symbol)
-        amount = float(position.get("positionAmt", 0) or 0)
+        try:
+            amount = float(position.get("positionAmt", 0) or 0)
+        except (TypeError, ValueError):
+            amount = float("nan")
+        if not math.isfinite(amount):
+            reason = "invalid or non-finite exchange quantity; reduce-only exit requires reconciliation"
+            self.engine.mark_reconcile_required(campaign, reason)
+            self.db.state_set(f"campaign_state:{campaign.campaign_id}", CampaignState.RECONCILE_REQUIRED.value)
+            self.db.state_set(f"position_state:{symbol}", CampaignState.RECONCILE_REQUIRED.value)
+            raise FuturesCampaignExecutionError(f"{symbol}: {reason}")
         if abs(amount) <= 0:
             self.engine.mark_reconcile_required(
                 campaign,
@@ -1220,7 +1229,23 @@ class FuturesCampaignExecutionService:
         response = result.response or {}
         order_id = str(response.get("orderId", "") or "")
         status = str(response.get("status", "")).upper()
-        fresh_amount = self._position_amount(symbol)
+        try:
+            fresh_amount = float(self._position_amount(symbol))
+        except (TypeError, ValueError):
+            fresh_amount = float("nan")
+        if not math.isfinite(fresh_amount):
+            reason = "exit was submitted but exchange position quantity is invalid; closure is unconfirmed"
+            self.engine.mark_reconcile_required(campaign, reason)
+            self.db.state_set(f"campaign_state:{campaign.campaign_id}", CampaignState.RECONCILE_REQUIRED.value)
+            self.db.state_set(f"position_state:{symbol}", CampaignState.RECONCILE_REQUIRED.value)
+            return {
+                "symbol": symbol,
+                "direction": direction,
+                "action": "RECONCILE_REQUIRED",
+                "order_id": order_id,
+                "status": status,
+                "reason": reason,
+            }
         if abs(fresh_amount) > 1e-12:
             self.engine.mark_reconcile_required(
                 campaign,
