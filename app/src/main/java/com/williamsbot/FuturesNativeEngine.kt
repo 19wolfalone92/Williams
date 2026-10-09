@@ -1252,8 +1252,7 @@ internal class FuturesNativeEngine(
             campaign.put(
                 "state",
                 when {
-                    mutationAccepted -> "RECONCILE_REQUIRED"
-                    unknown -> "ENTRY_PENDING"
+                    mutationAccepted || unknown -> "ENTRY_PENDING"
                     else -> "CLOSED"
                 }
             )
@@ -1408,9 +1407,33 @@ internal class FuturesNativeEngine(
             }.getOrNull()
             if (algo != null) {
                 val status = algo.optString("algoStatus").uppercase(Locale.US)
-                if (status in setOf("NEW", "WORKING", "PENDING")) {
+                if (status in setOf("NEW", "WORKING", "PENDING", "PENDING_NEW")) {
+                    val expectedSide = exchange.directionToEntrySide(direction)
+                    val expectedTrigger = campaign.optDouble("entry_trigger", 0.0)
+                    val expectedQty = campaign.optDouble("quantity", 0.0)
+                    val actualTrigger = algo.optString("triggerPrice").toDoubleOrNull()
+                    val actualQty = algo.optString("quantity").toDoubleOrNull()
+                    val verified =
+                        algo.optString("symbol").uppercase(Locale.US) == symbol &&
+                            algo.optString("clientAlgoId") == campaign.optString("entry_client_algo_id") &&
+                            algo.optString("side").uppercase(Locale.US) == expectedSide &&
+                            algo.optString("orderType", algo.optString("type")).uppercase(Locale.US) == "STOP_MARKET" &&
+                            !algo.optBoolean("closePosition", false) &&
+                            !algo.optBoolean("reduceOnly", false) &&
+                            actualTrigger != null && actualTrigger.isFinite() &&
+                            expectedTrigger > 0.0 && abs(actualTrigger - expectedTrigger) <= 1e-8 &&
+                            actualQty != null && actualQty.isFinite() &&
+                            expectedQty > 0.0 && abs(actualQty - expectedQty) <= max(1e-8, expectedQty * 1e-6)
+                    if (!verified) {
+                        return setCampaignState(
+                            campaign,
+                            "RECONCILE_REQUIRED",
+                            "Pending entry order does not match durable side/type/trigger/quantity intent"
+                        )
+                    }
                     campaign.put("entry_status", status)
                     auditStore.saveFuturesCampaign(symbol, campaign)
+                    updateIntentByClientId(campaign.optString("entry_client_algo_id"), "SUBMITTED", algo.toString())
                     return JSONObject().put("symbol", symbol).put("state", "ENTRY_PENDING").put("algo_status", status)
                 }
                 if (status in setOf("CANCELED", "CANCELLED", "EXPIRED", "REJECTED")) {
