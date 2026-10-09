@@ -882,7 +882,7 @@ internal class FuturesNativeEngine(
             // entry only when no campaign already exists for this symbol.
             if (configLong) {
                 reversalSignal(symbol, bars, "LONG", jaw, teeth, lips, ao, ac, atr, tickSize)
-                    ?.let(signalCandidates::add)
+                    ?.let { signalCandidates.add(it) }
             }
             if (configShort) {
                 reversalSignal(symbol, bars, "SHORT", jaw, teeth, lips, ao, ac, atr, tickSize)
