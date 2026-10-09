@@ -37,6 +37,7 @@ jobs:
             test_backtester.py \
             test_data_validation.py \
             test_market_context.py \
+            test_futures_runtime_freshness.py \
             test_production_architecture.py \
             test_binance_usdm_futures_client.py \
             test_futures_campaign_execution.py \
