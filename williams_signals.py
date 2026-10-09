@@ -239,7 +239,9 @@ def extract_long_signal_specs(
         trigger = trigger_base + tick
         if current_close < trigger:
             row = ind.iloc[i]
-            score, _ = _angulation(ind, i)
+            score, valid = _angulation(ind, i, side="LONG")
+            if not valid:
+                continue
             specs.append(
                 SignalSpec.new(
                     symbol=symbol,
@@ -311,7 +313,7 @@ def extract_long_signal_specs(
     if fractal is not None:
         confirmation_i, center_i, trigger_base, protective, teeth = fractal
         # Formation can be anywhere; trigger validity belongs to current
-        # price/Teeth.  At arm time the trigger must still be above Teeth.
+        # price/Teeth. At arm time a SHORT trigger must remain below Teeth.
         trigger = trigger_base + tick
         current_trigger_valid = trigger > max(current_teeth, 0.0)
         if current_close < trigger and current_trigger_valid:
@@ -399,7 +401,9 @@ def extract_short_signal_specs(
         trigger = trigger_base - tick
         if current_close > trigger:
             row = ind.iloc[i]
-            score, _ = _angulation(ind, i)
+            score, valid = _angulation(ind, i, side="SHORT")
+            if not valid:
+                continue
             specs.append(
                 SignalSpec.new(
                     symbol=symbol,
