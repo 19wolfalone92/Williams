@@ -1177,6 +1177,7 @@ class FuturesCampaignExecutionService:
             campaign.tags["previous_protective_client_algo_id"] = old_client_id
             campaign.tags["previous_protective_algo_id"] = old_algo_id
             campaign.tags["previous_protective_stop_price"] = old_stop
+            campaign.tags["protection_replace_target_stop_price"] = requested
             campaign.tags["protection_replace_reconcile_required"] = True
             self.db.save_campaign(campaign)
 
@@ -1254,6 +1255,7 @@ class FuturesCampaignExecutionService:
         campaign.tags.pop("previous_protective_client_algo_id", None)
         campaign.tags.pop("previous_protective_algo_id", None)
         campaign.tags.pop("previous_protective_stop_price", None)
+        campaign.tags.pop("protection_replace_target_stop_price", None)
         campaign.tags.pop("protection_replace_reconcile_required", None)
         self.db.save_campaign(campaign)
         self.db.log_campaign_event(
