@@ -269,10 +269,22 @@ class ExecutionBarrier:
             order_fsm = OrderStateMachine()
             order_fsm.transition(OrderState.ADMISSION)
             purpose = str(intent.purpose or "").strip().upper()
+            order_type = str(intent.order_type or "").strip().upper()
             entry_purposes = {"ENTRY", "CAMPAIGN_ENTRY", "CAMPAIGN_ADD_ON"}
+            durability_required = (
+                purpose in entry_purposes
+                or order_type in {"CANCEL", "OCO"}
+                or purpose in {
+                    "CAMPAIGN_PROTECTION",
+                    "CAMPAIGN_PROTECTION_CANCEL",
+                    "CAMPAIGN_TRAIL",
+                    "CAMPAIGN_EXIT_CANCEL_PROTECTION",
+                    "CAMPAIGN_PARTIAL_ENTRY_CANCEL",
+                }
+            )
             durable = self._persist(intent, "PENDING")
-            if purpose in entry_purposes and not durable:
-                reason = "mandatory intent persistence failed; entry blocked before exchange submission"
+            if durability_required and not durable:
+                reason = "mandatory intent persistence failed; mutation blocked before exchange submission"
                 self._record("ERROR", "execution_blocked", intent, reason)
                 return ExecutionResult(intent.intent_id, False, reason=reason)
             if self.db is not None and hasattr(self.db, "save_execution_event"):
@@ -491,8 +503,8 @@ class ExecutionBarrier:
                     raise RuntimeError(
                         "ExecutionBarrier: exchange response lacks authoritative order state"
                     )
-            if not self._persist(intent, "SUBMITTED") and purpose in entry_purposes:
-                reason = "exchange submission response received but durable status update failed; reconciliation required"
+            if not self._persist(intent, "SUBMITTED") and durability_required:
+                reason = "exchange response received but durable status update failed; reconciliation required"
                 self._record("ERROR", "execution_ambiguous", intent, reason)
                 raise RuntimeError(reason)
             if self.db is not None and hasattr(self.db, "save_execution_event"):
