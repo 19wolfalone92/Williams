@@ -24,7 +24,7 @@ _ALLOWED = {
     OrderState.ADMISSION: {OrderState.SUBMITTING, OrderState.CANCELED, OrderState.RECONCILE_REQUIRED},
     OrderState.SUBMITTING: {
         OrderState.OPEN, OrderState.PARTIALLY_FILLED, OrderState.FILLED,
-        OrderState.REJECTED, OrderState.EXPIRED, OrderState.AMBIGUOUS,
+        OrderState.REJECTED, OrderState.EXPIRED, OrderState.CANCELED, OrderState.AMBIGUOUS,
         OrderState.RECONCILE_REQUIRED,
     },
     OrderState.OPEN: {
