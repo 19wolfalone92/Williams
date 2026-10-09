@@ -3,8 +3,9 @@ from pathlib import Path
 
 from execution_accumulator import accumulate_fills, accumulate_order
 from hypothesis_engine import build_hypotheses
-from market_context import TFMarketContext
+from market_context import ContextCache, TFMarketContext
 from db import Database
+from execution_barrier import ExecutionBarrier, OrderIntent
 
 
 def test_execution_accumulator_vwap():
@@ -72,3 +73,46 @@ def test_market_context_persistence(tmp_path: Path):
     ).fetchone()
     assert row["version"] == 3
     assert '"long_probability": 0.7' in row["context_json"]
+
+
+def test_execution_barrier_refuses_duplicate_stable_client_id_after_unknown_retry(tmp_path):
+    db = Database(str(tmp_path / "idempotency.sqlite3"))
+    barrier = ExecutionBarrier(ContextCache(), db)
+    submissions = []
+
+    def submit():
+        submissions.append("sent")
+        return {"status": "NEW", "orderId": 123, "clientOrderId": "stable-exit-id"}
+
+    try:
+        first = OrderIntent.new(
+            "BTCUSDT", "SELL", "MARKET", {},
+            purpose="EXIT", client_order_id="stable-exit-id",
+        )
+        first_result = barrier.execute(first, submit)
+        assert first_result.accepted
+        assert submissions == ["sent"]
+
+        # A new process/call creates a different intent UUID but must not
+        # submit again under the same exchange idempotency key.
+        second = OrderIntent.new(
+            "BTCUSDT", "SELL", "MARKET", {},
+            purpose="EXIT", client_order_id="stable-exit-id",
+        )
+        second_result = barrier.execute(second, submit)
+        assert not second_result.accepted
+        assert "duplicate client_order_id" in second_result.reason
+        assert submissions == ["sent"]
+
+        # Repeating the rejected retry must remain blocked; the block record
+        # must not overwrite/erase evidence of the original submitted intent.
+        third = OrderIntent.new(
+            "BTCUSDT", "SELL", "MARKET", {},
+            purpose="EXIT", client_order_id="stable-exit-id",
+        )
+        third_result = barrier.execute(third, submit)
+        assert not third_result.accepted
+        assert "duplicate client_order_id" in third_result.reason
+        assert submissions == ["sent"]
+    finally:
+        db.conn.close()
