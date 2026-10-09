@@ -605,6 +605,7 @@ class FuturesRuntime:
         # The constructor's 1.0 is only a placeholder; leaving it unchanged
         # would make sizing unrelated to the live account equity.
         self.controller.balance_quote = equity
+        self.controller.risk_engine.balance = equity
         reconciliations = self._recover()
         management = self._manage_existing_positions()
         # A single cancel attempt is not enough after an unknown Binance
