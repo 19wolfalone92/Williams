@@ -248,3 +248,39 @@ def test_reconcile_required_campaign_retains_risk_and_capital_reservations():
             assert engine.portfolio_reserved_capital_quote() == pytest.approx(25.0)
         finally:
             db.conn.close()
+
+
+def test_signal_spec_rejects_conflicting_order_side_and_direction():
+    import pytest
+    from campaign_model import SignalRole, SignalSpec, SignalType
+
+    with pytest.raises(ValueError, match="side/direction conflict"):
+        SignalSpec.new(
+            symbol="BTCUSDT",
+            side="BUY",
+            direction="SHORT",
+            signal_type=SignalType.REVERSAL,
+            role=SignalRole.ENTRY,
+            timeframe="5m",
+            signal_bar_time_ms=1_000,
+            trigger_price=101.0,
+            protective_reference=95.0,
+        )
+
+
+def test_signal_spec_accepts_matching_short_order_side_and_direction():
+    from campaign_model import SignalRole, SignalSpec, SignalType
+
+    signal = SignalSpec.new(
+        symbol="BTCUSDT",
+        side="SELL",
+        direction="SHORT",
+        signal_type=SignalType.REVERSAL,
+        role=SignalRole.ENTRY,
+        timeframe="5m",
+        signal_bar_time_ms=1_000,
+        trigger_price=99.0,
+        protective_reference=105.0,
+    )
+    assert signal.direction == "SHORT"
+    assert signal.side == "SELL"
