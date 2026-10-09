@@ -463,3 +463,46 @@ def test_daily_loss_guard_blocks_new_entries_at_daily_limit(tmp_path):
         assert "daily loss limit reached" in reason
     finally:
         db.conn.close()
+
+
+def test_execution_barrier_stale_intent_only_blocks_new_exposure():
+    """Aged entry intents fail closed, but exits/protection remain admissible."""
+    import time
+    from market_context import MarketStateSnapshot
+
+    barrier = ExecutionBarrier(ContextCache(), db=None, require_durable_intent=False)
+    empty_snapshot = MarketStateSnapshot(
+        generation=0,
+        created_at_ms=int(time.time() * 1000),
+        by_symbol={},
+    )
+    stale_at = int(time.time() * 1000) - 60_000
+
+    stale_entry = __import__("execution_barrier").OrderIntent(
+        intent_id="stale-entry",
+        symbol="BTCUSDT",
+        side="BUY",
+        order_type="STOP_MARKET",
+        required_context_versions={},
+        purpose="CAMPAIGN_ENTRY",
+        created_at_ms=stale_at,
+        max_age_ms=1_000,
+    )
+    assert "stale intent" in barrier._validate(stale_entry, empty_snapshot)
+
+    for purpose, order_type, side in (
+        ("CAMPAIGN_PROTECTION", "STOP_MARKET", "SELL"),
+        ("CAMPAIGN_EXIT", "MARKET", "SELL"),
+        ("CAMPAIGN_EXIT_CANCEL_PROTECTION", "CANCEL", "SELL"),
+    ):
+        safety_intent = __import__("execution_barrier").OrderIntent(
+            intent_id=f"stale-{purpose.lower()}",
+            symbol="BTCUSDT",
+            side=side,
+            order_type=order_type,
+            required_context_versions={},
+            purpose=purpose,
+            created_at_ms=stale_at,
+            max_age_ms=1_000,
+        )
+        assert barrier._validate(safety_intent, empty_snapshot) == ""
