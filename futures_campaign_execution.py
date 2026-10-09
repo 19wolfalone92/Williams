@@ -1995,6 +1995,9 @@ class FuturesCampaignExecutionService:
                 "reason": reason_text,
             }
         try:
+            protective_reconcile = self._reconcile_flat_position_protection(campaign)
+            if protective_reconcile is not None:
+                return protective_reconcile
             return self._finalize_verified_market_exit(
                 campaign,
                 response,
@@ -2067,6 +2070,20 @@ class FuturesCampaignExecutionService:
             raise FuturesCampaignExecutionError(
                 f"{symbol}: filled exit lacks stable exchange order/client identity"
             )
+        expected_client_id = str(campaign.tags.get("pending_exit_client_order_id", "") or "")
+        expected_side = "SELL" if self._campaign_direction(campaign) == "LONG" else "BUY"
+        response_symbol = str(order.get("symbol", symbol) or "").upper()
+        response_side = str(order.get("side", "") or "").upper()
+        response_client_id = str(order.get("clientOrderId", "") or "")
+        if (
+            response_symbol != symbol
+            or (response_side and response_side != expected_side)
+            or (response_client_id and expected_client_id and response_client_id != expected_client_id)
+            or (expected_client_id and current_client_id != expected_client_id)
+        ):
+            raise FuturesCampaignExecutionError(
+                f"{symbol}: filled market exit does not match the durable symbol/side/clientOrderId intent"
+            )
         if str(order.get("status", "") or "").upper() != "FILLED":
             raise FuturesCampaignExecutionError(f"{symbol}: current exit is not authoritatively FILLED")
 
@@ -2082,7 +2099,8 @@ class FuturesCampaignExecutionService:
                 "executed_qty": order.get("executedQty", 0),
             })
 
-        total_executed = 0.0
+        market_exit_executed_qty = 0.0
+        protective_exit_executed_qty = 0.0
         realized_pnl = 0.0
         quote_commission = 0.0
         other_commission: dict[str, float] = {}
@@ -2104,6 +2122,22 @@ class FuturesCampaignExecutionService:
                 )
             if str(exchange_order.get("orderId", record_order_id)) != record_order_id:
                 raise FuturesCampaignExecutionError(f"{symbol}: exit order lookup returned a different orderId")
+            exchange_symbol = str(exchange_order.get("symbol", symbol) or "").upper()
+            exchange_side = str(exchange_order.get("side", "") or "").upper()
+            expected_exit_side = "SELL" if self._campaign_direction(campaign) == "LONG" else "BUY"
+            if (
+                exchange_symbol != symbol
+                or (exchange_side and exchange_side != expected_exit_side)
+            ):
+                raise FuturesCampaignExecutionError(
+                    f"{symbol}: exit order symbol/side does not match campaign direction"
+                )
+            saved_client_id = str(record.get("client_order_id", "") or "")
+            exchange_client_id = str(exchange_order.get("clientOrderId", "") or "")
+            if saved_client_id and exchange_client_id and saved_client_id != exchange_client_id:
+                raise FuturesCampaignExecutionError(
+                    f"{symbol}: exit order clientOrderId does not match durable exit ledger"
+                )
             try:
                 order_executed = float(exchange_order.get("executedQty", 0) or 0)
             except (TypeError, ValueError) as exc:
@@ -2148,14 +2182,125 @@ class FuturesCampaignExecutionService:
                     raise FuturesCampaignExecutionError(
                         f"{symbol}: exit order {record_order_id} executedQty disagrees with userTrades"
                     )
-            total_executed += order_executed
+            market_exit_executed_qty += order_executed
             reconciled_orders.append({
+                "source": "MARKET_EXIT",
                 "order_id": record_order_id,
                 "status": exchange_status,
                 "executed_qty": order_executed,
                 "user_trades_qty": order_trade_qty,
             })
 
+        # Resolve protective stop child orders too. These fills can race with a
+        # reduce-only market exit; excluding them would make a flat exchange
+        # position appear inconsistent and would omit realized PnL/commissions.
+        protective_records = list(
+            campaign.tags.get("unreconciled_protective_exit_orders", []) or []
+        )
+        expected_stop_side = "SELL" if self._campaign_direction(campaign) == "LONG" else "BUY"
+        seen_protective_ids: set[str] = set()
+        for record in protective_records:
+            if not isinstance(record, dict):
+                raise FuturesCampaignExecutionError(
+                    f"{symbol}: malformed protective-exit ledger record"
+                )
+            record_order_id = str(record.get("order_id", "") or "")
+            if not record_order_id or record_order_id in seen_protective_ids:
+                raise FuturesCampaignExecutionError(
+                    f"{symbol}: protective-exit ledger has a missing/duplicate orderId"
+                )
+            seen_protective_ids.add(record_order_id)
+            exchange_order = self.client.get_order(symbol, order_id=record_order_id)
+            exchange_status = str(exchange_order.get("status", "") or "").upper()
+            if exchange_status not in {"FILLED", "CANCELED", "CANCELLED", "EXPIRED", "REJECTED"}:
+                raise FuturesCampaignExecutionError(
+                    f"{symbol}: protective child {record_order_id} is not terminal "
+                    f"({exchange_status or 'UNKNOWN'})"
+                )
+            exchange_symbol = str(exchange_order.get("symbol", symbol) or "").upper()
+            exchange_id = str(exchange_order.get("orderId", "") or "")
+            exchange_side = str(exchange_order.get("side", "") or "").upper()
+            saved_child_client_id = str(record.get("client_order_id", "") or "")
+            exchange_child_client_id = str(exchange_order.get("clientOrderId", "") or "")
+            if (
+                exchange_symbol != symbol
+                or exchange_id != record_order_id
+                or exchange_side != expected_stop_side
+                or (
+                    saved_child_client_id and exchange_child_client_id
+                    and saved_child_client_id != exchange_child_client_id
+                )
+            ):
+                raise FuturesCampaignExecutionError(
+                    f"{symbol}: protective child {record_order_id} failed identity/side verification"
+                )
+            try:
+                order_executed = float(exchange_order.get("executedQty", 0) or 0)
+                previously_observed = float(record.get("executed_qty", order_executed) or 0)
+            except (TypeError, ValueError) as exc:
+                raise FuturesCampaignExecutionError(
+                    f"{symbol}: protective child executedQty is invalid"
+                ) from exc
+            if (
+                not math.isfinite(order_executed) or order_executed < 0
+                or not math.isfinite(previously_observed) or previously_observed <= 0
+                or abs(order_executed - previously_observed) > max(1e-8, order_executed * 1e-6)
+            ):
+                raise FuturesCampaignExecutionError(
+                    f"{symbol}: protective child executedQty changed or conflicts with the durable ledger"
+                )
+            order_trade_qty = 0.0
+            if order_executed > 0:
+                trades = self.client.user_trades(symbol, order_id=record_order_id, limit=1000)
+                if not trades:
+                    raise FuturesCampaignExecutionError(
+                        f"{symbol}: protective child {record_order_id} has execution but no userTrades"
+                    )
+                for trade in trades:
+                    trade_order_id = trade.get("orderId")
+                    if trade_order_id is not None and str(trade_order_id) != record_order_id:
+                        raise FuturesCampaignExecutionError(
+                            f"{symbol}: protective userTrades returned a different orderId"
+                        )
+                    try:
+                        qty = float(trade.get("qty", 0) or 0)
+                        price = float(trade.get("price", 0) or 0)
+                        pnl = float(trade.get("realizedPnl", 0) or 0)
+                        commission = float(trade.get("commission", 0) or 0)
+                    except (TypeError, ValueError) as exc:
+                        raise FuturesCampaignExecutionError(
+                            f"{symbol}: invalid protective userTrades row"
+                        ) from exc
+                    if (
+                        not all(math.isfinite(value) for value in (qty, price, pnl, commission))
+                        or qty <= 0 or price <= 0 or commission < 0
+                    ):
+                        raise FuturesCampaignExecutionError(
+                            f"{symbol}: non-finite/invalid protective userTrades values"
+                        )
+                    order_trade_qty += qty
+                    realized_pnl += pnl
+                    asset = str(trade.get("commissionAsset", "") or "").upper()
+                    if asset in {"USDT", "USDC"}:
+                        quote_commission += commission
+                    elif asset:
+                        other_commission[asset] = other_commission.get(asset, 0.0) + commission
+                if abs(order_trade_qty - order_executed) > max(1e-8, order_executed * 1e-6):
+                    raise FuturesCampaignExecutionError(
+                        f"{symbol}: protective child {record_order_id} executedQty disagrees with userTrades"
+                    )
+            protective_exit_executed_qty += order_executed
+            reconciled_orders.append({
+                "source": "PROTECTIVE_STOP",
+                "order_id": record_order_id,
+                "algo_id": str(record.get("algo_id", "") or ""),
+                "client_algo_id": str(record.get("client_algo_id", "") or ""),
+                "status": exchange_status,
+                "executed_qty": order_executed,
+                "user_trades_qty": order_trade_qty,
+            })
+
+        total_executed = market_exit_executed_qty + protective_exit_executed_qty
         try:
             original_qty = float(
                 campaign.tags.get(
@@ -2189,7 +2334,9 @@ class FuturesCampaignExecutionService:
             "realized_pnl_quote_before_commission": realized_pnl,
             "quote_commission": quote_commission,
             "unconverted_commission_by_asset": other_commission,
-            "pnl_basis": "Binance Futures userTrades; non-USDT/USDC fees separately recorded",
+            "market_exit_executed_qty": market_exit_executed_qty,
+            "protective_stop_executed_qty": protective_exit_executed_qty,
+            "pnl_basis": "Binance Futures userTrades across market exits and protective stop children; non-USDT/USDC fees separately recorded",
         }
         campaign.position_qty = 0.0
         campaign.open_risk_quote = 0.0
@@ -2199,6 +2346,7 @@ class FuturesCampaignExecutionService:
         for key in (
             "pending_exit_client_order_id", "pending_exit_reason", "pending_exit_expected_qty",
             "exit_cycle_original_qty", "unreconciled_terminal_exit_orders",
+            "unreconciled_protective_exit_orders",
         ):
             campaign.tags.pop(key, None)
         campaign.tags["last_exit_reason"] = str(reason)
@@ -2409,6 +2557,7 @@ class FuturesCampaignExecutionService:
                     "order_id": child_id,
                     "algo_id": str(protection.get("algoId", "") or ""),
                     "client_algo_id": str(protection.get("clientAlgoId", "") or ""),
+                    "client_order_id": str(actual_order.get("clientOrderId", "") or ""),
                     "status": str(actual_order.get("status", "") or "").upper(),
                     "executed_qty": executed_qty,
                 })
