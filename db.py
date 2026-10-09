@@ -142,6 +142,8 @@ class Database:
             event TEXT NOT NULL,
             payload_json TEXT
         );
+        CREATE INDEX IF NOT EXISTS idx_execution_intents_client_id
+            ON execution_intents(client_order_id, symbol, created_at);
         CREATE TABLE IF NOT EXISTS campaigns(
             campaign_id TEXT PRIMARY KEY,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
