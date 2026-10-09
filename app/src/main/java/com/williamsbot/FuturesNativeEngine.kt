@@ -81,7 +81,7 @@ internal class FuturesNativeEngine(
 
     @Volatile private var running = false
     @Volatile private var paused = true
-    @Volatile private var killLatched = false
+    @Volatile private var killLatched = prefs.getBoolean("futures_kill_latched", false)
     @Volatile private var reconcileRequired = false
     @Volatile private var lastError: String? = null
     @Volatile private var lastScanAtMs = 0L
@@ -305,6 +305,9 @@ internal class FuturesNativeEngine(
         synchronized(cycleLock) {
             killLatched = true
             paused = true
+            check(prefs.edit().putBoolean("futures_kill_latched", true).commit()) {
+                "Kill-switch latch could not be persisted; refusing to claim the kill switch is active"
+            }
             val exchange = api()
             val results = JSONArray()
             val campaigns = auditStore.activeFuturesCampaigns()
@@ -349,6 +352,9 @@ internal class FuturesNativeEngine(
                 throw IllegalStateException(
                     "Recovery reset denied: positions/intents remain unresolved; flat and verified state is required"
                 )
+            }
+            check(prefs.edit().putBoolean("futures_kill_latched", false).commit()) {
+                "Kill-switch reset could not be persisted; latch remains active"
             }
             killLatched = false
             reconcileRequired = false
