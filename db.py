@@ -1148,20 +1148,47 @@ class Database:
             self.conn.commit()
 
     def campaign_risk_reserved_quote(self):
-        row=self.conn.execute(
+        active = "(state IS NULL OR state NOT IN ('CLOSED','FLAT'))"
+        invalid = self.conn.execute(
+            "SELECT COUNT(*) FROM campaigns WHERE " + active + " AND ("
+            "open_risk_quote IS NULL OR pending_risk_quote IS NULL "
+            "OR typeof(open_risk_quote) NOT IN ('integer','real') "
+            "OR typeof(pending_risk_quote) NOT IN ('integer','real') "
+            "OR open_risk_quote < 0 OR pending_risk_quote < 0 "
+            "OR open_risk_quote > 1e308 OR pending_risk_quote > 1e308)"
+        ).fetchone()[0]
+        if int(invalid or 0) > 0:
+            raise ValueError("active campaign has missing or invalid reserved risk")
+        row = self.conn.execute(
             "SELECT COALESCE(SUM(open_risk_quote),0)+COALESCE(SUM(pending_risk_quote),0) AS risk "
-            # Unknown exchange state is still exposure; reserve it until
-            # reconciliation proves the campaign is closed or flat.
-            "FROM campaigns WHERE state NOT IN ('CLOSED','FLAT')"
+            "FROM campaigns WHERE " + active
         ).fetchone()
-        return float(row["risk"] or 0.0)
+        risk = float(row["risk"] or 0.0)
+        if not math.isfinite(risk) or risk < 0:
+            raise ValueError("aggregate portfolio risk reservation is invalid")
+        return risk
 
     def campaign_capital_reserved_quote(self):
-        row=self.conn.execute(
+        pending_states = (
+            "'SIGNAL_DETECTED','ENTRY_ARMING','ENTRY_PENDING',"
+            "'ADD_ON_ARMING','ADD_ON_PENDING'"
+        )
+        invalid = self.conn.execute(
+            "SELECT COUNT(*) FROM campaigns WHERE state IN (" + pending_states + ") AND ("
+            "capital_reserved_quote IS NULL "
+            "OR typeof(capital_reserved_quote) NOT IN ('integer','real') "
+            "OR capital_reserved_quote < 0 OR capital_reserved_quote > 1e308)"
+        ).fetchone()[0]
+        if int(invalid or 0) > 0:
+            raise ValueError("pending campaign has missing or invalid capital reservation")
+        row = self.conn.execute(
             "SELECT COALESCE(SUM(capital_reserved_quote),0) AS capital "
-            "FROM campaigns WHERE state IN ('SIGNAL_DETECTED','ENTRY_ARMING','ENTRY_PENDING','ADD_ON_ARMING','ADD_ON_PENDING')"
+            "FROM campaigns WHERE state IN (" + pending_states + ")"
         ).fetchone()
-        return float(row["capital"] or 0.0)
+        capital = float(row["capital"] or 0.0)
+        if not math.isfinite(capital) or capital < 0:
+            raise ValueError("aggregate capital reservation is invalid")
+        return capital
 
     def recent_orders(self, symbol, limit=100):
         return [
