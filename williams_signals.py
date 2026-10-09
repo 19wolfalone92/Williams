@@ -239,9 +239,6 @@ def extract_long_signal_specs(
         trigger = trigger_base + tick
         if current_close < trigger:
             row = ind.iloc[i]
-            score, valid = _angulation(ind, i, side="LONG")
-            if not valid:
-                continue
             specs.append(
                 SignalSpec.new(
                     symbol=symbol,
@@ -401,9 +398,6 @@ def extract_short_signal_specs(
         trigger = trigger_base - tick
         if current_close > trigger:
             row = ind.iloc[i]
-            score, valid = _angulation(ind, i, side="SHORT")
-            if not valid:
-                continue
             specs.append(
                 SignalSpec.new(
                     symbol=symbol,
