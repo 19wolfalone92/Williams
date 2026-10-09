@@ -151,6 +151,24 @@ def test_conditional_stop_requires_valid_close_position_contract():
         )
 
 
+@pytest.mark.parametrize("method_name", ["open_orders", "open_algo_orders"])
+def test_open_order_listing_malformed_payload_fails_closed(monkeypatch, method_name):
+    client = make_client()
+    monkeypatch.setattr(client, "_request", lambda *args, **kwargs: {})
+
+    with pytest.raises(FuturesAPIError, match="malformed payload"):
+        getattr(client, method_name)("BTCUSDT")
+
+
+@pytest.mark.parametrize("method_name", ["open_orders", "open_algo_orders"])
+def test_open_order_listing_rejects_malformed_rows(monkeypatch, method_name):
+    client = make_client()
+    monkeypatch.setattr(client, "_request", lambda *args, **kwargs: [{"orderId": 1}, None])
+
+    with pytest.raises(FuturesAPIError, match="malformed row"):
+        getattr(client, method_name)("BTCUSDT")
+
+
 def test_mainnet_flag_is_not_enabled_by_allow_live_argument_alone(monkeypatch):
     monkeypatch.setenv("ALLOW_LIVE", "false")
     with pytest.raises(ValueError, match="Mainnet futures is disabled"):
