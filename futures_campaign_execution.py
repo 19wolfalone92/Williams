@@ -366,20 +366,26 @@ class FuturesCampaignExecutionService:
                 "RECONCILE_REQUIRED blocks new exposure for the Futures runtime"
             )
 
-        # A flat position is not sufficient proof that a symbol is clean:
-        # an orphaned conditional entry/stop or triggered child order can still
-        # mutate exposure after a restart. Compare all live exchange orders to
-        # durable bot-owned IDs before admitting any new exposure.
-        known_algo_ids: set[str] = set()
-        known_client_algo_ids: set[str] = set()
-        known_order_ids: set[str] = set()
-        known_client_order_ids: set[str] = set()
+        # A flat position is not sufficient proof that the account is clean:
+        # an orphan conditional entry on ANY symbol can recreate exposure after
+        # restart. Query account-wide open orders and match each to durable IDs
+        # belonging to the same symbol; never ignore an order from an unconfigured
+        # symbol or a malformed row.
+        known_by_symbol: dict[str, dict[str, set[str]]] = {}
         for row in active:
-            if (
-                str(row.get("symbol", "")).upper() != str(symbol).upper()
-                or self._row_tags(row).get("execution_mode") != "FUTURES"
-            ):
+            if self._row_tags(row).get("execution_mode") != "FUTURES":
                 continue
+            managed_symbol = str(row.get("symbol", "") or "").upper()
+            if not managed_symbol:
+                raise FuturesCampaignExecutionError(
+                    "Active Futures campaign has no symbol during account-wide order reconciliation"
+                )
+            known = known_by_symbol.setdefault(managed_symbol, {
+                "algo_ids": set(),
+                "client_algo_ids": set(),
+                "order_ids": set(),
+                "client_order_ids": set(),
+            })
             tags = self._row_tags(row)
             for key in (
                 "pending_algo_id", "pending_add_on_algo_id", "protective_algo_id",
@@ -387,64 +393,104 @@ class FuturesCampaignExecutionService:
             ):
                 value = tags.get(key)
                 if value not in (None, ""):
-                    known_algo_ids.add(str(value))
+                    known["algo_ids"].add(str(value))
             for key in (
                 "entry_client_algo_id", "pending_add_on_client_algo_id",
                 "protective_client_algo_id", "previous_protective_client_algo_id",
                 "pending_protective_client_algo_id",
             ):
                 value = tags.get(key)
-                if value:
-                    known_client_algo_ids.add(str(value))
-            for key in ("entry_actual_order_id", "pending_exit_order_id", "last_add_on_exchange_order_id"):
+                if value not in (None, ""):
+                    known["client_algo_ids"].add(str(value))
+            for key in (
+                "entry_actual_order_id", "pending_exit_order_id",
+                "last_add_on_exchange_order_id",
+            ):
                 value = tags.get(key)
                 if value not in (None, ""):
-                    known_order_ids.add(str(value))
-            for key in ("pending_exit_client_order_id", "last_terminal_exit_client_order_id"):
+                    known["order_ids"].add(str(value))
+            for key in (
+                "pending_exit_client_order_id", "last_terminal_exit_client_order_id",
+            ):
                 value = tags.get(key)
                 if value:
-                    known_client_order_ids.add(str(value))
+                    known["client_order_ids"].add(str(value))
 
         try:
-            open_algo = self.client.open_algo_orders(str(symbol).upper())
-            open_standard = self.client.open_orders(str(symbol).upper())
+            # The Binance endpoints support account-wide listing when symbol is
+            # omitted. A failure here must block exposure; per-symbol fallback
+            # could miss an orphan order on a different symbol.
+            open_algo = self.client.open_algo_orders()
+            open_standard = self.client.open_orders()
         except Exception as exc:
             raise FuturesCampaignExecutionError(
-                f"{symbol}: cannot enumerate open exchange orders before exposure admission: "
+                f"{symbol}: cannot enumerate account-wide open exchange orders before exposure admission: "
                 f"{type(exc).__name__}: {exc}"
             ) from exc
         if not isinstance(open_algo, list) or not isinstance(open_standard, list):
             raise FuturesCampaignExecutionError(
-                f"{symbol}: exchange open-order responses are malformed; new exposure is blocked"
+                f"{symbol}: account-wide open-order responses are malformed; new exposure is blocked"
             )
+
         orphaned_algo = []
         for order in open_algo:
             if not isinstance(order, dict):
                 raise FuturesCampaignExecutionError(
-                    f"{symbol}: malformed open Algo order blocks new exposure"
+                    f"{symbol}: malformed account-wide open Algo order blocks new exposure"
                 )
-            order_symbol = str(order.get("symbol", symbol)).upper()
-            if order_symbol != str(symbol).upper():
-                continue
+            order_symbol = str(order.get("symbol", "") or "").upper()
+            if not order_symbol:
+                raise FuturesCampaignExecutionError(
+                    f"{symbol}: account-wide open Algo order omitted symbol; new exposure is blocked"
+                )
+            known = known_by_symbol.get(order_symbol, {})
             algo_id = str(order.get("algoId", "") or "")
             client_id = str(order.get("clientAlgoId", "") or "")
-            if algo_id not in known_algo_ids and client_id not in known_client_algo_ids:
-                orphaned_algo.append({"algoId": algo_id, "clientAlgoId": client_id})
+            if (
+                algo_id not in known.get("algo_ids", set())
+                and client_id not in known.get("client_algo_ids", set())
+            ):
+                orphaned_algo.append({
+                    "symbol": order_symbol,
+                    "algoId": algo_id,
+                    "clientAlgoId": client_id,
+                })
+
         orphaned_standard = []
         for order in open_standard:
             if not isinstance(order, dict):
                 raise FuturesCampaignExecutionError(
-                    f"{symbol}: malformed open standard order blocks new exposure"
+                    f"{symbol}: malformed account-wide open standard order blocks new exposure"
                 )
-            order_symbol = str(order.get("symbol", symbol)).upper()
-            if order_symbol != str(symbol).upper():
-                continue
+            order_symbol = str(order.get("symbol", "") or "").upper()
+            if not order_symbol:
+                raise FuturesCampaignExecutionError(
+                    f"{symbol}: account-wide open standard order omitted symbol; new exposure is blocked"
+                )
+            known = known_by_symbol.get(order_symbol, {})
             order_id = str(order.get("orderId", "") or "")
             client_id = str(order.get("clientOrderId", "") or "")
-            if order_id not in known_order_ids and client_id not in known_client_order_ids:
-                orphaned_standard.append({"orderId": order_id, "clientOrderId": client_id})
+            if (
+                order_id not in known.get("order_ids", set())
+                and client_id not in known.get("client_order_ids", set())
+            ):
+                orphaned_standard.append({
+                    "symbol": order_symbol,
+                    "orderId": order_id,
+                    "clientOrderId": client_id,
+                })
+
         if orphaned_algo or orphaned_standard:
-            self.db.state_set(f"position_state:{str(symbol).upper()}", CampaignState.RECONCILE_REQUIRED.value)
+            orphan_symbols = {
+                str(order.get("symbol", "")).upper()
+                for order in orphaned_algo + orphaned_standard
+                if str(order.get("symbol", "")).strip()
+            }
+            for orphan_symbol in orphan_symbols:
+                self.db.state_set(
+                    f"position_state:{orphan_symbol}",
+                    CampaignState.RECONCILE_REQUIRED.value,
+                )
             raise FuturesCampaignExecutionError(
                 f"{symbol}: orphan/unowned open exchange orders block new exposure "
                 f"(algo={orphaned_algo}, standard={orphaned_standard})"
