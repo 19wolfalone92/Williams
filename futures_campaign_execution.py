@@ -464,6 +464,8 @@ class FuturesCampaignExecutionService:
                 "direction": direction,
                 "entry_client_algo_id": client_algo_id,
                 "entry_trigger_price": trigger,
+                "entry_quantity": quantity,
+                "entry_fill_reconciliation_pending": True,
                 "initial_stop_price": stop,
                 "last_signal_time_ms": int(signal.signal_bar_time_ms),
                 "position_side_mode": "ONE_WAY",
@@ -2661,6 +2663,12 @@ class FuturesCampaignExecutionService:
 
         direction = self._campaign_direction(campaign)
         entry_client_algo_id = str(campaign.tags.get("entry_client_algo_id", "") or "")
+        if campaign.state == CampaignState.ENTRY_PENDING or (
+            campaign.state == CampaignState.RECONCILE_REQUIRED
+            and campaign.tags.get("entry_fill_reconciliation_pending")
+            and campaign.position_qty <= 0
+        ):
+            return self._reconcile_pending_initial_entry(campaign, position, amount)
         if abs(amount) <= 1e-12:
             if campaign.state == CampaignState.ENTRY_PENDING and entry_client_algo_id:
                 try:
