@@ -1040,6 +1040,7 @@ class CampaignExecutionService:
             quantity=self.client.decimal_format(qty),
             client_order_id=cid,
             purpose="CAMPAIGN_ADD_ON",
+            permission_interval=signal.timeframe,
             campaign_id=campaign.campaign_id,
             signal_id=signal.signal_id,
             risk_quote=requested,

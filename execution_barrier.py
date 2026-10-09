@@ -132,7 +132,21 @@ class ExecutionBarrier:
         # All declared TFs are version dependencies, but the permission
         # decision belongs to one operative/entry timeframe. Higher TFs provide
         # structural context and must not be required to emit a duplicate trigger.
-        if intent.purpose.upper() == "ENTRY":
+        purpose = intent.purpose.upper()
+        entry_purposes = {
+            "ENTRY",
+            "ADD_ON",
+            "CAMPAIGN_ENTRY",
+            "CAMPAIGN_ADD_ON",
+            "REVERSE_ENTRY",
+            "CAMPAIGN_REVERSE_ENTRY",
+        }
+        is_new_exposure = purpose in entry_purposes
+
+        # New exposure must pass the operative timeframe's directional gate.
+        # SELL means opening SHORT only for an ENTRY/ADD-ON intent; on exits it
+        # is simply an order side and must not be interpreted as a short signal.
+        if is_new_exposure:
             permission_tf = (intent.permission_interval or "").lower()
             permission_ctx = snapshot.context(intent.symbol, permission_tf) if permission_tf else None
             if permission_ctx is None:
@@ -142,7 +156,10 @@ class ExecutionBarrier:
             if direction == "short" and not permission_ctx.allow_short:
                 return f"context {permission_tf} does not allow SHORT"
 
-        if self.db is not None and hasattr(self.db, "state_get"):
+        # Reconciliation blocks any operation that can increase exposure, but
+        # must not disable exits, cancellation, protection or recovery. Those
+        # paths still need their own reduce-only / ownership guarantees.
+        if is_new_exposure and self.db is not None and hasattr(self.db, "state_get"):
             state = str(self.db.state_get("position_state", "FLAT"))
             if state == "RECONCILE_REQUIRED":
                 return "RECONCILE_REQUIRED"

@@ -209,3 +209,54 @@ def test_execution_barrier_flags_failure_to_persist_submission_after_one_submit(
 
     assert calls == ["sent"]
     assert db.statuses == ["PENDING", "SUBMITTED"]
+
+
+
+def test_campaign_entry_checks_directional_permission_for_long_and_short():
+    cache = ContextCache()
+    cache.publish(context(allow_long=False, allow_short=False))
+    snapshot = cache.snapshot()
+    barrier = ExecutionBarrier(cache, MemoryIntentDB())
+
+    for side, expected in (("BUY", "LONG"), ("SELL", "SHORT")):
+        intent = OrderIntent.new(
+            "BTCUSDT",
+            side,
+            "STOP_MARKET",
+            {"1h": snapshot.context("BTCUSDT", "1h").version},
+            purpose="CAMPAIGN_ENTRY",
+            permission_interval="1h",
+        )
+        result = barrier.execute(intent, lambda: {"status": "NEW"})
+        assert not result.accepted
+        assert f"does not allow {expected}" in result.reason
+
+
+def test_exit_remains_available_when_reconciliation_is_required():
+    class ReconcileDB(MemoryIntentDB):
+        def state_get(self, key, default=None):
+            if key == "position_state" or key.startswith("campaign_state:"):
+                return "RECONCILE_REQUIRED"
+            return default
+
+    cache = ContextCache()
+    cache.publish(context(allow_long=False, allow_short=False))
+    db = ReconcileDB()
+    barrier = ExecutionBarrier(cache, db)
+    intent = OrderIntent.new(
+        "BTCUSDT",
+        "SELL",
+        "MARKET",
+        {},
+        purpose="CAMPAIGN_EXIT",
+        campaign_id="campaign-1",
+        client_order_id="EXIT-RECONCILE-TEST",
+    )
+
+    result = barrier.execute(
+        intent,
+        lambda: {"status": "FILLED", "executedQty": "1"},
+    )
+
+    assert result.accepted
+    assert db.intents[intent.intent_id][0] == "SUBMITTED"
