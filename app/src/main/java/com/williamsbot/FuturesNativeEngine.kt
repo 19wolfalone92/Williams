@@ -729,20 +729,23 @@ internal class FuturesNativeEngine(
             // actionable price trigger. Use the current mouth angle/momentum as
             // a conservative native execution gate.
             if (signal == null && configLong) {
-                signal = reversalSignal(symbol, bars, i, "LONG", jaw[i], teeth[i], lips[i], aoNow, aoPrev, acNow, acPrev, atr)
+                signal = reversalSignal(
+                    symbol, bars, "LONG", jaw, teeth, lips, ao, ac, atr, tickSize
+                )
             }
             if (signal == null && configShort) {
-                signal = reversalSignal(symbol, bars, i, "SHORT", jaw[i], teeth[i], lips[i], aoNow, aoPrev, acNow, acPrev, atr)
+                signal = reversalSignal(
+                    symbol, bars, "SHORT", jaw, teeth, lips, ao, ac, atr, tickSize
+                )
             }
 
             // WM3: a confirmed fractal outside the Teeth/Balancing Line is a
             // pending stop-entry, never a MARKET chase after the trigger passed.
             if (signal == null && configLong && upFractal != null) {
                 val (center, level) = upFractal
-                // Actual exchange tick/price filters are enforced again before submission.
-                val tick = max(0.0, tickSizeFromPrice(level))
-                val entryTrigger = level + tick
-                val stop = bars[center].low - tick
+                // Use the real exchange tick; pre-submit filters validate rounding again.
+                val entryTrigger = level + tickSize
+                val stop = bars[center].low - tickSize
                 if (level > teeth[i] && bars[i].close < entryTrigger && stop > 0.0) {
                     signal = Signal(symbol, "LONG", "FRACTAL", bars[center].openTime, entryTrigger, stop, atr, "WM3 buy fractal outside Teeth; stop-entry trigger above fractal")
                 }
@@ -750,7 +753,7 @@ internal class FuturesNativeEngine(
             if (signal == null && configShort && downFractal != null) {
                 val (center, level) = downFractal
                 val entryTrigger = level - tickSize
-                val stop = bars[center].high + tick
+                val stop = bars[center].high + tickSize
                 if (level < teeth[i] && bars[i].close > entryTrigger && stop > entryTrigger) {
                     signal = Signal(symbol, "SHORT", "FRACTAL", bars[center].openTime, entryTrigger, stop, atr, "WM3 sell fractal outside Teeth; stop-entry trigger below fractal")
                 }
@@ -798,49 +801,61 @@ internal class FuturesNativeEngine(
     private fun reversalSignal(
         symbol: String,
         bars: List<Bar>,
-        currentIndex: Int,
         direction: String,
-        jaw: Double,
-        teeth: Double,
-        lips: Double,
-        ao: Double,
-        previousAo: Double,
-        ac: Double,
-        previousAc: Double,
-        atr: Double
+        jaw: List<Double>,
+        teeth: List<Double>,
+        lips: List<Double>,
+        ao: List<Double>,
+        ac: List<Double>,
+        atr: Double,
+        tickSize: Double
     ): Signal? {
-        // Restrict a first-Wise-Man proposal to a fresh signal bar. The trigger
-        // itself must not already have been crossed by the current close.
+        // The reversal candle, Alligator location and momentum are evaluated on
+        // the same closed bar. The trigger remains a later price confirmation.
         val start = max(2, bars.lastIndex - 2)
         for (i in bars.lastIndex downTo start) {
             val bar = bars[i]
             val previous = bars.subList(i - 2, i)
             val range = bar.high - bar.low
             if (range <= 0.0) continue
+
+            val jawAt = jaw.getOrElse(i) { Double.NaN }
+            val teethAt = teeth.getOrElse(i) { Double.NaN }
+            val lipsAt = lips.getOrElse(i) { Double.NaN }
+            val aoAt = ao.getOrElse(i) { Double.NaN }
+            val aoBefore = ao.getOrElse(i - 1) { Double.NaN }
+            val acAt = ac.getOrElse(i) { Double.NaN }
+            val acBefore = ac.getOrElse(i - 1) { Double.NaN }
+            if (!listOf(jawAt, teethAt, lipsAt, aoAt, aoBefore, acAt, acBefore).all(Double::isFinite)) continue
+
             val closeLocation = (bar.close - bar.low) / range
             if (direction == "LONG") {
                 val freshLow = bar.low < previous.minOf { it.low }
-                val belowMouth = bar.low < min(jaw, min(teeth, lips))
-                val momentumImproving = ao >= previousAo && ac >= previousAc
-                if (freshLow && belowMouth && closeLocation >= 0.50 && momentumImproving) {
-                    val tick = tickSizeFromPrice(bar.high)
-                    val trigger = bar.high + tick
-                    val stop = bar.low - tick
-                    if (bars.last().close < trigger && stop > 0.0) {
-                        return Signal(symbol, "LONG", "REVERSAL", bar.openTime, trigger, stop, atr, "WM1 bullish reversal outside the Alligator; BUY STOP confirms the signal bar")
-                    }
+                val belowMouth = bar.low < min(jawAt, min(teethAt, lipsAt))
+                val momentumImproving = aoAt >= aoBefore && acAt >= acBefore
+                val trigger = bar.high + tickSize
+                val stop = bar.low - tickSize
+                if (freshLow && belowMouth && closeLocation >= 0.50 &&
+                    momentumImproving && bars.last().close < trigger && stop > 0.0
+                ) {
+                    return Signal(
+                        symbol, "LONG", "REVERSAL", bar.openTime, trigger, stop, atr,
+                        "WM1 bullish reversal outside the Alligator; BUY STOP confirms the signal bar"
+                    )
                 }
             } else {
                 val freshHigh = bar.high > previous.maxOf { it.high }
-                val aboveMouth = bar.high > max(jaw, max(teeth, lips))
-                val momentumImproving = ao <= previousAo && ac <= previousAc
-                if (freshHigh && aboveMouth && closeLocation <= 0.50 && momentumImproving) {
-                    val tick = tickSizeFromPrice(bar.low)
-                    val trigger = bar.low - tick
-                    val stop = bar.high + tick
-                    if (bars.last().close > trigger && stop > trigger) {
-                        return Signal(symbol, "SHORT", "REVERSAL", bar.openTime, trigger, stop, atr, "WM1 bearish reversal outside the Alligator; SELL STOP confirms the signal bar")
-                    }
+                val aboveMouth = bar.high > max(jawAt, max(teethAt, lipsAt))
+                val momentumImproving = aoAt <= aoBefore && acAt <= acBefore
+                val trigger = bar.low - tickSize
+                val stop = bar.high + tickSize
+                if (freshHigh && aboveMouth && closeLocation <= 0.50 &&
+                    momentumImproving && bars.last().close > trigger && stop > trigger
+                ) {
+                    return Signal(
+                        symbol, "SHORT", "REVERSAL", bar.openTime, trigger, stop, atr,
+                        "WM1 bearish reversal outside the Alligator; SELL STOP confirms the signal bar"
+                    )
                 }
             }
         }
@@ -923,21 +938,6 @@ internal class FuturesNativeEngine(
             else trueRanges.subList(i - period + 1, i + 1).average()
         }
     }
-
-    private fun tickSizeFromPrice(price: Double): Double {
-        // Actual exchange tick is re-read from exchangeInfo during execution.
-        // The fallback precision here affects only candidate generation.
-        if (!price.isFinite() || price <= 0.0) return 0.00000001
-        return when {
-            price >= 1000.0 -> 0.1
-            price >= 100.0 -> 0.01
-            price >= 1.0 -> 0.0001
-            price >= 0.01 -> 0.000001
-            else -> 0.00000001
-        }
-    }
-
-    private fun tickSizeFromSymbol(symbol: String, fallback: Double): Double = fallback
 
     private fun sizePosition(
         exchange: BinanceUsdmFuturesClient,
