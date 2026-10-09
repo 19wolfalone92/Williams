@@ -1215,6 +1215,7 @@ def test_futures_add_on_partial_fill_reconciles_position_and_risk(tmp_path):
                     "clientAlgoId": add_client_id, "algoStatus": "TRIGGERED",
                     "actualOrderId": 999, "side": "BUY", "type": "STOP_MARKET",
                     "closePosition": False, "triggerPrice": "105.0",
+                    "quantity": str(armed["quantity"]),
                 }
             return {
                 "symbol": symbol, "algoId": "456",
@@ -1226,7 +1227,7 @@ def test_futures_add_on_partial_fill_reconciles_position_and_risk(tmp_path):
         client.get_order = lambda symbol, *, order_id=None, orig_client_order_id=None: {
             "symbol": symbol, "orderId": 999, "clientOrderId": add_client_id,
             "status": "FILLED", "executedQty": "0.1", "avgPrice": "104.0",
-            "cumQuote": "10.4",
+            "cumQuote": "10.4", "side": "BUY", "type": "MARKET",
         }
         client.user_trades = lambda symbol, *, order_id=None, limit=1000: [{
             "symbol": symbol, "orderId": 999, "qty": "0.1", "price": "104.0",
