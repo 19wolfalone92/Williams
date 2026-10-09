@@ -1255,6 +1255,33 @@ internal class FuturesNativeEngine(
         if (signal.direction == "SHORT" && !(triggerValue < mark && mark < stopValue)) {
             throw FuturesApiException("$symbol SHORT entry became stale at final validation")
         }
+
+        // Tick normalization can widen the actual trigger-to-stop distance.
+        // Re-check the *submitted* prices and quantity, not only the raw signal
+        // prices used by sizePosition(), or rounding can exceed the risk budget.
+        val submittedQty = quantity.toDoubleOrNull()
+            ?.takeIf { it.isFinite() && it > 0.0 }
+            ?: throw FuturesApiException("$symbol normalized entry quantity is invalid")
+        val normalizedStopDistance = abs(triggerValue - stopValue)
+        val normalizedCostReserve = triggerValue *
+            (2.0 * feeBufferPerSideFraction + slippageBufferFraction)
+        val normalizedRisk = submittedQty * (normalizedStopDistance + normalizedCostReserve)
+        val normalizedNotional = submittedQty * triggerValue
+        if (!normalizedStopDistance.isFinite() || normalizedStopDistance <= 0.0 ||
+            !normalizedCostReserve.isFinite() || normalizedCostReserve < 0.0 ||
+            !normalizedRisk.isFinite() || normalizedRisk <= 0.0 ||
+            normalizedRisk > riskQuote * 1.000001) {
+            throw FuturesApiException(
+                "$symbol tick-normalized entry exceeds or invalidates the admitted risk budget"
+            )
+        }
+        if (!normalizedNotional.isFinite() || normalizedNotional <= 0.0 ||
+            normalizedNotional > equity * 0.20 * 1.000001) {
+            throw FuturesApiException(
+                "$symbol tick-normalized entry exceeds the hard equity notional cap"
+            )
+        }
+
         val clientAlgoId = clientOrderId("W2FE_")
         val campaignId = UUID.randomUUID().toString()
         val campaign = JSONObject()
