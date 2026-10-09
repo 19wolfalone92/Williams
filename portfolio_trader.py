@@ -2003,7 +2003,13 @@ class MultiPositionTrader:
             return False, f"MAX_TRADES_PER_DAY reached: {trades_today}"
         losses = 0
         for row in recent:
-            if float(row["pnl"] or 0) < 0:
+            try:
+                pnl = float(row["pnl"] or 0)
+            except (TypeError, ValueError, OverflowError):
+                return False, "recent trade PnL invalid; loss streak cannot be verified"
+            if not math.isfinite(pnl):
+                return False, "recent trade PnL non-finite; loss streak cannot be verified"
+            if pnl < 0:
                 losses += 1
             else:
                 break
