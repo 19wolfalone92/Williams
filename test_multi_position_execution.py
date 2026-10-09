@@ -313,3 +313,45 @@ def test_immediate_transaction_serializes_portfolio_risk_reservation_across_conn
     finally:
         db1.conn.close()
         db2.conn.close()
+
+
+def test_database_rejects_non_finite_trade_and_campaign_risk_values(tmp_path):
+    db = Database(str(tmp_path / "numeric-integrity.sqlite3"))
+    try:
+        with pytest.raises(ValueError, match="finite"):
+            db.save_trade(
+                symbol="BTCUSDT",
+                side="BUY",
+                entry_time="2026-10-09T00:00:00+00:00",
+                entry_price=100.0,
+                quantity=float("nan"),
+            )
+
+        trade_id = db.save_trade(
+            symbol="BTCUSDT",
+            side="BUY",
+            entry_time="2026-10-09T00:00:00+00:00",
+            entry_price=100.0,
+            quantity=1.0,
+        )
+        with pytest.raises(ValueError, match="finite"):
+            db.close_trade(
+                trade_id,
+                "2026-10-09T00:01:00+00:00",
+                101.0,
+                float("nan"),
+                0.01,
+                "TEST",
+            )
+
+        with pytest.raises(ValueError, match="finite"):
+            db.save_campaign({
+                "campaign_id": "nan-risk",
+                "symbol": "BTCUSDT",
+                "side": "LONG",
+                "execution_timeframe": "5m",
+                "state": "ENTRY_PENDING",
+                "pending_risk_quote": float("nan"),
+            })
+    finally:
+        db.conn.close()
