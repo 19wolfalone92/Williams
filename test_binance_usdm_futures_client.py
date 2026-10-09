@@ -40,6 +40,80 @@ def test_one_way_mode_accepts_explicit_false_confirmation(monkeypatch, payload):
     assert client.ensure_one_way_mode() == payload
 
 
+def test_symbol_configuration_reads_margin_and_leverage_from_symbol_config(monkeypatch):
+    client = make_client()
+    monkeypatch.setattr(
+        client,
+        "_request",
+        lambda *args, **kwargs: [{
+            "symbol": "BTCUSDT",
+            "marginType": "ISOLATED",
+            "leverage": 1,
+            "maxNotionalValue": "1000000",
+        }],
+    )
+
+    result = client.symbol_configuration("BTCUSDT")
+
+    assert result["symbol"] == "BTCUSDT"
+    assert result["marginType"] == "ISOLATED"
+    assert result["leverage"] == 1
+
+
+def test_symbol_configuration_rejects_missing_symbol_or_leverage(monkeypatch):
+    client = make_client()
+    monkeypatch.setattr(
+        client,
+        "_request",
+        lambda *args, **kwargs: [{"symbol": "BTCUSDT", "marginType": "ISOLATED"}],
+    )
+
+    with pytest.raises(FuturesAPIError, match="leverage"):
+        client.symbol_configuration("BTCUSDT")
+
+
+def test_prepare_symbol_verifies_applied_isolated_one_x_policy(monkeypatch):
+    client = make_client()
+    responses = {
+        "/fapi/v1/positionSide/dual": {"dualSidePosition": False},
+        "/fapi/v1/marginType": {"symbol": "BTCUSDT", "marginType": "ISOLATED"},
+        "/fapi/v1/leverage": {"symbol": "BTCUSDT", "leverage": 1},
+        "/fapi/v1/symbolConfig": [{
+            "symbol": "BTCUSDT", "marginType": "ISOLATED", "leverage": 1,
+        }],
+    }
+    monkeypatch.setattr(
+        client,
+        "_request",
+        lambda method, path, params, signed=False: responses[path],
+    )
+
+    result = client.prepare_symbol("BTCUSDT")
+
+    assert result["configuration"]["marginType"] == "ISOLATED"
+    assert result["configuration"]["leverage"] == 1
+
+
+def test_prepare_symbol_fails_if_exchange_does_not_apply_one_x(monkeypatch):
+    client = make_client()
+    responses = {
+        "/fapi/v1/positionSide/dual": {"dualSidePosition": False},
+        "/fapi/v1/marginType": {"symbol": "BTCUSDT", "marginType": "ISOLATED"},
+        "/fapi/v1/leverage": {"symbol": "BTCUSDT", "leverage": 1},
+        "/fapi/v1/symbolConfig": [{
+            "symbol": "BTCUSDT", "marginType": "ISOLATED", "leverage": 2,
+        }],
+    }
+    monkeypatch.setattr(
+        client,
+        "_request",
+        lambda method, path, params, signed=False: responses[path],
+    )
+
+    with pytest.raises(FuturesAPIError, match="did not confirm 1x"):
+        client.prepare_symbol("BTCUSDT")
+
+
 def test_live_leverage_above_one_is_rejected():
     with pytest.raises(ValueError, match="capped at 1x"):
         BinanceUsdmFuturesClient("test-key", "test-secret", max_leverage=2)
