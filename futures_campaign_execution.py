@@ -2373,6 +2373,268 @@ class FuturesCampaignExecutionService:
             **result,
         }
 
+    def _reconcile_pending_initial_entry(
+        self,
+        campaign,
+        position: dict[str, Any],
+        amount: float,
+    ) -> dict[str, Any]:
+        """Reconcile a conditional entry from stable algo ID, child order and userTrades."""
+        symbol = campaign.symbol.upper()
+        direction = self._campaign_direction(campaign)
+        client_id = str(campaign.tags.get("entry_client_algo_id", "") or "")
+        if not client_id:
+            reason = f"{symbol}: pending initial entry has no durable clientAlgoId"
+            self.engine.mark_reconcile_required(campaign, reason)
+            self.db.state_set(f"campaign_state:{campaign.campaign_id}", CampaignState.RECONCILE_REQUIRED.value)
+            self.db.state_set(f"position_state:{symbol}", CampaignState.RECONCILE_REQUIRED.value)
+            return {"symbol": symbol, "state": "RECONCILE_REQUIRED", "reason": reason}
+
+        def unresolved(reason: str) -> dict[str, Any]:
+            campaign.tags["entry_fill_reconciliation_pending"] = True
+            self.engine.mark_reconcile_required(campaign, reason)
+            self.db.state_set(f"campaign_state:{campaign.campaign_id}", CampaignState.RECONCILE_REQUIRED.value)
+            self.db.state_set(f"position_state:{symbol}", CampaignState.RECONCILE_REQUIRED.value)
+            return {"symbol": symbol, "state": "RECONCILE_REQUIRED", "reason": reason}
+
+        try:
+            trigger = float(campaign.tags.get("entry_trigger_price", 0) or 0)
+            expected_qty = float(campaign.tags.get("entry_quantity", 0) or 0)
+            stop = float(campaign.tags.get("initial_stop_price", campaign.initial_stop_price) or 0)
+            if not all(math.isfinite(value) and value > 0 for value in (trigger, expected_qty, stop)):
+                return unresolved(f"{symbol}: durable initial entry trigger/quantity/stop is invalid")
+
+            # When a live position exists, protection takes priority over
+            # waiting for history endpoints. An existing stop is queried by its
+            # stable ID; a timeout never triggers a blind duplicate submission.
+            if abs(amount) > 1e-12:
+                if (direction == "LONG" and amount < 0) or (direction == "SHORT" and amount > 0):
+                    return unresolved(f"{symbol}: live position direction conflicts with pending entry")
+                protective_client_id = str(campaign.tags.get("protective_client_algo_id", "") or "")
+                protective_algo_id = campaign.tags.get("protective_algo_id")
+                if protective_client_id or protective_algo_id:
+                    protection = self.client.get_algo_order(
+                        symbol,
+                        algo_id=protective_algo_id or None,
+                        client_algo_id=protective_client_id or None,
+                    )
+                    pstatus = str(protection.get("algoStatus", "") or "").upper()
+                    if pstatus in {"NEW", "WORKING", "PENDING", "PENDING_NEW"}:
+                        expected_side = "SELL" if direction == "LONG" else "BUY"
+                        actual_trigger = float(protection.get("triggerPrice"))
+                        expected_trigger = float(campaign.current_stop_price or stop)
+                        if (
+                            str(protection.get("clientAlgoId", "") or "") != protective_client_id
+                            or str(protection.get("side", "") or "").upper() != expected_side
+                            or str(protection.get("type", "") or "").upper() != "STOP_MARKET"
+                            or str(protection.get("closePosition", "")).lower() not in {"true", "1"}
+                            or not math.isfinite(actual_trigger)
+                            or not math.isclose(actual_trigger, expected_trigger, rel_tol=0.0, abs_tol=1e-8)
+                        ):
+                            return unresolved(f"{symbol}: existing protective stop identity/side/trigger is inconsistent")
+                    elif pstatus in {"CANCELED", "CANCELLED", "EXPIRED", "REJECTED"}:
+                        self.place_protection(campaign, stop_price=stop)
+                    else:
+                        return unresolved(
+                            f"{symbol}: existing protective stop status is ambiguous ({pstatus or 'UNKNOWN'})"
+                        )
+                else:
+                    self.place_protection(campaign, stop_price=stop)
+
+            algo = self.client.get_algo_order(symbol, client_algo_id=client_id)
+            algo_status = str(algo.get("algoStatus", "") or "").upper()
+            expected_side = "BUY" if direction == "LONG" else "SELL"
+            algo_side = str(algo.get("side", "") or "").upper()
+            algo_type = str(algo.get("type", "") or "").upper()
+            algo_client_id = str(algo.get("clientAlgoId", "") or "")
+            try:
+                algo_trigger = float(algo.get("triggerPrice"))
+                algo_qty = float(algo.get("quantity"))
+            except (TypeError, ValueError):
+                algo_trigger = algo_qty = float("nan")
+            if (
+                algo_client_id != client_id
+                or algo_side != expected_side
+                or algo_type != "STOP_MARKET"
+                or str(algo.get("closePosition", "")).lower() not in {"false", "0"}
+                or not math.isfinite(algo_trigger)
+                or not math.isclose(algo_trigger, trigger, rel_tol=0.0, abs_tol=1e-8)
+                or not math.isfinite(algo_qty)
+                or not math.isclose(algo_qty, expected_qty, rel_tol=0.0, abs_tol=1e-8)
+            ):
+                return unresolved(f"{symbol}: initial entry algo does not match the durable entry intent")
+
+            active_statuses = {"NEW", "WORKING", "PENDING", "PENDING_NEW"}
+            terminal_no_fill = {"CANCELED", "CANCELLED", "EXPIRED", "REJECTED"}
+            actual_order_id = algo.get("actualOrderId")
+            if abs(amount) <= 1e-12 and algo_status in active_statuses and not actual_order_id:
+                return {"symbol": symbol, "state": "ENTRY_PENDING", "algo_status": algo_status}
+            if not actual_order_id:
+                if abs(amount) <= 1e-12 and algo_status in terminal_no_fill:
+                    campaign.state = CampaignState.CLOSED
+                    campaign.next_action = "WAIT"
+                    campaign.pending_risk_quote = 0.0
+                    campaign.capital_reserved_quote = 0.0
+                    campaign.tags.pop("entry_fill_reconciliation_pending", None)
+                    self.db.save_campaign(campaign)
+                    self.db.set_campaign_signal_state(campaign.current_signal_id, SignalState.CANCELLED.value)
+                    self.db.state_delete(f"futures_entry_pending:{symbol}")
+                    self.db.state_delete(f"campaign_state:{campaign.campaign_id}")
+                    self.db.state_set(f"position_state:{symbol}", "FLAT")
+                    return {"symbol": symbol, "state": "CLOSED", "algo_status": algo_status}
+                return unresolved(
+                    f"{symbol}: initial entry algo has no child order ID and cannot prove fill/no-fill"
+                )
+
+            actual_order = self.client.get_order(symbol, order_id=actual_order_id)
+            order_status = str(actual_order.get("status", "") or "").upper()
+            if (
+                str(actual_order.get("symbol", symbol)).upper() != symbol
+                or str(actual_order.get("side", "") or "").upper() != expected_side
+                or str(actual_order.get("type", "") or "").upper() != "MARKET"
+                or str(actual_order.get("orderId", "")) != str(actual_order_id)
+            ):
+                return unresolved(f"{symbol}: triggered initial order identity/side/type mismatch")
+            try:
+                executed = float(actual_order.get("executedQty", 0) or 0)
+            except (TypeError, ValueError):
+                executed = float("nan")
+            if not math.isfinite(executed) or executed < 0:
+                return unresolved(f"{symbol}: triggered initial order has invalid executedQty")
+
+            if order_status == "PARTIALLY_FILLED":
+                self.client.cancel_order_safe(symbol, order_id=actual_order_id)
+                actual_order = self.client.get_order(symbol, order_id=actual_order_id)
+                order_status = str(actual_order.get("status", "") or "").upper()
+                try:
+                    executed = float(actual_order.get("executedQty", 0) or 0)
+                except (TypeError, ValueError):
+                    executed = float("nan")
+                if not math.isfinite(executed) or executed < 0:
+                    return unresolved(f"{symbol}: initial executedQty invalid after cancel")
+            if order_status in {"NEW", "PARTIALLY_FILLED", "PENDING_NEW"}:
+                return unresolved(f"{symbol}: initial child order remains nonterminal after cancellation")
+            if order_status not in terminal_no_fill | {"FILLED"}:
+                return unresolved(f"{symbol}: initial child order status is ambiguous ({order_status or 'UNKNOWN'})")
+
+            if executed <= 0:
+                if abs(amount) > 1e-12:
+                    return unresolved(f"{symbol}: live position exists but the entry child order has no fills")
+                if algo_status not in terminal_no_fill:
+                    return unresolved(f"{symbol}: no fill confirmed but algo status is not terminal")
+                campaign.state = CampaignState.CLOSED
+                campaign.next_action = "WAIT"
+                campaign.pending_risk_quote = 0.0
+                campaign.capital_reserved_quote = 0.0
+                campaign.tags.pop("entry_fill_reconciliation_pending", None)
+                self.db.save_campaign(campaign)
+                self.db.set_campaign_signal_state(campaign.current_signal_id, SignalState.CANCELLED.value)
+                self.db.state_delete(f"futures_entry_pending:{symbol}")
+                self.db.state_delete(f"campaign_state:{campaign.campaign_id}")
+                self.db.state_set(f"position_state:{symbol}", "FLAT")
+                return {"symbol": symbol, "state": "CLOSED", "algo_status": algo_status}
+
+            if order_status not in {"FILLED", "CANCELED", "CANCELLED", "EXPIRED", "REJECTED"}:
+                return unresolved(f"{symbol}: initial partial fill is not terminal")
+            tolerance = max(1e-8, executed * 1e-6)
+            if abs(abs(amount) - executed) > tolerance:
+                return unresolved(
+                    f"{symbol}: initial fill/position mismatch; child={executed}, exchange={abs(amount)}"
+                )
+            try:
+                average_fill = float(actual_order.get("avgPrice", 0) or 0)
+                if average_fill <= 0:
+                    cumulative_quote = float(
+                        actual_order.get("cumQuote", actual_order.get("cumQuoteQty", 0)) or 0
+                    )
+                    average_fill = cumulative_quote / executed if cumulative_quote > 0 else 0.0
+                exchange_entry = float(position.get("entryPrice", 0) or 0)
+            except (TypeError, ValueError):
+                average_fill = exchange_entry = 0.0
+            if not all(math.isfinite(value) and value > 0 for value in (average_fill, exchange_entry)):
+                return unresolved(f"{symbol}: initial fill/position entry price is invalid")
+            if not math.isclose(average_fill, exchange_entry, rel_tol=1e-5, abs_tol=1e-8):
+                return unresolved(
+                    f"{symbol}: child average fill {average_fill} disagrees with position entry {exchange_entry}"
+                )
+
+            trades = self.client.user_trades(symbol, order_id=actual_order_id, limit=1000)
+            if not trades:
+                return unresolved(f"{symbol}: initial fill confirmed but userTrades are not yet available")
+            trade_qty = 0.0
+            trade_quote = 0.0
+            fee_quote = 0.0
+            fee_by_asset: dict[str, float] = {}
+            for trade in trades:
+                if trade.get("orderId") is not None and str(trade.get("orderId")) != str(actual_order_id):
+                    return unresolved(f"{symbol}: initial userTrades contain a different order ID")
+                try:
+                    qty = float(trade.get("qty", 0) or 0)
+                    price = float(trade.get("price", 0) or 0)
+                    commission = float(trade.get("commission", 0) or 0)
+                except (TypeError, ValueError):
+                    return unresolved(f"{symbol}: initial userTrades contain invalid numeric values")
+                if not all(math.isfinite(value) for value in (qty, price, commission)) or qty <= 0 or price <= 0 or commission < 0:
+                    return unresolved(f"{symbol}: initial userTrades contain non-finite values")
+                trade_qty += qty
+                trade_quote += qty * price
+                asset = str(trade.get("commissionAsset", "") or "").upper()
+                if asset in {"USDT", "USDC"}:
+                    fee_quote += commission
+                elif asset:
+                    fee_by_asset[asset] = fee_by_asset.get(asset, 0.0) + commission
+            if abs(trade_qty - executed) > max(1e-8, executed * 1e-6):
+                return unresolved(f"{symbol}: initial userTrades quantity disagrees with child order")
+            trade_average = trade_quote / trade_qty
+            if not math.isclose(trade_average, average_fill, rel_tol=1e-5, abs_tol=1e-8):
+                return unresolved(f"{symbol}: userTrades average price disagrees with child order")
+
+            actual_risk = self._actual_risk_quote(executed, average_fill, stop)
+            reserved_risk = float(campaign.pending_risk_quote or 0)
+            if (
+                not math.isfinite(actual_risk)
+                or actual_risk <= 0
+                or not math.isfinite(reserved_risk)
+                or reserved_risk <= 0
+                or actual_risk > reserved_risk + max(1e-8, reserved_risk * 1e-9)
+            ):
+                return unresolved(f"{symbol}: actual initial fill risk exceeds durable reservation")
+
+            if campaign.state == CampaignState.RECONCILE_REQUIRED:
+                campaign.state = CampaignState.ENTRY_PENDING
+            self.engine.mark_triggered(campaign, campaign.current_signal_id, str(actual_order_id))
+            self.engine.record_initial_fill(
+                campaign,
+                quantity=executed,
+                average_entry_price=average_fill,
+                initial_stop_price=stop,
+                fill_order_id=str(actual_order_id),
+                risk_quote=actual_risk,
+                fee_quote=fee_quote,
+            )
+            campaign.tags["entry_fee_by_asset"] = fee_by_asset
+            campaign.tags.pop("entry_fill_reconciliation_pending", None)
+            campaign.tags["entry_actual_order_id"] = str(actual_order_id)
+            self.db.save_campaign(campaign)
+            self.db.set_campaign_signal_state(campaign.current_signal_id, SignalState.FILLED.value)
+            self.db.state_delete(f"futures_entry_pending:{symbol}")
+            self.db.state_set(f"position_state:{symbol}", CampaignState.OPEN_INITIAL.value)
+            self.db.state_delete(f"campaign_state:{campaign.campaign_id}")
+            return {
+                "symbol": symbol,
+                "state": CampaignState.OPEN_INITIAL.value,
+                "direction": direction,
+                "position_qty": executed,
+                "average_entry_price": average_fill,
+                "entry_order_id": str(actual_order_id),
+                "protection": "CONFIRMED",
+                "partial_entry": order_status != "FILLED",
+            }
+        except Exception as exc:
+            return unresolved(
+                f"{symbol}: initial entry reconciliation failed: {type(exc).__name__}: {exc}"
+            )
+
     def reconcile_symbol(self, symbol: str) -> dict[str, Any]:
         """Reconcile local campaign against authoritative Futures position/order state."""
         symbol = str(symbol).upper()
