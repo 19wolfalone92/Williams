@@ -44,6 +44,7 @@ internal class FuturesNativeEngine(
     )
 
     private data class Signal(
+        val symbol: String,
         val direction: String,
         val type: String,
         val signalBarTime: Long,
@@ -75,6 +76,7 @@ internal class FuturesNativeEngine(
 
     private val lock = Any()
     private val cycleLock = Any()
+    private val tickSizeCache = java.util.concurrent.ConcurrentHashMap<String, Double>()
     private val stopLoop = AtomicBoolean(false)
 
     @Volatile private var running = false
@@ -646,7 +648,6 @@ internal class FuturesNativeEngine(
             }
         if (candidates.isEmpty()) return null
         val chosen = candidates.minByOrNull { it.signalBarTime } ?: return null
-        currentProcessingSymbol.set(symbol)
         val mark = exchange.markPrice(symbol)
         if (chosen.direction == "LONG" && !(chosen.stop < mark && mark < chosen.trigger)) return null
         if (chosen.direction == "SHORT" && !(chosen.trigger < mark && mark < chosen.stop)) return null
@@ -675,10 +676,16 @@ internal class FuturesNativeEngine(
             bars += Bar(openTime, closeTime, o, h, l, close, volume)
         }
         if (bars.size < 80) return null
-        return buildFrame(bars)
+        val tickSize = tickSizeCache.computeIfAbsent(symbol.uppercase(Locale.US)) {
+            exchange.symbolFilters(symbol)["PRICE_FILTER"]
+                ?.optString("tickSize")?.toDoubleOrNull()
+                ?.takeIf { value -> value.isFinite() && value > 0.0 }
+                ?: throw FuturesApiException("$symbol Futures PRICE_FILTER tickSize is unavailable")
+        }
+        return buildFrame(symbol, bars, tickSize)
     }
 
-    private fun buildFrame(bars: List<Bar>): Frame {
+    private fun buildFrame(symbol: String, bars: List<Bar>, tickSize: Double): Frame {
         val median = bars.map { (it.high + it.low) / 2.0 }
         val jawRaw = smma(median, 13)
         val teethRaw = smma(median, 8)
@@ -722,10 +729,10 @@ internal class FuturesNativeEngine(
             // actionable price trigger. Use the current mouth angle/momentum as
             // a conservative native execution gate.
             if (signal == null && configLong) {
-                signal = reversalSignal(bars, i, "LONG", jaw[i], teeth[i], lips[i], aoNow, aoPrev, acNow, acPrev, atr)
+                signal = reversalSignal(symbol, bars, i, "LONG", jaw[i], teeth[i], lips[i], aoNow, aoPrev, acNow, acPrev, atr)
             }
             if (signal == null && configShort) {
-                signal = reversalSignal(bars, i, "SHORT", jaw[i], teeth[i], lips[i], aoNow, aoPrev, acNow, acPrev, atr)
+                signal = reversalSignal(symbol, bars, i, "SHORT", jaw[i], teeth[i], lips[i], aoNow, aoPrev, acNow, acPrev, atr)
             }
 
             // WM3: a confirmed fractal outside the Teeth/Balancing Line is a
@@ -737,34 +744,33 @@ internal class FuturesNativeEngine(
                 val entryTrigger = level + tick
                 val stop = bars[center].low - tick
                 if (level > teeth[i] && bars[i].close < entryTrigger && stop > 0.0) {
-                    signal = Signal("LONG", "FRACTAL", bars[center].openTime, entryTrigger, stop, atr, "WM3 buy fractal outside Teeth; stop-entry trigger above fractal")
+                    signal = Signal(symbol, "LONG", "FRACTAL", bars[center].openTime, entryTrigger, stop, atr, "WM3 buy fractal outside Teeth; stop-entry trigger above fractal")
                 }
             }
             if (signal == null && configShort && downFractal != null) {
                 val (center, level) = downFractal
-                val tick = max(0.0, tickSizeFromPrice(level))
-                val entryTrigger = level - tick
+                val entryTrigger = level - tickSize
                 val stop = bars[center].high + tick
                 if (level < teeth[i] && bars[i].close > entryTrigger && stop > entryTrigger) {
-                    signal = Signal("SHORT", "FRACTAL", bars[center].openTime, entryTrigger, stop, atr, "WM3 sell fractal outside Teeth; stop-entry trigger below fractal")
+                    signal = Signal(symbol, "SHORT", "FRACTAL", bars[center].openTime, entryTrigger, stop, atr, "WM3 sell fractal outside Teeth; stop-entry trigger below fractal")
                 }
             }
             // WM2: three AO histogram bars in the same direction, following an
             // outside fractal, create a separate stop-triggered continuation.
             if (signal == null && configLong && superAo(ao, bars, "LONG", teeth[i], upFractal)) {
                 val row = bars[i]
-                val trigger = row.high + tickSizeFromPrice(row.high)
-                val stop = row.low - tickSizeFromPrice(row.low)
+                val trigger = row.high + tickSize
+                val stop = row.low - tickSize
                 if (row.close < trigger && stop > 0.0) {
-                    signal = Signal("LONG", "SUPER_AO", row.openTime, trigger, stop, atr, "WM2 Super AO: three rising AO bars after outside up fractal")
+                    signal = Signal(symbol, "LONG", "SUPER_AO", row.openTime, trigger, stop, atr, "WM2 Super AO: three rising AO bars after outside up fractal")
                 }
             }
             if (signal == null && configShort && superAo(ao, bars, "SHORT", teeth[i], downFractal)) {
                 val row = bars[i]
-                val trigger = row.low - tickSizeFromPrice(row.low)
-                val stop = row.high + tickSizeFromPrice(row.high)
+                val trigger = row.low - tickSize
+                val stop = row.high + tickSize
                 if (row.close > trigger && stop > trigger) {
-                    signal = Signal("SHORT", "SUPER_AO", row.openTime, trigger, stop, atr, "WM2 Super AO: three falling AO bars after outside down fractal")
+                    signal = Signal(symbol, "SHORT", "SUPER_AO", row.openTime, trigger, stop, atr, "WM2 Super AO: three falling AO bars after outside down fractal")
                 }
             }
         }
@@ -790,6 +796,7 @@ internal class FuturesNativeEngine(
     }
 
     private fun reversalSignal(
+        symbol: String,
         bars: List<Bar>,
         currentIndex: Int,
         direction: String,
@@ -820,7 +827,7 @@ internal class FuturesNativeEngine(
                     val trigger = bar.high + tick
                     val stop = bar.low - tick
                     if (bars.last().close < trigger && stop > 0.0) {
-                        return Signal("LONG", "REVERSAL", bar.openTime, trigger, stop, atr, "WM1 bullish reversal outside the Alligator; BUY STOP confirms the signal bar")
+                        return Signal(symbol, "LONG", "REVERSAL", bar.openTime, trigger, stop, atr, "WM1 bullish reversal outside the Alligator; BUY STOP confirms the signal bar")
                     }
                 }
             } else {
@@ -832,7 +839,7 @@ internal class FuturesNativeEngine(
                     val trigger = bar.low - tick
                     val stop = bar.high + tick
                     if (bars.last().close > trigger && stop > trigger) {
-                        return Signal("SHORT", "REVERSAL", bar.openTime, trigger, stop, atr, "WM1 bearish reversal outside the Alligator; SELL STOP confirms the signal bar")
+                        return Signal(symbol, "SHORT", "REVERSAL", bar.openTime, trigger, stop, atr, "WM1 bearish reversal outside the Alligator; SELL STOP confirms the signal bar")
                     }
                 }
             }
@@ -914,887 +921,6 @@ internal class FuturesNativeEngine(
         return trueRanges.indices.map { i ->
             if (i + 1 < period) Double.NaN
             else trueRanges.subList(i - period + 1, i + 1).average()
-        }
-    }
-
-    private fun tickSizeFromPrice(price: Double): Double {
-        // Actual exchange tick is re-read from exchangeInfo during execution.
-        // The fallback precision here affects only candidate generation.
-        if (!price.isFinite() || price <= 0.0) return 0.00000001
-        return when {
-            price >= 1000.0 -> 0.1
-            price >= 100.0 -> 0.01
-            price >= 1.0 -> 0.0001
-            price >= 0.01 -> 0.000001
-            else -> 0.00000001
-        }
-    }
-
-    private fun tickSizeFromSymbol(symbol: String, fallback: Double): Double = fallback
-
-    private fun sizePosition(
-        exchange: BinanceUsdmFuturesClient,
-        symbol: String,
-        signal: Signal,
-        equity: Double,
-        available: Double,
-        riskBudget: Double
-    ): String {
-        val mark = exchange.markPrice(symbol)
-        if (signal.direction == "LONG" && !(signal.stop < mark && mark < signal.trigger)) {
-            throw FuturesApiException("$symbol LONG trigger is stale or stop is breached")
-        }
-        if (signal.direction == "SHORT" && !(signal.trigger < mark && mark < signal.stop)) {
-            throw FuturesApiException("$symbol SHORT trigger is stale or stop is breached")
-        }
-        val stopDistance = abs(signal.trigger - signal.stop)
-        if (stopDistance <= 0.0) throw FuturesApiException("$symbol structural stop distance is invalid")
-        val targetDistance = signal.atr * 4.0
-        val rr = targetDistance / stopDistance
-        if (!rr.isFinite() || rr < minRiskReward) {
-            throw FuturesApiException("$symbol structural setup has R:R ${"%.2f".format(Locale.US, rr)} below ${minRiskReward}")
-        }
-        val costReserve = signal.trigger * (2.0 * feeBufferPerSideFraction + slippageBufferFraction)
-        val rawQtyByRisk = riskBudget / (stopDistance + costReserve)
-        val maxNotional = min(equity * 0.20, max(0.0, available * 0.90))
-        val rawQty = min(rawQtyByRisk, maxNotional / signal.trigger)
-        val quantity = exchange.normalizeQuantity(symbol, rawQty, market = false)
-        val normalized = quantity.toDouble()
-        val notional = normalized * signal.trigger
-        val filters = exchange.symbolFilters(symbol)
-        val minimum = (filters["NOTIONAL"] ?: filters["MIN_NOTIONAL"])?.optString("minNotional")
-            ?.toDoubleOrNull() ?: 0.0
-        if (notional < minimum) throw FuturesApiException("$symbol rounded quantity is below minimum notional")
-        val actualRisk = normalized * (stopDistance + costReserve)
-        if (actualRisk > riskBudget * 1.000001) throw FuturesApiException("$symbol rounded quantity exceeds risk budget")
-        return quantity
-    }
-
-    private fun armEntry(
-        exchange: BinanceUsdmFuturesClient,
-        signal: Signal,
-        quantity: String,
-        riskQuote: Double,
-        equity: Double
-    ): JSONObject {
-        val symbol = signalSymbolFromSignal(signal)
-        val side = exchange.directionToEntrySide(signal.direction)
-        val rules = exchange.symbolFilters(symbol)
-        val trigger = exchange.normalizePrice(symbol, signal.trigger, signal.direction, "ENTRY")
-        val stop = exchange.normalizePrice(symbol, signal.stop, signal.direction, "STOP")
-        val triggerValue = trigger.toDouble()
-        val stopValue = stop.toDouble()
-        if (signal.direction == "LONG" && !(stopValue < triggerValue)) {
-            throw FuturesApiException("$symbol normalized LONG stop must remain below trigger")
-        }
-        if (signal.direction == "SHORT" && !(stopValue > triggerValue)) {
-            throw FuturesApiException("$symbol normalized SHORT stop must remain above trigger")
-        }
-        val mark = exchange.markPrice(symbol)
-        if (signal.direction == "LONG" && !(stopValue < mark && mark < triggerValue)) {
-            throw FuturesApiException("$symbol LONG entry became stale at final validation")
-        }
-        if (signal.direction == "SHORT" && !(triggerValue < mark && mark < stopValue)) {
-            throw FuturesApiException("$symbol SHORT entry became stale at final validation")
-        }
-        val clientAlgoId = clientOrderId("W2FE_")
-        val campaignId = UUID.randomUUID().toString()
-        val campaign = JSONObject()
-            .put("campaign_id", campaignId)
-            .put("symbol", symbol)
-            .put("direction", signal.direction)
-            .put("state", "ENTRY_PENDING")
-            .put("signal_type", signal.type)
-            .put("signal_time_ms", signal.signalBarTime)
-            .put("timeframe", interval())
-            .put("entry_client_algo_id", clientAlgoId)
-            .put("entry_algo_id", "")
-            .put("protection_client_algo_id", "")
-            .put("protection_algo_id", "")
-            .put("entry_trigger", triggerValue)
-            .put("stop_price", stopValue)
-            .put("quantity", quantity.toDouble())
-            .put("risk_quote", riskQuote)
-            .put("equity_at_entry", equity)
-            .put("notional_quote", quantity.toDouble() * triggerValue)
-            .put("atr_at_entry", signal.atr)
-            .put("entry_price", 0.0)
-            .put("position_amt", 0.0)
-            .put("protection_active", false)
-            .put("reason", signal.reason)
-            .put("created_at_ms", System.currentTimeMillis())
-        // Commit the campaign skeleton before placing the exchange entry, so
-        // every restart has an owner for any newly-created order.
-        auditStore.saveFuturesCampaign(symbol, campaign)
-
-        val params = JSONObject()
-            .put("symbol", symbol)
-            .put("side", side)
-            .put("type", "STOP_MARKET")
-            .put("quantity", quantity)
-            .put("triggerPrice", trigger)
-            .put("clientAlgoId", clientAlgoId)
-            .put("structuralStop", stop)
-            .put("riskQuote", riskQuote)
-            .put("signalType", signal.type)
-        try {
-            val response = executeMutation(
-                exchange,
-                symbol,
-                "ENTRY",
-                signal.direction,
-                side,
-                clientAlgoId,
-                params
-            ) {
-                exchange.submitConditional(
-                    symbol = symbol,
-                    side = side,
-                    type = "STOP_MARKET",
-                    quantity = quantity,
-                    triggerPrice = trigger,
-                    clientAlgoId = clientAlgoId,
-                    closePosition = false,
-                    reduceOnly = false
-                )
-            }
-            campaign.put("entry_algo_id", response.optString("algoId"))
-            campaign.put("state", "ENTRY_PENDING")
-            campaign.put("entry_status", response.optString("algoStatus"))
-            auditStore.saveFuturesCampaign(symbol, campaign)
-            return JSONObject()
-                .put("symbol", symbol)
-                .put("direction", signal.direction)
-                .put("signal_type", signal.type)
-                .put("action", "ENTRY_ARMED")
-                .put("client_algo_id", clientAlgoId)
-                .put("algo_id", response.optString("algoId"))
-                .put("trigger_price", triggerValue)
-                .put("stop_price", stopValue)
-                .put("quantity", quantity)
-                .put("risk_quote", riskQuote)
-        } catch (x: Exception) {
-            campaign.put("state", if (x is FuturesApiException && x.outcomeUnknown) "ENTRY_PENDING" else "CLOSED")
-            campaign.put("reason", x.message ?: x.javaClass.simpleName)
-            auditStore.saveFuturesCampaign(symbol, campaign)
-            throw x
-        }
-    }
-
-    private fun signalSymbolFromSignal(signal: Signal): String {
-        // Signal carries a price hypothesis only; symbol is attached by the
-        // per-symbol caller immediately before sizing/arming.
-        return currentProcessingSymbol.get()
-            ?: throw IllegalStateException("Signal lost its symbol binding")
-    }
-
-    private val currentProcessingSymbol = ThreadLocal<String?>()
-
-    private fun position(exchange: BinanceUsdmFuturesClient, symbol: String): JSONObject {
-        val rows = exchange.positionRisk(symbol)
-        for (i in 0 until rows.length()) {
-            val row = rows.optJSONObject(i) ?: continue
-            if (row.optString("symbol").uppercase(Locale.US) == symbol.uppercase(Locale.US)) return row
-        }
-        throw FuturesApiException("$symbol positionRisk response omitted symbol")
-    }
-
-    private fun hasLivePosition(exchange: BinanceUsdmFuturesClient, symbol: String): Boolean =
-        abs(position(exchange, symbol).optString("positionAmt").toDoubleOrNull() ?: 0.0) > 1e-12
-
-    private fun isolated(row: JSONObject): Boolean =
-        row.optBoolean("isolated", false) ||
-            row.optString("isolated").equals("true", true) ||
-            row.optString("marginType").equals("isolated", true)
-
-    private fun hasActiveCampaign(symbol: String): Boolean {
-        val row = auditStore.futuresCampaign(symbol) ?: return false
-        return row.optString("state").uppercase(Locale.US) !in setOf("CLOSED", "FLAT")
-    }
-
-    private fun activeCampaign(symbol: String): Boolean = hasActiveCampaign(symbol)
-
-    private fun hasUnmanagedFuturesPositions(exchange: BinanceUsdmFuturesClient): Boolean {
-        val managed = auditStore.activeFuturesCampaigns().map { it.optString("symbol").uppercase(Locale.US) }.toSet()
-        val rows = exchange.positionRisk()
-        for (i in 0 until rows.length()) {
-            val row = rows.optJSONObject(i) ?: continue
-            val symbol = row.optString("symbol").uppercase(Locale.US)
-            val amount = row.optString("positionAmt").toDoubleOrNull() ?: 0.0
-            if (abs(amount) > 1e-12 && symbol !in managed) return true
-        }
-        return false
-    }
-
-    private fun reconcileAll(exchange: BinanceUsdmFuturesClient): JSONObject {
-        val rows = auditStore.activeFuturesCampaigns()
-        val results = JSONArray()
-        var unresolved = 0
-        for (campaign in rows) {
-            val symbol = campaign.optString("symbol").uppercase(Locale.US)
-            try {
-                val result = reconcileCampaign(exchange, campaign)
-                results.put(result)
-                if (result.optString("state") == "RECONCILE_REQUIRED") unresolved++
-            } catch (x: Exception) {
-                unresolved++
-                results.put(JSONObject()
-                    .put("symbol", symbol)
-                    .put("state", "RECONCILE_REQUIRED")
-                    .put("error", x.message ?: x.javaClass.simpleName))
-                setCampaignState(campaign, "RECONCILE_REQUIRED", x.message ?: "reconciliation failed")
-            }
-        }
-        val unknown = unresolvedIntentCount(exchange)
-        if (unknown > 0) unresolved++
-        return JSONObject().put("campaigns", results).put("unresolved", unresolved)
-    }
-
-    private fun reconcileCampaign(exchange: BinanceUsdmFuturesClient, campaignInput: JSONObject): JSONObject {
-        val campaign = JSONObject(campaignInput.toString())
-        val symbol = campaign.optString("symbol").uppercase(Locale.US)
-        val direction = campaign.optString("direction").uppercase(Locale.US)
-        if (direction !in setOf("LONG", "SHORT")) {
-            return setCampaignState(campaign, "RECONCILE_REQUIRED", "Campaign direction is invalid")
-        }
-        val position = position(exchange, symbol)
-        val amount = position.optString("positionAmt").toDoubleOrNull() ?: 0.0
-        val expectedPositive = direction == "LONG"
-        if (abs(amount) > 1e-12 && ((amount > 0.0) != expectedPositive)) {
-            return setCampaignState(campaign, "RECONCILE_REQUIRED", "Exchange position direction conflicts with campaign direction")
-        }
-        if (campaign.optString("state") == "ENTRY_PENDING" && abs(amount) <= 1e-12) {
-            val algo = runCatching {
-                exchange.getAlgoOrder(symbol, clientAlgoId = campaign.optString("entry_client_algo_id"))
-            }.getOrNull()
-            if (algo != null) {
-                val status = algo.optString("algoStatus").uppercase(Locale.US)
-                if (status in setOf("NEW", "WORKING", "PENDING")) {
-                    campaign.put("entry_status", status)
-                    auditStore.saveFuturesCampaign(symbol, campaign)
-                    return JSONObject().put("symbol", symbol).put("state", "ENTRY_PENDING").put("algo_status", status)
-                }
-                if (status in setOf("CANCELED", "EXPIRED", "REJECTED")) {
-                    campaign.put("state", "CLOSED")
-                    campaign.put("protection_active", false)
-                    campaign.put("reason", "Entry algorithm reached terminal state $status")
-                    auditStore.saveFuturesCampaign(symbol, campaign)
-                    updateIntentByClientId(campaign.optString("entry_client_algo_id"), status, algo.toString())
-                    return JSONObject().put("symbol", symbol).put("state", "CLOSED").put("algo_status", status)
-                }
-            }
-            return setCampaignState(
-                campaign,
-                "RECONCILE_REQUIRED",
-                "Pending entry has no exchange position and its terminal/fill state cannot be verified"
-            )
-        }
-
-        if (abs(amount) <= 1e-12 && campaign.optString("state") in setOf("OPEN", "OPEN_UNPROTECTED", "OPEN_PROTECTED", "EXIT_PENDING")) {
-            val protectionClientId = campaign.optString("protection_client_algo_id")
-            if (protectionClientId.isNotBlank()) {
-                val protection = runCatching {
-                    exchange.getAlgoOrder(symbol, clientAlgoId = protectionClientId)
-                }.getOrNull()
-                val actualOrderId = protection?.optString("actualOrderId").orEmpty()
-                if (protection != null && actualOrderId.isNotBlank() && actualOrderId != "0") {
-                    val actualOrder = runCatching {
-                        exchange.getOrder(symbol, orderId = actualOrderId)
-                    }.getOrNull()
-                    if (actualOrder?.optString("status").equals("FILLED", true)) {
-                        recordExchangeExit(exchange, campaign, protection!!, actualOrder!!, "EXCHANGE_PROTECTIVE_STOP_FILLED")
-                        return JSONObject().put("symbol", symbol).put("state", "CLOSED").put("reason", "exchange protective stop filled")
-                    }
-                }
-            }
-            return setCampaignState(
-                campaign,
-                "RECONCILE_REQUIRED",
-                "A locally open campaign is flat at Binance, but its closing order/fill cannot be verified"
-            )
-        }
-
-        if (abs(amount) <= 1e-12) {
-            return JSONObject().put("symbol", symbol).put("state", "FLAT")
-        }
-
-        campaign.put("position_amt", amount)
-        campaign.put("entry_price", position.optString("entryPrice").toDoubleOrNull() ?: campaign.optDouble("entry_price", 0.0))
-        if (campaign.optString("state") in setOf("ENTRY_PENDING", "OPEN", "OPEN_UNPROTECTED")) {
-            campaign.put("state", "OPEN_UNPROTECTED")
-            campaign.put("entry_filled_at_ms", System.currentTimeMillis())
-            auditStore.saveFuturesCampaign(symbol, campaign)
-            try {
-                placeProtection(exchange, campaign)
-            } catch (x: Exception) {
-                val exit = runCatching { exitPosition(exchange, campaign, "EMERGENCY_NO_PROTECTION") }.getOrNull()
-                if (exit == null || exit.optString("action") != "CLOSED") {
-                    return setCampaignState(
-                        campaign,
-                        "RECONCILE_REQUIRED",
-                        "Position exists but protective stop failed and emergency exit was not confirmed: ${x.message}"
-                    )
-                }
-                return JSONObject().put("symbol", symbol).put("state", "CLOSED").put("reason", "emergency exit after failed protection")
-            }
-            return JSONObject()
-                .put("symbol", symbol)
-                .put("state", "OPEN_PROTECTED")
-                .put("direction", direction)
-                .put("position_amt", amount)
-        }
-
-        if (campaign.optString("state") in setOf("OPEN_PROTECTED", "RECONCILE_REQUIRED", "EXIT_PENDING")) {
-            return verifyOrRestoreLiveProtection(exchange, campaign)
-        }
-
-        // A position without a recognized campaign state is never left open on
-        // the assumption that an old in-memory object is still authoritative.
-        val emergency = runCatching { exitPosition(exchange, campaign, "UNKNOWN_CAMPAIGN_STATE") }.getOrNull()
-        if (emergency?.optString("action") == "CLOSED") {
-            return JSONObject().put("symbol", symbol).put("state", "CLOSED").put("reason", "exited unknown campaign state")
-        }
-        return setCampaignState(campaign, "RECONCILE_REQUIRED", "Unknown campaign state: ${campaign.optString("state")}")
-    }
-
-    private fun verifyOrRestoreLiveProtection(
-        exchange: BinanceUsdmFuturesClient,
-        campaignInput: JSONObject
-    ): JSONObject {
-        val campaign = JSONObject(campaignInput.toString())
-        val symbol = campaign.optString("symbol").uppercase(Locale.US)
-        val direction = campaign.optString("direction").uppercase(Locale.US)
-        var clientId = campaign.optString("protection_client_algo_id")
-
-        // Recover a crash after a stop POST but before its response was linked
-        // to the campaign row, using the durable intent's stable clientAlgoId.
-        if (clientId.isBlank()) {
-            val pendingProtection = auditStore.pendingFuturesIntents().firstOrNull { row ->
-                row.optString("symbol").equals(symbol, true) &&
-                    row.optString("operation").uppercase(Locale.US) in setOf("PROTECTION", "PROTECTION_REPLACE") &&
-                    row.optString("status").uppercase(Locale.US) in setOf("PENDING", "SUBMITTING", "UNKNOWN", "SUBMITTED", "RECONCILE_REQUIRED")
-            }
-            if (pendingProtection != null) clientId = pendingProtection.optString("client_id")
-        }
-
-        if (clientId.isNotBlank()) {
-            val protection = runCatching {
-                exchange.getAlgoOrder(symbol, clientAlgoId = clientId)
-            }.getOrNull()
-            if (protection != null) {
-                val status = protection.optString("algoStatus").uppercase(Locale.US)
-                if (status in setOf("NEW", "WORKING", "PENDING")) {
-                    campaign.put("protection_client_algo_id", clientId)
-                    campaign.put("protection_algo_id", protection.optString("algoId"))
-                    campaign.put("protection_active", true)
-                    campaign.put("state", "OPEN_PROTECTED")
-                    auditStore.saveFuturesCampaign(symbol, campaign)
-                    updateIntentByClientId(clientId, "SUBMITTED", protection.toString())
-                    return JSONObject().put("symbol", symbol).put("state", "OPEN_PROTECTED").put("protection_status", status)
-                }
-
-                if (status in setOf("CANCELED", "EXPIRED", "REJECTED")) {
-                    val open = exchange.openAlgoOrders(symbol)
-                    val stillOpen = (0 until open.length()).any { i ->
-                        open.optJSONObject(i)?.optString("clientAlgoId") == clientId
-                    }
-                    if (!stillOpen) {
-                        campaign.put("state", "OPEN_UNPROTECTED")
-                        campaign.put("protection_active", false)
-                        auditStore.saveFuturesCampaign(symbol, campaign)
-                        return try {
-                            val replacement = placeProtection(exchange, campaign)
-                            JSONObject().put("symbol", symbol).put("state", "OPEN_PROTECTED")
-                                .put("reason", "replaced terminal protective order")
-                                .put("protection", replacement)
-                        } catch (x: Exception) {
-                            val exit = runCatching { exitPosition(exchange, campaign, "PROTECTION_LOST") }.getOrNull()
-                            if (exit?.optString("action") == "CLOSED") {
-                                JSONObject().put("symbol", symbol).put("state", "CLOSED").put("reason", "exit after lost protection")
-                            } else {
-                                setCampaignState(campaign, "RECONCILE_REQUIRED", "Protection was terminal and replacement failed: ${x.message}")
-                            }
-                        }
-                    }
-                }
-
-                // A triggered/finished stop with exposure still present may
-                // have partially reduced the position. Finish with reduce-only.
-                if (status in setOf("TRIGGERED", "FINISHED")) {
-                    val exit = runCatching { exitPosition(exchange, campaign, "PROTECTIVE_STOP_TRIGGERED_RESIDUAL") }.getOrNull()
-                    if (exit?.optString("action") == "CLOSED") return exit
-                    return setCampaignState(campaign, "RECONCILE_REQUIRED", "Protective stop triggered but exchange exposure remains")
-                }
-            }
-        }
-
-        // If the stop state cannot be verified, reduce exposure rather than
-        // leaving a live position dependent on an in-memory watchdog.
-        val emergency = runCatching { exitPosition(exchange, campaign, "PROTECTION_STATE_UNVERIFIED") }.getOrNull()
-        if (emergency?.optString("action") == "CLOSED") return emergency
-        return setCampaignState(
-            campaign,
-            "RECONCILE_REQUIRED",
-            "Live position has no authoritatively confirmed protective stop; emergency reduce-only exit also needs reconciliation"
-        )
-    }
-
-    private fun enforceKillOnCampaigns(exchange: BinanceUsdmFuturesClient): JSONArray {
-        val results = JSONArray()
-        for (row in auditStore.activeFuturesCampaigns()) {
-            val symbol = row.optString("symbol").uppercase(Locale.US)
-            val campaign = JSONObject(row.toString())
-            try {
-                val live = position(exchange, symbol).optString("positionAmt").toDoubleOrNull() ?: 0.0
-                if (abs(live) > 1e-12) {
-                    results.put(exitPosition(exchange, campaign, "KILL_SWITCH_RETRY"))
-                } else if (campaign.optString("state") == "ENTRY_PENDING") {
-                    cancelPendingEntry(exchange, campaign, "KILL_SWITCH_RETRY")
-                    results.put(JSONObject().put("symbol", symbol).put("action", "ENTRY_CANCEL_CONFIRMED"))
-                }
-            } catch (x: Exception) {
-                reconcileRequired = true
-                results.put(JSONObject().put("symbol", symbol).put("state", "RECONCILE_REQUIRED")
-                    .put("error", x.message ?: x.javaClass.simpleName))
-            }
-        }
-        return results
-    }
-
-    private fun placeProtection(exchange: BinanceUsdmFuturesClient, campaignInput: JSONObject): JSONObject {
-        val campaign = JSONObject(campaignInput.toString())
-        val symbol = campaign.optString("symbol").uppercase(Locale.US)
-        val direction = campaign.optString("direction").uppercase(Locale.US)
-        val pos = position(exchange, symbol)
-        val amount = pos.optString("positionAmt").toDoubleOrNull() ?: 0.0
-        if (abs(amount) <= 1e-12) throw FuturesApiException("$symbol has no live Futures position to protect")
-        if ((amount > 0.0) != (direction == "LONG")) {
-            throw FuturesApiException("$symbol live position direction changed before protection")
-        }
-        val stop = exchange.normalizePrice(
-            symbol,
-            campaign.optDouble("stop_price"),
-            direction,
-            "STOP"
-        )
-        val trigger = stop.toDouble()
-        val mark = exchange.markPrice(symbol)
-        if (direction == "LONG" && trigger >= mark) throw FuturesApiException("$symbol LONG protective stop is at/above mark; market exit required")
-        if (direction == "SHORT" && trigger <= mark) throw FuturesApiException("$symbol SHORT protective stop is at/below mark; market exit required")
-
-        val clientId = clientOrderId("W2FP_")
-        val side = exchange.directionToProtectiveSide(direction)
-        val params = JSONObject()
-            .put("symbol", symbol)
-            .put("side", side)
-            .put("type", "STOP_MARKET")
-            .put("triggerPrice", stop)
-            .put("closePosition", true)
-            .put("clientAlgoId", clientId)
-        val response = executeMutation(
-            exchange, symbol, "PROTECTION", direction, side, clientId, params
-        ) {
-            exchange.submitConditional(
-                symbol = symbol,
-                side = side,
-                type = "STOP_MARKET",
-                quantity = null,
-                triggerPrice = stop,
-                clientAlgoId = clientId,
-                closePosition = true,
-                reduceOnly = false
-            )
-        }
-        val algoId = response.optString("algoId")
-        if (algoId.isBlank()) throw FuturesApiException("$symbol protection response lacks algoId", outcomeUnknown = true)
-        campaign.put("protection_client_algo_id", clientId)
-        campaign.put("protection_algo_id", algoId)
-        campaign.put("protection_active", true)
-        campaign.put("state", "OPEN_PROTECTED")
-        campaign.put("position_amt", amount)
-        campaign.put("entry_price", pos.optString("entryPrice").toDoubleOrNull() ?: campaign.optDouble("entry_price", 0.0))
-        campaign.put("protection_status", response.optString("algoStatus"))
-        auditStore.saveFuturesCampaign(symbol, campaign)
-        return response
-    }
-
-    private fun exitPosition(
-        exchange: BinanceUsdmFuturesClient,
-        campaignInput: JSONObject,
-        reason: String
-    ): JSONObject {
-        val campaign = JSONObject(campaignInput.toString())
-        val symbol = campaign.optString("symbol").uppercase(Locale.US)
-        val direction = campaign.optString("direction").uppercase(Locale.US)
-        val position = position(exchange, symbol)
-        val amount = position.optString("positionAmt").toDoubleOrNull() ?: 0.0
-        if (abs(amount) <= 1e-12) {
-            return JSONObject().put("symbol", symbol).put("action", "FLAT").put("reason", "exchange position already flat")
-        }
-        if ((amount > 0.0) != (direction == "LONG")) {
-            return setCampaignState(campaign, "RECONCILE_REQUIRED", "Reduce-only exit blocked: position direction mismatch")
-        }
-
-        // Cancel the bot-owned protection first where possible. An ambiguous
-        // cancel does not prevent a reduce-only exit, which cannot reverse side.
-        val protectionClientId = campaign.optString("protection_client_algo_id")
-        if (protectionClientId.isNotBlank()) {
-            runCatching { cancelOwnedProtection(exchange, campaign, protectionClientId) }
-                .onFailure { lastError = "Protection cancel uncertain; reduce-only exit still attempted: ${it.message}" }
-        }
-
-        val side = exchange.directionToExitSide(direction)
-        val clientId = clientOrderId("W2FX_")
-        val quantity = exchange.normalizeQuantity(symbol, abs(amount), market = true)
-        val params = JSONObject()
-            .put("symbol", symbol)
-            .put("side", side)
-            .put("type", "MARKET")
-            .put("quantity", quantity)
-            .put("reduceOnly", true)
-            .put("reason", reason)
-            .put("clientOrderId", clientId)
-        val response = executeMutation(
-            exchange, symbol, "EXIT", direction, side, clientId, params
-        ) {
-            exchange.submitMarket(symbol, side, quantity, clientId, reduceOnly = true)
-        }
-        val latestPosition = position(exchange, symbol)
-        val residual = latestPosition.optString("positionAmt").toDoubleOrNull() ?: Double.NaN
-        if (!residual.isFinite()) {
-            return setCampaignState(campaign, "RECONCILE_REQUIRED", "Exit returned but post-exit position is invalid")
-        }
-        if (abs(residual) > 1e-12) {
-            campaign.put("position_amt", residual)
-            return setCampaignState(campaign, "RECONCILE_REQUIRED", "Reduce-only exit left residual quantity $residual")
-        }
-        recordMarketExit(exchange, campaign, response, reason)
-        campaign.put("state", "CLOSED")
-        campaign.put("position_amt", 0.0)
-        campaign.put("protection_active", false)
-        campaign.put("exit_reason", reason)
-        campaign.put("closed_at_ms", System.currentTimeMillis())
-        auditStore.saveFuturesCampaign(symbol, campaign)
-        return JSONObject()
-            .put("symbol", symbol)
-            .put("direction", direction)
-            .put("action", "CLOSED")
-            .put("order_id", response.optString("orderId"))
-            .put("status", response.optString("status"))
-            .put("reason", reason)
-    }
-
-    private fun cancelOwnedProtection(exchange: BinanceUsdmFuturesClient, campaign: JSONObject, targetClientId: String) {
-        val symbol = campaign.optString("symbol").uppercase(Locale.US)
-        val actionId = clientOrderId("W2FC_")
-        executeMutation(
-            exchange, symbol, "CANCEL_PROTECTION", campaign.optString("direction"),
-            exchange.directionToProtectiveSide(campaign.optString("direction")),
-            actionId,
-            JSONObject().put("targetClientAlgoId", targetClientId)
-        ) {
-            exchange.cancelAlgo(symbol, targetClientId)
-        }
-    }
-
-    private fun cancelPendingEntry(exchange: BinanceUsdmFuturesClient, campaign: JSONObject, reason: String) {
-        val symbol = campaign.optString("symbol").uppercase(Locale.US)
-        val target = campaign.optString("entry_client_algo_id")
-        if (target.isBlank()) {
-            setCampaignState(campaign, "RECONCILE_REQUIRED", "Cannot cancel pending entry: clientAlgoId missing")
-            return
-        }
-        val actionId = clientOrderId("W2FC_")
-        executeMutation(
-            exchange, symbol, "CANCEL_ENTRY", campaign.optString("direction"),
-            exchange.directionToEntrySide(campaign.optString("direction")),
-            actionId,
-            JSONObject().put("targetClientAlgoId", target).put("reason", reason)
-        ) {
-            exchange.cancelAlgo(symbol, target)
-        }
-        campaign.put("state", "CLOSED")
-        campaign.put("reason", reason)
-        campaign.put("closed_at_ms", System.currentTimeMillis())
-        auditStore.saveFuturesCampaign(symbol, campaign)
-    }
-
-    private fun manageExistingCampaigns(exchange: BinanceUsdmFuturesClient) {
-        val campaigns = auditStore.activeFuturesCampaigns()
-        for (row in campaigns) {
-            val symbol = row.optString("symbol").uppercase(Locale.US)
-            val campaign = JSONObject(row.toString())
-            try {
-                val position = position(exchange, symbol)
-                val amount = position.optString("positionAmt").toDoubleOrNull() ?: 0.0
-                if (abs(amount) <= 1e-12) continue
-                val tf = campaign.optString("timeframe", interval())
-                val frame = analyseFrame(exchange, symbol, tf)
-                if (frame != null) {
-                    manageStructuralExit(exchange, campaign, frame)
-                }
-            } catch (x: Exception) {
-                lastError = "$symbol position management: ${x.message ?: x.javaClass.simpleName}"
-                reconcileRequired = true
-                setCampaignState(campaign, "RECONCILE_REQUIRED", lastError!!)
-            }
-        }
-    }
-
-    private fun manageStructuralExit(exchange: BinanceUsdmFuturesClient, campaign: JSONObject, frame: Frame) {
-        val symbol = campaign.optString("symbol").uppercase(Locale.US)
-        val direction = campaign.optString("direction").uppercase(Locale.US)
-        if (campaign.optString("state") != "OPEN_PROTECTED") return
-        if (frame.bars.size < 3 || frame.atr <= 0.0) return
-        val lastTwo = frame.bars.takeLast(2)
-        val opposite = if (direction == "LONG") {
-            lastTwo.all { bar ->
-                val index = frame.bars.indexOf(bar)
-                val values = indicatorTuple(frame.bars, index)
-                val teethAtBar = values[1]
-                val aoAtBar = values[3]
-                val acAtBar = values[5]
-                bar.close < teethAtBar && aoAtBar.isFinite() && acAtBar.isFinite() &&
-                    aoAtBar < 0.0 && acAtBar < 0.0
-            }
-        } else {
-            lastTwo.all { bar ->
-                val index = frame.bars.indexOf(bar)
-                val values = indicatorTuple(frame.bars, index)
-                val teethAtBar = values[1]
-                val aoAtBar = values[3]
-                val acAtBar = values[5]
-                bar.close > teethAtBar && aoAtBar.isFinite() && acAtBar.isFinite() &&
-                    aoAtBar > 0.0 && acAtBar > 0.0
-            }
-        }
-        if (opposite) {
-            exitPosition(exchange, campaign, "WILLIAMS_TWO_BAR_STRUCTURAL_REVERSAL")
-            return
-        }
-
-        val position = position(exchange, symbol)
-        val mark = exchange.markPrice(symbol)
-        val entry = position.optString("entryPrice").toDoubleOrNull() ?: campaign.optDouble("entry_price", 0.0)
-        if (entry <= 0.0) return
-        val favorable = if (direction == "LONG") mark - entry else entry - mark
-        if (favorable / frame.atr < 0.5) return
-        val oldStop = campaign.optDouble("stop_price", 0.0)
-        val candidate = if (direction == "LONG") {
-            val fractal = frame.latestDownFractal?.second ?: 0.0
-            max(frame.teeth, fractal) - frame.atr * 0.25
-        } else {
-            val fractal = frame.latestUpFractal?.second ?: 0.0
-            min(frame.teeth, if (fractal > 0.0) fractal else frame.teeth) + frame.atr * 0.25
-        }
-        val tighter = if (direction == "LONG") candidate > oldStop else oldStop <= 0.0 || candidate < oldStop
-        val safe = if (direction == "LONG") candidate > 0.0 && candidate < mark - frame.atr * 0.1
-            else candidate > mark + frame.atr * 0.1
-        if (!tighter || !safe) return
-
-        val normalized = exchange.normalizePrice(symbol, candidate, direction, "STOP").toDouble()
-        val oldClientId = campaign.optString("protection_client_algo_id")
-        // Install a new confirmed stop first. Only then cancel the prior stop,
-        // never leaving a live position without server-side protection.
-        val newClientId = clientOrderId("W2FP_")
-        val side = exchange.directionToProtectiveSide(direction)
-        val newParams = JSONObject().put("symbol", symbol).put("side", side)
-            .put("type", "STOP_MARKET").put("triggerPrice", normalized).put("closePosition", true)
-            .put("clientAlgoId", newClientId).put("reason", "STRUCTURAL_TRAIL")
-        val newProtection = executeMutation(exchange, symbol, "PROTECTION_REPLACE", direction, side, newClientId, newParams) {
-            exchange.submitConditional(symbol, side, "STOP_MARKET", null, normalized.toString(), newClientId, closePosition = true)
-        }
-        val algoId = newProtection.optString("algoId")
-        if (algoId.isBlank()) {
-            setCampaignState(campaign, "RECONCILE_REQUIRED", "Replacement stop response omitted algoId")
-            return
-        }
-        campaign.put("protection_client_algo_id", newClientId)
-        campaign.put("protection_algo_id", algoId)
-        campaign.put("stop_price", normalized)
-        campaign.put("protection_active", true)
-        auditStore.saveFuturesCampaign(symbol, campaign)
-        if (oldClientId.isNotBlank()) {
-            runCatching { cancelOwnedProtection(exchange, campaign, oldClientId) }
-                .onFailure {
-                    // Both stops remain exchange-side; this is safer than a
-                    // naked interval, but duplicate protection needs reconciliation.
-                    setCampaignState(campaign, "RECONCILE_REQUIRED", "New stop is active but old stop cancellation is uncertain: ${it.message}")
-                }
-        }
-    }
-
-    private fun indicatorTuple(bars: List<Bar>, index: Int): List<Double> {
-        val median = bars.map { (it.high + it.low) / 2.0 }
-        val ao = median.indices.map { i ->
-            val f = smaAt(median, i, 5)
-            val s = smaAt(median, i, 34)
-            if (f.isFinite() && s.isFinite()) f - s else Double.NaN
-        }
-        val ac = ao.indices.map { i ->
-            val avg = smaAt(ao, i, 5)
-            if (ao[i].isFinite() && avg.isFinite()) ao[i] - avg else Double.NaN
-        }
-        val jaw = shifted(smma(median, 13), 8)
-        val teeth = shifted(smma(median, 8), 5)
-        val lips = shifted(smma(median, 5), 3)
-        return listOf(
-            jaw.getOrElse(index) { Double.NaN },
-            teeth.getOrElse(index) { Double.NaN },
-            lips.getOrElse(index) { Double.NaN },
-            ao.getOrElse(index) { Double.NaN },
-            ao.getOrElse(index - 1) { Double.NaN },
-            ac.getOrElse(index) { Double.NaN },
-            ac.getOrElse(index - 1) { Double.NaN }
-        )
-    }
-
-    private fun recordMarketExit(exchange: BinanceUsdmFuturesClient, campaign: JSONObject, response: JSONObject, reason: String) {
-        val symbol = campaign.optString("symbol").uppercase(Locale.US)
-        val orderId = response.optString("orderId")
-        var realized = 0.0
-        var feesQuote = 0.0
-        var feeUnknown = false
-        runCatching {
-            val trades = exchange.getUserTrades(symbol, orderId)
-            for (i in 0 until trades.length()) {
-                val row = trades.optJSONObject(i) ?: continue
-                realized += row.optString("realizedPnl").toDoubleOrNull() ?: 0.0
-                val fee = row.optString("commission").toDoubleOrNull() ?: 0.0
-                when (row.optString("commissionAsset").uppercase(Locale.US)) {
-                    "USDT", "USDC" -> feesQuote += fee
-                    "" -> Unit
-                    else -> feeUnknown = true
-                }
-            }
-        }.onFailure { feeUnknown = true }
-        campaign.put("realized_pnl_quote", campaign.optDouble("realized_pnl_quote", 0.0) + realized - feesQuote)
-        campaign.put("last_exit_order_id", orderId)
-        campaign.put("last_exit_fee_quote", feesQuote)
-        campaign.put("last_exit_fee_unknown", feeUnknown)
-        campaign.put("exit_reason", reason)
-    }
-
-    private fun recordExchangeExit(
-        exchange: BinanceUsdmFuturesClient,
-        campaign: JSONObject,
-        protection: JSONObject,
-        actualOrder: JSONObject,
-        reason: String
-    ) {
-        val symbol = campaign.optString("symbol").uppercase(Locale.US)
-        val orderId = actualOrder.optString("orderId")
-        val trades = exchange.getUserTrades(symbol, orderId)
-        var realized = 0.0
-        var feeQuote = 0.0
-        var unknown = false
-        for (i in 0 until trades.length()) {
-            val row = trades.optJSONObject(i) ?: continue
-            realized += row.optString("realizedPnl").toDoubleOrNull() ?: 0.0
-            val fee = row.optString("commission").toDoubleOrNull() ?: 0.0
-            when (row.optString("commissionAsset").uppercase(Locale.US)) {
-                "USDT", "USDC" -> feeQuote += fee
-                "" -> Unit
-                else -> unknown = true
-            }
-        }
-        campaign.put("realized_pnl_quote", campaign.optDouble("realized_pnl_quote", 0.0) + realized - feeQuote)
-        campaign.put("exit_reason", reason)
-        campaign.put("protection_active", false)
-        campaign.put("position_amt", 0.0)
-        campaign.put("closed_at_ms", System.currentTimeMillis())
-        campaign.put("exchange_exit_algo_id", protection.optString("algoId"))
-        campaign.put("exchange_exit_order_id", orderId)
-        campaign.put("exit_fee_unknown", unknown)
-        campaign.put("state", "CLOSED")
-        auditStore.saveFuturesCampaign(symbol, campaign)
-        updateIntentByClientId(campaign.optString("protection_client_algo_id"), "CONFIRMED", actualOrder.toString())
-    }
-
-    private fun setCampaignState(campaignInput: JSONObject, state: String, reason: String): JSONObject {
-        val campaign = JSONObject(campaignInput.toString())
-        val symbol = campaign.optString("symbol").uppercase(Locale.US)
-        campaign.put("state", state)
-        campaign.put("reason", reason)
-        campaign.put("updated_at_ms", System.currentTimeMillis())
-        if (state == "RECONCILE_REQUIRED") reconcileRequired = true
-        auditStore.saveFuturesCampaign(symbol, campaign)
-        return JSONObject().put("symbol", symbol).put("state", state).put("reason", reason)
-    }
-
-    private fun updateIntentByClientId(clientId: String, status: String, response: String) {
-        if (clientId.isBlank()) return
-        val row = auditStore.pendingFuturesIntents().firstOrNull { it.optString("client_id") == clientId }
-            ?: return
-        auditStore.updateFuturesIntent(row.optString("intent_id"), status, response)
-    }
-
-    private fun isUnresolvedIntent(row: JSONObject): Boolean =
-        row.optString("status").uppercase(Locale.US) in
-            setOf("PENDING", "SUBMITTING", "UNKNOWN", "RECONCILE_REQUIRED")
-
-    private fun unresolvedIntentCount(exchange: BinanceUsdmFuturesClient): Int {
-        val rows = auditStore.pendingFuturesIntents()
-        var unresolved = 0
-        for (row in rows) {
-            val status = row.optString("status").uppercase(Locale.US)
-            if (status !in setOf("PENDING", "SUBMITTING", "UNKNOWN", "RECONCILE_REQUIRED")) continue
-            val operation = row.optString("operation").uppercase(Locale.US)
-            val params = runCatching { JSONObject(row.optString("params_json", "{}")) }.getOrDefault(JSONObject())
-            val symbol = row.optString("symbol")
-            try {
-                when (operation) {
-                    "ENTRY", "PROTECTION", "PROTECTION_REPLACE" -> {
-                        val found = exchange.getAlgoOrder(symbol, clientAlgoId = row.optString("client_id"))
-                        val statusRemote = found.optString("algoStatus").uppercase(Locale.US)
-                        if (statusRemote.isNotBlank()) {
-                            auditStore.updateFuturesIntent(row.optString("intent_id"), "SUBMITTED", found.toString())
-                        } else unresolved++
-                    }
-                    "EXIT" -> {
-                        val found = exchange.getOrder(symbol, clientOrderId = row.optString("client_id"))
-                        val statusRemote = found.optString("status").uppercase(Locale.US)
-                        if (statusRemote.isNotBlank()) {
-                            auditStore.updateFuturesIntent(row.optString("intent_id"), "SUBMITTED", found.toString())
-                        } else unresolved++
-                    }
-                    "CANCEL_PROTECTION", "CANCEL_ENTRY" -> {
-                        val target = params.optString("targetClientAlgoId")
-                        if (target.isBlank()) {
-                            unresolved++
-                        } else {
-                            val found = exchange.getAlgoOrder(symbol, clientAlgoId = target)
-                            val remote = found.optString("algoStatus").uppercase(Locale.US)
-                            if (remote in setOf("CANCELED", "EXPIRED", "FINISHED")) {
-                                auditStore.updateFuturesIntent(row.optString("intent_id"), "CONFIRMED", found.toString())
-                            } else unresolved++
-                        }
-                    }
-                    "PREPARE_SYMBOL" -> {
-                        val pos = position(exchange, symbol)
-                        if (isolated(pos) && pos.optString("leverage").toIntOrNull() == 1) {
-                            auditStore.updateFuturesIntent(row.optString("intent_id"), "CONFIRMED", pos.toString())
-                        } else unresolved++
-                    }
-                    else -> unresolved++
-                }
-            } catch (_: Exception) {
-                unresolved++
-            }
-        }
-        return unresolved
-    }
-
-    private fun activeRiskQuote(): Double =
-        auditStore.activeFuturesCampaigns()
-            .filter { it.optString("state") !in setOf("CLOSED", "FLAT") }
-            .sumOf { it.optDouble("risk_quote", 0.0) }
-
-    private fun currentDailyTradeGuardPlaceholder() = Unit
-
-    private fun auditEvent(type: String, payload: JSONObject) {
-        runCatching {
-            auditStore.recordRestCall("EVENT", type, 200, null, payload.toString())
         }
     }
 
