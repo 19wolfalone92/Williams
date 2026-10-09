@@ -254,3 +254,20 @@ def test_risk_engine_rejects_prices_that_collapse_stop_distance_to_zero():
     assert result.allowed is False
     assert result.position_quote == 0.0
     assert "stop" in result.reason.lower() or "distance" in result.reason.lower()
+
+
+def test_invalid_explicit_structural_stop_fails_closed_instead_of_atr_fallback():
+    engine = RiskEngine(balance_quote=10_000)
+    cases = [
+        ({"side": "LONG", "entry_price": 100, "atr": 2, "invalidation_price": 101},
+         "LONG structural invalidation"),
+        ({"side": "SHORT", "entry_price": 100, "atr": 2, "invalidation_price": 99},
+         "SHORT structural invalidation"),
+        ({"side": "LONG", "entry_price": 100, "atr": 2, "invalidation_price": -1},
+         "cannot be negative"),
+    ]
+    for kwargs, expected in cases:
+        result = engine.analyse(symbol="TESTUSDT", **kwargs)
+        assert result.allowed is False
+        assert result.position_quote == 0.0
+        assert expected in result.reason
