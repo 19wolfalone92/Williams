@@ -411,6 +411,85 @@ class FuturesRuntime:
             context_versions=versions,
         )
 
+    def _directional_add_on_signal(
+        self,
+        candidate: Candidate,
+        direction: str,
+        campaign,
+    ) -> SignalSpec | None:
+        """Select only a fresh same-direction WM2/WM3 signal for an open campaign."""
+        latest_time = int(campaign.tags.get("last_signal_time_ms", 0) or 0)
+        parsed: list[SignalSpec] = []
+        for raw in list(candidate.campaign_signal_specs or []):
+            try:
+                spec = signal_spec_from_dict(raw)
+            except Exception as exc:
+                log.warning("%s: invalid add-on SignalSpec discarded: %s", candidate.symbol, exc)
+                continue
+            if spec.signal_type not in {SignalType.SUPER_AO, SignalType.FRACTAL}:
+                continue
+            if spec.direction != direction or int(spec.signal_bar_time_ms) <= latest_time:
+                continue
+            if spec.expires_at_ms and int(spec.expires_at_ms) < int(time.time() * 1000):
+                continue
+            parsed.append(replace(spec, role=SignalRole.ADD_ON))
+        if not parsed:
+            return None
+        signal = min(parsed, key=lambda item: (item.signal_bar_time_ms, item.created_at_ms))
+
+        snapshot = self.context_cache.snapshot()
+        operative = snapshot.context(signal.symbol, signal.timeframe)
+        if operative is None:
+            raise FuturesCampaignExecutionError(
+                f"{signal.symbol}/{signal.timeframe}: add-on operative context is missing"
+            )
+        allowed = operative.allow_long if direction == "LONG" else operative.allow_short
+        if not allowed:
+            raise FuturesCampaignExecutionError(
+                f"{signal.symbol}/{signal.timeframe}: operative context disallows add-on {direction}"
+            )
+
+        intervals = list(self.context_intervals)
+        seconds = {iv: _interval_seconds(iv) for iv in intervals}
+        parents = sorted(
+            [iv for iv in intervals if seconds[iv] > _interval_seconds(signal.timeframe)],
+            key=lambda iv: seconds[iv],
+        )
+        parent_ok = not self.require_htf_confirmation
+        if self.require_htf_confirmation:
+            if not parents:
+                raise FuturesCampaignExecutionError(
+                    f"{signal.symbol}: no higher timeframe available for add-on confirmation"
+                )
+            parent = snapshot.context(signal.symbol, parents[0])
+            if parent is None:
+                raise FuturesCampaignExecutionError(
+                    f"{signal.symbol}/{parents[0]}: add-on parent context is missing"
+                )
+            parent_ok = parent.allow_long if direction == "LONG" else parent.allow_short
+            if not parent_ok:
+                raise FuturesCampaignExecutionError(
+                    f"{signal.symbol}/{parents[0]}: higher timeframe does not confirm add-on {direction}"
+                )
+            for interval in parents[1:]:
+                higher = snapshot.context(signal.symbol, interval)
+                if higher is None:
+                    raise FuturesCampaignExecutionError(
+                        f"{signal.symbol}/{interval}: add-on context is missing"
+                    )
+                opposite = higher.allow_short if direction == "LONG" else higher.allow_long
+                if opposite:
+                    raise FuturesCampaignExecutionError(
+                        f"{signal.symbol}/{interval}: higher timeframe contradicts add-on {direction}"
+                    )
+
+        return replace(
+            signal,
+            role=SignalRole.ADD_ON,
+            htf_confirmed=bool(parent_ok),
+            context_versions=snapshot.versions(signal.symbol, intervals),
+        )
+
     def _recover(self) -> list[dict[str, Any]]:
         """Reconcile every Futures campaign before looking for fresh exposure."""
         summaries = []
@@ -581,17 +660,12 @@ class FuturesRuntime:
             row for row in self.execution._active_rows()
             if self.execution._row_tags(row).get("execution_mode") == "FUTURES"
         ])
-        if active_count >= self.max_open_positions:
-            return {
-                "state": "POSITION_CAPACITY",
-                "active_campaigns": active_count,
-                "new_entries": 0,
-                "reconciliation": reconciliations,
-            }
-
+        # Select candidates even at the position cap: existing campaigns may
+        # have eligible Wise-Men add-ons, while the execution loop below still
+        # enforces capacity for genuinely new campaigns.
         selections = self.controller.select_portfolio(
             open_risk_quote=self.execution.engine.portfolio_reserved_risk_quote(),
-            open_positions=active_count,
+            open_positions=0,
         )
         results = []
         for selection in selections:
@@ -606,7 +680,37 @@ class FuturesRuntime:
             if direction == "SHORT" and not self.allow_short:
                 continue
             symbol = candidate.symbol.upper()
-            if self.execution._find_active_campaign(symbol) is not None:
+            existing_campaign = self.execution._find_active_campaign(symbol)
+            if existing_campaign is not None:
+                # Existing campaigns do not consume a *new* position slot.
+                # Only same-direction, fresh WM2/WM3 signals can add exposure.
+                if existing_campaign.position_qty <= 0:
+                    continue
+                try:
+                    frames = self._refresh_symbol_context(symbol)
+                    add_signal = self._directional_add_on_signal(
+                        candidate, direction, existing_campaign
+                    )
+                    if add_signal is None:
+                        continue
+                    add_result = self.execution.arm_add_on(
+                        add_signal,
+                        equity_quote=equity,
+                        candidate_risk_fraction=float(selection.risk.risk_pct) / 100.0,
+                        available_quote=float(self._last_account["available_quote"]),
+                    )
+                    results.append(add_result)
+                except Exception as exc:
+                    log.warning("Futures add-on not armed for %s/%s: %s", symbol, direction, exc)
+                    results.append({
+                        "symbol": symbol,
+                        "direction": direction,
+                        "action": "WAIT_ADD_ON",
+                        "reason": f"{type(exc).__name__}: {exc}",
+                    })
+                continue
+
+            if active_count >= self.max_open_positions:
                 continue
             try:
                 frames = self._refresh_symbol_context(symbol)
@@ -625,8 +729,6 @@ class FuturesRuntime:
                 )
                 results.append(entry)
                 active_count += 1
-                if active_count >= self.max_open_positions:
-                    break
             except Exception as exc:
                 log.warning("Futures campaign not armed for %s/%s: %s", symbol, direction, exc)
                 results.append({
