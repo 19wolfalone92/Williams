@@ -1228,11 +1228,6 @@ class FuturesRuntime:
             if any(not isinstance(row, dict) for row in payload):
                 raise RuntimeError("Futures positionRisk contains a malformed row")
             return payload
-        if isinstance(payload, dict) and isinstance(payload.get("positions"), list):
-            rows = payload["positions"]
-            if any(not isinstance(row, dict) for row in rows):
-                raise RuntimeError("Futures positionRisk contains a malformed row")
-            return rows
         if isinstance(payload, dict) and "symbol" in payload:
             return [payload]
         raise RuntimeError("Futures positionRisk returned a malformed payload")
