@@ -93,7 +93,7 @@ def test_execution_barrier_serializes_publish_and_submit():
         started.set()
         time.sleep(0.05)
         assert cache.snapshot().context("BTCUSDT", "1h").version == version
-        return {"status": "FILLED"}
+        return {"status": "FILLED", "executedQty": "1"}
 
     def publish():
         started.wait(1)
