@@ -954,7 +954,16 @@ class FuturesRuntime:
                     if live_position or has_orders:
                         # Do not mutate margin/leverage under existing exposure.
                         continue
-                    self.client.prepare_symbol(symbol)
+                    try:
+                        self.client.prepare_symbol(symbol)
+                    except Exception as exc:
+                        startup_blockers.append(
+                            f"{symbol}: symbol preparation/config verification failed: "
+                            f"{type(exc).__name__}: {exc}"
+                        )
+                        # Stop changing other symbols once account policy
+                        # verification fails; the monitor will run management-only.
+                        break
                     prepared.append(symbol)
                 self.db.log_event(
                     "INFO",
