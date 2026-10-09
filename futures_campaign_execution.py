@@ -623,14 +623,30 @@ class FuturesCampaignExecutionService:
         symbol = campaign.symbol.upper()
         direction = self._campaign_direction(campaign)
         position = self._position_row(symbol)
-        amount = float(position.get("positionAmt", 0) or 0)
+        try:
+            amount = float(position.get("positionAmt", 0) or 0)
+        except (TypeError, ValueError) as exc:
+            raise FuturesCampaignExecutionError(
+                f"{symbol}: invalid live position quantity; protection cannot be verified"
+            ) from exc
+        if not math.isfinite(amount):
+            raise FuturesCampaignExecutionError(
+                f"{symbol}: non-finite live position quantity; protection cannot be verified"
+            )
         if (direction == "LONG" and amount <= 0) or (direction == "SHORT" and amount >= 0):
             raise FuturesCampaignExecutionError(
                 f"{symbol}: protective stop rejected because live position direction/quantity disagrees"
             )
-        entry = float(position.get("entryPrice", 0) or 0)
-        if entry <= 0:
-            raise FuturesCampaignExecutionError(f"{symbol}: live entry price unavailable")
+        try:
+            entry = float(position.get("entryPrice", 0) or 0)
+        except (TypeError, ValueError) as exc:
+            raise FuturesCampaignExecutionError(
+                f"{symbol}: invalid live entry price; protection cannot be verified"
+            ) from exc
+        if not math.isfinite(entry) or entry <= 0:
+            raise FuturesCampaignExecutionError(
+                f"{symbol}: live entry price must be finite and positive"
+            )
         stop = float(
             stop_price
             or campaign.current_stop_price
@@ -686,8 +702,21 @@ class FuturesCampaignExecutionService:
 
         def check_position(_snapshot) -> None:
             fresh = self._position_row(symbol)
-            fresh_amount = float(fresh.get("positionAmt", 0) or 0)
-            fresh_entry = float(fresh.get("entryPrice", 0) or 0)
+            try:
+                fresh_amount = float(fresh.get("positionAmt", 0) or 0)
+                fresh_entry = float(fresh.get("entryPrice", 0) or 0)
+            except (TypeError, ValueError) as exc:
+                raise FuturesCampaignExecutionError(
+                    "live position quantity/entry became invalid before protection submit"
+                ) from exc
+            if (
+                not math.isfinite(fresh_amount)
+                or not math.isfinite(fresh_entry)
+                or fresh_entry <= 0
+            ):
+                raise FuturesCampaignExecutionError(
+                    "live position quantity/entry is non-finite or invalid before protection submit"
+                )
             if (direction == "LONG" and fresh_amount <= 0) or (direction == "SHORT" and fresh_amount >= 0):
                 raise FuturesCampaignExecutionError("position changed direction before protection submit")
             fresh_mark = self._market_mark(symbol)
@@ -869,7 +898,14 @@ class FuturesCampaignExecutionService:
         old_algo_id = campaign.tags.get("protective_algo_id")
         old_stop = float(campaign.current_stop_price or campaign.initial_stop_price or 0.0)
         direction = self._campaign_direction(campaign)
-        requested = float(stop_price)
+        try:
+            requested = float(stop_price)
+        except (TypeError, ValueError) as exc:
+            raise FuturesCampaignExecutionError(f"{symbol}: replacement stop price is invalid") from exc
+        if not math.isfinite(requested) or requested <= 0:
+            raise FuturesCampaignExecutionError(f"{symbol}: replacement stop price must be finite and positive")
+        if not math.isfinite(old_stop) or old_stop < 0:
+            raise FuturesCampaignExecutionError(f"{symbol}: stored protective stop is invalid; reconciliation required")
         if direction == "LONG" and old_stop > 0 and requested < old_stop:
             raise FuturesCampaignExecutionError("LONG trailing stop may only move upward")
         if direction == "SHORT" and old_stop > 0 and requested > old_stop:
