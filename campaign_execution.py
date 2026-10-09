@@ -58,18 +58,36 @@ class CampaignExecutionService:
 
     @staticmethod
     def _floor(value: float, step: float) -> float:
-        if step <= 0:
-            return float(value)
         import math
-        return math.floor(float(value) / step + 1e-12) * step
+        value = float(value)
+        step = float(step)
+        if not math.isfinite(value) or value <= 0:
+            raise CampaignExecutionError("quantity/price must be finite and positive")
+        if not math.isfinite(step) or step <= 0:
+            raise CampaignExecutionError("exchange step/tick filter is missing or invalid")
+        result = math.floor(value / step + 1e-12) * step
+        if not math.isfinite(result) or result <= 0:
+            raise CampaignExecutionError("normalized quantity/price is invalid")
+        return result
 
     def _normalize_qty(self, symbol: str, quantity: float) -> float:
         filters = self._rules(symbol)
-        lot = filters.get("LOT_SIZE") or filters.get("MARKET_LOT_SIZE") or {}
-        step = float(lot.get("stepSize", "0") or 0)
-        minimum = float(lot.get("minQty", "0") or 0)
-        maximum = float(lot.get("maxQty", "inf") or "inf")
-        qty = self._floor(float(quantity), step)
+        lot = filters.get("LOT_SIZE")
+        if not isinstance(lot, dict):
+            raise CampaignExecutionError(f"{symbol}: LOT_SIZE filter unavailable")
+        try:
+            step = float(lot.get("stepSize", "0") or 0)
+            minimum = float(lot.get("minQty", "0") or 0)
+            maximum = float(lot.get("maxQty", "inf") or "inf")
+            quantity = float(quantity)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise CampaignExecutionError(f"{symbol}: invalid LOT_SIZE values") from exc
+        import math
+        if not math.isfinite(quantity) or quantity <= 0 or not math.isfinite(step) or step <= 0:
+            raise CampaignExecutionError(f"{symbol}: invalid quantity or LOT_SIZE.stepSize")
+        if not math.isfinite(minimum) or minimum < 0 or math.isnan(maximum) or maximum <= 0:
+            raise CampaignExecutionError(f"{symbol}: invalid LOT_SIZE bounds")
+        qty = self._floor(quantity, step)
         if qty > maximum:
             qty = self._floor(maximum, step)
         if qty < minimum:
@@ -80,19 +98,38 @@ class CampaignExecutionService:
 
     def _normalized_entry_qty(self, symbol: str, notional: float, trigger: float) -> float:
         filters = self._rules(symbol)
-        lot = filters.get("LOT_SIZE") or {}
-        step = float(lot.get("stepSize", "0") or 0)
-        minimum = float(lot.get("minQty", "0") or 0)
-        maximum = float(lot.get("maxQty", "inf") or "inf")
-        qty = self._floor(notional / max(trigger, 1e-12), step)
+        lot = filters.get("LOT_SIZE")
+        if not isinstance(lot, dict):
+            raise CampaignExecutionError(f"{symbol}: LOT_SIZE filter unavailable")
+        try:
+            notional = float(notional)
+            trigger = float(trigger)
+            step = float(lot.get("stepSize", "0") or 0)
+            minimum = float(lot.get("minQty", "0") or 0)
+            maximum = float(lot.get("maxQty", "inf") or "inf")
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise CampaignExecutionError(f"{symbol}: invalid entry quantity/filter values") from exc
+        import math
+        if not math.isfinite(notional) or notional <= 0 or not math.isfinite(trigger) or trigger <= 0:
+            raise CampaignExecutionError(f"{symbol}: notional and trigger must be finite and positive")
+        if not math.isfinite(step) or step <= 0 or not math.isfinite(minimum) or minimum < 0 or math.isnan(maximum) or maximum <= 0:
+            raise CampaignExecutionError(f"{symbol}: invalid LOT_SIZE filter values")
+        qty = self._floor(notional / trigger, step)
         if qty > maximum:
             qty = self._floor(maximum, step)
         if qty < minimum:
             raise CampaignExecutionError(
                 f"{symbol}: campaign entry quantity {qty:.12g} below LOT_SIZE {minimum:.12g}"
             )
-        nf = filters.get("NOTIONAL") or filters.get("MIN_NOTIONAL") or {}
-        min_notional = float(nf.get("minNotional", "0") or 0)
+        nf = filters.get("NOTIONAL") or filters.get("MIN_NOTIONAL")
+        if not isinstance(nf, dict) or "minNotional" not in nf:
+            raise CampaignExecutionError(f"{symbol}: NOTIONAL/MIN_NOTIONAL filter unavailable")
+        try:
+            min_notional = float(nf.get("minNotional"))
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise CampaignExecutionError(f"{symbol}: invalid minimum notional filter") from exc
+        if not math.isfinite(min_notional) or min_notional < 0:
+            raise CampaignExecutionError(f"{symbol}: invalid minimum notional filter")
         if qty * trigger < min_notional:
             raise CampaignExecutionError(
                 f"{symbol}: campaign entry notional {qty * trigger:.8f} below minimum {min_notional:.8f}"
