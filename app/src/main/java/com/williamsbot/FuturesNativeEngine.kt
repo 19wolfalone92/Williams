@@ -959,7 +959,8 @@ internal class FuturesNativeEngine(
         }
         if (signal.direction == "SHORT" && !(signal.trigger < mark && mark < signal.stop)) {
             throw FuturesApiException("$symbol SHORT trigger is stale or stop is breached")
-        }        val stopDistance = abs(signal.trigger - signal.stop)
+        }
+        val stopDistance = abs(signal.trigger - signal.stop)
         if (stopDistance <= 0.0) throw FuturesApiException("$symbol structural stop distance is invalid")
         val targetDistance = signal.atr * 4.0
         val rr = targetDistance / stopDistance
@@ -1149,7 +1150,8 @@ internal class FuturesNativeEngine(
             }
         }
         val unknown = unresolvedIntentCount(exchange)
-        if (unknown > 0) unresolved++        return JSONObject().put("campaigns", results).put("unresolved", unresolved)
+        if (unknown > 0) unresolved++
+        return JSONObject().put("campaigns", results).put("unresolved", unresolved)
     }
 
     private fun reconcileCampaign(exchange: BinanceUsdmFuturesClient, campaignInput: JSONObject): JSONObject {
@@ -1545,7 +1547,8 @@ internal class FuturesNativeEngine(
         val direction = campaign.optString("direction").uppercase(Locale.US)
         if (campaign.optString("state") != "OPEN_PROTECTED") return
         if (frame.bars.size < 3 || frame.atr <= 0.0) return
-        val lastTwo = frame.bars.takeLast(2)        val opposite = if (direction == "LONG") {
+        val lastTwo = frame.bars.takeLast(2)
+        val opposite = if (direction == "LONG") {
             lastTwo.all { bar ->
                 val index = frame.bars.indexOf(bar)
                 val values = indicatorTuple(frame.bars, index)
@@ -1743,7 +1746,8 @@ internal class FuturesNativeEngine(
                 when (operation) {
                     "ENTRY", "PROTECTION", "PROTECTION_REPLACE" -> {
                         val found = exchange.getAlgoOrder(symbol, clientAlgoId = row.optString("client_id"))
-                        val statusRemote = found.optString("algoStatus").uppercase(Locale.US)                        if (statusRemote.isNotBlank()) {
+                        val statusRemote = found.optString("algoStatus").uppercase(Locale.US)
+                        if (statusRemote.isNotBlank()) {
                             auditStore.updateFuturesIntent(row.optString("intent_id"), "SUBMITTED", found.toString())
                         } else unresolved++
                     }
