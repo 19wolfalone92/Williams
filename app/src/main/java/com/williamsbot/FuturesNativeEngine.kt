@@ -1199,7 +1199,7 @@ internal class FuturesNativeEngine(
                     clientAlgoId = clientAlgoId,
                     closePosition = false,
                     reduceOnly = false,
-                    workingType = "CONTRACT_PRICE"
+                    workingType = "MARK_PRICE"
                 )
             }
             // From this point onward, any failure is a post-submit uncertainty;
