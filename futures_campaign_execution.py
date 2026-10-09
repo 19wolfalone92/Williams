@@ -2672,6 +2672,9 @@ class FuturesCampaignExecutionService:
         quote_commission = 0.0
         other_commission: dict[str, float] = {}
         for row in trades:
+            self._validate_user_trade_row(
+                row, symbol, "protective stop", require_realized_pnl=True
+            )
             trade_order_id = row.get("orderId")
             if trade_order_id is not None and str(trade_order_id) != str(order_id):
                 raise FuturesCampaignExecutionError(
