@@ -483,3 +483,51 @@ def test_execution_barrier_marks_malformed_exchange_state_ambiguous(response):
         barrier.execute(intent, lambda: response)
 
     assert db.intents[intent.intent_id][0] == "AMBIGUOUS"
+
+
+def test_daily_equity_breaker_uses_portfolio_realized_pnl_and_fails_closed():
+    from equity_breaker import EquityCircuitBreaker
+
+    class RiskDB:
+        def __init__(self, pnl):
+            self.data = {}
+            self.pnl = pnl
+
+        def state_get(self, key, default=None):
+            return self.data.get(key, default)
+
+        def state_set(self, key, value):
+            self.data[key] = value
+
+        def pnl_today_all(self):
+            return self.pnl
+
+    allowed, reason = EquityCircuitBreaker(0.03).check(
+        RiskDB(-400.0), current_equity_quote=10_000.0
+    )
+    assert not allowed
+    assert "circuit breaker tripped" in reason
+
+    allowed, reason = EquityCircuitBreaker(0.03).check(
+        object(), current_equity_quote=10_000.0
+    )
+    assert not allowed
+    assert "realized PnL unavailable" in reason
+
+
+@pytest.mark.parametrize("equity", [float("nan"), float("inf"), 0.0, -1.0])
+def test_daily_equity_breaker_blocks_invalid_equity(equity):
+    from equity_breaker import EquityCircuitBreaker
+
+    class RiskDB:
+        def state_get(self, key, default=None):
+            return default
+
+        def state_set(self, key, value):
+            pass
+
+        def pnl_today_all(self):
+            return 0.0
+
+    allowed, _ = EquityCircuitBreaker().check(RiskDB(), current_equity_quote=equity)
+    assert not allowed
