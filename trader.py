@@ -837,8 +837,13 @@ class Trader:
         if self.state()!='FLAT': return False,f'state={self.state()}'
         if self.max_trades_day > 0 and self.db.trades_today(self.symbol) >= self.max_trades_day:
             return False, 'max daily trades reached'
-        if self.max_consecutive_losses > 0 and self.db.consecutive_losses(self.symbol) >= self.max_consecutive_losses:
-            return False, 'max consecutive losses reached'
+        if self.max_consecutive_losses > 0:
+            try:
+                loss_streak = self.db.consecutive_losses(self.symbol)
+            except Exception as exc:
+                return False, f"consecutive-loss history unavailable; new entries blocked ({type(exc).__name__})"
+            if loss_streak >= self.max_consecutive_losses:
+                return False, 'max consecutive losses reached'
         balance = float(self.available_quote())
         if not math.isfinite(balance) or balance <= 0:
             return False, 'quote equity unavailable; new entries blocked'
