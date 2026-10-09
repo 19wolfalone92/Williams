@@ -54,6 +54,7 @@ class PortfolioController:
                 filters = {f["filterType"]: f for f in info.get("symbols", [{}])[0].get("filters", [])}
                 notional_filter = filters.get("NOTIONAL") or filters.get("MIN_NOTIONAL") or {}
                 min_notional = float(notional_filter.get("minNotional", 0) or 0)
+                direction = str(getattr(candidate, "direction", "") or "LONG").upper()
                 risk = self.risk_engine.analyse(
                     symbol=candidate.symbol,
                     entry_price=entry_price,
@@ -64,13 +65,14 @@ class PortfolioController:
                     spread_pct=candidate.spread_pct,
                     max_spread_pct=self.scanner.max_spread_pct,
                     invalidation_price=float(getattr(candidate, "wave_invalidation_price", 0.0) or 0.0),
+                    side=direction,
                 )
                 if risk.allowed:
                     analysed.append(Selection(
                         candidate=candidate,
                         risk=risk,
-                        action="BUY_ALLOWED",
-                        reason="STRICT_SIGNAL + risk checks passed",
+                        action=f"{direction}_ALLOWED",
+                        reason=f"STRICT_SIGNAL + {direction} risk checks passed",
                     ))
             except Exception as exc:
                 print(f"[PORTFOLIO] {candidate.symbol}: risk analysis failed: {exc}")
@@ -126,6 +128,7 @@ class PortfolioController:
             filters = {f["filterType"]: f for f in info.get("symbols", [{}])[0].get("filters", [])}
             nf = filters.get("NOTIONAL") or filters.get("MIN_NOTIONAL") or {}
             min_notional = float(nf.get("minNotional", 0) or 0)
+            direction = str(getattr(base.candidate, "direction", "") or "LONG").upper()
             r = self.risk_engine.analyse(
                 symbol=base.candidate.symbol,
                 entry_price=base.risk.entry_price,
@@ -137,6 +140,7 @@ class PortfolioController:
                 max_spread_pct=self.scanner.max_spread_pct,
                 invalidation_price=float(getattr(base.candidate, "wave_invalidation_price", 0.0) or 0.0),
                 risk_pct_override=allocation_pct,
+                side=direction,
             )
             if not r.allowed:
                 continue
@@ -144,8 +148,8 @@ class PortfolioController:
             selections.append(Selection(
                 candidate=base.candidate,
                 risk=r,
-                action="BUY_ALLOWED",
-                reason=f"STRICT_SIGNAL + portfolio risk allocation {allocation_pct:.2%}",
+                action=f"{direction}_ALLOWED",
+                reason=f"STRICT_SIGNAL + {direction} portfolio risk allocation {allocation_pct:.2%}",
             ))
             remaining_pct -= allocation_pct
             remaining_slots -= 1
