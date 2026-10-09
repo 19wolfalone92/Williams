@@ -173,6 +173,7 @@ class FuturesRuntime:
             campaign_risk_limit_pct=min(0.005, self.config.risk_per_trade_pct),
         )
         self._lock = threading.RLock()
+        self._cycle_lock = threading.RLock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._running = False
@@ -470,6 +471,12 @@ class FuturesRuntime:
         return results
 
     def scan_once(self) -> dict[str, Any]:
+        # Serialize the whole cycle against the kill switch so a kill request
+        # cannot race between the entry gate and a new exchange mutation.
+        with self._cycle_lock:
+            return self._scan_once()
+
+    def _scan_once(self) -> dict[str, Any]:
         """One full cycle; existing exposure is managed before entry lockouts."""
         # Kill switch blocks all new exposure, but it must not disable
         # reconciliation, protective-stop repair, or exits for existing risk.
@@ -710,11 +717,16 @@ class FuturesRuntime:
         return {**self.status(), "state": "STOPPED"}
 
     def kill(self) -> dict[str, Any]:
-        """Latch the kill switch, stop new entries and attempt reduce-only exits."""
+        """Latch entries off, attempt exits, and retain a management-only monitor."""
+        with self._cycle_lock:
+            return self._kill_locked()
+
+    def _kill_locked(self) -> dict[str, Any]:
         with self._lock:
             self._kill_latched = True
             self._paused = True
-            self._stop.set()
+            # Do not stop the monitor: if an exit fails, reconciliation and
+            # protective management must continue while entries remain latched.
         results = []
         for row in self.execution._active_rows():
             if self.execution._row_tags(row).get("execution_mode") != "FUTURES":
@@ -737,7 +749,17 @@ class FuturesRuntime:
                     "error": f"{type(exc).__name__}: {exc}",
                 })
         with self._lock:
-            self._running = False
+            if not self._running:
+                # A kill invoked after STOPPED still starts a management-only
+                # monitor; the latched gate prevents every new entry.
+                self._stop.clear()
+                self._running = True
+                self._thread = threading.Thread(
+                    target=self._loop,
+                    name="williams-usdm-futures-kill-monitor",
+                    daemon=True,
+                )
+                self._thread.start()
         self.db.log_event(
             "ERROR",
             "futures_runtime_kill_switch",
