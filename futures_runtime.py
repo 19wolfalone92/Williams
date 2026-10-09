@@ -850,14 +850,36 @@ class FuturesRuntime:
                 if not self._kill_latched:
                     self._paused = False
                 return self.status()
-            self.client.sync_time()
-            self.client.ensure_one_way_mode()
-            account = self._account()
-            reconciliation = self._recover()
             startup_blockers = []
+            try:
+                self.client.sync_time()
+            except Exception as exc:
+                startup_blockers.append(
+                    f"Futures time sync failed: {type(exc).__name__}: {exc}"
+                )
+            try:
+                self.client.ensure_one_way_mode()
+            except Exception as exc:
+                startup_blockers.append(
+                    f"Futures one-way mode is unconfirmed: {type(exc).__name__}: {exc}"
+                )
+            account: dict[str, Any] = {}
+            try:
+                account = self._account()
+            except Exception as exc:
+                startup_blockers.append(
+                    f"Futures account/equity unavailable: {type(exc).__name__}: {exc}"
+                )
             can_trade = account.get("canTrade") if isinstance(account, dict) else None
             if can_trade is not True and str(can_trade).strip().lower() != "true":
                 startup_blockers.append("Futures account canTrade is not explicitly true")
+            try:
+                reconciliation = self._recover()
+            except Exception as exc:
+                reconciliation = []
+                startup_blockers.append(
+                    f"Startup reconciliation failed: {type(exc).__name__}: {exc}"
+                )
             startup_blockers.extend(
                 f"{item.get('symbol', 'UNKNOWN')}: {item.get('reason', 'reconciliation required')}"
                 for item in reconciliation
@@ -902,7 +924,14 @@ class FuturesRuntime:
                     "Verified/established one-way isolated 1x on flat Futures symbols",
                     {"symbols": prepared, "testnet": self.testnet},
                 )
-            self._daily_loss_allows_entry(self._last_account["equity_quote"])
+            try:
+                self._daily_loss_allows_entry(
+                    float(self._last_account.get("equity_quote", float("nan")))
+                )
+            except Exception as exc:
+                startup_blockers.append(
+                    f"Daily risk baseline check failed: {type(exc).__name__}: {exc}"
+                )
             self._paused = bool(self._kill_latched or startup_blockers)
             self._stop.clear()
             self._running = True
