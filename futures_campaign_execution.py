@@ -2564,7 +2564,7 @@ class FuturesCampaignExecutionService:
                 algo = self.client.get_algo_order(symbol, client_algo_id=client_add_id)
                 algo_status = str(algo.get("algoStatus", "") or "").upper()
                 active_add_statuses = {"NEW", "WORKING", "PENDING_NEW", "PENDING"}
-                terminal_add_statuses = {"CANCELED", "CANCELLED", "EXPIRED", "REJECTED", "FINISHED"}
+                terminal_add_statuses = {"CANCELED", "CANCELLED", "EXPIRED", "REJECTED"}
                 if algo_status in active_add_statuses:
                     if abs(abs(amount) - original_qty) > max(1e-8, original_qty * 1e-6):
                         raise FuturesCampaignExecutionError(
