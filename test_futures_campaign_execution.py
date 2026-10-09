@@ -19,6 +19,7 @@ class FakeFuturesClient:
         self.stop_entries = []
         self.market_exits = []
         self.protective_stops = []
+        self.protection_response_missing_ids = False
         self.algo_status = "NEW"
         self.cancel_confirms = True
         self._position = {
@@ -93,13 +94,17 @@ class FakeFuturesClient:
 
     def protective_stop(self, symbol, direction, trigger_price, client_algo_id):
         self.protective_stops.append((symbol, direction, trigger_price, client_algo_id))
-        return {
+        response = {
             "symbol": symbol,
             "algoId": 456,
             "clientAlgoId": client_algo_id,
             "algoStatus": "NEW",
             "side": "SELL" if direction == "LONG" else "BUY",
         }
+        if self.protection_response_missing_ids:
+            response.pop("algoId")
+            response.pop("clientAlgoId")
+        return response
 
     def market_exit(self, symbol, direction, quantity, client_order_id):
         self.market_exits.append((symbol, direction, quantity, client_order_id))
@@ -368,5 +373,36 @@ def test_ambiguous_pending_entry_cancellation_fails_closed(tmp_path):
         saved = service.engine.load_campaign(campaign.campaign_id)
         assert saved.state.value == "RECONCILE_REQUIRED"
         assert client.stop_entries, "the original conditional entry must be treated as potentially live"
+    finally:
+        db.conn.close()
+
+
+def test_protection_response_without_order_identity_requires_reconciliation(tmp_path):
+    db, client, service, campaign = _armed_entry_for_cancel(tmp_path)
+    try:
+        # Simulate an authoritative open position after entry and an exchange
+        # response that may represent a successful stop submission but omits
+        # both order identifiers.
+        client._position["positionAmt"] = "0.5"
+        client._position["entryPrice"] = "102.0"
+        from campaign_model import CampaignState
+        campaign.state = CampaignState.OPEN_INITIAL
+        campaign.position_qty = 0.5
+        campaign.average_entry_price = 102.0
+        campaign.open_risk_quote = 10.0
+        campaign.pending_risk_quote = 0.0
+        campaign.capital_reserved_quote = 0.0
+        service.db.save_campaign(campaign)
+        client.protection_response_missing_ids = True
+
+        with pytest.raises(FuturesCampaignExecutionError, match="reconciliation required"):
+            service.place_protection(campaign, stop_price=100.0)
+
+        saved = service.engine.load_campaign(campaign.campaign_id)
+        assert saved.state.value == "RECONCILE_REQUIRED"
+        assert saved.reconciliation_state == "REQUIRED"
+        assert saved.tags["protection_response_unidentified"]["client_algo_id"]
+        assert db.state_get(f"campaign_state:{campaign.campaign_id}") == "RECONCILE_REQUIRED"
+        assert db.state_get("position_state:BTCUSDT") == "RECONCILE_REQUIRED"
     finally:
         db.conn.close()
