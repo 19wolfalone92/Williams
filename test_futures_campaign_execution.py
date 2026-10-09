@@ -250,7 +250,7 @@ def test_futures_campaign_arms_correct_directional_conditional_entry(
 
         assert result["action"] == "ENTRY_ARMED"
         assert result["direction"] == direction
-        assert len(client.stop_entries) == 1
+        assert len(client.stop_entries) == initial_entry_count + 1
         assert client.stop_entries[0]["direction"] == direction
         assert result["status"] == "NEW"
         saved = db.conn.execute(
@@ -1227,6 +1227,7 @@ def _prepare_open_campaign_for_add_on(tmp_path, direction="LONG"):
 def test_futures_add_on_reserves_risk_and_arms_directionally(tmp_path):
     db, client, service, campaign = _prepare_open_campaign_for_add_on(tmp_path, "LONG")
     try:
+        initial_entry_count = len(client.stop_entries)
         result = service.arm_add_on(
             _make_add_on_signal("LONG"),
             equity_quote=10000.0,
