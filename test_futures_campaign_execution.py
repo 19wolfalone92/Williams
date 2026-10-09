@@ -243,6 +243,56 @@ def test_signal_spec_restore_defaults_null_source_candle_index_to_unknown():
     assert restored.source_candle_index == -1
 
 
+def test_sqlite_signal_persistence_preserves_zero_source_candle_index(tmp_path):
+    db = Database(str(tmp_path / "source-index.sqlite3"))
+    try:
+        signal = SignalSpec.new(
+            symbol="BTCUSDT",
+            side="BUY",
+            direction="LONG",
+            signal_type=SignalType.REVERSAL,
+            role=SignalRole.ENTRY,
+            timeframe="5m",
+            signal_bar_time_ms=1234,
+            trigger_price=105.0,
+            protective_reference=100.0,
+            source_candle_index=0,
+        )
+        db.save_campaign_signal(signal, "campaign-source-index")
+
+        row = db.conn.execute(
+            "SELECT source_candle_index FROM campaign_signals WHERE signal_id=?",
+            (signal.signal_id,),
+        ).fetchone()
+        assert row["source_candle_index"] == 0
+    finally:
+        db.conn.close()
+
+
+def test_persistent_kill_latch_survives_restart_and_fails_closed_on_corruption(tmp_path):
+    from futures_runtime import _read_persistent_kill_latch
+
+    db = Database(str(tmp_path / "kill-latch.sqlite3"))
+    try:
+        assert _read_persistent_kill_latch(db) is False
+
+        db.state_set("futures_kill_latched", "true")
+        assert _read_persistent_kill_latch(db) is True
+
+        # A new runtime reads the same durable state after process restart.
+        reopened = Database(str(tmp_path / "kill-latch.sqlite3"))
+        try:
+            assert _read_persistent_kill_latch(reopened) is True
+            reopened.state_set("futures_kill_latched", "false")
+            assert _read_persistent_kill_latch(reopened) is False
+            reopened.state_set("futures_kill_latched", "corrupt")
+            assert _read_persistent_kill_latch(reopened) is True
+        finally:
+            reopened.conn.close()
+    finally:
+        db.conn.close()
+
+
 @pytest.mark.parametrize(
     ("direction", "mark", "allow_long", "allow_short", "expected_side"),
     [
