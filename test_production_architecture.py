@@ -260,3 +260,34 @@ def test_exit_remains_available_when_reconciliation_is_required():
 
     assert result.accepted
     assert db.intents[intent.intent_id][0] == "SUBMITTED"
+
+
+def test_symbol_specific_reconciliation_lock_blocks_new_campaign_exposure():
+    class SymbolLockDB(MemoryIntentDB):
+        def state_get(self, key, default=None):
+            if key == "position_state:BTCUSDT":
+                return "RECONCILE_REQUIRED"
+            return default
+
+    cache = ContextCache()
+    cache.publish(context(allow_long=True, allow_short=True))
+    db = SymbolLockDB()
+    barrier = ExecutionBarrier(cache, db)
+    snapshot = cache.snapshot()
+    intent = OrderIntent.new(
+        "BTCUSDT",
+        "BUY",
+        "STOP_MARKET",
+        {"1h": snapshot.context("BTCUSDT", "1h").version},
+        purpose="CAMPAIGN_ENTRY",
+        permission_interval="1h",
+        client_order_id="SYMBOL-LOCK-TEST-001",
+    )
+    submissions = []
+
+    result = barrier.execute(intent, lambda: submissions.append("submitted") or {"status": "NEW"})
+
+    assert not result.accepted
+    assert result.reason == "RECONCILE_REQUIRED"
+    assert submissions == []
+
