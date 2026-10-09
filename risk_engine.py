@@ -166,11 +166,27 @@ class RiskEngine:
         if fallback_stop_distance <= 0:
             return self._blocked(symbol, side, entry, "invalid stop distance")
 
+        # A supplied structural invalidation is evidence from the setup, not
+        # a suggestion. Never silently replace an invalid Williams structure
+        # with an ATR stop: that would change the thesis while still approving
+        # the trade. Zero alone means no structural level was supplied.
+        if structural_stop < 0:
+            return self._blocked(symbol, side, entry, "structural invalidation price cannot be negative")
         if side == "LONG":
-            stop_price = structural_stop if 0.0 < structural_stop < entry else entry - fallback_stop_distance
+            if structural_stop > 0 and structural_stop >= entry:
+                return self._blocked(
+                    symbol, side, entry,
+                    "LONG structural invalidation must be strictly below entry",
+                )
+            stop_price = structural_stop if structural_stop > 0 else entry - fallback_stop_distance
             take_profit_price = entry + target_distance
         else:
-            stop_price = structural_stop if structural_stop > entry else entry + fallback_stop_distance
+            if structural_stop > 0 and structural_stop <= entry:
+                return self._blocked(
+                    symbol, side, entry,
+                    "SHORT structural invalidation must be strictly above entry",
+                )
+            stop_price = structural_stop if structural_stop > 0 else entry + fallback_stop_distance
             take_profit_price = entry - target_distance
 
         if (
