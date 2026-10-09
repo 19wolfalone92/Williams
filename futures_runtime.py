@@ -613,14 +613,25 @@ class FuturesRuntime:
         # reconciliation, protective-stop repair, or exits for existing risk.
         kill_latched = self._kill_latched
 
-        self.client.sync_time()
-        account = self._account()
-        equity = self._last_account["equity_quote"]
+        preflight_errors: list[str] = []
+        try:
+            self.client.sync_time()
+        except Exception as exc:
+            preflight_errors.append(f"Futures time sync failed: {type(exc).__name__}: {exc}")
+
+        try:
+            self._account()
+            equity = self._last_account["equity_quote"]
+        except Exception as exc:
+            # Account/equity failure blocks new exposure, but must not prevent
+            # attempts to reconcile, repair protection, or reduce existing risk.
+            equity = float("nan")
+            preflight_errors.append(f"Futures account/equity unavailable: {type(exc).__name__}: {exc}")
+
         # PortfolioController uses this value to size and rank risk allocations.
-        # The constructor's 1.0 is only a placeholder; leaving it unchanged
-        # would make sizing unrelated to the live account equity.
+        # Never overwrite its last valid equity with NaN/zero from a failed read.
         controller = getattr(self, "controller", None)
-        if controller is not None:
+        if controller is not None and math.isfinite(equity) and equity > 0:
             controller.balance_quote = equity
             risk_engine = getattr(controller, "risk_engine", None)
             if risk_engine is not None:
@@ -635,6 +646,9 @@ class FuturesRuntime:
             cancel_reason = "KILL_SWITCH" if kill_latched else "PAUSE"
             management.extend(self._cancel_pending_entries(reason=cancel_reason))
         daily_ok, daily_reason = self._daily_loss_allows_entry(equity)
+        if preflight_errors:
+            daily_ok = False
+            daily_reason = "; ".join(preflight_errors) + "; new entries blocked"
         blocked_reconciliation = any(
             str(item.get("state", "")).upper() == "RECONCILE_REQUIRED"
             for item in reconciliations
