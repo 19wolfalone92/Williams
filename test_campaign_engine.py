@@ -142,6 +142,36 @@ def test_add_on_stays_in_campaign_and_respects_remaining_risk_budget():
             db.conn.close()
 
 
+def test_add_on_fill_rejects_non_finite_values_and_risk_overrun():
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "w.sqlite3"))
+        engine = CampaignEngine(db)
+        try:
+            # An armed add-on has a $1 reservation against a $5 campaign cap.
+            campaign = _open_campaign_for_add_on(db, engine, open_risk=4.0, budget=5.0)
+            signal = make_signal(SignalType.SUPER_AO, role=SignalRole.ADD_ON, trigger=103.0, bar=210)
+            engine.arm_add_on(campaign, signal, risk_quote=1.0, capital_reserved_quote=25.0)
+            campaign.transition(CampaignState.POSITION_EXPANDING, reason="test exchange fill")
+            for bad_qty, bad_price, bad_risk in [
+                (float("nan"), 103.0, 1.0),
+                (1.0, float("inf"), 1.0),
+                (1.0, 103.0, float("nan")),
+                (1.0, 103.0, 1.01),
+            ]:
+                with pytest.raises(ValueError):
+                    engine.record_add_on_fill(
+                        campaign,
+                        quantity=bad_qty,
+                        average_entry_price=bad_price,
+                        fill_order_id="test-fill-1",
+                        risk_quote=bad_risk,
+                    )
+            assert campaign.position_qty == 1.0
+            assert campaign.open_risk_quote == 4.0
+        finally:
+            db.conn.close()
+
+
 def test_add_on_uses_existing_campaign_and_reserves_only_remaining_risk():
     with tempfile.TemporaryDirectory() as d:
         db = Database(os.path.join(d, "w.sqlite3"))
