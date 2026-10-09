@@ -1632,6 +1632,13 @@ class FuturesCampaignExecutionService:
                     )
                 if abs(remaining_after_prior) <= 1e-12:
                     if prior_status == "FILLED":
+                        # A crash may occur after the market exit fills but
+                        # before local stop-cancellation cleanup. Reconcile
+                        # every owned protective identity before closing local
+                        # campaign state.
+                        orphan_protection_result = self._reconcile_flat_position_protection(campaign)
+                        if orphan_protection_result is not None:
+                            return orphan_protection_result
                         return self._finalize_verified_market_exit(
                             campaign,
                             prior_exit,
