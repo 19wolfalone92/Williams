@@ -1,6 +1,5 @@
 package com.williamsbot
 
-import okhttp3.FormBody
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -393,8 +392,12 @@ internal class BinanceUsdmFuturesClient(
         try {
             val response = objectRequest(method, path, params, signed = true, mutation = true)
             val status = response.optString(if (algo) "algoStatus" else "status").uppercase(Locale.US)
-            require(status.isNotBlank()) {
-                "Exchange mutation response for $clientId lacks authoritative status"
+            if (status.isBlank()) {
+                throw FuturesApiException(
+                    "Exchange mutation response for $clientId lacks authoritative status",
+                    outcomeUnknown = true,
+                    payload = response.toString()
+                )
             }
             return response
         } catch (x: FuturesApiException) {
@@ -455,7 +458,8 @@ internal class BinanceUsdmFuturesClient(
         path: String,
         paramsInput: Map<String, String>,
         signed: Boolean,
-        mutation: Boolean
+        mutation: Boolean,
+        allowTimestampRetry: Boolean = true
     ): String {
         val method = methodInput.uppercase(Locale.US)
         val params = LinkedHashMap(paramsInput)
@@ -500,13 +504,18 @@ internal class BinanceUsdmFuturesClient(
                 val code = payload?.optInt("code", 0) ?: 0
                 val message = payload?.optString("msg").orEmpty().ifBlank { text }
                 // -1021 is an explicit timestamp rejection before order admission.
-                if (signed && code == -1021) {
+                if (signed && code == -1021 && allowTimestampRetry) {
                     syncTime()
-                    if (mutation) {
-                        // One retry is safe only because the exchange explicitly
-                        // rejected the request as a timestamp error.
-                        return requestRaw(method, path, paramsInput, signed = true, mutation = true)
-                    }
+                    // Binance explicitly rejected the timestamp before order
+                    // admission; permit one bounded correction retry only.
+                    return requestRaw(
+                        method,
+                        path,
+                        paramsInput,
+                        signed = true,
+                        mutation = mutation,
+                        allowTimestampRetry = false
+                    )
                 }
                 val unknown = mutation && (
                     response.code >= 500 ||
