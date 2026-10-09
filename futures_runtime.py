@@ -521,7 +521,10 @@ class FuturesRuntime:
 
     def _manage_existing_positions(self) -> list[dict[str, Any]]:
         """Run protective management before any new-entry lockout decision."""
-        results = self._cancel_pending_entries(reason="KILL_SWITCH")
+        # Pending entries are cancelled only by explicit pause/kill actions.
+        # Doing this on every management scan would continually cancel valid
+        # conditional entries and prevent the strategy from ever triggering.
+        results: list[dict[str, Any]] = []
         for row in self.execution._active_rows():
             if self.execution._row_tags(row).get("execution_mode") != "FUTURES":
                 continue
