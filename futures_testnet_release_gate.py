@@ -152,39 +152,51 @@ def run_futures_testnet_read_only(symbols: Iterable[str] = ("BTCUSDT",)) -> dict
         validated_filters = _validate_symbol_filters(symbol, filters)
         symbol_positions = client.position_risk(symbol)
         if isinstance(symbol_positions, dict):
-            position_rows = [symbol_positions] if str(symbol_positions.get("symbol", "")).upper() == symbol else []
+            if symbol_positions and str(symbol_positions.get("symbol", "")).upper() != symbol:
+                raise RuntimeError(f"{symbol}: positionRisk returned a different symbol")
+            position_rows = [symbol_positions] if symbol_positions else []
         elif isinstance(symbol_positions, list):
-            position_rows = [
+            if any(not isinstance(row, dict) for row in symbol_positions):
+                raise RuntimeError(f"{symbol}: positionRisk contains a malformed row")
+            wrong_symbols = [
                 row for row in symbol_positions
-                if isinstance(row, dict) and str(row.get("symbol", "")).upper() == symbol
+                if str(row.get("symbol", "")).upper() != symbol
             ]
+            if wrong_symbols:
+                raise RuntimeError(f"{symbol}: positionRisk returned a different symbol")
+            position_rows = symbol_positions
         else:
             raise RuntimeError(f"{symbol}: positionRisk returned an unexpected payload")
         position = next(iter(position_rows), None)
-        if position is None:
-            raise RuntimeError(f"{symbol}: positionRisk omitted the configured symbol")
-        raw_symbol_amount = position.get("positionAmt")
-        if raw_symbol_amount is None or str(raw_symbol_amount).strip() == "":
-            raise RuntimeError(f"{symbol}: positionRisk omitted positionAmt")
-        try:
-            symbol_amount = float(raw_symbol_amount)
-        except (TypeError, ValueError) as exc:
-            raise RuntimeError(f"{symbol}: positionRisk contains a non-numeric positionAmt") from exc
-        if not math.isfinite(symbol_amount):
-            raise RuntimeError(f"{symbol}: positionRisk contains a non-finite positionAmt")
-        if abs(symbol_amount) > 1e-12:
-            symbol_nonzero_positions.append({
-                "symbol": symbol,
-                "position_amt": symbol_amount,
-            })
-        isolated_raw = position.get("isolated")
-        isolated = isolated_raw is True or str(isolated_raw).strip().lower() in {"true", "1"}
-        try:
-            leverage = int(position.get("leverage"))
-        except (TypeError, ValueError) as exc:
-            raise RuntimeError(f"{symbol}: Futures leverage is unavailable") from exc
-        if not isolated:
+        symbol_amount = 0.0
+        if position is not None:
+            raw_symbol_amount = position.get("positionAmt")
+            if raw_symbol_amount is None or str(raw_symbol_amount).strip() == "":
+                raise RuntimeError(f"{symbol}: positionRisk omitted positionAmt")
+            try:
+                symbol_amount = float(raw_symbol_amount)
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError(f"{symbol}: positionRisk contains a non-numeric positionAmt") from exc
+            if not math.isfinite(symbol_amount):
+                raise RuntimeError(f"{symbol}: positionRisk contains a non-finite positionAmt")
+            if abs(symbol_amount) > 1e-12:
+                symbol_nonzero_positions.append({
+                    "symbol": symbol,
+                    "position_amt": symbol_amount,
+                })
+
+        # Binance's current positionRisk V3 omits marginType/leverage; those
+        # fields must come from the dedicated symbolConfig endpoint.
+        configuration = client.symbol_configuration(symbol)
+        if str(configuration.get("symbol", "")).upper() != symbol:
+            raise RuntimeError(f"{symbol}: symbolConfig returned a different symbol")
+        margin_type = str(configuration.get("marginType", "") or "").upper()
+        if margin_type != "ISOLATED":
             raise RuntimeError(f"{symbol}: isolated margin is required before trading")
+        try:
+            leverage = int(configuration.get("leverage"))
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(f"{symbol}: symbolConfig leverage is unavailable") from exc
         if leverage != 1:
             raise RuntimeError(f"{symbol}: Futures leverage must be 1x, observed {leverage}x")
         mark_payload = client.mark_price(symbol)
