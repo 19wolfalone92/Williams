@@ -544,10 +544,46 @@ class FuturesRuntime:
             self.client.sync_time()
             self.client.ensure_one_way_mode()
             account = self._account()
-            self._daily_loss_allows_entry(self._last_account["equity_quote"])
             reconciliation = self._recover()
             if any(str(x.get("state", "")).upper() == "RECONCILE_REQUIRED" for x in reconciliation):
                 raise RuntimeError("Futures start blocked: reconciliation required")
+            # An exchange-side position must already have a matching Futures
+            # campaign; never adopt an unexplained position automatically.
+            for symbol in self.symbols:
+                self.execution._assert_no_unmanaged_positions(symbol)
+
+            # Testnet can prepare flat symbols for the initial 1x isolated
+            # policy automatically. Mainnet changes require a separate explicit
+            # FUTURES_AUTO_PREPARE_SYMBOLS=true opt-in and only touch flat,
+            # order-free symbols.
+            auto_prepare = _env_bool(
+                "FUTURES_AUTO_PREPARE_SYMBOLS",
+                self.testnet,
+            )
+            if auto_prepare:
+                prepared = []
+                for symbol in self.symbols:
+                    pos_rows = self._rows(self.client.position_risk(symbol))
+                    live_position = any(
+                        abs(float(row.get("positionAmt", 0) or 0)) > 1e-12
+                        for row in pos_rows
+                    )
+                    has_orders = bool(
+                        self.client.open_orders(symbol)
+                        or self.client.open_algo_orders(symbol)
+                    )
+                    if live_position or has_orders:
+                        # Do not mutate margin/leverage under existing exposure.
+                        continue
+                    self.client.prepare_symbol(symbol)
+                    prepared.append(symbol)
+                self.db.log_event(
+                    "INFO",
+                    "futures_symbols_prepared",
+                    "Verified/established one-way isolated 1x on flat Futures symbols",
+                    {"symbols": prepared, "testnet": self.testnet},
+                )
+            self._daily_loss_allows_entry(self._last_account["equity_quote"])
             self._paused = False
             self._stop.clear()
             self._running = True
