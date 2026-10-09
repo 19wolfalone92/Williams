@@ -2265,3 +2265,33 @@ def test_lockout_cancels_reconcile_required_entry_with_durable_pending_flag():
 
     assert calls == [(campaign, "RECONCILE_REQUIRED")]
     assert results[0]["action"] == "CANCEL_UNVERIFIED"
+
+
+def test_pause_keeps_management_monitor_required_while_futures_campaign_is_active():
+    import threading
+    from types import MethodType, SimpleNamespace
+    from futures_runtime import FuturesRuntime
+
+    row = {
+        "campaign_id": "active-protected-campaign",
+        "symbol": "BTCUSDT",
+        "state": "OPEN_PROTECTED",
+        "tags": {"execution_mode": "FUTURES"},
+    }
+    runtime = object.__new__(FuturesRuntime)
+    runtime._cycle_lock = threading.RLock()
+    runtime._lock = threading.RLock()
+    runtime._paused = False
+    runtime._kill_latched = False
+    runtime.execution = SimpleNamespace(
+        _active_rows=lambda: [row],
+        _row_tags=lambda item: item["tags"],
+    )
+    runtime.db = SimpleNamespace(log_event=lambda *args, **kwargs: None)
+    runtime.status = MethodType(lambda self: {"paused": self._paused}, runtime)
+
+    result = runtime.pause()
+
+    assert result["state"] == "PAUSED"
+    assert result["management_only_monitor_required"] is True
+    assert "management monitor alive" in result["warning"]
