@@ -1173,6 +1173,7 @@ class FuturesCampaignExecutionService:
         # closePosition order cannot reverse exposure, but is reconciled after exit.
         protective_client_id = str(campaign.tags.get("protective_client_algo_id", "") or "")
         protective_algo_id = campaign.tags.get("protective_algo_id")
+        protection_cancel_confirmed = not (protective_client_id or protective_algo_id)
         if protective_client_id or protective_algo_id:
             cancel_intent = OrderIntent.new(
                 symbol,
@@ -1185,7 +1186,7 @@ class FuturesCampaignExecutionService:
                 client_order_id=str(protective_client_id or protective_algo_id),
             )
             try:
-                self.barrier.execute(
+                cancel_result = self.barrier.execute(
                     cancel_intent,
                     lambda: self.client.cancel_algo_order_safe(
                         symbol,
@@ -1193,7 +1194,19 @@ class FuturesCampaignExecutionService:
                         client_algo_id=protective_client_id or None,
                     ),
                 )
+                cancel_response = cancel_result.response if isinstance(cancel_result.response, dict) else {}
+                cancel_status = str(
+                    cancel_response.get("algoStatus", "") or cancel_response.get("status", "")
+                ).upper()
+                protection_cancel_confirmed = (
+                    cancel_result.accepted and cancel_status in {"CANCELED", "EXPIRED"}
+                )
+                if not protection_cancel_confirmed:
+                    raise FuturesCampaignExecutionError(
+                        f"protective cancel is not confirmed terminal: {cancel_status or 'UNKNOWN'}"
+                    )
             except Exception as exc:
+                protection_cancel_confirmed = False
                 self.db.log_event(
                     "ERROR",
                     "futures_protection_cancel_ambiguous",
@@ -1245,6 +1258,22 @@ class FuturesCampaignExecutionService:
                 "order_id": order_id,
                 "status": status,
                 "reason": reason,
+            }
+        if abs(fresh_amount) <= 1e-12 and not protection_cancel_confirmed:
+            reason_text = (
+                "exchange position is flat, but prior protective algo cancellation "
+                "is unconfirmed; orphaned protection must be reconciled"
+            )
+            self.engine.mark_reconcile_required(campaign, reason_text)
+            self.db.state_set(f"campaign_state:{campaign.campaign_id}", CampaignState.RECONCILE_REQUIRED.value)
+            self.db.state_set(f"position_state:{symbol}", CampaignState.RECONCILE_REQUIRED.value)
+            return {
+                "symbol": symbol,
+                "direction": direction,
+                "action": "RECONCILE_REQUIRED",
+                "order_id": order_id,
+                "status": status,
+                "reason": reason_text,
             }
         if abs(fresh_amount) > 1e-12:
             self.engine.mark_reconcile_required(
