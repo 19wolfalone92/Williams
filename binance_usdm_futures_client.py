@@ -308,11 +308,16 @@ class BinanceUsdmFuturesClient:
         if not str(row.get("marginType", "") or "").strip():
             raise FuturesAPIError(f"{symbol}: symbolConfig omitted marginType")
         try:
-            leverage = int(row.get("leverage"))
-        except (TypeError, ValueError) as exc:
+            leverage_decimal = Decimal(str(row.get("leverage")))
+        except (InvalidOperation, TypeError, ValueError) as exc:
             raise FuturesAPIError(f"{symbol}: symbolConfig omitted/invalid leverage") from exc
-        if leverage < 1:
+        if (
+            not leverage_decimal.is_finite()
+            or leverage_decimal < 1
+            or leverage_decimal != leverage_decimal.to_integral_value()
+        ):
             raise FuturesAPIError(f"{symbol}: symbolConfig returned invalid leverage")
+        leverage = int(leverage_decimal)
         return {**row, "leverage": leverage, "symbol": symbol}
 
     def user_trades(
