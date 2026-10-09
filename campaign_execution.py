@@ -169,11 +169,16 @@ class CampaignExecutionService:
 
     def _check_buy_position_capacity(self, symbol: str, quantity: float) -> None:
         filters = self._rules(symbol)
-        max_position_filter = filters.get("MAX_POSITION") or {}
-        max_position = float(
-            max_position_filter.get("maxPosition", "inf") or "inf"
-        )
-        if not max_position < float("inf"):
+        max_position_filter = filters.get("MAX_POSITION")
+        if not max_position_filter:
+            return
+        try:
+            max_position = float(max_position_filter.get("maxPosition", "nan"))
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise CampaignExecutionError(f"{symbol}: malformed MAX_POSITION filter") from exc
+        if math.isnan(max_position) or max_position <= 0:
+            raise CampaignExecutionError(f"{symbol}: invalid MAX_POSITION limit")
+        if math.isinf(max_position) and max_position > 0:
             return
 
         info = self.client.exchange_info(symbol)
@@ -212,17 +217,29 @@ class CampaignExecutionService:
             )
 
     def _current_price(self, symbol: str) -> float:
-        row = self.client.ticker_price(symbol)
-        price = float(row.get("price", 0) or 0)
-        if price <= 0:
+        try:
+            row = self.client.ticker_price(symbol)
+            price = float(row.get("price", "nan"))
+        except (AttributeError, TypeError, ValueError, OverflowError) as exc:
+            raise CampaignExecutionError(f"{symbol}: current market price unavailable") from exc
+        if not math.isfinite(price) or price <= 0:
             raise CampaignExecutionError(f"{symbol}: invalid current market price")
         return price
 
     def _check_algo_capacity(self, symbol: str, additional: int = 1) -> None:
         filters = self._rules(symbol)
         open_orders = self.client.open_orders(symbol)
-        max_orders = int((filters.get("MAX_NUM_ORDERS") or {}).get("maxNumOrders", 10**9))
-        max_algo = int((filters.get("MAX_NUM_ALGO_ORDERS") or {}).get("maxNumAlgoOrders", 10**9))
+        max_orders_filter = filters.get("MAX_NUM_ORDERS")
+        max_algo_filter = filters.get("MAX_NUM_ALGO_ORDERS")
+        if additional > 0 and (not max_orders_filter or not max_algo_filter):
+            raise CampaignExecutionError(f"{symbol}: required order-capacity filters unavailable")
+        try:
+            max_orders = int(max_orders_filter["maxNumOrders"]) if max_orders_filter else 10**9
+            max_algo = int(max_algo_filter["maxNumAlgoOrders"]) if max_algo_filter else 10**9
+        except (KeyError, TypeError, ValueError, OverflowError) as exc:
+            raise CampaignExecutionError(f"{symbol}: malformed order-capacity filters") from exc
+        if max_orders <= 0 or max_algo <= 0:
+            raise CampaignExecutionError(f"{symbol}: invalid order-capacity limits")
         if len(open_orders) + additional > max_orders:
             raise CampaignExecutionError(f"{symbol}: MAX_NUM_ORDERS would be exceeded")
         algo_open = sum(
