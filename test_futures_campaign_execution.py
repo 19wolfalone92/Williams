@@ -2185,3 +2185,48 @@ def test_partial_protective_stop_and_market_exit_reconcile_as_one_flattening_cyc
     finally:
         db.conn.close()
 
+
+
+def test_reconciliation_lockout_cancels_already_armed_entries():
+    import threading
+    from types import MethodType, SimpleNamespace
+
+    runtime = object.__new__(FuturesRuntime)
+    runtime._cycle_lock = threading.RLock()
+    runtime._kill_latched = False
+    runtime._paused = False
+    runtime.client = SimpleNamespace(
+        sync_time=lambda: {},
+        account_permissions=lambda: {"canTrade": True, "multiAssetsMargin": False},
+    )
+    runtime.controller = SimpleNamespace(
+        balance_quote=1000.0, risk_engine=SimpleNamespace(balance=1000.0)
+    )
+    runtime._last_account = {"equity_quote": 1000.0, "available_quote": 500.0}
+    runtime._last_scan_summary = {}
+    runtime._account = MethodType(lambda self: self._last_account, runtime)
+    runtime._recover = MethodType(
+        lambda self: [{"symbol": "BTCUSDT", "state": "RECONCILE_REQUIRED"}],
+        runtime,
+    )
+    runtime.execution = SimpleNamespace(_assert_no_unmanaged_positions=lambda symbol: None)
+    runtime.symbols = ("BTCUSDT",)
+    runtime._manage_existing_positions = MethodType(
+        lambda self: [{"symbol": "BTCUSDT", "action": "PROTECTION_MAINTAINED"}],
+        runtime,
+    )
+    runtime._daily_loss_allows_entry = MethodType(lambda self, equity: (True, "within limit"), runtime)
+    cancelled = []
+    runtime._cancel_pending_entries = MethodType(
+        lambda self, reason: cancelled.append(reason) or [
+            {"symbol": "ETHUSDT", "action": "ENTRY_CANCELLED", "state": "CLOSED"}
+        ],
+        runtime,
+    )
+
+    result = runtime.scan_once()
+
+    assert cancelled == ["RECONCILE_REQUIRED"]
+    assert result["state"] == "RECONCILE_REQUIRED"
+    assert result["new_entries"] == 0
+    assert result["pending_order_cancellations"][0]["action"] == "ENTRY_CANCELLED"
