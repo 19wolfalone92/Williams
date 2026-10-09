@@ -500,7 +500,9 @@ def test_execution_barrier_stale_intent_only_blocks_new_exposure():
             symbol="BTCUSDT",
             side=side,
             order_type=order_type,
-            required_context_versions={},
+            # No matching context exists in empty_snapshot. Safety actions
+            # must not depend on strategy-context freshness.
+            required_context_versions={"1m": 999},
             purpose=purpose,
             created_at_ms=stale_at,
             max_age_ms=1_000,
