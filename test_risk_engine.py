@@ -208,3 +208,35 @@ def test_default_risk_is_half_percent():
     assert result.risk_quote == 50
     assert result.risk_pct == 0.5
     print("[PASS] default per-trade risk is 0.5%")
+
+
+def test_non_finite_risk_inputs_are_blocked():
+    import math
+    import pytest
+
+    engine = RiskEngine(balance_quote=10000)
+    for kwargs in (
+        {"entry_price": float("nan"), "atr": 10},
+        {"entry_price": 100, "atr": float("inf")},
+        {"entry_price": 100, "atr": 1, "spread_pct": float("nan")},
+        {"entry_price": 100, "atr": 1, "invalidation_price": float("nan")},
+        {"entry_price": 100, "atr": 1, "risk_pct_override": float("inf")},
+    ):
+        result = engine.analyse(
+            symbol="BTCUSDT",
+            entry_price=kwargs.pop("entry_price"),
+            atr=kwargs.pop("atr"),
+            **kwargs,
+        )
+        assert result.allowed is False
+        assert math.isfinite(result.position_quote)
+        assert result.position_quote == 0.0
+
+
+def test_risk_engine_rejects_non_finite_or_unsafe_configuration():
+    import pytest
+
+    with pytest.raises(ValueError, match="finite"):
+        RiskEngine(balance_quote=float("nan"))
+    with pytest.raises(ValueError, match="max_position_fraction"):
+        RiskEngine(balance_quote=1000, max_position_fraction=1.5)
