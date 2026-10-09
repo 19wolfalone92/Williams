@@ -1171,6 +1171,7 @@ internal class FuturesNativeEngine(
             .put("structuralStop", stop)
             .put("riskQuote", riskQuote)
             .put("signalType", signal.type)
+        var mutationAccepted = false
         try {
             val response = executeMutation(
                 exchange,
@@ -1180,7 +1181,8 @@ internal class FuturesNativeEngine(
                 side,
                 clientAlgoId,
                 params
-            ) {                exchange.submitConditional(
+            ) {
+                exchange.submitConditional(
                     symbol = symbol,
                     side = side,
                     type = "STOP_MARKET",
@@ -1192,9 +1194,39 @@ internal class FuturesNativeEngine(
                     workingType = "CONTRACT_PRICE"
                 )
             }
-            campaign.put("entry_algo_id", response.optString("algoId"))
+            // From this point onward, any failure is a post-submit uncertainty;
+            // never mark the campaign CLOSED just because verification failed.
+            mutationAccepted = true
+            val responseStatus = response.optString("algoStatus").uppercase(Locale.US)
+            val responseAlgoId = response.optString("algoId")
+            val verified = exchange.getAlgoOrder(symbol, clientAlgoId = clientAlgoId)
+            val verifiedStatus = verified.optString("algoStatus").uppercase(Locale.US)
+            val verifiedTrigger = verified.optString("triggerPrice").toDoubleOrNull()
+            val verifiedQty = verified.optString("quantity").toDoubleOrNull()
+            if (
+                responseStatus !in setOf("NEW", "WORKING", "PENDING", "PENDING_NEW") ||
+                responseAlgoId.isBlank() ||
+                verifiedStatus !in setOf("NEW", "WORKING", "PENDING", "PENDING_NEW") ||
+                verified.optString("symbol").uppercase(Locale.US) != symbol ||
+                verified.optString("clientAlgoId") != clientAlgoId ||
+                verified.optString("algoId") != responseAlgoId ||
+                verified.optString("side").uppercase(Locale.US) != side ||
+                verified.optString("orderType", verified.optString("type")).uppercase(Locale.US) != "STOP_MARKET" ||
+                verified.optBoolean("closePosition", true) ||
+                verified.optBoolean("reduceOnly", true) ||
+                verifiedTrigger == null || !verifiedTrigger.isFinite() ||
+                abs(verifiedTrigger - triggerValue) > 1e-8 ||
+                verifiedQty == null || !verifiedQty.isFinite() ||
+                abs(verifiedQty - quantity.toDouble()) > max(1e-8, quantity.toDouble() * 1e-6)
+            ) {
+                throw FuturesApiException(
+                    "$symbol entry conditional order failed authoritative identity/side/type/trigger/quantity verification",
+                    outcomeUnknown = true
+                )
+            }
+            campaign.put("entry_algo_id", responseAlgoId)
             campaign.put("state", "ENTRY_PENDING")
-            campaign.put("entry_status", response.optString("algoStatus"))
+            campaign.put("entry_status", verifiedStatus)
             auditStore.saveFuturesCampaign(symbol, campaign)
             return JSONObject()
                 .put("symbol", symbol)
@@ -1208,7 +1240,16 @@ internal class FuturesNativeEngine(
                 .put("quantity", quantity)
                 .put("risk_quote", riskQuote)
         } catch (x: Exception) {
-            campaign.put("state", if (x is FuturesApiException && x.outcomeUnknown) "ENTRY_PENDING" else "CLOSED")
+            val unknown = x is FuturesApiException && x.outcomeUnknown
+            campaign.put(
+                "state",
+                when {
+                    mutationAccepted -> "RECONCILE_REQUIRED"
+                    unknown -> "ENTRY_PENDING"
+                    else -> "CLOSED"
+                }
+            )
+            if (mutationAccepted || unknown) reconcileRequired = true
             campaign.put("reason", x.message ?: x.javaClass.simpleName)
             auditStore.saveFuturesCampaign(symbol, campaign)
             throw x
@@ -1538,7 +1579,29 @@ internal class FuturesNativeEngine(
             }.getOrNull()
             if (protection != null) {
                 val status = protection.optString("algoStatus").uppercase(Locale.US)
-                if (status in setOf("NEW", "WORKING", "PENDING")) {
+                if (status in setOf("NEW", "WORKING", "PENDING", "PENDING_NEW")) {
+                    val expectedSide = exchange.directionToProtectiveSide(direction)
+                    val expectedStop = campaign.optDouble("stop_price", 0.0)
+                    val trigger = protection.optString("triggerPrice").toDoubleOrNull()
+                    val validProtection =
+                        protection.optString("symbol").uppercase(Locale.US) == symbol &&
+                            protection.optString("clientAlgoId") == clientId &&
+                            protection.optString("side").uppercase(Locale.US) == expectedSide &&
+                            protection.optString("orderType", protection.optString("type")).uppercase(Locale.US) == "STOP_MARKET" &&
+                            protection.optBoolean("closePosition", false) &&
+                            trigger != null && trigger.isFinite() &&
+                            expectedStop > 0.0 && abs(trigger - expectedStop) <= 1e-8
+                    if (!validProtection) {
+                        val emergency = runCatching {
+                            exitPosition(exchange, campaign, "PROTECTION_IDENTITY_MISMATCH")
+                        }.getOrNull()
+                        if (emergency?.optString("action") == "CLOSED") return emergency
+                        return setCampaignState(
+                            campaign,
+                            "RECONCILE_REQUIRED",
+                            "Live protective stop identity/side/type/trigger does not match campaign"
+                        )
+                    }
                     campaign.put("protection_client_algo_id", clientId)
                     campaign.put("protection_algo_id", protection.optString("algoId"))
                     campaign.put("protection_active", true)
@@ -1660,7 +1723,31 @@ internal class FuturesNativeEngine(
             )
         }
         val algoId = response.optString("algoId")
-        if (algoId.isBlank()) throw FuturesApiException("$symbol protection response lacks algoId", outcomeUnknown = true)
+        val responseStatus = response.optString("algoStatus").uppercase(Locale.US)
+        val verified = runCatching { exchange.getAlgoOrder(symbol, clientAlgoId = clientId) }
+            .getOrElse { throw FuturesApiException("$symbol protection lookup failed after submit: ${it.message}", outcomeUnknown = true, cause = it) }
+        val verifiedStatus = verified.optString("algoStatus").uppercase(Locale.US)
+        val verifiedTrigger = verified.optString("triggerPrice").toDoubleOrNull()
+        val expectedSide = exchange.directionToProtectiveSide(direction)
+        if (
+            algoId.isBlank() ||
+            responseStatus !in setOf("NEW", "WORKING", "PENDING", "PENDING_NEW") ||
+            verifiedStatus !in setOf("NEW", "WORKING", "PENDING", "PENDING_NEW") ||
+            verified.optString("symbol").uppercase(Locale.US) != symbol ||
+            verified.optString("clientAlgoId") != clientId ||
+            verified.optString("algoId") != algoId ||
+            verified.optString("side").uppercase(Locale.US) != expectedSide ||
+            verified.optString("orderType", verified.optString("type")).uppercase(Locale.US) != "STOP_MARKET" ||
+            !verified.optBoolean("closePosition", false) ||
+            verifiedTrigger == null || !verifiedTrigger.isFinite() ||
+            abs(verifiedTrigger - trigger) > 1e-8
+        ) {
+            reconcileRequired = true
+            throw FuturesApiException(
+                "$symbol protective stop failed authoritative identity/side/type/trigger verification",
+                outcomeUnknown = true
+            )
+        }
         campaign.put("protection_client_algo_id", clientId)
         campaign.put("protection_algo_id", algoId)
         campaign.put("protection_active", true)
