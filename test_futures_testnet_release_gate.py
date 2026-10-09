@@ -63,6 +63,11 @@ class FakeReadOnlyFuturesClient:
         self.quote_asset = "USDT"
         self.margin_asset = "USDT"
         self.missing_market_filter = False
+        self.bad_filter_step = False
+        self.crossed_book = False
+        self.position_amt = "0"
+        self.standard_orders = []
+        self.algo_orders = []
 
     def sync_time(self):
         return {"serverTime": 1}
@@ -76,7 +81,7 @@ class FakeReadOnlyFuturesClient:
     def position_risk(self, symbol=None):
         rows = [{
             "symbol": "BTCUSDT",
-            "positionAmt": "0",
+            "positionAmt": self.position_amt,
             "isolated": self.isolated,
             "leverage": str(self.leverage),
         }]
@@ -92,19 +97,36 @@ class FakeReadOnlyFuturesClient:
         }]}
 
     def symbol_filters(self, symbol):
-        filters = {"PRICE_FILTER": {}, "LOT_SIZE": {}}
+        filters = {
+            "PRICE_FILTER": {
+                "minPrice": "0", "maxPrice": "1000000", "tickSize": "0.01",
+            },
+            "LOT_SIZE": {
+                "minQty": "0.001", "maxQty": "100000", "stepSize": "0.001",
+            },
+        }
         if not self.missing_market_filter:
-            filters["MARKET_LOT_SIZE"] = {}
+            filters["MARKET_LOT_SIZE"] = {
+                "minQty": "0.001", "maxQty": "100000",
+                "stepSize": "0" if self.bad_filter_step else "0.001",
+            }
         return filters
 
     def mark_price(self, symbol):
         return {"symbol": symbol, "markPrice": "100.0"}
 
+    def book_ticker(self, symbol):
+        return {
+            "symbol": symbol,
+            "bidPrice": "100.01" if self.crossed_book else "99.99",
+            "askPrice": "100.00" if self.crossed_book else "100.01",
+        }
+
     def open_orders(self):
-        return []
+        return list(self.standard_orders)
 
     def open_algo_orders(self):
-        return []
+        return list(self.algo_orders)
 
 
 def _enable_fake_demo_gate(monkeypatch, *, client_type=FakeReadOnlyFuturesClient):
@@ -121,12 +143,15 @@ def test_read_only_release_gate_passes_only_when_demo_policy_is_verified(monkeyp
     result = gate.run_futures_testnet_read_only(["BTCUSDT"])
 
     assert result["status"] == "PASS_READ_ONLY"
+    assert result["release_gate_passed"] is True
     assert result["mutations_submitted"] == 0
     assert result["account_can_trade"] is True
     assert result["markets"][0]["quote_asset"] == "USDT"
     assert result["markets"][0]["margin_asset"] == "USDT"
     assert result["markets"][0]["isolated_margin"] is True
     assert result["markets"][0]["leverage"] == 1
+    assert result["markets"][0]["validated_filters"]["MARKET_LOT_SIZE"]["step"] == pytest.approx(0.001)
+    assert 0 <= result["markets"][0]["spread_pct"] < 0.001
 
 
 @pytest.mark.parametrize(
@@ -138,6 +163,8 @@ def test_read_only_release_gate_passes_only_when_demo_policy_is_verified(monkeyp
         ("quote_asset", "BUSD", "quote asset must be USDT"),
         ("margin_asset", "BUSD", "margin asset must be USDT"),
         ("missing_market_filter", True, "LOT_SIZE and MARKET_LOT_SIZE"),
+        ("bad_filter_step", True, "MARKET_LOT_SIZE bounds/stepSize are invalid"),
+        ("crossed_book", True, "best bid/ask is invalid"),
     ],
 )
 def test_read_only_release_gate_fails_closed_on_invalid_demo_policy(monkeypatch, setting, value, message):
@@ -150,4 +177,28 @@ def test_read_only_release_gate_fails_closed_on_invalid_demo_policy(monkeypatch,
 
     with pytest.raises(RuntimeError, match=message):
         gate.run_futures_testnet_read_only(["BTCUSDT"])
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected_status"),
+    [
+        ("position_amt", "0.01", "BLOCKED_ACCOUNT_NOT_CLEAN"),
+        ("standard_orders", [{"symbol": "BTCUSDT", "orderId": 1}], "BLOCKED_ACCOUNT_NOT_CLEAN"),
+        ("algo_orders", [{"symbol": "BTCUSDT", "algoId": 2}], "BLOCKED_ACCOUNT_NOT_CLEAN"),
+    ],
+)
+def test_read_only_gate_does_not_call_dirty_demo_account_release_ready(
+    monkeypatch, field, value, expected_status
+):
+    class DirtyClient(FakeReadOnlyFuturesClient):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            setattr(self, field, value)
+
+    _enable_fake_demo_gate(monkeypatch, client_type=DirtyClient)
+
+    result = gate.run_futures_testnet_read_only(["BTCUSDT"])
+
+    assert result["status"] == expected_status
+    assert result["release_gate_passed"] is False
+    assert result["mutations_submitted"] == 0
 
