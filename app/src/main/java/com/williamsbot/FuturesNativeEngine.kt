@@ -788,14 +788,10 @@ internal class FuturesNativeEngine(
         val higher = analyseFrame(exchange, symbol, higherTf) ?: return null
         val candidates = listOfNotNull(primary.lastSignal)
             .filter { signal ->
-                // This native release intentionally does not pyramid yet.
-                // WM2 Super AO and WM3 fractal are campaign ADD_ONs, not valid
-                // substitutes for the initial WM1 reversal entry. Until the
-                // add-on admission/fill/reconciliation path is implemented,
-                // never promote those signals into a new campaign.
-                if (signal.type != "REVERSAL") {
-                    false
-                } else if (signal.direction == "LONG") {
+                // Native mode has no pyramiding. The first valid WM1/WM2/WM3
+                // signal may start a campaign; existing campaigns are skipped
+                // before this function is called.
+                if (signal.direction == "LONG") {
                     higher.bullish && higher.ao > 0.0 && higher.ac > 0.0
                 } else {
                     higher.bearish && higher.ao < 0.0 && higher.ac < 0.0
@@ -875,63 +871,76 @@ internal class FuturesNativeEngine(
 
         val upFractal = latestFractal(bars, up = true)
         val downFractal = latestFractal(bars, up = false)
-        var signal: Signal? = null
+        val signalCandidates = mutableListOf<Signal>()
         if (atr > 0.0 && validLines && awake) {
             val configLong = bullish && aoNow > 0.0 && acNow > 0.0
             val configShort = bearish && aoNow < 0.0 && acNow < 0.0
 
-            // WM1: reversal bar is context; the stop beyond its extreme is the
-            // actionable price trigger. Use the current mouth angle/momentum as
-            // a conservative native execution gate.
-            if (signal == null && configLong) {
-                signal = reversalSignal(
-                    symbol, bars, "LONG", jaw, teeth, lips, ao, ac, atr, tickSize
-                )
+            // A campaign starts with the first valid Wise-Man signal available:
+            // WM1 reversal, WM2 Super AO, or WM3 confirmed fractal. This native
+            // release does not pyramid, so any selected signal is an initial
+            // entry only when no campaign already exists for this symbol.
+            if (configLong) {
+                reversalSignal(symbol, bars, "LONG", jaw, teeth, lips, ao, ac, atr, tickSize)
+                    ?.let(signalCandidates::add)
             }
-            if (signal == null && configShort) {
-                signal = reversalSignal(
-                    symbol, bars, "SHORT", jaw, teeth, lips, ao, ac, atr, tickSize
-                )
+            if (configShort) {
+                reversalSignal(symbol, bars, "SHORT", jaw, teeth, lips, ao, ac, atr, tickSize)
+                    ?.let(signalCandidates::add)
             }
 
-            // WM3: a confirmed fractal outside the Teeth/Balancing Line is a
-            // pending stop-entry, never a MARKET chase after the trigger passed.
-            if (signal == null && configLong && upFractal != null) {
+            // WM3: a confirmed fractal outside Teeth is a pending stop-entry,
+            // never a MARKET chase after the trigger has already passed.
+            if (configLong && upFractal != null) {
                 val (center, level) = upFractal
-                // Use the real exchange tick; pre-submit filters validate rounding again.
                 val entryTrigger = level + tickSize
                 val stop = bars[center].low - tickSize
-                if (level > teeth[i] && bars[i].close < entryTrigger && stop > 0.0) {
-                    signal = Signal(symbol, "LONG", "FRACTAL", bars[center].openTime, entryTrigger, stop, atr, "WM3 buy fractal outside Teeth; stop-entry trigger above fractal")
+                if (level > teeth[i] && bars[i].close < entryTrigger && stop > 0.0 && stop < entryTrigger) {
+                    signalCandidates.add(
+                        Signal(symbol, "LONG", "FRACTAL", bars[center].openTime, entryTrigger, stop, atr,
+                            "WM3 buy fractal outside Teeth; stop-entry trigger above fractal")
+                    )
                 }
             }
-            if (signal == null && configShort && downFractal != null) {
+            if (configShort && downFractal != null) {
                 val (center, level) = downFractal
                 val entryTrigger = level - tickSize
                 val stop = bars[center].high + tickSize
                 if (level < teeth[i] && bars[i].close > entryTrigger && stop > entryTrigger) {
-                    signal = Signal(symbol, "SHORT", "FRACTAL", bars[center].openTime, entryTrigger, stop, atr, "WM3 sell fractal outside Teeth; stop-entry trigger below fractal")
+                    signalCandidates.add(
+                        Signal(symbol, "SHORT", "FRACTAL", bars[center].openTime, entryTrigger, stop, atr,
+                            "WM3 sell fractal outside Teeth; stop-entry trigger below fractal")
+                    )
                 }
             }
-            // WM2: three AO histogram bars in the same direction, following an
-            // outside fractal, create a separate stop-triggered continuation.
-            if (signal == null && configLong && superAo(ao, bars, "LONG", teeth[i], upFractal)) {
+
+            // WM2: three consecutive AO bars in the same direction after the
+            // corresponding outside fractal. It can be the first signal of a
+            // new campaign if no earlier valid WM1/WM3 signal is available.
+            if (configLong && superAo(ao, bars, "LONG", teeth[i], upFractal)) {
                 val row = bars[i]
                 val trigger = row.high + tickSize
                 val stop = row.low - tickSize
-                if (row.close < trigger && stop > 0.0) {
-                    signal = Signal(symbol, "LONG", "SUPER_AO", row.openTime, trigger, stop, atr, "WM2 Super AO: three rising AO bars after outside up fractal")
+                if (row.close < trigger && stop > 0.0 && stop < trigger) {
+                    signalCandidates.add(
+                        Signal(symbol, "LONG", "SUPER_AO", row.openTime, trigger, stop, atr,
+                            "WM2 Super AO: three rising AO bars after outside up fractal")
+                    )
                 }
             }
-            if (signal == null && configShort && superAo(ao, bars, "SHORT", teeth[i], downFractal)) {
+            if (configShort && superAo(ao, bars, "SHORT", teeth[i], downFractal)) {
                 val row = bars[i]
                 val trigger = row.low - tickSize
                 val stop = row.high + tickSize
                 if (row.close > trigger && stop > trigger) {
-                    signal = Signal(symbol, "SHORT", "SUPER_AO", row.openTime, trigger, stop, atr, "WM2 Super AO: three falling AO bars after outside down fractal")
+                    signalCandidates.add(
+                        Signal(symbol, "SHORT", "SUPER_AO", row.openTime, trigger, stop, atr,
+                            "WM2 Super AO: three falling AO bars after outside down fractal")
+                    )
                 }
             }
         }
+        val signal = signalCandidates.minByOrNull { it.signalBarTime }
         return Frame(
             bars = bars,
             atr = atr,
