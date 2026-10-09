@@ -1689,12 +1689,22 @@ internal class FuturesNativeEngine(
             return setCampaignState(campaign, "RECONCILE_REQUIRED", "Reduce-only exit blocked: position direction mismatch")
         }
 
-        // Cancel the bot-owned protection first where possible. An ambiguous
-        // cancel does not prevent a reduce-only exit, which cannot reverse side.
+        // Cancel the owned stop before the market exit, but remember whether
+        // cancellation was authoritatively confirmed. If exit submission fails
+        // while the position remains open, the stop must be restored before
+        // returning control to the monitor.
         val protectionClientId = campaign.optString("protection_client_algo_id")
+        var protectionCancelConfirmed = protectionClientId.isBlank()
         if (protectionClientId.isNotBlank()) {
-            runCatching { cancelOwnedProtection(exchange, campaign, protectionClientId) }
-                .onFailure { lastError = "Protection cancel uncertain; reduce-only exit still attempted: ${it.message}" }
+            protectionCancelConfirmed = runCatching {
+                cancelOwnedProtection(exchange, campaign, protectionClientId)
+                val verified = exchange.getAlgoOrder(symbol, clientAlgoId = protectionClientId)
+                verified.optString("algoStatus").uppercase(Locale.US) in
+                    setOf("CANCELED", "CANCELLED", "EXPIRED", "REJECTED")
+            }.getOrDefault(false)
+            if (!protectionCancelConfirmed) {
+                lastError = "Protection cancellation is unconfirmed; reduce-only exit still attempted"
+            }
         }
 
         val side = exchange.directionToExitSide(direction)
@@ -1707,10 +1717,31 @@ internal class FuturesNativeEngine(
             .put("reduceOnly", true)
             .put("reason", reason)
             .put("clientOrderId", clientId)
-        val response = executeMutation(
-            exchange, symbol, "EXIT", direction, side, clientId, params
-        ) {
-            exchange.submitMarket(symbol, side, quantity, clientId, reduceOnly = true)
+        val response = try {
+            executeMutation(
+                exchange, symbol, "EXIT", direction, side, clientId, params
+            ) {
+                exchange.submitMarket(symbol, side, quantity, clientId, reduceOnly = true)
+            }
+        } catch (x: Exception) {
+            val latest = runCatching { position(exchange, symbol) }.getOrNull()
+            val residual = latest?.optString("positionAmt")?.toDoubleOrNull()
+            var protectionRestored = !protectionCancelConfirmed
+            if (residual != null && residual.isFinite() && abs(residual) > 1e-12 && protectionCancelConfirmed) {
+                protectionRestored = runCatching {
+                    placeProtection(exchange, campaign)
+                    true
+                }.getOrDefault(false)
+            }
+            val detail = buildString {
+                append("Reduce-only exit submission failed or is ambiguous: ")
+                append(x.message ?: x.javaClass.simpleName)
+                if (residual == null || !residual.isFinite()) append("; live position could not be verified")
+                else if (abs(residual) > 1e-12 && !protectionRestored) append("; protection restoration is not confirmed")
+                else if (abs(residual) > 1e-12) append("; exchange-side protection restored")
+            }
+            setCampaignState(campaign, "RECONCILE_REQUIRED", detail)
+            throw x
         }
         val latestPosition = position(exchange, symbol)
         val residual = latestPosition.optString("positionAmt").toDoubleOrNull() ?: Double.NaN
@@ -1721,7 +1752,29 @@ internal class FuturesNativeEngine(
             campaign.put("position_amt", residual)
             return setCampaignState(campaign, "RECONCILE_REQUIRED", "Reduce-only exit left residual quantity $residual")
         }
-        recordMarketExit(exchange, campaign, response, reason)
+        if (response.optString("status").uppercase(Locale.US) != "FILLED") {
+            return setCampaignState(
+                campaign,
+                "RECONCILE_REQUIRED",
+                "Exchange position is flat but market exit status is not FILLED; child fills/protective race must be reconciled"
+            )
+        }
+        try {
+            recordMarketExit(exchange, campaign, response, reason)
+        } catch (x: Exception) {
+            return setCampaignState(
+                campaign,
+                "RECONCILE_REQUIRED",
+                "Exchange position is flat but market-exit trade accounting is incomplete: ${x.message}"
+            )
+        }
+        if (!protectionCancelConfirmed) {
+            return setCampaignState(
+                campaign,
+                "RECONCILE_REQUIRED",
+                "Exchange position is flat but protective cancellation is unconfirmed; orphan order cleanup is required"
+            )
+        }
         campaign.put("state", "CLOSED")
         campaign.put("position_amt", 0.0)
         campaign.put("protection_active", false)
@@ -1965,6 +2018,12 @@ internal class FuturesNativeEngine(
             ?: throw FuturesApiException("$symbol market exit executedQty is missing or invalid")
         if (!executed.isFinite() || executed <= 0.0) {
             throw FuturesApiException("$symbol market exit executedQty is non-finite or non-positive")
+        }
+        val expectedQty = campaign.optDouble("position_amt", 0.0).let { abs(it) }
+        if (expectedQty > 0.0 && abs(executed - expectedQty) > max(1e-8, expectedQty * 1e-6)) {
+            throw FuturesApiException(
+                "$symbol market exit executedQty does not equal the persisted position quantity; protective fills may have raced"
+            )
         }
         val trades = exchange.getUserTrades(symbol, orderId)
         if (trades.length() == 0) {
