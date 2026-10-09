@@ -74,8 +74,13 @@ def calculate_indicators(df, cfg):
 
     # Fractals. The center must be strictly higher/lower than the two bars
     # on each side; equality therefore does not create a false fractal.
-    left = cfg["fractal_left"]
-    right = cfg["fractal_right"]
+    left = int(cfg["fractal_left"])
+    right = int(cfg["fractal_right"])
+    if left < 1 or right < 1:
+        raise ValueError("Fractal left/right confirmation windows must be positive")
+    # Preserve the configured confirmation delay in the indicator frame.
+    # Signal extraction must not silently assume the default two right bars.
+    x["fractal_right_bars"] = right
     x["fractal_up"] = False
     x["fractal_down"] = False
     for i in range(left, len(x) - right):
