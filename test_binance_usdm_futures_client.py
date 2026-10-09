@@ -23,6 +23,23 @@ def test_demo_futures_endpoint_is_default_and_mainnet_requires_double_opt_in(mon
     assert live.base_url == "https://fapi.binance.com"
 
 
+@pytest.mark.parametrize("payload", [{}, {"dualSidePosition": None}, {"dualSidePosition": "unknown"}])
+def test_one_way_mode_requires_explicit_valid_exchange_confirmation(monkeypatch, payload):
+    client = make_client()
+    monkeypatch.setattr(client, "_request", lambda *args, **kwargs: payload)
+
+    with pytest.raises(FuturesAPIError, match="one-way mode is not confirmed"):
+        client.ensure_one_way_mode()
+
+
+@pytest.mark.parametrize("payload", [{"dualSidePosition": False}, {"dualSidePosition": "false"}, {"dualSidePosition": "0"}])
+def test_one_way_mode_accepts_explicit_false_confirmation(monkeypatch, payload):
+    client = make_client()
+    monkeypatch.setattr(client, "_request", lambda *args, **kwargs: payload)
+
+    assert client.ensure_one_way_mode() == payload
+
+
 def test_live_leverage_above_one_is_rejected():
     with pytest.raises(ValueError, match="capped at 1x"):
         BinanceUsdmFuturesClient("test-key", "test-secret", max_leverage=2)
