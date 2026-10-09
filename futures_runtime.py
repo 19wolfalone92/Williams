@@ -471,8 +471,9 @@ class FuturesRuntime:
 
     def scan_once(self) -> dict[str, Any]:
         """One full cycle; existing exposure is managed before entry lockouts."""
-        if self._kill_latched:
-            return {"state": "KILL_SWITCH_LATCHED", "new_entries": 0}
+        # Kill switch blocks all new exposure, but it must not disable
+        # reconciliation, protective-stop repair, or exits for existing risk.
+        kill_latched = self._kill_latched
 
         self.client.sync_time()
         account = self._account()
@@ -484,6 +485,16 @@ class FuturesRuntime:
             str(item.get("state", "")).upper() == "RECONCILE_REQUIRED"
             for item in reconciliations
         )
+        if kill_latched:
+            self._last_scan_summary = {
+                "state": "KILL_SWITCH_LATCHED",
+                "reason": "new entries disabled; existing positions reconciled and managed",
+                "reconciliation": reconciliations,
+                "management": management,
+                "new_entries": 0,
+            }
+            return self._last_scan_summary
+
         if self._paused:
             self._last_scan_summary = {
                 "state": "PAUSED",
