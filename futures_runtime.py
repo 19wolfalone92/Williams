@@ -492,6 +492,14 @@ class FuturesRuntime:
             str(item.get("state", "")).upper() == "RECONCILE_REQUIRED"
             for item in reconciliations
         )
+        management_blocked = any(
+            str(item.get("action", "")).upper() in {"MANAGEMENT_ERROR", "RECONCILE_REQUIRED"}
+            or str(item.get("state", "")).upper() == "RECONCILE_REQUIRED"
+            for item in management
+        )
+        # If any open campaign could not be safely inspected/managed this
+        # cycle, do not compound exposure by opening another campaign.
+        blocked_reconciliation = blocked_reconciliation or management_blocked
         if kill_latched:
             self._last_scan_summary = {
                 "state": "KILL_SWITCH_LATCHED",
@@ -515,7 +523,10 @@ class FuturesRuntime:
         if blocked_reconciliation:
             self._last_scan_summary = {
                 "state": "RECONCILE_REQUIRED",
-                "reason": "one or more Futures campaigns need reconciliation; existing-position management was still attempted",
+                "reason": (
+                    "existing-position management failed or a campaign needs reconciliation; "
+                    "new exposure is fail-closed while protection/recovery remain enabled"
+                ),
                 "reconciliation": reconciliations,
                 "management": management,
                 "new_entries": 0,
