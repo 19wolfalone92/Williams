@@ -221,6 +221,28 @@ def make_signal(direction):
     )
 
 
+def test_signal_spec_restore_preserves_zero_source_candle_index():
+    from futures_runtime import signal_spec_from_dict
+
+    raw = make_signal("LONG").to_dict()
+    raw["source_candle_index"] = 0
+
+    restored = signal_spec_from_dict(raw)
+
+    assert restored.source_candle_index == 0
+
+
+def test_signal_spec_restore_defaults_null_source_candle_index_to_unknown():
+    from futures_runtime import signal_spec_from_dict
+
+    raw = make_signal("SHORT").to_dict()
+    raw["source_candle_index"] = None
+
+    restored = signal_spec_from_dict(raw)
+
+    assert restored.source_candle_index == -1
+
+
 @pytest.mark.parametrize(
     ("direction", "mark", "allow_long", "allow_short", "expected_side"),
     [
