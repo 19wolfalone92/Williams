@@ -399,8 +399,12 @@ class BinanceUsdmFuturesClient:
         if not price_filter:
             raise FuturesAPIError(f"{symbol}: exchangeInfo lacks PRICE_FILTER")
         tick = self._positive_decimal(price_filter.get("tickSize", "0"), "tickSize")
-        min_price = self._positive_decimal(price_filter.get("minPrice", "0"), "minPrice")
-        max_price = self._positive_decimal(price_filter.get("maxPrice", "0"), "maxPrice")
+        min_price = Decimal(str(price_filter.get("minPrice", "0")))
+        max_price = Decimal(str(price_filter.get("maxPrice", "0")))
+        if not min_price.is_finite() or min_price < 0:
+            raise FuturesAPIError(f"{symbol}: invalid PRICE_FILTER minPrice")
+        if not max_price.is_finite() or max_price <= 0:
+            raise FuturesAPIError(f"{symbol}: invalid PRICE_FILTER maxPrice")
         round_up = (direction == "LONG" and purpose == "ENTRY") or (
             direction == "SHORT" and purpose == "STOP"
         )
