@@ -663,7 +663,11 @@ def test_reconcile_detects_exchange_local_quantity_drift_after_confirming_protec
     }
     db = SimpleNamespace(state_set=lambda key, value: calls.append((key, value)))
     client = SimpleNamespace(
-        get_algo_order=lambda *args, **kwargs: {"algoStatus": "NEW", "clientAlgoId": "stop-2"},
+        get_algo_order=lambda *args, **kwargs: {
+            "algoStatus": "NEW", "clientAlgoId": "stop-2", "side": "SELL",
+            "type": "STOP_MARKET", "orderType": "STOP_MARKET",
+            "closePosition": True, "triggerPrice": "95.0",
+        },
     )
     engine = SimpleNamespace(
         mark_reconcile_required=lambda camp, reason: (
