@@ -616,3 +616,27 @@ def test_execution_barrier_blocks_ambiguous_or_partial_cancel(response):
     with pytest.raises(RuntimeError, match="ExecutionBarrier"):
         barrier.execute(intent, lambda: response)
     assert db.intents[intent.intent_id][0] == "AMBIGUOUS"
+
+
+def test_execution_barrier_does_not_cancel_protection_without_durable_intent():
+    class BrokenDB:
+        def save_execution_intent(self, *args, **kwargs):
+            raise OSError("disk unavailable")
+
+        def log_event(self, *args, **kwargs):
+            return None
+
+    cache = ContextCache()
+    cache.publish(context())
+    barrier = ExecutionBarrier(cache, BrokenDB())
+    intent = OrderIntent.new(
+        "BTCUSDT", "SELL", "CANCEL", {}, purpose="CAMPAIGN_PROTECTION_CANCEL"
+    )
+    calls = []
+    result = barrier.execute(
+        intent,
+        lambda: calls.append("cancelled") or {"status": "CANCELED", "executedQty": "0"},
+    )
+    assert not result.accepted
+    assert "persistence failed" in result.reason
+    assert calls == []
