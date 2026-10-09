@@ -839,17 +839,37 @@ internal class FuturesNativeEngine(
         val now = System.currentTimeMillis()
         val bars = mutableListOf<Bar>()
         for (i in 0 until payload.length()) {
-            val row = payload.optJSONArray(i) ?: continue
-            if (row.length() < 7) continue
+            val row = payload.optJSONArray(i)
+                ?: throw FuturesApiException("$symbol/$timeframe kline row $i is not an array")
+            if (row.length() < 7) {
+                throw FuturesApiException("$symbol/$timeframe kline row $i is incomplete")
+            }
             val openTime = row.optLong(0, 0L)
             val closeTime = row.optLong(6, 0L)
-            if (openTime <= 0L || closeTime >= now) continue // ignore a forming candle
-            val o = row.optString(1).toDoubleOrNull() ?: continue
-            val h = row.optString(2).toDoubleOrNull() ?: continue
-            val l = row.optString(3).toDoubleOrNull() ?: continue
-            val close = row.optString(4).toDoubleOrNull() ?: continue
-            val volume = row.optString(5).toDoubleOrNull() ?: 0.0
-            if (!listOf(o, h, l, close, volume).all(Double::isFinite) || h < l || l <= 0.0 || close <= 0.0) continue
+            if (openTime <= 0L || closeTime < openTime) {
+                throw FuturesApiException("$symbol/$timeframe kline row $i has invalid timestamps")
+            }
+            if (closeTime >= now) continue // ignore the currently forming candle
+            val o = row.optString(1).toDoubleOrNull()
+                ?: throw FuturesApiException("$symbol/$timeframe kline row $i has invalid open")
+            val h = row.optString(2).toDoubleOrNull()
+                ?: throw FuturesApiException("$symbol/$timeframe kline row $i has invalid high")
+            val l = row.optString(3).toDoubleOrNull()
+                ?: throw FuturesApiException("$symbol/$timeframe kline row $i has invalid low")
+            val close = row.optString(4).toDoubleOrNull()
+                ?: throw FuturesApiException("$symbol/$timeframe kline row $i has invalid close")
+            val volume = row.optString(5).toDoubleOrNull()
+                ?: throw FuturesApiException("$symbol/$timeframe kline row $i has invalid volume")
+            if (
+                !listOf(o, h, l, close, volume).all(Double::isFinite) ||
+                o <= 0.0 || h <= 0.0 || l <= 0.0 || close <= 0.0 || volume < 0.0 ||
+                h < maxOf(o, close, l) || l > minOf(o, close, h)
+            ) {
+                throw FuturesApiException("$symbol/$timeframe kline row $i violates OHLCV invariants")
+            }
+            if (bars.isNotEmpty() && openTime <= bars.last().openTime) {
+                throw FuturesApiException("$symbol/$timeframe kline timestamps are duplicate or out of order")
+            }
             bars += Bar(openTime, closeTime, o, h, l, close, volume)
         }
         if (bars.size < 80) return null
