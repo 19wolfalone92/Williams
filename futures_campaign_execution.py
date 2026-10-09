@@ -739,7 +739,7 @@ class FuturesCampaignExecutionService:
 
             pending_status = str(pending_order.get("algoStatus", "") or "").upper()
             pending_side = str(pending_order.get("side", "") or "").upper()
-            pending_type = str(pending_order.get("type", "") or "").upper()
+            pending_type = str(pending_order.get("orderType", pending_order.get("type", "")) or "").upper()
             pending_close_position = str(pending_order.get("closePosition", "")).lower() in {"true", "1"}
             pending_trigger = pending_order.get("triggerPrice")
             active_statuses = {"NEW", "WORKING", "PENDING_NEW"}
@@ -2000,7 +2000,7 @@ class FuturesCampaignExecutionService:
             )
             protection_status = str(protection.get("algoStatus", "") or "").upper()
             protection_side = str(protection.get("side", "") or "").upper()
-            protection_type = str(protection.get("type", "") or "").upper()
+            protection_type = str(protection.get("orderType", protection.get("type", "")) or "").upper()
             protection_close_position = str(protection.get("closePosition", "")).lower() in {"true", "1"}
             protection_client_id = str(protection.get("clientAlgoId", "") or "")
             protection_trigger = float(protection.get("triggerPrice"))
@@ -2428,7 +2428,7 @@ class FuturesCampaignExecutionService:
                         if (
                             str(protection.get("clientAlgoId", "") or "") != protective_client_id
                             or str(protection.get("side", "") or "").upper() != expected_side
-                            or str(protection.get("type", "") or "").upper() != "STOP_MARKET"
+                            or str(protection.get("orderType", protection.get("type", "")) or "").upper() != "STOP_MARKET"
                             or str(protection.get("closePosition", "")).lower() not in {"true", "1"}
                             or not math.isfinite(actual_trigger)
                             or not math.isclose(actual_trigger, expected_trigger, rel_tol=0.0, abs_tol=1e-8)
@@ -2447,7 +2447,7 @@ class FuturesCampaignExecutionService:
             algo_status = str(algo.get("algoStatus", "") or "").upper()
             expected_side = "BUY" if direction == "LONG" else "SELL"
             algo_side = str(algo.get("side", "") or "").upper()
-            algo_type = str(algo.get("type", "") or "").upper()
+            algo_type = str(algo.get("orderType", algo.get("type", "")) or "").upper()
             algo_client_id = str(algo.get("clientAlgoId", "") or "")
             try:
                 algo_trigger = float(algo.get("triggerPrice"))
@@ -2914,7 +2914,7 @@ class FuturesCampaignExecutionService:
                 else:
                     expected_side = "SELL" if direction == "LONG" else "BUY"
                     actual_side = str(protection.get("side", "") or "").upper()
-                    actual_type = str(protection.get("type", "") or "").upper()
+                    actual_type = str(protection.get("orderType", protection.get("type", "")) or "").upper()
                     close_position = str(protection.get("closePosition", "")).lower() in {"true", "1"}
                     actual_client_id = str(protection.get("clientAlgoId", "") or "")
                     expected_client_id = str(campaign.tags.get("protective_client_algo_id", "") or "")
@@ -2973,7 +2973,7 @@ class FuturesCampaignExecutionService:
                 algo_status = str(algo.get("algoStatus", "") or "").upper()
                 algo_client_id = str(algo.get("clientAlgoId", "") or "")
                 algo_side = str(algo.get("side", "") or "").upper()
-                algo_type = str(algo.get("type", "") or "").upper()
+                algo_type = str(algo.get("orderType", algo.get("type", "")) or "").upper()
                 algo_close_position_raw = str(algo.get("closePosition", "")).lower()
                 try:
                     algo_trigger = float(algo.get("triggerPrice"))
