@@ -63,18 +63,24 @@ jobs:
           gradle-version: ${{ env.GRADLE_VERSION }}
           validate-wrappers: false
       - name: Restore persistent debug signing key
+        id: restore-debug-key
         env:
           DEBUG_KEYSTORE_B64: ${{ secrets.WILLIAMS_DEBUG_KEYSTORE_B64 }}
+          DEBUG_KEYSTORE_PASSWORD: ${{ secrets.WILLIAMS_DEBUG_KEYSTORE_PASSWORD }}
         run: |
           set -euo pipefail
-          if [ -z "${DEBUG_KEYSTORE_B64:-}" ]; then
-            echo "::error::WILLIAMS_DEBUG_KEYSTORE_B64 GitHub Secret is not configured."
-            exit 1
+          if [ -z "${DEBUG_KEYSTORE_B64:-}" ] || [ -z "${DEBUG_KEYSTORE_PASSWORD:-}" ]; then
+            echo "::notice::Persistent debug keystore secrets are not configured; CI will use the ephemeral default Android debug key for build/test validation only."
+            echo "has_key=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
           mkdir -p build
           printf '%s' "$DEBUG_KEYSTORE_B64" | base64 --decode > build/williams-debug.p12
+          test -s build/williams-debug.p12
           chmod 600 build/williams-debug.p12
+          echo "has_key=true" >> "$GITHUB_OUTPUT"
       - name: Validate debug signing configuration
+        if: steps.restore-debug-key.outputs.has_key == 'true'
         env:
           WILLIAMS_DEBUG_KEYSTORE_PASSWORD: ${{ secrets.WILLIAMS_DEBUG_KEYSTORE_PASSWORD }}
           WILLIAMS_DEBUG_KEYSTORE_B64: ${{ secrets.WILLIAMS_DEBUG_KEYSTORE_B64 }}
@@ -146,10 +152,12 @@ jobs:
           "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging app/build/outputs/apk/debug/app-debug.apk | grep -E "package:|sdkVersion:|targetSdkVersion:"
           "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging app/build/outputs/apk/release/app-release-unsigned.apk | grep -E "package:|sdkVersion:|targetSdkVersion:"
       - name: Verify persistent debug keystore
+        if: steps.restore-debug-key.outputs.has_key == 'true'
         run: |
           set -euo pipefail
           test -s build/williams-debug.p12
       - name: Verify persistent debug APK signature
+        if: steps.restore-debug-key.outputs.has_key == 'true'
         env:
           WILLIAMS_DEBUG_KEYSTORE_PASSWORD: ${{ secrets.WILLIAMS_DEBUG_KEYSTORE_PASSWORD }}
         run: |
