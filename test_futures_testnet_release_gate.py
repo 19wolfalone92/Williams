@@ -186,6 +186,39 @@ def test_read_only_release_gate_fails_closed_on_invalid_demo_policy(monkeypatch,
         ("algo_orders", [{"symbol": "BTCUSDT", "algoId": 2}], "BLOCKED_ACCOUNT_NOT_CLEAN"),
     ],
 )
+def test_read_only_gate_detects_symbol_position_missing_from_account_wide_view(monkeypatch):
+    class InconsistentPositionClient(FakeReadOnlyFuturesClient):
+        def position_risk(self, symbol=None):
+            amount = "0" if symbol is None else "0.01"
+            return [{
+                "symbol": "BTCUSDT",
+                "positionAmt": amount,
+                "isolated": self.isolated,
+                "leverage": str(self.leverage),
+            }]
+
+    _enable_fake_demo_gate(monkeypatch, client_type=InconsistentPositionClient)
+
+    result = gate.run_futures_testnet_read_only(["BTCUSDT"])
+
+    assert result["status"] == "BLOCKED_ACCOUNT_NOT_CLEAN"
+    assert result["release_gate_passed"] is False
+    assert result["nonzero_positions"] == [{"symbol": "BTCUSDT", "position_amt": 0.01}]
+
+
+def test_read_only_gate_rejects_empty_account_wide_position_response(monkeypatch):
+    class EmptyAccountPositionClient(FakeReadOnlyFuturesClient):
+        def position_risk(self, symbol=None):
+            if symbol is None:
+                return []
+            return super().position_risk(symbol)
+
+    _enable_fake_demo_gate(monkeypatch, client_type=EmptyAccountPositionClient)
+
+    with pytest.raises(RuntimeError, match="no verifiable rows"):
+        gate.run_futures_testnet_read_only(["BTCUSDT"])
+
+
 def test_read_only_gate_does_not_call_dirty_demo_account_release_ready(
     monkeypatch, field, value, expected_status
 ):
