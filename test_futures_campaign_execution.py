@@ -1021,6 +1021,7 @@ def test_daily_loss_lockout_still_manages_open_positions_and_blocks_entries():
     runtime._kill_latched = False
     runtime._paused = False
     runtime.client = SimpleNamespace(sync_time=lambda: {})
+    runtime.controller = SimpleNamespace(balance_quote=1.0)
     runtime._last_account = {"equity_quote": 970.0, "available_quote": 400.0}
     runtime._last_scan_summary = {}
     runtime._account = MethodType(lambda self: self._last_account, runtime)
@@ -1047,6 +1048,7 @@ def test_daily_loss_lockout_still_manages_open_positions_and_blocks_entries():
     result = runtime.scan_once()
 
     assert managed == ["managed"]
+    assert runtime.controller.balance_quote == pytest.approx(970.0)
     assert cancelled == ["DAILY_RISK_LOCKOUT"]
     assert result["pending_order_cancellations"][0]["action"] == "ENTRY_CANCELLED"
     assert result["state"] == "DAILY_RISK_LOCKOUT"
