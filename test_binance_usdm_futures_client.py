@@ -187,9 +187,29 @@ def test_prepare_symbol_fails_if_exchange_does_not_apply_one_x(monkeypatch):
         client.prepare_symbol("BTCUSDT")
 
 
-def test_live_leverage_above_one_is_rejected():
-    with pytest.raises(ValueError, match="capped at 1x"):
-        BinanceUsdmFuturesClient("test-key", "test-secret", max_leverage=2)
+@pytest.mark.parametrize("value", [2, 1.5, "1.5", float("nan"), float("inf"), 0, -1])
+def test_client_rejects_non_exact_one_x_leverage(value):
+    with pytest.raises(ValueError, match="exactly 1x leverage"):
+        make_client(max_leverage=value)
+
+
+@pytest.mark.parametrize("value", [999, 60001, 5000.5, "5000.5", float("nan"), float("inf")])
+def test_client_rejects_invalid_recv_window(value):
+    with pytest.raises(ValueError, match="recv_window must be an integer"):
+        make_client(recv_window=value)
+
+
+@pytest.mark.parametrize("value", [0, -1, float("nan"), float("inf"), "invalid"])
+def test_client_rejects_non_positive_or_non_finite_timeout(value):
+    with pytest.raises(ValueError, match="timeout must be finite and positive"):
+        make_client(timeout=value)
+
+
+def test_client_accepts_valid_safety_settings():
+    client = make_client(max_leverage="1", recv_window="5000", timeout=1.5)
+    assert client.max_leverage == 1
+    assert client.recv_window == 5000
+    assert client.timeout == 1.5
 
 
 def test_market_entry_side_is_directional_and_not_reduce_only(monkeypatch):
