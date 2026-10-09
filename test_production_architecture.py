@@ -531,3 +531,52 @@ def test_daily_equity_breaker_blocks_invalid_equity(equity):
 
     allowed, _ = EquityCircuitBreaker().check(RiskDB(), current_equity_quote=equity)
     assert not allowed
+
+
+def test_execution_barrier_accepts_only_authoritative_oco_response():
+    cache = ContextCache()
+    cache.publish(context())
+    db = IntentDB()
+    barrier = ExecutionBarrier(cache, db)
+    intent = OrderIntent.new(
+        "BTCUSDT",
+        "SELL",
+        "OCO",
+        {},
+        purpose="EXIT",
+        quantity="1",
+    )
+    response = {
+        "orderListId": 77,
+        "listStatusType": "EXEC_STARTED",
+        "listOrderStatus": "EXECUTING",
+        "orderReports": [
+            {"orderId": 101, "status": "NEW"},
+            {"orderId": 102, "status": "NEW"},
+        ],
+    }
+    result = barrier.execute(intent, lambda: response)
+    assert result.accepted
+    assert result.response == response
+    assert db.intents[intent.intent_id][0] == "SUBMITTED"
+
+
+def test_execution_barrier_marks_incomplete_oco_response_ambiguous():
+    import pytest
+
+    cache = ContextCache()
+    cache.publish(context())
+    db = IntentDB()
+    barrier = ExecutionBarrier(cache, db)
+    intent = OrderIntent.new(
+        "BTCUSDT",
+        "SELL",
+        "OCO",
+        {},
+        purpose="EXIT",
+        quantity="1",
+    )
+    with pytest.raises(RuntimeError, match="OCO response"):
+        barrier.execute(intent, lambda: {"orderListId": 77})
+
+    assert db.intents[intent.intent_id][0] == "AMBIGUOUS"
