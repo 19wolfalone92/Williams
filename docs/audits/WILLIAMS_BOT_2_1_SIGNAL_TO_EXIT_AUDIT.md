@@ -147,3 +147,12 @@ The native reconciler copied the live Binance `positionAmt` into its local campa
 ### 18. Android CI was blocked before lint/tests by absent signing secrets — corrected for CI validation
 
 The APK workflow exited before running lint or unit tests when a persistent debug keystore secret was absent. The workflow now uses the persistent signing key when configured, otherwise it allows lint, unit tests and debug/release build validation with the default ephemeral Android debug key. That fallback is for CI validation only; it is not proof of persistent-signature continuity and does not change the live-release prohibition.
+
+
+### 19. Canonical Digital Williams core could let an expired older signal hide a valid newer setup — corrected
+
+The orchestration layer selected the earliest ENTRY first and only then checked whether it was actionable. If that oldest candidate was expired or had an invalid protective reference, `compose()` returned BLOCK and never considered a later valid signal from the same scan. This created a mismatch with the scanner/campaign runtime, which filter expired candidates before ranking.
+
+**Correction:** initial selection now filters by the canonical `PendingSignal.actionable()` contract before ranking. If at least one actionable candidate exists, the earliest actionable signal is selected. If candidates exist but none is actionable, the core emits a diagnostic BLOCK; if no entry candidates exist, it emits WAIT. Added tests for expired-first, all-expired, empty, and invalid-protection candidate sets.
+
+The canonical execution contract also contradicted the Futures exit implementation by documenting cancellation of protection before the reduce-only market exit. It now specifies keeping the exchange-side stop live while the exit mutation is unresolved, then reconciling flat state, protection cleanup and all fills/fees before finalizing.
