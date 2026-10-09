@@ -2147,12 +2147,37 @@ internal class FuturesNativeEngine(
     ): JSONArray {
         val results = JSONArray()
         for (campaign in auditStore.activeFuturesCampaigns()) {
-            if (campaign.optString("state") != "ENTRY_PENDING") continue
+            val state = campaign.optString("state").uppercase(Locale.US)
+            if (state !in setOf("ENTRY_PENDING", "RECONCILE_REQUIRED")) continue
+            val symbol = campaign.optString("symbol").uppercase(Locale.US)
             try {
+                val clientId = campaign.optString("entry_client_algo_id")
+                if (clientId.isBlank()) {
+                    if (state == "ENTRY_PENDING") {
+                        throw IllegalStateException("Pending entry has no durable clientAlgoId")
+                    }
+                    continue
+                }
+                val liveAmount = position(exchange, symbol).optString("positionAmt").toDoubleOrNull()
+                    ?: throw IllegalStateException("$symbol positionAmt is invalid during entry lockout")
+                if (!liveAmount.isFinite()) {
+                    throw IllegalStateException("$symbol positionAmt is non-finite during entry lockout")
+                }
+                // Never cancel a triggered child as if it were an unfilled
+                // conditional entry. Open exposure is managed separately.
+                if (abs(liveAmount) > 1e-12) continue
+                val algo = exchange.getAlgoOrder(symbol, clientAlgoId = clientId)
+                val algoStatus = algo.optString("algoStatus").uppercase(Locale.US)
+                if (algoStatus in setOf("CANCELED", "CANCELLED", "EXPIRED", "REJECTED")) {
+                    continue
+                }
+                if (algoStatus !in setOf("NEW", "WORKING", "PENDING", "PENDING_NEW")) {
+                    throw IllegalStateException("$symbol entry status $algoStatus is not a cancellable pending state")
+                }
                 cancelPendingEntry(exchange, campaign, reason)
                 results.put(
                     JSONObject()
-                        .put("symbol", campaign.optString("symbol"))
+                        .put("symbol", symbol)
                         .put("state", campaign.optString("state"))
                         .put("action", if (campaign.optString("state") == "CLOSED") "ENTRY_CANCELLED" else "CANCEL_UNVERIFIED")
                 )
@@ -2163,7 +2188,7 @@ internal class FuturesNativeEngine(
                 setCampaignState(campaign, "RECONCILE_REQUIRED", detail)
                 results.put(
                     JSONObject()
-                        .put("symbol", campaign.optString("symbol"))
+                        .put("symbol", symbol)
                         .put("state", "RECONCILE_REQUIRED")
                         .put("action", "CANCEL_UNVERIFIED")
                         .put("reason", detail)
