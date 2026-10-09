@@ -11,7 +11,7 @@ from strategy import calculate_indicators, config_from_env
 from wave_engine import DIRECTION_NEUTRAL, MultiTimeframeWaveEngine
 from feature_store import FeatureStore, build_market_feature_vector
 from ai_shadow import ShadowDecisionEngine, journal_shadow_decision
-from williams_signals import extract_long_signal_specs
+from williams_signals import extract_long_signal_specs, extract_short_signal_specs
 from shadow_execution import ShadowExecutionSimulator
 
 
@@ -424,12 +424,28 @@ class MarketScanner:
             if tick_size <= 0:
                 return None
 
-            campaign_specs = extract_long_signal_specs(
+            long_specs = extract_long_signal_specs(
                 symbol,
                 indicators,
                 timeframe=self.interval,
                 tick_size=tick_size,
                 htf_confirmed=False,
+            )
+            short_specs = extract_short_signal_specs(
+                symbol,
+                indicators,
+                timeframe=self.interval,
+                tick_size=tick_size,
+                htf_confirmed=False,
+            )
+            campaign_specs = sorted(
+                long_specs + short_specs,
+                key=lambda s: (
+                    s.signal_bar_time_ms,
+                    s.created_at_ms,
+                    s.direction,
+                    s.signal_type.value,
+                ),
             )
             setup_state = self._setup_state(last)
             if setup_state == "NONE" and not campaign_specs:
@@ -662,6 +678,7 @@ class MarketScanner:
                     symbol=str(raw["symbol"]),
                     side=str(raw["side"]),
                     signal_type=SignalType(str(raw["signal_type"])),
+                    direction=str(raw.get("direction", "") or ""),
                     role=SignalRole(str(raw["role"])),
                     timeframe=str(raw["timeframe"]),
                     signal_bar_time_ms=int(raw["signal_bar_time_ms"]),
@@ -671,6 +688,7 @@ class MarketScanner:
                     invalidation_price=float(frame_setup.invalidation_price if frame_setup else raw.get("invalidation_price", 0.0) or 0.0),
                     teeth_at_detection=float(raw.get("teeth_at_detection", 0.0) or 0.0),
                     alligator_bullish=bool(raw.get("alligator_bullish", False)),
+                    alligator_bearish=bool(raw.get("alligator_bearish", False)),
                     alligator_awake=bool(raw.get("alligator_awake", False)),
                     angulation_score=float(raw.get("angulation_score", 0.0) or 0.0),
                     wave_confidence=float(report.wave_score),
