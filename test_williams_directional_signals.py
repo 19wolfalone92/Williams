@@ -2,7 +2,7 @@ import pandas as pd
 
 from campaign_model import SignalRole, SignalSpec, SignalType
 from digital_williams_core import DigitalWilliamsCore
-from williams_signals import extract_short_signal_specs
+from williams_signals import extract_long_signal_specs, extract_short_signal_specs
 
 
 def frame():
@@ -69,10 +69,12 @@ def test_short_super_ao_and_fractal_use_bearish_trigger_geometry():
     by_type = {s.signal_type: s for s in signals}
     assert SignalType.SUPER_AO in by_type
     assert by_type[SignalType.SUPER_AO].direction == "SHORT"
+    assert by_type[SignalType.SUPER_AO].role is SignalRole.ADD_ON
     assert by_type[SignalType.SUPER_AO].trigger_price < float(data.loc[8, "low"])
     assert SignalType.FRACTAL in by_type
     fractal = by_type[SignalType.FRACTAL]
     assert fractal.direction == "SHORT"
+    assert fractal.role is SignalRole.ADD_ON
     assert fractal.trigger_price < float(data.loc[9, "low"])
     assert fractal.trigger_price < float(data.loc[11, "teeth_shifted"])
     assert fractal.protective_reference == float(data.loc[9, "high"])
@@ -103,3 +105,23 @@ def test_initial_signal_selector_accepts_explicit_short_direction():
     )
     selected = DigitalWilliamsCore().select_initial([short])
     assert selected is short
+
+
+def test_long_super_ao_and_fractal_are_add_ons_not_initial_entries():
+    data = frame()
+    data.loc[8, "ao_green_streak"] = 3
+    data.loc[7, "long_fractal_outside"] = True
+    data.loc[9, "fractal_up"] = True
+    data.loc[11, "confirmed_up_level"] = float(data.loc[9, "high"])
+    data.loc[11, "teeth_shifted"] = 100.0
+    data.loc[11, "close"] = 110.0
+
+    signals = extract_long_signal_specs(
+        "BTCUSDT", data, timeframe="5m", tick_size=0.1
+    )
+    by_type = {signal.signal_type: signal for signal in signals}
+    assert SignalType.SUPER_AO in by_type
+    assert SignalType.FRACTAL in by_type
+    assert by_type[SignalType.SUPER_AO].role is SignalRole.ADD_ON
+    assert by_type[SignalType.FRACTAL].role is SignalRole.ADD_ON
+    assert not [signal for signal in signals if signal.role is SignalRole.ENTRY]
