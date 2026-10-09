@@ -1,3 +1,4 @@
+import math
 import os
 import uuid
 from decimal import Decimal
@@ -357,31 +358,62 @@ class MultiPositionTrader:
         }
 
     def _normalize_qty(self, symbol, qty, *, market=False):
-        """Normalize quantity using the Binance filter for the exact order type.
-
-        MARKET orders use MARKET_LOT_SIZE; normal/OCO orders use LOT_SIZE.
-        """
+        """Normalize against exchange metadata; missing filters must not invent precision."""
         filters = self._filters(symbol)
-        if market:
-            f = filters.get("MARKET_LOT_SIZE") or filters.get("LOT_SIZE")
-        else:
-            f = filters.get("LOT_SIZE") or filters.get("MARKET_LOT_SIZE")
-        step = f["stepSize"] if f else "0.000001"
-        min_qty = float(f.get("minQty", 0)) if f else 0.0
-        value = self.client.decimal_floor(qty, step)
-        value = float(value)
-        return value if value >= min_qty else 0.0
+        f = (
+            filters.get("MARKET_LOT_SIZE") or filters.get("LOT_SIZE")
+            if market else filters.get("LOT_SIZE") or filters.get("MARKET_LOT_SIZE")
+        )
+        if not f:
+            raise RuntimeError(f"{symbol}: required quantity filter missing")
+        try:
+            step = float(f["stepSize"])
+            min_qty = float(f["minQty"])
+            max_qty = float(f.get("maxQty", "inf") or "inf")
+            requested = float(qty)
+        except (KeyError, TypeError, ValueError, OverflowError) as exc:
+            raise RuntimeError(f"{symbol}: malformed quantity filter/input") from exc
+        if (
+            not math.isfinite(step) or step <= 0
+            or not math.isfinite(min_qty) or min_qty < 0
+            or math.isnan(max_qty) or max_qty <= 0 or max_qty < min_qty
+            or not math.isfinite(requested) or requested <= 0
+        ):
+            raise RuntimeError(f"{symbol}: invalid quantity filter/input")
+        value = float(self.client.decimal_floor(requested, step))
+        if not math.isfinite(value) or value <= 0 or value < min_qty or value > max_qty:
+            raise RuntimeError(f"{symbol}: normalized quantity violates exchange bounds")
+        return value
 
     def _normalize_price(self, symbol, price):
         filters = self._filters(symbol)
         f = filters.get("PRICE_FILTER")
-        tick = f["tickSize"] if f else "0.01"
-        return float(self.client.decimal_floor(price, tick))
+        if not f:
+            raise RuntimeError(f"{symbol}: required PRICE_FILTER missing")
+        try:
+            tick = float(f["tickSize"])
+            requested = float(price)
+        except (KeyError, TypeError, ValueError, OverflowError) as exc:
+            raise RuntimeError(f"{symbol}: malformed price filter/input") from exc
+        if not math.isfinite(tick) or tick <= 0 or not math.isfinite(requested) or requested <= 0:
+            raise RuntimeError(f"{symbol}: invalid price filter/input")
+        value = float(self.client.decimal_floor(requested, tick))
+        if not math.isfinite(value) or value <= 0:
+            raise RuntimeError(f"{symbol}: normalized price is not positive and finite")
+        return value
 
     def _min_notional(self, symbol):
         filters = self._filters(symbol)
-        f = filters.get("NOTIONAL") or filters.get("MIN_NOTIONAL") or {}
-        return float(f.get("minNotional", 0) or 0)
+        f = filters.get("NOTIONAL") or filters.get("MIN_NOTIONAL")
+        if not f:
+            raise RuntimeError(f"{symbol}: required NOTIONAL/MIN_NOTIONAL filter missing")
+        try:
+            value = float(f["minNotional"])
+        except (KeyError, TypeError, ValueError, OverflowError) as exc:
+            raise RuntimeError(f"{symbol}: malformed minimum-notional filter") from exc
+        if not math.isfinite(value) or value < 0:
+            raise RuntimeError(f"{symbol}: invalid minimum-notional filter")
+        return value
 
     # ------------------------------------------------------------------
     # Order-list helpers
