@@ -1355,10 +1355,20 @@ internal class FuturesNativeEngine(
             if (symbol.isBlank()) return true
             val algos = knownAlgoBySymbol.getOrPut(symbol) { mutableSetOf() }
             val orders = knownOrderBySymbol.getOrPut(symbol) { mutableSetOf() }
-            listOf("entry_client_algo_id", "protection_client_algo_id").forEach { key ->
+            listOf(
+                "entry_client_algo_id",
+                "protection_client_algo_id",
+                "pending_protection_client_algo_id",
+                "previous_protection_client_algo_id"
+            ).forEach { key ->
                 campaign.optString(key).takeIf { it.isNotBlank() }?.let(algos::add)
             }
-            listOf("entry_algo_id", "protection_algo_id").forEach { key ->
+            listOf(
+                "entry_algo_id",
+                "protection_algo_id",
+                "pending_protection_algo_id",
+                "previous_protection_algo_id"
+            ).forEach { key ->
                 campaign.optString(key).takeIf { it.isNotBlank() }?.let(algos::add)
             }
         }
