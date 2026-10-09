@@ -95,3 +95,32 @@ Missing/malformed userTrades, incomplete exit status, mismatched quantities, or 
 **NOT READY FOR LIVE TRADING.**
 
 Do not merge this Draft PR or enable real orders until the final exact-head Python, Campaign CI, Android lint/unit-test/APK workflows are green; the remaining Android partial/race reconciliation and accounting gaps are closed or explicitly accepted with operational safeguards; and the read-only release gate plus authorized Demo lifecycle tests pass. No real exchange orders were sent during this audit.
+
+
+## Second-pass audit findings — 2026-10-09
+
+### 11. WM2/WM3 could not start a campaign when WM1 was absent — corrected
+
+The scanner previously treated only a WM1 reversal as a new-campaign signal. Super AO and confirmed fractal signals were always labelled ADD_ON and the runtime filtered them out of initial-entry selection. This contradicted the campaign contract: the first valid Wise-Man signal may start a campaign; later signals may add only after a campaign exists.
+
+**Correction:** all valid directional campaign signals now make a candidate eligible for deep context analysis. When no campaign exists, the runtime promotes the earliest non-expired valid signal (WM1, WM2 or WM3) to ENTRY locally. Signal extraction keeps WM2/WM3 tagged ADD_ON so an existing campaign still uses the add-on path. Added LONG/SHORT tests for a WM2-first campaign and an expired-signal rejection test.
+
+### 12. Android native lifecycle methods were missing from the active source — restored
+
+A fresh Android build exposed unresolved calls to `exitPosition`, `cancelPendingEntry/Entries`, `cancelOwnedProtection` and `manageExistingCampaigns`. The methods were absent even though startup, pause, kill and management code called them.
+
+**Correction:** restored the missing lifecycle methods and made exit handling write-ahead/idempotent: persist stable exit client ID before submission, keep exchange-side protection live while the reduce-only market exit is being resolved, query the authoritative order and post-exit position, reconcile protection cleanup, and do not close on an ambiguous response.
+
+### 13. Native partial market-exit recovery — fail-closed residual handling added; aggregation remains open
+
+A terminal market exit may report fills while a residual position remains. The native engine now validates the prior order identity and executed quantity, durably records prior terminal fills, refreshes the residual quantity before creating another reduce-only exit, and blocks the final CLOSED/PnL transition while multiple exit fills remain unaggregated. Startup recovery also refuses to bypass that ledger.
+
+This intentionally favors reducing residual exposure without inventing PnL. Full automated aggregation of multiple native market-exit orders and protective-child fills is still not implemented; unresolved ledger entries remain a release blocker and require reconciliation.
+
+### 14. Triggered stop without child order ID — test now enforces the safe outcome
+
+When Binance reports a protective Algo stop as triggered but does not yet expose its child order ID, the Python backend attempts a reduce-only exit for residual exposure but keeps the campaign in `RECONCILE_REQUIRED` because stop fills and fees cannot be authoritatively reconciled. The regression test now verifies both outcomes: residual reduction is attempted, and the campaign is not falsely marked CLOSED.
+
+## Latest verification checkpoint
+
+The last checked exact head was `c879deebe0b3eca61a3ef7439f7337ee90dc4b95`; Python backend, Campaign CI and Android workflows had been queued after these corrections. Results for earlier SHAs do not qualify as final verification. The PR remains Draft, `main` is unchanged, and no real exchange orders were sent.
