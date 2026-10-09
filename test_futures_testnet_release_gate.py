@@ -216,7 +216,7 @@ def test_read_only_gate_rejects_account_position_row_without_symbol(monkeypatch)
         gate.run_futures_testnet_read_only(["BTCUSDT"])
 
 
-def test_read_only_gate_rejects_empty_account_wide_position_response(monkeypatch):
+def test_read_only_gate_accepts_empty_account_wide_position_response_when_symbol_is_flat(monkeypatch):
     class EmptyAccountPositionClient(FakeReadOnlyFuturesClient):
         def position_risk(self, symbol=None):
             if symbol is None:
@@ -225,8 +225,11 @@ def test_read_only_gate_rejects_empty_account_wide_position_response(monkeypatch
 
     _enable_fake_demo_gate(monkeypatch, client_type=EmptyAccountPositionClient)
 
-    with pytest.raises(RuntimeError, match="no verifiable rows"):
-        gate.run_futures_testnet_read_only(["BTCUSDT"])
+    result = gate.run_futures_testnet_read_only(["BTCUSDT"])
+
+    assert result["status"] == "PASS_READ_ONLY"
+    assert result["release_gate_passed"] is True
+    assert result["nonzero_positions"] == []
 
 
 @pytest.mark.parametrize(
