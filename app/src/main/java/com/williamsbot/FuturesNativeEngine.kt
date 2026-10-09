@@ -26,6 +26,12 @@ import kotlin.math.min
  * exchange-side protection, structural trailing, hard exits and recovery.
  * Pyramiding and mainnet are deliberately not enabled by this class.
  */
+// Synchronous SharedPreferences commits are deliberate for fail-closed execution
+// state transitions: the caller must know whether persistence succeeded before
+// any exchange mutation is allowed. Replacing these with apply() would weaken
+// the write-before-submit durability contract.
+// Android Lint's ApplySharedPref advice is inappropriate for these critical writes.
+@Suppress("ApplySharedPref")
 internal class FuturesNativeEngine(
     @Suppress("UNUSED_PARAMETER") context: Context,
     private val prefs: SharedPreferences,
