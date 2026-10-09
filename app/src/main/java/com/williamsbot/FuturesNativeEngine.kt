@@ -190,12 +190,15 @@ internal class FuturesNativeEngine(
                     "Cannot remove Futures credentials while exchange orders remain open"
                 }
             }
-            prefs.edit()
+            val credentialsRemoved = prefs.edit()
                 .remove("futures_api_key")
                 .remove("futures_api_secret")
                 .remove("futures_symbols")
                 .remove("futures_interval")
                 .commit()
+            check(credentialsRemoved) {
+                "Futures credentials removal was not durably committed"
+            }
             client = null
             lastError = null
             reconcileRequired = false
