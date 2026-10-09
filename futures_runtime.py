@@ -113,7 +113,7 @@ def choose_initial_williams_signal(
             continue
         if not math.isfinite(trigger) or trigger <= 0:
             continue
-        if expires and expires < now:
+        if expires and expires <= now:
             continue
         candidates.append(replace(signal, role=SignalRole.ENTRY))
     return CampaignEngine.choose_initial_signal(candidates)
