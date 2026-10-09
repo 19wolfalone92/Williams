@@ -1755,6 +1755,161 @@ internal class FuturesNativeEngine(
         }
     }
 
+    /**
+     * Recover an exchange-side stop submitted before a crash/ambiguous response.
+     * When replacing a stop, never forget the old identity until cancellation is
+     * authoritatively terminal; both IDs stay durable while replacement is unresolved.
+     */
+    private fun reconcilePendingProtectionState(
+        exchange: BinanceUsdmFuturesClient,
+        campaign: JSONObject
+    ): JSONObject? {
+        val symbol = campaign.optString("symbol").uppercase(Locale.US)
+        val direction = campaign.optString("direction").uppercase(Locale.US)
+        val pendingId = campaign.optString("pending_protection_client_algo_id")
+        if (pendingId.isNotBlank()) {
+            val pending = runCatching {
+                exchange.getAlgoOrder(symbol, clientAlgoId = pendingId)
+            }.getOrElse {
+                return setCampaignState(
+                    campaign,
+                    "RECONCILE_REQUIRED",
+                    "Pending protective stop lookup is unresolved: ${it.message ?: it.javaClass.simpleName}"
+                )
+            }
+            val status = pending.optString("algoStatus").uppercase(Locale.US)
+            if (status in setOf("NEW", "WORKING", "PENDING", "PENDING_NEW")) {
+                val trigger = pending.optString("triggerPrice").toDoubleOrNull()
+                val expectedTrigger = campaign.optString("pending_protection_trigger_price").toDoubleOrNull()
+                val algoId = pending.optString("algoId")
+                if (
+                    pending.optString("symbol").uppercase(Locale.US) != symbol ||
+                    pending.optString("clientAlgoId") != pendingId ||
+                    algoId.isBlank() ||
+                    pending.optString("side").uppercase(Locale.US) != exchange.directionToProtectiveSide(direction) ||
+                    pending.optString("orderType", pending.optString("type")).uppercase(Locale.US) != "STOP_MARKET" ||
+                    !pending.optBoolean("closePosition", false) ||
+                    trigger == null || !trigger.isFinite() ||
+                    expectedTrigger == null || !expectedTrigger.isFinite() ||
+                    abs(trigger - expectedTrigger) > 1e-8
+                ) {
+                    return setCampaignState(
+                        campaign,
+                        "RECONCILE_REQUIRED",
+                        "Pending protective stop identity/side/type/trigger does not match durable intent"
+                    )
+                }
+                val oldId = campaign.optString("protection_client_algo_id")
+                if (oldId.isNotBlank() && oldId != pendingId) {
+                    campaign.put("previous_protection_client_algo_id", oldId)
+                    campaign.put("previous_protection_algo_id", campaign.optString("protection_algo_id"))
+                    campaign.put("protection_replace_reconcile_required", true)
+                }
+                campaign.put("protection_client_algo_id", pendingId)
+                campaign.put("protection_algo_id", algoId)
+                campaign.put("protection_status", status)
+                campaign.put("protection_active", true)
+                campaign.put("stop_price", trigger)
+                campaign.put("state", "OPEN_PROTECTED")
+                campaign.remove("pending_protection_client_algo_id")
+                campaign.remove("pending_protection_trigger_price")
+                campaign.remove("pending_protection_reason")
+                auditStore.saveFuturesCampaign(symbol, campaign)
+            } else if (status in setOf("CANCELED", "CANCELLED", "EXPIRED", "REJECTED")) {
+                updateIntentByClientId(pendingId, status, pending.toString())
+                campaign.remove("pending_protection_client_algo_id")
+                campaign.remove("pending_protection_trigger_price")
+                campaign.remove("pending_protection_reason")
+                auditStore.saveFuturesCampaign(symbol, campaign)
+            } else {
+                return setCampaignState(
+                    campaign,
+                    "RECONCILE_REQUIRED",
+                    "Pending protective stop has ambiguous exchange status: ${status.ifBlank { "UNKNOWN" }}"
+                )
+            }
+        }
+
+        val previousId = campaign.optString("previous_protection_client_algo_id")
+        if (previousId.isBlank()) {
+            if (campaign.optBoolean("protection_replace_reconcile_required", false)) {
+                return setCampaignState(
+                    campaign,
+                    "RECONCILE_REQUIRED",
+                    "Protection replacement flag is set but previous stop identity is missing"
+                )
+            }
+            return null
+        }
+        var previous = runCatching {
+            exchange.getAlgoOrder(symbol, clientAlgoId = previousId)
+        }.getOrElse {
+            return setCampaignState(
+                campaign,
+                "RECONCILE_REQUIRED",
+                "Previous protective stop lookup is unresolved: ${it.message ?: it.javaClass.simpleName}"
+            )
+        }
+        if (previous.optString("symbol").uppercase(Locale.US) != symbol ||
+            previous.optString("clientAlgoId") != previousId
+        ) {
+            return setCampaignState(campaign, "RECONCILE_REQUIRED", "Previous protective stop identity mismatch")
+        }
+        var previousStatus = previous.optString("algoStatus").uppercase(Locale.US)
+        if (previousStatus in setOf("NEW", "WORKING", "PENDING", "PENDING_NEW")) {
+            runCatching { cancelOwnedProtection(exchange, campaign, previousId) }.onFailure {
+                return setCampaignState(
+                    campaign,
+                    "RECONCILE_REQUIRED",
+                    "Previous protective stop cancellation is unresolved: ${it.message ?: it.javaClass.simpleName}"
+                )
+            }
+            previous = runCatching {
+                exchange.getAlgoOrder(symbol, clientAlgoId = previousId)
+            }.getOrElse {
+                return setCampaignState(campaign, "RECONCILE_REQUIRED", "Previous stop cancellation cannot be verified")
+            }
+            previousStatus = previous.optString("algoStatus").uppercase(Locale.US)
+        }
+        if (previousStatus in setOf("TRIGGERED", "FINISHED")) {
+            val childId = previous.optString("actualOrderId")
+            if (childId.isBlank() || childId == "0") {
+                return setCampaignState(campaign, "RECONCILE_REQUIRED", "Previous stop triggered but child order ID is missing")
+            }
+            val child = runCatching { exchange.getOrder(symbol, orderId = childId) }.getOrElse {
+                return setCampaignState(campaign, "RECONCILE_REQUIRED", "Previous stop child order cannot be verified")
+            }
+            val executed = child.optString("executedQty").toDoubleOrNull()
+            val childStatus = child.optString("status").uppercase(Locale.US)
+            if (executed == null || !executed.isFinite() || executed < 0.0 ||
+                childStatus !in setOf("FILLED", "CANCELED", "CANCELLED", "EXPIRED", "REJECTED")
+            ) {
+                return setCampaignState(campaign, "RECONCILE_REQUIRED", "Previous stop child status/quantity is ambiguous")
+            }
+            if (executed > 0.0) {
+                return setCampaignState(
+                    campaign,
+                    "RECONCILE_REQUIRED",
+                    "Previous stop child executed during replacement; exit fill reconciliation is required"
+                )
+            }
+            previousStatus = childStatus
+        }
+        if (previousStatus !in setOf("CANCELED", "CANCELLED", "EXPIRED", "REJECTED")) {
+            return setCampaignState(
+                campaign,
+                "RECONCILE_REQUIRED",
+                "Previous protective stop is not confirmed terminal: ${previousStatus.ifBlank { "UNKNOWN" }}"
+            )
+        }
+        updateIntentByClientId(previousId, previousStatus, previous.toString())
+        campaign.remove("previous_protection_client_algo_id")
+        campaign.remove("previous_protection_algo_id")
+        campaign.remove("protection_replace_reconcile_required")
+        auditStore.saveFuturesCampaign(symbol, campaign)
+        return null
+    }
+
     private fun verifyOrRestoreLiveProtection(
         exchange: BinanceUsdmFuturesClient,
         campaignInput: JSONObject
@@ -1783,6 +1938,8 @@ internal class FuturesNativeEngine(
                 "Live position quantity differs from persisted campaign quantity; exit/fill reconciliation is required"
             )
         }
+        val pendingProtectionRecovery = reconcilePendingProtectionState(exchange, campaign)
+        if (pendingProtectionRecovery != null) return pendingProtectionRecovery
         val unresolvedExit = auditStore.pendingFuturesIntents().firstOrNull { intent ->
             intent.optString("symbol").equals(symbol, true) &&
                 intent.optString("operation").equals("EXIT", true) &&
