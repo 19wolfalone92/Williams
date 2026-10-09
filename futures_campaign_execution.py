@@ -4324,7 +4324,7 @@ class FuturesCampaignExecutionService:
                 for key in (
                     "pending_add_on_client_algo_id", "pending_add_on_algo_id",
                     "pending_add_on_trigger_price", "pending_add_on_stop_price",
-                    "pending_add_on_quantity", "pending_add_on_risk_quote",
+                    "pending_add_on_quantity", "pending_add_on_risk_quote", "pending_add_on_expires_at_ms",
                     "pending_add_on_original_qty", "pending_add_on_original_entry",
                     "pending_add_on_direction",
                 ):
