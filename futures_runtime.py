@@ -40,6 +40,14 @@ def _env_bool(key: str, default: bool) -> bool:
     return str(os.getenv(key, str(default))).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _read_persistent_kill_latch(db: Database) -> bool:
+    """Treat any persisted non-explicitly-cleared latch value as a kill."""
+    raw = db.state_get("futures_kill_latched", None)
+    if raw is None:
+        return False
+    return str(raw).strip().lower() not in {"false", "0", "no", "off"}
+
+
 def _interval_seconds(interval: str) -> int:
     value = str(interval).strip()
     if value == "1M":
@@ -181,7 +189,7 @@ class FuturesRuntime:
         self._thread: threading.Thread | None = None
         self._running = False
         self._paused = True
-        self._kill_latched = False
+        self._kill_latched = _read_persistent_kill_latch(self.db)
         self._last_scan_at_ms = 0
         self._last_scan_summary: dict[str, Any] = {}
         self._last_error = ""
@@ -973,6 +981,13 @@ class FuturesRuntime:
             self._paused = True
             # Do not stop the monitor: if an exit fails, reconciliation and
             # protective management must continue while entries remain latched.
+        latch_persistence_error = ""
+        try:
+            self.db.state_set("futures_kill_latched", "true")
+        except Exception as exc:
+            # Keep the in-memory latch active and continue attempting to reduce
+            # risk, but explicitly report that restart durability is degraded.
+            latch_persistence_error = f"{type(exc).__name__}: {exc}"
         results = []
         for row in self.execution._active_rows():
             if self.execution._row_tags(row).get("execution_mode") != "FUTURES":
@@ -1027,7 +1042,13 @@ class FuturesRuntime:
             "Kill switch latched; reduce-only exits attempted for managed Futures positions",
             {"results": results},
         )
-        return {**self.status(), "state": "KILL_SWITCH_LATCHED", "exit_results": results}
+        return {
+            **self.status(),
+            "state": "KILL_SWITCH_LATCHED",
+            "exit_results": results,
+            "durable_latch_persisted": not bool(latch_persistence_error),
+            **({"latch_persistence_error": latch_persistence_error} if latch_persistence_error else {}),
+        }
 
     def recover_and_reset_kill(self) -> dict[str, Any]:
         """Only clear the kill latch after successful exchange reconciliation."""
@@ -1046,6 +1067,9 @@ class FuturesRuntime:
             raise RuntimeError("Kill reset denied: one or more campaigns need reconciliation")
         if active_positions:
             raise RuntimeError("Kill reset denied: Futures positions are still open")
+        # Persist the explicit reset before clearing the in-memory latch.
+        # If SQLite cannot commit, keep the kill switch active.
+        self.db.state_set("futures_kill_latched", "false")
         with self._lock:
             self._kill_latched = False
             self._paused = True
