@@ -163,3 +163,10 @@ The canonical execution contract also contradicted the Futures exit implementati
 When a LONG setup supplied a stop at/above entry, or a SHORT setup supplied a stop at/below entry, the risk engine silently substituted an ATR stop and could still approve the trade. That changed the structural invalidation thesis while preserving the appearance of a valid Williams risk calculation.
 
 **Correction:** a nonzero supplied structural invalidation must be strictly below LONG entry or strictly above SHORT entry. Invalid direction/negative levels now fail closed. ATR fallback remains available only when no structural level was supplied (zero sentinel). Added LONG/SHORT regression tests.
+
+
+### 21. Signal domain factory allowed contradictory order side and exposure direction — corrected
+
+`SignalSpec.new()` accepted an explicitly contradictory pair such as `side=BUY, direction=SHORT`. Downstream Futures execution has a separate guard, so this did not establish that a wrong-side order would be submitted; however, the contradiction could travel through candidate ranking and decision traces before being rejected at the execution boundary.
+
+**Correction:** the canonical signal factory now requires BUY/LONG and SELL/SHORT consistency and raises immediately on conflict. Added regression tests for both rejection and valid SHORT construction.
