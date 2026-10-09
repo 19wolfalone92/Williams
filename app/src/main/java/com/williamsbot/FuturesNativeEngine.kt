@@ -1208,6 +1208,12 @@ internal class FuturesNativeEngine(
             .put("signal_type", signal.type)
             .put("signal_time_ms", signal.signalBarTime)
             .put("timeframe", interval())
+            .put("entry_expires_at_ms", signal.signalBarTime + intervalMillis(interval()) * when (signal.type) {
+                "REVERSAL" -> 2
+                "SUPER_AO" -> 2
+                "FRACTAL" -> 8
+                else -> 0
+            })
             .put("entry_client_algo_id", clientAlgoId)
             .put("entry_algo_id", "")
             .put("protection_client_algo_id", "")
@@ -1500,6 +1506,13 @@ internal class FuturesNativeEngine(
                             "RECONCILE_REQUIRED",
                             "Pending entry order does not match durable side/type/trigger/quantity intent"
                         )
+                    }
+                    val expiresAt = campaign.optLong("entry_expires_at_ms", 0L)
+                    if (expiresAt > 0L && System.currentTimeMillis() >= expiresAt) {
+                        // Binance conditional orders do not expire with the local
+                        // Signal object. Cancel the stable Algo identity and
+                        // reconcile any triggered child before releasing risk.
+                        return cancelPendingEntry(exchange, campaign, "SIGNAL_EXPIRED")
                     }
                     campaign.put("entry_status", status)
                     auditStore.saveFuturesCampaign(symbol, campaign)
