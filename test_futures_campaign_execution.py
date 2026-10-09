@@ -650,3 +650,21 @@ def test_execution_barrier_executes_stale_safety_intents_without_market_context(
     assert not result.accepted
     assert "stale intent" in result.reason
     assert submitted_entry == []
+
+
+@pytest.mark.parametrize("bad_amount", ["NaN", "Infinity", "-Infinity", "not-a-number"])
+def test_reconcile_rejects_invalid_exchange_position_quantity(bad_amount):
+    from types import SimpleNamespace
+
+    state_updates = []
+    service = object.__new__(FuturesCampaignExecutionService)
+    service._position_row = lambda symbol: {"symbol": symbol, "positionAmt": bad_amount}
+    service.db = SimpleNamespace(
+        state_set=lambda key, value: state_updates.append((key, value)),
+    )
+
+    result = service.reconcile_symbol("BTCUSDT")
+
+    assert result["state"] == "RECONCILE_REQUIRED"
+    assert "invalid exchange position quantity" in result["reason"]
+    assert ("position_state:BTCUSDT", "RECONCILE_REQUIRED") in state_updates
