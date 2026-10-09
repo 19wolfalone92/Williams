@@ -1490,8 +1490,17 @@ class CampaignExecutionService:
                         order_id=int(protective_id),
                     )
                     status = str(current.get("status", "")).upper()
-                    if status not in {"CANCELED", "EXPIRED", "FILLED", "REJECTED"}:
-                        raise
+                    executed_qty = float(current.get("executedQty", 0) or 0)
+                    if (
+                        status not in {"CANCELED", "EXPIRED"}
+                        or not math.isfinite(executed_qty)
+                        or executed_qty < 0
+                        or executed_qty > 0
+                    ):
+                        raise CampaignExecutionError(
+                            f"{symbol}: protection cancel is not confirmed flat-safe "
+                            f"(status={status}, executedQty={executed_qty}); reconciliation required"
+                        )
                 except Exception:
                     self.engine.mark_reconcile_required(
                         campaign,
