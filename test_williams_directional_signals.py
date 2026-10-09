@@ -95,7 +95,8 @@ def test_short_super_ao_and_fractal_use_bearish_trigger_geometry():
 def test_short_signal_is_not_armed_after_price_has_already_broken_trigger():
     data = frame()
     data.loc[8, "bearish_reversal_bar"] = True
-    data.loc[11, "close"] = float(data.loc[8, "low"]) - 0.5
+    close = float(data.loc[8, "low"]) - 0.5
+    data.loc[11, ["open", "high", "low", "close"]] = [close + 0.1, close + 0.5, close - 0.2, close]
 
     signals = extract_short_signal_specs(
         "BTCUSDT", data, timeframe="5m", tick_size=0.1
