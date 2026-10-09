@@ -168,7 +168,7 @@ class CampaignEngine:
         candidates = [
             s for s in signals
             if s.role == SignalRole.ENTRY
-            and s.side == "BUY"
+            and str(s.direction).upper() in {"LONG", "SHORT"}
             and s.trigger_price > 0
         ]
         if not candidates:
