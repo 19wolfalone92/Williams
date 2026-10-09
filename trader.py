@@ -852,7 +852,7 @@ class Trader:
         except Exception as exc:
             return False, f"portfolio equity unavailable; new entries blocked ({type(exc).__name__})"
         equity_ok, equity_reason = self.equity_breaker.check(
-            self.db, portfolio_equity, self.symbol, unrealized_pnl_quote=0.0, fees_quote=0.0
+            self.db, portfolio_equity, None, unrealized_pnl_quote=0.0, fees_quote=0.0
         )
         if not equity_ok:
             return False, equity_reason
