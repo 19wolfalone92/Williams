@@ -37,6 +37,7 @@ jobs:
             test_production_architecture.py \
             test_binance_usdm_futures_client.py \
             test_futures_campaign_execution.py \
+            test_futures_testnet_release_gate.py \
             test_williams_directional_signals.py \
             test_android_remote_only.py \
             test_l2_slippage.py \
