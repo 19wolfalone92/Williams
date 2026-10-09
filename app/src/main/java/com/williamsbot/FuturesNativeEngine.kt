@@ -1743,8 +1743,13 @@ internal class FuturesNativeEngine(
         if (!liveAmount.isFinite() || abs(liveAmount) <= 1e-12) {
             return setCampaignState(campaign, "RECONCILE_REQUIRED", "Protection verification requires a finite non-zero live position")
         }
-        val persistedQty = abs(campaign.optDouble("position_amt", 0.0))
-        if (persistedQty > 0.0 && abs(abs(liveAmount) - persistedQty) > max(1e-8, persistedQty * 1e-6)) {
+        val rawPersistedQty = campaign.optString("position_amt").toDoubleOrNull()
+            ?: return setCampaignState(campaign, "RECONCILE_REQUIRED", "Persisted campaign position_amt is missing or invalid")
+        val persistedQty = abs(rawPersistedQty)
+        if (!persistedQty.isFinite() || persistedQty <= 0.0) {
+            return setCampaignState(campaign, "RECONCILE_REQUIRED", "Persisted campaign position_amt is non-finite or non-positive")
+        }
+        if (abs(abs(liveAmount) - persistedQty) > max(1e-8, persistedQty * 1e-6)) {
             return setCampaignState(
                 campaign,
                 "RECONCILE_REQUIRED",
