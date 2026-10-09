@@ -459,7 +459,17 @@ class FuturesRuntime:
                     continue
 
                 position = self.execution._position_row(symbol)
-                amount = float(position.get("positionAmt", 0) or 0.0)
+                try:
+                    amount = float(position.get("positionAmt", 0) or 0.0)
+                except (TypeError, ValueError):
+                    amount = float("nan")
+                if not math.isfinite(amount):
+                    reason = "invalid or non-finite exchange position quantity; management deferred"
+                    self.execution.engine.mark_reconcile_required(campaign, reason)
+                    self.db.state_set(f"campaign_state:{campaign_id}", "RECONCILE_REQUIRED")
+                    self.db.state_set(f"position_state:{symbol}", "RECONCILE_REQUIRED")
+                    results.append({"symbol": symbol, "action": "RECONCILE_REQUIRED", "reason": reason})
+                    continue
                 if abs(amount) <= 1e-12:
                     # reconcile_symbol has already attempted to verify entry
                     # or protective-exit history; do not invent a close here.
