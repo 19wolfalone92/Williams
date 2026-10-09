@@ -53,3 +53,18 @@ def test_contract_keeps_protection_during_market_exit_resolution():
     contract = DigitalWilliamsCore().contract()["execution_contract"]["exit"]
     assert "keep exchange-side protection live" in contract
     assert "cancel protection ->" not in contract
+
+
+def test_explicitly_expired_signal_is_not_revived_by_late_creation_time():
+    core = DigitalWilliamsCore()
+    stale = signal(1_000, expires_at_ms=9_999)
+    # Signal creation happened after its source-derived expiry; preserve expiry.
+    stale = SignalSpec.new(
+        symbol="BTCUSDT", side="BUY", signal_type=SignalType.REVERSAL,
+        role=SignalRole.ENTRY, timeframe="5m", signal_bar_time_ms=1_000,
+        trigger_price=101.0, protective_reference=95.0,
+        created_at_ms=15_000, expires_at_ms=9_999,
+    )
+    decision = core.compose([stale], now_ms=15_000)
+    assert decision.action == "BLOCK"
+    assert decision.pending.expires_at_ms == 9_999
