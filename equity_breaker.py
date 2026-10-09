@@ -38,8 +38,8 @@ class EquityCircuitBreaker:
             return False, "non-finite daily-risk input; new entries blocked"
         if equity <= 0:
             return False, "equity is zero"
-        if fees < 0:
-            return False, "fees must be non-negative"
+        # Accept either sign convention from callers, but always count fees as cost.
+        fees = abs(fees)
 
         try:
             realized = float(
