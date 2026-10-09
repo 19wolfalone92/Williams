@@ -87,6 +87,13 @@ class FakeReadOnlyFuturesClient:
         }]
         return [row for row in rows if not symbol or row["symbol"] == symbol.upper()]
 
+    def symbol_configuration(self, symbol):
+        return {
+            "symbol": symbol.upper(),
+            "marginType": "ISOLATED" if self.isolated else "CROSSED",
+            "leverage": self.leverage,
+        }
+
     def exchange_info(self, symbol=None):
         return {"symbols": [{
             "symbol": symbol or "BTCUSDT",
