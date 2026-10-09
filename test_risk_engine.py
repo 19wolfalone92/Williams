@@ -270,7 +270,7 @@ def test_invalid_risk_configuration_is_rejected(kwargs):
 
 @pytest.mark.parametrize(
     "side,invalidation",
-    [("LONG", 101.0), ("SHORT", 99.0)],
+    [("LONG", 101.0), ("SHORT", 99.0), ("LONG", -1.0)],
 )
 def test_wrong_side_structural_invalidation_blocks_trade(side, invalidation):
     result = RiskEngine(balance_quote=10_000).analyse(
