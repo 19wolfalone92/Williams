@@ -72,3 +72,18 @@ class BinanceUsdmFuturesClientTest {
         )
     }
 }
+
+
+    @Test
+    fun ambiguousMutationResponsesIncludeTimeoutAndUnknownExchangeExecutionCodes() {
+        for (status in listOf(408, 418, 425, 429, 500, 502, 503, 504)) {
+            assertEquals(
+                true,
+                BinanceUsdmFuturesClient.isAmbiguousMutationOutcome(status, 0)
+            )
+        }
+        assertEquals(true, BinanceUsdmFuturesClient.isAmbiguousMutationOutcome(400, -1006))
+        assertEquals(true, BinanceUsdmFuturesClient.isAmbiguousMutationOutcome(400, -1007))
+        assertEquals(false, BinanceUsdmFuturesClient.isAmbiguousMutationOutcome(400, -1100))
+        assertEquals(false, BinanceUsdmFuturesClient.isAmbiguousMutationOutcome(200, 0))
+    }
