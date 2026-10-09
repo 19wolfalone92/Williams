@@ -107,9 +107,16 @@ internal class BinanceUsdmFuturesClient(
     fun normalizeQuantity(symbol: String, quantity: Double, market: Boolean = true): String {
         require(quantity.isFinite() && quantity > 0.0) { "Quantity must be finite and positive" }
         val filters = symbolFilters(symbol)
-        val filter = filters[if (market) "MARKET_LOT_SIZE" else "LOT_SIZE"]
-            ?: filters["LOT_SIZE"]
-            ?: throw FuturesApiException("$symbol has no LOT_SIZE filter")
+        val preferred = filters[if (market) "MARKET_LOT_SIZE" else "LOT_SIZE"]
+        val fallback = filters["LOT_SIZE"]
+        val filter = listOfNotNull(preferred, fallback).firstOrNull { candidate ->
+            val step = candidate.optString("stepSize").toBigDecimalOrNull()
+            val minimum = candidate.optString("minQty").toBigDecimalOrNull()
+            val maximum = candidate.optString("maxQty").toBigDecimalOrNull()
+            step != null && step.signum() > 0 &&
+                minimum != null && minimum.signum() >= 0 &&
+                maximum != null && maximum.signum() > 0
+        } ?: throw FuturesApiException("$symbol has no valid LOT_SIZE/MARKET_LOT_SIZE filters")
         val step = filter.decimal("stepSize")
         val min = filter.decimal("minQty")
         val max = filter.decimal("maxQty")
