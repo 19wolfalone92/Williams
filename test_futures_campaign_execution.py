@@ -24,6 +24,7 @@ class FakeFuturesClient:
         self.protection_response_status = "NEW"
         self.entry_response_status = "NEW"
         self.algo_status = "NEW"
+        self.protection_algo_status = "NEW"
         self.entry_actual_order_id = None
         self.cancel_confirms = True
         self._position = {
@@ -154,7 +155,7 @@ class FakeFuturesClient:
             "symbol": symbol,
             "algoId": algo_id or 456,
             "clientAlgoId": client_algo_id,
-            "algoStatus": self.algo_status,
+            "algoStatus": self.protection_algo_status,
             "side": side,
             "type": "STOP_MARKET",
             "orderType": "STOP_MARKET",
@@ -165,13 +166,17 @@ class FakeFuturesClient:
         return response
 
     def cancel_algo_order_safe(self, symbol, *, algo_id=None, client_algo_id=None):
+        is_protection = any(row[3] == client_algo_id for row in self.protective_stops)
         if self.cancel_confirms:
-            self.algo_status = "CANCELED"
+            if is_protection:
+                self.protection_algo_status = "CANCELED"
+            else:
+                self.algo_status = "CANCELED"
         return {
             "symbol": symbol,
             "algoId": algo_id or 456,
             "clientAlgoId": client_algo_id,
-            "algoStatus": self.algo_status,
+            "algoStatus": self.protection_algo_status if is_protection else self.algo_status,
         }
 
 
