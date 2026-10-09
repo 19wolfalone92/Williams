@@ -20,7 +20,7 @@ class Database:
         self.init()
 
     @contextmanager
-    def transaction(self):
+    def transaction(self, *, immediate=False):
         """Atomic transaction for multi-step DB operations."""
         if self._transaction_active:
             yield self
@@ -28,7 +28,7 @@ class Database:
 
         self._transaction_active = True
         try:
-            self.conn.execute('BEGIN')
+            self.conn.execute('BEGIN IMMEDIATE' if immediate else 'BEGIN')
             yield self
             self.conn.commit()
         except Exception:
