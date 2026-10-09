@@ -2485,7 +2485,7 @@ class FuturesCampaignExecutionService:
             if not math.isfinite(executed) or executed < 0:
                 return unresolved(f"{symbol}: triggered initial order has invalid executedQty")
 
-            if order_status == "PARTIALLY_FILLED":
+            if order_status in {"NEW", "PARTIALLY_FILLED", "PENDING_NEW"}:
                 self.client.cancel_order_safe(symbol, order_id=actual_order_id)
                 actual_order = self.client.get_order(symbol, order_id=actual_order_id)
                 order_status = str(actual_order.get("status", "") or "").upper()
@@ -2647,7 +2647,6 @@ class FuturesCampaignExecutionService:
         if campaign.state == CampaignState.ENTRY_PENDING or (
             campaign.state == CampaignState.RECONCILE_REQUIRED
             and campaign.tags.get("entry_fill_reconciliation_pending")
-            and campaign.position_qty <= 0
         ):
             return self._reconcile_pending_initial_entry(campaign, position, amount)
         if abs(amount) <= 1e-12:
@@ -2937,7 +2936,7 @@ class FuturesCampaignExecutionService:
                 CampaignState.ADD_ON_ARMING,
                 CampaignState.ADD_ON_PENDING,
                 CampaignState.POSITION_EXPANDING,
-            }:
+            } or campaign.tags.get("pending_add_on_client_algo_id"):
                 client_add_id = str(campaign.tags.get("pending_add_on_client_algo_id", "") or "")
                 original_qty = float(campaign.tags.get("pending_add_on_original_qty", 0) or 0)
                 trigger_price = float(campaign.tags.get("pending_add_on_trigger_price", 0) or 0)
@@ -2981,6 +2980,25 @@ class FuturesCampaignExecutionService:
                 active_add_statuses = {"NEW", "WORKING", "PENDING_NEW", "PENDING"}
                 terminal_add_statuses = {"CANCELED", "CANCELLED", "EXPIRED", "REJECTED"}
                 if algo_status in active_add_statuses:
+                    if campaign.state == CampaignState.RECONCILE_REQUIRED:
+                        reason = (
+                            f"{symbol}: add-on order remains active while campaign is "
+                            "RECONCILE_REQUIRED; cancellation/reconciliation is required"
+                        )
+                        self.db.state_set(
+                            f"campaign_state:{campaign.campaign_id}",
+                            CampaignState.RECONCILE_REQUIRED.value,
+                        )
+                        self.db.state_set(
+                            f"position_state:{symbol}",
+                            CampaignState.RECONCILE_REQUIRED.value,
+                        )
+                        return {
+                            "symbol": symbol,
+                            "state": "RECONCILE_REQUIRED",
+                            "reason": reason,
+                            "protection": "CONFIRMED",
+                        }
                     if campaign.state == CampaignState.POSITION_EXPANDING:
                         reason = (
                             f"{symbol}: local state is POSITION_EXPANDING while the add-on "
@@ -3050,10 +3068,9 @@ class FuturesCampaignExecutionService:
                             f"{symbol}: add-on actual order has invalid executedQty"
                         )
 
-                    if order_status == "PARTIALLY_FILLED":
-                        # Do not leave a residual add-on capable of expanding
-                        # risk after the local campaign has moved on. Cancel the
-                        # remainder, then re-read authoritative order state.
+                    if order_status in {"NEW", "PARTIALLY_FILLED", "PENDING_NEW"}:
+                        # Do not leave a residual child order capable of
+                        # expanding risk after the local campaign has moved on.
                         self.client.cancel_order_safe(
                             symbol, order_id=actual_order_id
                         )
