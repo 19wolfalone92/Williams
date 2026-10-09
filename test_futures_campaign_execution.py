@@ -681,6 +681,7 @@ def test_account_reconciliation_blocks_new_exposure_on_non_finite_position(bad_a
         ],
     )
     service.db = SimpleNamespace(open_campaigns=lambda: [])
+    service._active_rows = lambda: []
 
     with pytest.raises(FuturesCampaignExecutionError, match="non-finite positionAmt"):
         service._assert_no_unmanaged_positions("ETHUSDT")
