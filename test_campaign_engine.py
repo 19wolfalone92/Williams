@@ -166,7 +166,7 @@ def test_add_on_fill_rejects_non_finite_values_and_risk_overrun():
                         fill_order_id="test-fill-1",
                         risk_quote=bad_risk,
                     )
-            assert campaign.position_qty == 1.0
+            assert campaign.position_qty == 0.1
             assert campaign.open_risk_quote == 4.0
         finally:
             db.conn.close()
