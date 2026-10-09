@@ -1231,7 +1231,40 @@ internal class FuturesNativeEngine(
             )
         }
 
-        if (abs(amount) <= 1e-12 && campaign.optString("state") in setOf("OPEN", "OPEN_UNPROTECTED", "OPEN_PROTECTED", "EXIT_PENDING")) {
+        if (abs(amount) <= 1e-12 && campaign.optString("state") in setOf("OPEN", "OPEN_UNPROTECTED", "OPEN_PROTECTED", "EXIT_PENDING", "RECONCILE_REQUIRED")) {
+            // Recover the crash window after a reduce-only market exit reached
+            // Binance but before CLOSED was committed to SQLite.
+            val exitIntent = auditStore.pendingFuturesIntents()
+                .filter { row ->
+                    row.optString("symbol").equals(symbol, true) &&
+                        row.optString("operation").equals("EXIT", true) &&
+                        row.optString("status").uppercase(Locale.US) in
+                            setOf("PENDING", "SUBMITTING", "SUBMITTED", "UNKNOWN", "RECONCILE_REQUIRED")
+                }
+                .maxByOrNull { it.optLong("created_at", 0L) }
+            if (exitIntent != null) {
+                val exitOrder = runCatching {
+                    exchange.getOrder(symbol, clientOrderId = exitIntent.optString("client_id"))
+                }.getOrNull()
+                if (exitOrder?.optString("status").equals("FILLED", true)) {
+                    val reason = runCatching {
+                        JSONObject(exitIntent.optString("params_json", "{}")).optString("reason")
+                    }.getOrDefault("RECOVERED_CONFIRMED_MARKET_EXIT").ifBlank {
+                        "RECOVERED_CONFIRMED_MARKET_EXIT"
+                    }
+                    recordMarketExit(exchange, campaign, exitOrder!!, reason)
+                    campaign.put("state", "CLOSED")
+                    campaign.put("position_amt", 0.0)
+                    campaign.put("protection_active", false)
+                    campaign.put("exit_reason", reason)
+                    campaign.put("closed_at_ms", System.currentTimeMillis())
+                    auditStore.saveFuturesCampaign(symbol, campaign)
+                    auditStore.updateFuturesIntent(exitIntent.optString("intent_id"), "CONFIRMED", exitOrder.toString())
+                    return JSONObject().put("symbol", symbol).put("state", "CLOSED")
+                        .put("reason", "recovered confirmed reduce-only exit")
+                }
+            }
+
             val protectionClientId = campaign.optString("protection_client_algo_id")
             if (protectionClientId.isNotBlank()) {
                 val protection = runCatching {
@@ -1306,9 +1339,42 @@ internal class FuturesNativeEngine(
         val direction = campaign.optString("direction").uppercase(Locale.US)
         var clientId = campaign.optString("protection_client_algo_id")
 
-        // Recover a crash after a stop POST but before its response was linked
-        // to the campaign row, using the durable intent's stable clientAlgoId.
+        // Prefer exchange-authoritative open protection over guessing from
+        // historical intents. This closes the crash window after the exchange
+        // accepted a new stop but before its clientAlgoId reached the campaign row.
         if (clientId.isBlank()) {
+            val expectedSide = exchange.directionToProtectiveSide(direction)
+            val openAlgo = exchange.openAlgoOrders(symbol)
+            val ownedStops = (0 until openAlgo.length()).mapNotNull { index ->
+                openAlgo.optJSONObject(index)
+            }.filter { order ->
+                val candidateId = order.optString("clientAlgoId")
+                val type = order.optString("orderType", order.optString("type")).uppercase(Locale.US)
+                candidateId.startsWith("W2FP_") &&
+                    order.optString("side").uppercase(Locale.US) == expectedSide &&
+                    type == "STOP_MARKET" &&
+                    order.optBoolean("closePosition", false)
+            }
+            if (ownedStops.size == 1) {
+                val found = ownedStops.single()
+                clientId = found.optString("clientAlgoId")
+                campaign.put("protection_client_algo_id", clientId)
+                campaign.put("protection_algo_id", found.optString("algoId"))
+                campaign.put("protection_active", true)
+                campaign.put("state", "OPEN_PROTECTED")
+                auditStore.saveFuturesCampaign(symbol, campaign)
+                updateIntentByClientId(clientId, "SUBMITTED", found.toString())
+                return JSONObject().put("symbol", symbol).put("state", "OPEN_PROTECTED")
+                    .put("reason", "recovered exchange-confirmed protective order")
+            }
+            if (ownedStops.size > 1) {
+                return setCampaignState(
+                    campaign,
+                    "RECONCILE_REQUIRED",
+                    "Multiple bot-owned protective stops are open; refusing to add another stop until duplicates are reconciled"
+                )
+            }
+
             val pendingProtection = auditStore.pendingFuturesIntents().firstOrNull { row ->
                 row.optString("symbol").equals(symbol, true) &&
                     row.optString("operation").uppercase(Locale.US) in setOf("PROTECTION", "PROTECTION_REPLACE") &&
