@@ -103,7 +103,7 @@ class ExecutionBarrier:
         client_order_id = str(intent.client_order_id or "").strip()
         allowed_order_types = {
             "MARKET", "LIMIT", "LIMIT_MAKER", "STOP_LOSS",
-            "STOP_LOSS_LIMIT", "TAKE_PROFIT", "TAKE_PROFIT_LIMIT",
+            "STOP_LOSS_LIMIT", "TAKE_PROFIT", "TAKE_PROFIT_LIMIT", "OCO",
         }
 
         if not str(intent.intent_id or "").strip():
@@ -351,7 +351,40 @@ class ExecutionBarrier:
                 )
                 raise
 
-            if str(intent.order_type).strip().upper() != "CANCEL":
+            if str(intent.order_type).strip().upper() == "OCO":
+                reports = response.get("orderReports") if isinstance(response, dict) else None
+                try:
+                    order_list_id = int(response.get("orderListId", -1)) if isinstance(response, dict) else -1
+                except (TypeError, ValueError, OverflowError):
+                    order_list_id = -1
+                list_type = str(response.get("listStatusType", "")).upper() if isinstance(response, dict) else ""
+                list_status = str(response.get("listOrderStatus", "")).upper() if isinstance(response, dict) else ""
+                reports_valid = (
+                    isinstance(reports, list)
+                    and len(reports) >= 2
+                    and all(
+                        isinstance(row, dict)
+                        and row.get("orderId") is not None
+                        and str(row.get("status", "")).upper() in {
+                            "NEW", "PENDING_NEW", "PARTIALLY_FILLED", "FILLED",
+                            "CANCELED", "EXPIRED", "REJECTED",
+                        }
+                        for row in reports
+                    )
+                )
+                if (
+                    order_list_id < 0
+                    or list_type not in {"EXEC_STARTED", "ALL_DONE"}
+                    or list_status not in {"EXECUTING", "ALL_DONE"}
+                    or not reports_valid
+                ):
+                    order_fsm.state = OrderState.RECONCILE_REQUIRED
+                    reason = "OCO response lacks authoritative order-list and leg state; reconciliation required"
+                    self._persist(intent, "AMBIGUOUS", reason)
+                    self._record("ERROR", "execution_ambiguous", intent, reason)
+                    raise RuntimeError(f"ExecutionBarrier: {reason}")
+                order_fsm.state = OrderState.OPEN
+            elif str(intent.order_type).strip().upper() != "CANCEL":
                 status = str(
                     response.get("status", "")
                     if isinstance(response, dict)
