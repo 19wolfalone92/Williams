@@ -1539,3 +1539,37 @@ def test_protective_exit_closes_only_when_trade_qty_matches_live_campaign(tmp_pa
         assert db.state_get("position_state:BTCUSDT") == "FLAT"
     finally:
         db.conn.close()
+
+
+def test_flat_position_recovers_filled_pending_market_exit_before_new_submit(tmp_path):
+    db, client, service, campaign = _prepare_open_campaign_for_add_on(tmp_path, "LONG")
+    try:
+        client._position["positionAmt"] = "0"
+        stable_id = "W2FX_RECOVER_FILLED_EXIT"
+        campaign.tags["pending_exit_client_order_id"] = stable_id
+        campaign.tags["pending_exit_reason"] = "RECOVER_AFTER_CRASH"
+        campaign.tags["pending_exit_expected_qty"] = 0.5
+        campaign.tags["exit_cycle_original_qty"] = 0.5
+        db.save_campaign(campaign)
+
+        client.get_order = lambda symbol, *, order_id=None, orig_client_order_id=None: {
+            "symbol": symbol, "orderId": 789, "clientOrderId": stable_id,
+            "status": "FILLED", "executedQty": "0.5", "avgPrice": "101.0",
+            "cumQuote": "50.5", "side": "SELL", "type": "MARKET",
+        }
+        client.user_trades = lambda symbol, *, order_id=None, limit=1000: [{
+            "symbol": symbol, "orderId": 789, "qty": "0.5", "price": "101.0",
+            "realizedPnl": "-0.5", "commission": "0.1", "commissionAsset": "USDT",
+        }]
+
+        result = service.exit_position(campaign, reason="RECOVERY_RETRY")
+
+        assert result["action"] == "CLOSED"
+        assert result["realized_pnl_quote_net_known_fees"] == pytest.approx(-0.6)
+        saved = service.engine.load_campaign(campaign.campaign_id)
+        assert saved.state.value == "CLOSED"
+        assert saved.position_qty == 0.0
+        assert db.state_get("position_state:BTCUSDT") == "FLAT"
+        assert len(client.market_exits) == 0, "must not submit a second market exit"
+    finally:
+        db.conn.close()
