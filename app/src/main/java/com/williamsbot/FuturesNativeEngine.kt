@@ -1983,6 +1983,7 @@ internal class FuturesNativeEngine(
             val latest = runCatching { position(exchange, symbol) }.getOrNull()
             val residual = latest?.optString("positionAmt")?.toDoubleOrNull()
             var protectionRestored = false
+            var campaignToPersist = campaign
             if (residual != null && residual.isFinite() && abs(residual) > 1e-12) {
                 val stopStatus = if (protectionClientId.isNotBlank()) {
                     runCatching {
@@ -1996,6 +1997,7 @@ internal class FuturesNativeEngine(
                 if (!activeStop && (protectionCancelConfirmed || terminalStop || protectionClientId.isBlank())) {
                     protectionRestored = runCatching {
                         placeProtection(exchange, campaign)
+                        campaignToPersist = auditStore.futuresCampaign(symbol) ?: campaign
                         true
                     }.getOrDefault(false)
                 }
@@ -2007,7 +2009,7 @@ internal class FuturesNativeEngine(
                 else if (abs(residual) > 1e-12 && !protectionRestored) append("; protection restoration is not confirmed")
                 else if (abs(residual) > 1e-12) append("; exchange-side protection restored")
             }
-            setCampaignState(campaign, "RECONCILE_REQUIRED", detail)
+            setCampaignState(campaignToPersist, "RECONCILE_REQUIRED", detail)
             throw x
         }
         val latestPosition = position(exchange, symbol)
