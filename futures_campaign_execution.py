@@ -807,6 +807,7 @@ class FuturesCampaignExecutionService:
             # (cancel old stop) becomes ambiguous.
             campaign.tags["previous_protective_client_algo_id"] = old_client_id
             campaign.tags["previous_protective_algo_id"] = old_algo_id
+            campaign.tags["previous_protective_stop_price"] = old_stop
             campaign.tags["protection_replace_reconcile_required"] = True
             self.db.save_campaign(campaign)
 
@@ -860,6 +861,7 @@ class FuturesCampaignExecutionService:
 
         campaign.tags.pop("previous_protective_client_algo_id", None)
         campaign.tags.pop("previous_protective_algo_id", None)
+        campaign.tags.pop("previous_protective_stop_price", None)
         campaign.tags.pop("protection_replace_reconcile_required", None)
         self.db.save_campaign(campaign)
         self.db.log_campaign_event(
@@ -1377,6 +1379,100 @@ class FuturesCampaignExecutionService:
             }
 
         if campaign.position_qty > 0:
+            # If stop replacement was interrupted after the new stop was
+            # created but before the old stop was confirmed cancelled, reconcile
+            # both stable IDs before doing any other campaign mutation.
+            if campaign.tags.get("protection_replace_reconcile_required"):
+                new_client_id = str(campaign.tags.get("protective_client_algo_id", "") or "")
+                new_algo_id = campaign.tags.get("protective_algo_id")
+                old_client_id = str(campaign.tags.get("previous_protective_client_algo_id", "") or "")
+                old_algo_id = campaign.tags.get("previous_protective_algo_id")
+                try:
+                    new_order = self.client.get_algo_order(
+                        symbol,
+                        algo_id=new_algo_id or None,
+                        client_algo_id=new_client_id or None,
+                    )
+                    old_order = self.client.get_algo_order(
+                        symbol,
+                        algo_id=old_algo_id or None,
+                        client_algo_id=old_client_id or None,
+                    ) if (old_client_id or old_algo_id) else {}
+                    active_statuses = {"NEW", "WORKING", "PENDING"}
+                    terminal_statuses = {"CANCELED", "CANCELLED", "EXPIRED", "REJECTED", "FINISHED"}
+                    new_status = str(new_order.get("algoStatus", "")).upper()
+                    old_status = str(old_order.get("algoStatus", "")).upper()
+                    if new_status not in active_statuses | terminal_statuses:
+                        raise FuturesCampaignExecutionError(
+                            f"{symbol}: replacement stop status is ambiguous ({new_status or 'UNKNOWN'})"
+                        )
+                    if old_client_id or old_algo_id:
+                        if old_status not in active_statuses | terminal_statuses:
+                            raise FuturesCampaignExecutionError(
+                                f"{symbol}: prior stop status is ambiguous ({old_status or 'UNKNOWN'})"
+                            )
+                    if new_status in active_statuses:
+                        if old_status in active_statuses:
+                            cancel_intent = OrderIntent.new(
+                                symbol,
+                                "SELL" if direction == "LONG" else "BUY",
+                                "CANCEL",
+                                {},
+                                purpose="CAMPAIGN_PROTECTION_RECONCILE_CANCEL_OLD",
+                                campaign_id=campaign.campaign_id,
+                                signal_id=campaign.current_signal_id,
+                                client_order_id=str(old_client_id or old_algo_id),
+                            )
+                            cancel_result = self.barrier.execute(
+                                cancel_intent,
+                                lambda: self.client.cancel_algo_order_safe(
+                                    symbol,
+                                    algo_id=old_algo_id or None,
+                                    client_algo_id=old_client_id or None,
+                                ),
+                            )
+                            if not cancel_result.accepted:
+                                raise FuturesCampaignExecutionError(
+                                    f"{symbol}: prior stop cancellation remains uncertain: {cancel_result.reason}"
+                                )
+                        # The new stop is authoritative and active.
+                    elif old_status in active_statuses:
+                        # New stop is terminal, but old protection is still live.
+                        # Restore the old stop as canonical; the next cycle may
+                        # safely retry tightening from this confirmed baseline.
+                        campaign.tags["protective_client_algo_id"] = old_client_id
+                        campaign.tags["protective_algo_id"] = old_algo_id
+                        previous_stop = float(campaign.tags.get("previous_protective_stop_price", 0) or 0)
+                        if previous_stop > 0:
+                            campaign.current_stop_price = previous_stop
+                    else:
+                        # Both are terminal. The ordinary protection check below
+                        # must establish a fresh stop or fail closed.
+                        campaign.tags["protection_active"] = False
+                    campaign.tags.pop("previous_protective_client_algo_id", None)
+                    campaign.tags.pop("previous_protective_algo_id", None)
+                    campaign.tags.pop("previous_protective_stop_price", None)
+                    campaign.tags.pop("protection_replace_reconcile_required", None)
+                    self.db.save_campaign(campaign)
+                except Exception as exc:
+                    self.engine.mark_reconcile_required(
+                        campaign,
+                        f"Protective stop replacement reconciliation failed: {type(exc).__name__}: {exc}",
+                    )
+                    self.db.state_set(
+                        f"campaign_state:{campaign.campaign_id}",
+                        CampaignState.RECONCILE_REQUIRED.value,
+                    )
+                    self.db.state_set(
+                        f"position_state:{symbol}",
+                        CampaignState.RECONCILE_REQUIRED.value,
+                    )
+                    return {
+                        "symbol": symbol,
+                        "state": "RECONCILE_REQUIRED",
+                        "reason": f"protective stop replacement unresolved: {exc}",
+                    }
+
             expected_direction_sign = 1 if direction == "LONG" else -1
             if amount * expected_direction_sign <= 0:
                 self.engine.mark_reconcile_required(campaign, "position sign changed unexpectedly")
