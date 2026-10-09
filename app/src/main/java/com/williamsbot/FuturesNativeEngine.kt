@@ -807,14 +807,7 @@ internal class FuturesNativeEngine(
             .filter { signal ->
                 // Conditional entries are exchange-side and do not inherit the
                 // local signal expiry. Reject stale signal bars before arming.
-                val pendingBars = when (signal.type) {
-                    "REVERSAL" -> 2
-                    "SUPER_AO" -> 2
-                    "FRACTAL" -> 8
-                    else -> 0
-                }
-                val expiresAt = signal.signalBarTime + intervalMillis(tf) * pendingBars
-                val fresh = pendingBars > 0 && currentClosedBarTime < expiresAt
+                val fresh = isSignalFresh(signal, currentClosedBarTime, tf)
                 if (!fresh) {
                     false
                 } else if (signal.direction == "LONG") {
@@ -887,10 +880,10 @@ internal class FuturesNativeEngine(
                 ?.takeIf { value -> value.isFinite() && value > 0.0 }
                 ?: throw FuturesApiException("$symbol Futures PRICE_FILTER tickSize is unavailable")
         }
-        return buildFrame(symbol, bars, tickSize)
+        return buildFrame(symbol, bars, tickSize, timeframe)
     }
 
-    private fun buildFrame(symbol: String, bars: List<Bar>, tickSize: Double): Frame {
+    private fun buildFrame(symbol: String, bars: List<Bar>, tickSize: Double, timeframe: String): Frame {
         val median = bars.map { (it.high + it.low) / 2.0 }
         val jawRaw = smma(median, 13)
         val teethRaw = smma(median, 8)
@@ -996,6 +989,9 @@ internal class FuturesNativeEngine(
         }
         val signal = signalCandidates
             .filter { isSignalStillValid(bars, it) }
+            // A stale earliest signal must not mask a later live WM signal.
+            // Conditional orders do not inherit this local expiry after arming.
+            .filter { isSignalFresh(it, bars.last().openTime, timeframe) }
             .minByOrNull { it.signalBarTime }
         return Frame(
             bars = bars,
@@ -1016,6 +1012,19 @@ internal class FuturesNativeEngine(
             latestDownFractal = downFractal,
             lastSignal = signal
         )
+    }
+
+    private fun pendingBarsForSignal(type: String): Int = when (type.uppercase(Locale.US)) {
+        "REVERSAL", "SUPER_AO" -> 2
+        "FRACTAL" -> 8
+        else -> 0
+    }
+
+    private fun isSignalFresh(signal: Signal, currentClosedBarTime: Long, timeframe: String): Boolean {
+        val bars = pendingBarsForSignal(signal.type)
+        if (bars <= 0) return false
+        val expiresAt = signal.signalBarTime + intervalMillis(timeframe) * bars
+        return currentClosedBarTime < expiresAt
     }
 
     private fun isSignalStillValid(bars: List<Bar>, signal: Signal): Boolean {
@@ -1256,12 +1265,7 @@ internal class FuturesNativeEngine(
             .put("signal_type", signal.type)
             .put("signal_time_ms", signal.signalBarTime)
             .put("timeframe", interval())
-            .put("entry_expires_at_ms", signal.signalBarTime + intervalMillis(interval()) * when (signal.type) {
-                "REVERSAL" -> 2
-                "SUPER_AO" -> 2
-                "FRACTAL" -> 8
-                else -> 0
-            })
+            .put("entry_expires_at_ms", signal.signalBarTime + intervalMillis(interval()) * pendingBarsForSignal(signal.type))
             .put("entry_client_algo_id", clientAlgoId)
             .put("entry_algo_id", "")
             .put("protection_client_algo_id", "")
