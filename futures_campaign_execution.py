@@ -1380,7 +1380,16 @@ class FuturesCampaignExecutionService:
             return {"symbol": symbol, "action": "WAIT", "reason": "ATR unavailable"}
 
         position = self._position_row(symbol)
-        signed_qty = float(position.get("positionAmt", 0) or 0.0)
+        try:
+            signed_qty = float(position.get("positionAmt", 0) or 0.0)
+        except (TypeError, ValueError):
+            signed_qty = float("nan")
+        if not math.isfinite(signed_qty):
+            reason = "invalid or non-finite exchange quantity during campaign management"
+            self.engine.mark_reconcile_required(campaign, reason)
+            self.db.state_set(f"campaign_state:{campaign.campaign_id}", CampaignState.RECONCILE_REQUIRED.value)
+            self.db.state_set(f"position_state:{symbol}", CampaignState.RECONCILE_REQUIRED.value)
+            return {"symbol": symbol, "action": "RECONCILE_REQUIRED", "reason": reason}
         if abs(signed_qty) <= 1e-12:
             return self.reconcile_symbol(symbol)
         if (direction == "LONG" and signed_qty < 0) or (direction == "SHORT" and signed_qty > 0):
