@@ -948,6 +948,250 @@ class FuturesCampaignExecutionService:
             "reason": reason,
         }
 
+    def _finalize_verified_protective_exit(
+        self,
+        campaign,
+        protection: dict[str, Any],
+        actual_order: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Close a campaign only after the exchange confirms the stop fill.
+
+        When commission is paid in a non-quote asset, preserve it in the
+        audit record rather than inventing a USD-equivalent conversion.
+        """
+        symbol = campaign.symbol.upper()
+        order_id = actual_order.get("orderId") or protection.get("actualOrderId")
+        trades = self.client.user_trades(symbol, order_id=order_id, limit=1000)
+        if not trades:
+            raise FuturesCampaignExecutionError(
+                f"{symbol}: protective exit is filled but authoritative userTrades are unavailable"
+            )
+
+        executed_qty = sum(float(row.get("qty", 0) or 0) for row in trades)
+        if not math.isfinite(executed_qty) or executed_qty <= 0:
+            raise FuturesCampaignExecutionError(
+                f"{symbol}: protective exit has no positive authoritative trade quantity"
+            )
+
+        realized_pnl = sum(float(row.get("realizedPnl", 0) or 0) for row in trades)
+        quote_commission = 0.0
+        other_commission: dict[str, float] = {}
+        for row in trades:
+            asset = str(row.get("commissionAsset", "") or "").upper()
+            commission = max(0.0, float(row.get("commission", 0) or 0))
+            if asset in {"USDT", "USDC"}:
+                quote_commission += commission
+            elif asset:
+                other_commission[asset] = other_commission.get(asset, 0.0) + commission
+
+        net_known_quote = realized_pnl - quote_commission
+        campaign.realized_pnl_quote = float(campaign.realized_pnl_quote or 0.0) + net_known_quote
+        campaign.tags["last_protective_exit"] = {
+            "algo_id": protection.get("algoId"),
+            "client_algo_id": protection.get("clientAlgoId") or campaign.tags.get("protective_client_algo_id"),
+            "actual_order_id": str(order_id or ""),
+            "algo_status": str(protection.get("algoStatus", "")).upper(),
+            "order_status": str(actual_order.get("status", "")).upper(),
+            "executed_qty_from_user_trades": executed_qty,
+            "realized_pnl_quote_before_commission": realized_pnl,
+            "quote_commission": quote_commission,
+            "unconverted_commission_by_asset": other_commission,
+            "pnl_basis": "exchange userTrades; non-USDT/USDC fees are separately recorded, not converted",
+        }
+        campaign.position_qty = 0.0
+        campaign.open_risk_quote = 0.0
+        campaign.pending_risk_quote = 0.0
+        campaign.capital_reserved_quote = 0.0
+        campaign.tags["protection_active"] = False
+        campaign.exit_reason = "EXCHANGE_PROTECTIVE_STOP_FILLED"
+        campaign.tags["last_exit_reason"] = campaign.exit_reason
+
+        # Normalize any non-terminal state through the explicit recovery
+        # state before closing. This is allowed only after exchange evidence.
+        campaign.mark_reconcile_required(
+            "Exchange position is flat; protection algo and actual order fill confirmed"
+        )
+        campaign.transition(
+            CampaignState.EXIT_PENDING,
+            reason="protective algo actual order is confirmed FILLED",
+        )
+        campaign.transition(
+            CampaignState.CLOSED,
+            reason="protective stop fill reconciled from Binance userTrades",
+        )
+        self.db.save_campaign(campaign)
+        self.db.state_set(f"position_state:{symbol}", "FLAT")
+        self.db.state_delete(f"campaign_state:{campaign.campaign_id}")
+        self.db.state_delete(f"futures_entry_pending:{symbol}")
+        self.db.set_campaign_signal_state(
+            campaign.current_signal_id,
+            SignalState.CANCELLED.value,
+        )
+        self.db.log_campaign_event(
+            campaign.campaign_id,
+            CampaignEventType.EXIT_FILLED.value,
+            order_id=str(order_id or ""),
+            reason="Exchange-side protective stop filled; campaign closed by reconciliation",
+            payload=campaign.tags["last_protective_exit"],
+        )
+        self.db.log_campaign_event(
+            campaign.campaign_id,
+            CampaignEventType.CAMPAIGN_CLOSED.value,
+            order_id=str(order_id or ""),
+            reason=campaign.exit_reason,
+            payload={"realized_pnl_quote_net_known_fees": net_known_quote},
+        )
+        return {
+            "symbol": symbol,
+            "state": "CLOSED",
+            "reason": campaign.exit_reason,
+            "actual_order_id": str(order_id or ""),
+            "executed_qty": executed_qty,
+            "realized_pnl_quote_net_known_fees": net_known_quote,
+            "unconverted_commission_by_asset": other_commission,
+        }
+
+    def manage_campaign(self, campaign, indicators, *, atr: float) -> dict[str, Any]:
+        """Manage an exchange-confirmed position using only closed Williams bars.
+
+        The policy uses a two-bar structural reversal for hard exit and an
+        Alligator/fractal-based trailing stop after favorable movement. It does
+        not add exposure; every proposed stop is monotonically risk-reducing.
+        """
+        symbol = campaign.symbol.upper()
+        direction = self._campaign_direction(campaign)
+        if indicators is None or len(indicators) < 3:
+            return {"symbol": symbol, "action": "WAIT", "reason": "insufficient closed candles"}
+        if not math.isfinite(float(atr)) or float(atr) <= 0:
+            return {"symbol": symbol, "action": "WAIT", "reason": "ATR unavailable"}
+
+        position = self._position_row(symbol)
+        signed_qty = float(position.get("positionAmt", 0) or 0.0)
+        if abs(signed_qty) <= 1e-12:
+            return self.reconcile_symbol(symbol)
+        if (direction == "LONG" and signed_qty < 0) or (direction == "SHORT" and signed_qty > 0):
+            self.engine.mark_reconcile_required(
+                campaign,
+                "Position direction mismatch during campaign management",
+            )
+            self.db.state_set(
+                f"campaign_state:{campaign.campaign_id}",
+                CampaignState.RECONCILE_REQUIRED.value,
+            )
+            self.db.state_set(f"position_state:{symbol}", CampaignState.RECONCILE_REQUIRED.value)
+            return {"symbol": symbol, "action": "RECONCILE_REQUIRED", "reason": "direction mismatch"}
+
+        rows = indicators.tail(2)
+        latest = rows.iloc[-1]
+        opposite_structure: list[bool] = []
+        for _, row in rows.iterrows():
+            teeth = float(row.get("teeth_shifted", 0.0) or 0.0)
+            close = float(row.get("close", 0.0) or 0.0)
+            ao = float(row.get("ao", 0.0) or 0.0)
+            if direction == "LONG":
+                opposite_structure.append(
+                    bool(row.get("bearish_alligator", False))
+                    and teeth > 0 and close < teeth and ao < 0
+                )
+            else:
+                opposite_structure.append(
+                    bool(row.get("bullish_alligator", False))
+                    and teeth > 0 and close > teeth and ao > 0
+                )
+        if len(opposite_structure) == 2 and all(opposite_structure):
+            result = self.exit_position(
+                campaign,
+                reason="WILLIAMS_TWO_BAR_STRUCTURAL_REVERSAL",
+            )
+            return {**result, "management_signal": "HARD_EXIT"}
+
+        entry = float(position.get("entryPrice", campaign.average_entry_price or 0.0) or 0.0)
+        mark = self._market_mark(symbol)
+        if entry <= 0:
+            self.engine.mark_reconcile_required(campaign, "Exchange position has no entryPrice")
+            self.db.state_set(f"campaign_state:{campaign.campaign_id}", CampaignState.RECONCILE_REQUIRED.value)
+            return {"symbol": symbol, "action": "RECONCILE_REQUIRED", "reason": "entryPrice missing"}
+
+        favorable = mark - entry if direction == "LONG" else entry - mark
+        progress_atr = favorable / float(atr)
+        if progress_atr < 0.5:
+            return {
+                "symbol": symbol,
+                "action": "HOLD_PROTECTION",
+                "progress_atr": progress_atr,
+                "stop_price": campaign.current_stop_price,
+            }
+
+        teeth = float(latest.get("teeth_shifted", 0.0) or 0.0)
+        if teeth <= 0:
+            return {"symbol": symbol, "action": "HOLD_PROTECTION", "reason": "Teeth unavailable"}
+
+        if direction == "LONG":
+            fractal = float(latest.get("last_down_level", 0.0) or 0.0)
+            structure = max(teeth, fractal) if fractal > 0 else teeth
+            proposed = structure - 0.25 * float(atr)
+            safe = proposed > 0 and proposed < mark - 0.1 * float(atr)
+            tighter = proposed > float(campaign.current_stop_price or campaign.initial_stop_price or 0.0)
+        else:
+            fractal = float(latest.get("last_up_level", 0.0) or 0.0)
+            structure = min(teeth, fractal) if fractal > 0 else teeth
+            proposed = structure + 0.25 * float(atr)
+            safe = proposed > mark + 0.1 * float(atr)
+            old_stop = float(campaign.current_stop_price or campaign.initial_stop_price or 0.0)
+            tighter = old_stop <= 0 or proposed < old_stop
+
+        if not safe or not tighter:
+            return {
+                "symbol": symbol,
+                "action": "HOLD_PROTECTION",
+                "progress_atr": progress_atr,
+                "proposed_stop": proposed,
+                "reason": "no safe, strictly tighter structural stop",
+            }
+
+        try:
+            result = self.replace_protection(campaign, stop_price=proposed)
+        except Exception as exc:
+            self.engine.mark_reconcile_required(
+                campaign,
+                f"Futures structural stop replacement failed: {type(exc).__name__}: {exc}",
+            )
+            self.db.state_set(f"campaign_state:{campaign.campaign_id}", CampaignState.RECONCILE_REQUIRED.value)
+            self.db.state_set(f"position_state:{symbol}", CampaignState.RECONCILE_REQUIRED.value)
+            return {
+                "symbol": symbol,
+                "action": "RECONCILE_REQUIRED",
+                "reason": f"structural stop replacement failed: {exc}",
+            }
+
+        if campaign.state == CampaignState.OPEN_INITIAL:
+            campaign.transition(CampaignState.TREND_ACTIVE, reason="favorable movement supports structural management")
+        if campaign.state == CampaignState.TREND_ACTIVE:
+            campaign.transition(CampaignState.TRAILING, reason="Williams structural stop tightened")
+        self.db.save_campaign(campaign)
+        self.db.log_campaign_event(
+            campaign.campaign_id,
+            CampaignEventType.STOP_MOVED.value,
+            reason=f"{direction} protective stop moved in favor of the campaign",
+            payload={
+                "direction": direction,
+                "entry_price": entry,
+                "mark_price": mark,
+                "atr": float(atr),
+                "progress_atr": progress_atr,
+                "new_stop": result.get("stop_price"),
+                "fractal_reference": fractal,
+                "teeth": teeth,
+            },
+        )
+        return {
+            "symbol": symbol,
+            "direction": direction,
+            "action": "TRAILING_STOP_MOVED",
+            "progress_atr": progress_atr,
+            **result,
+        }
+
     def reconcile_symbol(self, symbol: str) -> dict[str, Any]:
         """Reconcile local campaign against authoritative Futures position/order state."""
         symbol = str(symbol).upper()
@@ -988,6 +1232,38 @@ class FuturesCampaignExecutionService:
                     self.db.state_delete(f"futures_entry_pending:{symbol}")
                     self.db.state_delete(f"campaign_state:{campaign.campaign_id}")
                     return {"symbol": symbol, "state": "CLOSED", "algo_status": status}
+            protective_client_id = str(
+                campaign.tags.get("protective_client_algo_id", "") or ""
+            )
+            protective_algo_id = campaign.tags.get("protective_algo_id")
+            if protective_client_id or protective_algo_id:
+                try:
+                    protection = self.client.get_algo_order(
+                        symbol,
+                        algo_id=protective_algo_id or None,
+                        client_algo_id=protective_client_id or None,
+                    )
+                    algo_status = str(protection.get("algoStatus", "")).upper()
+                    actual_order_id = protection.get("actualOrderId")
+                    if actual_order_id and algo_status in {"TRIGGERED", "FINISHED"}:
+                        actual_order = self.client.get_order(
+                            symbol,
+                            order_id=actual_order_id,
+                        )
+                        if str(actual_order.get("status", "")).upper() == "FILLED":
+                            return self._finalize_verified_protective_exit(
+                                campaign,
+                                protection,
+                                actual_order,
+                            )
+                except Exception as exc:
+                    self.db.log_event(
+                        "WARNING",
+                        "futures_protective_exit_reconciliation_pending",
+                        f"{symbol}: unable to verify the protective exit fill: {exc}",
+                        {"campaign_id": campaign.campaign_id},
+                    )
+
             self.engine.mark_reconcile_required(
                 campaign,
                 "Local active Futures campaign has no live exchange position; closure/fill history must be verified",
