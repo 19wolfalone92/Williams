@@ -1086,6 +1086,14 @@ class Database:
         ).fetchone()
         return float(r['pnl'] or 0)
 
+    def pnl_today_all(self):
+        """Return realized PnL across all symbols for the current UTC day."""
+        r = self.conn.execute(
+            "SELECT COALESCE(SUM(pnl),0) AS pnl FROM trades "
+            "WHERE exit_time IS NOT NULL AND exit_time >= date('now')"
+        ).fetchone()
+        return float(r["pnl"] or 0)
+
     def consecutive_losses(self, symbol, limit=20):
         rows = self.conn.execute(
             'SELECT pnl FROM trades WHERE symbol=? '
