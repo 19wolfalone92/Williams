@@ -447,3 +447,40 @@ def test_execution_barrier_fails_closed_without_durable_intent_store():
     assert not result.accepted
     assert "persistence failed" in result.reason
     assert calls == []
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        {"status": "UNKNOWN", "executedQty": "0"},
+        {"status": "NEW", "executedQty": "NaN"},
+        {"status": "NEW", "executedQty": "-1"},
+        {"status": "NEW", "executedQty": "not-a-number"},
+    ],
+)
+def test_execution_barrier_marks_malformed_exchange_state_ambiguous(response):
+    import pytest
+
+    cache = ContextCache()
+    cache.publish(context())
+    db = IntentDB()
+    barrier = ExecutionBarrier(cache, db)
+    version = cache.snapshot().context("BTCUSDT", "1h").version
+    intent = OrderIntent.new(
+        "BTCUSDT",
+        "BUY",
+        "MARKET",
+        {"1h": version},
+        client_order_id="WTEST_MALFORMED_RESPONSE",
+        quantity="1",
+        invalidation_level=97.0,
+        trigger_price=101.0,
+        signal_id="malformed-response-test",
+        signal_expires_at_ms=int(time.time() * 1000) + 60_000,
+        permission_interval="1h",
+    )
+
+    with pytest.raises(RuntimeError, match="ExecutionBarrier"):
+        barrier.execute(intent, lambda: response)
+
+    assert db.intents[intent.intent_id][0] == "AMBIGUOUS"
