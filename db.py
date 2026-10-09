@@ -1196,7 +1196,13 @@ class Database:
         ).fetchall()
         n = 0
         for r in rows:
-            if float(r['pnl'] or 0) < 0:
+            try:
+                pnl = float(r["pnl"] or 0)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError("consecutive-loss PnL data is invalid") from exc
+            if not math.isfinite(pnl):
+                raise ValueError("consecutive-loss PnL data is non-finite")
+            if pnl < 0:
                 n += 1
             else:
                 break
