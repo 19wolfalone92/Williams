@@ -603,3 +603,50 @@ def test_reconcile_detects_exchange_local_quantity_drift_after_confirming_protec
     assert result["state"] == "RECONCILE_REQUIRED"
     assert "quantity mismatch" in result["reason"]
     assert result["protection"] == "CONFIRMED"
+
+
+def test_execution_barrier_executes_stale_safety_intents_without_market_context():
+    import time
+    from execution_barrier import OrderIntent
+
+    barrier = ExecutionBarrier(ContextCache(), db=None, require_durable_intent=False)
+    stale_at = int(time.time() * 1000) - 60_000
+    cases = [
+        ("CAMPAIGN_PROTECTION", "STOP_MARKET", "SELL", {"algoStatus": "NEW"}),
+        ("CAMPAIGN_EXIT", "MARKET", "SELL", {"status": "FILLED"}),
+        ("CAMPAIGN_EXIT_CANCEL_PROTECTION", "CANCEL", "SELL", {"algoStatus": "CANCELED"}),
+    ]
+    for purpose, order_type, side, response in cases:
+        submitted = []
+        intent = OrderIntent(
+            intent_id=f"integration-{purpose}",
+            symbol="BTCUSDT",
+            side=side,
+            order_type=order_type,
+            required_context_versions={"1m": 999},
+            purpose=purpose,
+            created_at_ms=stale_at,
+            max_age_ms=1_000,
+        )
+        result = barrier.execute(intent, lambda: submitted.append(purpose) or response)
+        assert result.accepted, (purpose, result.reason)
+        assert submitted == [purpose]
+
+    submitted_entry = []
+    stale_entry = OrderIntent(
+        intent_id="integration-stale-entry",
+        symbol="BTCUSDT",
+        side="BUY",
+        order_type="STOP_MARKET",
+        required_context_versions={},
+        purpose="CAMPAIGN_ENTRY",
+        created_at_ms=stale_at,
+        max_age_ms=1_000,
+    )
+    result = barrier.execute(
+        stale_entry,
+        lambda: submitted_entry.append("entry") or {"algoStatus": "NEW"},
+    )
+    assert not result.accepted
+    assert "stale intent" in result.reason
+    assert submitted_entry == []
