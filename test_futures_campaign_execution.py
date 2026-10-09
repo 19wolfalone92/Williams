@@ -1033,10 +1033,19 @@ def test_daily_loss_lockout_still_manages_open_positions_and_blocks_entries():
         lambda self, equity: (False, "daily loss limit reached"),
         runtime,
     )
+    cancelled = []
+    runtime._cancel_pending_entries = MethodType(
+        lambda self, reason: cancelled.append(reason) or [
+            {"symbol": "ETHUSDT", "state": "CLOSED", "action": "ENTRY_CANCELLED"}
+        ],
+        runtime,
+    )
 
     result = runtime.scan_once()
 
     assert managed == ["managed"]
+    assert cancelled == ["DAILY_RISK_LOCKOUT"]
+    assert result["pending_order_cancellations"][0]["action"] == "ENTRY_CANCELLED"
     assert result["state"] == "DAILY_RISK_LOCKOUT"
     assert result["new_entries"] == 0
     assert result["management"][0]["action"] == "PROTECTION_MAINTAINED"
