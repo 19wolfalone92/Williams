@@ -1168,6 +1168,17 @@ class FuturesCampaignExecutionService:
                 raise FuturesCampaignExecutionError(
                     f"{symbol}: old protective order cancellation is not confirmed terminal: {cancel_status or 'UNKNOWN'}"
                 )
+            verified_old = self.client.get_algo_order(
+                symbol,
+                algo_id=old_algo_id or None,
+                client_algo_id=old_client_id or None,
+            )
+            verified_old_status = str(verified_old.get("algoStatus", "") or "").upper()
+            if verified_old_status not in {"CANCELED", "CANCELLED", "EXPIRED", "REJECTED"}:
+                raise FuturesCampaignExecutionError(
+                    f"{symbol}: old protective order remains nonterminal after cancellation re-query "
+                    f"({verified_old_status or 'UNKNOWN'})"
+                )
         except Exception as exc:
             reason = (
                 f"{symbol}: new stop {new_protection.get('stop_price')} is active, "
@@ -1612,9 +1623,20 @@ class FuturesCampaignExecutionService:
                 protection_cancel_confirmed = (
                     cancel_result.accepted and cancel_status in {"CANCELED", "EXPIRED"}
                 )
+                if protection_cancel_confirmed:
+                    verified_stop = self.client.get_algo_order(
+                        symbol,
+                        algo_id=protective_algo_id or None,
+                        client_algo_id=protective_client_id or None,
+                    )
+                    verified_status = str(verified_stop.get("algoStatus", "") or "").upper()
+                    protection_cancel_confirmed = verified_status in {
+                        "CANCELED", "CANCELLED", "EXPIRED", "REJECTED"
+                    }
                 if not protection_cancel_confirmed:
                     raise FuturesCampaignExecutionError(
-                        f"protective cancel is not confirmed terminal: {cancel_status or 'UNKNOWN'}"
+                        f"protective cancel is not confirmed terminal after re-query: "
+                        f"{cancel_status or 'UNKNOWN'}"
                     )
             except Exception as exc:
                 protection_cancel_confirmed = False
@@ -2992,6 +3014,17 @@ class FuturesCampaignExecutionService:
                             if cancel_status not in {"CANCELED", "EXPIRED"}:
                                 raise FuturesCampaignExecutionError(
                                     f"{symbol}: prior stop cancellation is not confirmed terminal: {cancel_status or 'UNKNOWN'}"
+                                )
+                            verified_old = self.client.get_algo_order(
+                                symbol,
+                                algo_id=old_algo_id or None,
+                                client_algo_id=old_client_id or None,
+                            )
+                            verified_old_status = str(verified_old.get("algoStatus", "") or "").upper()
+                            if verified_old_status not in {"CANCELED", "CANCELLED", "EXPIRED", "REJECTED"}:
+                                raise FuturesCampaignExecutionError(
+                                    f"{symbol}: prior stop remains nonterminal after cancellation re-query "
+                                    f"({verified_old_status or 'UNKNOWN'})"
                                 )
                         # The new stop is authoritative and active.
                     elif old_status in active_statuses:
