@@ -2277,6 +2277,9 @@ internal class FuturesNativeEngine(
         ) {
             throw FuturesApiException("$symbol market exit identity/status is not authoritatively FILLED")
         }
+        if (campaign.optString("last_exit_order_id") == orderId &&
+            campaign.optBoolean("last_exit_accounted", false)
+        ) return
         val executed = response.optString("executedQty").toDoubleOrNull()
             ?: throw FuturesApiException("$symbol market exit executedQty is missing or invalid")
         if (!executed.isFinite() || executed <= 0.0) {
@@ -2335,10 +2338,16 @@ internal class FuturesNativeEngine(
         if (!realized.isFinite() || !feesQuote.isFinite()) {
             throw FuturesApiException("$symbol market exit accounting totals are non-finite")
         }
-        campaign.put("realized_pnl_quote", campaign.optDouble("realized_pnl_quote", 0.0) + realized - feesQuote)
+        val entryFee = campaign.optDouble("entry_fee_quote", 0.0)
+        if (!entryFee.isFinite() || entryFee < 0.0) {
+            throw FuturesApiException("$symbol persisted entry fee is invalid")
+        }
+        campaign.put("realized_pnl_quote", campaign.optDouble("realized_pnl_quote", 0.0) + realized - feesQuote - entryFee)
         campaign.put("last_exit_order_id", orderId)
         campaign.put("last_exit_fee_quote", feesQuote)
-        campaign.put("last_exit_fee_unknown", feeUnknown)
+        campaign.put("last_exit_fee_unknown", feeUnknown || campaign.optBoolean("entry_fee_unknown", false))
+        campaign.put("last_exit_accounted", true)
+        campaign.put("entry_fee_accounted", true)
         campaign.put("exit_reason", reason)
     }
 
@@ -2351,11 +2360,26 @@ internal class FuturesNativeEngine(
     ) {
         val symbol = campaign.optString("symbol").uppercase(Locale.US)
         val orderId = actualOrder.optString("orderId")
+        val expectedSide = exchange.directionToProtectiveSide(campaign.optString("direction"))
+        if (
+            orderId.isBlank() ||
+            actualOrder.optString("symbol").uppercase(Locale.US) != symbol ||
+            actualOrder.optString("side").uppercase(Locale.US) != expectedSide ||
+            (protection.optString("actualOrderId").isNotBlank() &&
+                protection.optString("actualOrderId") != orderId)
+        ) throw FuturesApiException("$symbol protective child identity/side mismatch")
+        if (campaign.optString("exchange_exit_order_id") == orderId &&
+            campaign.optBoolean("exchange_exit_accounted", false)
+        ) return
         val executed = actualOrder.optString("executedQty").toDoubleOrNull()
             ?: throw FuturesApiException("$symbol protective exit executedQty is invalid")
-        if (orderId.isBlank() || actualOrder.optString("status").uppercase(Locale.US) != "FILLED" ||
+        if (actualOrder.optString("status").uppercase(Locale.US) != "FILLED" ||
             !executed.isFinite() || executed <= 0.0
         ) throw FuturesApiException("$symbol protective child is not an authoritative fill")
+        val expectedQty = abs(campaign.optDouble("position_amt", 0.0))
+        if (expectedQty > 0.0 && abs(executed - expectedQty) > max(1e-8, expectedQty * 1e-6)) {
+            throw FuturesApiException("$symbol protective exit quantity differs from persisted position; another exit may have raced")
+        }
         val trades = exchange.getUserTrades(symbol, orderId)
         if (trades.length() == 0) throw FuturesApiException("$symbol protective exit has no authoritative userTrades")
         var realized = 0.0
@@ -2392,14 +2416,18 @@ internal class FuturesNativeEngine(
         if (!tradeQty.isFinite() || abs(tradeQty - executed) > max(1e-8, executed * 1e-6)) {
             throw FuturesApiException("$symbol protective executedQty disagrees with userTrades")
         }
-        campaign.put("realized_pnl_quote", campaign.optDouble("realized_pnl_quote", 0.0) + realized - feeQuote)
+        val entryFee = campaign.optDouble("entry_fee_quote", 0.0)
+        if (!entryFee.isFinite() || entryFee < 0.0) throw FuturesApiException("$symbol persisted entry fee is invalid")
+        campaign.put("realized_pnl_quote", campaign.optDouble("realized_pnl_quote", 0.0) + realized - feeQuote - entryFee)
+        campaign.put("entry_fee_accounted", true)
         campaign.put("exit_reason", reason)
         campaign.put("protection_active", false)
         campaign.put("position_amt", 0.0)
         campaign.put("closed_at_ms", System.currentTimeMillis())
         campaign.put("exchange_exit_algo_id", protection.optString("algoId"))
         campaign.put("exchange_exit_order_id", orderId)
-        campaign.put("exit_fee_unknown", unknown)
+        campaign.put("exchange_exit_accounted", true)
+        campaign.put("exit_fee_unknown", unknown || campaign.optBoolean("entry_fee_unknown", false))
         campaign.put("state", "CLOSED")
         auditStore.saveFuturesCampaign(symbol, campaign)
         updateIntentByClientId(campaign.optString("protection_client_algo_id"), "CONFIRMED", actualOrder.toString())
