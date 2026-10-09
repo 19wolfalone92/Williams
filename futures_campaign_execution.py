@@ -442,6 +442,8 @@ class FuturesCampaignExecutionService:
             )
             campaign.pending_risk_quote = actual_risk
             campaign.capital_reserved_quote = notional
+            campaign.initial_stop_price = stop
+            campaign.current_stop_price = stop
             campaign.tags.update({
                 "execution_mode": "FUTURES",
                 "direction": direction,
