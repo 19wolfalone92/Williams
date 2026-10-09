@@ -835,8 +835,13 @@ class Trader:
     def _risk_gate(self, closed):
         if self.state()=='RECONCILE_REQUIRED': return False,'RECONCILE_REQUIRED'
         if self.state()!='FLAT': return False,f'state={self.state()}'
-        if self.max_trades_day > 0 and self.db.trades_today(self.symbol) >= self.max_trades_day:
-            return False, 'max daily trades reached'
+        if self.max_trades_day > 0:
+            try:
+                trades_today = self.db.trades_today(self.symbol)
+            except Exception as exc:
+                return False, f"daily trade count unavailable; new entries blocked ({type(exc).__name__})"
+            if trades_today >= self.max_trades_day:
+                return False, 'max daily trades reached'
         if self.max_consecutive_losses > 0:
             try:
                 loss_streak = self.db.consecutive_losses(self.symbol)
@@ -844,10 +849,13 @@ class Trader:
                 return False, f"consecutive-loss history unavailable; new entries blocked ({type(exc).__name__})"
             if loss_streak >= self.max_consecutive_losses:
                 return False, 'max consecutive losses reached'
-        balance = float(self.available_quote())
+        try:
+            balance = float(self.available_quote())
+            today_pnl = float(self.db.pnl_today(self.symbol))
+        except Exception as exc:
+            return False, f"daily-risk inputs unavailable; new entries blocked ({type(exc).__name__})"
         if not math.isfinite(balance) or balance <= 0:
             return False, 'quote equity unavailable; new entries blocked'
-        today_pnl = float(self.db.pnl_today(self.symbol))
         if not math.isfinite(today_pnl):
             return False, 'daily realized PnL invalid; new entries blocked'
         # Reuse the durable equity breaker on this legacy single-symbol path;
@@ -863,7 +871,10 @@ class Trader:
             return False, equity_reason
         if today_pnl <= -balance * self.max_daily_loss_pct:
             return False, 'daily loss limit reached'
-        last_exit = self.db.last_exit_time(self.symbol)
+        try:
+            last_exit = self.db.last_exit_time(self.symbol)
+        except Exception as exc:
+            return False, f"last exit history unavailable; new entries blocked ({type(exc).__name__})"
         if last_exit:
             try:
                 dt = datetime.fromisoformat(str(last_exit).replace('Z', '+00:00'))
