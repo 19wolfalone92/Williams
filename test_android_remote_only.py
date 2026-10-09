@@ -77,7 +77,7 @@ def test_binance_client_has_ambiguous_execution_barrier():
     assert "X-MBX-ORDER-COUNT-10S" in client
 
 
-def test_spot_testnet_endpoints_and_no_futures_execution():
+def test_spot_testnet_endpoints_and_isolated_futures_adapter():
     client = _read(ROOT / "binance_client.py")
     data = _read(ROOT / "data.py")
     ws = _read(ROOT / "ws_hub.py")
@@ -85,14 +85,26 @@ def test_spot_testnet_endpoints_and_no_futures_execution():
     assert "testnet.binance.vision" in data
     assert "wss://stream.testnet.binance.vision" in ws
     assert "wss://ws-api.testnet.binance.vision/ws-api/v3" in ws
+
+    # Legacy Spot services must remain Spot-only. USDⓈ-M Futures routes are
+    # permitted exclusively inside the new opt-in adapter and its unit tests.
+    allowed_futures_files = {
+        ROOT / "binance_usdm_futures_client.py",
+        ROOT / "test_binance_usdm_futures_client.py",
+    }
     for path in ROOT.rglob("*.py"):
         if any(part in {".git", "__pycache__"} for part in path.parts):
             continue
-        if path == ROOT / "test_android_remote_only.py":
+        if path in {ROOT / "test_android_remote_only.py", *allowed_futures_files}:
             continue
         text = path.read_text(errors="replace")
-        assert "/fapi/" not in text, f"Futures REST endpoint found in {path}"
-        assert "binancefuture.com" not in text, f"Futures Testnet host found in {path}"
+        assert "/fapi/" not in text, f"Futures REST endpoint leaked into legacy Spot path: {path}"
+        assert "binancefuture.com" not in text, f"Futures Testnet host leaked into legacy Spot path: {path}"
+
+    futures = _read(ROOT / "binance_usdm_futures_client.py")
+    assert "https://demo-fapi.binance.com" in futures
+    assert '"/fapi/v1/order"' in futures
+    assert '"/fapi/v1/algoOrder"' in futures
 
 
 def test_environment_secrets_are_gitignored():
