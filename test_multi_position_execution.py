@@ -8,6 +8,7 @@ def _legacy_campaign_mode(monkeypatch):
 
 
 from portfolio_trader import MultiPositionTrader
+from campaign_execution import CampaignExecutionService, CampaignExecutionError
 from db import Database
 
 
@@ -192,3 +193,31 @@ def test_legacy_multi_position_mode_fails_closed_without_signal_contract(tmp_pat
     assert db.open_trades() == []
     assert client.buy_calls == 0
     assert client.oco_calls == 0
+
+
+def test_legacy_quantity_and_price_normalization_fail_closed_on_missing_filters(tmp_path):
+    client = FakeClient()
+    client.exchange_info = lambda symbol: {
+        "symbols": [{
+            "symbol": symbol,
+            "baseAsset": symbol.replace("USDT", ""),
+            "filters": [],
+        }]
+    }
+    trader = object.__new__(MultiPositionTrader)
+    trader.client = client
+
+    with pytest.raises(RuntimeError, match="quantity filter missing"):
+        trader._normalize_qty("BTCUSDT", 1.0)
+    with pytest.raises(RuntimeError, match="PRICE_FILTER missing"):
+        trader._normalize_price("BTCUSDT", 100.0)
+
+    db = Database(str(tmp_path / "campaign-filter-test.sqlite3"))
+    try:
+        service = CampaignExecutionService(client, db)
+        with pytest.raises(CampaignExecutionError, match="filter missing"):
+            service._normalize_qty("BTCUSDT", 1.0)
+        with pytest.raises(CampaignExecutionError, match="PRICE_FILTER missing"):
+            service._normalize_price("BTCUSDT", 100.0)
+    finally:
+        db.conn.close()
