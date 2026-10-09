@@ -1151,7 +1151,7 @@ def test_account_can_trade_false_blocks_entries_but_keeps_management_active():
     runtime._cycle_lock = threading.RLock()
     runtime._kill_latched = False
     runtime._paused = False
-    runtime.client = SimpleNamespace(sync_time=lambda: {}, account_permissions=lambda: {"canTrade": False})
+    runtime.client = SimpleNamespace(sync_time=lambda: {}, account_permissions=lambda: {"canTrade": False, "multiAssetsMargin": False})
     runtime.controller = SimpleNamespace(
         balance_quote=1000.0, risk_engine=SimpleNamespace(balance=1000.0)
     )
@@ -1190,7 +1190,7 @@ def test_account_preflight_failure_does_not_skip_existing_position_management():
     runtime._cycle_lock = threading.RLock()
     runtime._kill_latched = False
     runtime._paused = False
-    runtime.client = SimpleNamespace(sync_time=lambda: {}, account_permissions=lambda: {"canTrade": True})
+    runtime.client = SimpleNamespace(sync_time=lambda: {}, account_permissions=lambda: {"canTrade": True, "multiAssetsMargin": False})
     runtime.controller = SimpleNamespace(
         balance_quote=1000.0, risk_engine=SimpleNamespace(balance=1000.0)
     )
@@ -1235,7 +1235,7 @@ def test_daily_loss_lockout_still_manages_open_positions_and_blocks_entries():
     runtime._cycle_lock = threading.RLock()
     runtime._kill_latched = False
     runtime._paused = False
-    runtime.client = SimpleNamespace(sync_time=lambda: {}, account_permissions=lambda: {"canTrade": True})
+    runtime.client = SimpleNamespace(sync_time=lambda: {}, account_permissions=lambda: {"canTrade": True, "multiAssetsMargin": False})
     runtime.controller = SimpleNamespace(
         balance_quote=1.0, risk_engine=SimpleNamespace(balance=1.0)
     )
