@@ -1702,3 +1702,97 @@ def test_reconcile_does_not_report_flat_when_unowned_orders_exist_without_campai
     finally:
         db.conn.close()
 
+def test_partial_protective_stop_and_market_exit_reconcile_as_one_flattening_cycle(tmp_path):
+    db, client, service, campaign = _prepare_open_campaign_for_add_on(tmp_path, "LONG")
+    try:
+        # Original campaign was 0.5, but the closePosition protective child
+        # partially filled 0.2 just before the runtime noticed the stop. The
+        # remaining 0.3 is then closed by a reduce-only market order.
+        campaign.position_qty = 0.5
+        campaign.average_entry_price = 102.0
+        campaign.tags["protective_client_algo_id"] = "W2FP_PROTECTIVE_PARTIAL"
+        campaign.tags["protective_algo_id"] = "456"
+        client._position["positionAmt"] = "0.3"
+        client._position["entryPrice"] = "102.0"
+
+        client.protective_stops = [
+            ("BTCUSDT", "LONG", "100.0", "W2FP_PROTECTIVE_PARTIAL")
+        ]
+        def protective_lookup(symbol, *, algo_id=None, client_algo_id=None):
+            return {
+                "symbol": symbol,
+                "algoId": str(algo_id or "456"),
+                "clientAlgoId": client_algo_id or "W2FP_PROTECTIVE_PARTIAL",
+                "algoStatus": "FINISHED",
+                "actualOrderId": 901,
+                "side": "SELL",
+                "type": "STOP_MARKET",
+                "orderType": "STOP_MARKET",
+                "closePosition": True,
+                "triggerPrice": "100.0",
+            }
+
+        market_orders = {}
+        def residual_market_exit(symbol, direction, quantity, client_order_id):
+            client._position["positionAmt"] = "0"
+            order = {
+                "symbol": symbol, "orderId": 790, "clientOrderId": client_order_id,
+                "side": "SELL", "type": "MARKET", "status": "FILLED",
+                "executedQty": "0.3", "avgPrice": "99.0", "cumQuote": "29.7",
+            }
+            market_orders[client_order_id] = order
+            return order
+
+        protective_child = {
+            "symbol": "BTCUSDT", "orderId": 901, "clientOrderId": "stop-child-901",
+            "side": "SELL", "type": "MARKET", "status": "CANCELED",
+            "executedQty": "0.2", "avgPrice": "100.0", "cumQuote": "20.0",
+        }
+        def get_order(symbol, *, order_id=None, orig_client_order_id=None):
+            if orig_client_order_id:
+                found = market_orders.get(orig_client_order_id)
+                if found is not None:
+                    return found
+            if str(order_id) == "901":
+                return protective_child
+            if str(order_id) == "790":
+                return next(iter(market_orders.values()))
+            raise TimeoutError(f"unknown test order: {order_id}/{orig_client_order_id}")
+
+        def user_trades(symbol, *, order_id=None, limit=1000):
+            if str(order_id) == "901":
+                return [{
+                    "symbol": symbol, "orderId": 901, "qty": "0.2", "price": "100.0",
+                    "realizedPnl": "-0.2", "commission": "0.02", "commissionAsset": "USDT",
+                }]
+            if str(order_id) == "790":
+                return [{
+                    "symbol": symbol, "orderId": 790, "qty": "0.3", "price": "99.0",
+                    "realizedPnl": "-0.3", "commission": "0.03", "commissionAsset": "USDT",
+                }]
+            return []
+
+        client.get_algo_order = protective_lookup
+        client.market_exit = residual_market_exit
+        client.get_order = get_order
+        client.user_trades = user_trades
+
+        first = service.exit_position(campaign, reason="STOP_MARKET_RACE")
+        assert first["action"] == "RECONCILE_REQUIRED"
+
+        recovered = service.engine.load_campaign(campaign.campaign_id)
+        result = service.reconcile_symbol("BTCUSDT")
+
+        assert result["action"] == "CLOSED"
+        assert result["realized_pnl_quote_net_known_fees"] == pytest.approx(-0.55)
+        closed = service.engine.load_campaign(campaign.campaign_id)
+        assert closed.state.value == "CLOSED"
+        assert closed.position_qty == 0.0
+        orders = closed.tags["last_market_exit"]["orders"]
+        assert len(orders) == 2
+        assert sum(x["executed_qty"] for x in orders if x["source"] == "MARKET_EXIT") == pytest.approx(0.3)
+        assert sum(x["executed_qty"] for x in orders if x["source"] == "PROTECTIVE_STOP") == pytest.approx(0.2)
+        assert db.state_get("position_state:BTCUSDT") == "FLAT"
+    finally:
+        db.conn.close()
+
