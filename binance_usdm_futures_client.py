@@ -10,7 +10,7 @@ import hashlib
 import hmac
 import os
 import time
-from decimal import Decimal, InvalidOperation, ROUND_DOWN
+from decimal import Decimal, InvalidOperation, ROUND_DOWN, ROUND_UP
 from typing import Any, Mapping
 from urllib.parse import urlencode
 
@@ -43,6 +43,7 @@ class BinanceUsdmFuturesClient:
 
     DEMO_BASE_URL = "https://demo-fapi.binance.com"
     LIVE_BASE_URL = "https://fapi.binance.com"
+    is_usdm_futures = True
 
     def __init__(
         self,
@@ -227,6 +228,14 @@ class BinanceUsdmFuturesClient:
     def ticker_price(self, symbol: str) -> dict[str, Any]:
         return self._request("GET", "/fapi/v1/ticker/price", {"symbol": str(symbol).upper()})
 
+    def book_ticker(self, symbol: str | None = None) -> Any:
+        params = {"symbol": str(symbol).upper()} if symbol else {}
+        return self._request("GET", "/fapi/v1/ticker/bookTicker", params)
+
+    def ticker_24hr(self, symbol: str | None = None) -> Any:
+        params = {"symbol": str(symbol).upper()} if symbol else {}
+        return self._request("GET", "/fapi/v1/ticker/24hr", params)
+
     def mark_price(self, symbol: str) -> dict[str, Any]:
         return self._request("GET", "/fapi/v1/premiumIndex", {"symbol": str(symbol).upper()})
 
@@ -348,6 +357,58 @@ class BinanceUsdmFuturesClient:
         if client_algo_id:
             params["clientAlgoId"] = client_algo_id
         return self._request("GET", "/fapi/v1/algoOrder", params, signed=True)
+
+    def open_orders(self, symbol: str | None = None) -> list[dict[str, Any]]:
+        params = {"symbol": str(symbol).upper()} if symbol else {}
+        result = self._request("GET", "/fapi/v1/openOrders", params, signed=True)
+        if isinstance(result, list):
+            return [x for x in result if isinstance(x, dict)]
+        if isinstance(result, dict) and isinstance(result.get("orders"), list):
+            return [x for x in result["orders"] if isinstance(x, dict)]
+        return [result] if isinstance(result, dict) and result.get("orderId") else []
+
+    def open_algo_orders(self, symbol: str | None = None) -> list[dict[str, Any]]:
+        params = {"symbol": str(symbol).upper()} if symbol else {}
+        result = self._request("GET", "/fapi/v1/openAlgoOrders", params, signed=True)
+        if isinstance(result, list):
+            return [x for x in result if isinstance(x, dict)]
+        if isinstance(result, dict) and isinstance(result.get("orders"), list):
+            return [x for x in result["orders"] if isinstance(x, dict)]
+        return [result] if isinstance(result, dict) and result.get("algoId") else []
+
+    def normalize_price(
+        self,
+        symbol: str,
+        price: Any,
+        *,
+        direction: str,
+        purpose: str,
+    ) -> str:
+        """Round price away from accidental trigger tightening.
+
+        LONG entry trigger rounds up and LONG stop rounds down. SHORT entry
+        trigger rounds down and SHORT stop rounds up.
+        """
+        value = self._positive_decimal(price, "price")
+        direction = str(direction).upper()
+        purpose = str(purpose).upper()
+        if direction not in {"LONG", "SHORT"} or purpose not in {"ENTRY", "STOP"}:
+            raise ValueError("direction must be LONG/SHORT and purpose ENTRY/STOP")
+        filters = self.symbol_filters(symbol)
+        price_filter = filters.get("PRICE_FILTER")
+        if not price_filter:
+            raise FuturesAPIError(f"{symbol}: exchangeInfo lacks PRICE_FILTER")
+        tick = self._positive_decimal(price_filter.get("tickSize", "0"), "tickSize")
+        min_price = self._positive_decimal(price_filter.get("minPrice", "0"), "minPrice")
+        max_price = self._positive_decimal(price_filter.get("maxPrice", "0"), "maxPrice")
+        round_up = (direction == "LONG" and purpose == "ENTRY") or (
+            direction == "SHORT" and purpose == "STOP"
+        )
+        rounding = ROUND_UP if round_up else ROUND_DOWN
+        normalized = (value / tick).to_integral_value(rounding=rounding) * tick
+        if normalized < min_price or normalized > max_price:
+            raise ValueError(f"{symbol}: normalized price is outside PRICE_FILTER")
+        return format(normalized.normalize(), "f")
 
     def new_order_safe(
         self,
@@ -522,7 +583,33 @@ class BinanceUsdmFuturesClient:
             params["orderId"] = order_id
         if orig_client_order_id:
             params["origClientOrderId"] = orig_client_order_id
-        return self._request("DELETE", "/fapi/v1/order", params, signed=True)
+        try:
+            return self._request("DELETE", "/fapi/v1/order", params, signed=True)
+        except FuturesAPIError as exc:
+            if not exc.unknown_execution:
+                raise
+            try:
+                state = self.get_order(
+                    symbol,
+                    order_id=order_id,
+                    orig_client_order_id=orig_client_order_id,
+                )
+            except Exception as reconcile_exc:
+                raise FuturesAPIError(
+                    f"Cancel outcome UNKNOWN for {symbol}; reconcile before any retry",
+                    unknown_execution=True,
+                    status_code=exc.status_code,
+                    payload={"cancel_error": exc.payload, "reconcile_error": str(reconcile_exc)},
+                ) from exc
+            status = str(state.get("status", "")).upper()
+            if status in {"CANCELED", "EXPIRED", "FILLED", "REJECTED"}:
+                return state
+            raise FuturesAPIError(
+                f"Cancel outcome UNKNOWN for {symbol}; observed order status={status or 'UNKNOWN'}",
+                unknown_execution=True,
+                status_code=exc.status_code,
+                payload=state,
+            ) from exc
 
     def cancel_algo_order_safe(
         self,
@@ -538,7 +625,33 @@ class BinanceUsdmFuturesClient:
             params["algoId"] = algo_id
         if client_algo_id:
             params["clientAlgoId"] = client_algo_id
-        return self._request("DELETE", "/fapi/v1/algoOrder", params, signed=True)
+        try:
+            return self._request("DELETE", "/fapi/v1/algoOrder", params, signed=True)
+        except FuturesAPIError as exc:
+            if not exc.unknown_execution:
+                raise
+            try:
+                state = self.get_algo_order(
+                    symbol,
+                    algo_id=algo_id,
+                    client_algo_id=client_algo_id,
+                )
+            except Exception as reconcile_exc:
+                raise FuturesAPIError(
+                    f"Algo cancel outcome UNKNOWN for {symbol}; reconcile before any retry",
+                    unknown_execution=True,
+                    status_code=exc.status_code,
+                    payload={"cancel_error": exc.payload, "reconcile_error": str(reconcile_exc)},
+                ) from exc
+            status = str(state.get("algoStatus", "")).upper()
+            if status in {"CANCELED", "EXPIRED"}:
+                return state
+            raise FuturesAPIError(
+                f"Algo cancel outcome UNKNOWN for {symbol}; observed algoStatus={status or 'UNKNOWN'}",
+                unknown_execution=True,
+                status_code=exc.status_code,
+                payload=state,
+            ) from exc
 
     @staticmethod
     def _direction(direction: str) -> str:
