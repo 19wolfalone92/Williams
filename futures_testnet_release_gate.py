@@ -121,6 +121,8 @@ def run_futures_testnet_read_only(symbols: Iterable[str] = ("BTCUSDT",)) -> dict
     permissions = client.account_permissions()
     if not isinstance(permissions, dict) or permissions.get("canTrade") is not True:
         raise RuntimeError("Futures Demo account does not confirm canTrade=true")
+    if permissions.get("multiAssetsMargin") is not False:
+        raise RuntimeError("Futures Demo account must explicitly confirm single-asset margin mode")
     positions = client.position_risk()
     if not isinstance(positions, list):
         raise RuntimeError("Futures positionRisk endpoint returned an unexpected payload")
