@@ -282,8 +282,11 @@ class ExecutionBarrier:
                     "CAMPAIGN_PARTIAL_ENTRY_CANCEL",
                 }
             )
+            durability_required_before_submit = (
+                purpose in entry_purposes or order_type == "CANCEL"
+            )
             durable = self._persist(intent, "PENDING")
-            if durability_required and not durable:
+            if durability_required_before_submit and not durable:
                 reason = "mandatory intent persistence failed; mutation blocked before exchange submission"
                 self._record("ERROR", "execution_blocked", intent, reason)
                 return ExecutionResult(intent.intent_id, False, reason=reason)
