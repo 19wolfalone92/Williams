@@ -170,3 +170,10 @@ When a LONG setup supplied a stop at/above entry, or a SHORT setup supplied a st
 `SignalSpec.new()` accepted an explicitly contradictory pair such as `side=BUY, direction=SHORT`. Downstream Futures execution has a separate guard, so this did not establish that a wrong-side order would be submitted; however, the contradiction could travel through candidate ranking and decision traces before being rejected at the execution boundary.
 
 **Correction:** the canonical signal factory now requires BUY/LONG and SELL/SHORT consistency and raises immediately on conflict. Added regression tests for both rejection and valid SHORT construction.
+
+
+### 22. Android native signal ranking could let an expired earliest signal hide a later valid setup — corrected
+
+The native engine built a list of structurally valid WM1/WM2/WM3 candidates, selected the earliest source bar, and only afterward checked expiry in `findSignal()`. Because `findSignal()` received only `primary.lastSignal`, an expired early candidate could make the whole symbol return no signal even when a later valid candidate existed.
+
+**Correction:** native candidate ranking now filters signal validity and per-type expiry before selecting the earliest live signal. Freshness calculation is shared by frame selection, final signal admission and persisted entry expiry, reducing the chance that those paths drift apart.
