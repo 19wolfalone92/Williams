@@ -6,7 +6,15 @@ import ast
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-EXPECTED_VERSION = '4.25.0'
+def canonical_version(server_text: str) -> str:
+    for line in server_text.splitlines():
+        key, separator, value = line.partition("=")
+        if separator and key.strip() == "VERSION":
+            version = value.strip().strip("\\'\\\"")
+            assert version, "server.py: VERSION must not be empty"
+            return version
+    raise AssertionError("server.py: missing canonical VERSION declaration")
+
 
 def read(path: str) -> str:
     p = ROOT / path
@@ -60,10 +68,10 @@ def main() -> None:
     must(trader, "_auto_scan_lock", "trader.py")
 
     server = read("server.py")
-    must(server, f"VERSION = '{EXPECTED_VERSION}'", "server.py")
+    expected_version = canonical_version(server)
 
     android = read("app/src/main/java/com/williamsbot/MainActivity.kt")
-    must(android, f"Williams {EXPECTED_VERSION}", "MainActivity.kt")
+    must(android, f"Williams {expected_version}", "MainActivity.kt")
     for needle in (
         "Top 50 liquid USDT", "1D / 4H / 1H / 15M",
         '.putString("api_key"', '.putString("api_secret"',
@@ -72,7 +80,7 @@ def main() -> None:
     must(android, "TradingForegroundService", "MainActivity.kt")
     must(android, "http://127.0.0.1:18080", "MainActivity.kt")
     gradle = read("app/build.gradle.kts")
-    must(gradle, f'versionName = "{EXPECTED_VERSION}"', "app/build.gradle.kts")
+    must(gradle, f'versionName = "{expected_version}"', "app/build.gradle.kts")
     must(android, "val maxOpenPositions: Int = 5", "MainActivity.kt")
     runtime = read("app/src/main/java/com/williamsbot/StandaloneRuntime.kt")
     must(runtime, 'prefs.getInt("max_open_positions", 5)', "StandaloneRuntime.kt")
