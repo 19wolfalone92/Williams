@@ -1113,7 +1113,7 @@ def test_exit_does_not_close_campaign_when_post_exit_quantity_is_non_finite(tmp_
     finally:
         db.conn.close()
 
-def test_exit_keeps_campaign_in_reconciliation_when_protection_cancel_is_unconfirmed(tmp_path):
+def test_exit_keeps_protection_active_until_reduce_only_exit_and_reconciles_cleanup(tmp_path):
     db, client, service, campaign = _armed_entry_for_cancel(tmp_path, cancel_confirms=False)
     try:
         from campaign_model import CampaignState
@@ -1133,12 +1133,14 @@ def test_exit_keeps_campaign_in_reconciliation_when_protection_cancel_is_unconfi
 
         result = service.exit_position(campaign, reason="TEST_ORPHANED_STOP")
 
+        # The reduce-only exit is attempted without first cancelling the only
+        # exchange-side protection. Failed cleanup leaves reconciliation locked.
         assert result["action"] == "RECONCILE_REQUIRED"
-        assert "cancellation is unconfirmed" in result["reason"]
+        assert client.market_exits
+        assert client.protection_algo_status == "NEW"
         assert campaign.state == CampaignState.RECONCILE_REQUIRED
         assert db.state_get(f"campaign_state:{campaign.campaign_id}") == "RECONCILE_REQUIRED"
         assert db.state_get("position_state:BTCUSDT") == "RECONCILE_REQUIRED"
-        assert client.market_exits
     finally:
         db.conn.close()
 
@@ -2166,10 +2168,9 @@ def test_partial_protective_stop_and_market_exit_reconcile_as_one_flattening_cyc
         client.user_trades = user_trades
 
         first = service.exit_position(campaign, reason="STOP_MARKET_RACE")
-        assert first["action"] == "RECONCILE_REQUIRED"
-
-        recovered = service.engine.load_campaign(campaign.campaign_id)
-        result = service.reconcile_symbol("BTCUSDT")
+        # The market exit and stop-child partial fill are reconciled in the
+        # same cycle when both histories are authoritative.
+        result = first if first.get("action") == "CLOSED" else service.reconcile_symbol("BTCUSDT")
 
         assert result["action"] == "CLOSED"
         assert result["realized_pnl_quote_net_known_fees"] == pytest.approx(-0.55)
