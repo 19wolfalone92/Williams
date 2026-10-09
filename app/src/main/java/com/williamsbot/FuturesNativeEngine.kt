@@ -623,6 +623,11 @@ internal class FuturesNativeEngine(
             }
             val baselinePersisted = updateDailyBaseline(equity)
             val dailyLoss = if (baselinePersisted) dailyLossFraction(equity) else 1.0
+            var lockoutCancellations = JSONArray()
+            if (!killLatched && !paused && (reconcileRequired || dailyLoss >= maxDailyLossFraction)) {
+                val reason = if (reconcileRequired) "RECONCILE_REQUIRED" else "DAILY_RISK_LOCKOUT"
+                lockoutCancellations = cancelPendingEntries(exchange, reason)
+            }
             if (killLatched) {
                 val exits = enforceKillOnCampaigns(exchange)
                 lastScanSummary = JSONObject()
@@ -641,6 +646,7 @@ internal class FuturesNativeEngine(
                     .put("state", "RECONCILE_REQUIRED")
                     .put("unresolved_intents", unknownIntents)
                     .put("reconciliation", recovered)
+                    .put("pending_entry_cancellations", lockoutCancellations)
                     .put("new_entries", 0)
                 return
             }
@@ -649,6 +655,7 @@ internal class FuturesNativeEngine(
                     .put("state", "DAILY_RISK_LOCKOUT")
                     .put("daily_loss_fraction", dailyLoss)
                     .put("limit_fraction", maxDailyLossFraction)
+                    .put("pending_entry_cancellations", lockoutCancellations)
                     .put("new_entries", 0)
                 return
             }
