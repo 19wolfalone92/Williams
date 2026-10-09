@@ -727,8 +727,18 @@ internal class FuturesNativeEngine(
         val higher = analyseFrame(exchange, symbol, higherTf) ?: return null
         val candidates = listOfNotNull(primary.lastSignal)
             .filter { signal ->
-                if (signal.direction == "LONG") higher.bullish && higher.ao > 0.0 && higher.ac > 0.0
-                else higher.bearish && higher.ao < 0.0 && higher.ac < 0.0
+                // This native release intentionally does not pyramid yet.
+                // WM2 Super AO and WM3 fractal are campaign ADD_ONs, not valid
+                // substitutes for the initial WM1 reversal entry. Until the
+                // add-on admission/fill/reconciliation path is implemented,
+                // never promote those signals into a new campaign.
+                if (signal.type != "REVERSAL") {
+                    false
+                } else if (signal.direction == "LONG") {
+                    higher.bullish && higher.ao > 0.0 && higher.ac > 0.0
+                } else {
+                    higher.bearish && higher.ao < 0.0 && higher.ac < 0.0
+                }
             }
         if (candidates.isEmpty()) return null
         val chosen = candidates.minByOrNull { it.signalBarTime } ?: return null
