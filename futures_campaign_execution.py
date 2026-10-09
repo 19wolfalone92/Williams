@@ -301,10 +301,19 @@ class FuturesCampaignExecutionService:
             raise FuturesCampaignExecutionError("SHORT structural invalidation must be above entry trigger")
         return direction, float(signal.trigger_price), raw_stop
 
-    def _entry_preflight(self, signal: SignalSpec, direction: str, trigger: float, stop: float) -> None:
+    def _entry_preflight(
+        self,
+        signal: SignalSpec,
+        direction: str,
+        trigger: float,
+        stop: float,
+        *,
+        allow_campaign_id: str = "",
+    ) -> None:
         symbol = signal.symbol.upper()
         self._assert_no_unmanaged_positions(symbol)
-        if self._find_active_campaign(symbol) is not None:
+        active = self._find_active_campaign(symbol)
+        if active is not None and active.campaign_id != allow_campaign_id:
             raise FuturesCampaignExecutionError(
                 f"{symbol}: an active campaign already exists; use campaign reconciliation/add-on path"
             )
@@ -477,7 +486,13 @@ class FuturesCampaignExecutionService:
                     raise FuturesCampaignExecutionError(
                         f"operative MarketContext no longer allows {direction}"
                     )
-                self._entry_preflight(signal, direction, trigger, stop)
+                self._entry_preflight(
+                    signal,
+                    direction,
+                    trigger,
+                    stop,
+                    allow_campaign_id=campaign.campaign_id,
+                )
 
             result = self.barrier.execute(
                 intent,
