@@ -13,6 +13,7 @@ from campaign_execution import CampaignExecutionService, CampaignExecutionError
 from campaign_model import SignalSpec, SignalType, SignalRole
 from campaign_monitor import CampaignMonitor
 from order_identity import is_entry_id, is_exit_id, is_managed_order
+from execution_barrier import OrderIntent
 
 
 POSITION_STATES = {
@@ -754,6 +755,25 @@ class MultiPositionTrader:
     # Protection
     # ------------------------------------------------------------------
 
+    def _submit_via_barrier(self, intent, submit, *, emergency_fallback=False):
+        """Route managed mutations through the canonical execution admission point."""
+        if self.execution_barrier is None:
+            if emergency_fallback:
+                # Last-resort exposure reduction only. Normal entries and
+                # protective-list mutations never bypass the barrier.
+                return submit()
+            raise RuntimeError("canonical ExecutionBarrier unavailable; mutation blocked")
+        result = self.execution_barrier.execute(intent, submit)
+        if not result.accepted:
+            raise RuntimeError(
+                f"ExecutionBarrier blocked {intent.purpose}: {result.reason}"
+            )
+        if not isinstance(result.response, dict):
+            raise RuntimeError(
+                f"ExecutionBarrier returned a non-authoritative response for {intent.purpose}"
+            )
+        return result.response
+
     def _emergency_market_sell(self, symbol, qty, trade_id, reason):
         """Close a just-filled/unprotected Spot position if protection is already breached."""
         if self.dry_run:
@@ -771,12 +791,27 @@ class MultiPositionTrader:
             )
 
         client_id = f"{self.EMERGENCY_PREFIX}{uuid.uuid4().hex[:16]}"
-        sell = self.client.order_safe(
+        quantity_text = self.client.decimal_format(sell_qty)
+        intent = OrderIntent.new(
             symbol,
             "SELL",
             "MARKET",
-            quantity=self.client.decimal_format(sell_qty),
-            new_client_order_id=client_id,
+            {},
+            quantity=quantity_text,
+            client_order_id=client_id,
+            purpose="EMERGENCY_EXIT",
+            signal_id=str(trade_id),
+        )
+        sell = self._submit_via_barrier(
+            intent,
+            lambda: self.client.order_safe(
+                symbol,
+                "SELL",
+                "MARKET",
+                quantity=quantity_text,
+                new_client_order_id=client_id,
+            ),
+            emergency_fallback=True,
         )
         self.db.save_order(sell)
 
@@ -990,13 +1025,27 @@ class MultiPositionTrader:
         self.set_state(symbol, "EXIT_PENDING")
 
         create_oco = getattr(self.client, "create_oco_sell_safe", None) or self.client.create_oco_sell
-        result = create_oco(
+        quantity_text = self.client.decimal_format(qty)
+        intent = OrderIntent.new(
             symbol,
-            self.client.decimal_format(qty),
-            self.client.decimal_format(tp),
-            self.client.decimal_format(sl),
-            self.client.decimal_format(sl_limit),
-            client_id,
+            "SELL",
+            "OCO",
+            {},
+            quantity=quantity_text,
+            client_order_id=client_id,
+            purpose="EXIT",
+            signal_id=str(trade_id),
+        )
+        result = self._submit_via_barrier(
+            intent,
+            lambda: create_oco(
+                symbol,
+                quantity_text,
+                self.client.decimal_format(tp),
+                self.client.decimal_format(sl),
+                self.client.decimal_format(sl_limit),
+                client_id,
+            ),
         )
 
         for leg in result.get("orderReports", []):
