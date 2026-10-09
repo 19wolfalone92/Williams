@@ -346,6 +346,27 @@ class Database:
         if not self._transaction_active:
             self.conn.commit()
 
+    def find_execution_intent_by_client_order_id(self, client_order_id, *, symbol=None):
+        """Return the latest durable non-cancel intent using a client ID.
+
+        The barrier uses this before a new POST so a retry cannot create a
+        second exchange operation after an unknown response or process restart.
+        """
+        client_id = str(client_order_id or "").strip()
+        if not client_id:
+            return None
+        query = (
+            "SELECT intent_id, symbol, side, order_type, purpose, status, reason, client_order_id "
+            "FROM execution_intents WHERE client_order_id=? AND UPPER(order_type)!='CANCEL'"
+        )
+        params = [client_id]
+        if symbol:
+            query += " AND UPPER(symbol)=?"
+            params.append(str(symbol).upper())
+        query += " ORDER BY created_at DESC, rowid DESC LIMIT 1"
+        row = self.conn.execute(query, tuple(params)).fetchone()
+        return dict(row) if row is not None else None
+
     def save_execution_event(self, intent_id, event, payload=None):
         self.conn.execute(
             'INSERT INTO execution_events(intent_id,event,payload_json) VALUES(?,?,?)',
