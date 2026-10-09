@@ -169,8 +169,12 @@ def test_read_only_release_gate_passes_only_when_demo_policy_is_verified(monkeyp
 
 
 def test_read_only_gate_blocks_multi_asset_margin_mode(monkeypatch):
-    client = _enable_fake_demo_gate(monkeypatch)
-    client.multi_assets_margin = True
+    class MultiAssetClient(FakeReadOnlyFuturesClient):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.multi_assets_margin = True
+
+    _enable_fake_demo_gate(monkeypatch, client_type=MultiAssetClient)
 
     with pytest.raises(RuntimeError, match="single-asset margin mode"):
         gate.run_futures_testnet_read_only(["BTCUSDT"])
