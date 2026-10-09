@@ -244,10 +244,14 @@ internal class FuturesNativeEngine(
             // Futures campaign. Spot positions do not affect this account check.
             if (hasUnmanagedFuturesPositions(exchange)) {
                 reconcileRequired = true
-                lastError = "Unmanaged Futures exposure detected; new entries remain blocked"
+                lastError = "Unmanaged or malformed Futures exposure detected; new entries remain blocked"
+            }
+            if (runCatching { hasUnmanagedFuturesOrders(exchange) }.getOrDefault(true)) {
+                reconcileRequired = true
+                lastError = "Unmanaged or unverified account-wide Futures orders detected; new entries remain blocked"
             }
 
-            for (symbol in symbols()) {
+            if (!reconcileRequired) for (symbol in symbols()) {
                 if (hasActiveCampaign(symbol)) continue
                 if (hasLivePosition(exchange, symbol)) continue
                 if (exchange.openOrders(symbol).length() > 0 || exchange.openAlgoOrders(symbol).length() > 0) {
@@ -378,7 +382,9 @@ internal class FuturesNativeEngine(
                 val symbol = campaign.optString("symbol").uppercase(Locale.US)
                 try {
                     val pos = position(exchange, symbol)
-                    val amount = pos.optDouble("positionAmt", 0.0)
+                    val amount = pos.optString("positionAmt").toDoubleOrNull()
+                        ?: throw FuturesApiException("$symbol positionAmt is missing or malformed during KILL")
+                    if (!amount.isFinite()) throw FuturesApiException("$symbol positionAmt is non-finite during KILL")
                     if (abs(amount) > 1e-12) {
                         results.put(exitPosition(exchange, campaign, "KILL_SWITCH"))
                     } else if (campaign.optString("state") == "ENTRY_PENDING") {
@@ -406,7 +412,15 @@ internal class FuturesNativeEngine(
             val reconciliation = reconcileAll(exchange)
             val anyPosition = exchange.positionRisk().let { rows ->
                 (0 until rows.length()).any { i ->
-                    abs(rows.optJSONObject(i)?.optString("positionAmt")?.toDoubleOrNull() ?: 0.0) > 1e-12
+                    val row = rows.optJSONObject(i)
+                        ?: throw FuturesApiException("Malformed positionRisk row during kill recovery")
+                    val symbol = row.optString("symbol").uppercase(Locale.US)
+                    val rawAmount = row.optString("positionAmt")
+                    val amount = rawAmount.toDoubleOrNull()
+                    if (symbol.isBlank() || amount == null || !amount.isFinite()) {
+                        throw FuturesApiException("Invalid positionRisk symbol/positionAmt during kill recovery")
+                    }
+                    abs(amount) > 1e-12
                 }
             }
             val unresolvedIntents = unresolvedIntentCount(exchange)
@@ -592,9 +606,11 @@ internal class FuturesNativeEngine(
             if (equity <= 0.0) throw FuturesApiException("Futures equity is invalid")
             val recovered = reconcileAll(exchange)
             val unowned = hasUnmanagedFuturesPositions(exchange)
+            val unownedOrders = runCatching { hasUnmanagedFuturesOrders(exchange) }.getOrDefault(true)
             val unknownIntents = unresolvedIntentCount(exchange)
-            reconcileRequired = recovered.optInt("unresolved", 0) > 0 || unowned || unknownIntents > 0
-            if (unowned) lastError = "Unmanaged Futures position blocks new entries"
+            reconcileRequired = recovered.optInt("unresolved", 0) > 0 || unowned || unownedOrders || unknownIntents > 0
+            if (unowned) lastError = "Unmanaged or malformed Futures position blocks new entries"
+            if (unownedOrders) lastError = "Unmanaged or unverified account-wide Futures orders block new entries"
             manageExistingCampaigns(exchange)
             updateDailyBaseline(equity)
             val dailyLoss = dailyLossFraction(equity)
@@ -693,9 +709,17 @@ internal class FuturesNativeEngine(
     }
 
     private fun equity(account: JSONObject): Double {
-        val value = account.optString("totalMarginBalance").toDoubleOrNull()
-            ?: account.optString("totalWalletBalance").toDoubleOrNull()
-            ?: account.optString("availableBalance").toDoubleOrNull()
+        fun field(name: String): Double? {
+            if (!account.has(name) || account.isNull(name)) return null
+            val raw = account.optString(name).trim()
+            if (raw.isEmpty()) return null
+            // A present but malformed authoritative equity field must not be
+            // silently replaced by a less authoritative balance field.
+            return raw.toDoubleOrNull() ?: Double.NaN
+        }
+        val value = field("totalMarginBalance")
+            ?: field("totalWalletBalance")
+            ?: field("availableBalance")
             ?: 0.0
         return value.takeIf { it.isFinite() && it > 0.0 } ?: 0.0
     }
@@ -709,14 +733,16 @@ internal class FuturesNativeEngine(
                 .putString("futures_daily_day", day)
                 .putString("futures_daily_equity", equity.toString())
                 .commit()
-        } else if (prefs.getString("futures_daily_equity", "").orEmpty().toDoubleOrNull() == null) {
-            prefs.edit().putString("futures_daily_equity", equity.toString()).commit()
         }
+        // If today's baseline is missing/corrupt, do not replace it with the
+        // current equity: that would erase the loss history and reopen entries.
     }
 
     private fun dailyLossFraction(equity: Double): Double {
-        val baseline = prefs.getString("futures_daily_equity", "").orEmpty().toDoubleOrNull() ?: equity
-        if (baseline <= 0.0) return 1.0
+        if (!equity.isFinite() || equity <= 0.0) return 1.0
+        val raw = prefs.getString("futures_daily_equity", "").orEmpty()
+        val baseline = raw.toDoubleOrNull() ?: return 1.0
+        if (!baseline.isFinite() || baseline <= 0.0) return 1.0
         return max(0.0, (baseline - equity) / baseline)
     }
 
@@ -1196,8 +1222,13 @@ internal class FuturesNativeEngine(
         throw FuturesApiException("$symbol positionRisk response omitted symbol")
     }
 
-    private fun hasLivePosition(exchange: BinanceUsdmFuturesClient, symbol: String): Boolean =
-        abs(position(exchange, symbol).optString("positionAmt").toDoubleOrNull() ?: 0.0) > 1e-12
+    private fun hasLivePosition(exchange: BinanceUsdmFuturesClient, symbol: String): Boolean {
+        val raw = position(exchange, symbol).optString("positionAmt")
+        val amount = raw.toDoubleOrNull()
+            ?: throw FuturesApiException("$symbol positionAmt is missing or malformed")
+        if (!amount.isFinite()) throw FuturesApiException("$symbol positionAmt is non-finite")
+        return abs(amount) > 1e-12
+    }
 
     private fun isolated(row: JSONObject): Boolean =
         row.optBoolean("isolated", false) ||
@@ -1212,13 +1243,68 @@ internal class FuturesNativeEngine(
     private fun activeCampaign(symbol: String): Boolean = hasActiveCampaign(symbol)
 
     private fun hasUnmanagedFuturesPositions(exchange: BinanceUsdmFuturesClient): Boolean {
-        val managed = auditStore.activeFuturesCampaigns().map { it.optString("symbol").uppercase(Locale.US) }.toSet()
-        val rows = exchange.positionRisk()
+        val managed = auditStore.activeFuturesCampaigns()
+            .map { it.optString("symbol").uppercase(Locale.US) }.toSet()
+        val rows = runCatching { exchange.positionRisk() }.getOrElse { return true }
         for (i in 0 until rows.length()) {
-            val row = rows.optJSONObject(i) ?: continue
+            val row = rows.optJSONObject(i) ?: return true
             val symbol = row.optString("symbol").uppercase(Locale.US)
-            val amount = row.optString("positionAmt").toDoubleOrNull() ?: 0.0
+            val amount = row.optString("positionAmt").toDoubleOrNull() ?: return true
+            if (symbol.isBlank() || !amount.isFinite()) return true
             if (abs(amount) > 1e-12 && symbol !in managed) return true
+        }
+        return false
+    }
+
+    /**
+     * Account-wide order ownership check. A clean position snapshot does not
+     * prove safety: an orphan conditional entry can create exposure later.
+     * Unknown/malformed order rows or endpoint errors fail closed.
+     */
+    private fun hasUnmanagedFuturesOrders(exchange: BinanceUsdmFuturesClient): Boolean {
+        val campaigns = auditStore.activeFuturesCampaigns()
+        val knownAlgoBySymbol = mutableMapOf<String, MutableSet<String>>()
+        val knownOrderBySymbol = mutableMapOf<String, MutableSet<String>>()
+        for (campaign in campaigns) {
+            val symbol = campaign.optString("symbol").uppercase(Locale.US)
+            if (symbol.isBlank()) return true
+            val algos = knownAlgoBySymbol.getOrPut(symbol) { mutableSetOf() }
+            val orders = knownOrderBySymbol.getOrPut(symbol) { mutableSetOf() }
+            listOf("entry_client_algo_id", "protection_client_algo_id").forEach { key ->
+                campaign.optString(key).takeIf { it.isNotBlank() }?.let(algos::add)
+            }
+            listOf("entry_algo_id", "protection_algo_id").forEach { key ->
+                campaign.optString(key).takeIf { it.isNotBlank() }?.let(algos::add)
+            }
+        }
+        for (intent in auditStore.pendingFuturesIntents()) {
+            val symbol = intent.optString("symbol").uppercase(Locale.US)
+            val clientId = intent.optString("client_id")
+            if (symbol.isBlank() || clientId.isBlank()) return true
+            when (intent.optString("operation").uppercase(Locale.US)) {
+                "ENTRY", "PROTECTION", "PROTECTION_REPLACE" ->
+                    knownAlgoBySymbol.getOrPut(symbol) { mutableSetOf() }.add(clientId)
+                "EXIT" ->
+                    knownOrderBySymbol.getOrPut(symbol) { mutableSetOf() }.add(clientId)
+            }
+        }
+        val algos = runCatching { exchange.openAlgoOrders() }.getOrElse { return true }
+        for (i in 0 until algos.length()) {
+            val order = algos.optJSONObject(i) ?: return true
+            val symbol = order.optString("symbol").uppercase(Locale.US)
+            val clientId = order.optString("clientAlgoId")
+            val algoId = order.optString("algoId")
+            if (symbol.isBlank() || (clientId.isBlank() && algoId.isBlank())) return true
+            val known = knownAlgoBySymbol[symbol].orEmpty()
+            if (clientId !in known && algoId !in known) return true
+        }
+        val standard = runCatching { exchange.openOrders() }.getOrElse { return true }
+        for (i in 0 until standard.length()) {
+            val order = standard.optJSONObject(i) ?: return true
+            val symbol = order.optString("symbol").uppercase(Locale.US)
+            val clientId = order.optString("clientOrderId")
+            if (symbol.isBlank() || clientId.isBlank()) return true
+            if (clientId !in knownOrderBySymbol[symbol].orEmpty()) return true
         }
         return false
     }
@@ -1255,7 +1341,11 @@ internal class FuturesNativeEngine(
             return setCampaignState(campaign, "RECONCILE_REQUIRED", "Campaign direction is invalid")
         }
         val position = position(exchange, symbol)
-        val amount = position.optString("positionAmt").toDoubleOrNull() ?: 0.0
+        val amount = position.optString("positionAmt").toDoubleOrNull()
+            ?: return setCampaignState(campaign, "RECONCILE_REQUIRED", "Exchange positionAmt is missing or malformed")
+        if (!amount.isFinite()) {
+            return setCampaignState(campaign, "RECONCILE_REQUIRED", "Exchange positionAmt is non-finite")
+        }
         val expectedPositive = direction == "LONG"
         if (abs(amount) > 1e-12 && ((amount > 0.0) != expectedPositive)) {
             return setCampaignState(campaign, "RECONCILE_REQUIRED", "Exchange position direction conflicts with campaign direction")
@@ -1732,7 +1822,9 @@ internal class FuturesNativeEngine(
             val campaign = JSONObject(row.toString())
             try {
                 val position = position(exchange, symbol)
-                val amount = position.optString("positionAmt").toDoubleOrNull() ?: 0.0
+                val amount = position.optString("positionAmt").toDoubleOrNull()
+                    ?: throw FuturesApiException("$symbol positionAmt is missing or malformed during management")
+                if (!amount.isFinite()) throw FuturesApiException("$symbol positionAmt is non-finite during management")
                 if (abs(amount) <= 1e-12) continue
                 val tf = campaign.optString("timeframe", interval())
                 val frame = analyseFrame(exchange, symbol, tf)
