@@ -308,12 +308,20 @@ class MultiPositionTrader:
                 continue
             try:
                 mark = float(self.client.ticker_price(symbol)["price"])
-            except Exception:
-                # A missing mark must never create extra risk capacity.
-                continue
-            if mark > 0:
-                equity += qty * mark
-        return max(0.0, equity)
+            except Exception as exc:
+                # A missing mark makes total portfolio equity unknowable.
+                # Do not continue with a partial valuation.
+                raise RuntimeError(
+                    f"{symbol}: mark price unavailable; portfolio risk blocked"
+                ) from exc
+            if not math.isfinite(mark) or mark <= 0:
+                raise RuntimeError(
+                    f"{symbol}: mark price invalid; portfolio risk blocked"
+                )
+            equity += qty * mark
+        if not math.isfinite(equity) or equity < 0:
+            raise RuntimeError("portfolio equity is non-finite or negative")
+        return equity
 
     def _balance(self):
         return self._portfolio_equity_quote()
