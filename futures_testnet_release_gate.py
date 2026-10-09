@@ -193,9 +193,12 @@ def run_futures_testnet_read_only(symbols: Iterable[str] = ("BTCUSDT",)) -> dict
         if margin_type != "ISOLATED":
             raise RuntimeError(f"{symbol}: isolated margin is required before trading")
         try:
-            leverage = int(configuration.get("leverage"))
+            leverage_value = float(configuration.get("leverage"))
         except (TypeError, ValueError) as exc:
-            raise RuntimeError(f"{symbol}: symbolConfig leverage is unavailable") from exc
+            raise RuntimeError(f"{symbol}: symbolConfig leverage is missing/invalid") from exc
+        if not math.isfinite(leverage_value) or not leverage_value.is_integer() or leverage_value < 1:
+            raise RuntimeError(f"{symbol}: symbolConfig leverage is not a valid positive integer")
+        leverage = int(leverage_value)
         if leverage != 1:
             raise RuntimeError(f"{symbol}: Futures leverage must be 1x, observed {leverage}x")
         mark_payload = client.mark_price(symbol)
