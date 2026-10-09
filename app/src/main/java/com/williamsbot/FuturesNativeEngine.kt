@@ -1635,6 +1635,10 @@ internal class FuturesNativeEngine(
         auditStore.updateFuturesIntent(row.optString("intent_id"), status, response)
     }
 
+    private fun isUnresolvedIntent(row: JSONObject): Boolean =
+        row.optString("status").uppercase(Locale.US) in
+            setOf("PENDING", "SUBMITTING", "UNKNOWN", "RECONCILE_REQUIRED")
+
     private fun unresolvedIntentCount(exchange: BinanceUsdmFuturesClient): Int {
         val rows = auditStore.pendingFuturesIntents()
         var unresolved = 0
