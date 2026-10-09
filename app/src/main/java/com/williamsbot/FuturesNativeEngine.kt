@@ -31,7 +31,9 @@ import kotlin.math.min
 // any exchange mutation is allowed. Replacing these with apply() would weaken
 // the write-before-submit durability contract.
 // Android Lint's ApplySharedPref advice is inappropriate for these critical writes.
-@Suppress("ApplySharedPref")
+// KTX edit(commit=true) hides the Boolean returned by SharedPreferences.commit(),
+// so standard Editor calls are retained to fail closed when a durable write fails.
+@Suppress("ApplySharedPref", "UseKtx")
 internal class FuturesNativeEngine(
     @Suppress("UNUSED_PARAMETER") context: Context,
     private val prefs: SharedPreferences,
