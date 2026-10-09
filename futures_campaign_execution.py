@@ -980,6 +980,10 @@ class FuturesCampaignExecutionService:
                 f"campaign_state:{campaign.campaign_id}",
                 CampaignState.RECONCILE_REQUIRED.value,
             )
+            self.db.state_set(
+                f"position_state:{symbol}",
+                CampaignState.RECONCILE_REQUIRED.value,
+            )
             self.db.log_event(
                 "ERROR",
                 "futures_stop_replace_ambiguous",
