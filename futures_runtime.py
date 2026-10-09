@@ -421,14 +421,22 @@ class FuturesRuntime:
             try:
                 summaries.append(self.execution.reconcile_symbol(symbol))
             except Exception as exc:
-                self.db.state_set(
-                    f"campaign_state:{row.get('campaign_id')}",
-                    "RECONCILE_REQUIRED",
-                )
+                reason = f"{type(exc).__name__}: {exc}"
+                campaign_id = str(row.get("campaign_id", "") or "")
+                try:
+                    campaign = self.execution.engine.load_campaign(campaign_id) if campaign_id else None
+                    if campaign is not None:
+                        self.execution.engine.mark_reconcile_required(campaign, reason)
+                except Exception:
+                    # The state keys below still block new exposure if the campaign
+                    # row itself cannot be loaded or durably updated.
+                    pass
+                self.db.state_set(f"campaign_state:{campaign_id}", "RECONCILE_REQUIRED")
+                self.db.state_set(f"position_state:{symbol}", "RECONCILE_REQUIRED")
                 summaries.append({
                     "symbol": symbol,
                     "state": "RECONCILE_REQUIRED",
-                    "reason": f"{type(exc).__name__}: {exc}",
+                    "reason": reason,
                 })
         return summaries
 
