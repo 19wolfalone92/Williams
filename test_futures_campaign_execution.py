@@ -1598,3 +1598,41 @@ def test_triggered_protective_stop_with_residual_position_forces_reduce_only_exi
         assert saved.state.value == "CLOSED"
     finally:
         db.conn.close()
+
+
+def test_orphan_open_algo_order_blocks_new_entry_when_position_is_flat(tmp_path):
+    db = Database(str(tmp_path / "orphan-algo.sqlite3"))
+    try:
+        cache = ContextCache()
+        make_context(cache, allow_long=True, allow_short=False)
+        client = FakeFuturesClient(102.0)
+        client.open_algo_orders = lambda symbol=None: [{
+            "symbol": symbol or "BTCUSDT",
+            "algoId": "9001",
+            "clientAlgoId": "unowned-orphan-stop",
+            "algoStatus": "NEW",
+            "side": "SELL",
+            "type": "STOP_MARKET",
+            "closePosition": True,
+        }]
+        service = FuturesCampaignExecutionService(
+            client,
+            db,
+            execution_barrier=ExecutionBarrier(cache, db),
+            max_open_positions=3,
+            portfolio_risk_limit_pct=0.01,
+            campaign_risk_limit_pct=0.005,
+        )
+
+        with pytest.raises(FuturesCampaignExecutionError, match="orphan/unowned open exchange orders"):
+            service.arm_initial_entry(
+                make_signal("LONG"),
+                equity_quote=10000.0,
+                atr=2.0,
+                candidate_risk_fraction=0.005,
+            )
+
+        assert client.stop_entries == []
+        assert db.state_get("position_state:BTCUSDT") == "RECONCILE_REQUIRED"
+    finally:
+        db.conn.close()
