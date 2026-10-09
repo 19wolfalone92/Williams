@@ -1686,13 +1686,25 @@ class FuturesCampaignExecutionService:
                     }
         else:
             entry_cancel_confirmed = True
-        position = self._position_row(symbol)
         try:
-            amount = float(position.get("positionAmt", 0) or 0)
-        except (TypeError, ValueError):
-            amount = float("nan")
+            position = self._position_row(symbol)
+            amount = float(position.get("positionAmt"))
+        except Exception as exc:
+            reason = (
+                "invalid or non-finite exchange quantity (positionAmt); "
+                "reduce-only exit requires reconciliation"
+            )
+            self.engine.mark_reconcile_required(campaign, reason)
+            self.db.state_set(f"campaign_state:{campaign.campaign_id}", CampaignState.RECONCILE_REQUIRED.value)
+            self.db.state_set(f"position_state:{symbol}", CampaignState.RECONCILE_REQUIRED.value)
+            raise FuturesCampaignExecutionError(
+                f"{symbol}: {reason}: {type(exc).__name__}: {exc}"
+            ) from exc
         if not math.isfinite(amount):
-            reason = "invalid or non-finite exchange quantity; reduce-only exit requires reconciliation"
+            reason = (
+                "invalid or non-finite exchange quantity (positionAmt); "
+                "reduce-only exit requires reconciliation"
+            )
             self.engine.mark_reconcile_required(campaign, reason)
             self.db.state_set(f"campaign_state:{campaign.campaign_id}", CampaignState.RECONCILE_REQUIRED.value)
             self.db.state_set(f"position_state:{symbol}", CampaignState.RECONCILE_REQUIRED.value)
