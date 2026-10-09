@@ -19,6 +19,8 @@ class FakeFuturesClient:
         self.stop_entries = []
         self.market_exits = []
         self.protective_stops = []
+        self.algo_status = "NEW"
+        self.cancel_confirms = True
         self._position = {
             "symbol": "BTCUSDT",
             "positionAmt": "0",
@@ -112,10 +114,22 @@ class FakeFuturesClient:
         }
 
     def get_algo_order(self, symbol, *, algo_id=None, client_algo_id=None):
-        return {"symbol": symbol, "algoId": algo_id or 456, "clientAlgoId": client_algo_id, "algoStatus": "NEW"}
+        return {
+            "symbol": symbol,
+            "algoId": algo_id or 456,
+            "clientAlgoId": client_algo_id,
+            "algoStatus": self.algo_status,
+        }
 
     def cancel_algo_order_safe(self, symbol, *, algo_id=None, client_algo_id=None):
-        return {"symbol": symbol, "algoId": algo_id or 456, "clientAlgoId": client_algo_id, "algoStatus": "CANCELED"}
+        if self.cancel_confirms:
+            self.algo_status = "CANCELED"
+        return {
+            "symbol": symbol,
+            "algoId": algo_id or 456,
+            "clientAlgoId": client_algo_id,
+            "algoStatus": self.algo_status,
+        }
 
 
 def make_context(cache, *, allow_long, allow_short):
@@ -305,3 +319,54 @@ def test_kill_latch_keeps_existing_position_management_enabled():
     assert result["state"] == "KILL_SWITCH_LATCHED"
     assert result["new_entries"] == 0
     assert result["management"][0]["action"] == "HOLD_PROTECTION"
+
+
+def _armed_entry_for_cancel(tmp_path, *, cancel_confirms=True):
+    db = Database(str(tmp_path / "futures-cancel.sqlite3"))
+    cache = ContextCache()
+    make_context(cache, allow_long=True, allow_short=False)
+    client = FakeFuturesClient(mark_price=102.0)
+    client.cancel_confirms = cancel_confirms
+    service = FuturesCampaignExecutionService(
+        client,
+        db,
+        execution_barrier=ExecutionBarrier(cache, db),
+        max_open_positions=3,
+        portfolio_risk_limit_pct=0.01,
+        campaign_risk_limit_pct=0.005,
+    )
+    result = service.arm_initial_entry(
+        make_signal("LONG"),
+        equity_quote=10000.0,
+        atr=2.0,
+        candidate_risk_fraction=0.005,
+    )
+    return db, client, service, service.engine.load_campaign(result["campaign_id"])
+
+
+def test_pending_entry_cancellation_requires_authoritative_terminal_state(tmp_path):
+    db, client, service, campaign = _armed_entry_for_cancel(tmp_path, cancel_confirms=True)
+    try:
+        result = service.cancel_pending_entry(campaign, reason="PAUSE")
+        assert result["action"] == "ENTRY_CANCELLED"
+        assert result["state"] == "CLOSED"
+        assert result["algo_status"] == "CANCELED"
+        assert client._position["positionAmt"] == "0"
+        saved = service.engine.load_campaign(campaign.campaign_id)
+        assert saved.state.value == "CLOSED"
+        assert saved.pending_risk_quote == 0.0
+    finally:
+        db.conn.close()
+
+
+def test_ambiguous_pending_entry_cancellation_fails_closed(tmp_path):
+    db, client, service, campaign = _armed_entry_for_cancel(tmp_path, cancel_confirms=False)
+    try:
+        result = service.cancel_pending_entry(campaign, reason="KILL_SWITCH")
+        assert result["action"] == "CANCEL_UNVERIFIED"
+        assert result["state"] == "RECONCILE_REQUIRED"
+        saved = service.engine.load_campaign(campaign.campaign_id)
+        assert saved.state.value == "RECONCILE_REQUIRED"
+        assert client.stop_entries, "the original conditional entry must be treated as potentially live"
+    finally:
+        db.conn.close()
