@@ -296,16 +296,27 @@ class MultiPositionTrader:
         equity. Foreign assets are deliberately excluded from the risk base.
         """
         account = account or self.client.account()
-        equity = sum(
-            float(b.get("free", 0) or 0)
-            + float(b.get("locked", 0) or 0)
-            for b in account.get("balances", [])
-            if str(b.get("asset", "")).upper() == "USDT"
-        )
+        equity = 0.0
+        for balance in account.get("balances", []):
+            if str(balance.get("asset", "")).upper() != "USDT":
+                continue
+            try:
+                free = float(balance.get("free", 0) or 0)
+                locked = float(balance.get("locked", 0) or 0)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise RuntimeError("USDT balance is invalid; portfolio risk blocked") from exc
+            if not math.isfinite(free) or not math.isfinite(locked) or free < 0 or locked < 0:
+                raise RuntimeError("USDT balance is invalid; portfolio risk blocked")
+            equity += free + locked
         for trade in self.open_trades():
             symbol = str(trade["symbol"]).upper()
-            qty = float(trade.get("quantity", 0) or 0)
-            if qty <= 0:
+            try:
+                qty = float(trade.get("quantity", 0) or 0)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise RuntimeError(f"{symbol}: position quantity is invalid") from exc
+            if not math.isfinite(qty) or qty < 0:
+                raise RuntimeError(f"{symbol}: position quantity is invalid")
+            if qty == 0:
                 continue
             try:
                 mark = float(self.client.ticker_price(symbol)["price"])
