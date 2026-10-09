@@ -1213,7 +1213,7 @@ internal class FuturesNativeEngine(
                 verified.optString("side").uppercase(Locale.US) != side ||
                 verified.optString("orderType", verified.optString("type")).uppercase(Locale.US) != "STOP_MARKET" ||
                 verified.optBoolean("closePosition", true) ||
-                verified.optBoolean("reduceOnly", true) ||
+                verified.optBoolean("reduceOnly", false) ||
                 verifiedTrigger == null || !verifiedTrigger.isFinite() ||
                 abs(verifiedTrigger - triggerValue) > 1e-8 ||
                 verifiedQty == null || !verifiedQty.isFinite() ||
@@ -1821,8 +1821,8 @@ internal class FuturesNativeEngine(
                             .optString("algoStatus").uppercase(Locale.US)
                     }.getOrNull()
                 } else null
-                val activeStop = stopStatus in setOf("NEW", "WORKING", "PENDING", "PENDING_NEW")
-                val terminalStop = stopStatus in setOf("CANCELED", "CANCELLED", "EXPIRED", "REJECTED", "FINISHED")
+                val activeStop = stopStatus != null && stopStatus in setOf("NEW", "WORKING", "PENDING", "PENDING_NEW")
+                val terminalStop = stopStatus != null && stopStatus in setOf("CANCELED", "CANCELLED", "EXPIRED", "REJECTED", "FINISHED")
                 protectionRestored = activeStop
                 if (!activeStop && (protectionCancelConfirmed || terminalStop || protectionClientId.isBlank())) {
                     protectionRestored = runCatching {
