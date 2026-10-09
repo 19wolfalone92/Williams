@@ -7,6 +7,14 @@ from market_context import ContextCache, TFMarketContext, WaveHypothesis
 from wise_men import WiseMenPhase, WiseMenStateMachine
 
 
+class MemoryIntentDB:
+    def __init__(self):
+        self.intents = {}
+
+    def save_execution_intent(self, intent, status, reason=""):
+        self.intents[intent.intent_id] = (status, reason)
+
+
 def context(symbol="BTCUSDT", interval="1h", allow_long=True, allow_short=False):
     return TFMarketContext(
         symbol=symbol,
@@ -58,7 +66,7 @@ def test_execution_barrier_rejects_stale_context():
 def test_execution_barrier_serializes_publish_and_submit():
     cache = ContextCache()
     cache.publish(context())
-    barrier = ExecutionBarrier(cache)
+    barrier = ExecutionBarrier(cache, MemoryIntentDB())
     version = cache.snapshot().context("BTCUSDT", "1h").version
     started = threading.Event()
     published = threading.Event()
@@ -109,3 +117,95 @@ def test_wise_men_state_machine_is_durable():
     assert restored.state.phase == WiseMenPhase.TREND_ACTIVE
     payload = json.loads(db.data[restored.key])
     assert payload["additions"] == 0
+
+
+
+def test_execution_barrier_fails_closed_when_pending_intent_cannot_be_persisted():
+    class FailingDB:
+        def save_execution_intent(self, intent, status, reason=""):
+            raise OSError("simulated disk failure")
+
+    cache = ContextCache()
+    cache.publish(context())
+    barrier = ExecutionBarrier(cache, FailingDB())
+    version = cache.snapshot().context("BTCUSDT", "1h").version
+    intent = OrderIntent.new(
+        "BTCUSDT",
+        "BUY",
+        "MARKET",
+        {"1h": version},
+        permission_interval="1h",
+    )
+    calls = []
+
+    result = barrier.execute(
+        intent,
+        lambda: calls.append("sent") or {"status": "FILLED", "executedQty": "1"},
+    )
+
+    assert not result.accepted
+    assert "persistence_failed" in result.reason
+    assert calls == []
+
+
+def test_execution_barrier_requires_durable_store_by_default():
+    cache = ContextCache()
+    cache.publish(context())
+    barrier = ExecutionBarrier(cache)
+    version = cache.snapshot().context("BTCUSDT", "1h").version
+    intent = OrderIntent.new(
+        "BTCUSDT",
+        "BUY",
+        "MARKET",
+        {"1h": version},
+        permission_interval="1h",
+    )
+    calls = []
+
+    result = barrier.execute(
+        intent,
+        lambda: calls.append("sent") or {"status": "FILLED", "executedQty": "1"},
+    )
+
+    assert not result.accepted
+    assert "persistence_failed" in result.reason
+    assert calls == []
+
+
+def test_execution_barrier_flags_failure_to_persist_submission_after_one_submit():
+    class FailsOnSubmittedDB:
+        def __init__(self):
+            self.statuses = []
+
+        def save_execution_intent(self, intent, status, reason=""):
+            self.statuses.append(status)
+            if status == "SUBMITTED":
+                raise OSError("simulated failure after exchange response")
+
+    cache = ContextCache()
+    cache.publish(context())
+    db = FailsOnSubmittedDB()
+    barrier = ExecutionBarrier(cache, db)
+    version = cache.snapshot().context("BTCUSDT", "1h").version
+    intent = OrderIntent.new(
+        "BTCUSDT",
+        "BUY",
+        "MARKET",
+        {"1h": version},
+        permission_interval="1h",
+        client_order_id="WILLIAMS_TEST_PERSISTENCE_001",
+    )
+    calls = []
+
+    try:
+        barrier.execute(
+            intent,
+            lambda: calls.append("sent") or {"status": "FILLED", "executedQty": "1"},
+        )
+    except RuntimeError as exc:
+        assert "reconcile by stable client_order_id" in str(exc)
+    else:
+        raise AssertionError("post-submit persistence failure must be surfaced")
+
+    assert calls == ["sent"]
+    assert db.statuses == ["PENDING", "SUBMITTED"]
