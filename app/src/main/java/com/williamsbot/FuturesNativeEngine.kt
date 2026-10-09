@@ -966,7 +966,9 @@ internal class FuturesNativeEngine(
                 }
             }
         }
-        val signal = signalCandidates.minByOrNull { it.signalBarTime }
+        val signal = signalCandidates
+            .filter { isSignalStillValid(bars, it) }
+            .minByOrNull { it.signalBarTime }
         return Frame(
             bars = bars,
             atr = atr,
@@ -986,6 +988,23 @@ internal class FuturesNativeEngine(
             latestDownFractal = downFractal,
             lastSignal = signal
         )
+    }
+
+    private fun isSignalStillValid(bars: List<Bar>, signal: Signal): Boolean {
+        val sourceIndex = bars.indexOfFirst { it.openTime == signal.signalBarTime }
+        if (sourceIndex < 0 || sourceIndex >= bars.lastIndex) return sourceIndex == bars.lastIndex
+        val sourceBar = bars[sourceIndex]
+        for (index in sourceIndex + 1..bars.lastIndex) {
+            val later = bars[index]
+            if (signal.direction == "LONG") {
+                if (later.high >= signal.trigger || later.low <= sourceBar.low) return false
+            } else if (signal.direction == "SHORT") {
+                if (later.low <= signal.trigger || later.high >= sourceBar.high) return false
+            } else {
+                return false
+            }
+        }
+        return true
     }
 
     private fun reversalSignal(
