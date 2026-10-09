@@ -1123,3 +1123,125 @@ def test_exit_submission_timeout_persists_stable_client_id_and_blocks_duplicate(
         assert db.state_get(f"position_state:{campaign.symbol}") == "RECONCILE_REQUIRED"
     finally:
         db.conn.close()
+
+
+def _make_add_on_signal(direction="LONG", signal_time=2000):
+    side = "BUY" if direction == "LONG" else "SELL"
+    trigger = 105.0 if direction == "LONG" else 95.0
+    stop = 100.0
+    return SignalSpec.new(
+        symbol="BTCUSDT",
+        side=side,
+        direction=direction,
+        signal_type=SignalType.SUPER_AO,
+        role=SignalRole.ADD_ON,
+        timeframe="5m",
+        signal_bar_time_ms=signal_time,
+        trigger_price=trigger,
+        protective_reference=stop,
+        invalidation_price=stop,
+        htf_confirmed=True,
+        reason="test add-on",
+    )
+
+
+def _prepare_open_campaign_for_add_on(tmp_path, direction="LONG"):
+    db, client, service, campaign = _armed_entry_for_cancel(tmp_path)
+    from campaign_model import CampaignState
+    client.mark = 102.0 if direction == "LONG" else 98.0
+    client._position["positionAmt"] = "0.5" if direction == "LONG" else "-0.5"
+    client._position["entryPrice"] = "102.0" if direction == "LONG" else "98.0"
+    campaign.state = CampaignState.OPEN_INITIAL
+    campaign.position_qty = 0.5
+    campaign.average_entry_price = float(client._position["entryPrice"])
+    campaign.initial_stop_price = 100.0
+    campaign.current_stop_price = 100.0
+    campaign.open_risk_quote = 20.0
+    campaign.pending_risk_quote = 0.0
+    campaign.capital_reserved_quote = 50.0
+    campaign.tags["direction"] = direction
+    campaign.tags["risk_budget_quote"] = 50.0
+    campaign.tags["last_signal_time_ms"] = 1000
+    campaign.tags["protective_client_algo_id"] = "protective-test-id"
+    campaign.tags["protective_algo_id"] = "456"
+    campaign.tags["protection_active"] = True
+    client.protective_stops.append((
+        "BTCUSDT", direction, "100.00", "protective-test-id"
+    ))
+    db.state_delete("futures_entry_pending:BTCUSDT")
+    db.state_set("position_state:BTCUSDT", CampaignState.OPEN_INITIAL.value)
+    db.save_campaign(campaign)
+    return db, client, service, campaign
+
+
+def test_futures_add_on_reserves_risk_and_arms_directionally(tmp_path):
+    db, client, service, campaign = _prepare_open_campaign_for_add_on(tmp_path, "LONG")
+    try:
+        result = service.arm_add_on(
+            _make_add_on_signal("LONG"),
+            equity_quote=10000.0,
+            candidate_risk_fraction=0.001,
+            available_quote=5000.0,
+        )
+        assert result["action"] == "ADD_ON_ARMED"
+        assert result["direction"] == "LONG"
+        assert result["client_algo_id"].startswith("W2FA_")
+        saved = service.engine.load_campaign(campaign.campaign_id)
+        assert saved.state.value == "ADD_ON_PENDING"
+        assert saved.pending_risk_quote > 0
+        assert saved.tags["pending_add_on_client_algo_id"] == result["client_algo_id"]
+        assert len(client.stop_entries) == 1
+    finally:
+        db.conn.close()
+
+
+def test_futures_add_on_partial_fill_reconciles_position_and_risk(tmp_path):
+    db, client, service, campaign = _prepare_open_campaign_for_add_on(tmp_path, "LONG")
+    try:
+        armed = service.arm_add_on(
+            _make_add_on_signal("LONG"),
+            equity_quote=10000.0,
+            candidate_risk_fraction=0.001,
+            available_quote=5000.0,
+        )
+        add_client_id = armed["client_algo_id"]
+        client._position["positionAmt"] = "0.6"
+        client._position["entryPrice"] = "102.333333"
+
+        def lookup_algo(symbol, *, algo_id=None, client_algo_id=None):
+            if client_algo_id == add_client_id or algo_id == armed["algo_id"]:
+                return {
+                    "symbol": symbol, "algoId": armed["algo_id"],
+                    "clientAlgoId": add_client_id, "algoStatus": "TRIGGERED",
+                    "actualOrderId": 999, "side": "BUY", "type": "STOP_MARKET",
+                    "closePosition": False, "triggerPrice": "105.0",
+                }
+            return {
+                "symbol": symbol, "algoId": "456",
+                "clientAlgoId": "protective-test-id", "algoStatus": "NEW",
+                "side": "SELL", "type": "STOP_MARKET",
+                "closePosition": True, "triggerPrice": "100.0",
+            }
+        client.get_algo_order = lookup_algo
+        client.get_order = lambda symbol, *, order_id=None, orig_client_order_id=None: {
+            "symbol": symbol, "orderId": 999, "clientOrderId": add_client_id,
+            "status": "FILLED", "executedQty": "0.1", "avgPrice": "104.0",
+            "cumQuote": "10.4",
+        }
+        client.user_trades = lambda symbol, *, order_id=None, limit=1000: [{
+            "symbol": symbol, "orderId": 999, "qty": "0.1", "price": "104.0",
+            "realizedPnl": "0", "commission": "0.01", "commissionAsset": "USDT",
+        }]
+
+        result = service.reconcile_symbol("BTCUSDT")
+
+        assert result["action"] == "ADD_ON_FILLED"
+        assert result["filled_quantity"] == pytest.approx(0.1)
+        saved = service.engine.load_campaign(campaign.campaign_id)
+        assert saved.state.value == "TREND_ACTIVE"
+        assert saved.position_qty == pytest.approx(0.6)
+        assert saved.additions == 1
+        assert saved.pending_risk_quote == 0.0
+        assert "pending_add_on_client_algo_id" not in saved.tags
+    finally:
+        db.conn.close()
