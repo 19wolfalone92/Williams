@@ -1796,9 +1796,12 @@ def test_flat_position_recovers_filled_pending_market_exit_before_new_submit(tmp
         db.conn.close()
 
 
-def test_triggered_protective_stop_with_residual_position_forces_reduce_only_exit(tmp_path):
+def test_triggered_protective_stop_without_child_id_exits_residual_but_does_not_false_close(tmp_path):
     db, client, service, campaign = _prepare_open_campaign_for_add_on(tmp_path, "LONG")
     try:
+        # Binance reports the Algo stop as triggered but does not yet expose its
+        # child order ID. The residual exposure must still be reduce-only exited,
+        # while PnL finalization stays blocked until the stop fill can be reconciled.
         client.protection_algo_status = "TRIGGERED"
         client.user_trades = lambda symbol, *, order_id=None, limit=1000: [{
             "symbol": symbol, "orderId": order_id, "qty": "0.5", "price": "101.0",
@@ -1807,12 +1810,13 @@ def test_triggered_protective_stop_with_residual_position_forces_reduce_only_exi
 
         result = service.reconcile_symbol("BTCUSDT")
 
-        assert result["action"] == "CLOSED"
-        assert result["realized_pnl_quote_net_known_fees"] == pytest.approx(-0.6)
-        assert len(client.market_exits) == 1
+        assert result["action"] == "RECONCILE_REQUIRED"
+        assert len(client.market_exits) == 1, "residual exposure must still be reduced"
         assert client.protective_stops
         saved = service.engine.load_campaign(campaign.campaign_id)
-        assert saved.state.value == "CLOSED"
+        assert saved.state.value == "RECONCILE_REQUIRED"
+        assert "actualOrderId is missing" in (saved.reason or "")
+        assert db.state_get("position_state:BTCUSDT") == "RECONCILE_REQUIRED"
     finally:
         db.conn.close()
 
