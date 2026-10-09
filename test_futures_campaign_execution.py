@@ -623,6 +623,9 @@ def test_add_on_reconciliation_uses_exchange_order_and_position_state(campaign_s
     service._position_row = lambda symbol: position
     service._find_active_campaign = lambda symbol: campaign
     service._campaign_direction = lambda camp: "LONG"
+    service._cancel_algo_via_barrier = lambda *args, **kwargs: {
+        "symbol": "BTCUSDT", "algoStatus": "CANCELED"
+    }
 
     result = service.reconcile_symbol("BTCUSDT")
 
