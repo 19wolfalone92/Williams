@@ -118,11 +118,8 @@ def run_futures_testnet_read_only(symbols: Iterable[str] = ("BTCUSDT",)) -> dict
 
     time_sync = client.sync_time()
     mode = client.ensure_one_way_mode()
-    account = client.account()
-    if not isinstance(account, dict):
-        raise RuntimeError("Futures account endpoint returned an unexpected payload")
-    can_trade = account.get("canTrade")
-    if can_trade is not True and str(can_trade).strip().lower() != "true":
+    permissions = client.account_permissions()
+    if not isinstance(permissions, dict) or permissions.get("canTrade") is not True:
         raise RuntimeError("Futures Demo account does not confirm canTrade=true")
     positions = client.position_risk()
     if not isinstance(positions, list):
