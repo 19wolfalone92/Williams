@@ -640,3 +640,47 @@ def test_execution_barrier_does_not_cancel_protection_without_durable_intent():
     assert not result.accepted
     assert "persistence failed" in result.reason
     assert calls == []
+
+
+def test_execution_barrier_accepts_only_confirmed_no_fill_oco_cancellation():
+    cache = ContextCache()
+    cache.publish(context())
+    db = IntentDB()
+    barrier = ExecutionBarrier(cache, db)
+    intent = OrderIntent.new(
+        "BTCUSDT", "SELL", "OCO_CANCEL", {}, purpose="MANUAL_EXIT_CANCEL_PROTECTION"
+    )
+    response = {
+        "orderListId": 91,
+        "listStatusType": "ALL_DONE",
+        "listOrderStatus": "ALL_DONE",
+        "orderReports": [
+            {"orderId": 901, "status": "CANCELED", "executedQty": "0"},
+            {"orderId": 902, "status": "CANCELED", "executedQty": "0"},
+        ],
+    }
+    result = barrier.execute(intent, lambda: response)
+    assert result.accepted
+    assert db.intents[intent.intent_id][0] == "CANCELED"
+
+
+def test_execution_barrier_requires_reconciliation_when_oco_cancel_has_fill():
+    cache = ContextCache()
+    cache.publish(context())
+    db = IntentDB()
+    barrier = ExecutionBarrier(cache, db)
+    intent = OrderIntent.new(
+        "BTCUSDT", "SELL", "OCO_CANCEL", {}, purpose="MANUAL_EXIT_CANCEL_PROTECTION"
+    )
+    response = {
+        "orderListId": 92,
+        "listStatusType": "ALL_DONE",
+        "listOrderStatus": "ALL_DONE",
+        "orderReports": [
+            {"orderId": 911, "status": "FILLED", "executedQty": "1"},
+            {"orderId": 912, "status": "CANCELED", "executedQty": "0"},
+        ],
+    }
+    with pytest.raises(RuntimeError, match="OCO cancellation"):
+        barrier.execute(intent, lambda: response)
+    assert db.intents[intent.intent_id][0] == "AMBIGUOUS"
