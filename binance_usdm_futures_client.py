@@ -256,6 +256,41 @@ class BinanceUsdmFuturesClient:
         params = {"symbol": str(symbol).upper()} if symbol else {}
         return self._request("GET", "/fapi/v3/positionRisk", params, signed=True)
 
+    def symbol_configuration(self, symbol: str) -> dict[str, Any]:
+        """Read margin mode/leverage from Binance's dedicated symbolConfig endpoint."""
+        symbol = str(symbol).upper()
+        result = self._request(
+            "GET",
+            "/fapi/v1/symbolConfig",
+            {"symbol": symbol},
+            signed=True,
+        )
+        if isinstance(result, list):
+            if any(not isinstance(row, dict) for row in result):
+                raise FuturesAPIError("Binance Futures symbolConfig contains a malformed row")
+            rows = [row for row in result if str(row.get("symbol", "")).upper() == symbol]
+            if len(rows) != 1:
+                raise FuturesAPIError(
+                    f"Binance Futures symbolConfig did not return exactly one row for {symbol}"
+                )
+            row = rows[0]
+        elif isinstance(result, dict):
+            row = result
+        else:
+            raise FuturesAPIError("Binance Futures symbolConfig returned a malformed payload")
+
+        if str(row.get("symbol", "")).upper() != symbol:
+            raise FuturesAPIError(f"Binance Futures symbolConfig returned a different symbol for {symbol}")
+        if not str(row.get("marginType", "") or "").strip():
+            raise FuturesAPIError(f"{symbol}: symbolConfig omitted marginType")
+        try:
+            leverage = int(row.get("leverage"))
+        except (TypeError, ValueError) as exc:
+            raise FuturesAPIError(f"{symbol}: symbolConfig omitted/invalid leverage") from exc
+        if leverage < 1:
+            raise FuturesAPIError(f"{symbol}: symbolConfig returned invalid leverage")
+        return {**row, "leverage": leverage, "symbol": symbol}
+
     def user_trades(
         self,
         symbol: str,
@@ -337,11 +372,22 @@ class BinanceUsdmFuturesClient:
             raise
 
     def prepare_symbol(self, symbol: str) -> dict[str, Any]:
-        """Validate account mode and establish the initial 1x isolated policy."""
+        """Establish and then verify the initial one-way, isolated 1x policy."""
+        symbol = str(symbol).upper()
         mode = self.ensure_one_way_mode()
         margin = self.set_margin_type(symbol, "ISOLATED")
         leverage = self.set_leverage(symbol, 1)
-        return {"mode": mode, "margin": margin, "leverage": leverage}
+        configuration = self.symbol_configuration(symbol)
+        if str(configuration.get("marginType", "")).upper() != "ISOLATED":
+            raise FuturesAPIError(f"{symbol}: symbolConfig did not confirm isolated margin")
+        if int(configuration.get("leverage", 0)) != 1:
+            raise FuturesAPIError(f"{symbol}: symbolConfig did not confirm 1x leverage")
+        return {
+            "mode": mode,
+            "margin": margin,
+            "leverage": leverage,
+            "configuration": configuration,
+        }
 
     @staticmethod
     def _positive_decimal(value: Any, label: str) -> Decimal:
