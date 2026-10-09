@@ -277,11 +277,12 @@ internal class BinanceUsdmFuturesClient(
             "symbol" to symbol.uppercase(Locale.US),
             "marginType" to "ISOLATED"
         )
-        runCatching { objectRequest("POST", "/fapi/v1/marginType", margin, signed = true) }
-            .onFailure { error ->
-                val msg = error.message.orEmpty()
-                if (!msg.contains("-4046")) throw error
-            }
+        runCatching {
+            objectRequest("POST", "/fapi/v1/marginType", margin, signed = true, mutation = true)
+        }.onFailure { error ->
+            val msg = error.message.orEmpty()
+            if (!msg.contains("-4046")) throw error
+        }
         objectRequest(
             "POST",
             "/fapi/v1/leverage",
