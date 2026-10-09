@@ -714,11 +714,11 @@ class FuturesRuntime:
             })
 
         if blocked_reconciliation:
-            if not daily_ok:
-                cancellations = self._cancel_pending_entries(reason="DAILY_RISK_LOCKOUT")
-                management.extend(cancellations)
-            else:
-                cancellations = []
+            # A reconciliation/management failure must also cancel already-armed
+            # conditional entries. Blocking only the scanner is insufficient:
+            # an exchange-side stop-entry on another symbol could still trigger.
+            cancellations = self._cancel_pending_entries(reason="RECONCILE_REQUIRED")
+            management.extend(cancellations)
             self._last_scan_summary = {
                 "state": "RECONCILE_REQUIRED",
                 "reason": (
