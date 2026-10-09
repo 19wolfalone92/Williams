@@ -1328,3 +1328,48 @@ def test_normal_management_scan_does_not_cancel_pending_entries():
 
     assert result == []
     assert calls == [], "pending entries are cancelled only on explicit pause/kill"
+
+
+def test_initial_conditional_partial_fill_is_cancelled_and_reconciled(tmp_path):
+    db, client, service, campaign = _armed_entry_for_cancel(tmp_path)
+    try:
+        expected = float(campaign.tags["entry_quantity"])
+        executed = expected / 2.0
+        client._position["positionAmt"] = str(executed)
+        client._position["entryPrice"] = "104.9"
+        client.algo_status = "FINISHED"
+        client.entry_actual_order_id = 999
+        child_status = {"value": "PARTIALLY_FILLED"}
+        cancel_calls = []
+
+        def get_order(symbol, *, order_id=None, orig_client_order_id=None):
+            return {
+                "symbol": symbol, "orderId": 999, "clientOrderId": "child-order-id",
+                "side": "BUY", "type": "MARKET", "status": child_status["value"],
+                "executedQty": str(executed), "avgPrice": "104.9",
+                "cumQuote": str(executed * 104.9),
+            }
+        def cancel_order_safe(symbol, *, order_id=None, orig_client_order_id=None):
+            cancel_calls.append(order_id)
+            child_status["value"] = "CANCELED"
+            return {"symbol": symbol, "orderId": order_id, "status": "CANCELED"}
+        client.get_order = get_order
+        client.cancel_order_safe = cancel_order_safe
+        client.user_trades = lambda symbol, *, order_id=None, limit=1000: [{
+            "symbol": symbol, "orderId": 999, "qty": str(executed), "price": "104.9",
+            "realizedPnl": "0", "commission": "0.02", "commissionAsset": "USDT",
+        }]
+
+        result = service.reconcile_symbol("BTCUSDT")
+
+        assert result["state"] == "OPEN_INITIAL"
+        assert result["partial_entry"] is True
+        assert cancel_calls == [999]
+        saved = service.engine.load_campaign(campaign.campaign_id)
+        assert saved.position_qty == pytest.approx(executed)
+        assert saved.state.value == "OPEN_INITIAL"
+        assert saved.tags["entry_fee_quote"] == pytest.approx(0.02)
+        assert "entry_fill_reconciliation_pending" not in saved.tags
+        assert db.state_get("position_state:BTCUSDT") == "OPEN_INITIAL"
+    finally:
+        db.conn.close()
