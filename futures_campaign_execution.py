@@ -1059,6 +1059,53 @@ class FuturesCampaignExecutionService:
                 f"{reason}; reconciliation required before further exposure"
             )
 
+        try:
+            verified_order = self.client.get_algo_order(
+                symbol,
+                algo_id=algo_id or None,
+                client_algo_id=client_algo_id,
+            )
+            verified_status = str(verified_order.get("algoStatus", "") or "").upper()
+            verified_client_id = str(verified_order.get("clientAlgoId", "") or "")
+            verified_side = str(verified_order.get("side", "") or "").upper()
+            verified_type = str(
+                verified_order.get("orderType", verified_order.get("type", "")) or ""
+            ).upper()
+            verified_close_position = str(verified_order.get("closePosition", "")).lower() in {"true", "1"}
+            verified_trigger = float(verified_order.get("triggerPrice"))
+            if (
+                verified_status not in {"NEW", "WORKING", "PENDING", "PENDING_NEW"}
+                or verified_client_id != client_algo_id
+                or verified_side != order_side
+                or verified_type != "STOP_MARKET"
+                or not verified_close_position
+                or not math.isfinite(verified_trigger)
+                or not math.isclose(verified_trigger, normalized_stop, rel_tol=0.0, abs_tol=1e-8)
+                or (
+                    verified_order.get("algoId") is not None
+                    and str(verified_order.get("algoId")) != algo_id
+                )
+            ):
+                raise FuturesCampaignExecutionError(
+                    f"{symbol}: submitted protection failed authoritative identity/side/type/trigger verification"
+                )
+        except Exception as exc:
+            reason = (
+                f"{symbol}: protective submit response was not authoritatively verified; "
+                f"old protection must remain until reconciliation: {type(exc).__name__}: {exc}"
+            )
+            campaign.mark_reconcile_required(reason)
+            self.db.save_campaign(campaign)
+            self.db.state_set(f"campaign_state:{campaign.campaign_id}", CampaignState.RECONCILE_REQUIRED.value)
+            self.db.state_set(f"position_state:{symbol}", CampaignState.RECONCILE_REQUIRED.value)
+            self.db.log_event(
+                "ERROR",
+                "futures_protection_authoritative_verification_failed",
+                reason,
+                {"campaign_id": campaign.campaign_id, "client_algo_id": client_algo_id, "algo_id": algo_id},
+            )
+            raise FuturesCampaignExecutionError(reason) from exc
+
         campaign.tags["protective_client_algo_id"] = client_algo_id
         campaign.tags["protective_algo_id"] = algo_id
         campaign.tags.pop("pending_protective_client_algo_id", None)
