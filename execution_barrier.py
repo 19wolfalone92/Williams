@@ -8,7 +8,6 @@ from typing import Any, Callable, Mapping
 
 from market_context import ContextCache, MarketStateSnapshot
 from order_state_machine import OrderState, OrderStateMachine
-from order_state_machine import OrderState, OrderStateMachine
 
 
 @dataclass(frozen=True)
@@ -148,6 +147,11 @@ class ExecutionBarrier:
         direction = "long" if intent.side == "BUY" else "short" if intent.side == "SELL" else ""
         if not direction:
             return f"unsupported side {intent.side}"
+        # Every mutating non-cancel order needs a durable client identity so a
+        # timeout/restart can query the same exchange operation instead of
+        # submitting a duplicate under a new ID.
+        if intent.order_type.upper() != "CANCEL" and not str(intent.client_order_id or "").strip():
+            return "missing stable client_order_id"
 
         # All declared TFs are version dependencies, but the permission
         # decision belongs to one operative/entry timeframe. Higher TFs provide
@@ -260,7 +264,6 @@ class ExecutionBarrier:
             try:
                 response = submit()
             except Exception as exc:
-                order_fsm.state = OrderState.AMBIGUOUS
                 order_fsm.state = OrderState.AMBIGUOUS
                 self._persist(intent, "AMBIGUOUS", f"{type(exc).__name__}: {exc}")
                 self._record(
