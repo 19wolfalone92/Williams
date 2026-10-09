@@ -1337,11 +1337,6 @@ class FuturesCampaignExecutionService:
                 # position. FILLED with residual exposure may require a new
                 # reduce-only order, but only after the previous order is proven
                 # terminal by this authoritative lookup.
-                campaign.tags["last_terminal_exit_client_order_id"] = pending_exit_id
-                campaign.tags["last_terminal_exit_status"] = prior_status
-                campaign.tags.pop("pending_exit_client_order_id", None)
-                campaign.tags.pop("pending_exit_reason", None)
-                self.db.save_campaign(campaign)
                 if prior_status == "FILLED":
                     position_after_prior = self._position_row(symbol)
                     try:
@@ -1353,13 +1348,40 @@ class FuturesCampaignExecutionService:
                             "prior exit is FILLED but the refreshed position quantity is invalid"
                         )
                     if abs(remaining_after_prior) <= 1e-12:
-                        return self.reconcile_symbol(symbol)
+                        reason_text = (
+                            f"{symbol}: prior exit {pending_exit_id} is FILLED and the "
+                            "exchange position is flat; trade history/PnL must be reconciled "
+                            "before clearing the durable exit intent"
+                        )
+                        self.engine.mark_reconcile_required(campaign, reason_text)
+                        self.db.save_campaign(campaign)
+                        self.db.state_set(
+                            f"campaign_state:{campaign.campaign_id}",
+                            CampaignState.RECONCILE_REQUIRED.value,
+                        )
+                        self.db.state_set(
+                            f"position_state:{symbol}",
+                            CampaignState.RECONCILE_REQUIRED.value,
+                        )
+                        return {
+                            "symbol": symbol,
+                            "direction": direction,
+                            "action": "RECONCILE_REQUIRED",
+                            "client_order_id": pending_exit_id,
+                            "status": prior_status,
+                            "reason": reason_text,
+                        }
                     if (direction == "LONG" and remaining_after_prior < 0) or (
                         direction == "SHORT" and remaining_after_prior > 0
                     ):
                         raise FuturesCampaignExecutionError(
                             "prior exit is FILLED but exchange position direction changed"
                         )
+                campaign.tags["last_terminal_exit_client_order_id"] = pending_exit_id
+                campaign.tags["last_terminal_exit_status"] = prior_status
+                campaign.tags.pop("pending_exit_client_order_id", None)
+                campaign.tags.pop("pending_exit_reason", None)
+                self.db.save_campaign(campaign)
             except Exception as exc:
                 reason_text = (
                     f"{symbol}: previous reduce-only exit outcome cannot be "
