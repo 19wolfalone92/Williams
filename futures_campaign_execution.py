@@ -1562,7 +1562,11 @@ class FuturesCampaignExecutionService:
             self.db.state_set(f"campaign_state:{campaign.campaign_id}", CampaignState.RECONCILE_REQUIRED.value)
             self.db.state_set(f"position_state:{symbol}", CampaignState.RECONCILE_REQUIRED.value)
             raise FuturesCampaignExecutionError(f"{symbol}: {reason}")
-        if abs(amount) <= 0:
+        # Resolve a durable prior exit intent even when the exchange position
+        # is already flat: the previous MARKET order may have filled just before
+        # a crash, and that is precisely when we must not submit a new exit.
+        pending_exit_id = str(campaign.tags.get("pending_exit_client_order_id", "") or "")
+        if abs(amount) <= 1e-12 and not pending_exit_id:
             self.engine.mark_reconcile_required(
                 campaign,
                 f"Cannot confirm exit: exchange position is flat but campaign was active ({reason})",
@@ -1570,7 +1574,9 @@ class FuturesCampaignExecutionService:
             raise FuturesCampaignExecutionError(
                 f"{symbol}: exchange is flat but campaign state requires reconciliation"
             )
-        if (direction == "LONG" and amount < 0) or (direction == "SHORT" and amount > 0):
+        if abs(amount) > 1e-12 and (
+            (direction == "LONG" and amount < 0) or (direction == "SHORT" and amount > 0)
+        ):
             self.engine.mark_reconcile_required(
                 campaign,
                 f"Position direction mismatch during exit ({reason})",
@@ -1578,10 +1584,8 @@ class FuturesCampaignExecutionService:
             raise FuturesCampaignExecutionError(f"{symbol}: direction mismatch; exit blocked for reconciliation")
         order_side = "SELL" if direction == "LONG" else "BUY"
 
-        # Resolve a durable prior exit intent before creating another one.
         # A timeout after Binance accepted a MARKET order must never cause a
         # restart to generate a fresh clientOrderId and duplicate the exit.
-        pending_exit_id = str(campaign.tags.get("pending_exit_client_order_id", "") or "")
         if pending_exit_id:
             try:
                 prior_exit = self.client.get_order(
