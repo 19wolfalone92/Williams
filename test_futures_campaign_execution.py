@@ -570,6 +570,8 @@ def test_add_on_reconciliation_uses_exchange_order_and_position_state(campaign_s
         open_risk_quote=10.0,
         pending_risk_quote=2.0,
         capital_reserved_quote=20.0,
+        current_stop_price=95.0,
+        initial_stop_price=95.0,
         current_signal_id="signal-add",
         tags={
             "direction": "LONG",
