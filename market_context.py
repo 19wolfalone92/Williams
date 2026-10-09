@@ -9,6 +9,12 @@ from types import MappingProxyType
 from typing import Mapping, Optional
 
 
+def _normalize_interval(value: str) -> str:
+    """Normalize Binance intervals without conflating monthly 1M and minute 1m."""
+    raw = str(value or "").strip()
+    return "1M" if raw == "1M" else raw.lower()
+
+
 @dataclass(frozen=True)
 class WaveHypothesis:
     hypothesis_id: str
@@ -97,11 +103,11 @@ class MarketStateSnapshot:
         object.__setattr__(self, "by_symbol", MappingProxyType(frozen_symbols))
 
     def context(self, symbol: str, interval: str) -> Optional[TFMarketContext]:
-        return self.by_symbol.get(symbol.upper(), {}).get(interval.lower())
+        return self.by_symbol.get(symbol.upper(), {}).get(_normalize_interval(interval))
 
     def versions(self, symbol: str, intervals: list[str] | tuple[str, ...]) -> dict[str, int]:
         return {
-            tf.lower(): int(ctx.version)
+            _normalize_interval(tf): int(ctx.version)
             for tf in intervals
             if (ctx := self.context(symbol, tf)) is not None
         }
@@ -132,7 +138,7 @@ class ContextCache:
         with self._lock:
             current = self._current_market_snapshot
             symbol = context.symbol.upper()
-            tf = context.interval.lower()
+            tf = _normalize_interval(context.interval)
             old_frames = dict(current.by_symbol.get(symbol, {}))
             old = old_frames.get(tf)
             next_version = 1 if old is None else old.version + 1
