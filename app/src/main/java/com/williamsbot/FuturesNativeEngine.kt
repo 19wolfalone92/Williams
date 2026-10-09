@@ -2255,26 +2255,84 @@ internal class FuturesNativeEngine(
         val newParams = JSONObject().put("symbol", symbol).put("side", side)
             .put("type", "STOP_MARKET").put("triggerPrice", normalized).put("closePosition", true)
             .put("clientAlgoId", newClientId).put("reason", "STRUCTURAL_TRAIL")
+        campaign.put("pending_protection_client_algo_id", newClientId)
+        campaign.put("pending_protection_trigger_price", normalized)
+        campaign.put("pending_protection_reason", "STRUCTURAL_TRAIL")
+        auditStore.saveFuturesCampaign(symbol, campaign)
         val newProtection = executeMutation(exchange, symbol, "PROTECTION_REPLACE", direction, side, newClientId, newParams) {
             exchange.submitConditional(symbol, side, "STOP_MARKET", null, normalized.toString(), newClientId, closePosition = true)
         }
         val algoId = newProtection.optString("algoId")
-        if (algoId.isBlank()) {
-            setCampaignState(campaign, "RECONCILE_REQUIRED", "Replacement stop response omitted algoId")
+        val responseStatus = newProtection.optString("algoStatus").uppercase(Locale.US)
+        val verified = runCatching { exchange.getAlgoOrder(symbol, clientAlgoId = newClientId) }.getOrElse {
+            setCampaignState(
+                campaign,
+                "RECONCILE_REQUIRED",
+                "Replacement stop lookup is unresolved; old protection remains recorded: ${it.message ?: it.javaClass.simpleName}"
+            )
             return
+        }
+        val verifiedStatus = verified.optString("algoStatus").uppercase(Locale.US)
+        val verifiedTrigger = verified.optString("triggerPrice").toDoubleOrNull()
+        if (
+            algoId.isBlank() ||
+            responseStatus !in setOf("NEW", "WORKING", "PENDING", "PENDING_NEW") ||
+            verifiedStatus !in setOf("NEW", "WORKING", "PENDING", "PENDING_NEW") ||
+            verified.optString("symbol").uppercase(Locale.US) != symbol ||
+            verified.optString("clientAlgoId") != newClientId ||
+            verified.optString("algoId") != algoId ||
+            verified.optString("side").uppercase(Locale.US) != side ||
+            verified.optString("orderType", verified.optString("type")).uppercase(Locale.US) != "STOP_MARKET" ||
+            !verified.optBoolean("closePosition", false) ||
+            verifiedTrigger == null || !verifiedTrigger.isFinite() ||
+            abs(verifiedTrigger - normalized) > 1e-8
+        ) {
+            setCampaignState(
+                campaign,
+                "RECONCILE_REQUIRED",
+                "Replacement stop failed authoritative identity/side/type/trigger verification; prior stop was not canceled"
+            )
+            return
+        }
+        if (oldClientId.isNotBlank() && oldClientId != newClientId) {
+            campaign.put("previous_protection_client_algo_id", oldClientId)
+            campaign.put("previous_protection_algo_id", campaign.optString("protection_algo_id"))
+            campaign.put("protection_replace_reconcile_required", true)
         }
         campaign.put("protection_client_algo_id", newClientId)
         campaign.put("protection_algo_id", algoId)
         campaign.put("stop_price", normalized)
         campaign.put("protection_active", true)
+        campaign.remove("pending_protection_client_algo_id")
+        campaign.remove("pending_protection_trigger_price")
+        campaign.remove("pending_protection_reason")
         auditStore.saveFuturesCampaign(symbol, campaign)
-        if (oldClientId.isNotBlank()) {
-            runCatching { cancelOwnedProtection(exchange, campaign, oldClientId) }
-                .onFailure {
-                    // Both stops remain exchange-side; this is safer than a
-                    // naked interval, but duplicate protection needs reconciliation.
-                    setCampaignState(campaign, "RECONCILE_REQUIRED", "New stop is active but old stop cancellation is uncertain: ${it.message}")
+        if (oldClientId.isNotBlank() && oldClientId != newClientId) {
+            try {
+                cancelOwnedProtection(exchange, campaign, oldClientId)
+                val oldProtection = exchange.getAlgoOrder(symbol, clientAlgoId = oldClientId)
+                val oldStatus = oldProtection.optString("algoStatus").uppercase(Locale.US)
+                if (oldStatus !in setOf("CANCELED", "CANCELLED", "EXPIRED", "REJECTED")) {
+                    setCampaignState(
+                        campaign,
+                        "RECONCILE_REQUIRED",
+                        "Replacement stop is verified but previous stop is not confirmed terminal"
+                    )
+                    return
                 }
+                updateIntentByClientId(oldClientId, oldStatus, oldProtection.toString())
+                campaign.remove("previous_protection_client_algo_id")
+                campaign.remove("previous_protection_algo_id")
+                campaign.remove("protection_replace_reconcile_required")
+                auditStore.saveFuturesCampaign(symbol, campaign)
+            } catch (x: Exception) {
+                setCampaignState(
+                    campaign,
+                    "RECONCILE_REQUIRED",
+                    "Replacement stop is verified but previous stop cancellation is unresolved: ${x.message ?: x.javaClass.simpleName}"
+                )
+                return
+            }
         }
     }
 
