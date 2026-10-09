@@ -643,6 +643,9 @@ class Database:
             self.conn.commit()
 
     def update_trade_quantity(self, trade_id, quantity):
+        quantity = self._require_finite_number(quantity, "quantity", minimum=0.0)
+        if quantity <= 0:
+            raise ValueError("quantity must be positive")
         self.conn.execute(
             'UPDATE trades SET quantity=?,updated_at=? '
             'WHERE id=? AND exit_time IS NULL',
