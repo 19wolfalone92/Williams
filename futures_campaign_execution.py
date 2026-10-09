@@ -1327,6 +1327,44 @@ class FuturesCampaignExecutionService:
         """Reduce-only market exit; it remains available while entries are blocked."""
         symbol = campaign.symbol.upper()
         direction = self._campaign_direction(campaign)
+        add_on_cancel_confirmed = True
+        if campaign.tags.get("pending_add_on_client_algo_id") or campaign.state in {
+            CampaignState.ADD_ON_ARMING,
+            CampaignState.ADD_ON_PENDING,
+            CampaignState.POSITION_EXPANDING,
+        }:
+            add_on_cancel_result = self.cancel_pending_add_on(
+                campaign, reason=f"EXIT_PRECHECK:{reason}"
+            )
+            add_on_cancel_confirmed = (
+                str(add_on_cancel_result.get("state", "")).upper() != "RECONCILE_REQUIRED"
+            )
+            campaign = self.engine.load_campaign(campaign.campaign_id) or campaign
+            direction = self._campaign_direction(campaign)
+        if campaign.state == CampaignState.ENTRY_PENDING or campaign.tags.get("entry_fill_reconciliation_pending"):
+            entry_cancel_result = self.cancel_pending_entry(
+                campaign, reason=f"EXIT_PRECHECK:{reason}"
+            )
+            entry_cancel_confirmed = (
+                str(entry_cancel_result.get("state", "")).upper() != "RECONCILE_REQUIRED"
+            )
+            campaign = self.engine.load_campaign(campaign.campaign_id) or campaign
+            direction = self._campaign_direction(campaign)
+            if campaign.state == CampaignState.CLOSED:
+                refreshed = self._position_row(symbol)
+                try:
+                    refreshed_amount = float(refreshed.get("positionAmt", 0) or 0)
+                except (TypeError, ValueError):
+                    refreshed_amount = float("nan")
+                if math.isfinite(refreshed_amount) and abs(refreshed_amount) <= 1e-12:
+                    return {
+                        "symbol": symbol,
+                        "direction": direction,
+                        "action": "ENTRY_CANCELLED",
+                        "reason": reason,
+                    }
+        else:
+            entry_cancel_confirmed = True
         position = self._position_row(symbol)
         try:
             amount = float(position.get("positionAmt", 0) or 0)
