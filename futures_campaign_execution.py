@@ -1609,10 +1609,12 @@ class FuturesCampaignExecutionService:
         if abs(fresh_amount) <= 1e-12 and (
             not protection_cancel_confirmed
             or not add_on_cancel_confirmed
+            or not entry_cancel_confirmed
             or bool(campaign.tags.get("pending_add_on_client_algo_id"))
+            or bool(campaign.tags.get("entry_fill_reconciliation_pending"))
         ):
             reason_text = (
-                "exchange position is flat, but protective-stop cancellation or pending "
+                "exchange position is flat, but protective-stop, pending-entry, or "
                 "add-on cancellation is unconfirmed; orphaned orders must be reconciled"
             )
             self.engine.mark_reconcile_required(campaign, reason_text)
@@ -1694,9 +1696,9 @@ class FuturesCampaignExecutionService:
         client_order_id = str(
             order.get("clientOrderId", "") or campaign.tags.get("pending_exit_client_order_id", "") or ""
         )
-        if campaign.tags.get("pending_add_on_client_algo_id"):
+        if campaign.tags.get("pending_add_on_client_algo_id") or campaign.tags.get("entry_fill_reconciliation_pending"):
             raise FuturesCampaignExecutionError(
-                f"{symbol}: cannot finalize exit while an add-on entry may still be live"
+                f"{symbol}: cannot finalize exit while an entry/add-on order may still be live"
             )
         if order_id is None or not client_order_id:
             raise FuturesCampaignExecutionError(
