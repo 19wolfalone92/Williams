@@ -2060,11 +2060,16 @@ internal class FuturesNativeEngine(
                                 .put("reason", "replaced terminal protective order")
                                 .put("protection", replacement)
                         } catch (x: Exception) {
-                            val exit = runCatching { exitPosition(exchange, campaign, "PROTECTION_LOST") }.getOrNull()
+                            val latestCampaign = auditStore.futuresCampaign(symbol) ?: campaign
+                            val exit = runCatching { exitPosition(exchange, latestCampaign, "PROTECTION_LOST") }.getOrNull()
                             if (exit?.optString("action") == "CLOSED") {
                                 JSONObject().put("symbol", symbol).put("state", "CLOSED").put("reason", "exit after lost protection")
                             } else {
-                                setCampaignState(campaign, "RECONCILE_REQUIRED", "Protection was terminal and replacement failed: ${x.message}")
+                                setCampaignState(
+                                    latestCampaign,
+                                    "RECONCILE_REQUIRED",
+                                    "Protection was terminal and replacement failed: ${x.message}"
+                                )
                             }
                         }
                     }
