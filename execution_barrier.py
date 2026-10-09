@@ -106,11 +106,6 @@ class ExecutionBarrier:
                 pass
 
     def _validate(self, intent: OrderIntent, snapshot: MarketStateSnapshot) -> str:
-        if intent.created_at_ms:
-            age = int(time.time() * 1000) - intent.created_at_ms
-            if age > intent.max_age_ms:
-                return f"stale intent age={age}ms"
-
         purpose = intent.purpose.upper()
         entry_purposes = {
             "ENTRY",
@@ -121,6 +116,16 @@ class ExecutionBarrier:
             "CAMPAIGN_REVERSE_ENTRY",
         }
         is_new_exposure = purpose in entry_purposes
+
+        # Freshness is an admission rule for increasing exposure. A delayed
+        # protective action, cancellation, recovery operation, or reduce-only
+        # exit must not be stranded merely because its intent aged while waiting
+        # for the execution lock. These non-entry paths must enforce their own
+        # live-position/price/ownership checks before submission.
+        if is_new_exposure and intent.created_at_ms:
+            age = int(time.time() * 1000) - intent.created_at_ms
+            if age > intent.max_age_ms:
+                return f"stale intent age={age}ms"
 
         # Missing context must block new exposure, not cancellation, protection,
         # exit, or recovery. Any context versions that are supplied are still
