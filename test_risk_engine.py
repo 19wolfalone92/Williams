@@ -1,3 +1,5 @@
+import pytest
+
 from risk_engine import RiskEngine
 
 
@@ -208,3 +210,59 @@ def test_default_risk_is_half_percent():
     assert result.risk_quote == 50
     assert result.risk_pct == 0.5
     print("[PASS] default per-trade risk is 0.5%")
+
+
+@pytest.mark.parametrize(
+    "entry,atr,spread",
+    [
+        (float("nan"), 1.0, 0.0),
+        (100.0, float("inf"), 0.0),
+        (100.0, 1.0, float("nan")),
+        (100.0, 1.0, float("inf")),
+    ],
+)
+def test_non_finite_market_inputs_are_blocked(entry, atr, spread):
+    result = RiskEngine(balance_quote=10_000).analyse(
+        "BTCUSDT", entry_price=entry, atr=atr, spread_pct=spread
+    )
+    assert not result.allowed
+    assert result.position_quote == 0.0
+
+
+def test_risk_override_cannot_exceed_configured_trade_risk():
+    result = RiskEngine(
+        balance_quote=10_000, risk_per_trade_pct=0.005
+    ).analyse(
+        "BTCUSDT",
+        entry_price=100_000,
+        atr=500,
+        risk_pct_override=0.01,
+    )
+    assert not result.allowed
+    assert "override exceeds" in result.reason
+
+
+def test_smaller_risk_override_is_allowed():
+    result = RiskEngine(
+        balance_quote=10_000, risk_per_trade_pct=0.005
+    ).analyse(
+        "BTCUSDT",
+        entry_price=100_000,
+        atr=500,
+        risk_pct_override=0.0025,
+    )
+    assert result.allowed
+    assert result.risk_quote == 25.0
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"balance_quote": float("nan")},
+        {"balance_quote": 10_000, "risk_per_trade_pct": float("inf")},
+        {"balance_quote": 10_000, "max_position_fraction": -0.1},
+    ],
+)
+def test_invalid_risk_configuration_is_rejected(kwargs):
+    with pytest.raises(ValueError):
+        RiskEngine(**kwargs)
