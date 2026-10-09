@@ -3006,37 +3006,25 @@ class FuturesCampaignExecutionService:
         ):
             return self._reconcile_pending_initial_entry(campaign, position, amount)
         if abs(amount) <= 1e-12:
-            protective_client_id = str(
-                campaign.tags.get("protective_client_algo_id", "") or ""
-            )
-            protective_algo_id = campaign.tags.get("protective_algo_id")
-            if protective_client_id or protective_algo_id:
-                try:
-                    protection = self.client.get_algo_order(
-                        symbol,
-                        algo_id=protective_algo_id or None,
-                        client_algo_id=protective_client_id or None,
-                    )
-                    algo_status = str(protection.get("algoStatus", "")).upper()
-                    actual_order_id = protection.get("actualOrderId")
-                    if actual_order_id and algo_status in {"TRIGGERED", "FINISHED"}:
-                        actual_order = self.client.get_order(
-                            symbol,
-                            order_id=actual_order_id,
-                        )
-                        if str(actual_order.get("status", "")).upper() == "FILLED":
-                            return self._finalize_verified_protective_exit(
-                                campaign,
-                                protection,
-                                actual_order,
-                            )
-                except Exception as exc:
-                    self.db.log_event(
-                        "WARNING",
-                        "futures_protective_exit_reconciliation_pending",
-                        f"{symbol}: unable to verify the protective exit fill: {exc}",
-                        {"campaign_id": campaign.campaign_id},
-                    )
+            try:
+                protective_result = self._reconcile_flat_position_protection(campaign)
+                if protective_result is not None:
+                    return protective_result
+            except Exception as exc:
+                reason = (
+                    f"{symbol}: flat-position protective-order reconciliation failed: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+                self.engine.mark_reconcile_required(campaign, reason)
+                self.db.state_set(f"campaign_state:{campaign.campaign_id}", CampaignState.RECONCILE_REQUIRED.value)
+                self.db.state_set(f"position_state:{symbol}", CampaignState.RECONCILE_REQUIRED.value)
+                self.db.log_event(
+                    "ERROR",
+                    "futures_flat_protection_reconciliation_failed",
+                    reason,
+                    {"campaign_id": campaign.campaign_id},
+                )
+                return {"symbol": symbol, "state": "RECONCILE_REQUIRED", "reason": reason}
 
             self.engine.mark_reconcile_required(
                 campaign,
