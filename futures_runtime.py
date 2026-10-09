@@ -415,26 +415,91 @@ class FuturesRuntime:
                 })
         return summaries
 
+    def _manage_existing_positions(self) -> list[dict[str, Any]]:
+        """Run protective management before any new-entry lockout decision."""
+        results = []
+        for row in self.execution._active_rows():
+            if self.execution._row_tags(row).get("execution_mode") != "FUTURES":
+                continue
+            symbol = str(row.get("symbol", "")).upper()
+            campaign_id = str(row.get("campaign_id", ""))
+            try:
+                campaign = self.execution.engine.load_campaign(campaign_id)
+                if campaign is None:
+                    results.append({
+                        "symbol": symbol,
+                        "action": "RECONCILE_REQUIRED",
+                        "reason": "active Futures campaign row could not be loaded",
+                    })
+                    continue
+
+                position = self.execution._position_row(symbol)
+                amount = float(position.get("positionAmt", 0) or 0.0)
+                if abs(amount) <= 1e-12:
+                    # reconcile_symbol has already attempted to verify entry
+                    # or protective-exit history; do not invent a close here.
+                    continue
+
+                frame = fetch_klines(
+                    self.client,
+                    symbol,
+                    self.interval,
+                    limit=max(160, self.config.wave_lookback),
+                )
+                if frame is None or frame.empty:
+                    raise RuntimeError("Futures candles unavailable for open-position management")
+                closed = frame.iloc[:-1].copy() if len(frame) > 1 else frame.iloc[0:0].copy()
+                if len(closed) < 100:
+                    raise RuntimeError("insufficient closed candles for safe structural management")
+                indicators = calculate_indicators(closed, config_from_env())
+                atr = self._atr(closed, self.config.atr_period)
+                result = self.execution.manage_campaign(campaign, indicators, atr=atr)
+                results.append(result)
+            except Exception as exc:
+                self.db.log_event(
+                    "ERROR",
+                    "futures_campaign_management_error",
+                    f"{symbol}: {type(exc).__name__}: {exc}",
+                    {"campaign_id": campaign_id},
+                )
+                results.append({
+                    "symbol": symbol,
+                    "action": "MANAGEMENT_ERROR",
+                    "reason": f"{type(exc).__name__}: {exc}",
+                })
+        return results
+
     def scan_once(self) -> dict[str, Any]:
-        """One complete account -> reconciliation -> context -> risk -> execution cycle."""
+        """One full cycle; existing exposure is managed before entry lockouts."""
         if self._kill_latched:
             return {"state": "KILL_SWITCH_LATCHED", "new_entries": 0}
-        if self._paused:
-            return {"state": "PAUSED", "new_entries": 0}
+
         self.client.sync_time()
         account = self._account()
         equity = self._last_account["equity_quote"]
-        daily_ok, daily_reason = self._daily_loss_allows_entry(equity)
         reconciliations = self._recover()
+        management = self._manage_existing_positions()
+        daily_ok, daily_reason = self._daily_loss_allows_entry(equity)
         blocked_reconciliation = any(
             str(item.get("state", "")).upper() == "RECONCILE_REQUIRED"
             for item in reconciliations
         )
+        if self._paused:
+            self._last_scan_summary = {
+                "state": "PAUSED",
+                "reason": "new entries paused; existing positions remain managed",
+                "reconciliation": reconciliations,
+                "management": management,
+                "new_entries": 0,
+            }
+            return self._last_scan_summary
+
         if blocked_reconciliation:
             self._last_scan_summary = {
                 "state": "RECONCILE_REQUIRED",
-                "reason": "one or more Futures campaigns need reconciliation",
+                "reason": "one or more Futures campaigns need reconciliation; existing-position management was still attempted",
                 "reconciliation": reconciliations,
+                "management": management,
                 "new_entries": 0,
             }
             return self._last_scan_summary
@@ -444,6 +509,7 @@ class FuturesRuntime:
                 "state": "DAILY_RISK_LOCKOUT",
                 "reason": daily_reason,
                 "reconciliation": reconciliations,
+                "management": management,
                 "new_entries": 0,
             }
             return self._last_scan_summary
@@ -512,6 +578,7 @@ class FuturesRuntime:
             "state": "RUNNING",
             "cycle": self._scan_count,
             "reconciliation": reconciliations,
+            "management": management,
             "candidates_considered": len(selections),
             "actions": results,
             "active_campaigns": active_count,
