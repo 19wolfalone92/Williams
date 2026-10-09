@@ -1086,6 +1086,10 @@ class FuturesRuntime:
                 item for item in cancellations
                 if str(item.get("state", "")).upper() == "RECONCILE_REQUIRED"
             ]
+            active_campaigns = [
+                row for row in self.execution._active_rows()
+                if self.execution._row_tags(row).get("execution_mode") == "FUTURES"
+            ]
             self.db.log_event(
                 "WARNING",
                 "futures_runtime_paused",
@@ -1093,11 +1097,11 @@ class FuturesRuntime:
                 {"pending_entry_cancellations": cancellations},
             )
             result = {**self.status(), "state": "PAUSED", "pending_entry_cancellations": cancellations}
-            if unresolved:
+            if unresolved or active_campaigns:
                 result["management_only_monitor_required"] = True
                 result["warning"] = (
-                    "At least one pending entry cancellation is unresolved. Keep the runtime "
-                    "monitor alive until exchange state and any resulting exposure are reconciled."
+                    "Futures campaigns or pending-order cancellations remain active. Keep the "
+                    "management monitor alive until exposure is flat and exchange state is reconciled."
                 )
             return result
 
