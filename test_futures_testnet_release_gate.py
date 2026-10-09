@@ -179,14 +179,6 @@ def test_read_only_release_gate_fails_closed_on_invalid_demo_policy(monkeypatch,
     with pytest.raises(RuntimeError, match=message):
         gate.run_futures_testnet_read_only(["BTCUSDT"])
 
-@pytest.mark.parametrize(
-    ("field", "value", "expected_status"),
-    [
-        ("position_amt", "0.01", "BLOCKED_ACCOUNT_NOT_CLEAN"),
-        ("standard_orders", [{"symbol": "BTCUSDT", "orderId": 1}], "BLOCKED_ACCOUNT_NOT_CLEAN"),
-        ("algo_orders", [{"symbol": "BTCUSDT", "algoId": 2}], "BLOCKED_ACCOUNT_NOT_CLEAN"),
-    ],
-)
 def test_read_only_gate_detects_symbol_position_missing_from_account_wide_view(monkeypatch):
     class InconsistentPositionClient(FakeReadOnlyFuturesClient):
         def position_risk(self, symbol=None):
@@ -237,6 +229,14 @@ def test_read_only_gate_rejects_empty_account_wide_position_response(monkeypatch
         gate.run_futures_testnet_read_only(["BTCUSDT"])
 
 
+@pytest.mark.parametrize(
+    ("field", "value", "expected_status"),
+    [
+        ("position_amt", "0.01", "BLOCKED_ACCOUNT_NOT_CLEAN"),
+        ("standard_orders", [{"symbol": "BTCUSDT", "orderId": 1}], "BLOCKED_ACCOUNT_NOT_CLEAN"),
+        ("algo_orders", [{"symbol": "BTCUSDT", "algoId": 2}], "BLOCKED_ACCOUNT_NOT_CLEAN"),
+    ],
+)
 def test_read_only_gate_does_not_call_dirty_demo_account_release_ready(
     monkeypatch, field, value, expected_status
 ):
