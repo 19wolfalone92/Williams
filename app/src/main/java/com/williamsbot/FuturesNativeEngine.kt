@@ -2509,6 +2509,27 @@ internal class FuturesNativeEngine(
         }
         val verified = exchange.getAlgoOrder(symbol, clientAlgoId = target)
         val finalStatus = verified.optString("algoStatus").uppercase(Locale.US)
+        if (verified.optString("symbol").uppercase(Locale.US) != symbol ||
+            verified.optString("clientAlgoId") != target) {
+            throw FuturesApiException("Entry cancellation follow-up identity mismatch")
+        }
+        val childId = verified.optString("actualOrderId")
+        if (childId.isNotBlank() && childId != "0") {
+            val child = exchange.getOrder(symbol, orderId = childId)
+            val executed = child.optString("executedQty").toDoubleOrNull()
+                ?: throw FuturesApiException("Entry child executedQty is missing or malformed after cancellation")
+            val childStatus = child.optString("status").uppercase(Locale.US)
+            if (child.optString("symbol").uppercase(Locale.US) != symbol ||
+                child.optString("orderId") != childId ||
+                child.optString("side").uppercase(Locale.US) != exchange.directionToEntrySide(campaign.optString("direction")) ||
+                !executed.isFinite() || executed < 0.0 ||
+                childStatus !in setOf("FILLED", "CANCELED", "CANCELLED", "EXPIRED", "REJECTED")) {
+                throw FuturesApiException("Entry child identity/status/quantity is invalid after cancellation")
+            }
+            if (executed > 0.0) {
+                throw FuturesApiException("Entry child has executed quantity; campaign must be reconciled, not closed as cancelled")
+            }
+        }
         val amount = position(exchange, symbol).optString("positionAmt").toDoubleOrNull()
             ?: throw FuturesApiException("Position quantity invalid after entry cancellation")
         if (!amount.isFinite() || abs(amount) > 1e-12 ||
