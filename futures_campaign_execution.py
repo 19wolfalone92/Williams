@@ -648,6 +648,11 @@ class FuturesCampaignExecutionService:
         )
         client_algo_id = "W2FP_" + uuid.uuid4().hex[:24]
         order_side = "SELL" if direction == "LONG" else "BUY"
+        # Persist the clientAlgoId before the request. After a timeout, recovery
+        # can query the exact conditional order instead of risking a duplicate.
+        campaign.tags["pending_protective_client_algo_id"] = client_algo_id
+        campaign.tags["pending_protective_stop_price"] = normalized_stop
+        self.db.save_campaign(campaign)
         intent = OrderIntent.new(
             symbol,
             order_side,
@@ -680,14 +685,44 @@ class FuturesCampaignExecutionService:
             if direction == "SHORT" and previous_stop > 0 and normalized_stop > previous_stop:
                 raise FuturesCampaignExecutionError("SHORT stop update would loosen protection")
 
-        result = self.barrier.execute(
-            intent,
-            lambda: self.client.protective_stop(
-                symbol, direction, str(normalized_stop), client_algo_id
-            ),
-            pre_submit_checks=check_position,
-        )
+        try:
+            result = self.barrier.execute(
+                intent,
+                lambda: self.client.protective_stop(
+                    symbol, direction, str(normalized_stop), client_algo_id
+                ),
+                pre_submit_checks=check_position,
+            )
+        except Exception as exc:
+            campaign.mark_reconcile_required(
+                f"{symbol}: protection submission outcome requires reconciliation: {exc}"
+            )
+            self.db.save_campaign(campaign)
+            self.db.state_set(
+                f"campaign_state:{campaign.campaign_id}",
+                CampaignState.RECONCILE_REQUIRED.value,
+            )
+            self.db.state_set(f"position_state:{symbol}", CampaignState.RECONCILE_REQUIRED.value)
+            self.db.log_event(
+                "ERROR",
+                "futures_protection_submit_ambiguous",
+                f"{symbol}: {exc}",
+                {
+                    "campaign_id": campaign.campaign_id,
+                    "client_algo_id": client_algo_id,
+                    "stop_price": normalized_stop,
+                },
+            )
+            raise FuturesCampaignExecutionError(
+                f"{symbol}: protective order outcome is unresolved; clientAlgoId={client_algo_id}"
+            ) from exc
+
         if not result.accepted:
+            # ExecutionBarrier proves that submit was never entered for a
+            # validation/persistence block, so this reservation can be cleared.
+            campaign.tags.pop("pending_protective_client_algo_id", None)
+            campaign.tags.pop("pending_protective_stop_price", None)
+            self.db.save_campaign(campaign)
             raise FuturesCampaignExecutionError(
                 f"{symbol}: hard protection blocked: {result.reason}"
             )
@@ -700,6 +735,8 @@ class FuturesCampaignExecutionService:
             )
         campaign.tags["protective_client_algo_id"] = client_algo_id
         campaign.tags["protective_algo_id"] = algo_id
+        campaign.tags.pop("pending_protective_client_algo_id", None)
+        campaign.tags.pop("pending_protective_stop_price", None)
         campaign.tags["protection_active"] = True
         campaign.current_stop_price = normalized_stop
         if campaign.initial_stop_price <= 0:
@@ -753,6 +790,15 @@ class FuturesCampaignExecutionService:
         if direction == "SHORT" and old_stop > 0 and requested > old_stop:
             raise FuturesCampaignExecutionError("SHORT trailing stop may only move downward")
 
+        if old_client_id or old_algo_id:
+            # Keep the prior stop identifiers durable while the replacement is
+            # created. A restart must know both orders if the second mutation
+            # (cancel old stop) becomes ambiguous.
+            campaign.tags["previous_protective_client_algo_id"] = old_client_id
+            campaign.tags["previous_protective_algo_id"] = old_algo_id
+            campaign.tags["protection_replace_reconcile_required"] = True
+            self.db.save_campaign(campaign)
+
         new_protection = self.place_protection(campaign, stop_price=requested)
         if not old_client_id and not old_algo_id:
             return new_protection
@@ -786,7 +832,9 @@ class FuturesCampaignExecutionService:
                 f"but old stop cancellation is uncertain (old_algo_id={old_algo_id}, "
                 f"old_client_algo_id={old_client_id}): {exc}"
             )
+            campaign.tags["protection_replace_reconcile_required"] = True
             self.engine.mark_reconcile_required(campaign, reason)
+            self.db.save_campaign(campaign)
             self.db.state_set(
                 f"campaign_state:{campaign.campaign_id}",
                 CampaignState.RECONCILE_REQUIRED.value,
@@ -799,8 +847,9 @@ class FuturesCampaignExecutionService:
             )
             raise FuturesCampaignExecutionError(reason) from exc
 
-        campaign.tags["previous_protective_client_algo_id"] = old_client_id
-        campaign.tags["previous_protective_algo_id"] = old_algo_id
+        campaign.tags.pop("previous_protective_client_algo_id", None)
+        campaign.tags.pop("previous_protective_algo_id", None)
+        campaign.tags.pop("protection_replace_reconcile_required", None)
         self.db.save_campaign(campaign)
         self.db.log_campaign_event(
             campaign.campaign_id,
