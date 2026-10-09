@@ -2367,32 +2367,42 @@ internal class FuturesNativeEngine(
      * harmless. Confirm cancellation, and reject a stop-child fill that raced
      * with the market exit until both executions can be accounted together.
      */
+    /**
+     * A flat position is not sufficient proof that any campaign-owned stop is
+     * harmless. Clean current, pending and previous replacement IDs before
+     * finalizing an exit; any child fill requires aggregate reconciliation.
+     */
     private fun verifyFlatProtectionCleanup(
         exchange: BinanceUsdmFuturesClient,
         campaign: JSONObject
     ): String? {
         val symbol = campaign.optString("symbol").uppercase(Locale.US)
-        val clientId = campaign.optString("protection_client_algo_id")
-        if (clientId.isBlank()) return null
-        return try {
-            var protection = exchange.getAlgoOrder(symbol, clientAlgoId = clientId)
-            if (protection.optString("symbol").uppercase(Locale.US) != symbol ||
-                protection.optString("clientAlgoId") != clientId
-            ) return "Flat-position protective lookup identity mismatch"
-            var status = protection.optString("algoStatus").uppercase(Locale.US)
-            if (status in setOf("NEW", "WORKING", "PENDING", "PENDING_NEW")) {
-                cancelOwnedProtection(exchange, campaign, clientId)
-                protection = exchange.getAlgoOrder(symbol, clientAlgoId = clientId)
-                status = protection.optString("algoStatus").uppercase(Locale.US)
-            }
-            if (status in setOf("CANCELED", "CANCELLED", "EXPIRED", "REJECTED")) {
-                updateIntentByClientId(clientId, status, protection.toString())
-                null
-            } else if (status in setOf("TRIGGERED", "FINISHED")) {
-                val childId = protection.optString("actualOrderId")
-                if (childId.isBlank() || childId == "0") {
-                    "Protective Algo triggered during exit but child order ID is missing"
-                } else {
+        val ids = listOf(
+            campaign.optString("protection_client_algo_id"),
+            campaign.optString("pending_protection_client_algo_id"),
+            campaign.optString("previous_protection_client_algo_id")
+        ).filter { it.isNotBlank() }.distinct()
+        for (clientId in ids) {
+            try {
+                var protection = exchange.getAlgoOrder(symbol, clientAlgoId = clientId)
+                if (protection.optString("symbol").uppercase(Locale.US) != symbol ||
+                    protection.optString("clientAlgoId") != clientId
+                ) return "Flat-position protective lookup identity mismatch"
+                var status = protection.optString("algoStatus").uppercase(Locale.US)
+                if (status in setOf("NEW", "WORKING", "PENDING", "PENDING_NEW")) {
+                    cancelOwnedProtection(exchange, campaign, clientId)
+                    protection = exchange.getAlgoOrder(symbol, clientAlgoId = clientId)
+                    status = protection.optString("algoStatus").uppercase(Locale.US)
+                }
+                if (status in setOf("CANCELED", "CANCELLED", "EXPIRED", "REJECTED")) {
+                    updateIntentByClientId(clientId, status, protection.toString())
+                    continue
+                }
+                if (status in setOf("TRIGGERED", "FINISHED")) {
+                    val childId = protection.optString("actualOrderId")
+                    if (childId.isBlank() || childId == "0") {
+                        return "Protective Algo triggered during exit but child order ID is missing"
+                    }
                     val child = exchange.getOrder(symbol, orderId = childId)
                     val executed = child.optString("executedQty").toDoubleOrNull()
                     val childStatus = child.optString("status").uppercase(Locale.US)
@@ -2401,20 +2411,27 @@ internal class FuturesNativeEngine(
                         child.optString("orderId") != childId ||
                         executed == null || !executed.isFinite() || executed < 0.0 ||
                         childStatus !in setOf("FILLED", "CANCELED", "CANCELLED", "EXPIRED", "REJECTED")
-                    ) {
-                        "Protective child order cannot be authoritatively reconciled after exit"
-                    } else if (executed > 0.0) {
-                        "Protective child filled during market exit; both executions require aggregate reconciliation"
-                    } else {
-                        null
+                    ) return "Protective child order cannot be authoritatively reconciled after exit"
+                    if (executed > 0.0) {
+                        return "Protective child filled during market exit; both executions require aggregate reconciliation"
                     }
+                    updateIntentByClientId(clientId, childStatus, child.toString())
+                    continue
                 }
-            } else {
-                "Protective Algo has ambiguous status after the position became flat: ${status.ifBlank { "UNKNOWN" }}"
+                return "Protective Algo has ambiguous status after the position became flat: ${status.ifBlank { "UNKNOWN" }}"
+            } catch (x: Exception) {
+                return "Protective order cleanup after flat position failed: ${x.message ?: x.javaClass.simpleName}"
             }
-        } catch (x: Exception) {
-            "Protective order cleanup after flat position failed: ${x.message ?: x.javaClass.simpleName}"
         }
+        campaign.remove("pending_protection_client_algo_id")
+        campaign.remove("pending_protection_trigger_price")
+        campaign.remove("pending_protection_reason")
+        campaign.remove("previous_protection_client_algo_id")
+        campaign.remove("previous_protection_algo_id")
+        campaign.remove("protection_replace_reconcile_required")
+        campaign.put("protection_active", false)
+        auditStore.saveFuturesCampaign(symbol, campaign)
+        return null
     }
 
     private fun recordMarketExit(exchange: BinanceUsdmFuturesClient, campaign: JSONObject, response: JSONObject, reason: String) {
