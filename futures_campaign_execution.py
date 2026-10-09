@@ -1852,6 +1852,7 @@ class FuturesCampaignExecutionService:
         campaign = self._find_active_campaign(symbol)
         if campaign is None or campaign.position_qty <= 0:
             raise FuturesCampaignExecutionError(f"{symbol}: add-on requires an existing managed position")
+        self._assert_no_unmanaged_positions(symbol)
         if self._campaign_direction(campaign) != direction:
             raise FuturesCampaignExecutionError("Add-on direction conflicts with the live campaign")
         if campaign.state not in {
