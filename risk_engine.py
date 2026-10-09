@@ -133,6 +133,8 @@ class RiskEngine:
             return self._blocked(symbol, side, entry, "non-finite risk input")
         if side not in {"LONG", "SHORT"}:
             return self._blocked(symbol, side, entry, "unsupported side")
+        if not isinstance(htf_confirmed, bool):
+            return self._blocked(symbol, side, entry, "higher-timeframe confirmation must be boolean")
         if entry <= 0:
             return self._blocked(symbol, side, entry, "invalid entry price")
         if atr_value <= 0:
@@ -143,6 +145,8 @@ class RiskEngine:
             return self._blocked(symbol, side, entry, "invalid ATR multipliers")
         if minimum_notional < 0:
             return self._blocked(symbol, side, entry, "invalid minimum notional")
+        if structural_stop < 0:
+            return self._blocked(symbol, side, entry, "structural invalidation cannot be negative")
 
         atr_pct = atr_value / entry
         if not math.isfinite(atr_pct):
