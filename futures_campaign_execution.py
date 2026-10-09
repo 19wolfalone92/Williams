@@ -1850,7 +1850,20 @@ class FuturesCampaignExecutionService:
         quantity = self.client.normalize_quantity(symbol, abs(amount), market=True)
         client_order_id = "W2FX_" + uuid.uuid4().hex[:24]
         if not campaign.tags.get("exit_cycle_original_qty"):
-            campaign.tags["exit_cycle_original_qty"] = abs(amount)
+            # Keep the pre-exit campaign quantity as the conservation target.
+            # A protective stop may have partially filled before this market
+            # order; the remaining reduce-only exit quantity is then smaller.
+            try:
+                original_cycle_qty = float(campaign.position_qty or abs(amount))
+            except (TypeError, ValueError) as exc:
+                raise FuturesCampaignExecutionError(
+                    f"{symbol}: tracked campaign quantity is invalid before exit"
+                ) from exc
+            if not math.isfinite(original_cycle_qty) or original_cycle_qty <= 0:
+                raise FuturesCampaignExecutionError(
+                    f"{symbol}: tracked campaign quantity is non-finite or non-positive before exit"
+                )
+            campaign.tags["exit_cycle_original_qty"] = original_cycle_qty
         campaign.tags["pending_exit_client_order_id"] = client_order_id
         campaign.tags["pending_exit_reason"] = str(reason)
         campaign.tags["pending_exit_expected_qty"] = abs(amount)
@@ -2029,7 +2042,7 @@ class FuturesCampaignExecutionService:
         campaign.tags["unreconciled_terminal_exit_orders"] = records
         campaign.tags.setdefault(
             "exit_cycle_original_qty",
-            float(campaign.tags.get("pending_exit_expected_qty", campaign.position_qty) or campaign.position_qty),
+            float(campaign.position_qty or campaign.tags.get("pending_exit_expected_qty", 0) or 0),
         )
         self.db.save_campaign(campaign)
 
@@ -2353,14 +2366,62 @@ class FuturesCampaignExecutionService:
             if executed > 0:
                 candidates.append((protection, actual_order))
 
-        if len(candidates) > 1:
-            raise FuturesCampaignExecutionError(
-                f"{symbol}: multiple protective child orders report fills while position is flat"
-            )
         if not candidates:
             campaign.tags["protection_active"] = False
             self.db.save_campaign(campaign)
             return None
+
+        # If a reduce-only market exit is also in flight or has terminal fills,
+        # keep the stop-child executions in a durable ledger and reconcile both
+        # execution paths together. A stop may have partially filled just as
+        # the market exit closes its residual; treating either order alone as
+        # the whole campaign would lose quantity and realized PnL.
+        market_exit_in_flight = bool(
+            campaign.tags.get("pending_exit_client_order_id")
+            or campaign.tags.get("unreconciled_terminal_exit_orders")
+        )
+        if market_exit_in_flight:
+            ledger = list(campaign.tags.get("unreconciled_protective_exit_orders", []) or [])
+            known = {
+                str(row.get("order_id", ""))
+                for row in ledger
+                if isinstance(row, dict) and row.get("order_id") not in (None, "")
+            }
+            for protection, actual_order in candidates:
+                child_id = str(actual_order.get("orderId", "") or protection.get("actualOrderId") or "")
+                if not child_id:
+                    raise FuturesCampaignExecutionError(
+                        f"{symbol}: protective child fill lacks stable orderId"
+                    )
+                if child_id in known:
+                    continue
+                try:
+                    executed_qty = float(actual_order.get("executedQty", 0) or 0)
+                except (TypeError, ValueError) as exc:
+                    raise FuturesCampaignExecutionError(
+                        f"{symbol}: protective child executedQty is invalid"
+                    ) from exc
+                if not math.isfinite(executed_qty) or executed_qty <= 0:
+                    raise FuturesCampaignExecutionError(
+                        f"{symbol}: protective child fill quantity is invalid"
+                    )
+                ledger.append({
+                    "order_id": child_id,
+                    "algo_id": str(protection.get("algoId", "") or ""),
+                    "client_algo_id": str(protection.get("clientAlgoId", "") or ""),
+                    "status": str(actual_order.get("status", "") or "").upper(),
+                    "executed_qty": executed_qty,
+                })
+                known.add(child_id)
+            campaign.tags["unreconciled_protective_exit_orders"] = ledger
+            campaign.tags["protection_active"] = False
+            self.db.save_campaign(campaign)
+            return None
+
+        if len(candidates) > 1:
+            raise FuturesCampaignExecutionError(
+                f"{symbol}: multiple protective child orders report fills while position is flat"
+            )
         protection, actual_order = candidates[0]
         return self._finalize_verified_protective_exit(campaign, protection, actual_order)
 
