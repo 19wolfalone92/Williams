@@ -586,7 +586,7 @@ def test_add_on_reconciliation_uses_exchange_order_and_position_state(campaign_s
         return {
             "symbol": symbol, "algoId": "add-algo-1", "clientAlgoId": "add-on-1",
             "algoStatus": "NEW", "side": "BUY", "type": "STOP_MARKET",
-            "closePosition": False, "triggerPrice": "105.0",
+            "closePosition": False, "triggerPrice": "105.0", "quantity": "0.1",
         }
 
     client = SimpleNamespace(get_algo_order=get_algo_order)
@@ -1244,5 +1244,36 @@ def test_futures_add_on_partial_fill_reconciles_position_and_risk(tmp_path):
         assert saved.additions == 1
         assert saved.pending_risk_quote == 0.0
         assert "pending_add_on_client_algo_id" not in saved.tags
+    finally:
+        db.conn.close()
+
+
+def test_filled_market_exit_requires_matching_trade_history_and_records_pnl(tmp_path):
+    db, client, service, campaign = _armed_entry_for_cancel(tmp_path)
+    try:
+        from campaign_model import CampaignState
+        client._position["positionAmt"] = "0.5"
+        client._position["entryPrice"] = "102.0"
+        campaign.state = CampaignState.OPEN_INITIAL
+        campaign.position_qty = 0.5
+        campaign.average_entry_price = 102.0
+        campaign.open_risk_quote = 1.0
+        campaign.current_stop_price = 100.0
+        service.db.save_campaign(campaign)
+        client.user_trades = lambda symbol, *, order_id=None, limit=1000: [{
+            "symbol": symbol, "orderId": order_id, "qty": "0.5", "price": "101.0",
+            "realizedPnl": "-0.5", "commission": "0.1", "commissionAsset": "USDT",
+        }]
+
+        result = service.exit_position(campaign, reason="TEST_EXIT")
+
+        assert result["action"] == "CLOSED"
+        assert result["status"] == "FILLED"
+        assert result["realized_pnl_quote_net_known_fees"] == pytest.approx(-0.6)
+        saved = service.engine.load_campaign(campaign.campaign_id)
+        assert saved.state.value == "CLOSED"
+        assert saved.position_qty == 0.0
+        assert saved.realized_pnl_quote == pytest.approx(-0.6)
+        assert db.state_get("position_state:BTCUSDT") == "FLAT"
     finally:
         db.conn.close()
