@@ -257,58 +257,52 @@ class ExecutionBarrier:
                 )
                 raise
 
-            if intent.order_type != "CANCEL":
-                status = str(
-                    response.get("status", "")
-                    if isinstance(response, dict)
-                    else ""
-                ).upper()
-                if status:
+            if intent.order_type.upper() != "CANCEL":
+                response_status = ""
+                if isinstance(response, dict):
+                    response_status = str(
+                        response.get("status")
+                        or response.get("algoStatus")
+                        or ""
+                    ).upper()
+
+                    # Binance Spot OCO returns an order-list envelope rather
+                    # than a top-level order status. Only treat it as accepted
+                    # when the response includes authoritative order reports.
+                    if not response_status and response.get("orderListId") is not None:
+                        reports = response.get("orderReports") or []
+                        report_statuses = [
+                            str(row.get("status", "")).upper()
+                            for row in reports
+                            if isinstance(row, dict)
+                        ]
+                        if report_statuses and all(
+                            value in {"NEW", "PARTIALLY_FILLED", "FILLED", "CANCELED", "EXPIRED"}
+                            for value in report_statuses
+                        ):
+                            response_status = (
+                                "FILLED"
+                                if all(value == "FILLED" for value in report_statuses)
+                                else "NEW"
+                            )
+
+                if response_status:
                     order_fsm.observe_exchange_status(
-                        status,
+                        response_status,
                         float(
                             response.get("executedQty", 0) or 0
                             if isinstance(response, dict)
                             else 0
                         ),
                     )
-                elif (
-                    isinstance(response, dict)
-                    and str(response.get("newOrderResult", "")).upper() == "SUCCESS"
-                ):
-                    order_fsm.state = OrderState.OPEN
-                else:
-                    order_fsm.state = OrderState.RECONCILE_REQUIRED
-                    self._persist(
-                        intent,
-                        "AMBIGUOUS",
-                        "exchange response did not contain authoritative order state",
-                    )
-                    self._record(
-                        "ERROR",
-                        "execution_ambiguous",
-                        intent,
-                        "Exchange accepted an operation without authoritative state",
-                        {"response_keys": list(response.keys()) if isinstance(response, dict) else []},
-                    )
-                    raise RuntimeError(
-                        "ExecutionBarrier: exchange response lacks authoritative order state"
-                    )
-            if intent.order_type != "CANCEL":
-                status = str(
-                    response.get("status", "")
-                    if isinstance(response, dict)
-                    else ""
-                ).upper()
-                if status:
-                    order_fsm.observe_exchange_status(
-                        status,
-                        float(
-                            response.get("executedQty", 0) or 0
-                            if isinstance(response, dict)
-                            else 0
-                        ),
-                    )
+                    if order_fsm.state == OrderState.RECONCILE_REQUIRED:
+                        reason = (
+                            f"exchange status {response_status} is not valid "
+                            "for the expected order lifecycle"
+                        )
+                        self._persist(intent, "AMBIGUOUS", reason)
+                        self._record("ERROR", "execution_ambiguous", intent, reason)
+                        raise RuntimeError(f"ExecutionBarrier: {reason}")
                 elif (
                     isinstance(response, dict)
                     and str(response.get("newOrderResult", "")).upper() == "SUCCESS"
