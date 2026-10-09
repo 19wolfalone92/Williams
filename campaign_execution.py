@@ -634,7 +634,12 @@ class CampaignExecutionService:
                             })
                             continue
                         try:
-                            self.client.cancel_order(symbol, order_id=order_id)
+                            self._execute_cancel(
+                                campaign,
+                                int(order_id),
+                                "CAMPAIGN_ENTRY_CANCEL",
+                                side="BUY",
+                            )
                             order = self.client.get_order(symbol, order_id=order_id)
                             status = str(order.get("status", "")).upper()
                             executed = float(order.get("executedQty", 0) or 0)
@@ -1463,10 +1468,17 @@ class CampaignExecutionService:
             "quantity": qty,
         }
 
-    def _execute_cancel(self, campaign, order_id: int, purpose: str) -> dict[str, Any]:
+    def _execute_cancel(
+        self,
+        campaign,
+        order_id: int,
+        purpose: str,
+        *,
+        side: str = "SELL",
+    ) -> dict[str, Any]:
         intent = OrderIntent.new(
             campaign.symbol,
-            "SELL",
+            side,
             "CANCEL",
             required_context_versions={},
             client_order_id=f"{self.STOP_PREFIX}CANCEL_{uuid.uuid4().hex[:14]}",
