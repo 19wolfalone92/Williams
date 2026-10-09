@@ -1697,6 +1697,283 @@ class FuturesCampaignExecutionService:
             "unconverted_commission_by_asset": other_commission,
         }
 
+    def arm_add_on(
+        self,
+        signal: SignalSpec,
+        *,
+        equity_quote: float,
+        candidate_risk_fraction: float,
+        available_quote: float | None = None,
+    ) -> dict[str, Any]:
+        """Reserve and submit a directional Futures add-on with durable identity."""
+        symbol = signal.symbol.upper()
+        direction = signal_direction(signal)
+        if signal.role != SignalRole.ADD_ON:
+            raise FuturesCampaignExecutionError("Futures add-on requires SignalRole.ADD_ON")
+        if signal.signal_type not in {SignalType.SUPER_AO, SignalType.FRACTAL}:
+            raise FuturesCampaignExecutionError("Only Super AO or valid fractal signals may add exposure")
+        if signal.expires_at_ms and int(signal.expires_at_ms) < int(time.time() * 1000):
+            raise FuturesCampaignExecutionError("Williams add-on signal has expired")
+        equity = float(equity_quote)
+        risk_fraction = float(candidate_risk_fraction)
+        if not math.isfinite(equity) or equity <= 0:
+            raise FuturesCampaignExecutionError("Equity must be finite and positive")
+        if not math.isfinite(risk_fraction) or risk_fraction <= 0:
+            raise FuturesCampaignExecutionError("Add-on risk fraction must be finite and positive")
+
+        campaign = self._find_active_campaign(symbol)
+        if campaign is None or campaign.position_qty <= 0:
+            raise FuturesCampaignExecutionError(f"{symbol}: add-on requires an existing managed position")
+        if self._campaign_direction(campaign) != direction:
+            raise FuturesCampaignExecutionError("Add-on direction conflicts with the live campaign")
+        if campaign.state not in {
+            CampaignState.OPEN_INITIAL,
+            CampaignState.TREND_ACTIVE,
+            CampaignState.TRAILING,
+            CampaignState.EXHAUSTION_WATCH,
+        }:
+            raise FuturesCampaignExecutionError(
+                f"{symbol}: campaign state {campaign.state.value} does not admit an add-on"
+            )
+        if campaign.additions >= 2:
+            raise FuturesCampaignExecutionError("Campaign has reached the maximum of two add-ons")
+        if int(signal.signal_bar_time_ms) <= int(campaign.tags.get("last_signal_time_ms", 0) or 0):
+            raise FuturesCampaignExecutionError("Add-on signal is not newer than the last campaign signal")
+        if self.db.state_get(f"position_state:{symbol}", "FLAT") == CampaignState.RECONCILE_REQUIRED.value:
+            raise FuturesCampaignExecutionError(f"{symbol}: position reconciliation lock blocks add-on")
+
+        position = self._position_row(symbol)
+        try:
+            live_amount = float(position.get("positionAmt", 0) or 0)
+            old_qty = float(campaign.position_qty)
+            old_entry = float(campaign.average_entry_price)
+        except (TypeError, ValueError) as exc:
+            raise FuturesCampaignExecutionError(f"{symbol}: invalid live/local position values") from exc
+        if not all(math.isfinite(x) for x in (live_amount, old_qty, old_entry)) or old_qty <= 0 or old_entry <= 0:
+            raise FuturesCampaignExecutionError(f"{symbol}: invalid live/local position values")
+        if (direction == "LONG" and live_amount <= 0) or (direction == "SHORT" and live_amount >= 0):
+            raise FuturesCampaignExecutionError(f"{symbol}: live position direction mismatch")
+        if abs(abs(live_amount) - old_qty) > max(1e-8, old_qty * 1e-6):
+            raise FuturesCampaignExecutionError(f"{symbol}: live/local quantity mismatch blocks add-on")
+        self._assert_isolated_1x(symbol)
+
+        # Permit only the campaign's own hard stop; every other open order must
+        # be reconciled before a second exposure-increasing order is admitted.
+        if self.client.open_orders(symbol):
+            raise FuturesCampaignExecutionError(f"{symbol}: unrelated open orders block add-on")
+        protective_id = str(campaign.tags.get("protective_client_algo_id", "") or "")
+        protective_algo_id = str(campaign.tags.get("protective_algo_id", "") or "")
+        open_algos = self.client.open_algo_orders(symbol)
+        foreign_algos = [
+            row for row in open_algos
+            if str(row.get("clientAlgoId", "") or "") != protective_id
+            and str(row.get("algoId", "") or "") != protective_algo_id
+        ]
+        if foreign_algos:
+            raise FuturesCampaignExecutionError(f"{symbol}: unrelated conditional orders block add-on")
+        if not protective_id and not protective_algo_id:
+            raise FuturesCampaignExecutionError(f"{symbol}: add-on requires a confirmed hard protective stop")
+
+        mark = self._market_mark(symbol)
+        trigger = float(self.client.normalize_price(
+            symbol, signal.trigger_price, direction=direction, purpose="ENTRY"
+        ))
+        stop = float(self.client.normalize_price(
+            symbol, campaign.current_stop_price or campaign.initial_stop_price,
+            direction=direction, purpose="STOP",
+        ))
+        if direction == "LONG":
+            valid_geometry = stop < mark < trigger
+        else:
+            valid_geometry = trigger < mark < stop
+        if not valid_geometry:
+            raise FuturesCampaignExecutionError(
+                f"{symbol}: add-on trigger is stale or structural stop geometry is invalid"
+            )
+        if self.require_htf_confirmation and not bool(signal.htf_confirmed):
+            raise FuturesCampaignExecutionError(f"{symbol}: add-on requires higher-timeframe confirmation")
+        spread = self._spread_pct(symbol)
+        if spread > self.max_spread_pct:
+            raise FuturesCampaignExecutionError(
+                f"{symbol}: spread {spread:.4%} exceeds {self.max_spread_pct:.4%}"
+            )
+
+        budget = float(campaign.tags.get("risk_budget_quote", 0.0) or 0.0)
+        open_risk = float(campaign.open_risk_quote or 0.0)
+        pending_risk = float(campaign.pending_risk_quote or 0.0)
+        if not all(math.isfinite(x) for x in (budget, open_risk, pending_risk)) or budget <= 0 or open_risk < 0 or pending_risk < 0:
+            raise FuturesCampaignExecutionError(f"{symbol}: campaign risk reservation is invalid")
+        campaign_remaining = max(0.0, budget - open_risk - pending_risk)
+        portfolio_remaining = self.engine.remaining_portfolio_risk_quote(equity)
+        requested_risk = min(
+            equity * min(risk_fraction, self.engine.campaign_risk_limit_pct),
+            campaign_remaining,
+            portfolio_remaining,
+        )
+        if requested_risk <= 0:
+            raise FuturesCampaignExecutionError(f"{symbol}: no remaining risk capacity for add-on")
+        raw_qty = requested_risk / max(
+            abs(trigger - stop) + (trigger * (2.0 * self.fee_buffer_per_side_pct + self.slippage_buffer_pct)),
+            1e-12,
+        )
+        quantity_text = self.client.normalize_quantity(symbol, raw_qty, market=False)
+        quantity = float(quantity_text)
+        notional = quantity * trigger
+        if quantity <= 0 or notional < self._min_notional(symbol):
+            raise FuturesCampaignExecutionError(f"{symbol}: add-on quantity fails Futures lot/notional filters")
+        actual_risk = self._actual_risk_quote(quantity, trigger, stop)
+        if actual_risk <= 0 or actual_risk > requested_risk + max(1e-8, requested_risk * 1e-9):
+            raise FuturesCampaignExecutionError(f"{symbol}: normalized add-on exceeds reserved risk")
+        if available_quote is not None:
+            available = float(available_quote)
+            if not math.isfinite(available) or available < 0:
+                raise FuturesCampaignExecutionError("Available Futures balance is invalid")
+            if notional * (1.0 + 2.0 * self.fee_buffer_per_side_pct) > available:
+                raise FuturesCampaignExecutionError(f"{symbol}: insufficient available margin for add-on")
+
+        client_algo_id = "W2FA_" + uuid.uuid4().hex[:24]
+        claim_key = f"futures_entry_pending:{symbol}"
+        if not self.db.try_claim_state(claim_key, client_algo_id):
+            raise FuturesCampaignExecutionError(f"{symbol}: another entry/add-on intent is pending")
+        campaign.tags.update({
+            "pending_add_on_client_algo_id": client_algo_id,
+            "pending_add_on_trigger_price": trigger,
+            "pending_add_on_stop_price": stop,
+            "pending_add_on_quantity": quantity,
+            "pending_add_on_risk_quote": actual_risk,
+            "pending_add_on_original_qty": old_qty,
+            "pending_add_on_original_entry": old_entry,
+            "pending_add_on_direction": direction,
+            "last_signal_time_ms": int(signal.signal_bar_time_ms),
+            "execution_mode": "FUTURES",
+        })
+        try:
+            self.engine.arm_add_on(
+                campaign,
+                signal,
+                risk_quote=actual_risk,
+                capital_reserved_quote=notional,
+            )
+            self.db.state_set(f"campaign_state:{campaign.campaign_id}", CampaignState.ADD_ON_PENDING.value)
+            order_side = "BUY" if direction == "LONG" else "SELL"
+            intent = OrderIntent.new(
+                symbol,
+                order_side,
+                "STOP_MARKET",
+                self._context_versions(signal),
+                hypothesis_id=f"WILLIAMS_ADD_ON_{signal.signal_type.value}_{direction}",
+                invalidation_level=stop,
+                quantity=quantity_text,
+                client_order_id=client_algo_id,
+                purpose="CAMPAIGN_ADD_ON",
+                permission_interval=signal.timeframe,
+                campaign_id=campaign.campaign_id,
+                signal_id=signal.signal_id,
+                risk_quote=actual_risk,
+                capital_reserved_quote=notional,
+            )
+
+            def pre_submit(_snapshot) -> None:
+                fresh = self._position_row(symbol)
+                amount = float(fresh.get("positionAmt", 0) or 0)
+                fresh_mark = self._market_mark(symbol)
+                if not math.isfinite(amount) or abs(abs(amount) - old_qty) > max(1e-8, old_qty * 1e-6):
+                    raise FuturesCampaignExecutionError("live position changed before add-on submission")
+                if direction == "LONG" and not stop < fresh_mark < trigger:
+                    raise FuturesCampaignExecutionError("LONG add-on trigger/stop geometry changed before submit")
+                if direction == "SHORT" and not trigger < fresh_mark < stop:
+                    raise FuturesCampaignExecutionError("SHORT add-on trigger/stop geometry changed before submit")
+
+            result = self.barrier.execute(
+                intent,
+                lambda: self.client.stop_entry(symbol, direction, quantity_text, str(trigger), client_algo_id),
+                pre_submit_checks=pre_submit,
+            )
+            if not result.accepted:
+                campaign.pending_risk_quote = 0.0
+                campaign.capital_reserved_quote = 0.0
+                campaign.tags.pop("pending_add_on_client_algo_id", None)
+                campaign.tags.pop("pending_add_on_trigger_price", None)
+                campaign.tags.pop("pending_add_on_stop_price", None)
+                campaign.tags.pop("pending_add_on_quantity", None)
+                campaign.tags.pop("pending_add_on_risk_quote", None)
+                campaign.tags.pop("pending_add_on_original_qty", None)
+                campaign.tags.pop("pending_add_on_original_entry", None)
+                campaign.tags.pop("pending_add_on_direction", None)
+                campaign.transition(CampaignState.TREND_ACTIVE, reason="add-on admission blocked before exchange submit")
+                self.db.save_campaign(campaign)
+                self.db.state_delete(claim_key)
+                self.db.state_set(f"campaign_state:{campaign.campaign_id}", campaign.state.value)
+                raise FuturesCampaignExecutionError(f"{symbol}: add-on blocked: {result.reason}")
+
+            response = result.response or {}
+            status = str(response.get("algoStatus", "") or response.get("status", "")).upper()
+            algo_id = str(response.get("algoId", "") or "")
+            if status not in {"NEW", "WORKING", "PENDING_NEW"} or not algo_id:
+                reason = f"{symbol}: add-on order response is not confirmed active (status={status or 'UNKNOWN'})"
+                self.engine.mark_reconcile_required(campaign, reason)
+                self.db.state_set(f"campaign_state:{campaign.campaign_id}", CampaignState.RECONCILE_REQUIRED.value)
+                self.db.state_set(f"position_state:{symbol}", CampaignState.RECONCILE_REQUIRED.value)
+                raise FuturesCampaignExecutionError(f"{reason}; recovery must query clientAlgoId={client_algo_id}")
+
+            campaign.tags["pending_add_on_algo_id"] = algo_id
+            self.db.save_campaign_order(PendingOrderRecord(
+                order_id=algo_id,
+                client_order_id=client_algo_id,
+                symbol=symbol,
+                side=order_side,
+                order_type="STOP_MARKET",
+                purpose="ADD_ON",
+                status=status,
+                stop_price=trigger,
+                quantity=quantity,
+                risk_quote=actual_risk,
+                capital_reserved_quote=notional,
+                signal_id=signal.signal_id,
+                campaign_id=campaign.campaign_id,
+            ))
+            self.db.save_campaign(campaign)
+            self.db.log_campaign_event(
+                campaign.campaign_id,
+                CampaignEventType.ADD_ON_ARMED.value,
+                signal_id=signal.signal_id,
+                order_id=algo_id,
+                reason=f"{direction} conditional add-on submitted",
+                payload={
+                    "client_algo_id": client_algo_id,
+                    "trigger_price": trigger,
+                    "stop_price": stop,
+                    "quantity": quantity,
+                    "risk_quote": actual_risk,
+                },
+            )
+            return {
+                "campaign_id": campaign.campaign_id,
+                "symbol": symbol,
+                "direction": direction,
+                "action": "ADD_ON_ARMED",
+                "algo_id": algo_id,
+                "client_algo_id": client_algo_id,
+                "trigger_price": trigger,
+                "quantity": quantity,
+                "risk_quote": actual_risk,
+                "status": status,
+            }
+        except Exception as exc:
+            # An exception may occur after Binance accepted the request. Keep
+            # the durable ID and risk reservation; never clear them on timeout.
+            if campaign.state != CampaignState.RECONCILE_REQUIRED and isinstance(exc, FuturesCampaignExecutionError) and "add-on blocked:" in str(exc):
+                raise
+            self.engine.mark_reconcile_required(
+                campaign,
+                f"add-on submission outcome requires reconciliation: {type(exc).__name__}: {exc}",
+            )
+            self.db.state_set(f"campaign_state:{campaign.campaign_id}", CampaignState.RECONCILE_REQUIRED.value)
+            self.db.state_set(f"position_state:{symbol}", CampaignState.RECONCILE_REQUIRED.value)
+            raise FuturesCampaignExecutionError(
+                f"{symbol}: add-on submission is unresolved; clientAlgoId={client_algo_id}"
+            ) from exc
+
     def manage_campaign(self, campaign, indicators, *, atr: float) -> dict[str, Any]:
         """Manage an exchange-confirmed position using only closed Williams bars.
 
