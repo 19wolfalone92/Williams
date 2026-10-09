@@ -1932,62 +1932,12 @@ class FuturesCampaignExecutionService:
                     "reason": reason_text,
                 }
 
-        # A cancel timeout must not prevent the reduce-only exit. A lingering
-        # closePosition order cannot reverse exposure, but is reconciled after exit.
-        protective_client_id = str(campaign.tags.get("protective_client_algo_id", "") or "")
-        protective_algo_id = campaign.tags.get("protective_algo_id")
-        protection_cancel_confirmed = not (protective_client_id or protective_algo_id)
-        if protective_client_id or protective_algo_id:
-            cancel_intent = OrderIntent.new(
-                symbol,
-                order_side,
-                "CANCEL",
-                {},
-                purpose="CAMPAIGN_EXIT_CANCEL_PROTECTION",
-                campaign_id=campaign.campaign_id,
-                signal_id=campaign.current_signal_id,
-                client_order_id=str(protective_client_id or protective_algo_id),
-            )
-            try:
-                cancel_result = self.barrier.execute(
-                    cancel_intent,
-                    lambda: self.client.cancel_algo_order_safe(
-                        symbol,
-                        algo_id=protective_algo_id or None,
-                        client_algo_id=protective_client_id or None,
-                    ),
-                )
-                cancel_response = cancel_result.response if isinstance(cancel_result.response, dict) else {}
-                cancel_status = str(
-                    cancel_response.get("algoStatus", "") or cancel_response.get("status", "")
-                ).upper()
-                protection_cancel_confirmed = (
-                    cancel_result.accepted and cancel_status in {"CANCELED", "EXPIRED"}
-                )
-                if protection_cancel_confirmed:
-                    verified_stop = self.client.get_algo_order(
-                        symbol,
-                        algo_id=protective_algo_id or None,
-                        client_algo_id=protective_client_id or None,
-                    )
-                    verified_status = str(verified_stop.get("algoStatus", "") or "").upper()
-                    protection_cancel_confirmed = verified_status in {
-                        "CANCELED", "CANCELLED", "EXPIRED", "REJECTED"
-                    }
-                if not protection_cancel_confirmed:
-                    raise FuturesCampaignExecutionError(
-                        f"protective cancel is not confirmed terminal after re-query: "
-                        f"{cancel_status or 'UNKNOWN'}"
-                    )
-            except Exception as exc:
-                protection_cancel_confirmed = False
-                self.db.log_event(
-                    "ERROR",
-                    "futures_protection_cancel_ambiguous",
-                    f"{symbol}: {exc}",
-                    {"campaign_id": campaign.campaign_id, "reason": reason},
-                )
-
+        # Keep the exchange-side closePosition stop active while submitting
+        # the reduce-only market exit. Cancelling protection first creates a
+        # naked-position window if the exit is rejected, blocked, or times out.
+        # A closePosition stop cannot reverse exposure; once the position is
+        # flat, _reconcile_flat_position_protection() cancels/reconciles the
+        # remaining stop and merges any racing child fill into the exit ledger.
         quantity = self.client.normalize_quantity(symbol, abs(amount), market=True)
         client_order_id = "W2FX_" + uuid.uuid4().hex[:24]
         if not campaign.tags.get("exit_cycle_original_qty"):
@@ -2082,15 +2032,14 @@ class FuturesCampaignExecutionService:
                 "reason": reason,
             }
         if abs(fresh_amount) <= 1e-12 and (
-            not protection_cancel_confirmed
-            or not add_on_cancel_confirmed
+            not add_on_cancel_confirmed
             or not entry_cancel_confirmed
             or bool(campaign.tags.get("pending_add_on_client_algo_id"))
             or bool(campaign.tags.get("entry_fill_reconciliation_pending"))
         ):
             reason_text = (
-                "exchange position is flat, but protective-stop, pending-entry, or "
-                "add-on cancellation is unconfirmed; orphaned orders must be reconciled"
+                "exchange position is flat, but pending-entry or add-on cancellation is "
+                "unconfirmed; orphaned orders must be reconciled"
             )
             self.engine.mark_reconcile_required(campaign, reason_text)
             self.db.state_set(f"campaign_state:{campaign.campaign_id}", CampaignState.RECONCILE_REQUIRED.value)
