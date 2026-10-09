@@ -400,14 +400,26 @@ class MultiPositionTrader:
             raise RuntimeError(f"{symbol}: required PRICE_FILTER missing")
         try:
             tick = float(f["tickSize"])
+            minimum = float(f.get("minPrice", "0") or 0)
+            maximum = float(f.get("maxPrice", "0") or 0)
             requested = float(price)
         except (KeyError, TypeError, ValueError, OverflowError) as exc:
             raise RuntimeError(f"{symbol}: malformed price filter/input") from exc
-        if not math.isfinite(tick) or tick <= 0 or not math.isfinite(requested) or requested <= 0:
+        if (
+            not math.isfinite(tick) or tick <= 0
+            or not math.isfinite(minimum) or minimum < 0
+            or not math.isfinite(maximum) or maximum < 0
+            or (maximum > 0 and maximum < minimum)
+            or not math.isfinite(requested) or requested <= 0
+        ):
             raise RuntimeError(f"{symbol}: invalid price filter/input")
         value = float(self.client.decimal_floor(requested, tick))
-        if not math.isfinite(value) or value <= 0:
-            raise RuntimeError(f"{symbol}: normalized price is not positive and finite")
+        if (
+            not math.isfinite(value) or value <= 0
+            or (minimum > 0 and value < minimum)
+            or (maximum > 0 and value > maximum)
+        ):
+            raise RuntimeError(f"{symbol}: normalized price violates PRICE_FILTER bounds")
         return value
 
     def _min_notional(self, symbol):
