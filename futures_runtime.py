@@ -1123,10 +1123,17 @@ class FuturesRuntime:
     @staticmethod
     def _rows(payload: Any) -> list[dict[str, Any]]:
         if isinstance(payload, list):
-            return [x for x in payload if isinstance(x, dict)]
+            if any(not isinstance(row, dict) for row in payload):
+                raise RuntimeError("Futures positionRisk contains a malformed row")
+            return payload
         if isinstance(payload, dict) and isinstance(payload.get("positions"), list):
-            return [x for x in payload["positions"] if isinstance(x, dict)]
-        return []
+            rows = payload["positions"]
+            if any(not isinstance(row, dict) for row in rows):
+                raise RuntimeError("Futures positionRisk contains a malformed row")
+            return rows
+        if isinstance(payload, dict) and "symbol" in payload:
+            return [payload]
+        raise RuntimeError("Futures positionRisk returned a malformed payload")
 
     def status(self) -> dict[str, Any]:
         with self._lock:
