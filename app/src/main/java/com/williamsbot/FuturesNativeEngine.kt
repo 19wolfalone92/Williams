@@ -1516,21 +1516,30 @@ internal class FuturesNativeEngine(
         campaign.put("position_amt", amount)
         campaign.put("entry_price", position.optString("entryPrice").toDoubleOrNull() ?: campaign.optDouble("entry_price", 0.0))
         if (campaign.optString("state") in setOf("ENTRY_PENDING", "OPEN", "OPEN_UNPROTECTED")) {
+            val wasPendingEntry = campaign.optString("state") == "ENTRY_PENDING"
             campaign.put("state", "OPEN_UNPROTECTED")
             campaign.put("entry_filled_at_ms", System.currentTimeMillis())
             auditStore.saveFuturesCampaign(symbol, campaign)
             try {
                 placeProtection(exchange, campaign)
             } catch (x: Exception) {
-                val exit = runCatching { exitPosition(exchange, campaign, "EMERGENCY_NO_PROTECTION") }.getOrNull()
+                val latestCampaign = auditStore.futuresCampaign(symbol) ?: campaign
+                val exit = runCatching { exitPosition(exchange, latestCampaign, "EMERGENCY_NO_PROTECTION") }.getOrNull()
                 if (exit == null || exit.optString("action") != "CLOSED") {
                     return setCampaignState(
-                        campaign,
+                        latestCampaign,
                         "RECONCILE_REQUIRED",
                         "Position exists but protective stop failed and emergency exit was not confirmed: ${x.message}"
                     )
                 }
                 return JSONObject().put("symbol", symbol).put("state", "CLOSED").put("reason", "emergency exit after failed protection")
+            }
+            val protectedCampaign = auditStore.futuresCampaign(symbol) ?: campaign
+            if (wasPendingEntry) {
+                val fillProblem = verifyInitialEntryFill(exchange, protectedCampaign, position, amount)
+                if (fillProblem != null) {
+                    return setCampaignState(protectedCampaign, "RECONCILE_REQUIRED", fillProblem)
+                }
             }
             return JSONObject()
                 .put("symbol", symbol)
@@ -1549,6 +1558,131 @@ internal class FuturesNativeEngine(
             return JSONObject().put("symbol", symbol).put("state", "CLOSED").put("reason", "exited unknown campaign state")
         }
         return setCampaignState(campaign, "RECONCILE_REQUIRED", "Unknown campaign state: ${campaign.optString("state")}")
+    }
+
+    /**
+     * A non-zero position is not enough to prove that the campaign's pending
+     * conditional entry created it. Verify the exact algo, child MARKET order,
+     * position quantity/average price, and authoritative userTrades before
+     * releasing the campaign from entry reconciliation.
+     */
+    private fun verifyInitialEntryFill(
+        exchange: BinanceUsdmFuturesClient,
+        campaign: JSONObject,
+        position: JSONObject,
+        signedAmount: Double
+    ): String? {
+        val symbol = campaign.optString("symbol").uppercase(Locale.US)
+        val direction = campaign.optString("direction").uppercase(Locale.US)
+        val clientId = campaign.optString("entry_client_algo_id")
+        if (clientId.isBlank()) return "Initial entry has no durable clientAlgoId"
+        return try {
+            val algo = exchange.getAlgoOrder(symbol, clientAlgoId = clientId)
+            val algoStatus = algo.optString("algoStatus").uppercase(Locale.US)
+            val childId = algo.optString("actualOrderId")
+            val expectedSide = exchange.directionToEntrySide(direction)
+            val expectedTrigger = campaign.optDouble("entry_trigger", 0.0)
+            val expectedQty = campaign.optDouble("quantity", 0.0)
+            val actualTrigger = algo.optString("triggerPrice").toDoubleOrNull()
+            val actualQty = algo.optString("quantity").toDoubleOrNull()
+            if (
+                algo.optString("symbol").uppercase(Locale.US) != symbol ||
+                algo.optString("clientAlgoId") != clientId ||
+                algo.optString("side").uppercase(Locale.US) != expectedSide ||
+                algo.optString("orderType", algo.optString("type")).uppercase(Locale.US) != "STOP_MARKET" ||
+                algo.optBoolean("closePosition", true) ||
+                actualTrigger == null || !actualTrigger.isFinite() ||
+                expectedTrigger <= 0.0 || abs(actualTrigger - expectedTrigger) > 1e-8 ||
+                actualQty == null || !actualQty.isFinite() ||
+                expectedQty <= 0.0 || abs(actualQty - expectedQty) > max(1e-8, expectedQty * 1e-6) ||
+                algoStatus !in setOf("TRIGGERED", "FINISHED", "CANCELED", "CANCELLED", "EXPIRED")
+            ) {
+                return "Initial entry algo identity/status/trigger/quantity does not match durable intent"
+            }
+            if (childId.isBlank() || childId == "0") {
+                return "Live position exists but initial entry algo has no authoritative child order ID"
+            }
+            val child = exchange.getOrder(symbol, orderId = childId)
+            val childStatus = child.optString("status").uppercase(Locale.US)
+            val executed = child.optString("executedQty").toDoubleOrNull()
+                ?: return "Initial entry child executedQty is missing or invalid"
+            if (
+                child.optString("symbol").uppercase(Locale.US) != symbol ||
+                child.optString("orderId") != childId ||
+                child.optString("side").uppercase(Locale.US) != expectedSide ||
+                child.optString("type").uppercase(Locale.US) != "MARKET" ||
+                childStatus !in setOf("FILLED", "CANCELED", "CANCELLED", "EXPIRED", "REJECTED") ||
+                !executed.isFinite() || executed <= 0.0 ||
+                abs(abs(signedAmount) - executed) > max(1e-8, executed * 1e-6)
+            ) {
+                return "Initial entry child order does not reconcile to the live position"
+            }
+            var average = child.optString("avgPrice").toDoubleOrNull() ?: 0.0
+            if (average <= 0.0) {
+                val quote = child.optString("cumQuote", child.optString("cumQuoteQty")).toDoubleOrNull() ?: 0.0
+                if (quote > 0.0) average = quote / executed
+            }
+            val positionEntry = position.optString("entryPrice").toDoubleOrNull()
+                ?: return "Exchange position entryPrice is missing"
+            if (!average.isFinite() || average <= 0.0 || !positionEntry.isFinite() ||
+                positionEntry <= 0.0 || abs(average - positionEntry) > max(1e-8, average * 1e-5)
+            ) {
+                return "Initial entry average fill does not match exchange position entryPrice"
+            }
+            val trades = exchange.getUserTrades(symbol, childId)
+            if (trades.length() == 0) return "Initial entry fills are confirmed but userTrades are not yet available"
+            var tradeQty = 0.0
+            var tradeQuote = 0.0
+            var entryFeeQuote = 0.0
+            var feeUnknown = false
+            for (i in 0 until trades.length()) {
+                val trade = trades.optJSONObject(i)
+                    ?: return "Initial entry userTrades contains a malformed row"
+                if (trade.optString("symbol").uppercase(Locale.US) != symbol ||
+                    (trade.has("orderId") && trade.optString("orderId") != childId)
+                ) return "Initial entry userTrades identity mismatch"
+                val qty = trade.optString("qty").toDoubleOrNull()
+                    ?: return "Initial entry trade quantity is invalid"
+                val price = trade.optString("price").toDoubleOrNull()
+                    ?: return "Initial entry trade price is invalid"
+                val fee = trade.optString("commission").toDoubleOrNull()
+                    ?: return "Initial entry commission is invalid"
+                if (!listOf(qty, price, fee).all(Double::isFinite) || qty <= 0.0 || price <= 0.0 || fee < 0.0) {
+                    return "Initial entry userTrades contains invalid numeric values"
+                }
+                val asset = trade.optString("commissionAsset").uppercase(Locale.US)
+                if (fee > 0.0 && asset.isBlank()) return "Initial entry commission asset is missing"
+                tradeQty += qty
+                tradeQuote += qty * price
+                when (asset) {
+                    "USDT", "USDC" -> entryFeeQuote += fee
+                    "" -> Unit
+                    else -> feeUnknown = true
+                }
+            }
+            if (!tradeQty.isFinite() || abs(tradeQty - executed) > max(1e-8, executed * 1e-6) ||
+                !tradeQuote.isFinite() || abs(tradeQuote / tradeQty - average) > max(1e-8, average * 1e-5)
+            ) return "Initial entry userTrades quantity/average does not match child order"
+            val stop = campaign.optDouble("stop_price", 0.0)
+            if (stop <= 0.0 || (direction == "LONG" && stop >= average) || (direction == "SHORT" && stop <= average)) {
+                return "Initial protective stop geometry is invalid relative to the actual fill"
+            }
+            val actualRisk = executed * (abs(average - stop) + average * (2.0 * feeBufferPerSideFraction + slippageBufferFraction))
+            val reservedRisk = campaign.optDouble("risk_quote", 0.0)
+            if (!actualRisk.isFinite() || reservedRisk <= 0.0 || actualRisk > reservedRisk + max(1e-8, reservedRisk * 1e-6)) {
+                return "Actual initial fill risk exceeds the durable risk reservation"
+            }
+            campaign.put("entry_actual_order_id", childId)
+            campaign.put("entry_fill_qty", executed)
+            campaign.put("entry_fill_price", average)
+            campaign.put("entry_fee_quote", entryFeeQuote)
+            campaign.put("entry_fee_unknown", feeUnknown)
+            campaign.put("entry_fill_verified", true)
+            auditStore.saveFuturesCampaign(symbol, campaign)
+            null
+        } catch (x: Exception) {
+            "Initial entry fill reconciliation failed: ${x.message ?: x.javaClass.simpleName}"
+        }
     }
 
     private fun verifyOrRestoreLiveProtection(
