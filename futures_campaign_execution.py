@@ -469,7 +469,10 @@ class FuturesCampaignExecutionService:
                 "position_side_mode": "ONE_WAY",
                 "leverage": 1,
                 "isolated_margin": True,
-                "risk_budget_quote": equity * requested_fraction,
+                # The campaign cap is the lifetime budget across the
+                # initial tranche and later Wise-Men add-ons; the initial
+                # tranche receives only its configured fraction of this cap.
+                "risk_budget_quote": equity * self.campaign_risk_limit_pct,
             })
             self.db.save_campaign(campaign)
             self.engine.arm_entry(campaign, signal)
@@ -1897,6 +1900,38 @@ class FuturesCampaignExecutionService:
             raise FuturesCampaignExecutionError(f"{symbol}: unrelated conditional orders block add-on")
         if not protective_id and not protective_algo_id:
             raise FuturesCampaignExecutionError(f"{symbol}: add-on requires a confirmed hard protective stop")
+        try:
+            protection = self.client.get_algo_order(
+                symbol,
+                algo_id=protective_algo_id or None,
+                client_algo_id=protective_id or None,
+            )
+            protection_status = str(protection.get("algoStatus", "") or "").upper()
+            protection_side = str(protection.get("side", "") or "").upper()
+            protection_type = str(protection.get("type", "") or "").upper()
+            protection_close_position = str(protection.get("closePosition", "")).lower() in {"true", "1"}
+            protection_client_id = str(protection.get("clientAlgoId", "") or "")
+            protection_trigger = float(protection.get("triggerPrice"))
+        except Exception as exc:
+            raise FuturesCampaignExecutionError(
+                f"{symbol}: existing hard stop cannot be authoritatively verified before add-on: {exc}"
+            ) from exc
+        expected_protection_side = "SELL" if direction == "LONG" else "BUY"
+        expected_stop = float(campaign.current_stop_price or campaign.initial_stop_price or 0)
+        if (
+            protection_status not in {"NEW", "WORKING", "PENDING", "PENDING_NEW"}
+            or protection_side != expected_protection_side
+            or protection_type != "STOP_MARKET"
+            or not protection_close_position
+            or (protective_id and protection_client_id != protective_id)
+            or not math.isfinite(protection_trigger)
+            or not math.isfinite(expected_stop)
+            or expected_stop <= 0
+            or not math.isclose(protection_trigger, expected_stop, rel_tol=0.0, abs_tol=1e-8)
+        ):
+            raise FuturesCampaignExecutionError(
+                f"{symbol}: add-on blocked because the existing protective stop identity/side/type/trigger is invalid"
+            )
 
         mark = self._market_mark(symbol)
         trigger = float(self.client.normalize_price(
