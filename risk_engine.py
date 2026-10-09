@@ -189,6 +189,8 @@ class RiskEngine:
         # protective stop plus bounded fee/slippage reserve.
         if effective_risk_pct <= 0:
             return self._blocked(symbol, side, entry, "risk allocation is zero")
+        if effective_risk_pct > 0.05:
+            return self._blocked(symbol, side, entry, "risk allocation exceeds the hard 5% per-trade cap")
         risk_quote = self.balance * effective_risk_pct
         effective_loss_fraction = (
             stop_pct
