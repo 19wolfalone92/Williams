@@ -1467,6 +1467,7 @@ internal class FuturesNativeEngine(
         if (direction !in setOf("LONG", "SHORT")) {
             return setCampaignState(campaign, "RECONCILE_REQUIRED", "Campaign direction is invalid")
         }
+        val trackedAmountBeforeReconcile = campaign.optString("position_amt").toDoubleOrNull()
         val position = position(exchange, symbol)
         val amount = position.optString("positionAmt").toDoubleOrNull()
             ?: return setCampaignState(campaign, "RECONCILE_REQUIRED", "Exchange positionAmt is missing or malformed")
@@ -1647,6 +1648,28 @@ internal class FuturesNativeEngine(
             return JSONObject().put("symbol", symbol).put("state", "FLAT")
         }
 
+        val stateBeforeQuantitySync = campaign.optString("state").uppercase(Locale.US)
+        val quantitySyncRelevant = stateBeforeQuantitySync in setOf("OPEN_PROTECTED", "RECONCILE_REQUIRED", "EXIT_PENDING") &&
+            !campaign.optBoolean("entry_fill_reconciliation_pending", false)
+        if (quantitySyncRelevant) {
+            val tracked = trackedAmountBeforeReconcile
+            val mismatch = tracked == null || !tracked.isFinite() || abs(tracked) <= 1e-12 ||
+                abs(abs(amount) - abs(tracked)) > max(1e-8, abs(tracked) * 1e-6)
+            if (mismatch) {
+                campaign.put(
+                    "unreconciled_position_quantity_mismatch",
+                    JSONObject()
+                        .put("expected_position_amt", tracked ?: JSONObject.NULL)
+                        .put("observed_position_amt", amount)
+                        .put("detected_at_ms", System.currentTimeMillis())
+                )
+                campaign.put("position_amt", amount)
+                auditStore.saveFuturesCampaign(symbol, campaign)
+                // Reduce live residual exposure, but the mismatch tag blocks
+                // PnL finalization until the missing/extra fills are reconciled.
+                return exitPosition(exchange, campaign, "POSITION_QUANTITY_MISMATCH")
+            }
+        }
         campaign.put("position_amt", amount)
         campaign.put("entry_price", position.optString("entryPrice").toDoubleOrNull() ?: campaign.optDouble("entry_price", 0.0))
         if (campaign.optString("state") in setOf("ENTRY_PENDING", "OPEN", "OPEN_UNPROTECTED")) {
@@ -2863,6 +2886,9 @@ internal class FuturesNativeEngine(
     }
 
     private fun recordMarketExit(exchange: BinanceUsdmFuturesClient, campaign: JSONObject, response: JSONObject, reason: String) {
+        if (campaign.has("unreconciled_position_quantity_mismatch")) {
+            throw FuturesApiException("Position quantity mismatch ledger must be reconciled before PnL finalization")
+        }
         val symbol = campaign.optString("symbol").uppercase(Locale.US)
         val orderId = response.optString("orderId")
         val clientOrderId = response.optString("clientOrderId")
@@ -2960,6 +2986,9 @@ internal class FuturesNativeEngine(
         actualOrder: JSONObject,
         reason: String
     ) {
+        if (campaign.has("unreconciled_position_quantity_mismatch")) {
+            throw FuturesApiException("Position quantity mismatch ledger must be reconciled before PnL finalization")
+        }
         val symbol = campaign.optString("symbol").uppercase(Locale.US)
         val orderId = actualOrder.optString("orderId")
         val expectedSide = exchange.directionToProtectiveSide(campaign.optString("direction"))
