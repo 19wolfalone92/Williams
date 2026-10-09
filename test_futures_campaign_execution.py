@@ -1753,6 +1753,32 @@ def test_triggered_protective_stop_with_residual_position_forces_reduce_only_exi
         db.conn.close()
 
 
+def test_position_payload_missing_quantity_blocks_new_entry_fail_closed(tmp_path):
+    db = Database(str(tmp_path / "missing-position-amount.sqlite3"))
+    try:
+        cache = ContextCache()
+        make_context(cache, allow_long=True, allow_short=False)
+        client = FakeFuturesClient(102.0)
+        client.position_risk = lambda symbol=None: [{"symbol": "BTCUSDT"}]
+        service = FuturesCampaignExecutionService(
+            client,
+            db,
+            execution_barrier=ExecutionBarrier(cache, db),
+        )
+
+        with pytest.raises(FuturesCampaignExecutionError, match="omitted positionAmt"):
+            service.arm_initial_entry(
+                make_signal("LONG"),
+                equity_quote=10000.0,
+                atr=2.0,
+                candidate_risk_fraction=0.005,
+            )
+
+        assert client.stop_entries == []
+    finally:
+        db.conn.close()
+
+
 def test_malformed_position_payload_blocks_new_entry_fail_closed(tmp_path):
     db = Database(str(tmp_path / "malformed-position-risk.sqlite3"))
     try:
