@@ -623,10 +623,21 @@ class FuturesCampaignExecutionService:
             or campaign.tags.get("initial_stop_price", 0)
             or 0
         )
-        if direction == "LONG" and not 0 < stop < entry:
-            raise FuturesCampaignExecutionError(f"{symbol}: LONG protective stop must be below live entry")
-        if direction == "SHORT" and not stop > entry:
-            raise FuturesCampaignExecutionError(f"{symbol}: SHORT protective stop must be above live entry")
+        if not math.isfinite(stop) or stop <= 0:
+            raise FuturesCampaignExecutionError(f"{symbol}: protective stop must be finite and positive")
+        previous_stop = float(campaign.current_stop_price or campaign.initial_stop_price or 0.0)
+        # A structural trailing stop is allowed to pass break-even. It must
+        # tighten protection, never loosen it, and must remain on the safe side
+        # of the current mark price.
+        if previous_stop > 0:
+            if direction == "LONG" and stop < previous_stop:
+                raise FuturesCampaignExecutionError(
+                    f"{symbol}: LONG protective stop would loosen from {previous_stop} to {stop}"
+                )
+            if direction == "SHORT" and stop > previous_stop:
+                raise FuturesCampaignExecutionError(
+                    f"{symbol}: SHORT protective stop would loosen from {previous_stop} to {stop}"
+                )
         mark = self._market_mark(symbol)
         if (direction == "LONG" and stop >= mark) or (direction == "SHORT" and stop <= mark):
             raise FuturesCampaignExecutionError(
@@ -659,10 +670,15 @@ class FuturesCampaignExecutionService:
             fresh_entry = float(fresh.get("entryPrice", 0) or 0)
             if (direction == "LONG" and fresh_amount <= 0) or (direction == "SHORT" and fresh_amount >= 0):
                 raise FuturesCampaignExecutionError("position changed direction before protection submit")
-            if direction == "LONG" and normalized_stop >= fresh_entry:
-                raise FuturesCampaignExecutionError("LONG stop is not below fresh entry price")
-            if direction == "SHORT" and normalized_stop <= fresh_entry:
-                raise FuturesCampaignExecutionError("SHORT stop is not above fresh entry price")
+            fresh_mark = self._market_mark(symbol)
+            if direction == "LONG" and normalized_stop >= fresh_mark:
+                raise FuturesCampaignExecutionError("LONG stop is not below the fresh mark price")
+            if direction == "SHORT" and normalized_stop <= fresh_mark:
+                raise FuturesCampaignExecutionError("SHORT stop is not above the fresh mark price")
+            if direction == "LONG" and previous_stop > 0 and normalized_stop < previous_stop:
+                raise FuturesCampaignExecutionError("LONG stop update would loosen protection")
+            if direction == "SHORT" and previous_stop > 0 and normalized_stop > previous_stop:
+                raise FuturesCampaignExecutionError("SHORT stop update would loosen protection")
 
         result = self.barrier.execute(
             intent,
@@ -718,6 +734,87 @@ class FuturesCampaignExecutionService:
             "stop_price": normalized_stop,
             "status": status,
         }
+
+    def replace_protection(self, campaign, *, stop_price: float) -> dict[str, Any]:
+        """Tighten a structural stop without leaving the position naked.
+
+        New protection is confirmed first; the prior bot-owned algo order is
+        cancelled second. If cancellation is ambiguous both IDs are retained in
+        the event log and the campaign is marked for reconciliation.
+        """
+        symbol = campaign.symbol.upper()
+        old_client_id = str(campaign.tags.get("protective_client_algo_id", "") or "")
+        old_algo_id = campaign.tags.get("protective_algo_id")
+        old_stop = float(campaign.current_stop_price or campaign.initial_stop_price or 0.0)
+        direction = self._campaign_direction(campaign)
+        requested = float(stop_price)
+        if direction == "LONG" and old_stop > 0 and requested < old_stop:
+            raise FuturesCampaignExecutionError("LONG trailing stop may only move upward")
+        if direction == "SHORT" and old_stop > 0 and requested > old_stop:
+            raise FuturesCampaignExecutionError("SHORT trailing stop may only move downward")
+
+        new_protection = self.place_protection(campaign, stop_price=requested)
+        if not old_client_id and not old_algo_id:
+            return new_protection
+
+        cancel_intent = OrderIntent.new(
+            symbol,
+            "SELL" if direction == "LONG" else "BUY",
+            "CANCEL",
+            {},
+            purpose="CAMPAIGN_PROTECTION_REPLACE_CANCEL_OLD",
+            campaign_id=campaign.campaign_id,
+            signal_id=campaign.current_signal_id,
+            client_order_id=str(old_client_id or old_algo_id),
+        )
+        try:
+            result = self.barrier.execute(
+                cancel_intent,
+                lambda: self.client.cancel_algo_order_safe(
+                    symbol,
+                    algo_id=old_algo_id or None,
+                    client_algo_id=old_client_id or None,
+                ),
+            )
+            if not result.accepted:
+                raise FuturesCampaignExecutionError(
+                    f"{symbol}: old protective order cancellation blocked: {result.reason}"
+                )
+        except Exception as exc:
+            reason = (
+                f"{symbol}: new stop {new_protection.get('stop_price')} is active, "
+                f"but old stop cancellation is uncertain (old_algo_id={old_algo_id}, "
+                f"old_client_algo_id={old_client_id}): {exc}"
+            )
+            self.engine.mark_reconcile_required(campaign, reason)
+            self.db.state_set(
+                f"campaign_state:{campaign.campaign_id}",
+                CampaignState.RECONCILE_REQUIRED.value,
+            )
+            self.db.log_event(
+                "ERROR",
+                "futures_stop_replace_ambiguous",
+                reason,
+                {"campaign_id": campaign.campaign_id},
+            )
+            raise FuturesCampaignExecutionError(reason) from exc
+
+        campaign.tags["previous_protective_client_algo_id"] = old_client_id
+        campaign.tags["previous_protective_algo_id"] = old_algo_id
+        self.db.save_campaign(campaign)
+        self.db.log_campaign_event(
+            campaign.campaign_id,
+            CampaignEventType.PROTECTION_ARMED.value,
+            order_id=str(new_protection.get("algo_id", "") or ""),
+            reason=f"{direction} structural trailing stop tightened",
+            payload={
+                "old_stop": old_stop,
+                "new_stop": new_protection.get("stop_price"),
+                "old_algo_id": old_algo_id,
+                "new_algo_id": new_protection.get("algo_id"),
+            },
+        )
+        return {**new_protection, "previous_stop_price": old_stop}
 
     def exit_position(self, campaign, *, reason: str) -> dict[str, Any]:
         """Reduce-only market exit; it remains available while entries are blocked."""
