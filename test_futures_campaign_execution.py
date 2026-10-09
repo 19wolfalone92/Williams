@@ -4,6 +4,7 @@ from binance_usdm_futures_client import FuturesAPIError
 from campaign_model import SignalRole, SignalSpec, SignalType
 from db import Database
 from execution_barrier import ExecutionBarrier
+from futures_runtime import FuturesRuntime
 from futures_campaign_execution import (
     FuturesCampaignExecutionError,
     FuturesCampaignExecutionService,
@@ -404,5 +405,61 @@ def test_protection_response_without_order_identity_requires_reconciliation(tmp_
         assert saved.tags["protection_response_unidentified"]["client_algo_id"]
         assert db.state_get(f"campaign_state:{campaign.campaign_id}") == "RECONCILE_REQUIRED"
         assert db.state_get("position_state:BTCUSDT") == "RECONCILE_REQUIRED"
+    finally:
+        db.conn.close()
+
+
+
+def test_daily_loss_guard_blocks_non_finite_equity_without_resetting_baseline(tmp_path):
+    from datetime import datetime, timezone
+
+    db = Database(str(tmp_path / "daily-loss-nan.sqlite3"))
+    try:
+        runtime = object.__new__(FuturesRuntime)
+        runtime.db = db
+        runtime.max_daily_loss_pct = 0.03
+        today = datetime.now(timezone.utc).date().isoformat()
+        db.state_set("futures_day_start_date", today)
+        db.state_set("futures_day_start_equity_quote", "1000")
+        for bad_equity in (float("nan"), float("inf"), 0.0, -1.0):
+            allowed, reason = runtime._daily_loss_allows_entry(bad_equity)
+            assert not allowed
+            assert "blocked" in reason
+        assert db.state_get("futures_day_start_equity_quote") == "1000"
+    finally:
+        db.conn.close()
+
+
+def test_daily_loss_guard_fails_closed_on_corrupt_same_day_baseline(tmp_path):
+    from datetime import datetime, timezone
+
+    db = Database(str(tmp_path / "daily-loss-corrupt.sqlite3"))
+    try:
+        runtime = object.__new__(FuturesRuntime)
+        runtime.db = db
+        runtime.max_daily_loss_pct = 0.03
+        db.state_set("futures_day_start_date", datetime.now(timezone.utc).date().isoformat())
+        db.state_set("futures_day_start_equity_quote", "NaN")
+        allowed, reason = runtime._daily_loss_allows_entry(1000.0)
+        assert not allowed
+        assert "baseline" in reason
+        assert db.state_get("futures_day_start_equity_quote") == "NaN"
+    finally:
+        db.conn.close()
+
+
+def test_daily_loss_guard_blocks_new_entries_at_daily_limit(tmp_path):
+    from datetime import datetime, timezone
+
+    db = Database(str(tmp_path / "daily-loss-limit.sqlite3"))
+    try:
+        runtime = object.__new__(FuturesRuntime)
+        runtime.db = db
+        runtime.max_daily_loss_pct = 0.03
+        db.state_set("futures_day_start_date", datetime.now(timezone.utc).date().isoformat())
+        db.state_set("futures_day_start_equity_quote", "1000")
+        allowed, reason = runtime._daily_loss_allows_entry(970.0)
+        assert not allowed
+        assert "daily loss limit reached" in reason
     finally:
         db.conn.close()
