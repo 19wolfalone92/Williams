@@ -1473,6 +1473,10 @@ internal class FuturesNativeEngine(
                     }.getOrDefault("RECOVERED_CONFIRMED_MARKET_EXIT").ifBlank {
                         "RECOVERED_CONFIRMED_MARKET_EXIT"
                     }
+                    val cleanupProblem = verifyFlatProtectionCleanup(exchange, campaign)
+                    if (cleanupProblem != null) {
+                        return setCampaignState(campaign, "RECONCILE_REQUIRED", cleanupProblem)
+                    }
                     recordMarketExit(exchange, campaign, exitOrder!!, reason)
                     campaign.put("state", "CLOSED")
                     campaign.put("position_amt", 0.0)
@@ -2022,6 +2026,10 @@ internal class FuturesNativeEngine(
                 "Exchange position is flat but market exit status is not FILLED; child fills/protective race must be reconciled"
             )
         }
+        val cleanupProblem = verifyFlatProtectionCleanup(exchange, campaign)
+        if (cleanupProblem != null) {
+            return setCampaignState(campaign, "RECONCILE_REQUIRED", cleanupProblem)
+        }
         try {
             recordMarketExit(exchange, campaign, response, reason)
         } catch (x: Exception) {
@@ -2029,13 +2037,6 @@ internal class FuturesNativeEngine(
                 campaign,
                 "RECONCILE_REQUIRED",
                 "Exchange position is flat but market-exit trade accounting is incomplete: ${x.message}"
-            )
-        }
-        if (!protectionCancelConfirmed) {
-            return setCampaignState(
-                campaign,
-                "RECONCILE_REQUIRED",
-                "Exchange position is flat but protective cancellation is unconfirmed; orphan order cleanup is required"
             )
         }
         campaign.put("state", "CLOSED")
@@ -2264,6 +2265,60 @@ internal class FuturesNativeEngine(
             ac.getOrElse(index) { Double.NaN },
             ac.getOrElse(index - 1) { Double.NaN }
         )    }
+
+    /**
+     * A flat position is not sufficient proof that a protective Algo order is
+     * harmless. Confirm cancellation, and reject a stop-child fill that raced
+     * with the market exit until both executions can be accounted together.
+     */
+    private fun verifyFlatProtectionCleanup(
+        exchange: BinanceUsdmFuturesClient,
+        campaign: JSONObject
+    ): String? {
+        val symbol = campaign.optString("symbol").uppercase(Locale.US)
+        val clientId = campaign.optString("protection_client_algo_id")
+        if (clientId.isBlank()) return null
+        return try {
+            var protection = exchange.getAlgoOrder(symbol, clientAlgoId = clientId)
+            if (protection.optString("symbol").uppercase(Locale.US) != symbol ||
+                protection.optString("clientAlgoId") != clientId
+            ) return "Flat-position protective lookup identity mismatch"
+            var status = protection.optString("algoStatus").uppercase(Locale.US)
+            if (status in setOf("NEW", "WORKING", "PENDING", "PENDING_NEW")) {
+                cancelOwnedProtection(exchange, campaign, clientId)
+                protection = exchange.getAlgoOrder(symbol, clientAlgoId = clientId)
+                status = protection.optString("algoStatus").uppercase(Locale.US)
+            }
+            if (status in setOf("CANCELED", "CANCELLED", "EXPIRED", "REJECTED")) {
+                null
+            } else if (status in setOf("TRIGGERED", "FINISHED")) {
+                val childId = protection.optString("actualOrderId")
+                if (childId.isBlank() || childId == "0") {
+                    "Protective Algo triggered during exit but child order ID is missing"
+                } else {
+                    val child = exchange.getOrder(symbol, orderId = childId)
+                    val executed = child.optString("executedQty").toDoubleOrNull()
+                    val childStatus = child.optString("status").uppercase(Locale.US)
+                    if (
+                        child.optString("symbol").uppercase(Locale.US) != symbol ||
+                        child.optString("orderId") != childId ||
+                        executed == null || !executed.isFinite() || executed < 0.0 ||
+                        childStatus !in setOf("FILLED", "CANCELED", "CANCELLED", "EXPIRED", "REJECTED")
+                    ) {
+                        "Protective child order cannot be authoritatively reconciled after exit"
+                    } else if (executed > 0.0) {
+                        "Protective child filled during market exit; both executions require aggregate reconciliation"
+                    } else {
+                        null
+                    }
+                }
+            } else {
+                "Protective Algo has ambiguous status after the position became flat: ${status.ifBlank { "UNKNOWN" }}"
+            }
+        } catch (x: Exception) {
+            "Protective order cleanup after flat position failed: ${x.message ?: x.javaClass.simpleName}"
+        }
+    }
 
     private fun recordMarketExit(exchange: BinanceUsdmFuturesClient, campaign: JSONObject, response: JSONObject, reason: String) {
         val symbol = campaign.optString("symbol").uppercase(Locale.US)
