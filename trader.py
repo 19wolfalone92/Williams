@@ -1,4 +1,5 @@
-import logging, os, time, uuid
+import logging
+import math, os, time, uuid
 import pandas as pd
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
@@ -812,16 +813,36 @@ class Trader:
     def _risk_gate(self, closed):
         if self.state()=='RECONCILE_REQUIRED': return False,'RECONCILE_REQUIRED'
         if self.state()!='FLAT': return False,f'state={self.state()}'
-        if self.db.trades_today(self.symbol)>=self.max_trades_day:return False,'max daily trades reached'
-        if self.db.consecutive_losses(self.symbol)>=self.max_consecutive_losses:return False,'max consecutive losses reached'
-        today_pnl=self.db.pnl_today(self.symbol); balance=max(self.available_quote(),0.0)
-        if balance>0 and today_pnl <= -balance*self.max_daily_loss_pct:return False,'daily loss limit reached'
-        last_exit=self.db.last_exit_time(self.symbol)
+        if self.max_trades_day > 0 and self.db.trades_today(self.symbol) >= self.max_trades_day:
+            return False, 'max daily trades reached'
+        if self.max_consecutive_losses > 0 and self.db.consecutive_losses(self.symbol) >= self.max_consecutive_losses:
+            return False, 'max consecutive losses reached'
+        balance = float(self.available_quote())
+        if not math.isfinite(balance) or balance <= 0:
+            return False, 'quote equity unavailable; new entries blocked'
+        today_pnl = float(self.db.pnl_today(self.symbol))
+        if not math.isfinite(today_pnl):
+            return False, 'daily realized PnL invalid; new entries blocked'
+        # Reuse the durable equity breaker on this legacy single-symbol path;
+        # otherwise this path would bypass portfolio-wide daily-loss controls.
+        equity_ok, equity_reason = self.equity_breaker.check(
+            self.db, balance, self.symbol, unrealized_pnl_quote=0.0, fees_quote=0.0
+        )
+        if not equity_ok:
+            return False, equity_reason
+        if today_pnl <= -balance * self.max_daily_loss_pct:
+            return False, 'daily loss limit reached'
+        last_exit = self.db.last_exit_time(self.symbol)
         if last_exit:
             try:
-                dt=datetime.fromisoformat(last_exit.replace('Z','+00:00'))
-                if datetime.now(timezone.utc)-dt < timedelta(minutes=self.cooldown_minutes):return False,'cooldown active'
-            except ValueError:pass
+                dt = datetime.fromisoformat(str(last_exit).replace('Z', '+00:00'))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                elapsed = (datetime.now(timezone.utc) - dt).total_seconds()
+                if elapsed < max(0, self.cooldown_minutes) * 60:
+                    return False, 'cooldown active'
+            except (TypeError, ValueError, OverflowError):
+                return False, 'last exit timestamp invalid; cooldown cannot be verified'
         if self.target_pct/max(self.stop_pct,1e-9) < self.min_risk_reward:return False,'risk/reward below minimum'
         spread=self._spread_pct()
         if spread>self.max_spread_pct:return False,f'spread {spread:.4%} > {self.max_spread_pct:.4%}'
