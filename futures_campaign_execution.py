@@ -638,20 +638,6 @@ class FuturesCampaignExecutionService:
     def place_protection(self, campaign, *, stop_price: float | None = None) -> dict[str, Any]:
         symbol = campaign.symbol.upper()
         direction = self._campaign_direction(campaign)
-        add_on_cancel_confirmed = True
-        if campaign.tags.get("pending_add_on_client_algo_id") or campaign.state in {
-            CampaignState.ADD_ON_ARMING,
-            CampaignState.ADD_ON_PENDING,
-            CampaignState.POSITION_EXPANDING,
-        }:
-            add_on_cancel_result = self.cancel_pending_add_on(
-                campaign, reason=f"EXIT_PRECHECK:{reason}"
-            )
-            add_on_cancel_confirmed = (
-                str(add_on_cancel_result.get("state", "")).upper() != "RECONCILE_REQUIRED"
-            )
-            campaign = self.engine.load_campaign(campaign.campaign_id) or campaign
-            direction = self._campaign_direction(campaign)
         position = self._position_row(symbol)
         try:
             amount = float(position.get("positionAmt", 0) or 0)
