@@ -120,7 +120,7 @@ def _latest_reversal(
     *,
     side: str,
     max_age_bars: int = 20,
-) -> tuple[int, float, float] | None:
+) -> tuple[int, float, float, float] | None:
     column = "bullish_reversal_bar" if side == "LONG" else "bearish_reversal_bar"
     if column not in ind.columns:
         return None
@@ -133,7 +133,7 @@ def _latest_reversal(
                 continue
             extreme = float(row["low"] if side == "LONG" else row["high"])
             trigger_base = float(row["high"] if side == "LONG" else row["low"])
-            return i, trigger_base, extreme
+            return i, trigger_base, extreme, score
     return None
 
 
@@ -235,7 +235,7 @@ def extract_long_signal_specs(
         max_age_bars=max_reversal_age_bars,
     )
     if reversal is not None:
-        i, trigger_base, protective = reversal
+        i, trigger_base, protective, score = reversal
         trigger = trigger_base + tick
         if current_close < trigger:
             row = ind.iloc[i]
@@ -394,7 +394,7 @@ def extract_short_signal_specs(
         max_age_bars=max_reversal_age_bars,
     )
     if reversal is not None:
-        i, trigger_base, protective = reversal
+        i, trigger_base, protective, score = reversal
         trigger = trigger_base - tick
         if current_close > trigger:
             row = ind.iloc[i]
