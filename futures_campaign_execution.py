@@ -2967,70 +2967,47 @@ class FuturesCampaignExecutionService:
                     )
                 active_add_statuses = {"NEW", "WORKING", "PENDING_NEW", "PENDING"}
                 terminal_add_statuses = {"CANCELED", "CANCELLED", "EXPIRED", "REJECTED"}
-                if algo_status in active_add_statuses:
-                    if campaign.state == CampaignState.RECONCILE_REQUIRED:
-                        reason = (
-                            f"{symbol}: add-on order remains active while campaign is "
-                            "RECONCILE_REQUIRED; cancellation/reconciliation is required"
-                        )
-                        self.db.state_set(
-                            f"campaign_state:{campaign.campaign_id}",
-                            CampaignState.RECONCILE_REQUIRED.value,
-                        )
-                        self.db.state_set(
-                            f"position_state:{symbol}",
-                            CampaignState.RECONCILE_REQUIRED.value,
-                        )
-                        return {
-                            "symbol": symbol,
-                            "state": "RECONCILE_REQUIRED",
-                            "reason": reason,
-                            "protection": "CONFIRMED",
-                        }
-                    if campaign.state == CampaignState.POSITION_EXPANDING:
-                        reason = (
-                            f"{symbol}: local state is POSITION_EXPANDING while the add-on "
-                            "order is still active; execution/position history is inconsistent"
-                        )
-                        self.engine.mark_reconcile_required(campaign, reason)
-                        self.db.state_set(
-                            f"campaign_state:{campaign.campaign_id}",
-                            CampaignState.RECONCILE_REQUIRED.value,
-                        )
-                        self.db.state_set(
-                            f"position_state:{symbol}",
-                            CampaignState.RECONCILE_REQUIRED.value,
-                        )
-                        return {
-                            "symbol": symbol,
-                            "state": "RECONCILE_REQUIRED",
-                            "reason": reason,
-                            "protection": "CONFIRMED",
-                        }
-                    if abs(abs(amount) - original_qty) > max(1e-8, original_qty * 1e-6):
-                        raise FuturesCampaignExecutionError(
-                            f"{symbol}: exchange quantity changed while add-on algo remains active"
-                        )
-                    if campaign.state == CampaignState.ADD_ON_ARMING:
-                        campaign.transition(
-                            CampaignState.ADD_ON_PENDING,
-                            reason="recovered active add-on order by stable clientAlgoId",
-                        )
-                        self.db.save_campaign(campaign)
-                        self.db.state_set(
-                            f"campaign_state:{campaign.campaign_id}",
-                            CampaignState.ADD_ON_PENDING.value,
-                        )
-                    return {
-                        "symbol": symbol,
-                        "state": "ADD_ON_PENDING",
-                        "algo_status": algo_status,
-                        "client_algo_id": client_add_id,
-                        "position_qty": abs(amount),
-                        "protection": "CONFIRMED",
-                    }
-
                 actual_order_id = algo.get("actualOrderId")
+                if algo_status in active_add_statuses and not actual_order_id:
+                    if campaign.state in {
+                        CampaignState.RECONCILE_REQUIRED,
+                        CampaignState.POSITION_EXPANDING,
+                    }:
+                        self.client.cancel_algo_order_safe(
+                            symbol,
+                            algo_id=algo.get("algoId") or campaign.tags.get("pending_add_on_algo_id") or None,
+                            client_algo_id=client_add_id,
+                        )
+                        algo = self.client.get_algo_order(symbol, client_algo_id=client_add_id)
+                        algo_status = str(algo.get("algoStatus", "") or "").upper()
+                        actual_order_id = algo.get("actualOrderId")
+                        if algo_status in active_add_statuses and not actual_order_id:
+                            raise FuturesCampaignExecutionError(
+                                f"{symbol}: add-on remains active after cancellation/re-query"
+                            )
+                    else:
+                        if abs(abs(amount) - original_qty) > max(1e-8, original_qty * 1e-6):
+                            raise FuturesCampaignExecutionError(
+                                f"{symbol}: exchange quantity changed while add-on algo remains active"
+                            )
+                        if campaign.state == CampaignState.ADD_ON_ARMING:
+                            campaign.transition(
+                                CampaignState.ADD_ON_PENDING,
+                                reason="recovered active add-on order by stable clientAlgoId",
+                            )
+                            self.db.save_campaign(campaign)
+                            self.db.state_set(
+                                f"campaign_state:{campaign.campaign_id}",
+                                CampaignState.ADD_ON_PENDING.value,
+                            )
+                        return {
+                            "symbol": symbol,
+                            "state": "ADD_ON_PENDING",
+                            "algo_status": algo_status,
+                            "client_algo_id": client_add_id,
+                            "position_qty": abs(amount),
+                            "protection": "CONFIRMED",
+                        }
                 actual_order: dict[str, Any] = {}
                 executed = 0.0
                 average_fill = 0.0
