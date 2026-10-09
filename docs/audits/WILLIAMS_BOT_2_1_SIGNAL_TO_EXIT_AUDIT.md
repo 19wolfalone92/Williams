@@ -177,3 +177,10 @@ When a LONG setup supplied a stop at/above entry, or a SHORT setup supplied a st
 The native engine built a list of structurally valid WM1/WM2/WM3 candidates, selected the earliest source bar, and only afterward checked expiry in `findSignal()`. Because `findSignal()` received only `primary.lastSignal`, an expired early candidate could make the whole symbol return no signal even when a later valid candidate existed.
 
 **Correction:** native candidate ranking now filters signal validity and per-type expiry before selecting the earliest live signal. Freshness calculation is shared by frame selection, final signal admission and persisted entry expiry, reducing the chance that those paths drift apart.
+
+
+### 23. The named Digital Williams core is not the single end-to-end orchestrator — parity/trace gap remains open
+
+Repository inspection confirms that `DigitalWilliamsCore` is used by the API/server path, but the Python Futures runtime independently runs `MarketScanner → PortfolioController → FuturesCampaignExecutionService`, while Android `FuturesNativeEngine` has its own Kotlin signal/risk/lifecycle implementation. The three paths do not all consume the same decision object or emit the same structured stage-by-stage `DecisionTrace`. Therefore, passing tests for the canonical core do not prove identical signal selection or Williams semantics across the Futures runtime and native Android engine.
+
+**Status: OPEN ARCHITECTURE GAP, not represented as fixed.** The native stale-signal issue above was corrected directly in its active path. Before claiming strategy parity, create shared LONG/SHORT golden vectors for WM1 reversal, WM2 Super AO, WM3 fractal, expiry, trigger-cross, invalidation, context veto, and exit reason; run equivalent assertions against Python Futures and Android native code. Add a persisted trace linking source candle, context versions, risk decision, client order IDs, fills, protection changes and final exit accounting. No live approval until this gap and the documented Android partial/racing-exit ledger are resolved.
