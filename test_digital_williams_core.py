@@ -57,7 +57,6 @@ def test_contract_keeps_protection_during_market_exit_resolution():
 
 def test_explicitly_expired_signal_is_not_revived_by_late_creation_time():
     core = DigitalWilliamsCore()
-    stale = signal(1_000, expires_at_ms=9_999)
     # Signal creation happened after its source-derived expiry; preserve expiry.
     stale = SignalSpec.new(
         symbol="BTCUSDT", side="BUY", signal_type=SignalType.REVERSAL,
