@@ -1696,6 +1696,35 @@ internal class FuturesNativeEngine(
         val campaign = JSONObject(campaignInput.toString())
         val symbol = campaign.optString("symbol").uppercase(Locale.US)
         val direction = campaign.optString("direction").uppercase(Locale.US)
+        val livePosition = runCatching { position(exchange, symbol) }.getOrElse {
+            return setCampaignState(campaign, "RECONCILE_REQUIRED", "Cannot verify live position while checking protection: ${it.message}")
+        }
+        val liveAmount = livePosition.optString("positionAmt").toDoubleOrNull()
+            ?: return setCampaignState(campaign, "RECONCILE_REQUIRED", "positionAmt is missing while checking protection")
+        if (!liveAmount.isFinite() || abs(liveAmount) <= 1e-12) {
+            return setCampaignState(campaign, "RECONCILE_REQUIRED", "Protection verification requires a finite non-zero live position")
+        }
+        val persistedQty = abs(campaign.optDouble("position_amt", 0.0))
+        if (persistedQty > 0.0 && abs(abs(liveAmount) - persistedQty) > max(1e-8, persistedQty * 1e-6)) {
+            return setCampaignState(
+                campaign,
+                "RECONCILE_REQUIRED",
+                "Live position quantity differs from persisted campaign quantity; exit/fill reconciliation is required"
+            )
+        }
+        val unresolvedExit = auditStore.pendingFuturesIntents().firstOrNull { intent ->
+            intent.optString("symbol").equals(symbol, true) &&
+                intent.optString("operation").equals("EXIT", true) &&
+                intent.optString("status").uppercase(Locale.US) in
+                    setOf("PENDING", "SUBMITTING", "SUBMITTED", "UNKNOWN", "RECONCILE_REQUIRED")
+        }
+        if (unresolvedExit != null) {
+            return setCampaignState(
+                campaign,
+                "RECONCILE_REQUIRED",
+                "A prior reduce-only exit intent remains unresolved while Futures exposure is still open"
+            )
+        }
         var clientId = campaign.optString("protection_client_algo_id")
 
         // Prefer exchange-authoritative open protection over guessing from
