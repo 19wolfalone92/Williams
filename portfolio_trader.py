@@ -1198,6 +1198,7 @@ class MultiPositionTrader:
                         side="LONG",
                         entry_price=entry,
                         quantity=qty,
+                        gross_entry_qty=float(execution.executed_qty),
                         entry_order_id=str(
                             order.get("orderId")
                         ),
@@ -2479,6 +2480,7 @@ class MultiPositionTrader:
                     side="LONG",
                     entry_price=entry,
                     quantity=qty,
+                    gross_entry_qty=float(execution.executed_qty),
                     entry_order_id=str(order.get("orderId")),
                     entry_client_order_id=client_id,
                     stop_price=self._normalize_price(
@@ -2490,7 +2492,7 @@ class MultiPositionTrader:
                         entry * (1.0 + target_fraction),
                     ),
                     risk_pct=requested_risk_pct * 100.0,
-                    fees=float(execution.fee_quote_equivalent),
+                    fees=self._entry_fee_quote(execution),
                 )
 
                 self.db.state_delete(
