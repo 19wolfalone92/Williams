@@ -853,6 +853,14 @@ internal class FuturesNativeEngine(
             bars += Bar(openTime, closeTime, o, h, l, close, volume)
         }
         if (bars.size < 80) return null
+        val latestCloseTime = bars.last().closeTime
+        val ageMs = now - latestCloseTime
+        val maxAgeMs = max(120_000L, 2L * intervalMillis(timeframe))
+        if (latestCloseTime <= 0L || ageMs < -60_000L || ageMs > maxAgeMs) {
+            throw FuturesApiException(
+                "$symbol/$timeframe latest closed candle is stale or has invalid time (ageMs=$ageMs, maxAgeMs=$maxAgeMs)"
+            )
+        }
         val tickSize = tickSizeCache.computeIfAbsent(symbol.uppercase(Locale.US)) {
             exchange.symbolFilters(symbol)["PRICE_FILTER"]
                 ?.optString("tickSize")?.toDoubleOrNull()
@@ -2664,7 +2672,8 @@ internal class FuturesNativeEngine(
                 if (abs(amount) <= 1e-12) continue
                 val timeframe = campaign.optString("timeframe", interval())
                 val frame = analyseFrame(exchange, symbol, timeframe)
-                if (frame != null) manageStructuralExit(exchange, campaign, frame)
+                    ?: throw FuturesApiException("$symbol/$timeframe candles unavailable for open-position management")
+                manageStructuralExit(exchange, campaign, frame)
             } catch (x: Exception) {
                 lastError = "$symbol position management: ${x.message ?: x.javaClass.simpleName}"
                 reconcileRequired = true
