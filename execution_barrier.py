@@ -175,6 +175,18 @@ class ExecutionBarrier:
             if prior:
                 prior_status = str(prior.get("status", "UNKNOWN")).upper()
                 return ExecutionResult(intent.intent_id, False, reason=f"prior_intent_exists:{prior_status}; reconciliation_required")
+            try:
+                if self.db is None or not hasattr(self.db, "unresolved_execution_intents"):
+                    return ExecutionResult(intent.intent_id, False, reason="unresolved_intent_lookup_unavailable")
+                unresolved = self.db.unresolved_execution_intents()
+            except Exception as exc:
+                return ExecutionResult(intent.intent_id, False, reason=self._safe_error_reason("unresolved_intent_lookup_failed", exc))
+            if unresolved:
+                return ExecutionResult(
+                    intent.intent_id,
+                    False,
+                    reason="unresolved_execution_intent_requires_reconciliation",
+                )
             # The durable write-ahead intent is a hard precondition for any
             # exchange mutation. If SQLite cannot commit it, do not call submit.
             try:
