@@ -159,12 +159,29 @@ class ExecutionBarrier:
         # only. Protective actions, cancellations, exits and recovery must remain
         # available when strategy context is stale or temporarily unavailable.
         if is_new_exposure:
-            for tf, required in intent.required_context_versions.items():
+            normalized_versions = {
+                ("1M" if str(tf) == "1M" else str(tf).lower()): int(version)
+                for tf, version in dict(intent.required_context_versions or {}).items()
+            }
+            for tf, required in normalized_versions.items():
                 ctx = snapshot.context(intent.symbol, tf)
                 if ctx is None:
                     return f"missing context {intent.symbol} {tf}"
                 if int(ctx.version) != int(required):
                     return f"stale context {tf}: required={required} current={ctx.version}"
+                duration = _interval_ms(tf)
+                if duration > 0:
+                    try:
+                        close_ms = int(ctx.candle_close_time_ms)
+                        age_ms = int(time.time() * 1000) - close_ms
+                    except (TypeError, ValueError, OverflowError):
+                        return f"invalid context candle timestamp {tf}"
+                    if (
+                        close_ms <= 0
+                        or age_ms < -60_000
+                        or age_ms > max(120_000, 2 * duration)
+                    ):
+                        return f"stale/invalid closed-candle context {tf}"
 
         direction = "long" if intent.side == "BUY" else "short" if intent.side == "SELL" else ""
         if not direction:
@@ -208,44 +225,80 @@ class ExecutionBarrier:
                 # need not already agree with the new direction. Their contexts
                 # must still exist, be fresh, and be pinned by the intent versions.
                 # D1 is only a macro airbag and may veto an active opposite regime.
-                normalized_versions = {
-                    ("1M" if str(tf) == "1M" else str(tf).lower()): int(ver)
-                    for tf, ver in dict(intent.required_context_versions or {}).items()
-                }
                 for tf in ("1h", "4h", "1d"):
                     ctx = snapshot.context(intent.symbol, tf)
                     if ctx is None or tf not in normalized_versions:
                         return f"TC2_WM1_EARLY requires versioned {tf} context"
-                    if int(ctx.version) != normalized_versions[tf]:
-                        return f"TC2_WM1_EARLY stale {tf} context"
-                    try:
-                        close_ms = int(ctx.candle_close_time_ms)
-                        age_ms = int(time.time() * 1000) - close_ms
-                    except (TypeError, ValueError, OverflowError):
-                        return f"TC2_WM1_EARLY invalid {tf} candle timestamp"
-                    duration = _interval_ms(tf)
-                    if (
-                        duration <= 0
-                        or close_ms <= 0
-                        or age_ms < -60_000
-                        or age_ms > max(120_000, 2 * duration)
-                    ):
-                        return f"TC2_WM1_EARLY stale/invalid {tf} candle"
+                    if not ctx.williams_core_ready:
+                        return f"TC2_WM1_EARLY requires valid Williams indicator evidence on {tf}"
                 macro = snapshot.context(intent.symbol, "1d")
                 macro_state = str(macro.alligator_state or "").strip().upper()
-                if direction == "long" and (
-                    macro.allow_short or macro_state == "BEARISH"
-                ):
+                macro_opposes_long = (
+                    macro_state == "BEARISH"
+                    and bool(macro.alligator_awake)
+                    and math.isfinite(float(macro.ao_value))
+                    and float(macro.ao_value) < 0.0
+                )
+                macro_opposes_short = (
+                    macro_state == "BULLISH"
+                    and bool(macro.alligator_awake)
+                    and math.isfinite(float(macro.ao_value))
+                    and float(macro.ao_value) > 0.0
+                )
+                if direction == "long" and (macro.allow_short or macro_opposes_long):
                     return "TC2_WM1_EARLY blocked by active opposite D1 context"
-                if direction == "short" and (
-                    macro.allow_long or macro_state == "BULLISH"
-                ):
+                if direction == "short" and (macro.allow_long or macro_opposes_short):
                     return "TC2_WM1_EARLY blocked by active opposite D1 context"
             elif admission_mode == "STRICT_DIRECTIONAL":
-                if direction == "long" and not permission_ctx.allow_long:
+                if not permission_ctx.williams_core_ready:
+                    return (
+                        f"context {permission_tf} does not allow {direction.upper()}: "
+                        "canonical Williams indicator evidence is missing/invalid"
+                    )
+                state = str(permission_ctx.alligator_state or "").strip().upper()
+                try:
+                    ao_value = float(permission_ctx.ao_value)
+                    awake = bool(permission_ctx.alligator_awake)
+                except (TypeError, ValueError, OverflowError):
+                    return f"context {permission_tf} does not allow {direction.upper()}: invalid Williams evidence"
+                if not math.isfinite(ao_value):
+                    return f"context {permission_tf} does not allow {direction.upper()}: non-finite AO"
+                if direction == "long" and not (
+                    state == "BULLISH" and awake and ao_value > 0.0
+                ):
                     return f"context {permission_tf} does not allow LONG"
-                if direction == "short" and not permission_ctx.allow_short:
+                if direction == "short" and not (
+                    state == "BEARISH" and awake and ao_value < 0.0
+                ):
                     return f"context {permission_tf} does not allow SHORT"
+
+                # D1 is the macro airbag. Its opposite active Alligator/AO state
+                # may veto a new campaign, but it does not create a signal.
+                if permission_tf == "1h":
+                    macro = snapshot.context(intent.symbol, "1d")
+                    if macro is None or not macro.williams_core_ready:
+                        return "missing/invalid D1 Williams macro context"
+                    macro_state = str(macro.alligator_state or "").strip().upper()
+                    try:
+                        macro_ao = float(macro.ao_value)
+                    except (TypeError, ValueError, OverflowError):
+                        return "invalid D1 AO evidence"
+                    if not math.isfinite(macro_ao):
+                        return "invalid D1 AO evidence"
+                    macro_opposes_long = (
+                        macro_state == "BEARISH"
+                        and bool(macro.alligator_awake)
+                        and macro_ao < 0.0
+                    )
+                    macro_opposes_short = (
+                        macro_state == "BULLISH"
+                        and bool(macro.alligator_awake)
+                        and macro_ao > 0.0
+                    )
+                    if direction == "long" and (macro.allow_short or macro_opposes_long):
+                        return "active opposite D1 macro context blocks LONG"
+                    if direction == "short" and (macro.allow_long or macro_opposes_short):
+                        return "active opposite D1 macro context blocks SHORT"
             else:
                 return f"unsupported context admission mode {admission_mode}"
 
