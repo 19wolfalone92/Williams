@@ -1125,12 +1125,6 @@ class FuturesRuntime:
                 risk_engine.balance = equity
         reconciliations = self._recover()
         management = self._manage_existing_positions()
-        # D1 is dashboard context, refreshed only after live-position management.
-        # Its availability cannot gate order admission or block protective exits.
-        try:
-            self._refresh_daily_market_overview()
-        except Exception as exc:
-            log.warning("D1 overview refresh failed; strategy admission unchanged: %s", exc)
         # A single cancel attempt is not enough after an unknown Binance
         # response. While paused/killed, keep reconciling/cancelling stable
         # pending entry and add-on IDs on each cycle; normal scans never cancel
@@ -1266,6 +1260,14 @@ class FuturesRuntime:
                 "new_entries": 0,
             }
             return self._last_scan_summary
+
+        # D1 dashboard context is refreshed only after existing-position
+        # management, pause/kill, reconciliation, loss, and timeframe gates have
+        # passed. It never blocks protective exits or changes trade eligibility.
+        try:
+            self._refresh_daily_market_overview()
+        except Exception as exc:
+            log.warning("D1 overview refresh failed; strategy admission unchanged: %s", exc)
 
         active_count = len([
             row for row in self.execution._active_rows()
