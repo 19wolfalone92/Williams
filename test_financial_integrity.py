@@ -95,6 +95,23 @@ def ledger_fill(**overrides):
     return row
 
 
+@pytest.mark.parametrize("changes,error", [
+    ({"commission": None}, "exchange_fill_commission_unknown"),
+    ({"commission": ""}, "exchange_fill_commission_unknown"),
+    ({"commissionAsset": ""}, "exchange_fill_commission_asset_unknown"),
+    ({"commission": "NaN"}, "exchange_fill_financial_fields_invalid"),
+    ({"quantity": "Infinity"}, "exchange_fill_financial_fields_invalid"),
+    ({"quote_quantity": "0"}, "exchange_fill_financial_fields_invalid"),
+])
+def test_database_rejects_unknown_or_invalid_fee_rows(tmp_path, changes, error):
+    db = Database(str(tmp_path / "invalid-fill.sqlite3"))
+    row = ledger_fill(**changes)
+    with pytest.raises(ValueError, match=error):
+        db.save_campaign_fill(row)
+    assert db.conn.execute("SELECT COUNT(*) FROM campaign_fills").fetchone()[0] == 0
+    assert db.state_get("recovery_status") == "RECOVERY_REQUIRED"
+
+
 def test_campaign_fill_identity_is_database_unique_and_idempotent(tmp_path):
     db = Database(str(tmp_path / "fills.sqlite3"))
     assert db.save_campaign_fill(ledger_fill()) is True
