@@ -602,7 +602,12 @@ class FuturesRuntime:
         campaign,
     ) -> SignalSpec | None:
         """Select only a fresh same-direction WM2/WM3 signal for an open campaign."""
-        latest_time = int(campaign.tags.get("last_signal_time_ms", 0) or 0)
+        latest_confirmation = int(
+            campaign.tags.get(
+                "last_signal_confirmation_time_ms",
+                campaign.tags.get("last_signal_time_ms", 0),
+            ) or 0
+        )
         parsed: list[SignalSpec] = []
         for raw in list(candidate.campaign_signal_specs or []):
             try:
@@ -612,14 +617,23 @@ class FuturesRuntime:
                 continue
             if spec.signal_type not in {SignalType.SUPER_AO, SignalType.FRACTAL}:
                 continue
-            if spec.direction != direction or int(spec.signal_bar_time_ms) <= latest_time:
+            confirmation_time = int(
+                getattr(spec, "confirmation_time_ms", 0) or spec.signal_bar_time_ms
+            )
+            if spec.direction != direction or confirmation_time <= latest_confirmation:
                 continue
             if int(spec.expires_at_ms or 0) <= int(time.time() * 1000):
                 continue
             parsed.append(replace(spec, role=SignalRole.ADD_ON))
         if not parsed:
             return None
-        signal = min(parsed, key=lambda item: (item.signal_bar_time_ms, item.created_at_ms))
+        signal = min(
+            parsed,
+            key=lambda item: (
+                int(getattr(item, "confirmation_time_ms", 0) or item.signal_bar_time_ms),
+                item.created_at_ms,
+            ),
+        )
 
         snapshot = self.context_cache.snapshot()
         operative = snapshot.context(signal.symbol, signal.timeframe)
