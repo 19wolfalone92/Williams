@@ -16,25 +16,50 @@ class MemoryIntentDB:
 
 
 def context(symbol="BTCUSDT", interval="1h", allow_long=True, allow_short=False):
+    now_ms = int(time.time() * 1000)
+    alligator_state = "BULLISH" if allow_long else "BEARISH" if allow_short else "SLEEP"
+    active = bool(allow_long or allow_short)
     return TFMarketContext(
         symbol=symbol,
         interval=interval,
         version=0,
-        candle_open_time_ms=1,
-        candle_close_time_ms=2,
+        candle_open_time_ms=now_ms - 30_000,
+        candle_close_time_ms=now_ms - {
+            "1h": 20_000, "4h": 40_000, "1d": 60_000, "1M": 60_000,
+        }.get(interval, 20_000),
         price=100.0,
         atr=2.0,
         jaw=98.0,
         teeth=99.0,
         lips=99.5,
+        alligator_state=alligator_state,
+        alligator_awake=active,
+        ao_value=1.0 if allow_long else -1.0 if allow_short else 0.0,
+        ac_value=0.0,
+        williams_core_ready=True,
         allow_long=allow_long,
         allow_short=allow_short,
-        decision="LONG" if allow_long else "NO_TRADE",
+        decision="LONG" if allow_long else "SHORT" if allow_short else "NO_TRADE",
         hypotheses=(
             WaveHypothesis("w3", "W3", "LONG", 0.85, 0.10, invalidation_level=94.0),
         ),
         data_bars=220,
     )
+
+
+def publish_tc2_contexts(
+    cache,
+    *,
+    h1_allow_long=True,
+    h1_allow_short=False,
+    d1_allow_long=False,
+    d1_allow_short=False,
+):
+    cache.publish(context("BTCUSDT", "1h", h1_allow_long, h1_allow_short))
+    # H4 is required as valid context but intentionally does not have to agree
+    # directionally with the canonical H1 signal.
+    cache.publish(context("BTCUSDT", "4h", False, False))
+    cache.publish(context("BTCUSDT", "1d", d1_allow_long, d1_allow_short))
 
 
 def test_copy_on_write_versions_and_immutable_snapshot():
@@ -89,6 +114,7 @@ def test_execution_barrier_serializes_publish_and_submit():
         "BUY",
         "MARKET",
         {"1h": version},
+        purpose="EXIT",
         permission_interval="1h",
         client_order_id="stable-serial-test",
     )
@@ -135,6 +161,7 @@ def test_execution_barrier_fails_closed_when_pending_intent_cannot_be_persisted(
         "BUY",
         "MARKET",
         {"1h": version},
+        purpose="EXIT",
         permission_interval="1h",
         client_order_id="stable-persistence-failure",
     )
@@ -160,6 +187,7 @@ def test_execution_barrier_requires_durable_store_by_default():
         "BUY",
         "MARKET",
         {"1h": version},
+        purpose="EXIT",
         permission_interval="1h",
         client_order_id="stable-no-store",
     )
@@ -195,6 +223,7 @@ def test_execution_barrier_flags_failure_to_persist_submission_after_one_submit(
         "BUY",
         "MARKET",
         {"1h": version},
+        purpose="EXIT",
         permission_interval="1h",
         client_order_id="WILLIAMS_TEST_PERSISTENCE_001",
     )
@@ -217,16 +246,21 @@ def test_execution_barrier_flags_failure_to_persist_submission_after_one_submit(
 
 def test_campaign_entry_checks_directional_permission_for_long_and_short():
     cache = ContextCache()
-    cache.publish(context(allow_long=False, allow_short=False))
+    publish_tc2_contexts(
+        cache,
+        h1_allow_long=False,
+        h1_allow_short=False,
+    )
     snapshot = cache.snapshot()
     barrier = ExecutionBarrier(cache, MemoryIntentDB())
 
+    versions = snapshot.versions("BTCUSDT", ["1h", "4h", "1d"])
     for side, expected in (("BUY", "LONG"), ("SELL", "SHORT")):
         intent = OrderIntent.new(
             "BTCUSDT",
             side,
             "STOP_MARKET",
-            {"1h": snapshot.context("BTCUSDT", "1h").version},
+            versions,
             purpose="CAMPAIGN_ENTRY",
             permission_interval="1h",
             client_order_id=f"stable-entry-{side.lower()}",
@@ -274,7 +308,11 @@ def test_symbol_specific_reconciliation_lock_blocks_new_campaign_exposure():
             return default
 
     cache = ContextCache()
-    cache.publish(context(allow_long=True, allow_short=True))
+    publish_tc2_contexts(
+        cache,
+        h1_allow_long=True,
+        h1_allow_short=False,
+    )
     db = SymbolLockDB()
     barrier = ExecutionBarrier(cache, db)
     snapshot = cache.snapshot()
@@ -282,7 +320,7 @@ def test_symbol_specific_reconciliation_lock_blocks_new_campaign_exposure():
         "BTCUSDT",
         "BUY",
         "STOP_MARKET",
-        {"1h": snapshot.context("BTCUSDT", "1h").version},
+        snapshot.versions("BTCUSDT", ["1h", "4h", "1d"]),
         purpose="CAMPAIGN_ENTRY",
         permission_interval="1h",
         client_order_id="SYMBOL-LOCK-TEST-001",
@@ -306,7 +344,7 @@ def test_mutating_order_without_stable_client_id_is_blocked():
     intent = OrderIntent.new(
         "BTCUSDT", "BUY", "STOP_MARKET",
         {"1h": snapshot.context("BTCUSDT", "1h").version},
-        purpose="CAMPAIGN_ENTRY", permission_interval="1h",
+        purpose="EXIT", permission_interval="1h",
     )
     submissions = []
 
