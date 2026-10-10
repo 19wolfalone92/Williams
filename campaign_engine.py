@@ -173,9 +173,13 @@ class CampaignEngine:
         ]
         if not candidates:
             return None
-        # Book model: first available valid signal starts the campaign.  We
-        # therefore order primarily by signal-bar time, not by a score.
-        return min(candidates, key=lambda s: (s.signal_bar_time_ms, s.created_at_ms))
+        # A WM3 center bar is historical structure. Campaign chronology must
+        # use true confirmation close so a later-confirmed fractal cannot jump
+        # ahead of a WM1/WM2 event that became actionable earlier.
+        return min(
+            candidates,
+            key=lambda s: (s.confirmation_time_ms or s.signal_bar_time_ms, s.created_at_ms),
+        )
 
     @staticmethod
     def should_replace_pending(old: SignalSpec, new: SignalSpec, *, min_ticks: int = 1, tick_size: float = 0.0) -> bool:
@@ -189,8 +193,10 @@ class CampaignEngine:
         new_pending = PendingSignal.from_spec(new)
         if old_pending.is_expired() and not new_pending.is_expired():
             return True
+        old_event_time = old.confirmation_time_ms or old.signal_bar_time_ms
+        new_event_time = new.confirmation_time_ms or new.signal_bar_time_ms
         return (
-            new.signal_bar_time_ms > old.signal_bar_time_ms
+            new_event_time > old_event_time
             and distance >= threshold
             and not new_pending.is_expired()
         )
