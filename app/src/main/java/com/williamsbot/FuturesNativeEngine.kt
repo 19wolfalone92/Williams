@@ -2534,7 +2534,7 @@ internal class FuturesNativeEngine(
         if (direction == "SHORT" && trigger <= mark) throw FuturesApiException("$symbol SHORT protective stop is at/below mark; market exit required")
 
         val clientId = clientOrderId("W2FP_")
-        val side = exchange.directionToProtectiveSide(direction)
+        val side = if (direction == "LONG") "SELL" else "BUY"
         val params = JSONObject()
             .put("symbol", symbol)
             .put("side", side)
