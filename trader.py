@@ -250,9 +250,14 @@ class Trader:
                         f"recovery gate cannot resolve OCO cancel intent {intent['intent_id']}: target list ID missing"
                     )
                 try:
-                    target_list = self.client.order_list(
-                        symbol, order_list_id=target_list_id
-                    )
+                    if target_list_id.isdigit():
+                        target_list = self.client.order_list(
+                            symbol, order_list_id=target_list_id
+                        )
+                    else:
+                        target_list = self.client.order_list(
+                            symbol, list_client_order_id=target_list_id
+                        )
                 except Exception as exc:
                     raise RuntimeError(
                         f"recovery gate cannot resolve OCO cancel intent {intent['intent_id']}: "
