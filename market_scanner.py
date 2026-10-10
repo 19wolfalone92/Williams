@@ -1158,11 +1158,24 @@ class MarketScanner:
 
         for candidate, enriched_candidate, exc in wave_results:
             if enriched_candidate is not None:
-                if candidate.signal and self.require_htf_confirmation and not enriched_candidate.htf_confirmed:
+                # TC2 typed Wise-Men signals are admitted by the final H1/H4
+                # signal-family gate in the execution runtime. Do not silently
+                # reintroduce a universal directional HTF or Elliott-wave veto
+                # in this ranking/enrichment stage.
+                if (
+                    candidate.signal
+                    and self.strategy_profile != "TC2_THREE_WISE_MEN"
+                    and self.require_htf_confirmation
+                    and not enriched_candidate.htf_confirmed
+                ):
                     log.info("AUTO-SCAN HTF BLOCK: %s %s strict signal lacks directional HTF confirmation", candidate.symbol, candidate.direction or "UNKNOWN")
                     blocked_symbols.add(candidate.symbol)
                     continue
-                if candidate.signal and not enriched_candidate.wave_entry_allowed:
+                wave_admission_filter = (
+                    os.getenv("WILLIAMS_WAVE_ENTRY_ADMISSION_FILTER", "false").lower()
+                    == "true"
+                )
+                if candidate.signal and wave_admission_filter and not enriched_candidate.wave_entry_allowed:
                     log.info("AUTO-SCAN WAVE BLOCK: %s %s", candidate.symbol, enriched_candidate.wave_block_reason)
                     blocked_symbols.add(candidate.symbol)
                     continue
@@ -1170,7 +1183,14 @@ class MarketScanner:
                 continue
 
             log.warning("Wave analysis failed for %s: %s", candidate.symbol, exc)
-            if candidate.signal and os.getenv("NO_TRADE_WHEN_UNCERTAIN", "true").lower() == "true":
+            if (
+                candidate.signal
+                and os.getenv("NO_TRADE_WHEN_UNCERTAIN", "true").lower() == "true"
+                and (
+                    self.strategy_profile != "TC2_THREE_WISE_MEN"
+                    or os.getenv("WILLIAMS_WAVE_ENTRY_ADMISSION_FILTER", "false").lower() == "true"
+                )
+            ):
                 blocked_symbols.add(candidate.symbol)
                 continue
             neutral = replace(
@@ -1185,7 +1205,12 @@ class MarketScanner:
                 ),
                 wave_reason=f"Wave analysis unavailable: {type(exc).__name__}: {exc}",
             )
-            if candidate.signal and self.require_htf_confirmation and not neutral.htf_confirmed:
+            if (
+                candidate.signal
+                and self.strategy_profile != "TC2_THREE_WISE_MEN"
+                and self.require_htf_confirmation
+                and not neutral.htf_confirmed
+            ):
                 blocked_symbols.add(candidate.symbol)
                 continue
             enriched.append(neutral)
