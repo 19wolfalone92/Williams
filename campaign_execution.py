@@ -1162,6 +1162,116 @@ class CampaignExecutionService:
                     continue
 
                 if not managed_stops:
+                    unresolved_for_campaign = [
+                        intent for intent in self.db.unresolved_execution_intents()
+                        if str(intent.get("symbol", "")).upper() == symbol
+                        and str(intent.get("campaign_id", "")) == str(campaign.campaign_id)
+                    ]
+                    unresolved_protection = [
+                        intent for intent in unresolved_for_campaign
+                        if str(intent.get("purpose", "")).upper()
+                        in {"PROTECTION", "CAMPAIGN_PROTECTION", "CAMPAIGN_TRAIL"}
+                        and str(intent.get("operation_kind", "PLACE")).upper()
+                        in {"PLACE", "CANCEL_REPLACE"}
+                    ]
+                    for pending_intent in unresolved_protection:
+                        pending_cid = str(pending_intent.get("client_order_id", "") or "")
+                        pending_operation = str(
+                            pending_intent.get("operation_kind", "PLACE")
+                        ).upper()
+                        try:
+                            observed = self.client.get_order(
+                                symbol,
+                                orig_client_order_id=pending_cid,
+                            )
+                        except Exception as lookup_exc:
+                            if self._authoritative_order_not_found(lookup_exc) and pending_operation == "PLACE":
+                                self._mark_intent_reconciled(
+                                    pending_cid,
+                                    "NOT_FOUND",
+                                    evidence="Binance GET by stable clientOrderId returned definitive -2013; no protective order exists",
+                                )
+                                continue
+                            if self._authoritative_order_not_found(lookup_exc) and pending_operation == "CANCEL_REPLACE":
+                                # A missing replacement is safe to retry only if the
+                                # old protection is authoritatively still active.
+                                try:
+                                    old_order = self.client.get_order(
+                                        symbol,
+                                        order_id=pending_intent.get("related_order_id"),
+                                    )
+                                    old_status = str(old_order.get("status", "")).upper()
+                                    old_executed = float(old_order.get("executedQty", 0) or 0)
+                                    if old_status in {"NEW", "PENDING_NEW"} and old_executed == 0:
+                                        self._mark_intent_reconciled(
+                                            pending_cid,
+                                            "NOT_FOUND",
+                                            evidence="replacement clientOrderId is absent and original protective order is authoritatively still active",
+                                        )
+                                        if str(old_order.get("side", "")).upper() == "SELL" and str(old_order.get("type", "")).upper() in {"STOP_LOSS", "STOP_LOSS_LIMIT"}:
+                                            managed_stops.append(old_order)
+                                        continue
+                                except Exception:
+                                    pass
+                            self.engine.mark_reconcile_required(
+                                campaign,
+                                f"protective mutation {pending_cid} cannot be authoritatively queried: {lookup_exc}",
+                            )
+                            self.db.state_set(f"position_state:{symbol}", "RECONCILE_REQUIRED")
+                            raise CampaignExecutionError(
+                                "protective mutation outcome remains UNKNOWN; refusing to create another stop"
+                            ) from lookup_exc
+
+                        observed_status = str(observed.get("status", "")).upper()
+                        observed_executed = float(observed.get("executedQty", 0) or 0)
+                        observed_qty = float(observed.get("origQty", 0) or 0)
+                        if (
+                            str(observed.get("side", "")).upper() != "SELL"
+                            or str(observed.get("type", "")).upper() not in {"STOP_LOSS", "STOP_LOSS_LIMIT"}
+                            or observed_status not in {"NEW", "PENDING_NEW"}
+                            or observed_executed != 0
+                            or observed_qty <= 0
+                        ):
+                            self.engine.mark_reconcile_required(
+                                campaign,
+                                f"protective mutation {pending_cid} has exchange state {observed_status} with executedQty={observed_executed}",
+                            )
+                            self.db.state_set(f"position_state:{symbol}", "RECONCILE_REQUIRED")
+                            raise CampaignExecutionError(
+                                "protective order state is not an untouched active stop; position reconciliation is required"
+                            )
+                        if pending_operation == "CANCEL_REPLACE":
+                            old_order = self.client.get_order(
+                                symbol,
+                                order_id=pending_intent.get("related_order_id"),
+                            )
+                            old_status = str(old_order.get("status", "")).upper()
+                            old_executed = float(old_order.get("executedQty", 0) or 0)
+                            if old_status not in {"CANCELED", "CANCELLED", "EXPIRED", "REJECTED"} or old_executed != 0:
+                                self.engine.mark_reconcile_required(
+                                    campaign,
+                                    "cancelReplace new stop exists but old stop is not proven canceled without fills",
+                                )
+                                self.db.state_set(f"position_state:{symbol}", "RECONCILE_REQUIRED")
+                                raise CampaignExecutionError(
+                                    "cancelReplace old/new order pair is not fully reconciled"
+                                )
+                        self.db.save_order(observed)
+                        managed_stops.append(observed)
+
+                    if not managed_stops and unresolved_for_campaign:
+                        # An ambiguous exit/cancel or an unrecognized mutation is
+                        # not permission to create another protective order.
+                        self.engine.mark_reconcile_required(
+                            campaign,
+                            "unresolved execution intent exists while no active protection is visible",
+                        )
+                        self.db.state_set(f"position_state:{symbol}", "RECONCILE_REQUIRED")
+                        raise CampaignExecutionError(
+                            "missing protection with unresolved mutation; reconcile that mutation before replacement"
+                        )
+
+                if not managed_stops:
                     protection = self.create_hard_stop(
                         campaign,
                         quantity=expected,
