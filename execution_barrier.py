@@ -178,6 +178,11 @@ class ExecutionBarrier:
             # exchange mutation. If SQLite cannot commit it, do not call submit.
             try:
                 self._persist(intent, "PENDING")
+                # Reusing this intent after any later failure requires recovery,
+                # even when a subsequent BLOCKED/AMBIGUOUS write also fails.
+                self._attempted_intents.add(key)
+                if client_key:
+                    self._attempted_client_order_ids.add(client_key)
             except Exception as exc:
                 reason = f"intent_persistence_failed: {type(exc).__name__}"
                 self._record("ERROR", "execution_blocked", intent, reason)
@@ -246,9 +251,6 @@ class ExecutionBarrier:
             )
             # Once submit is called, this intent/client ID cannot be replayed
             # in-process. On restart, durable PENDING/AMBIGUOUS must reconcile.
-            self._attempted_intents.add(key)
-            if client_key:
-                self._attempted_client_order_ids.add(client_key)
             try:
                 response = submit()
             except Exception as exc:
