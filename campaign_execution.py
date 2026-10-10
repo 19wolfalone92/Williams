@@ -13,6 +13,7 @@ import uuid
 from binance_client import BinanceAPIError
 from campaign_engine import CampaignEngine
 from campaign_model import CampaignState, PendingOrderRecord, SignalSpec, SignalState, SignalType
+from trading_config import TradingConfig
 from decision_trace import DecisionTrace
 from execution_barrier import ExecutionBarrier, OrderIntent
 
@@ -37,10 +38,14 @@ class CampaignExecutionService:
         self.db = db
         self.barrier = execution_barrier
         self.context_refresh = context_refresh
+        config = TradingConfig.from_env()
         self.engine = CampaignEngine(
             db,
-            portfolio_risk_limit_pct=float(os.getenv("MAX_TOTAL_RISK_PCT", "0.01")),
-            campaign_risk_limit_pct=float(os.getenv("MAX_RISK_PER_TRADE_PCT", "0.005")),
+            portfolio_risk_limit_pct=config.max_total_risk_pct,
+            campaign_risk_limit_pct=min(
+                0.01,
+                max(0.0, float(os.getenv("CAMPAIGN_RISK_LIMIT_PCT", "0.01"))),
+            ),
             initial_risk_fraction_of_campaign=float(
                 os.getenv("CAMPAIGN_INITIAL_RISK_FRACTION", "0.40")
             ),
@@ -335,6 +340,18 @@ class CampaignExecutionService:
         ):
             raise CampaignExecutionError("Spot Williams trigger/structural stop geometry is invalid")
         if signal.signal_type == SignalType.REVERSAL:
+            tc2_core_for_wm1 = (
+                os.getenv("WILLIAMS_STRATEGY_PROFILE", "TC2_THREE_WISE_MEN").strip().upper()
+                == "TC2_THREE_WISE_MEN"
+            )
+            allow_approximate_angulation = (
+                os.getenv("WILLIAMS_ALLOW_APPROXIMATE_ANGULATION", "false").strip().lower()
+                == "true"
+            )
+            if tc2_core_for_wm1 and not allow_approximate_angulation:
+                raise CampaignExecutionError(
+                    "Spot WM1 is blocked until its source-defined angulation rule is implemented exactly"
+                )
             try:
                 angle = float(signal.angulation_score)
             except (TypeError, ValueError, OverflowError) as exc:
@@ -365,12 +382,17 @@ class CampaignExecutionService:
                 f"{signal.symbol}: selected non-TC2 profile requires higher-timeframe confirmation"
             )
 
-        required_contexts = (
-            ("1h", "4h", "1d") if signal_tf == "1h" else (signal_tf,)
-        )
+        required_contexts = ("1h", "4h") if signal_tf == "1h" else (signal_tf,)
         try:
             if self.context_refresh is not None:
                 self.context_refresh(signal.symbol, required_contexts)
+                if signal_tf == "1h":
+                    # D1 is a best-effort observation only. A missing/stale D1
+                    # must not veto an H1/H4-valid Three Wise Men signal.
+                    try:
+                        self.context_refresh(signal.symbol, ("1d",))
+                    except Exception:
+                        pass
             context_snapshot = self.barrier.context_cache.snapshot()
             context_versions = context_snapshot.versions(
                 signal.symbol, list(required_contexts)
@@ -396,7 +418,7 @@ class CampaignExecutionService:
             )
             if not admitted:
                 raise CampaignExecutionError(
-                    f"{signal.symbol}: TC2 H1 context, H4 data validity, D1 macro airbag, or WM1 angulation rejected the entry"
+                    f"{signal.symbol}: TC2 H1 evidence, H4 context validity, or WM1 angulation rejected the entry"
                 )
         elif context_versions:
             signal = replace(
@@ -455,35 +477,70 @@ class CampaignExecutionService:
         qty = self._normalized_entry_qty(signal.symbol, notional, trigger)
         client_id = f"{self.ENTRY_PREFIX}{uuid.uuid4().hex[:20]}"
 
-        claimed = self.db.try_claim_state(
-            f"entry_client_order_id:{signal.symbol}",
-            client_id,
-        )
-        if not claimed:
+        estimated_actual_risk = qty * trigger * effective_loss_fraction
+        risk_tolerance = max(1e-8, risk_quote * 1e-9)
+        if (
+            not math.isfinite(estimated_actual_risk)
+            or estimated_actual_risk <= 0
+            or estimated_actual_risk > risk_quote + risk_tolerance
+        ):
             raise CampaignExecutionError(
-                f"{signal.symbol}: another conditional entry is already reserved"
+                f"{signal.symbol}: normalized entry quantity exceeds reserved risk"
             )
 
-        campaign = self.engine.create_campaign(
-            signal,
-            initial_risk_pct=requested_risk,
-        )
-        campaign.tags["signal_role"] = signal.role.value
-        campaign.tags["decision_trace"] = DecisionTrace.from_signal(signal).to_dict()
-        campaign.tags["pending_signal_expires_at_ms"] = int(signal.expires_at_ms or 0)
-        campaign.tags["initial_stop_price"] = stop
-        campaign.initial_stop_price = stop
-        campaign.current_stop_price = stop
-        campaign.pending_risk_quote = risk_quote
-        campaign.capital_reserved_quote = qty * trigger
-        self.db.save_campaign(campaign)
-        campaign.tags["pending_order_client_id"] = client_id
-        campaign.tags["pending_order_quantity"] = qty
-        campaign.tags["pending_order_trigger"] = trigger
-        # IMPORTANT: persist ENTRY_PENDING before touching Binance. A fast
-        # conditional fill can arrive on the user stream immediately.
-        self.engine.arm_entry(campaign, signal)
-        self.db.state_set(f"campaign_state:{campaign.campaign_id}", campaign.state.value)
+        # Campaign admission and aggregate-risk reservation are one SQLite
+        # write transaction. A per-symbol key alone cannot prevent two symbols
+        # from both spending the same last portfolio risk budget.
+        with self.db.transaction(immediate=True):
+            capacity_at_commit = max(
+                0.0, float(equity_quote) * self.engine.portfolio_risk_limit_pct
+            )
+            reserved_at_commit = self.engine.portfolio_reserved_risk_quote()
+            capacity_tolerance = max(1e-8, capacity_at_commit * 1e-9)
+            if reserved_at_commit + risk_quote > capacity_at_commit + capacity_tolerance:
+                raise CampaignExecutionError(
+                    f"{signal.symbol}: portfolio risk capacity changed before durable entry reservation"
+                )
+            initial_tranche_cap = (
+                float(equity_quote) * self.engine.initial_risk_pct()
+            )
+            tranche_tolerance = max(1e-8, initial_tranche_cap * 1e-9)
+            if risk_quote > initial_tranche_cap + tranche_tolerance:
+                raise CampaignExecutionError(
+                    f"{signal.symbol}: initial entry exceeds the campaign tranche risk cap"
+                )
+            claimed = self.db.try_claim_state(
+                f"entry_client_order_id:{signal.symbol}",
+                client_id,
+            )
+            if not claimed:
+                raise CampaignExecutionError(
+                    f"{signal.symbol}: another conditional entry is already reserved"
+                )
+
+            campaign = self.engine.create_campaign(
+                signal,
+                initial_risk_pct=requested_risk,
+            )
+            campaign.tags["signal_role"] = signal.role.value
+            campaign.tags["decision_trace"] = DecisionTrace.from_signal(signal).to_dict()
+            campaign.tags["pending_signal_expires_at_ms"] = int(signal.expires_at_ms or 0)
+            campaign.tags["initial_stop_price"] = stop
+            campaign.initial_stop_price = stop
+            campaign.current_stop_price = stop
+            campaign.pending_risk_quote = risk_quote
+            campaign.capital_reserved_quote = qty * trigger
+            self.db.save_campaign(campaign)
+            campaign.tags["pending_order_client_id"] = client_id
+            campaign.tags["pending_order_quantity"] = qty
+            campaign.tags["pending_order_trigger"] = trigger
+            # Persist ENTRY_PENDING before touching Binance: a fast conditional
+            # fill can arrive immediately after the exchange accepts the order.
+            self.engine.arm_entry(campaign, signal)
+            self.db.state_set(
+                f"campaign_state:{campaign.campaign_id}",
+                campaign.state.value,
+            )
 
         intent = OrderIntent.new(
             signal.symbol,
