@@ -289,3 +289,54 @@ def test_campaign_entry_needs_persisted_campaign_state(tmp_path):
     assert result.accepted is False
     assert result.reason == "campaign_unknown"
     assert called == []
+
+
+def test_all_backend_order_mutators_converge_on_an_execution_boundary():
+    import ast
+
+    root = Path(__file__).parent
+    mutation_methods = {
+        "order_safe", "order", "new_order", "create_oco_sell",
+        "create_oco_sell_safe", "cancel_order", "cancel_open_orders",
+        "cancel_replace", "cancel_oco",
+    }
+    wrappers = {"execute", "_submit", "_submit_via_execution_barrier"}
+    violations = []
+
+    class Visitor(ast.NodeVisitor):
+        def __init__(self, path):
+            self.path = path
+            self.parents = []
+
+        def generic_visit(self, node):
+            self.parents.append(node)
+            super().generic_visit(node)
+            self.parents.pop()
+
+        def visit_Call(self, node):
+            if isinstance(node.func, ast.Attribute) and node.func.attr in mutation_methods:
+                in_lambda = any(isinstance(parent, ast.Lambda) for parent in self.parents)
+                inside_wrapper = any(
+                    isinstance(parent, ast.Call)
+                    and isinstance(parent.func, ast.Attribute)
+                    and parent.func.attr in wrappers
+                    for parent in self.parents
+                )
+                if not (in_lambda and inside_wrapper):
+                    violations.append(
+                        (self.path.name, node.lineno, node.func.attr)
+                    )
+            self.generic_visit(node)
+
+    for path in root.glob("*.py"):
+        if path.name.startswith("test_") or path.name in {
+            "binance_client.py", "execution_barrier.py"
+        }:
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except (SyntaxError, UnicodeDecodeError):
+            raise
+        Visitor(path).visit(tree)
+
+    assert violations == [], f"backend mutation call sites outside barrier: {violations}"
