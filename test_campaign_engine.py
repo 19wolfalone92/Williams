@@ -199,6 +199,31 @@ def test_portfolio_risk_includes_pending_campaign():
         assert engine.portfolio_reserved_capital_quote() == 500.0
 
 
+@pytest.mark.parametrize(
+    ("field", "bad_value"),
+    [
+        ("open_risk_quote", -1.0),
+        ("pending_risk_quote", float("inf")),
+        ("open_risk_quote", float("nan")),
+    ],
+)
+def test_portfolio_risk_fails_closed_on_corrupt_persisted_reservation(tmp_path, field, bad_value):
+    db = Database(str(tmp_path / f"corrupt-risk-{field}.sqlite3"))
+    try:
+        engine = CampaignEngine(db)
+        campaign = engine.create_campaign(make_signal(), initial_risk_pct=0.002)
+        db.conn.execute(
+            f"UPDATE campaigns SET {field}=? WHERE campaign_id=?",
+            (bad_value, campaign.campaign_id),
+        )
+        db.conn.commit()
+
+        with pytest.raises(ValueError, match="invalid persisted campaign risk"):
+            engine.portfolio_reserved_risk_quote()
+    finally:
+        db.conn.close()
+
+
 def _open_campaign_for_add_on(db, engine, *, open_risk=4.0, budget=5.0):
     initial = make_signal(SignalType.REVERSAL, role=SignalRole.ENTRY, bar=100)
     campaign = engine.create_campaign(initial, initial_risk_pct=0.002)
