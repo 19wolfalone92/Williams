@@ -70,6 +70,11 @@ class ExecutionDB:
         return True
 
 
+class FakeSpotClient:
+    testnet = True
+    base_url = "https://testnet.binance.vision"
+
+
 def ready_preflight():
     return {
         "ready": True,
@@ -84,7 +89,7 @@ def ready_preflight():
 def test_execution_barrier_rejects_stale_context():
     cache = ContextCache()
     cache.publish(context())
-    barrier = ExecutionBarrier(cache, ExecutionDB(), preflight_provider=ready_preflight)
+    barrier = ExecutionBarrier(cache, ExecutionDB(), preflight_provider=ready_preflight, exchange_client=FakeSpotClient())
     snap = cache.snapshot()
     cache.publish(context())
     intent = OrderIntent.new(
