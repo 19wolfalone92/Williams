@@ -6434,13 +6434,13 @@ private class NativeEngine(
     ): List<CampaignSignalN> {
         if (candles.size < 45 || tick <= 0.0) return emptyList()
 
-        val medians = candles.map { (it.h + it.l) / 2.0 }
-        val jaw = smma(medians, 13)
-        val teeth = smma(medians, 8)
-        val lips = smma(medians, 5)
-        val jawS = shiftedSeries(jaw, 8)
-        val teethS = shiftedSeries(teeth, 5)
-        val lipsS = shiftedSeries(lips, 3)
+        val alligatorLines = WilliamsAlligatorMath.calculate(
+            highs = candles.map { it.h },
+            lows = candles.map { it.l }
+        )
+        val jawS = alligatorLines.jaw
+        val teethS = alligatorLines.teeth
+        val lipsS = alligatorLines.lips
 
         fun bullishAlligator(i: Int): Boolean =
             i in candles.indices &&
@@ -6607,6 +6607,7 @@ private class NativeEngine(
         }
 
         val closes = workCandles.map { it.c }
+        val medians = workCandles.map { (it.h + it.l) / 2.0 }
         val atrPct = atrPct(workCandles)
         val atrAbs =
             atrAbs(workCandles)
@@ -6624,7 +6625,12 @@ private class NativeEngine(
             emptyList()
         }
 
-        val alligator = alligator(closes)
+        val alligatorLines = WilliamsAlligatorMath.calculateFromMedianPrices(medians)
+        val alligator = TripleValues(
+            alligatorLines.jaw.lastOrNull() ?: Double.NaN,
+            alligatorLines.teeth.lastOrNull() ?: Double.NaN,
+            alligatorLines.lips.lastOrNull() ?: Double.NaN
+        )
         val bullish =
             alligator.lips > alligator.teeth &&
                 alligator.teeth > alligator.jaw &&
@@ -6633,15 +6639,21 @@ private class NativeEngine(
         val aoValue = ao(workCandles, i)
         val aoPositive = aoValue > 0.0
 
-        val fractalIndex = latestConfirmedUpFractal(workCandles, i)
-        val fractalHigh =
-            fractalIndex?.let { workCandles[it].h }
-        val teethSeries = smma(closes, 8)
-        val fractalTeeth =
-            fractalIndex?.let { teethSeries.getOrNull(it) }
+        val upFractal = WilliamsFractalMath.latestUp(
+            highs = workCandles.map { it.h },
+            throughIndex = i,
+            lookbackBars = 40
+        )
+        val fractalIndex = upFractal?.centerIndex
+        val fractalHigh = upFractal?.level
+        val fractalTeeth = upFractal?.let {
+            alligatorLines.teeth.getOrNull(it.confirmationIndex)
+        }
         val externalFractal =
             fractalHigh != null &&
                 fractalTeeth != null &&
+                fractalTeeth.isFinite() &&
+                fractalTeeth > 0.0 &&
                 fractalHigh > fractalTeeth
         val breakoutDistance =
             if (fractalHigh != null && fractalHigh > 0.0) {
@@ -7114,13 +7126,21 @@ private class NativeEngine(
         return count.coerceIn(0, 3)
     }
 
+    /**
+     * Bill Williams Alligator calculated from median prices and displayed with
+     * Jaw/Teeth/Lips shifts 8/5/3. Keep this helper out of any close-price-only
+     * shortcuts so the scanner summary and chart use the same indicator family
+     * as the Spot/Futures campaign signal detectors.
+     */
     private fun alligator(
-        closes: List<Double>
+        medianPrices: List<Double>
     ): TripleValues {
-        val jaw = smma(closes, 13).lastOrNull() ?: 0.0
-        val teeth = smma(closes, 8).lastOrNull() ?: 0.0
-        val lips = smma(closes, 5).lastOrNull() ?: 0.0
-        return TripleValues(jaw, teeth, lips)
+        val lines = WilliamsAlligatorMath.calculateFromMedianPrices(medianPrices)
+        return TripleValues(
+            lines.jaw.lastOrNull() ?: Double.NaN,
+            lines.teeth.lastOrNull() ?: Double.NaN,
+            lines.lips.lastOrNull() ?: Double.NaN
+        )
     }
 
     private data class TripleValues(
@@ -7324,7 +7344,7 @@ private class NativeEngine(
             }
 
         val alligatorValues =
-            alligator(candles.map { it.c })
+            alligator(candles.map { (it.h + it.l) / 2.0 })
 
         val bullish =
             alligatorValues.lips >
@@ -7927,13 +7947,14 @@ private class NativeEngine(
         }
 
         val output = JSONArray()
-        val prices =
-            sourceCandles.map { it.c }
+        val prices = sourceCandles.map { it.c }
+        val medianPrices = sourceCandles.map { (it.h + it.l) / 2.0 }
 
         if (prices.isNotEmpty()) {
-            val jaw = smma(prices, 13)
-            val teeth = smma(prices, 8)
-            val lips = smma(prices, 5)
+            val lines = WilliamsAlligatorMath.calculateFromMedianPrices(medianPrices)
+            val jaw = lines.jaw
+            val teeth = lines.teeth
+            val lips = lines.lips
 
             val start =
                 max(0, sourceCandles.size - 120)
@@ -7969,17 +7990,13 @@ private class NativeEngine(
                         .put(
                             "long_signal",
                             i >= 40 &&
-                                alligator(
-                                    prices.subList(
-                                        0,
-                                        i + 1
-                                    )
-                                ).let { values ->
-                                    values.lips > values.teeth &&
-                                        values.teeth > values.jaw &&
-                                        prices[i] > values.lips &&
-                                        ao(sourceCandles, i) > 0.0
-                                }
+                                lips[i].isFinite() &&
+                                teeth[i].isFinite() &&
+                                jaw[i].isFinite() &&
+                                lips[i] > teeth[i] &&
+                                teeth[i] > jaw[i] &&
+                                prices[i] > lips[i] &&
+                                ao(sourceCandles, i) > 0.0
                         )
                         .put(
                             "fractal_up",
