@@ -546,69 +546,85 @@ class FuturesRuntime:
                 # ADD_ON when a campaign already exists, but may be the first
                 # initial entry when no earlier Wise-Man signal is available.
                 parsed.append(replace(spec, role=SignalRole.ENTRY))
-        signal = choose_initial_williams_signal(parsed, direction)
-        if signal is None:
+        now_ms = int(time.time() * 1000)
+        live = []
+        for spec in parsed:
+            try:
+                trigger = float(spec.trigger_price)
+                expires = int(spec.expires_at_ms or 0)
+                confirmation = int(spec.confirmation_time_ms or spec.signal_bar_time_ms)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if not math.isfinite(trigger) or trigger <= 0 or expires <= now_ms:
+                continue
+            live.append((confirmation, int(spec.created_at_ms), replace(spec, role=SignalRole.ENTRY)))
+        if not live:
             raise FuturesCampaignExecutionError(
-                f"{candidate.symbol}: no valid {direction} campaign signal"
+                f"{candidate.symbol}: no valid, unexpired {direction} campaign signal"
             )
-
+        # Evaluate context per candidate. A valid but context-vetoed older
+        # signal must not hide a later actionable Wise-Man setup.
+        live.sort(key=lambda item: (item[0], item[1]))
         snapshot = self.context_cache.snapshot()
-        operative = snapshot.context(signal.symbol, signal.timeframe)
-        if operative is None:
-            raise FuturesCampaignExecutionError(
-                f"{signal.symbol}/{signal.timeframe}: context missing after refresh"
-            )
-        wm1_reversal = signal.signal_type == SignalType.REVERSAL
-        operative_ok = operative.allow_long if direction == "LONG" else operative.allow_short
-        if not operative_ok and not wm1_reversal:
-            raise FuturesCampaignExecutionError(
-                f"{signal.symbol}/{signal.timeframe}: operative Williams context disallows {direction}"
-            )
-
         seconds = {iv: _interval_seconds(iv) for iv in self.context_intervals}
         parent_intervals = sorted(
-            [iv for iv in self.context_intervals if seconds[iv] > _interval_seconds(signal.timeframe)],
+            [iv for iv in self.context_intervals if seconds[iv] > _interval_seconds("1h")],
             key=lambda iv: seconds[iv],
         )
-        parent_ok = not self.require_htf_confirmation
-        if self.require_htf_confirmation:
-            if not parent_intervals:
+        vetoes = []
+        for _, _, signal in live:
+            operative = snapshot.context(signal.symbol, signal.timeframe)
+            if operative is None:
                 raise FuturesCampaignExecutionError(
-                    f"{signal.symbol}: no higher timeframe available for confirmation"
+                    f"{signal.symbol}/{signal.timeframe}: context missing after refresh"
                 )
-            # The immediate structural parent is mandatory. Larger contexts
-            # may be neutral but must not actively contradict the setup.
-            immediate_parent = parent_intervals[0]
-            parent = snapshot.context(signal.symbol, immediate_parent)
-            if parent is None:
-                raise FuturesCampaignExecutionError(
-                    f"{signal.symbol}/{immediate_parent}: higher-timeframe context missing"
-                )
-            parent_ok = parent.allow_long if direction == "LONG" else parent.allow_short
-            if not parent_ok and not wm1_reversal:
-                raise FuturesCampaignExecutionError(
-                    f"{signal.symbol}/{immediate_parent}: higher timeframe does not confirm {direction}"
-                )
-            # For WM1, a higher timeframe is context, not a requirement that
-            # the reversal already be confirmed by the new trend. Larger
-            # contexts below (including D1) still veto an active contradiction.
-            for interval in parent_intervals[1:]:
-                higher = snapshot.context(signal.symbol, interval)
-                if higher is None:
-                    raise FuturesCampaignExecutionError(
-                        f"{signal.symbol}/{interval}: structural context missing"
-                    )
-                opposite = higher.allow_short if direction == "LONG" else higher.allow_long
-                if opposite:
-                    raise FuturesCampaignExecutionError(
-                        f"{signal.symbol}/{interval}: higher timeframe contradicts {direction}"
-                    )
+            wm1_reversal = signal.signal_type == SignalType.REVERSAL
+            operative_ok = operative.allow_long if direction == "LONG" else operative.allow_short
+            if not operative_ok and not wm1_reversal:
+                vetoes.append(f"{signal.signal_type.value}: operative context disallows {direction}")
+                continue
 
-        versions = snapshot.versions(signal.symbol, list(self.context_intervals))
-        return replace(
-            signal,
-            htf_confirmed=bool(parent_ok),
-            context_versions=versions,
+            parent_ok = not self.require_htf_confirmation
+            if self.require_htf_confirmation:
+                if not parent_intervals:
+                    raise FuturesCampaignExecutionError(
+                        f"{signal.symbol}: no higher timeframe available for confirmation"
+                    )
+                immediate_parent = parent_intervals[0]
+                parent = snapshot.context(signal.symbol, immediate_parent)
+                if parent is None:
+                    raise FuturesCampaignExecutionError(
+                        f"{signal.symbol}/{immediate_parent}: higher-timeframe context missing"
+                    )
+                parent_ok = parent.allow_long if direction == "LONG" else parent.allow_short
+                if not parent_ok and not wm1_reversal:
+                    vetoes.append(f"{signal.signal_type.value}: {immediate_parent} does not confirm {direction}")
+                    continue
+                blocked_by_higher = False
+                for interval in parent_intervals[1:]:
+                    higher = snapshot.context(signal.symbol, interval)
+                    if higher is None:
+                        raise FuturesCampaignExecutionError(
+                            f"{signal.symbol}/{interval}: structural context missing"
+                        )
+                    opposite = higher.allow_short if direction == "LONG" else higher.allow_long
+                    if opposite:
+                        vetoes.append(f"{signal.signal_type.value}: {interval} actively contradicts {direction}")
+                        blocked_by_higher = True
+                        break
+                if blocked_by_higher:
+                    continue
+
+            versions = snapshot.versions(signal.symbol, list(self.context_intervals))
+            return replace(
+                signal,
+                htf_confirmed=bool(parent_ok),
+                context_versions=versions,
+            )
+
+        raise FuturesCampaignExecutionError(
+            f"{candidate.symbol}: all live {direction} signals failed context admission: "
+            + "; ".join(vetoes)
         )
 
     def _directional_add_on_signal(
