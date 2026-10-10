@@ -779,6 +779,7 @@ class MarketScanner:
                 return None
             if (
                 candidate.signal
+                and self.strategy_profile != "TC2_THREE_WISE_MEN"
                 and self.require_htf_confirmation
                 and not self._is_tc2_early_wm1(candidate)
                 and not self._htf_confirmation(candidate.symbol)
@@ -990,7 +991,13 @@ class MarketScanner:
             wave_scenario_primary=(setup.scenario_primary if setup else ""),
             wave_scenario_alternative=(setup.scenario_alternative if setup else ""),
             wave_operative_interval=report.operative_interval,
-            campaign_ready=bool(candidate.campaign_ready and htf_confirmed),
+            campaign_ready=bool(
+                candidate.campaign_ready
+                and (
+                    self.strategy_profile == "TC2_THREE_WISE_MEN"
+                    or htf_confirmed
+                )
+            ),
             entry_signal_type=(
                 enriched_signal_specs[0].get("signal_type", "") if enriched_signal_specs else candidate.entry_signal_type
             ),
