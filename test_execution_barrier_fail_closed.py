@@ -51,6 +51,20 @@ class FakeDB:
         return True
 
 
+@pytest.fixture(autouse=True)
+def _controlled_preflight_test_seam(monkeypatch):
+    """Test-only class-level seam; production code has no callback injection."""
+    original = PreflightCheckService.verify_all
+
+    def controlled(service, *args, **kwargs):
+        provider = getattr(service, "_test_preflight_provider", None)
+        if provider is not None:
+            return provider()
+        return original(service, *args, **kwargs)
+
+    monkeypatch.setattr(PreflightCheckService, "verify_all", controlled)
+
+
 def _context():
     return TFMarketContext(
         symbol="BTCUSDT", interval="1h", version=0,
@@ -94,9 +108,9 @@ def _barrier(db, provider=_ready_preflight, *, client=None, service_client=None)
     service = None
     if provider is not None:
         service = PreflightCheckService(service_client if service_client is not None else client, symbols=["BTCUSDT"])
-        # Controlled test seam: production callers cannot supply a callback to
-        # ExecutionBarrier; tests can deterministically model Preflight outcomes.
-        service.verify_all = provider
+        # Controlled test seam is activated only by this test module fixture;
+        # ExecutionBarrier calls the class implementation directly in production.
+        service._test_preflight_provider = provider
     return ExecutionBarrier(cache, db, preflight_service=service, exchange_client=client)
 
 
@@ -479,3 +493,24 @@ def test_legacy_portfolio_mutation_wrapper_routes_through_barrier():
     assert trader.execution_barrier.intent.client_order_id == "CID_LEGACY_BARRIER"
     assert trader.execution_barrier.intent.purpose == "CAMPAIGN_MANUAL_EXIT"
     assert trader.db.states["position_state:BTCUSDT"] == "RECONCILE_REQUIRED"
+
+
+def test_instance_method_substitution_cannot_forge_ready_report():
+    client = FakeSpotClient()
+    cache = ContextCache()
+    cache.publish(_context())
+    service = PreflightCheckService(client, symbols=["BTCUSDT"])
+    # Attempt to replace the instance method with a fabricated green report.
+    service.verify_all = _ready_preflight
+    barrier = ExecutionBarrier(
+        cache, FakeDB(), preflight_service=service, exchange_client=client,
+    )
+    calls = []
+    result = barrier.execute(
+        _intent("CID_INSTANCE_METHOD_FORGERY"),
+        lambda: calls.append("submit"),
+        pre_submit_checks=_pre_submit,
+    )
+    assert not result.accepted
+    assert result.reason == "preflight_not_ready"
+    assert calls == []
