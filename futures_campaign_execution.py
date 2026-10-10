@@ -298,6 +298,23 @@ class FuturesCampaignExecutionService:
         rows = self.db.open_campaigns()
         return [r for r in rows if str(r.get("state", "")).upper() not in {"CLOSED", "FLAT"}]
 
+    def _assert_position_capacity(self) -> None:
+        """Defense-in-depth cap for callers that bypass FuturesRuntime.
+
+        This is a persisted-state admission check, not an atomic multi-process
+        slot reservation. The per-symbol pending-entry claim still prevents
+        duplicate entries for one symbol; a portfolio-wide concurrent slot
+        reservation remains a separate requirement.
+        """
+        active_futures = [
+            row for row in self._active_rows()
+            if self._row_tags(row).get("execution_mode") == "FUTURES"
+        ]
+        if len(active_futures) >= self.max_open_positions:
+            raise FuturesCampaignExecutionError(
+                "Maximum open Futures campaign count reached; new campaign blocked"
+            )
+
     @staticmethod
     def _row_tags(row: dict[str, Any]) -> dict[str, Any]:
         raw = row.get("tags_json", "{}")
@@ -880,6 +897,9 @@ class FuturesCampaignExecutionService:
         )
         if tc2_core:
             signal = replace(signal, context_versions=self._context_versions(signal))
+        # Runtime enforces the same cap during portfolio selection, but this
+        # final service boundary must also reject direct callers that bypass it.
+        self._assert_position_capacity()
         self._entry_preflight(signal, direction, trigger, stop)
         capacity_quote = equity * self.portfolio_risk_limit_pct
         portfolio_reserved = self.engine.portfolio_reserved_risk_quote()
