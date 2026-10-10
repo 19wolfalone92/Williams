@@ -229,3 +229,25 @@ At the time of inspection, the connector did not return useful commit-status or 
 7. **CI:** pending/queued/in-progress jobs are not success. Task remains blocked until Python, Campaign CI, Android APK, lint/unit tests and golden replay complete on the exact final report SHA.
 
 **Acceptance decision:** H1 admission has been strengthened on both runtimes, but TASK 004.4 is **NOT ACCEPTED**. Do not mark the PR ready, merge it, or enable live trading on the basis of these changes alone.
+
+
+### Изменённые файлы TASK 004.4
+
+- `execution_barrier.py`
+- `campaign_execution.py`
+- `mock_exchange.py`
+- `test_campaign_execution.py`
+- `app/src/main/java/com/williamsbot/StandaloneRuntime.kt`
+- `app/src/main/java/com/williamsbot/WilliamsTimeframeContract.kt`
+- `app/src/test/java/com/williamsbot/WilliamsStrategyGoldenVectorsTest.kt`
+- `audit/williams-2.1-task-004-williams-strategy/REPORT_RU.md`
+
+### CI run links recorded before this report revision
+
+These runs target code SHA `c7d868130839eb87db3bb6da076042a86810b7cd`; they are included for traceability only and are **not** proof for the new report commit SHA:
+
+- [Python backend tests — c7d8681](https://github.com/19wolfalone92/Williams/actions/runs/38088806286)
+- [Williams Campaign CI — c7d8681](https://github.com/19wolfalone92/Williams/actions/runs/38088806287)
+- [Build Android APK — c7d8681](https://github.com/19wolfalone92/Williams/actions/runs/38088806293)
+
+A fresh set of workflows is expected for the final report commit. Acceptance requires checking each job on that exact final SHA; queued, pending, running, cancelled, or failed jobs do not count as success.
