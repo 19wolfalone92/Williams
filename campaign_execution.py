@@ -581,7 +581,6 @@ class CampaignExecutionService:
                             f"{symbol}: executed conditional BUY has no authoritative quote quantity"
                         )
                     avg = quote / executed
-                    fee_quote = self._executed_fee_quote(symbol, order, executed, avg)
 
                     if purpose == "ADD_ON" or campaign.state == CampaignState.ADD_ON_PENDING:
                         if campaign.state == CampaignState.ADD_ON_PENDING:
@@ -619,6 +618,8 @@ class CampaignExecutionService:
                                 "order_id", ""
                             )
 
+                        # Protection must be verified/installed before fee reconciliation.
+                        fee_quote = self._executed_fee_quote(symbol, order, executed, avg)
                         self.engine.record_add_on_fill(
                             campaign,
                             quantity=executed,
@@ -710,6 +711,9 @@ class CampaignExecutionService:
                         "order_id", ""
                     )
 
+                    # Install the stop for the actual executed quantity before any
+                    # ancillary trade/commission lookup can fail.
+                    fee_quote = self._executed_fee_quote(symbol, order, executed, avg)
                     self.engine.record_initial_fill(
                         campaign,
                         quantity=executed,
