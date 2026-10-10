@@ -6,6 +6,9 @@ import tempfile
 import pytest
 
 from db import Database
+from mock_exchange import MockExchange
+from portfolio_trader import MultiPositionTrader
+from trader import Trader
 
 
 def evidence(**overrides):
@@ -131,3 +134,49 @@ def test_order_identity_conflict_is_not_silently_overwritten():
                 "symbol": "BTCUSDT", "orderId": 11, "clientOrderId": "cid-a",
                 "side": "BUY", "type": "LIMIT", "status": "NEW", "origQty": "1",
             })
+
+
+def _recovery_gate_fixture(path):
+    db = Database(path)
+    client = MockExchange()
+    runtime = object.__new__(Trader)
+    runtime.db = db
+    runtime.client = client
+    runtime.auto_scan_symbols = ["BTCUSDT"]
+    runtime.symbol = "BTCUSDT"
+    portfolio = MultiPositionTrader(client, db=db, symbols=["BTCUSDT"])
+    report = {
+        "ready": True,
+        "checks": {"api_reachable": "PASS", "account": "PASS"},
+    }
+    recovery = {"ok": True, "state": "FLAT"}
+    return db, client, runtime, portfolio, report, recovery
+
+
+def test_startup_gate_unlocks_only_after_complete_read_only_reconciliation(tmp_path):
+    db, client, runtime, portfolio, report, recovery = _recovery_gate_fixture(
+        str(tmp_path / "gate.sqlite3")
+    )
+    assert db.state_get("recovery_state") == "REQUIRED"
+    runtime._finalize_recovery_gate(report, recovery, portfolio)
+    assert db.state_get("recovery_state") == "READY"
+    assert db.state_get("position_state") == "FLAT"
+
+
+def test_startup_gate_remains_blocked_when_exchange_has_unknown_open_order(tmp_path):
+    db, client, runtime, portfolio, report, recovery = _recovery_gate_fixture(
+        str(tmp_path / "gate_unknown.sqlite3")
+    )
+    client.orders.append({
+        "symbol": "BTCUSDT",
+        "orderId": "foreign-1",
+        "clientOrderId": "FOREIGN_ORDER",
+        "side": "BUY",
+        "type": "LIMIT",
+        "status": "NEW",
+        "origQty": "1",
+        "executedQty": "0",
+    })
+    with pytest.raises(RuntimeError, match="unknown exchange orders"):
+        runtime._finalize_recovery_gate(report, recovery, portfolio)
+    assert db.state_get("recovery_state") == "REQUIRED"
