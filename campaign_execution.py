@@ -1445,6 +1445,22 @@ class CampaignExecutionService:
             campaign_id=campaign.campaign_id,
             signal_id=campaign.current_signal_id,
         )
+        # Persist both legs and the stable replacement identity before the
+        # ExecutionBarrier is allowed to perform the non-atomic exchange mutation.
+        old_client_row = self.db.conn.execute(
+            "SELECT client_order_id FROM campaign_orders "
+            "WHERE symbol=? AND order_id=? ORDER BY id DESC LIMIT 1",
+            (campaign.symbol, str(existing_order_id)),
+        ).fetchone()
+        old_client_id = old_client_row["client_order_id"] if old_client_row else None
+        self.db.create_cancel_replace_operation(
+            operation_id=intent.intent_id,
+            intent_id=intent.intent_id,
+            symbol=campaign.symbol,
+            old_order_id=existing_order_id,
+            old_client_order_id=old_client_id,
+            replacement_client_order_id=cid,
+        )
         result = self._submit(
             intent,
             lambda: self.client.cancel_replace(
@@ -1458,6 +1474,22 @@ class CampaignExecutionService:
             ),
             lambda _snapshot: self._check_algo_capacity(campaign.symbol, 0),
         )
+        # This write is deliberately not allowed to clear reconcile_required:
+        # financial exposure and actual protection still need independent proof.
+        try:
+            self.db.update_cancel_replace_operation(
+                intent.intent_id, result, reconcile_required=True,
+                reconciliation={"source": "cancelReplace_response", "confirmed": False},
+            )
+        except Exception as exc:
+            campaign.mark_reconcile_required(
+                f"cancelReplace response received but durable per-leg update failed: {type(exc).__name__}"
+            )
+            self.db.save_campaign(campaign)
+            self.db.state_set(f"position_state:{campaign.symbol}", "RECONCILE_REQUIRED")
+            raise CampaignExecutionError(
+                f"{campaign.symbol}: cancelReplace outcome persistence failed; reconciliation required"
+            ) from exc
 
         cancel_result = str(result.get("cancelResult", "")).upper()
         new_result = str(result.get("newOrderResult", "")).upper()
