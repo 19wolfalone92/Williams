@@ -6,6 +6,10 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
+
+class ExecutionPersistenceError(RuntimeError):
+    """Durable execution evidence could not be written safely."""
+
 from market_context import ContextCache, MarketStateSnapshot
 from order_state_machine import OrderState, OrderStateMachine
 from order_state_machine import OrderState, OrderStateMachine
@@ -71,20 +75,41 @@ class ExecutionBarrier:
     def __init__(self, context_cache: ContextCache, db=None) -> None:
         self.context_cache = context_cache
         self.db = db
+        self._poisoned = False
+
+    @staticmethod
+    def _risk_reducing(intent: OrderIntent) -> bool:
+        purpose = str(intent.purpose or "").upper()
+        side = str(intent.side or "").upper()
+        order_type = str(intent.order_type or "").upper()
+        if side == "SELL" and any(
+            token in purpose for token in ("PROTECTION", "EXIT", "EMERGENCY", "STOP")
+        ):
+            return True
+        # Exiting a campaign uses a cancel-then-sell sequence. This narrowly
+        # permits cancellation of the campaign's own protection; restart recovery
+        # must re-establish protection if the following sell is interrupted.
+        return order_type == "CANCEL" and purpose == "CAMPAIGN_PROTECTION_CANCEL"
 
     def _persist(self, intent: OrderIntent, status: str, reason: str = "") -> None:
-        if self.db is not None and hasattr(self.db, "save_execution_intent"):
-            try:
-                self.db.save_execution_intent(intent, status, reason)
-            except Exception:
-                pass
+        if self.db is None or not hasattr(self.db, "save_execution_intent"):
+            raise ExecutionPersistenceError("durable execution-intent store is unavailable")
+        try:
+            self.db.save_execution_intent(intent, status, reason)
+        except Exception as exc:
+            raise ExecutionPersistenceError(
+                f"cannot persist execution intent {intent.intent_id} status={status}; exchange mutation blocked"
+            ) from exc
 
     def _record(self, level: str, event: str, intent: OrderIntent, message: str, raw=None) -> None:
-        if self.db is not None and hasattr(self.db, "log_event"):
-            try:
-                self.db.log_event(level, event, message, raw or {"intent_id": intent.intent_id})
-            except Exception:
-                pass
+        if self.db is None or not hasattr(self.db, "log_event"):
+            raise ExecutionPersistenceError("durable execution event journal is unavailable")
+        try:
+            self.db.log_event(level, event, message, raw or {"intent_id": intent.intent_id})
+        except Exception as exc:
+            raise ExecutionPersistenceError(
+                f"cannot persist execution event {event} for intent {intent.intent_id}"
+            ) from exc
 
     def _validate(self, intent: OrderIntent, snapshot: MarketStateSnapshot) -> str:
         if intent.created_at_ms:
@@ -123,18 +148,23 @@ class ExecutionBarrier:
             if direction == "short" and not permission_ctx.allow_short:
                 return f"context {permission_tf} does not allow SHORT"
 
-        if self.db is not None and hasattr(self.db, "state_get"):
-            state = str(self.db.state_get("position_state", "FLAT"))
-            if state == "RECONCILE_REQUIRED":
-                return "RECONCILE_REQUIRED"
-            campaign_state = str(
-                self.db.state_get(
-                    f"campaign_state:{intent.campaign_id}",
-                    "CLEAN"
-                )
-            ) if intent.campaign_id else "CLEAN"
-            if campaign_state == "RECONCILE_REQUIRED":
-                return "campaign_reconcile_required"
+        risk_reducing = self._risk_reducing(intent)
+        if self._poisoned and not risk_reducing:
+            return "execution_barrier_poisoned_reconciliation_required"
+
+        if self.db is None or not hasattr(self.db, "state_get"):
+            return "durable recovery gate is unavailable"
+        recovery_state = str(self.db.state_get("recovery_state", "REQUIRED")).upper()
+        if recovery_state != "READY" and not risk_reducing:
+            return f"RECOVERY_REQUIRED:{recovery_state}"
+        state = str(self.db.state_get("position_state", "RECONCILE_REQUIRED")).upper()
+        if state == "RECONCILE_REQUIRED" and not risk_reducing:
+            return "RECONCILE_REQUIRED"
+        campaign_state = str(
+            self.db.state_get(f"campaign_state:{intent.campaign_id}", "CLEAN")
+        ).upper() if intent.campaign_id else "CLEAN"
+        if campaign_state == "RECONCILE_REQUIRED" and not risk_reducing:
+            return "campaign_reconcile_required"
 
         return ""
 
@@ -148,19 +178,25 @@ class ExecutionBarrier:
         with self.context_cache.execution_lock:
             order_fsm = OrderStateMachine()
             order_fsm.transition(OrderState.ADMISSION)
+
+            # This durable write is a hard precondition. If it fails, submit()
+            # is never called and no exchange mutation can have occurred.
             self._persist(intent, "PENDING")
-            if self.db is not None and hasattr(self.db, "save_execution_event"):
-                try:
-                    self.db.save_execution_event(intent.intent_id, "ADMISSION_STARTED", dict(intent.required_context_versions))
-                except Exception:
-                    pass
+            if self.db is None or not hasattr(self.db, "save_execution_event"):
+                raise ExecutionPersistenceError("durable execution-event store is unavailable")
+            try:
+                self.db.save_execution_event(
+                    intent.intent_id, "ADMISSION_STARTED",
+                    dict(intent.required_context_versions),
+                )
+            except Exception as exc:
+                raise ExecutionPersistenceError(
+                    f"cannot persist admission event for intent {intent.intent_id}; submission blocked"
+                ) from exc
+
             snapshot = self.context_cache.snapshot()
             reason = self._validate(intent, snapshot)
             if reason:
-                try:
-                    order_fsm.transition(OrderState.CANCELED)
-                except ValueError:
-                    order_fsm.state = OrderState.RECONCILE_REQUIRED
                 self._record("WARNING", "execution_blocked", intent, reason)
                 self._persist(intent, "BLOCKED", reason)
                 return ExecutionResult(intent.intent_id, False, reason=reason)
@@ -169,22 +205,15 @@ class ExecutionBarrier:
                 try:
                     pre_submit_checks(snapshot)
                 except Exception as exc:
-                    try:
-                        order_fsm.transition(OrderState.CANCELED)
-                    except ValueError:
-                        order_fsm.state = OrderState.RECONCILE_REQUIRED
                     reason = f"pre_submit_check_failed: {type(exc).__name__}: {exc}"
                     self._persist(intent, "BLOCKED", reason)
                     self._record("WARNING", "execution_blocked", intent, reason)
                     return ExecutionResult(intent.intent_id, False, reason=reason)
 
             order_fsm.transition(OrderState.SUBMITTING)
-            order_fsm.transition(OrderState.SUBMITTING)
             self._record(
-                "INFO",
-                "execution_admitted",
-                intent,
-                "Final P0 validation passed; submitting to Binance",
+                "INFO", "execution_admitted", intent,
+                "Final validation passed; submitting to Binance",
                 {
                     "intent_id": intent.intent_id,
                     "symbol": intent.symbol,
@@ -198,99 +227,68 @@ class ExecutionBarrier:
             try:
                 response = submit()
             except Exception as exc:
-                order_fsm.state = OrderState.AMBIGUOUS
-                order_fsm.state = OrderState.AMBIGUOUS
-                self._persist(intent, "AMBIGUOUS", f"{type(exc).__name__}: {exc}")
-                self._record(
-                    "ERROR",
-                    "execution_ambiguous",
-                    intent,
-                    "Binance submission failed or timed out; reconciliation required",
-                    {"error": f"{type(exc).__name__}: {exc}"},
-                )
+                # Keep the durable intent even when the HTTP outcome is unknown.
+                # Recovery must query the same clientOrderId; never blind-resubmit.
+                self._poisoned = True
+                try:
+                    self._persist(intent, "AMBIGUOUS", f"{type(exc).__name__}: {exc}")
+                    self._record(
+                        "ERROR", "execution_ambiguous", intent,
+                        "Binance submission failed or timed out; reconciliation required",
+                        {"error": f"{type(exc).__name__}: {exc}"},
+                    )
+                    self.db.save_execution_event(
+                        intent.intent_id, "SUBMISSION_AMBIGUOUS",
+                        {"error": f"{type(exc).__name__}: {exc}"},
+                    )
+                except Exception as journal_exc:
+                    raise ExecutionPersistenceError(
+                        "submission outcome is ambiguous and durable journal update failed"
+                    ) from journal_exc
                 raise
 
             if intent.order_type != "CANCEL":
-                status = str(
-                    response.get("status", "")
-                    if isinstance(response, dict)
-                    else ""
-                ).upper()
+                status = str(response.get("status", "") if isinstance(response, dict) else "").upper()
                 if status:
-                    order_fsm.observe_exchange_status(
-                        status,
-                        float(
-                            response.get("executedQty", 0) or 0
-                            if isinstance(response, dict)
-                            else 0
-                        ),
-                    )
-                elif (
-                    isinstance(response, dict)
-                    and str(response.get("newOrderResult", "")).upper() == "SUCCESS"
-                ):
+                    order_fsm.observe_exchange_status(status, float(response.get("executedQty", 0) or 0))
+                elif isinstance(response, dict) and str(response.get("newOrderResult", "")).upper() == "SUCCESS":
                     order_fsm.state = OrderState.OPEN
                 else:
-                    order_fsm.state = OrderState.RECONCILE_REQUIRED
-                    self._persist(
-                        intent,
-                        "AMBIGUOUS",
-                        "exchange response did not contain authoritative order state",
-                    )
-                    self._record(
-                        "ERROR",
-                        "execution_ambiguous",
-                        intent,
-                        "Exchange accepted an operation without authoritative state",
-                        {"response_keys": list(response.keys()) if isinstance(response, dict) else []},
-                    )
-                    raise RuntimeError(
-                        "ExecutionBarrier: exchange response lacks authoritative order state"
-                    )
-            if intent.order_type != "CANCEL":
-                status = str(
-                    response.get("status", "")
-                    if isinstance(response, dict)
-                    else ""
-                ).upper()
-                if status:
-                    order_fsm.observe_exchange_status(
-                        status,
-                        float(
-                            response.get("executedQty", 0) or 0
-                            if isinstance(response, dict)
-                            else 0
-                        ),
-                    )
-                elif (
-                    isinstance(response, dict)
-                    and str(response.get("newOrderResult", "")).upper() == "SUCCESS"
-                ):
-                    order_fsm.state = OrderState.OPEN
-                else:
-                    order_fsm.state = OrderState.RECONCILE_REQUIRED
-                    self._persist(
-                        intent,
-                        "AMBIGUOUS",
-                        "exchange response did not contain authoritative order state",
-                    )
-                    self._record(
-                        "ERROR",
-                        "execution_ambiguous",
-                        intent,
-                        "Exchange accepted an operation without authoritative state",
-                        {"response_keys": list(response.keys()) if isinstance(response, dict) else []},
-                    )
-                    raise RuntimeError(
-                        "ExecutionBarrier: exchange response lacks authoritative order state"
-                    )
-            self._persist(intent, "SUBMITTED")
-            if self.db is not None and hasattr(self.db, "save_execution_event"):
-                try:
-                    self.db.save_execution_event(intent.intent_id, "BINANCE_SUBMITTED", {"symbol": intent.symbol, "side": intent.side})
-                except Exception:
-                    pass
-            self._record("INFO", "execution_submitted", intent, "Binance accepted request", {
-                "intent_id": intent.intent_id,
-            })
+                    self._poisoned = True
+                    reason = "exchange response did not contain authoritative order state"
+                    try:
+                        self._persist(intent, "AMBIGUOUS", reason)
+                        self._record(
+                            "ERROR", "execution_ambiguous", intent, reason,
+                            {"response_keys": list(response.keys()) if isinstance(response, dict) else []},
+                        )
+                    except Exception as journal_exc:
+                        raise ExecutionPersistenceError(
+                            "exchange accepted an operation but authoritative state/journal are unresolved"
+                        ) from journal_exc
+                    raise RuntimeError(f"ExecutionBarrier: {reason}")
+
+            # If a post-response write fails, the pre-submit PENDING intent remains
+            # durable. Poison the in-memory barrier until reconciliation/restart.
+            try:
+                self._persist(intent, "SUBMITTED")
+                self.db.save_execution_event(
+                    intent.intent_id, "EXCHANGE_RESPONSE",
+                    response if isinstance(response, dict) else {"response": str(response)},
+                )
+                self._record(
+                    "INFO", "execution_result", intent,
+                    "Exchange response persisted",
+                    {
+                        "order_state": order_fsm.state.value,
+                        "client_order_id": intent.client_order_id,
+                        "order_id": response.get("orderId") if isinstance(response, dict) else None,
+                    },
+                )
+            except Exception as exc:
+                self._poisoned = True
+                raise ExecutionPersistenceError(
+                    "exchange operation may have succeeded but its result was not durably recorded; reconciliation required"
+                ) from exc
+
             return ExecutionResult(intent.intent_id, True, response=response)
