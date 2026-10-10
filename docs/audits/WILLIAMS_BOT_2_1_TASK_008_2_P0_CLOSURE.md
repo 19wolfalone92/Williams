@@ -119,3 +119,16 @@ The ordinary legacy portfolio paths now route through the barrier. The emergency
 - No authorized read-only Spot Testnet preflight has been run.
 
 **Status remains BLOCKED / NOT ACCEPTED.** The code changes above do not authorize trading and do not establish READY FOR READ-ONLY TESTNET VERIFICATION.
+
+
+## 8. CI wiring and test compatibility addendum
+
+| SHA | Change | Status |
+|---|---|---|
+| `a8a8dc021d3bcd1bf7abe091a4ea027dc9669d26` | Migrated campaign execution tests from arbitrary provider injection to a test-only class-level preflight fixture bound to the MockExchange client. | Committed; not executed. |
+| `0b344b99cd9f1568d59ef365fac77fc940ed38c2` | Migrated production-architecture tests to the client-bound service and test-only fixture. | Committed; not executed. |
+| `ee4982f52b54183bddc9f77fe8d86a98cde4cc9d` | Added the missing pytest import for the scoped fixture. | Committed; not executed. |
+| `274bf3c77f20fb963e53d74c7d650566ece77336` | Added `test_runtime_freshness.py` to the Python Campaign CI command. | Workflow definition updated; no successful run is claimed. |
+
+At SHA `274bf3c77f20fb963e53d74c7d650566ece77336`, the GitHub combined-status lookup returned an empty status list, and the available workflow-run lookup returned no PR-triggered runs. This is **UNKNOWN**, not PASS. The branch search found no PR with the specified head branch, so no duplicate PR was created. The latest CI evidence must be obtained from an actual Actions run on the final branch head.
+
