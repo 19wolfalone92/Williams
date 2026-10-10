@@ -264,16 +264,42 @@ class TradingAuditStore(context: Context) :
     }
 
     @Synchronized
-    fun resolveUnresolvedMutationIntents(reason: String): Int {
-        val values = ContentValues()
-        values.put("status", "RECONCILED")
-        values.put("error", reason)
-        values.put("updated_at", System.currentTimeMillis())
-        return writableDatabase.update(
-            "mutation_intents",
-            values,
-            "status IN ('PENDING','UNKNOWN')",
+    fun unresolvedMutationIntents(): List<JSONObject> {
+        val rows = mutableListOf<JSONObject>()
+        readableDatabase.rawQuery(
+            """SELECT intent_id, method, path, symbol, side, client_order_id,
+                      status, request_json, created_at
+               FROM mutation_intents
+               WHERE status IN ('PENDING','UNKNOWN')
+               ORDER BY created_at ASC""".trimIndent(),
             null
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                rows += JSONObject()
+                    .put("intent_id", cursor.getString(0))
+                    .put("method", cursor.getString(1))
+                    .put("path", cursor.getString(2))
+                    .put("symbol", cursor.getString(3))
+                    .put("side", cursor.getString(4))
+                    .put("client_order_id", cursor.getString(5))
+                    .put("status", cursor.getString(6))
+                    .put("request_json", cursor.getString(7))
+                    .put("created_at", cursor.getLong(8))
+            }
+        }
+        return rows
+    }
+
+    @Synchronized
+    fun confirmMutationIntent(
+        intentId: String,
+        exchangeEvidence: JSONObject
+    ) {
+        finishMutationIntent(
+            intentId,
+            "RECONCILED",
+            exchangeEvidence.toString(),
+            "Authoritative Binance REST state verified during recovery"
         )
     }
 
