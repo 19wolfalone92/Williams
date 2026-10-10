@@ -446,3 +446,38 @@ def test_stop_replacement_never_lowers_stop():
         assert current > 0
         assert not svc.engine.propose_stop(campaign, current - 1.0, "BAD")
         assert campaign.current_stop_price == current
+
+
+def test_reconcile_pending_entry_blocks_when_authoritative_fill_history_is_unavailable():
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "campaign-missing-fill-history.sqlite3"))
+        client = MockExchange()
+        svc = service(db, client)
+        armed = svc.arm_initial_entry(
+            signal(trigger=101.0),
+            equity_quote=10_000,
+            candidate_risk_pct=0.004,
+        )
+        client.set_price("BTCUSDT", 101.5)
+        original_get_order = client.get_order
+
+        def zero_quote_snapshot(*args, **kwargs):
+            snapshot = original_get_order(*args, **kwargs)
+            snapshot["cummulativeQuoteQty"] = "0"
+            return snapshot
+
+        def unavailable_trade_history(*args, **kwargs):
+            raise RuntimeError("fixture: trade history unavailable")
+
+        client.get_order = zero_quote_snapshot
+        client.my_trades = unavailable_trade_history
+        result = svc.reconcile_pending_entries()
+
+        assert result[0]["state"] == "RECONCILE_REQUIRED"
+        assert "fill history is unavailable" in result[0]["error"]
+        assert db.state_get("position_state:BTCUSDT") == "RECONCILE_REQUIRED"
+        assert not [
+            order for order in client.all_orders("BTCUSDT", limit=1000)
+            if str(order.get("side", "")).upper() == "SELL"
+        ]
+        db.conn.close()
