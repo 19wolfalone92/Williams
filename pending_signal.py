@@ -67,12 +67,12 @@ class PendingSignal:
     role: str
     timeframe: str
     signal_bar_time_ms: int
-    confirmation_time_ms: int
     trigger_price: float
     protective_reference: float
-    invalidation_price: float
     created_at_ms: int
     expires_at_ms: int
+    confirmation_time_ms: int = 0
+    invalidation_price: float = 0.0
     state: str = SignalState.DETECTED.value
     replacement_of: str = ""
 
