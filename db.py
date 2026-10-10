@@ -340,14 +340,14 @@ class Database:
             'unresolved_symbols', 'pending_entries', 'unknown_orders',
             'inventory_mismatches', 'unprotected_positions', 'unknown_campaigns',
         )
+        if not isinstance(evidence, dict):
+            raise TypeError('recovery evidence must be a dictionary')
         canonical_state = str(evidence.get('canonical_position_state', '')).upper()
         if canonical_state not in {'FLAT', 'OPEN', 'ENTRY_PENDING', 'EXIT_PENDING'}:
             raise RuntimeError(
                 'recovery evidence must contain an exchange-reconciled canonical_position_state; '
                 'empty local storage is not evidence of FLAT'
             )
-        if not isinstance(evidence, dict):
-            raise TypeError('recovery evidence must be a dictionary')
         failed = [key for key in required_checks if evidence.get(key) is not True]
         missing = [key for key in required_empty if not isinstance(evidence.get(key), list)]
         nonempty = [key for key in required_empty if isinstance(evidence.get(key), list) and evidence[key]]
@@ -1109,7 +1109,7 @@ class Database:
         data = fill if isinstance(fill, dict) else dict(fill)
         symbol = str(data.get("symbol") or "").upper()
         exchange_trade_id = str(
-            data.get("exchange_trade_id") or data.get("tradeId") or data.get("trade_id") or ""
+            data.get("exchange_trade_id") or data.get("tradeId") or data.get("trade_id") or data.get("id") or ""
         ).strip()
         if not symbol or not exchange_trade_id:
             raise ValueError("campaign fill requires symbol and stable Binance trade/execution ID; refusing non-idempotent fill")
