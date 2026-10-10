@@ -225,6 +225,7 @@ def make_signal(direction):
         invalidation_price=stop,
         htf_confirmed=True,
         reason=f"test {direction}",
+        expires_at_ms=int(time.time() * 1000) + 3_600_000,
     )
 
 
@@ -1432,6 +1433,7 @@ def _make_add_on_signal(direction="LONG", signal_time=2000):
         invalidation_price=stop,
         htf_confirmed=True,
         reason="test add-on",
+        expires_at_ms=int(time.time() * 1000) + 3_600_000,
     )
 
 
@@ -2360,5 +2362,42 @@ def test_add_on_expiring_at_current_millisecond_is_rejected(tmp_path, monkeypatc
                 available_quote=5000.0,
             )
         assert len(client.stop_entries) == 1  # only the original campaign entry
+    finally:
+        db.conn.close()
+
+
+@pytest.mark.parametrize("direction", ["LONG", "SHORT"])
+def test_initial_signal_without_expiry_is_rejected(tmp_path, direction):
+    from dataclasses import replace
+    db = Database(str(tmp_path / f"missing-expiry-{direction}.sqlite3"))
+    try:
+        cache = ContextCache()
+        make_context(cache, allow_long=True, allow_short=True)
+        client = FakeFuturesClient(mark_price=102.0 if direction == "LONG" else 98.0)
+        service = FuturesCampaignExecutionService(
+            client, db, execution_barrier=ExecutionBarrier(cache, db)
+        )
+        signal = replace(make_signal(direction), expires_at_ms=0)
+        with pytest.raises(FuturesCampaignExecutionError, match="no valid expiry"):
+            service.arm_initial_entry(
+                signal, equity_quote=10000.0, atr=2.0, candidate_risk_fraction=0.005
+            )
+        assert client.stop_entries == []
+    finally:
+        db.conn.close()
+
+
+@pytest.mark.parametrize("direction", ["LONG", "SHORT"])
+def test_add_on_signal_without_expiry_is_rejected(tmp_path, direction):
+    from dataclasses import replace
+    db, client, service, campaign = _prepare_open_campaign_for_add_on(tmp_path, direction)
+    try:
+        signal = replace(_make_add_on_signal(direction), expires_at_ms=0)
+        with pytest.raises(FuturesCampaignExecutionError, match="no valid expiry"):
+            service.arm_add_on(
+                signal, equity_quote=10000.0, candidate_risk_fraction=0.001,
+                available_quote=5000.0,
+            )
+        assert len(client.stop_entries) == 1
     finally:
         db.conn.close()
