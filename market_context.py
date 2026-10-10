@@ -85,6 +85,13 @@ class TFMarketContext:
     hypotheses: tuple[WaveHypothesis, ...] = field(default_factory=tuple)
     data_bars: int = 0
     live_only: bool = False
+    # Authoritative Williams indicator evidence, separate from Wave/uncertainty
+    # policy. These fields let the execution gate validate the actual strategy
+    # context without treating a Wave probability as a Bill Williams rule.
+    alligator_awake: bool = False
+    ao_value: float = 0.0
+    ac_value: float = 0.0
+    williams_core_ready: bool = False
 
     def to_dict(self) -> dict:
         return asdict(self)
