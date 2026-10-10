@@ -8,52 +8,23 @@ from __future__ import annotations
 
 from dataclasses import dataclass, asdict
 import math
-import os
 import time
 
 from campaign_model import SignalSpec, SignalState
 
 
-_TF_MS = {
-    "1m": 60_000,
-    "3m": 180_000,
-    "5m": 300_000,
-    "15m": 900_000,
-    "30m": 1_800_000,
-    "1h": 3_600_000,
-    "2h": 7_200_000,
-    "4h": 14_400_000,
-    "6h": 21_600_000,
-    "8h": 28_800_000,
-    "12h": 43_200_000,
-    "1d": 86_400_000,
-    "3d": 259_200_000,
-    "1w": 604_800_000,
-    "1M": 2_592_000_000,
-}
-
-
-def _bar_ms(timeframe: str) -> int:
-    return _TF_MS.get(str(timeframe), 300_000)
-
-
 def default_expiry_ms(signal: SignalSpec) -> int:
-    # Preserve any explicit expiry, including one that is already in the past.
-    # Recomputing from created_at would silently revive an expired signal.
-    if signal.expires_at_ms != 0:
+    """Return only the source signal's declared expiry.
+
+    Missing expiry is a contract failure, not a request to invent a new
+    deadline. Strategy detectors set expiry from the signal/confirmation
+    candle; all entry selectors and execution adapters must fail closed when
+    that explicit timestamp is absent or invalid.
+    """
+    try:
         return int(signal.expires_at_ms)
-
-    if signal.signal_type.value == "REVERSAL":
-        bars = max(1, int(os.getenv("WILLIAMS_PENDING_REVERSAL_BARS", "2")))
-    elif signal.signal_type.value == "SUPER_AO":
-        bars = max(1, int(os.getenv("WILLIAMS_PENDING_SUPER_AO_BARS", "2")))
-    else:
-        bars = max(1, int(os.getenv("WILLIAMS_PENDING_FRACTAL_BARS", "8")))
-
-    return max(
-        signal.created_at_ms + _bar_ms(signal.timeframe) * bars,
-        signal.signal_bar_time_ms + _bar_ms(signal.timeframe) * bars,
-    )
+    except (TypeError, ValueError, OverflowError):
+        return 0
 
 
 @dataclass(frozen=True)
