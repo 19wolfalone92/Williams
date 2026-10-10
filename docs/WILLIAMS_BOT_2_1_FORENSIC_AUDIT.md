@@ -159,3 +159,10 @@ The Android campaign route is traced from `requestScan` → `performCampaignScan
 **OBS-003 resolved against TC2 Second Edition:** the source explicitly allows Super AO to be the first actionable signal before WM1/WM3/fractal (PDF p.155, printed p.140, Chapter 12, Fig. 12.1 cited). Both baseline Python campaign signal extraction and Android `longCampaignSignals` require a prior valid fractal/Balance-Line condition. This is now a static source-to-code **MISMATCH** on both paths; no golden vector was run and no code changed.
 
 The complete mutation inventory, full rule registry, golden vectors and all campaign lifecycle proofs remain incomplete. Overall status remains **IN PROGRESS — NOT ACCEPTED**.
+
+## New source locators and defect cards
+
+- Alligator: New Trading Dimensions PDF p.36 / printed p.36, Fig. 3-4; TC2 Second Edition PDF p.117 / printed p.102, Fig. 8.9. TC2 confirms Jaw 13/8, Teeth 8/5, Lips 5/3; New Trading Dimensions has an internal prose-vs-box discrepancy (Lips shift 2 vs 3). SMMA seed convention remains unresolved.
+- Angulation: TC2 PDF pp.123–124 / printed pp.108–109, Figs. 9.3–9.5; source establishes increasing geometric angle relative to Alligator/Jaw, not a unique numeric regression formula.
+- Defect cards now recorded in the appendix: DEF-WM2-001 (source/code mismatch), DEF-SNAPSHOT-001 (diagnostic-only divergence), DEF-ORDER-DOOR-001 (manual sell mutation path outside Python ExecutionBarrier), DEF-SMMA-001 and DEF-ANGULATION-001 (confirmed code divergence, numerical tests not run).
+- Golden-vector status remains NOT RUN on the forensic branch. No trading code or test files were changed.
