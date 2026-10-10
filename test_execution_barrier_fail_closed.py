@@ -274,3 +274,53 @@ def test_pending_and_blocked_persistence_both_fail_never_calls_submit():
     assert result.reason == "execution_intent_persistence_failed"
     assert calls == []
     assert result.intent_id not in db.intents
+
+
+def test_unknown_reconciliation_and_preflight_exception_block_mutation():
+    db = FakeDB()
+    calls = []
+    unknown = _ready_preflight()
+    unknown["checks"]["reconciliation"] = "UNKNOWN"
+    barrier = _barrier(db, provider=lambda: unknown)
+    result = barrier.execute(_intent("CID_RECON_UNKNOWN"), lambda: calls.append("submit"), pre_submit_checks=_pre_submit)
+    assert not result.accepted
+    assert result.reason == "preflight_required_check_not_pass"
+    assert calls == []
+
+    def raises():
+        raise TimeoutError("synthetic preflight timeout")
+    barrier = _barrier(FakeDB(), provider=raises)
+    result = barrier.execute(_intent("CID_PREFLIGHT_EXCEPTION"), lambda: calls.append("submit"), pre_submit_checks=_pre_submit)
+    assert not result.accepted
+    assert result.reason == "preflight_exception:TimeoutError"
+    assert calls == []
+
+
+def test_missing_stable_client_order_id_blocks_before_submit():
+    db = FakeDB()
+    barrier = _barrier(db)
+    calls = []
+    intent = OrderIntent.new("BTCUSDT", "BUY", "MARKET", {"1h": 1}, permission_interval="1h")
+    result = barrier.execute(intent, lambda: calls.append("submit"), pre_submit_checks=_pre_submit)
+    assert not result.accepted
+    assert result.reason == "stable_client_order_id_missing"
+    assert calls == []
+
+
+def test_mainnet_exchange_client_is_rejected_even_with_green_preflight():
+    class MainnetClient:
+        testnet = False
+        base_url = "https://api.binance.com"
+
+    cache = ContextCache()
+    cache.publish(_context())
+    barrier = ExecutionBarrier(
+        cache, FakeDB(),
+        preflight_provider=_ready_preflight,
+        exchange_client=MainnetClient(),
+    )
+    calls = []
+    result = barrier.execute(_intent("CID_MAINNET_BLOCK"), lambda: calls.append("submit"), pre_submit_checks=_pre_submit)
+    assert not result.accepted
+    assert result.reason == "execution_client_not_pinned_to_spot_testnet"
+    assert calls == []
