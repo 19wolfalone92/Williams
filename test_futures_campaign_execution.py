@@ -10,6 +10,7 @@ from futures_runtime import FuturesRuntime
 from futures_campaign_execution import (
     FuturesCampaignExecutionError,
     FuturesCampaignExecutionService,
+    tc2_price_bar_trailing_candidate,
 )
 from market_context import ContextCache, TFMarketContext
 
@@ -1489,6 +1490,49 @@ def _prepare_open_campaign_for_add_on(tmp_path, direction="LONG"):
     db.state_set("position_state:BTCUSDT", CampaignState.OPEN_INITIAL.value)
     db.save_campaign(campaign)
     return db, client, service, campaign
+
+
+def test_python_tc2_trailing_candidate_matches_native_price_bar_contract():
+    long_candidate = tc2_price_bar_trailing_candidate(
+        "LONG",
+        lows=[90.0, 91.0, 100.0, 101.0, 99.5],
+        highs=[92.0, 93.0, 103.0, 104.0, 102.0],
+        tick_size=0.1,
+        trailing_bars=3,
+    )
+    assert long_candidate == {
+        "direction": "LONG",
+        "trailing_bars": 3,
+        "structural_extreme": 99.5,
+        "raw_stop_price": pytest.approx(99.4),
+    }
+
+    short_candidate = tc2_price_bar_trailing_candidate(
+        "SHORT",
+        lows=[90.0, 91.0, 92.0, 93.0, 94.0],
+        highs=[92.0, 95.0, 94.0, 96.0, 93.0],
+        tick_size=0.1,
+        trailing_bars=5,
+    )
+    assert short_candidate["direction"] == "SHORT"
+    assert short_candidate["trailing_bars"] == 5
+    assert short_candidate["structural_extreme"] == pytest.approx(96.0)
+    assert short_candidate["raw_stop_price"] == pytest.approx(96.1)
+
+
+@pytest.mark.parametrize(
+    "direction,lows,highs,tick,bars",
+    [
+        ("FLAT", [1.0, 2.0, 3.0], [2.0, 3.0, 4.0], 0.1, 3),
+        ("LONG", [1.0, 2.0], [2.0, 3.0], 0.1, 3),
+        ("SHORT", [1.0, float("nan"), 3.0], [2.0, 3.0, 4.0], 0.1, 3),
+        ("LONG", [1.0, 2.0, 3.0], [2.0, 3.0, 4.0], 0.0, 3),
+        ("LONG", [1.0, 2.0, 3.0], [2.0, 3.0, 4.0], 0.1, 4),
+    ],
+)
+def test_tc2_trailing_candidate_rejects_ambiguous_or_invalid_input(direction,lows,highs,tick,bars):
+    with pytest.raises(ValueError):
+        tc2_price_bar_trailing_candidate(direction, lows, highs, tick, bars)
 
 
 @pytest.mark.parametrize("direction", ["LONG", "SHORT"])
