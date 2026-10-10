@@ -12,6 +12,7 @@ from binance_client import BinanceAPIError
 from campaign_engine import CampaignEngine
 from campaign_model import CampaignState, PendingOrderRecord, SignalSpec, SignalState, SignalType
 from decision_trace import DecisionTrace
+from order_identity import stable_client_order_id
 from execution_barrier import ExecutionBarrier, OrderIntent
 
 
@@ -244,7 +245,10 @@ class CampaignExecutionService:
             risk_quote / max(effective_loss_fraction, 1e-12),
         )
         qty = self._normalized_entry_qty(signal.symbol, notional, trigger)
-        client_id = f"{self.ENTRY_PREFIX}{uuid.uuid4().hex[:20]}"
+        client_id = stable_client_order_id(
+            self.ENTRY_PREFIX, signal.symbol, signal.timeframe,
+            signal.signal_id, signal.signal_type.value, "INITIAL_ENTRY",
+        )
 
         claimed = self.db.try_claim_state(
             f"entry_client_order_id:{signal.symbol}",
@@ -282,6 +286,7 @@ class CampaignExecutionService:
             "STOP_LOSS",
             required_context_versions=dict(signal.context_versions),
             hypothesis_id=f"WILLIAMS_{signal.signal_type.value}",
+            signal_type=signal.signal_type.value,
             invalidation_level=stop,
             quantity=self.client.decimal_format(qty),
             client_order_id=client_id,
@@ -990,7 +995,10 @@ class CampaignExecutionService:
             requested / max(effective_loss_fraction, 1e-12),
         )
         qty = self._normalized_entry_qty(signal.symbol, notional, trigger)
-        cid = f"{self.ENTRY_PREFIX}ADD_{uuid.uuid4().hex[:16]}"
+        cid = stable_client_order_id(
+            f"{self.ENTRY_PREFIX}ADD_", signal.symbol, signal.timeframe,
+            campaign.campaign_id, signal.signal_id, "ADD_ON",
+        )
 
         prior = self.db.conn.execute(
             "SELECT state FROM campaign_signals WHERE campaign_id=? AND signal_id=?",
@@ -1036,6 +1044,7 @@ class CampaignExecutionService:
             "STOP_LOSS",
             required_context_versions=dict(signal.context_versions),
             hypothesis_id=f"WILLIAMS_ADD_{signal.signal_type.value}",
+            signal_type=signal.signal_type.value,
             invalidation_level=stop,
             quantity=self.client.decimal_format(qty),
             client_order_id=cid,
@@ -1107,7 +1116,11 @@ class CampaignExecutionService:
                 f"{campaign.symbol}: protective stop notional {qty * stop:.8f} below Binance minimum {min_notional:.8f}"
             )
         self._check_algo_capacity(campaign.symbol, 1)
-        cid = f"{self.STOP_PREFIX}{uuid.uuid4().hex[:20]}"
+        cid = stable_client_order_id(
+            self.STOP_PREFIX, campaign.campaign_id, campaign.current_signal_id,
+            self.client.decimal_format(qty), self.client.decimal_format(stop),
+            "CAMPAIGN_PROTECTION",
+        )
         intent = OrderIntent.new(
             campaign.symbol,
             "SELL",
@@ -1162,10 +1175,15 @@ class CampaignExecutionService:
             "SELL",
             "CANCEL",
             required_context_versions={},
-            client_order_id=f"{self.STOP_PREFIX}CANCEL_{uuid.uuid4().hex[:14]}",
+            client_order_id=stable_client_order_id(
+                f"{self.STOP_PREFIX}CANCEL_", campaign.campaign_id,
+                str(order_id), purpose,
+            ),
             purpose=purpose,
             campaign_id=campaign.campaign_id,
             signal_id=campaign.current_signal_id,
+            operation_kind="CANCEL",
+            related_order_id=str(order_id),
         )
         return self._submit(
             intent,
@@ -1247,7 +1265,10 @@ class CampaignExecutionService:
                 f"{symbol}: no free campaign inventory after protection cancel"
             )
 
-        cid = f"{self.EXIT_PREFIX}{uuid.uuid4().hex[:20]}"
+        cid = stable_client_order_id(
+            self.EXIT_PREFIX, campaign.campaign_id, campaign.current_signal_id,
+            reason, self.client.decimal_format(qty), "CAMPAIGN_EXIT",
+        )
         intent = OrderIntent.new(
             symbol,
             "SELL",
@@ -1360,7 +1381,11 @@ class CampaignExecutionService:
         if not campaign.current_stop_price <= proposed_stop:
             raise CampaignExecutionError("structural stop would loosen LONG risk")
         new_stop = self._normalize_price(campaign.symbol, proposed_stop)
-        cid = f"{self.STOP_PREFIX}{uuid.uuid4().hex[:20]}"
+        cid = stable_client_order_id(
+            self.STOP_PREFIX, campaign.campaign_id, str(existing_order_id),
+            self.client.decimal_format(quantity), self.client.decimal_format(new_stop),
+            campaign.current_signal_id, "CANCEL_REPLACE",
+        )
         intent = OrderIntent.new(
             campaign.symbol,
             "SELL",
@@ -1372,6 +1397,8 @@ class CampaignExecutionService:
             purpose="CAMPAIGN_TRAIL",
             campaign_id=campaign.campaign_id,
             signal_id=campaign.current_signal_id,
+            operation_kind="CANCEL_REPLACE",
+            related_order_id=str(existing_order_id),
         )
         result = self._submit(
             intent,
