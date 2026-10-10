@@ -1066,7 +1066,8 @@ internal class FuturesNativeEngine(
                 val entryTrigger = level + tickSize
                 val stop = bars[center].low - tickSize
                 if (teethAtConfirmation.isFinite() && level > teethAtConfirmation &&
-                    bars[i].close < entryTrigger && stop > 0.0 && stop < entryTrigger
+                    entryTrigger > teeth[i] && bars[i].close < entryTrigger &&
+                    stop > 0.0 && stop < entryTrigger
                 ) {
                     signalCandidates.add(
                         Signal(symbol, "LONG", "FRACTAL", bars[center].openTime, entryTrigger, stop, atr,
@@ -1083,7 +1084,8 @@ internal class FuturesNativeEngine(
                 val entryTrigger = level - tickSize
                 val stop = bars[center].high + tickSize
                 if (teethAtConfirmation.isFinite() && level < teethAtConfirmation &&
-                    bars[i].close > entryTrigger && stop > entryTrigger
+                    entryTrigger < teeth[i] && bars[i].close > entryTrigger &&
+                    stop > entryTrigger
                 ) {
                     signalCandidates.add(
                         Signal(symbol, "SHORT", "FRACTAL", bars[center].openTime, entryTrigger, stop, atr,
