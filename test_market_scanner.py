@@ -202,4 +202,62 @@ test_best_prefers_strict_signal()
 test_best_prefers_higher_score_when_both_strict()
 test_candidate_serialization()
 
+
+
+def _wm1_candidate(direction, *, trigger=101.0, stop=99.0, signal_direction=None):
+    actual_direction = signal_direction or direction
+    signal = {
+        "signal_type": "REVERSAL",
+        "role": "ENTRY",
+        "direction": actual_direction,
+        "timeframe": "1h",
+        "signal_bar_time_ms": 100,
+        "confirmation_time_ms": 200,
+        "expires_at_ms": 10_000,
+        "trigger_price": trigger,
+        "protective_reference": stop,
+        "angulation_score": 2.0,
+    }
+    return Candidate(
+        symbol="BTCUSDT",
+        score=50,
+        signal=True,
+        setup_score=80,
+        signal_strength=1.0,
+        breakout_distance_pct=0.1,
+        risk_pct=0.5,
+        risk_reward=2.0,
+        atr_pct=0.01,
+        spread_pct=0.0001,
+        htf_confirmed=False,
+        setup_state="STRONG_SIGNAL",
+        direction=direction,
+        entry_signal_type="REVERSAL",
+        entry_signal_time_ms=100,
+        campaign_signal_specs=[signal],
+    )
+
+
+def test_tc2_early_wm1_admission_supports_both_directions():
+    assert MarketScanner._is_tc2_early_wm1(
+        _wm1_candidate("LONG", trigger=101.0, stop=99.0), now_ms=1_000
+    )
+    assert MarketScanner._is_tc2_early_wm1(
+        _wm1_candidate("SHORT", trigger=99.0, stop=101.0), now_ms=1_000
+    )
+
+
+def test_tc2_early_wm1_rejects_direction_mismatch_and_invalid_stop_geometry():
+    assert not MarketScanner._is_tc2_early_wm1(
+        _wm1_candidate("SHORT", trigger=101.0, stop=99.0, signal_direction="LONG"),
+        now_ms=1_000,
+    )
+    assert not MarketScanner._is_tc2_early_wm1(
+        _wm1_candidate("SHORT", trigger=101.0, stop=99.0), now_ms=1_000
+    )
+
+
+test_tc2_early_wm1_admission_supports_both_directions()
+test_tc2_early_wm1_rejects_direction_mismatch_and_invalid_stop_geometry()
+
 print("MARKET SCANNER TESTS: PASS")
