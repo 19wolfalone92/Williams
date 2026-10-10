@@ -7,6 +7,7 @@ from typing import Any
 import json
 import os
 import uuid
+import time
 
 from binance_client import BinanceAPIError
 from campaign_engine import CampaignEngine
@@ -299,6 +300,48 @@ class CampaignExecutionService:
         )
 
         def check(snapshot):
+            # PendingSignal is immutable. A stale/terminal signal cannot be
+            # revived by reusing its object after a restart or retry.
+            if signal.expires_at_ms and int(time.time() * 1000) > int(signal.expires_at_ms):
+                raise CampaignExecutionError(
+                    f"{signal.symbol}: PendingSignal expired before exchange submission"
+                )
+            signal_row = self.db.conn.execute(
+                "SELECT state FROM campaign_signals WHERE campaign_id=? AND signal_id=?",
+                (campaign.campaign_id, signal.signal_id),
+            ).fetchone()
+            if signal_row is not None and str(signal_row["state"]).upper() in {
+                "INVALIDATED", "EXPIRED", "CANCELLED", "REPLACED", "FILLED"
+            }:
+                raise CampaignExecutionError(
+                    f"{signal.symbol}: PendingSignal is terminal ({signal_row['state']})"
+                )
+            operative = snapshot.context(signal.symbol, signal.timeframe)
+            if operative is None:
+                raise CampaignExecutionError(
+                    f"{signal.symbol}: operative context missing at final admission"
+                )
+            if int(operative.candle_close_time_ms) < int(signal.signal_bar_time_ms):
+                raise CampaignExecutionError(
+                    f"{signal.symbol}: execution context predates the source signal bar"
+                )
+
+            reserved_now = float(self.engine.portfolio_reserved_risk_quote())
+            portfolio_capacity_now = float(equity_quote) * float(
+                self.engine.portfolio_risk_limit_pct
+            )
+            if reserved_now > portfolio_capacity_now + max(1e-9, portfolio_capacity_now * 1e-9):
+                raise CampaignExecutionError(
+                    "portfolio risk reservation changed before initial entry submission"
+                )
+            campaign_capacity_now = float(equity_quote) * float(
+                self.engine.campaign_risk_limit_pct
+            )
+            if float(campaign.pending_risk_quote or 0.0) > campaign_capacity_now + 1e-9:
+                raise CampaignExecutionError(
+                    "campaign risk reservation exceeds its limit before submission"
+                )
+
             # Last-mile market condition: this is a conditional order, never a
             # substitute for a missed trigger. If price already crossed the
             # trigger, abort rather than turn it into a MARKET BUY.
@@ -934,7 +977,48 @@ class CampaignExecutionService:
         ).fetchall()
         return self.engine.load_campaign(str(rows[0]["campaign_id"])) if rows else None
 
-    def _validate_add_on_submission(self, symbol: str, qty: float, trigger: float) -> None:
+    def _validate_add_on_submission(
+        self,
+        symbol: str,
+        qty: float,
+        trigger: float,
+        *,
+        signal: SignalSpec,
+        campaign_id: str,
+        equity_quote: float,
+    ) -> None:
+        if signal.expires_at_ms and int(time.time() * 1000) > int(signal.expires_at_ms):
+            raise CampaignExecutionError(f"{symbol}: add-on PendingSignal expired before submission")
+        campaign = self.engine.load_campaign(campaign_id)
+        if campaign is None or campaign.campaign_id != campaign_id:
+            raise CampaignExecutionError(f"{symbol}: add-on campaign ownership is not confirmed")
+        if campaign.state == CampaignState.RECONCILE_REQUIRED:
+            raise CampaignExecutionError(f"{symbol}: campaign requires reconciliation before add-on")
+        if campaign.current_signal_id == signal.signal_id:
+            raise CampaignExecutionError(f"{symbol}: add-on signal was already consumed")
+        if int(campaign.tags.get("last_signal_time_ms", 0) or 0) >= int(signal.signal_bar_time_ms):
+            raise CampaignExecutionError(f"{symbol}: add-on signal is stale or already consumed")
+        signal_row = self.db.conn.execute(
+            "SELECT state FROM campaign_signals WHERE campaign_id=? AND signal_id=?",
+            (campaign_id, signal.signal_id),
+        ).fetchone()
+        if signal_row is not None and str(signal_row["state"]).upper() in {
+            "INVALIDATED", "EXPIRED", "CANCELLED", "REPLACED", "FILLED"
+        }:
+            raise CampaignExecutionError(f"{symbol}: add-on signal is terminal")
+        reserved_now = float(self.engine.portfolio_reserved_risk_quote())
+        portfolio_capacity_now = float(equity_quote) * float(
+            self.engine.portfolio_risk_limit_pct
+        )
+        if reserved_now > portfolio_capacity_now + max(1e-9, portfolio_capacity_now * 1e-9):
+            raise CampaignExecutionError("portfolio risk budget changed before add-on submission")
+        campaign_capacity_now = float(equity_quote) * float(self.engine.campaign_risk_limit_pct)
+        if (
+            float(campaign.open_risk_quote or 0.0)
+            + float(campaign.pending_risk_quote or 0.0)
+            > campaign_capacity_now + 1e-9
+        ):
+            raise CampaignExecutionError("campaign risk budget changed before add-on submission")
         if self._current_price(symbol) >= trigger:
             raise CampaignExecutionError(
                 f"{symbol}: add-on trigger crossed before submission"
@@ -1049,6 +1133,7 @@ class CampaignExecutionService:
             quantity=self.client.decimal_format(qty),
             client_order_id=cid,
             purpose="CAMPAIGN_ADD_ON",
+            permission_interval=signal.timeframe,
             campaign_id=campaign.campaign_id,
             signal_id=signal.signal_id,
             risk_quote=requested,
@@ -1064,10 +1149,13 @@ class CampaignExecutionService:
                 stop_price=self.client.decimal_format(trigger),
                 new_client_order_id=cid,
             ),
-            lambda _snapshot: self._validate_add_on_submission(
+            lambda snapshot: self._validate_add_on_submission(
                 signal.symbol,
                 qty,
                 trigger,
+                signal=signal,
+                campaign_id=campaign.campaign_id,
+                equity_quote=float(equity_quote),
             ),
         )
         self.db.save_campaign_order(
