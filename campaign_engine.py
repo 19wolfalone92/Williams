@@ -536,6 +536,33 @@ class CampaignEngine:
         if not str(fill_order_id or "").strip():
             raise ValueError("Initial fill requires a stable exchange order ID")
 
+        # Futures fill reconciliation checks the reservation before calling
+        # the engine, but the engine is also a state-mutation boundary. Do not
+        # let another caller book a gap/slippage fill that exceeds the durable
+        # entry reservation or the lifetime campaign budget.
+        if str(campaign.tags.get("execution_mode", "") or "").upper() == "FUTURES":
+            try:
+                pending_risk = float(campaign.pending_risk_quote)
+                risk_budget = float(campaign.tags.get("risk_budget_quote", 0.0) or 0.0)
+                already_open_risk = float(campaign.open_risk_quote)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError("Futures initial fill risk reservation is invalid") from exc
+            if (
+                not math.isfinite(pending_risk)
+                or pending_risk <= 0
+                or not math.isfinite(risk_budget)
+                or risk_budget <= 0
+                or not math.isfinite(already_open_risk)
+                or already_open_risk < 0
+            ):
+                raise ValueError("Futures initial fill risk reservation is invalid")
+            reservation_tolerance = max(1e-8, pending_risk * 1e-9)
+            budget_tolerance = max(1e-8, risk_budget * 1e-9)
+            if risk_quote > pending_risk + reservation_tolerance:
+                raise ValueError("actual Futures initial fill risk exceeds durable reservation")
+            if already_open_risk + risk_quote > risk_budget + budget_tolerance:
+                raise ValueError("actual Futures initial fill risk exceeds campaign risk budget")
+
         campaign.position_qty = float(quantity)
         campaign.average_entry_price = float(average_entry_price)
         campaign.initial_stop_price = float(initial_stop_price)
