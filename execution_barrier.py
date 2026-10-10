@@ -1,6 +1,7 @@
 """P0 serialized execution barrier for Williams."""
 from __future__ import annotations
 
+import math
 import time
 import uuid
 from dataclasses import dataclass
@@ -200,7 +201,7 @@ class ExecutionBarrier:
                     angulation = float(getattr(intent, "angulation_score", 0.0))
                 except (TypeError, ValueError, OverflowError):
                     return "TC2_WM1_EARLY angulation evidence is invalid"
-                if not __import__("math").isfinite(angulation) or angulation <= 0.0:
+                if not math.isfinite(angulation) or angulation <= 0.0:
                     return "TC2_WM1_EARLY requires finite positive angulation evidence"
 
                 # Preserve the actual source's early-reversal capability: H1/H4
