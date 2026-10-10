@@ -302,3 +302,23 @@ def test_structural_campaign_profile_can_report_low_reference_rr_without_fixed_t
     )
     assert result.allowed is True
     assert result.risk_reward < 1.5
+
+
+def test_structural_campaign_does_not_require_positive_hypothetical_short_target():
+    engine = RiskEngine(
+        balance_quote=10_000,
+        max_atr_pct=0.25,
+        min_rr=1.5,
+        require_min_rr=False,
+    )
+    result = engine.analyse(
+        symbol="LOWPRICEUSDT",
+        entry_price=1.0,
+        atr=0.3,
+        side="SHORT",
+        invalidation_price=1.2,
+        target_atr_multiplier=4.0,
+    )
+    assert result.allowed is True
+    assert result.take_profit_price == 0.0
+    assert result.risk_reward == 0.0
