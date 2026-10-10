@@ -77,6 +77,21 @@ def service(db, client):
     return CampaignExecutionService(client, db, barrier)
 
 
+def test_spot_buy_stop_price_rounds_up_beyond_signal_extreme():
+    with tempfile.TemporaryDirectory() as directory:
+        db = Database(os.path.join(directory, "campaign.sqlite3"))
+        client = MockExchange()
+        executor = service(db, client)
+        executor._rules = lambda symbol: {
+            "PRICE_FILTER": {"tickSize": "0.01"}
+        }
+        try:
+            assert executor._normalize_price("BTCUSDT", 100.001, round_up=True) == 100.01
+            assert executor._normalize_price("BTCUSDT", 100.001) == 100.0
+        finally:
+            db.conn.close()
+
+
 def test_conditional_entry_is_armed_not_market():
     with tempfile.TemporaryDirectory() as d:
         db = Database(os.path.join(d, "campaign.sqlite3"))
