@@ -41,6 +41,14 @@ class _DB:
                 return dict(row)
         return None
 
+    def claim_execution_intent(self, intent):
+        if self.find_execution_intent(intent.intent_id, intent.client_order_id):
+            return False
+        if self.unresolved_execution_intents():
+            return False
+        self.save_execution_intent(intent, "PENDING")
+        return True
+
     def save_execution_intent(self, intent, status, reason=""):
         if status in self.fail_statuses:
             raise OSError("SYNTHETIC_DB_SECRET_MARKER")
