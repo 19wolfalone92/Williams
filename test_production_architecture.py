@@ -30,6 +30,17 @@ def context(symbol="BTCUSDT", interval="1h", allow_long=True, allow_short=False)
     )
 
 
+@pytest.fixture(autouse=True)
+def _test_only_preflight_override(monkeypatch):
+    original = PreflightCheckService.verify_all
+
+    def controlled(service, *args, **kwargs):
+        provider = getattr(service, "_test_preflight_provider", None)
+        return provider() if provider is not None else original(service, *args, **kwargs)
+
+    monkeypatch.setattr(PreflightCheckService, "verify_all", controlled)
+
+
 def test_copy_on_write_versions_and_immutable_snapshot():
     cache = ContextCache()
     first = cache.publish(context())
@@ -89,7 +100,10 @@ def ready_preflight():
 def test_execution_barrier_rejects_stale_context():
     cache = ContextCache()
     cache.publish(context())
-    barrier = ExecutionBarrier(cache, ExecutionDB(), preflight_provider=ready_preflight, exchange_client=FakeSpotClient())
+    client = FakeSpotClient()
+    preflight = PreflightCheckService(client, symbols=["BTCUSDT"])
+    preflight._test_preflight_provider = ready_preflight
+    barrier = ExecutionBarrier(cache, ExecutionDB(), preflight_service=preflight, exchange_client=client)
     snap = cache.snapshot()
     cache.publish(context())
     intent = OrderIntent.new(
