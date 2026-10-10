@@ -2,6 +2,7 @@ import requests
 import pytest
 
 from binance_client import BinanceAPIError, BinanceSpotClient
+from execution_permit import mutation_permit
 
 
 class FakeResponse:
@@ -33,7 +34,8 @@ def test_post_timeout_is_unknown_execution():
     client.session = FakeSession([requests.Timeout("lost")])
 
     with pytest.raises(BinanceAPIError) as exc:
-        client.order("BTCUSDT", "BUY", "MARKET", quote_order_qty="25")
+        with mutation_permit(client):
+            client.order("BTCUSDT", "BUY", "MARKET", quote_order_qty="25")
 
     assert exc.value.unknown_execution is True
 
@@ -69,7 +71,8 @@ def test_post_5xx_is_unknown_execution():
     ])
 
     with pytest.raises(BinanceAPIError) as exc:
-        client.order("BTCUSDT", "BUY", "MARKET", quote_order_qty="25")
+        with mutation_permit(client):
+            client.order("BTCUSDT", "BUY", "MARKET", quote_order_qty="25")
 
     assert exc.value.unknown_execution is True
 
