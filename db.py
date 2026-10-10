@@ -3,6 +3,7 @@ import json, sqlite3
 from pathlib import Path
 from datetime import datetime, timezone
 from contextlib import contextmanager
+from safe_logging import redact_text, redact_value
 
 
 class Database:
@@ -354,7 +355,7 @@ class Database:
                 intent.hypothesis_id,
                 float(intent.invalidation_level or 0.0),
                 status,
-                reason,
+                redact_text(reason),
                 getattr(intent, 'client_order_id', ''),
             ),
         )
@@ -364,7 +365,7 @@ class Database:
     def save_execution_event(self, intent_id, event, payload=None):
         self.conn.execute(
             'INSERT INTO execution_events(intent_id,event,payload_json) VALUES(?,?,?)',
-            (intent_id, event, json.dumps(payload, default=str) if payload is not None else None),
+            (intent_id, event, json.dumps(redact_value(payload), default=str) if payload is not None else None),
         )
         if not self._transaction_active:
             self.conn.commit()
@@ -375,8 +376,8 @@ class Database:
             (
                 level,
                 event,
-                message,
-                json.dumps(raw, default=str) if raw is not None else None
+                redact_text(message),
+                json.dumps(redact_value(raw), default=str) if raw is not None else None
             )
         )
         if not self._transaction_active:
@@ -428,6 +429,7 @@ class Database:
             return None
 
     def save_order(self, data):
+        data = redact_value(data)
         oid = (
             str(data.get('orderId'))
             if data.get('orderId') is not None
@@ -967,7 +969,7 @@ class Database:
         return [dict(r) for r in rows]
 
     def save_campaign_order(self, record):
-        data=record.to_dict() if hasattr(record,"to_dict") else dict(record)
+        data=redact_value(record.to_dict() if hasattr(record,"to_dict") else dict(record))
         self.conn.execute(
             """INSERT INTO campaign_orders(
                 campaign_id,signal_id,symbol,side,purpose,order_type,order_id,order_list_id,
@@ -986,7 +988,7 @@ class Database:
             self.conn.commit()
 
     def save_campaign_fill(self, fill):
-        data=fill if isinstance(fill,dict) else dict(fill)
+        data=redact_value(fill if isinstance(fill,dict) else dict(fill))
         self.conn.execute(
             """INSERT INTO campaign_fills(
                 campaign_id,order_id,symbol,side,quantity,price,quote_quantity,
