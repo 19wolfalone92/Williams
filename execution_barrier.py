@@ -504,31 +504,53 @@ class ExecutionBarrier:
         ):
             cancel_result = str(response.get("cancelResult", "")).upper()
             new_result = str(response.get("newOrderResult", "")).upper()
-            cancel_ok = cancel_result in {"SUCCESS", "NOT_FOUND"}
-            new_ok = new_result in {"SUCCESS", "NOT_ATTEMPTED"}
+            cancel_response = response.get("cancelResponse")
             new_response = response.get("newOrderResponse")
+            cancel_status = ExecutionBarrier._response_status(cancel_response)
             new_status = ExecutionBarrier._response_status(new_response)
+            try:
+                cancel_executed = float(
+                    (cancel_response or {}).get("executedQty", 0) or 0
+                )
+            except (TypeError, ValueError):
+                cancel_executed = -1.0
             try:
                 new_executed = float(
                     (new_response or {}).get("executedQty", 0) or 0
                 )
             except (TypeError, ValueError):
                 new_executed = -1.0
-            if (
-                cancel_ok
-                and new_ok
-                and (
-                    new_result != "SUCCESS"
-                    or (
-                        new_status in {"NEW", "PENDING_NEW"}
-                        and new_executed == 0.0
-                    )
+
+            # NOT_FOUND is not permission to replace: the old order may have
+            # filled or otherwise changed before cancellation. A cancel response
+            # that reports any fill is also a cancel/fill race.
+            cancel_ok = (
+                cancel_result == "SUCCESS"
+                and isinstance(cancel_response, dict)
+                and cancel_status in {"CANCELED", "CANCELLED", "EXPIRED", "REJECTED"}
+                and cancel_executed == 0.0
+            )
+            if not cancel_ok:
+                return False, "AMBIGUOUS", (
+                    f"cancelReplace old order unresolved: result={cancel_result or 'UNKNOWN'} "
+                    f"status={cancel_status or 'UNKNOWN'} executedQty={cancel_executed}"
                 )
-            ):
-                if new_result == "SUCCESS" and new_status in {"NEW", "PENDING_NEW"}:
-                    return True, "SUBMITTED", ""
-                if cancel_result == "SUCCESS" and new_result == "NOT_ATTEMPTED":
-                    return True, "SUBMITTED", ""
+            if new_result == "SUCCESS":
+                if (
+                    not isinstance(new_response, dict)
+                    or new_status not in {"NEW", "PENDING_NEW"}
+                    or new_executed != 0.0
+                ):
+                    return False, "AMBIGUOUS", (
+                        f"cancelReplace replacement is not an untouched open order: "
+                        f"result={new_result} status={new_status or 'UNKNOWN'} "
+                        f"executedQty={new_executed}"
+                    )
+                return True, "SUBMITTED", ""
+            if new_result == "NOT_ATTEMPTED":
+                # Old protection is authoritatively canceled; no new protection
+                # exists. The operation is known but campaign must re-protect.
+                return True, "SUBMITTED", ""
             return False, "AMBIGUOUS", f"cancelReplace ambiguous: cancel={cancel_result or 'UNKNOWN'} new={new_result or 'UNKNOWN'}"
 
         # OCO cancellation must be decided from per-leg reports. The list-level
@@ -848,10 +870,12 @@ class ExecutionBarrier:
                     fsm.state = OrderState.RECONCILE_REQUIRED
 
                 if fsm.state == OrderState.RECONCILE_REQUIRED:
-                    self._set_reconciliation_lock(
-                        intent,
-                        "order state transition needs authoritative reconciliation",
-                    )
+                    reason = "order state transition needs authoritative reconciliation"
+                    # Make reconciliation durable in the intent table as well as
+                    # the global latch, so restart recovery cannot mistake this
+                    # mutation for a completed/clean order.
+                    self._persist(intent, "RECONCILE_REQUIRED", reason)
+                    self._set_reconciliation_lock(intent, reason)
                     raise ExecutionAmbiguousError(
                         "order state requires authoritative reconciliation"
                     )
