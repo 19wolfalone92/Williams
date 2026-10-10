@@ -10,11 +10,14 @@ class FuturesContextPolicyTest {
     private val neutral = FuturesContextState(false, false, false, 0.0)
 
     @Test
-    fun longNeedsH1AndH4AndOnlyVetoesOnActiveBearishD1() {
+    fun h1OwnsDirectionH4IsContextOnlyAndD1IsTheMacroAirbag() {
         assertTrue(FuturesContextPolicy.allows("LONG", long, long, neutral))
-        assertFalse(FuturesContextPolicy.allows("LONG", long, short, neutral))
+        assertTrue(FuturesContextPolicy.allows("LONG", long, short, neutral))
+        assertTrue(FuturesContextPolicy.allows("LONG", long, neutral, neutral))
         assertFalse(FuturesContextPolicy.allows("LONG", long, long, short))
         assertFalse(FuturesContextPolicy.allows("LONG", neutral, long, neutral))
+        assertTrue(FuturesContextPolicy.allows("SHORT", short, long, neutral))
+        assertFalse(FuturesContextPolicy.allows("SHORT", short, neutral, long))
     }
 
     @Test
@@ -86,7 +89,7 @@ class FuturesContextPolicyTest {
     @Test
     fun shortIsMirroredAndNeutralD1DoesNotCreateAnEntry() {
         assertTrue(FuturesContextPolicy.allows("SHORT", short, short, neutral))
-        assertFalse(FuturesContextPolicy.allows("SHORT", short, long, neutral))
+        assertTrue(FuturesContextPolicy.allows("SHORT", short, long, neutral))
         assertFalse(FuturesContextPolicy.allows("SHORT", short, short, long))
         assertFalse(FuturesContextPolicy.allows("BUY", long, long, neutral))
     }
