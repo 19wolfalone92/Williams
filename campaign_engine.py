@@ -189,21 +189,38 @@ class CampaignEngine:
         now = int(time.time() * 1000) if now_ms is None else int(now_ms)
         candidates = []
         for signal in signals:
-            if signal.role != SignalRole.ENTRY:
+            # The detector marks WM2/WM3 as ADD_ON because that is their role
+            # once a campaign exists. When no campaign exists, either can be the
+            # first presenting Wise-Man signal and must be promoted contextually
+            # to ENTRY. This method is only called for a new campaign; add-on
+            # callers preserve ADD_ON on their own path.
+            if signal.role not in {SignalRole.ENTRY, SignalRole.ADD_ON}:
+                continue
+            if signal.role == SignalRole.ADD_ON and signal.signal_type not in {
+                SignalType.SUPER_AO,
+                SignalType.FRACTAL,
+            }:
                 continue
             if str(signal.direction).upper() not in {"LONG", "SHORT"}:
                 continue
             try:
                 trigger = float(signal.trigger_price)
-                protective = float(signal.protective_reference)
+                protective = float(
+                    signal.invalidation_price or signal.protective_reference
+                )
             except (TypeError, ValueError, OverflowError):
                 continue
             if not math.isfinite(trigger) or trigger <= 0:
                 continue
             if not math.isfinite(protective) or protective <= 0:
                 continue
-            if PendingSignal.from_spec(signal).actionable(now):
-                candidates.append(signal)
+            initial = (
+                replace(signal, role=SignalRole.ENTRY)
+                if signal.role == SignalRole.ADD_ON
+                else signal
+            )
+            if PendingSignal.from_spec(initial).actionable(now):
+                candidates.append(initial)
         if not candidates:
             return None
         # Book model: the first signal that became actionable starts the
