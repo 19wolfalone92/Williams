@@ -23,6 +23,9 @@ object FuturesLossGuard {
             .atStartOfDay(java.time.ZoneOffset.UTC).toInstant().toEpochMilli()
         var stopOutsToday = 0
         for (trade in closedTradesNewestFirst) {
+            if (!trade.has("fee_known") || !trade.optBoolean("fee_known", false)) {
+                return "closed Futures trade has incomplete commission accounting"
+            }
             val closedAt = trade.optString("closed_at").toLongOrNull()
                 ?: return "closed Futures trade has missing/malformed close timestamp"
             if (closedAt <= 0L || closedAt > nowMs) {
@@ -43,6 +46,9 @@ object FuturesLossGuard {
         var consecutiveLosses = 0
         var mostRecentLossAt = 0L
         for (trade in closedTradesNewestFirst) {
+            if (!trade.has("fee_known") || !trade.optBoolean("fee_known", false)) {
+                return "closed Futures trade has incomplete commission accounting"
+            }
             val pnl = trade.optString("net_pnl").toDoubleOrNull()
                 ?: return "closed Futures trade has missing/malformed net PnL"
             val closedAt = trade.optString("closed_at").toLongOrNull()
