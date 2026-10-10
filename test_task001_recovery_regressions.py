@@ -484,8 +484,8 @@ def test_populated_legacy_v6_database_migrates_without_losing_campaign_or_intent
         "VALUES('legacy-intent','BTCUSDT','SELL','STOP_LOSS','CANCEL_REPLACE','{}','AMBIGUOUS','LEGACY_NEW')"
     )
     db.conn.execute(
-        "INSERT INTO campaigns(campaign_id,symbol,state,side,quantity,entry_price) "
-        "VALUES('legacy-campaign','BTCUSDT','RECONCILE_REQUIRED','LONG',0.25,40000)"
+        "INSERT INTO campaigns(campaign_id,symbol,execution_timeframe,state,side,position_qty,average_entry_price) "
+        "VALUES('legacy-campaign','BTCUSDT','1h','RECONCILE_REQUIRED','LONG',0.25,40000)"
     )
     db.conn.execute("DROP TABLE IF EXISTS cancel_replace_operations")
     db.conn.execute("DROP TABLE IF EXISTS exchange_fill_ledger")
@@ -499,10 +499,10 @@ def test_populated_legacy_v6_database_migrates_without_losing_campaign_or_intent
         "SELECT intent_id,status,client_order_id FROM execution_intents WHERE intent_id='legacy-intent'"
     ).fetchone()["status"] == "AMBIGUOUS"
     campaign = migrated.conn.execute(
-        "SELECT campaign_id,quantity FROM campaigns WHERE campaign_id='legacy-campaign'"
+        "SELECT campaign_id,position_qty FROM campaigns WHERE campaign_id='legacy-campaign'"
     ).fetchone()
     assert campaign["campaign_id"] == "legacy-campaign"
-    assert campaign["quantity"] == 0.25
+    assert campaign["position_qty"] == 0.25
     assert migrated.get_cancel_replace_operation("legacy-intent") is None
     assert migrated.conn.execute(
         "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='exchange_fill_ledger'"
@@ -510,7 +510,7 @@ def test_populated_legacy_v6_database_migrates_without_losing_campaign_or_intent
     # Legacy ambiguous operations without the two-leg journal remain unresolved.
     migrated.state_set("position_state", "RECONCILE_REQUIRED")
     assert migrated.state_get("position_state") == "RECONCILE_REQUIRED"
-    migrated.close()
+    migrated.conn.close()
 
 
 def test_two_independent_sqlite_connections_record_same_exchange_fill_once(tmp_path):
@@ -539,8 +539,8 @@ def test_two_independent_sqlite_connections_record_same_exchange_fill_once(tmp_p
     assert errors == []
     assert sorted(result["inserted"] for result in results) == [False, True]
     assert len(first_db.exchange_fills_for_order("BTCUSDT", 81)) == 1
-    first_db.close()
-    second_db.close()
+    first_db.conn.close()
+    second_db.conn.close()
 
 
 def test_exchange_fill_ledger_is_idempotent_and_preserves_exact_decimal_values(tmp_path):
