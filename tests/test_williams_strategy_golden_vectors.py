@@ -9,6 +9,7 @@ import pytest
 
 from campaign_engine import CampaignEngine
 from campaign_model import SignalRole, SignalSpec, SignalType
+from pending_signal import PendingSignal, default_expiry_ms
 from strategy import (
     calculate_indicators,
     canonical_williams_environment_blockers,
@@ -257,3 +258,62 @@ def test_live_williams_profile_mismatch_is_blocked_and_timeframes_are_separated(
     assert config.structural_timeframes == ("1d", "4h", "1h", "15m", "5m")
     assert TradingConfig.from_env({"EXECUTION_TIMEFRAME": "5m"}).execution_timeframe == "5m"
 
+
+
+
+def _pending_test_signal(*, timeframe="1h", confirmation_time_ms=3_600_000, expires_at_ms=0):
+    return SignalSpec.new(
+        symbol="BTCUSDT",
+        side="LONG",
+        signal_type=SignalType.FRACTAL,
+        role=SignalRole.ENTRY,
+        timeframe=timeframe,
+        signal_bar_time_ms=0,
+        confirmation_time_ms=confirmation_time_ms,
+        expires_at_ms=expires_at_ms,
+        trigger_price=101.0,
+        protective_reference=99.0,
+    )
+
+
+def test_pending_signal_unknown_timeframe_fails_closed_without_m5_fallback(monkeypatch):
+    monkeypatch.delenv("WILLIAMS_PENDING_FRACTAL_BARS", raising=False)
+    signal = _pending_test_signal(timeframe="unknown-frame")
+    pending = PendingSignal.from_spec(signal)
+    assert default_expiry_ms(signal) == 0
+    assert pending.expires_at_ms == 0
+    assert pending.is_expired(now_ms=1_000_000_000)
+    assert not pending.actionable(now_ms=1_000_000_000)
+
+
+def test_pending_signal_missing_confirmation_time_fails_closed():
+    signal = _pending_test_signal(confirmation_time_ms=0)
+    pending = PendingSignal.from_spec(signal)
+    assert pending.expires_at_ms == 0
+    assert not pending.actionable(now_ms=1)
+
+
+def test_pending_signal_expiry_boundary_is_not_actionable():
+    signal = _pending_test_signal(
+        timeframe="1h",
+        confirmation_time_ms=3_600_000,
+        expires_at_ms=7_200_000,
+    )
+    pending = PendingSignal.from_spec(signal)
+    assert pending.expires_at_ms == 7_200_000
+    assert pending.actionable(now_ms=7_199_999)
+    assert pending.is_expired(now_ms=7_200_000)
+    assert not pending.actionable(now_ms=7_200_000)
+
+
+def test_pending_signal_explicit_expiry_is_not_replaced_by_default_ttl(monkeypatch):
+    monkeypatch.setenv("WILLIAMS_PENDING_FRACTAL_BARS", "99")
+    signal = _pending_test_signal(
+        timeframe="1h",
+        confirmation_time_ms=3_600_000,
+        expires_at_ms=123,
+    )
+    assert default_expiry_ms(signal) == 123
+    pending = PendingSignal.from_spec(signal)
+    assert pending.expires_at_ms == 123
+    assert not pending.actionable(now_ms=123)
