@@ -159,7 +159,9 @@ private data class PendingEntry(
     val signalExpiresAtMs: Long = 0L,
     val invalidationPrice: Double = 0.0,
     // Open time of the latest closed H1 bar already checked against invalidation.
-    val lastSignalValidationCandleTimeMs: Long = 0L
+    val lastSignalValidationCandleTimeMs: Long = 0L,
+    // Missing/legacy persisted timeframe is intentionally invalid and fails closed.
+    val signalTimeframe: String = ""
 )
 
 private data class ExecutionResult(
@@ -213,7 +215,8 @@ private data class CampaignSignalN(
     val invalidationPrice: Double,
     val reason: String,
     val confirmationTimeMs: Long = signalBarTimeMs,
-    val expiresAtMs: Long = Long.MAX_VALUE
+    val expiresAtMs: Long = 0L,
+    val timeframe: String = ""
 )
 
 private data class BaseAnalysis(
@@ -861,6 +864,7 @@ private class NativeEngine(
                         .put("signal_type", it.signalType)
                         .put("signal_bar_time_ms", it.signalBarTimeMs)
                         .put("signal_confirmation_time_ms", it.signalConfirmationTimeMs)
+                        .put("signal_timeframe", it.signalTimeframe)
                         .put("signal_expires_at_ms", it.signalExpiresAtMs)
                         .put("invalidation_price", it.invalidationPrice)
                         .put("last_signal_validation_candle_time_ms", it.lastSignalValidationCandleTimeMs)
@@ -945,6 +949,7 @@ private class NativeEngine(
                         signalType = item.optString("signal_type", "REVERSAL"),
                         signalBarTimeMs = item.optLong("signal_bar_time_ms", 0L),
                         signalConfirmationTimeMs = item.optLong("signal_confirmation_time_ms", 0L),
+                        signalTimeframe = item.optString("signal_timeframe", ""),
                         signalExpiresAtMs = item.optLong("signal_expires_at_ms", 0L),
                         invalidationPrice = item.optDouble("invalidation_price", 0.0),
                         lastSignalValidationCandleTimeMs = item.optLong("last_signal_validation_candle_time_ms", 0L)
@@ -2617,6 +2622,45 @@ private class NativeEngine(
         }
     }
 
+    private fun validateNewCampaignEntryAtMutation(symbol: String, purpose: String) {
+        if (purpose != "CAMPAIGN_ENTRY" && purpose != "CAMPAIGN_ADD_ON") return
+        val intent = synchronized(pendingEntries) { pendingEntries[symbol] }
+            ?: error("ENTRY_REVALIDATION_UNAVAILABLE: no persisted pending signal")
+        val nowMs = System.currentTimeMillis()
+        val frameMs = frameSeconds(WilliamsTimeframeContract.CANONICAL_DECISION) * 1000L
+        require(WilliamsTimeframeContract.canCreateCanonicalSignal(intent.signalTimeframe)) {
+            "ENTRY_TIMEFRAME_BLOCKED: missing/non-H1 persisted timeframe"
+        }
+        require(intent.symbol == symbol && intent.signalId.isNotBlank() && intent.campaignId.isNotBlank()) {
+            "ENTRY_PROVENANCE_BLOCKED: signal/campaign/symbol mismatch"
+        }
+        require(intent.signalBarTimeMs > 0L &&
+            intent.signalConfirmationTimeMs >= intent.signalBarTimeMs + frameMs &&
+            intent.signalConfirmationTimeMs <= nowMs &&
+            intent.signalExpiresAtMs > nowMs &&
+            intent.triggerPrice > 0.0 && intent.invalidationPrice > 0.0) {
+            "ENTRY_PROVENANCE_BLOCKED: missing, future-dated, or expired signal"
+        }
+        require(marketDataFresh()) { "ENTRY_MARKET_DATA_STALE" }
+        val history = fetchCandles(symbol, WilliamsTimeframeContract.CANONICAL_DECISION, 151)
+        val closed = history.filter { it.t + frameMs <= nowMs }.sortedBy { it.t }
+        require(closed.isNotEmpty()) { "ENTRY_H1_HISTORY_UNAVAILABLE" }
+        require(closed.any { it.t == intent.signalBarTimeMs }) {
+            "ENTRY_SOURCE_CANDLE_UNAVAILABLE"
+        }
+        require(nowMs - (closed.last().t + frameMs) <= 2L * frameMs) {
+            "ENTRY_H1_MARKET_DATA_STALE"
+        }
+        require(!closed.any {
+            it.t > intent.signalBarTimeMs &&
+                it.t + frameMs <= nowMs &&
+                it.l <= intent.invalidationPrice
+        }) { "ENTRY_STRUCTURALLY_INVALIDATED" }
+        require(currentCampaignPrice(symbol) < intent.triggerPrice) {
+            "ENTRY_TRIGGER_ALREADY_CROSSED"
+        }
+    }
+
     private fun withCampaignMutation(
         symbol: String,
         purpose: String,
@@ -2626,6 +2670,7 @@ private class NativeEngine(
         if (paused) error("Runtime is paused")
         if (reconcileRequired) error("RECONCILE_REQUIRED")
         if (killLatched) error("KILL_SWITCH_LATCHED")
+        validateNewCampaignEntryAtMutation(symbol, purpose)
         require(executionGate.tryReserve(symbol)) {
             "Campaign execution already reserved for " + symbol
         }
@@ -2654,11 +2699,16 @@ private class NativeEngine(
     private fun submitCampaignEntry(candidate: BaseAnalysis) {
         if (!campaignEngineEnabled || !candidate.campaignReady) return
         if (reconcileRequired || paused || killLatched) return
+        if (!WilliamsTimeframeContract.canCreateCanonicalSignal(WilliamsTimeframeContract.CANONICAL_DECISION)) return
         if (positionList().any { it.symbol == candidate.symbol }) return
         if (synchronized(pendingEntries) { pendingEntries.containsKey(candidate.symbol) }) return
         if (positionList().size >= maxOpenPositions) return
 
         val signal = campaignEntryCandidate(candidate) ?: return
+        if (!WilliamsTimeframeContract.canCreateCanonicalSignal(signal.timeframe)) {
+            lastError = "BLOCKED_ENTRY_TIMEFRAME: expected H1, got " + signal.timeframe
+            return
+        }
         val equity = estimateManagedEquity()
         val remainingRisk = campaignRemainingRiskPct(equity)
         val riskPct = min(
@@ -2714,6 +2764,7 @@ private class NativeEngine(
             signalId = signal.signalId,
             signalType = signal.type,
             signalBarTimeMs = signal.signalBarTimeMs,
+            signalTimeframe = signal.timeframe,
             signalConfirmationTimeMs = signal.confirmationTimeMs,
             signalExpiresAtMs = signal.expiresAtMs,
             invalidationPrice = signal.invalidationPrice,
@@ -3664,6 +3715,7 @@ private class NativeEngine(
         position: PositionState
     ) {
         if (!campaignEngineEnabled || position.campaignId.isBlank()) return
+        if (reconcileRequired || paused || killLatched) return
 
         // Add-ons are later confirmed events, not merely newer center bars.
         val signal = candidate.campaignSignals
@@ -3677,6 +3729,17 @@ private class NativeEngine(
             )
             ?: return
 
+        if (!WilliamsTimeframeContract.canCreateCanonicalSignal(signal.timeframe)) {
+            lastError = "BLOCKED_ADD_ON_TIMEFRAME: expected H1, got " + signal.timeframe
+            return
+        }
+        if (signal.signalBarTimeMs <= 0L ||
+            signal.confirmationTimeMs < signal.signalBarTimeMs + frameSeconds(WilliamsTimeframeContract.CANONICAL_DECISION) * 1000L ||
+            signal.confirmationTimeMs > System.currentTimeMillis() ||
+            signal.expiresAtMs <= System.currentTimeMillis()) {
+            lastError = "BLOCKED_ADD_ON_PROVENANCE: invalid or expired H1 signal"
+            return
+        }
         if (synchronized(pendingEntries) { pendingEntries.containsKey(candidate.symbol) }) return
 
         val equity = estimateManagedEquity()
@@ -3743,6 +3806,7 @@ private class NativeEngine(
             signalType = signal.type,
             signalBarTimeMs = signal.signalBarTimeMs,
             signalConfirmationTimeMs = signal.confirmationTimeMs,
+            signalTimeframe = signal.timeframe,
             signalExpiresAtMs = signal.expiresAtMs,
             invalidationPrice = signal.invalidationPrice,
             lastSignalValidationCandleTimeMs = signal.confirmationTimeMs -
@@ -6640,7 +6704,8 @@ private class NativeEngine(
                         invalidationPrice = candles[i].l,
                         reason = "WM1 reversal candidate; approximate angulation explicitly opted in; conditional trigger above signal bar",
                         confirmationTimeMs = candles[i].t + frameMs,
-                        expiresAtMs = candles[i].t + frameMs * (1L + wm1TtlBars)
+                        expiresAtMs = candles[i].t + frameMs * (1L + wm1TtlBars),
+                        timeframe = frame
                     )
                 }
                 // A newer reversal supersedes this search even when it is no
@@ -6670,7 +6735,8 @@ private class NativeEngine(
                     invalidationPrice = candles[i].l,
                     reason = "WM2 Super AO: third rising AO bar; independent of fractal; conditional trigger above corresponding price bar",
                     confirmationTimeMs = candles[i].t + frameMs,
-                    expiresAtMs = candles[i].t + frameMs * (1L + wm2TtlBars)
+                    expiresAtMs = candles[i].t + frameMs * (1L + wm2TtlBars),
+                    timeframe = frame
                 )
             }
         }
@@ -6711,7 +6777,8 @@ private class NativeEngine(
                     invalidationPrice = candles[center].l,
                     reason = "WM3 confirmed fractal; Teeth validated at confirmation and at current activation; stop provenance kept separate from fractal invalidation",
                     confirmationTimeMs = candles[confirmation].t + frameMs,
-                    expiresAtMs = candles[confirmation].t + frameMs * (1L + wm3TtlBars)
+                    expiresAtMs = candles[confirmation].t + frameMs * (1L + wm3TtlBars),
+                    timeframe = frame
                 )
             }
         }
