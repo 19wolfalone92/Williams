@@ -10,13 +10,12 @@ import java.util.concurrent.atomic.AtomicInteger
 
 class ExecutionGateTest {
     @Test
-    fun differentSymbols_canReserveConcurrently() {
+    fun differentSymbols_cannotReserveTheSamePortfolioRisk() {
         val gate = ExecutionGate()
         assertTrue(gate.tryReserve("BTCUSDT"))
-        assertTrue(gate.tryReserve("ETHUSDT"))
-        assertEquals(2, gate.reservedCount())
+        org.junit.Assert.assertFalse(gate.tryReserve("ETHUSDT"))
+        assertEquals(1, gate.reservedCount())
         gate.release("BTCUSDT")
-        gate.release("ETHUSDT")
         assertEquals(0, gate.reservedCount())
     }
 

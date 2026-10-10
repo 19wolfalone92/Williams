@@ -50,8 +50,8 @@ def test_risk_based_position_size():
     # Effective loss fraction = 2% stop + 0.20% fees + 0.15% slippage.
     # Position is capped by risk and by the 25% exposure ceiling.
     assert result.allowed is True
-    assert result.position_quote == 2500
-    assert result.risk_quote == 100
+    assert abs(result.position_quote - (25 / 0.0235)) < 1e-6
+    assert result.risk_quote == 25
 
 
 def test_high_atr_is_blocked():

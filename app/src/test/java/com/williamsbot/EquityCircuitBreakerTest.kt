@@ -6,11 +6,12 @@ import org.junit.Test
 
 class EquityCircuitBreakerTest {
     @Test
-    fun tripsAtFivePercentWithinHour() {
+    fun tripsAtOnePercentWithinUtcDay() {
         val b = EquityCircuitBreaker()
         b.observe(1000.0, 1_000L)
-        assertTrue(b.observe(950.0, 2_000L).tripped)
-        assertTrue(b.observe(949.9, 3_000L).tripped)
+        assertFalse(b.observe(995.0, 2_000L).tripped)
+        assertTrue(b.observe(990.0, 3_000L).tripped)
+        assertTrue(b.observe(989.9, 4_000L).tripped)
     }
 
     @Test
@@ -28,12 +29,13 @@ class EquityCircuitBreakerTest {
     @Test
     fun resetsAtUtcDayBoundary() {
         val b = EquityCircuitBreaker()
-        b.observe(1000.0, 1_000L)
-        assertTrue(b.observe(950.0, 2_000L).tripped)
+        val nearUtcMidnight = 86_400_000L - 3_000L
+        b.observe(1000.0, nearUtcMidnight - 1_000L)
+        assertTrue(b.observe(990.0, nearUtcMidnight).tripped)
 
         val nextUtcDay = 86_400_000L + 1_000L
-        assertFalse(b.observe(950.0, nextUtcDay).tripped)
-        assertTrue(b.observe(921.5, nextUtcDay + 1_000L).tripped)
+        assertFalse(b.observe(990.0, nextUtcDay).tripped)
+        assertTrue(b.observe(980.1, nextUtcDay + 1_000L).tripped)
     }
 
 

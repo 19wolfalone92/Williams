@@ -31,9 +31,9 @@ class FakeCache:
         return FakeSnapshot()
 
 
-def signal(kind=SignalType.REVERSAL, role=SignalRole.ENTRY, bar=100, trigger=101):
+def signal(kind=SignalType.REVERSAL, role=SignalRole.ENTRY, bar=100, trigger=101, symbol="BTCUSDT"):
     return SignalSpec.new(
-        symbol="BTCUSDT",
+        symbol=symbol,
         side="BUY",
         signal_type=kind,
         role=role,
