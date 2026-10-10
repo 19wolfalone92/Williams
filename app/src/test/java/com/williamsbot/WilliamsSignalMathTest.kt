@@ -7,7 +7,7 @@ import org.junit.Test
 class WilliamsSignalMathTest {
     @Test
     fun signalRemainsActionableOnlyBeforeTriggerAndOppositeExtremeAreTouched() {
-        val highs = listOf(10.0, 11.0, 10.5, 9.8)
+        val highs = listOf(10.0, 10.05, 10.02, 9.8)
         val lows = listOf(8.0, 8.2, 8.1, 8.3)
         assertTrue(isLongSignalStillActionable(0, 3, highs, lows, triggerPrice = 10.1))
         assertFalse(isLongSignalStillActionable(0, 3, highs, lows, triggerPrice = 10.0))
