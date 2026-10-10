@@ -676,7 +676,8 @@ def test_legacy_exit_fee_reconciliation_keeps_missing_commission_unknown(tmp_pat
     assert rows[0]["financial_state"] == "UNKNOWN"
     assert rows[0]["commission_amount_text"] is None
     assert rows[0]["commission_asset"] is None
-    assert db.state_get("position_state") == "FLAT"
+    assert db.state_get("position_state") == "RECONCILE_REQUIRED"
+    assert db.state_get("position_state:BTCUSDT") == "RECONCILE_REQUIRED"
 
 
 def test_legacy_exit_fee_reconciliation_records_exact_fill_and_confirms_zero_fee(tmp_path):
