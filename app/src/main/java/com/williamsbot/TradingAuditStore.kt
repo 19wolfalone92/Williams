@@ -674,6 +674,71 @@ class TradingAuditStore(context: Context) :
     }
 
     @Synchronized
+    fun reconcileExecutionMutationByTargetOrderListClientId(
+        targetClientOrderId: String,
+        responseJson: String?
+    ) {
+        if (targetClientOrderId.isBlank()) return
+        val response = runCatching { responseJson?.let { JSONObject(it) } }.getOrNull()
+        val reports = response?.optJSONArray("orderReports")
+        var anyFill = false
+        var allKnown = reports != null && reports.length() > 0
+        var allOpen = allKnown
+        var allTerminal = allKnown
+        if (reports != null) {
+            for (i in 0 until reports.length()) {
+                val leg = reports.optJSONObject(i)
+                if (leg == null) {
+                    allKnown = false
+                    allOpen = false
+                    allTerminal = false
+                    continue
+                }
+                val state = leg.optString("status").uppercase(Locale.US)
+                val qty = leg.optString("executedQty").toDoubleOrNull()
+                if (qty == null || qty < 0.0 ||
+                    state in setOf("PARTIALLY_FILLED", "FILLED") || qty > 0.0
+                ) anyFill = true
+                if (state !in setOf(
+                        "NEW", "PENDING_NEW", "FILLED", "PARTIALLY_FILLED",
+                        "CANCELED", "CANCELLED", "EXPIRED", "REJECTED"
+                    )
+                ) allKnown = false
+                if (state !in setOf("NEW", "PENDING_NEW") || qty != 0.0) allOpen = false
+                if (state !in setOf("CANCELED", "CANCELLED", "EXPIRED", "REJECTED") || qty != 0.0) allTerminal = false
+            }
+        }
+        val status = when {
+            anyFill || !allKnown -> "RECONCILE_REQUIRED"
+            allOpen -> "RECONCILED_ACTIVE"
+            allTerminal -> "RECONCILED"
+            else -> "RECONCILE_REQUIRED"
+        }
+        val db = writableDatabase
+        val values = ContentValues().apply {
+            put("status", status)
+            put("exchange_status", response?.optString("listOrderStatus").orEmpty()
+                .ifBlank { response?.optString("listStatusType").orEmpty() })
+            put("response_json", responseJson)
+            put("reason", "authoritative Binance GET by target order-list client ID")
+            put("updated_at", System.currentTimeMillis())
+        }
+        val updated = db.update(
+            "execution_intents",
+            values,
+            "target_client_order_id=? AND operation='CANCEL_OCO' AND method='DELETE' " +
+                "AND status IN ('PENDING','SUBMITTING','AMBIGUOUS','RECONCILE_REQUIRED')",
+            arrayOf(targetClientOrderId)
+        )
+        if (updated == 0) return
+        val persisted = db.rawQuery(
+            "SELECT COUNT(*) FROM execution_intents WHERE target_client_order_id=? AND operation='CANCEL_OCO' AND method='DELETE' AND status=?",
+            arrayOf(targetClientOrderId, status)
+        ).use { cursor -> cursor.moveToFirst() && cursor.getInt(0) >= updated }
+        if (!persisted) throw IllegalStateException("target OCO client ID reconciliation read-back failed")
+    }
+
+    @Synchronized
     fun reconcileExecutionMutationByTargetOrderListId(
         targetOrderListId: String,
         responseJson: String?
