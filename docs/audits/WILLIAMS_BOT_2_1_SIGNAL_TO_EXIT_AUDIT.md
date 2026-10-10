@@ -275,3 +275,10 @@ Although initial signal selection treated `now >= expires_at_ms` as expired, the
 The canonical `PendingSignal` treated zero/negative expiry as invalid, but the Futures selector, scanner and last-mile entry/add-on methods still used truthy checks such as `if expires_at_ms and expires_at_ms <= now`. A malformed/restored signal with `expires_at_ms=0` could bypass those checks, be armed on Binance, and persist with no automatic expiry.
 
 **Correction:** signal selection requires a positive expiry strictly later than now; scanner output excludes missing-expiry signals; initial-entry and add-on execution refuse missing, zero, negative or expired expiry before any exchange mutation. Test signal factories now supply explicit future expiry, and regression tests cover missing-expiry rejection for both LONG and SHORT and both initial/add-on entry paths.
+
+
+### 34. Legacy armed conditional entries with missing expiry could remain live indefinitely — corrected
+
+Last-mile entry creation now rejects missing expiry, but an already-persisted/legacy pending entry with `entry_expires_at_ms=0` was not cancelled during reconciliation because the expiry branch treated zero as “no expiry.” The exchange-side conditional order could therefore remain live after the local signal's validity was unknowable. The Python add-on reconciliation path had the same condition; Android's native initial-entry reconciliation also skipped zero expiry.
+
+**Correction:** an active conditional entry/add-on with missing, zero or negative expiry is now treated as invalid and sent through the existing cancellation-and-authoritative-verification path. Android native initial-entry recovery applies the same fail-closed rule. Added a regression test for a pending Python entry with missing expiry. Cancellation failure still leaves the campaign locked for reconciliation; it is never treated as a successful cancel.
