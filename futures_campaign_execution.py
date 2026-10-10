@@ -299,17 +299,25 @@ class FuturesCampaignExecutionService:
         return [r for r in rows if str(r.get("state", "")).upper() not in {"CLOSED", "FLAT"}]
 
     def _assert_position_capacity(self) -> None:
-        """Defense-in-depth cap for callers that bypass FuturesRuntime.
+        """Reject new Futures campaigns when durable ownership/capacity is unclear.
 
-        This is a persisted-state admission check, not an atomic multi-process
-        slot reservation. The per-symbol pending-entry claim still prevents
-        duplicate entries for one symbol; a portfolio-wide concurrent slot
-        reservation remains a separate requirement.
+        arm_initial_entry calls this once for fast rejection and again inside
+        Database.transaction(immediate=True), immediately before writing the
+        new campaign. That second check and the campaign write are serialized
+        across database connections/processes. Explicit Spot campaigns do not
+        consume a Futures slot; campaigns with missing/unknown mode fail closed.
         """
-        active_futures = [
-            row for row in self._active_rows()
-            if self._row_tags(row).get("execution_mode") == "FUTURES"
-        ]
+        active_futures = []
+        for row in self._active_rows():
+            mode = str(self._row_tags(row).get("execution_mode", "") or "").strip().upper()
+            if mode == "SPOT":
+                continue
+            if mode != "FUTURES":
+                raise FuturesCampaignExecutionError(
+                    "Active campaign execution mode is missing/unknown; "
+                    "new Futures campaign blocked until ownership is reconciled"
+                )
+            active_futures.append(row)
         if len(active_futures) >= self.max_open_positions:
             raise FuturesCampaignExecutionError(
                 "Maximum open Futures campaign count reached; new campaign blocked"
