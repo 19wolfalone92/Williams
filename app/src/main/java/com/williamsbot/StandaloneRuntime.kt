@@ -3005,6 +3005,20 @@ private class NativeEngine(
         }
     }
 
+    private fun campaignMutationEnvironmentReady(): Boolean =
+        running &&
+            !paused &&
+            !reconcileRequired &&
+            !killLatched &&
+            marketDataFresh() &&
+            marketSocketConnected &&
+            marketWebSocketFresh() &&
+            restAccountReady &&
+            historyReady &&
+            userStreamConnected &&
+            !userStreamSyncRequired &&
+            !equityCircuitBreaker.isTripped()
+
     private fun withCampaignMutation(
         symbol: String,
         purpose: String,
@@ -3017,18 +3031,70 @@ private class NativeEngine(
         require(executionGate.tryReserve(symbol)) {
             "Campaign execution already reserved for " + symbol
         }
-        prefs.edit()
-            .putString("execution_gate_symbol", symbol)
-            .putString("execution_gate_purpose", purpose)
-            .apply()
+
         return try {
+            // Entry/add-on signals may be admitted during a valid scan and then
+            // wait in the executor queue. Recheck every data/account/stream gate
+            // immediately before the exchange mutation, but keep protection,
+            // trailing and exit operations available for risk reduction.
+            if (purpose == "CAMPAIGN_ENTRY" || purpose == "CAMPAIGN_ADD_ON") {
+                require(campaignMutationEnvironmentReady()) {
+                    "CAMPAIGN_MUTATION_BLOCKED: live runtime preflight degraded before " +
+                        purpose + "; no exchange mutation sent"
+                }
+                val expectedStates = if (purpose == "CAMPAIGN_ENTRY") {
+                    setOf(TradingState.ENTRY_PENDING)
+                } else {
+                    setOf(TradingState.PROTECTED, TradingState.ENTRY_PENDING)
+                }
+                require(stateMachine.state in expectedStates) {
+                    "CAMPAIGN_MUTATION_BLOCKED: FSM state " + stateMachine.state.name +
+                        " does not admit " + purpose
+                }
+                require(synchronized(pendingEntries) { pendingEntries.containsKey(symbol) }) {
+                    "CAMPAIGN_MUTATION_BLOCKED: durable pending entry is missing for " +
+                        symbol
+                }
+            }
+
+            // The durable write-ahead gate must be verified before any exchange
+            // mutation. An Android process death after this commit will leave a
+            // reconciliation marker instead of replaying an ambiguous request.
+            val intentPersisted = runCatching {
+                prefs.edit()
+                    .putString("execution_gate_symbol", symbol)
+                    .putString("execution_gate_purpose", purpose)
+                    .commit() &&
+                    prefs.getString("execution_gate_symbol", null) == symbol &&
+                    prefs.getString("execution_gate_purpose", null) == purpose
+            }.getOrDefault(false)
+            if (!intentPersisted) {
+                setReconcileRequired(
+                    "execution mutation write-ahead intent could not be durably verified: " +
+                        symbol + "/" + purpose
+                )
+                error("EXECUTION_INTENT_PERSISTENCE_FAILED: exchange mutation not sent")
+            }
+
             block()
         } finally {
             executionGate.release(symbol)
-            prefs.edit()
-                .remove("execution_gate_symbol")
-                .remove("execution_gate_purpose")
-                .apply()
+            val gateCleared = runCatching {
+                prefs.edit()
+                    .remove("execution_gate_symbol")
+                    .remove("execution_gate_purpose")
+                    .commit() &&
+                    (prefs.getString("execution_gate_symbol", null).isNullOrBlank()) &&
+                    (prefs.getString("execution_gate_purpose", null).isNullOrBlank())
+            }.getOrDefault(false)
+            if (!gateCleared) {
+                // A mutation may already have reached Binance. Never report the
+                // local gate as clean if its durable cleanup cannot be verified.
+                setReconcileRequired(
+                    "execution mutation gate cleanup could not be durably verified: " +
+                        symbol + "/" + purpose
+                )
+            }
         }
     }
 
