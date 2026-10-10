@@ -82,7 +82,7 @@ class FuturesCampaignExecutionService:
         db,
         *,
         execution_barrier: ExecutionBarrier,
-        max_open_positions: int = 1,
+        max_open_positions: int = 3,
         portfolio_risk_limit_pct: float = 0.03,
         campaign_risk_limit_pct: float = 0.01,
         initial_risk_fraction_of_campaign: float = 0.40,
