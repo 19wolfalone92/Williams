@@ -84,7 +84,7 @@ internal fun williamsAngulationScore(
         if (!listOf(jaw[i], teethLine[i], lipsLine[i], lows[i], highs[i], closes[i]).all { it.isFinite() && it > 0.0 }) {
             return null
         }
-        if (lows[i] > highs[i]) return null
+        if (lows[i] > highs[i] || closes[i] < lows[i] || closes[i] > highs[i]) return null
     }
 
     fun localSlope(values: List<Double>): Double {
@@ -102,10 +102,11 @@ internal fun williamsAngulationScore(
         return if (denominator > 0.0) numerator / denominator else 0.0
     }
 
-    val bullishDistance = (start..index).map { i -> max(0.0, jaw[i] - lows[i]) }
-    val bearishDistance = (start..index).map { i -> max(0.0, highs[i] - jaw[i]) }
-    val bullishDelta = bullishDistance.last() - bullishDistance.first()
-    val bearishDelta = bearishDistance.last() - bearishDistance.first()
+    // Keep full-length series because localSlope selects start..index.
+    val bullishDistance = jaw.indices.map { i -> max(0.0, jaw[i] - lows[i]) }
+    val bearishDistance = jaw.indices.map { i -> max(0.0, highs[i] - jaw[i]) }
+    val bullishDelta = bullishDistance[index] - bullishDistance[start]
+    val bearishDelta = bearishDistance[index] - bearishDistance[start]
 
     val jawSlope = localSlope(jaw)
     val lowSlope = localSlope(lows)
