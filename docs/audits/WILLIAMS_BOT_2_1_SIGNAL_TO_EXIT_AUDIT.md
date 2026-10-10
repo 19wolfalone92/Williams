@@ -588,3 +588,14 @@ The audit is traced across both Python and Android paths, not just the indicator
 **Correction.** The scanner now keeps the legacy fixed-target gate for Spot, but disables it for clients explicitly identified as USDⓈ-M Futures. The configured ratio remains a diagnostic/ranking value; it is not a live Futures entry criterion when the campaign's actual exit contract is structural/trailing. Added profile-specific regression tests.
 
 **Chain impact.** OHLCV → signal extraction → candidate filter → portfolio risk → campaign entry. This closes the upstream bypass of finding 52; the full exact-head CI must pass before considering it verified.
+
+
+### 55. Android Futures retained a hypothetical fixed-target R:R entry veto — corrected; exact-head verification pending
+
+**Root cause.** The native `FuturesNativeEngine.sizePosition()` calculated a hypothetical target as `ATR × 4`, derived R:R from that target and the structural stop, then rejected the entry when the ratio was below `minRiskReward`. The native campaign does not submit that fixed target; its documented exit contract is structural invalidation, trailing and exhaustion. This duplicated a previously corrected Python scanner/risk mismatch and left Android and Python with different admission semantics.
+
+**Correction.** Removed the hypothetical ATR-target R:R hard veto from the native Futures sizing path. Sizing still requires valid stop geometry and retains fee/slippage reserves, exchange lot/notional checks, equity/available-margin caps, and the final tick-normalized risk guard. This change does not disable any separate legacy Spot fixed-target policy.
+
+**Book-alignment boundary.** The change removes a non-book veto; it does not claim that the current native structural exit is an exact transcription of every book/edition. The two-bar hard-exit and trailing implementation still require comparison against source-derived golden charts.
+
+**Verification.** Change committed at `555de2ff4935e2cf56fce3caaf8d789b61d9b0fe`. The exact-head Campaign CI was in progress at the last check. Do not count the earlier passing run at `df19c4de830543c5bad2d56d270b4c048c775633` as verification of this correction.
