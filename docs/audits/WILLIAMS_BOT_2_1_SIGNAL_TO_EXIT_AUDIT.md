@@ -289,3 +289,23 @@ Last-mile entry creation now rejects missing expiry, but an already-persisted/le
 After correcting the Futures signal extractor, `strategy.calculate_indicators` still defined `long_super_ao_signal` and `short_super_ao_signal` as Super AO AND the prior bar's fractal-outside flag. That left indicator diagnostics, legacy signal counts and campaign signal extraction with contradictory WM2 semantics.
 
 **Correction:** the WM2 indicator flags now identify only the third consecutive same-colour AO bar (`ao_green_streak == super_ao_bars` / mirrored red streak), independent of fractal flags. Added monotonic LONG/SHORT regression vectors where no separate fractal-outside flag is required.
+
+
+### 36. Conservative risk defaults corrected; UTC stop-count guard remains open
+
+The shared config and Futures runtime previously defaulted to 0.50% per-entry risk, 3% daily equity loss and five simultaneous campaigns. These defaults were not aligned with the project's conservative target profile.
+
+**Correction on this branch:** defaults are now 0.25% per-entry risk, 1% daily equity loss, one open campaign, and a 0.60% configurable campaign risk ceiling. The configured consecutive-loss default is two. Regression tests cover defaults and explicit environment overrides.
+
+**Not fixed by changing defaults:** the Futures runtime still needs an idempotent, durable count of confirmed protective-stop exits per UTC day. `max_consecutive_losses` and `cooldown_minutes` exist in shared configuration but are not yet wired into Futures entry admission. Daily percentage loss, consecutive losses, and a maximum number of full stop-outs are different controls and must not be treated as interchangeable. This remains a P1 release blocker.
+
+### 37. Final-chain disposition after the third-pass review
+
+- **Signal detection to conditional order:** source path mapped; exact Python/Android parity remains unproven.
+- **Entry to protective stop:** strict exchange-side verification exists in Python; native Android has unresolved aggregation gaps for partial/racing exits.
+- **Position management to exit:** Python uses H1 closed bars, structural reversal and monotonic trailing. This is the current implemented policy, not proof of complete book/course exit-rule parity.
+- **Exit to accounting:** Python requires authoritative fill and fee reconciliation. Native unified closed-trade history integration remains open.
+- **Risk lockouts:** 1% daily-equity guard is the default after this pass. Two-confirmed-stop-outs/day, configured consecutive-loss lockout and cooldown are still not implemented in the Futures scan gate.
+- **Verification:** Python tests passed on the pre-config-change head; Android build/unit tests were still running when checked. New risk-default tests and all workflows must pass on the final exact SHA.
+
+**Release status remains NOT READY FOR LIVE TRADING.** No real exchange orders were sent.
