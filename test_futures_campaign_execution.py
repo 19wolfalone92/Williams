@@ -493,10 +493,14 @@ def test_execution_service_enforces_campaign_cap_for_direct_callers(tmp_path):
 
 def test_campaign_capacity_admission_serializes_across_database_connections(tmp_path):
     db_path = str(tmp_path / "futures-capacity-concurrent.sqlite3")
+    seed = Database(db_path)
+    seed.conn.close()
+    # Construct both connections before starting threads so schema migration
+    # is not the thing that serializes this test.
+    connections = [Database(db_path), Database(db_path)]
     start_together = threading.Barrier(2)
 
-    def attempt_admission():
-        db = Database(db_path)
+    def attempt_admission(db):
         try:
             cache = ContextCache()
             make_context(cache, allow_long=True, allow_short=False)
@@ -528,7 +532,7 @@ def test_campaign_capacity_admission_serializes_across_database_connections(tmp_
             db.conn.close()
 
     with ThreadPoolExecutor(max_workers=2) as pool:
-        outcomes = list(pool.map(lambda _index: attempt_admission(), range(2)))
+        outcomes = list(pool.map(attempt_admission, connections))
 
     assert outcomes.count("ADMITTED") == 1
     assert outcomes.count("BLOCKED") == 1
