@@ -12,7 +12,7 @@ from campaign_execution import CampaignExecutionService, CampaignExecutionError
 from campaign_model import SignalSpec, SignalType, SignalRole
 from campaign_monitor import CampaignMonitor
 from order_identity import is_entry_id, is_exit_id, is_managed_order, stable_client_order_id
-from execution_barrier import ExecutionBarrier, OrderIntent
+from execution_barrier import ExecutionBarrier, ExecutionAmbiguousError, OrderIntent
 from market_context import ContextCache
 
 
@@ -2354,9 +2354,33 @@ class MultiPositionTrader:
                 continue
 
             self._locks.add(symbol)
-            client_id = (
-                f"{self.ENTRY_PREFIX}{uuid.uuid4().hex[:20]}"
+            barrier_cache = self.execution_barrier.context_cache
+            snapshot = barrier_cache.snapshot()
+            permission_interval = str(
+                getattr(
+                    selection.candidate,
+                    "timeframe",
+                    os.getenv("INTERVAL", "1h"),
+                )
+            ).strip().lower()
+            permission_context = snapshot.context(symbol, permission_interval)
+            frames = snapshot.by_symbol.get(symbol, {})
+            required_versions = {
+                interval: context.version
+                for interval, context in frames.items()
+            }
+            signal_type = str(
+                getattr(selection.candidate, "entry_signal_type", "LEGACY_SCANNER")
             )
+            candle_time = (
+                int(permission_context.candle_close_time_ms)
+                if permission_context is not None else 0
+            )
+            signal_id = (
+                f"{symbol}:{permission_interval}:LEGACY_ENTRY:"
+                f"{candle_time}:{signal_type}"
+            )
+            client_id = stable_client_order_id(self.ENTRY_PREFIX, signal_id)
             self.set_state(
                 symbol,
                 "ENTRY_PENDING",
@@ -2388,12 +2412,53 @@ class MultiPositionTrader:
                     float(quote),
                 )
 
-                order = self.client.order_safe(
+                intent = OrderIntent.new(
                     symbol,
                     "BUY",
                     "MARKET",
-                    quote_order_qty=self.client.decimal_format(quote),
-                    new_client_order_id=client_id,
+                    required_context_versions=required_versions,
+                    hypothesis_id="LEGACY_SCANNER_ENTRY",
+                    purpose="ENTRY",
+                    permission_interval=permission_interval,
+                    campaign_id="",
+                    signal_id=signal_id,
+                    client_order_id=client_id,
+                    quote_order_quantity=self.client.decimal_format(quote),
+                    risk_quote=float(balance) * float(requested_risk_pct),
+                    capital_reserved_quote=float(quote),
+                )
+
+                def _check_legacy_entry(_snapshot):
+                    if str(self.db.state_get(self._pending_key(symbol), "")) != client_id:
+                        raise RuntimeError("pending-entry owner changed before submission")
+                    if self.state(symbol) != "ENTRY_PENDING":
+                        raise RuntimeError("symbol state changed before legacy entry")
+                    if self.db.open_trade(symbol) is not None:
+                        raise RuntimeError("managed position already exists")
+                    current_equity = self._balance()
+                    equity_ok, equity_reason = self.equity_breaker.check(
+                        self.db, current_equity, symbol
+                    )
+                    if not equity_ok:
+                        raise RuntimeError(equity_reason)
+                    if self.reserved_risk_quote() + float(balance) * float(requested_risk_pct) > (
+                        current_equity * self.max_total_risk_pct + 1e-9
+                    ):
+                        raise RuntimeError("portfolio risk budget changed before entry")
+                    if float(quote) > self._quote_free() + 1e-9:
+                        raise RuntimeError("available quote balance changed before entry")
+                    self.l2_guard.check_buy_quote(self.client, symbol, float(quote))
+
+                order = self._submit_mutation(
+                    intent,
+                    lambda: self.client.order_safe(
+                        symbol,
+                        "BUY",
+                        "MARKET",
+                        quote_order_qty=self.client.decimal_format(quote),
+                        new_client_order_id=client_id,
+                    ),
+                    pre_submit_checks=_check_legacy_entry,
                 )
                 self.db.save_order(order)
 
@@ -2484,13 +2549,17 @@ class MultiPositionTrader:
                     }
                 )
             except Exception as exc:
-                # Do NOT issue an emergency SELL here. The durable entry
-                # intent remains on disk and startup/next cycle recovery
-                # will inspect the exact Binance clientOrderId.
-                self.set_state(
-                    symbol,
-                    "RECONCILE_REQUIRED",
-                )
+                # Only a known pre-submit rejection may release the reservation.
+                # Once submit() could have run, keep state for exchange recovery.
+                ambiguous_or_post_submit = isinstance(exc, ExecutionAmbiguousError)
+                if ambiguous_or_post_submit:
+                    self.set_state(symbol, "RECONCILE_REQUIRED")
+                else:
+                    try:
+                        self.db.release_state_claim(self._pending_key(symbol), client_id)
+                    except Exception:
+                        pass
+                    self.set_state(symbol, "FLAT")
                 self.db.log_event(
                     "ERROR",
                     "multi_position_entry_error",
@@ -2498,13 +2567,14 @@ class MultiPositionTrader:
                     {
                         "symbol": symbol,
                         "clientOrderId": client_id,
+                        "reconcile_required": ambiguous_or_post_submit,
                     },
                 )
                 results.append(
                     {
                         "symbol": symbol,
                         "error": str(exc),
-                        "reconcile_required": True,
+                        "reconcile_required": ambiguous_or_post_submit,
                     }
                 )
             finally:
