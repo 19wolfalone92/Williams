@@ -54,8 +54,13 @@ def _read_persistent_kill_latch(db: Database) -> bool:
     return str(raw).strip().lower() not in {"false", "0", "no", "off"}
 
 
+def _normalize_interval(interval: str) -> str:
+    raw = str(interval or "").strip()
+    return "1M" if raw == "1M" else raw.lower()
+
+
 def _interval_seconds(interval: str) -> int:
-    value = str(interval).strip()
+    value = _normalize_interval(interval)
     if value == "1M":
         return 30 * 24 * 60 * 60
     if not value:
@@ -280,7 +285,7 @@ class FuturesRuntime:
             raise ValueError("Futures mainnet requires allow_live=True and ALLOW_LIVE=true")
 
         self.config = TradingConfig.from_env()
-        self.interval = str(interval or os.getenv("EXECUTION_TIMEFRAME", "1h")).lower()
+        self.interval = _normalize_interval(interval or os.getenv("EXECUTION_TIMEFRAME", "1h"))
         raw_symbols = list(symbols or [
             x.strip().upper()
             for x in os.getenv(
@@ -306,7 +311,7 @@ class FuturesRuntime:
         )
         self.poll_seconds = max(10, int(os.getenv("FUTURES_SCAN_SECONDS", "30")))
         self.context_intervals = tuple(dict.fromkeys(
-            [str(x).lower() for x in self.config.structural_timeframes]
+            [_normalize_interval(x) for x in self.config.structural_timeframes]
             + [self.interval]
         ))
         self.db_path = db_path or os.getenv("FUTURES_DB_PATH", "data/williams_futures.sqlite3")
