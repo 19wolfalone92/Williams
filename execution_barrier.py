@@ -69,10 +69,11 @@ class ExecutionBarrier:
     is performed by this layer.
     """
 
-    def __init__(self, context_cache: ContextCache, db=None, *, preflight_provider: Callable[[], Mapping[str, Any]] | None = None, max_preflight_age_ms: int = 2_000) -> None:
+    def __init__(self, context_cache: ContextCache, db=None, *, preflight_provider: Callable[[], Mapping[str, Any]] | None = None, exchange_client=None, max_preflight_age_ms: int = 2_000) -> None:
         self.context_cache = context_cache
         self.db = db
         self.preflight_provider = preflight_provider
+        self.exchange_client = exchange_client
         self.max_preflight_age_ms = max(1, int(max_preflight_age_ms))
 
     def _persist(self, intent: OrderIntent, status: str, reason: str = "") -> bool:
@@ -103,6 +104,12 @@ class ExecutionBarrier:
             pass
 
     def _verify_preflight(self) -> str:
+        if (
+            self.exchange_client is None
+            or getattr(self.exchange_client, "testnet", None) is not True
+            or getattr(self.exchange_client, "base_url", None) != "https://testnet.binance.vision"
+        ):
+            return "execution_client_not_pinned_to_spot_testnet"
         if not callable(self.preflight_provider):
             return "mandatory_preflight_provider_missing"
         try:
@@ -284,7 +291,7 @@ class ExecutionBarrier:
                 },
             )
             try:
-                with mutation_permit():
+                with mutation_permit(self.exchange_client):
                     response = submit()
             except Exception as exc:
                 order_fsm.state = OrderState.AMBIGUOUS
