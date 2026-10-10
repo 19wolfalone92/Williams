@@ -77,6 +77,19 @@ def canonical_williams_parameter_blockers(cfg):
     return blockers
 
 
+def canonical_live_config_from_env(env=os.environ):
+    """Use book constants for live calculations while preserving explicit overlays.
+
+    The caller separately checks the original env config and blocks new entries
+    when canonical indicator constants were overridden. Existing-position
+    management still calculates the canonical indicator series rather than
+    accidentally managing a live position with research parameters.
+    """
+    cfg = config_from_env(env)
+    cfg.update(CANONICAL_WILLIAMS_PARAMETERS)
+    return cfg
+
+
 def calculate_indicators(df, cfg):
     x = df.copy()
     if x.empty:
