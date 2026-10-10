@@ -2057,10 +2057,19 @@ private class NativeEngine(
     @Synchronized
     private fun startMarketDataStream() {
         if (marketSocket != null) return
+        // A previous socket's last message must never satisfy the new socket's
+        // freshness gate during reconnect.
+        marketSocketConnected = false
+        marketSocketLastEventMs = 0L
         val request = Request.Builder().url(wsStreamUrl()).build()
         marketSocket = http.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
+                if (marketSocket !== webSocket) {
+                    webSocket.close(1000, "superseded_market_socket")
+                    return
+                }
                 marketSocketConnected = true
+                marketSocketLastEventMs = 0L
                 lastError = null
                 Thread {
                     warmOrderBookSnapshots()
@@ -2079,11 +2088,13 @@ private class NativeEngine(
                     }
                 }.apply {
                     isDaemon = true
+                    name = "williams-market-ws-rotation"
                     start()
                 }
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
+                if (marketSocket !== webSocket) return
                 marketSocketLastEventMs = System.currentTimeMillis()
                 runCatching { consumeMarketStream(JSONObject(text)) }
                     .onFailure { lastError = "WS market: " + (it.message ?: it.javaClass.simpleName) }
@@ -2092,29 +2103,51 @@ private class NativeEngine(
                     val data = JSONObject(text).optJSONObject("data")
                     if (data?.optString("e") == "serverShutdown") {
                         marketSocketConnected = false
+                        marketSocketLastEventMs = 0L
                         webSocket.close(1000, "serverShutdown")
                     }
                 }
             }
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-                marketSocketConnected = false
+                if (marketSocket === webSocket) {
+                    marketSocketConnected = false
+                    marketSocketLastEventMs = 0L
+                }
                 webSocket.close(code, reason)
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                if (marketSocket !== webSocket) return
                 marketSocketConnected = false
+                marketSocketLastEventMs = 0L
                 marketSocket = null
-                if (running) Thread { Thread.sleep(1500); if (running) startMarketDataStream() }.start()
+                scheduleMarketSocketReconnect(delayMs = 1_500L)
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                if (marketSocket !== webSocket) return
                 marketSocketConnected = false
+                marketSocketLastEventMs = 0L
                 marketSocket = null
-                lastError = "WS market: " + (t.message ?: t.javaClass.simpleName)
-                if (running) Thread { Thread.sleep(2500); if (running) startMarketDataStream() }.start()
+                lastError = "WS market: " + t.javaClass.simpleName
+                scheduleMarketSocketReconnect(delayMs = 2_500L)
             }
         })
+    }
+
+    private fun scheduleMarketSocketReconnect(delayMs: Long) {
+        if (!running) return
+        Thread({
+            try {
+                Thread.sleep(delayMs)
+                if (running && marketSocket == null) startMarketDataStream()
+            } catch (_: InterruptedException) {
+            }
+        }, "williams-market-ws-reconnect").apply {
+            isDaemon = true
+            start()
+        }
     }
 
     private fun consumeMarketStream(envelope: JSONObject) {
