@@ -309,3 +309,26 @@ The shared config and Futures runtime previously defaulted to 0.50% per-entry ri
 - **Verification:** Python tests passed on the pre-config-change head; Android build/unit tests were still running when checked. New risk-default tests and all workflows must pass on the final exact SHA.
 
 **Release status remains NOT READY FOR LIVE TRADING.** No real exchange orders were sent.
+
+
+## Supplement — signal confirmation chronology and full signal lifetime
+
+### Defect found
+
+The fractal detector already returned both the fractal-center index and the later confirmation index. However, the emitted `SignalSpec.signal_bar_time_ms` was based on the center candle, and both scanner ordering and initial-signal selection used that timestamp. A fractal cannot be known until its right-side confirmation candles close. Sorting by the center candle could therefore make a late-confirmed fractal appear earlier than a different signal that actually became actionable first.
+
+The expiry timer was also based on the center/signal candle's open time. Since a signal is only actionable after its candle closes (and a fractal only after its confirmation candle closes), this shortened the configured pending lifetime.
+
+### Correction applied in this audit
+
+- Added `SignalSpec.confirmation_time_ms`, retaining `signal_bar_time_ms` for the source candle and stable signal identity.
+- WM1/WM2 record the source signal candle as their confirmation candle.
+- WM3 records the actual confirmation candle separately from the fractal center.
+- Scanner sorting and `CampaignEngine.choose_initial_signal` use confirmation chronology, not the source candle's historical timestamp.
+- `signal_spec_from_dict` restores the confirmation timestamp during runtime reconstruction.
+- Pending expiry is anchored after the confirmation candle and grants the configured number of full subsequent bars.
+- Regression tests assert WM3 source time, confirmation time, and expiry, plus SHORT WM1 timestamp/lifetime.
+
+### Revalidation required
+
+These changes were committed after the previous green CI run. The latest exact SHA must pass Python tests, Campaign CI, and Android build/static checks before this correction can be considered verified. Demo order lifecycle remains untested. The overall release status remains **NOT READY FOR LIVE TRADING**.
