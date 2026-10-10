@@ -61,3 +61,38 @@ The tests that inject synthetic ready reports are deterministic unit-test fixtur
 6. Only after P0 closure, run read-only Spot Testnet checks in the authorized runtime. Do not send, cancel, replace, or protect orders during that verification.
 
 **Final decision: BLOCKED / NOT ACCEPTED.** Do not label this branch READY FOR READ-ONLY TESTNET VERIFICATION until the unresolved criteria above have evidence.
+
+
+## 6. Addendum — subsequent implementation
+
+The following work was committed after the first version of this report. The report remains **BLOCKED / NOT ACCEPTED**.
+
+| SHA | Change | Acceptance effect |
+|---|---|---|
+| `74f0c1b8f29a2771612f87fe083836baec57380a` | Added `runtime_freshness.py` with component/source-bound evidence contracts, age budgets, missing/invalid/future timestamp handling, and no substitution of report creation time. | Contract validator exists, but actual measurements from each runtime component are not wired into Preflight; P0-B remains UNKNOWN. |
+| `435b6ba7b997b25d75cfaaba126129ef047e154c` | Added `test_runtime_freshness.py` for fresh, stale, missing, future, invalid, wrong-source, wrong-component and missing-generation cases. | Tests have not been executed on GitHub Actions at the current branch head. |
+| `a44d17392058472ec9f35f80b0c7edcd1349c20a` | Production `Trader` now constructs a concrete `PreflightCheckService` bound to the same `BinanceSpotClient` supplied to `ExecutionBarrier`. | Removes the legacy callback wiring. Real preflight still correctly remains blocked while runtime evidence is UNKNOWN. |
+| `7b9c49ba29f58a308114c34cb06d0690fd6dc75e` | Routed legacy `MultiPositionTrader` entry, manual exit, emergency exit and managed OCO cancellation paths through a shared `_execute_mutation` wrapper that requires the canonical barrier. | Eliminates those direct production call paths; emergency exits still lack a separately approved emergency contract and therefore must fail closed. |
+| `a0c35d749bb64858ca34ec27d14f818948fac731` | Added tests proving the legacy wrapper does not submit without a barrier and marks the symbol for reconciliation when the barrier rejects. | Tests have not been executed on GitHub Actions at the current branch head. |
+| `ffc65a1bb67592e35f4f2e1c218141de186db35f` | ExecutionBarrier invokes `PreflightCheckService.verify_all(service)` through the class implementation, avoiding instance-level method replacement. | Closes the specific instance-method substitution route; in-process arbitrary code execution remains outside Python object-level trust guarantees. |
+| `fb7a957b57c23142fa9d7e62391846358a1f172b` | Changed ready-report injection to a test-only class-level fixture and added an instance-method forgery test. | The new test is committed but unexecuted pending CI evidence. |
+
+### Updated source inventory
+
+- `trader.py`: two order submissions are enclosed in `ExecutionBarrier.execute()` (BUY and OCO creation).
+- `campaign_execution.py`: order, protective order, cancellation, market exit and cancel-replace callbacks route through its `_submit()`, which calls the canonical barrier.
+- `portfolio_trader.py`: legacy market entry, manual exit, emergency exit and OCO cancellation now call `_execute_mutation()`, which calls the canonical barrier.
+- `binance_client.py`: REST mutation endpoints are order POST, cancel-replace POST, order DELETE, open-orders DELETE, OCO POST and OCO DELETE. The client checks for a matching mutation permit before a mutation request.
+- The permit is one-shot and consumed before network I/O. A transport exception cannot make it reusable.
+
+This is source-level inventory, not yet proof that every recovery/background path is covered by behavioral tests. In particular, protective-order unknown state, cancellation/replacement ambiguity, crash recovery, and reconciliation restart scenarios remain incomplete.
+
+### Updated remaining blockers
+
+1. Actual runtime freshness evidence remains unwired; `runtime_freshness.py` is a validator, not a source of real measurements. Preflight must continue to return UNKNOWN for components without real evidence.
+2. Required recovery/reconciliation failure-injection matrix remains incomplete.
+3. Secret marker coverage across all listed channels remains incomplete.
+4. Python/Campaign CI, security audit and Android unit/lint/build results have not been verified on the final implementation SHA. Baseline CI is not transferable to these commits.
+5. Read-only Spot Testnet verification remains NOT RUN; no credentials or network outcome is inferred from mocks.
+
+No order, cancellation, replacement, OCO mutation or Mainnet request was sent during this work.
