@@ -167,6 +167,38 @@ class ExecutionBarrier:
 
         return ""
 
+    def _assert_fresh_intent_identity(self, intent: OrderIntent) -> None:
+        """Prevent reusing a durable intent or clientOrderId after any outcome."""
+        if self.db is None or not hasattr(self.db, "conn"):
+            raise ExecutionPersistenceError(
+                "durable identity lookup is unavailable; refusing order submission"
+            )
+        try:
+            by_intent = self.db.conn.execute(
+                "SELECT status FROM execution_intents WHERE intent_id=? LIMIT 1",
+                (intent.intent_id,),
+            ).fetchone()
+            if by_intent is not None:
+                raise ExecutionPersistenceError(
+                    "intent ID already exists; reconcile the prior intent instead of resubmitting"
+                )
+            if intent.client_order_id:
+                by_client = self.db.conn.execute(
+                    "SELECT intent_id,status FROM execution_intents "
+                    "WHERE symbol=? AND client_order_id=? LIMIT 1",
+                    (intent.symbol.upper(), intent.client_order_id),
+                ).fetchone()
+                if by_client is not None:
+                    raise ExecutionPersistenceError(
+                        "clientOrderId already belongs to a durable intent; reconcile instead of resubmitting"
+                    )
+        except ExecutionPersistenceError:
+            raise
+        except Exception as exc:
+            raise ExecutionPersistenceError(
+                "could not verify intent/clientOrderId uniqueness; refusing order submission"
+            ) from exc
+
     def execute(
         self,
         intent: OrderIntent,
@@ -175,6 +207,9 @@ class ExecutionBarrier:
         pre_submit_checks: Callable[[MarketStateSnapshot], None] | None = None,
     ) -> ExecutionResult:
         with self.context_cache.execution_lock:
+            # Identity reuse is never a retry mechanism. Even a risk-reducing
+            # order can be duplicated if the previous response was ambiguous.
+            self._assert_fresh_intent_identity(intent)
             order_fsm = OrderStateMachine()
             order_fsm.transition(OrderState.ADMISSION)
 
