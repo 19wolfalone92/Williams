@@ -61,6 +61,8 @@ def test_execution_barrier_rejects_stale_context(tmp_path):
 def test_execution_barrier_serializes_publish_and_submit(tmp_path):
     cache = ContextCache()
     db = Database(str(tmp_path / "serialize-submit.sqlite3"))
+    # This test isolates context serialization; recovery-gate behavior is tested separately.
+    db.state_set("recovery_status", "RECOVERY_COMPLETE")
     cache.publish(context())
     barrier = ExecutionBarrier(cache, db)
     version = cache.snapshot().context("BTCUSDT", "1h").version
