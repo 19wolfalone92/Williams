@@ -380,3 +380,21 @@ def test_production_binance_mutation_call_sites_are_barrier_routed():
     # Guard against silently dropping the inventory as files are refactored.
     assert findings, "no production mutation call sites were inventoried"
     assert all(row[3] for row in findings), findings
+
+
+def test_unresolved_execution_intent_prevents_stale_symbol_barrier_clear(tmp_path, monkeypatch):
+    from portfolio_trader import MultiPositionTrader
+
+    monkeypatch.setenv("CAMPAIGN_ENGINE", "false")
+    db = Database(str(tmp_path / "stale-symbol-barrier.sqlite3"))
+    exchange = FakeExchange()
+    intent = make_intent(db, cid="WILL_RECOVERY_STALE_BARRIER_012")
+    db.state_set("position_state:BTCUSDT", "RECONCILE_REQUIRED")
+
+    trader = MultiPositionTrader(exchange, db=db, symbols=[])
+    repaired = trader._repair_stale_reconcile_states()
+
+    assert repaired == []
+    assert trader.state("BTCUSDT") == "RECONCILE_REQUIRED"
+    assert db.unresolved_execution_intents()[0]["intent_id"] == intent.intent_id
+    assert exchange.mutations == 0
