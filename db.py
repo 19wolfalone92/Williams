@@ -7,7 +7,7 @@ from safe_logging import redact_text, redact_value
 
 
 class Database:
-    SCHEMA_VERSION = 7
+    SCHEMA_VERSION = 8
 
     def __init__(self, path=None):
         path = path or os.getenv('WILLIAMS_DB_PATH') or 'data/trader.sqlite3'
@@ -269,9 +269,56 @@ class Database:
         ''')
         self._migrate_trade_columns()
         self._migrate_execution_intent_columns()
+        self._migrate_campaign_fill_identity()
         self.state_set('schema_version', self.SCHEMA_VERSION)
         self.state_set('position_state', self.state_get('position_state', 'FLAT'))
         self.conn.commit()
+
+    def _migrate_campaign_fill_identity(self):
+        """Add a DB-enforced exchange fill identity without deleting legacy rows.
+
+        Existing rows remain LEGACY_UNVERIFIED because their exchange trade IDs
+        cannot safely be inferred from lossy aggregate columns. The partial
+        unique index applies only to rows with an explicit exchange trade ID.
+        """
+        columns = {
+            row["name"]
+            for row in self.conn.execute("PRAGMA table_info(campaign_fills)").fetchall()
+        }
+        additions = {
+            "exchange": "TEXT NOT NULL DEFAULT 'BINANCE'",
+            "account_id": "TEXT NOT NULL DEFAULT 'default'",
+            "trade_id": "TEXT",
+            "financial_state": "TEXT NOT NULL DEFAULT 'LEGACY_UNVERIFIED'",
+        }
+        for name, declaration in additions.items():
+            if name not in columns:
+                self.conn.execute(
+                    f"ALTER TABLE campaign_fills ADD COLUMN {name} {declaration}"
+                )
+
+        # Do not silently choose a winner if a previous partial migration left
+        # duplicate exchange identities. Preserve rows and set a durable gate.
+        duplicate = self.conn.execute(
+            """SELECT exchange,account_id,symbol,trade_id,COUNT(*) AS n
+               FROM campaign_fills WHERE trade_id IS NOT NULL
+               GROUP BY exchange,account_id,symbol,trade_id HAVING COUNT(*) > 1
+               LIMIT 1"""
+        ).fetchone()
+        if duplicate:
+            self.state_set("recovery_status", "RECOVERY_REQUIRED")
+            self.state_set("campaign_fill_identity_conflict", json.dumps(dict(duplicate)))
+            self.conn.commit()
+            raise RuntimeError("campaign_fill_identity_migration_conflict")
+        self.conn.execute(
+            """CREATE UNIQUE INDEX IF NOT EXISTS uq_campaign_fill_exchange_trade
+               ON campaign_fills(exchange,account_id,symbol,trade_id)
+               WHERE trade_id IS NOT NULL"""
+        )
+        # A legacy database without prior recovery metadata must not implicitly
+        # become entry-admissible merely because the schema migration succeeded.
+        if self.state_get("recovery_status") is None:
+            self.state_set("recovery_status", "RECOVERY_REQUIRED")
 
     def _migrate_trade_columns(self):
         columns = {
@@ -1082,22 +1129,69 @@ class Database:
             self.conn.commit()
 
     def save_campaign_fill(self, fill):
-        data=redact_value(fill if isinstance(fill,dict) else dict(fill))
+        """Idempotently persist one exchange fill; conflicting duplicates fail closed."""
+        data = redact_value(fill if isinstance(fill, dict) else dict(fill))
+        trade_id = data.get("trade_id", data.get("tradeId"))
+        symbol = str(data.get("symbol", "")).upper().strip()
+        exchange = str(data.get("exchange", "BINANCE")).upper().strip()
+        account_id = str(data.get("account_id", "default")).strip()
+        if not trade_id or not symbol or not exchange or not account_id:
+            raise ValueError("exchange_fill_identity_required")
+        identity = (exchange, account_id, symbol, str(trade_id))
+        values = (
+            str(data.get("campaign_id", "")), str(data.get("order_id", data.get("orderId", ""))),
+            str(data.get("side", "")).upper(), float(data.get("quantity", data.get("qty", 0))),
+            float(data.get("price", 0)), float(data.get("quote_quantity", data.get("quoteQty", 0))),
+            float(data.get("commission", data.get("fee_amount", 0))),
+            str(data.get("commission_asset", data.get("commissionAsset", ""))).upper(),
+        )
+        if values[3] <= 0 or values[4] <= 0 or values[6] < 0 or not values[7]:
+            raise ValueError("exchange_fill_financial_fields_incomplete")
+        payload = json.dumps(data, default=str, sort_keys=True)
+        if not self._transaction_active:
+            with self.transaction():
+                return self.save_campaign_fill(data)
+        prior = self.conn.execute(
+            """SELECT campaign_id,order_id,side,quantity,price,quote_quantity,
+                      commission_asset,raw_json
+               FROM campaign_fills
+               WHERE exchange=? AND account_id=? AND symbol=? AND trade_id=?""",
+            identity,
+        ).fetchone()
+        if prior:
+            expected = (
+                values[0], values[1], values[2], values[3], values[4], values[5],
+                values[7],
+            )
+            actual = (
+                prior["campaign_id"], prior["order_id"], prior["side"],
+                prior["quantity"], prior["price"], prior["quote_quantity"],
+                prior["commission_asset"],
+            )
+            if actual != expected:
+                self.state_set("recovery_status", "RECOVERY_REQUIRED")
+                self.save_execution_event(
+                    str(data.get("intent_id", "fill-ledger")),
+                    "CONFLICTING_DUPLICATE_TRADE_ID",
+                    {"exchange": exchange, "account_id": account_id,
+                     "symbol": symbol, "trade_id": str(trade_id)},
+                )
+                raise RuntimeError("conflicting_duplicate_trade_id")
+            return False
         self.conn.execute(
             """INSERT INTO campaign_fills(
                 campaign_id,order_id,symbol,side,quantity,price,quote_quantity,
-                fee_quote,commission_base,commission_asset,raw_json
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                fee_quote,commission_base,commission_asset,raw_json,
+                exchange,account_id,trade_id,financial_state
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
-                data.get("campaign_id",""),data.get("order_id"),data.get("symbol",""),
-                data.get("side",""),float(data.get("quantity",0) or 0),float(data.get("price",0) or 0),
-                float(data.get("quote_quantity",0) or 0),float(data.get("fee_quote",0) or 0),
-                float(data.get("commission_base",0) or 0),data.get("commission_asset",""),
-                json.dumps(data,default=str),
+                values[0], values[1], symbol, values[2], values[3], values[4], values[5],
+                float(data.get("fee_quote", 0) or 0),
+                float(data.get("commission_base", 0) or 0), values[7], payload,
+                exchange, account_id, str(trade_id), "COMPLETE",
             ),
         )
-        if not self._transaction_active:
-            self.conn.commit()
+        return True
 
     def log_campaign_event(self, campaign_id, event, *, level="INFO", signal_id=None, order_id=None, reason="", payload=None):
         self.conn.execute(
