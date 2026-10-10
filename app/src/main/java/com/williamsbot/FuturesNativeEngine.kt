@@ -1992,7 +1992,8 @@ internal class FuturesNativeEngine(
                 tradeQty += qty
                 tradeQuote += qty * price
                 when (asset) {
-                    "USDT", "USDC" -> entryFeeQuote += fee
+                    "USDT" -> entryFeeQuote += fee
+                    "USDC" -> feeUnknown = true
                     "" -> Unit
                     else -> feeUnknown = true
                 }
@@ -3183,7 +3184,8 @@ internal class FuturesNativeEngine(
             exitNotional += qty * price
             realized += pnl
             when (feeAsset) {
-                "USDT", "USDC" -> feesQuote += fee
+                "USDT" -> feesQuote += fee
+                "USDC" -> feeUnknown = true
                 "" -> Unit
                 else -> feeUnknown = true
             }
@@ -3283,7 +3285,8 @@ internal class FuturesNativeEngine(
             exitNotional += qty * price
             realized += pnl
             when (asset) {
-                "USDT", "USDC" -> feeQuote += fee
+                "USDT" -> feeQuote += fee
+                "USDC" -> unknown = true
                 "" -> Unit
                 else -> unknown = true
             }
