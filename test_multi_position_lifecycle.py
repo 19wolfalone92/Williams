@@ -10,6 +10,8 @@ def _legacy_campaign_mode(monkeypatch):
 
 from db import Database
 from portfolio_trader import MultiPositionTrader
+from execution_barrier import ExecutionBarrier
+from market_context import ContextCache
 
 
 class FakeClient:
@@ -287,7 +289,7 @@ def test_multiple_positions_are_independent_and_exit_is_mapped_to_one_symbol(tmp
         },
     ]
 
-    multi = MultiPositionTrader(client, db=db)
+    multi = MultiPositionTrader(client, db=db8962, execution_barrier=ExecutionBarrier(ContextCache(), db))
     result = multi.reconcile_open_positions()
 
     assert any(x.get("closed") and x.get("symbol") == "BTCUSDT" for x in result)
@@ -330,7 +332,7 @@ def test_missing_oco_is_restored_from_persisted_position(tmp_path: Path):
         "time": 100,
     }]
 
-    multi = MultiPositionTrader(client, db=db)
+    multi = MultiPositionTrader(client, db=db10296, execution_barrier=ExecutionBarrier(ContextCache(), db))
     result = multi.reconcile_open_positions()
 
     assert result[0]["trade_id"] == trade_id
@@ -371,7 +373,7 @@ def test_filled_pending_buy_is_recovered_into_its_own_position(tmp_path: Path):
         "ENTRY_PENDING",
     )
 
-    multi = MultiPositionTrader(client, db=db)
+    multi = MultiPositionTrader(client, db=db11619, execution_barrier=ExecutionBarrier(ContextCache(), db))
     result = multi.recover_pending_entries()
 
     assert result[0]["symbol"] == "SOLUSDT"
@@ -443,7 +445,7 @@ def test_recover_keeps_reconcile_barrier_for_unresolved_exchange_position(tmp_pa
     }
     db.state_set("position_state:SOLUSDT", "RECONCILE_REQUIRED")
 
-    multi = MultiPositionTrader(client, db=db, symbols=["SOLUSDT"])
+    multi = MultiPositionTrader(client, db=db14072, execution_barrier=ExecutionBarrier(ContextCache(), db))
     result = multi.recover()
 
     assert result["ok"] is False
@@ -524,7 +526,7 @@ def test_partial_manual_sell_keeps_residual_position_protected(tmp_path: Path):
         risk_pct=0.5,
     )
     db.state_set("position_state:BTCUSDT", "OPEN")
-    trader = MultiPositionTrader(client, db=db, symbols=["BTCUSDT"])
+    trader = MultiPositionTrader(client, db=db16865, execution_barrier=ExecutionBarrier(ContextCache(), db))
     result = trader.manual_sell("BTCUSDT")
 
     assert result["sold"] is True
@@ -591,7 +593,7 @@ def test_partial_emergency_sell_never_closes_trade_as_flat(tmp_path: Path):
         risk_pct=0.5,
     )
     db.state_set("position_state:BTCUSDT", "OPEN")
-    trader = MultiPositionTrader(client, db=db, symbols=["BTCUSDT"])
+    trader = MultiPositionTrader(client, db=db19321, execution_barrier=ExecutionBarrier(ContextCache(), db))
     trader.dry_run = False
     result = trader._emergency_market_sell("BTCUSDT", 1.0, trade_id, "TEST_PARTIAL")
 
