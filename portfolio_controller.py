@@ -41,6 +41,11 @@ class PortfolioController:
             max_daily_loss_pct=float(os.getenv("MAX_DAILY_LOSS_PCT", "0.03")),
             min_rr=float(os.getenv("MIN_RISK_REWARD", "1.5")),
             max_atr_pct=float(os.getenv("MAX_ATR_PCT", "0.08")),
+            # Futures campaign exits are structural/trailing, not fixed ATR
+            # targets. Keep the R:R metric for ranking/diagnostics, but do not
+            # reject a valid Williams campaign solely because a hypothetical
+            # fixed target misses a legacy Spot gate.
+            require_min_rr=not bool(getattr(client, "is_usdm_futures", False)),
         )
 
     def _candidate_direction(self, candidate) -> str:
