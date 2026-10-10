@@ -1877,6 +1877,7 @@ class MultiPositionTrader:
                         protective_reference=float(raw["protective_reference"]),
                         trigger_buffer_ticks=int(raw.get("trigger_buffer_ticks", 1) or 1),
                         invalidation_price=float(raw.get("invalidation_price", 0.0) or 0.0),
+                        wave_invalidation_price=float(raw.get("wave_invalidation_price", 0.0) or 0.0),
                         teeth_at_detection=float(raw.get("teeth_at_detection", 0.0) or 0.0),
                         alligator_bullish=bool(raw.get("alligator_bullish", False)),
                         alligator_bearish=bool(raw.get("alligator_bearish", False)),
@@ -1888,8 +1889,12 @@ class MultiPositionTrader:
                         context_versions=dict(raw.get("context_versions", {}) or {}),
                         reason=str(raw.get("reason", "")),
                         created_at_ms=int(raw.get("created_at_ms", 0) or 0),
+                        confirmation_time_ms=int(raw.get("confirmation_time_ms", 0) or 0),
                         expires_at_ms=int(raw.get("expires_at_ms", 0) or 0),
-                        source_candle_index=int(raw.get("source_candle_index", -1) or -1),
+                        source_candle_index=(
+                            int(raw.get("source_candle_index", -1))
+                            if raw.get("source_candle_index") is not None else -1
+                        ),
                     )
                 )
             except Exception:
@@ -1917,6 +1922,7 @@ class MultiPositionTrader:
                         protective_reference=float(raw["protective_reference"]),
                         trigger_buffer_ticks=int(raw.get("trigger_buffer_ticks", 1) or 1),
                         invalidation_price=float(raw.get("invalidation_price", 0.0) or 0.0),
+                        wave_invalidation_price=float(raw.get("wave_invalidation_price", 0.0) or 0.0),
                         teeth_at_detection=float(raw.get("teeth_at_detection", 0.0) or 0.0),
                         alligator_bullish=bool(raw.get("alligator_bullish", False)),
                         alligator_bearish=bool(raw.get("alligator_bearish", False)),
@@ -1928,8 +1934,12 @@ class MultiPositionTrader:
                         context_versions=dict(raw.get("context_versions", {}) or {}),
                         reason=str(raw.get("reason", "")),
                         created_at_ms=int(raw.get("created_at_ms", 0) or 0),
+                        confirmation_time_ms=int(raw.get("confirmation_time_ms", 0) or 0),
                         expires_at_ms=int(raw.get("expires_at_ms", 0) or 0),
-                        source_candle_index=int(raw.get("source_candle_index", -1) or -1),
+                        source_candle_index=(
+                            int(raw.get("source_candle_index", -1))
+                            if raw.get("source_candle_index") is not None else -1
+                        ),
                     )
                 )
             except Exception:
