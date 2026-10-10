@@ -122,6 +122,23 @@ class FakeClient:
                 return order
         raise RuntimeError("order not found")
 
+    def my_trades(self, symbol, order_id=None, limit=1000):
+        order = self.get_order(symbol, order_id=order_id)
+        qty = float(order.get("executedQty", 0) or 0)
+        quote = float(order.get("cummulativeQuoteQty", 0) or 0)
+        if qty <= 0:
+            return []
+        return [{
+            "id": str(order.get("orderId", order_id)),
+            "orderId": order.get("orderId", order_id),
+            "symbol": symbol,
+            "price": str(quote / qty),
+            "qty": str(qty),
+            "quoteQty": str(quote),
+            "commission": "0",
+            "commissionAsset": "USDT",
+        }]
+
     def order(self, symbol, *args, **kwargs):
         raise AssertionError("unexpected new order in lifecycle recovery test")
 
