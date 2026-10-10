@@ -11,15 +11,34 @@ from db import Database
 
 
 class FakeContext:
-    def __init__(self, version=1):
+    def __init__(self, interval, version=1):
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
         self.version = version
-        self.allow_long = True
+        self.candle_close_time_ms = now_ms - {
+            "1h": 20_000,
+            "4h": 40_000,
+            "1d": 60_000,
+        }.get(interval, 20_000)
+        self.price = 100.0
+        self.atr = 2.0
+        self.jaw = 100.0
+        self.teeth = 100.0
+        self.lips = 100.0
+        self.alligator_state = "BULLISH" if interval == "1h" else "SLEEP"
+        self.alligator_awake = interval == "1h"
+        self.ao_value = 1.0 if interval == "1h" else 0.0
+        self.ac_value = 0.0
+        self.williams_core_ready = True
+        self.allow_long = interval == "1h"
         self.allow_short = False
 
 
 class FakeSnapshot:
     def context(self, symbol, interval):
-        return FakeContext(1)
+        return FakeContext(interval, 1)
+
+    def versions(self, symbol, intervals):
+        return {str(interval).lower(): 1 for interval in intervals}
 
 
 class FakeCache:
@@ -32,17 +51,24 @@ class FakeCache:
 
 
 def signal(kind=SignalType.REVERSAL, role=SignalRole.ENTRY, bar=100, trigger=101):
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    source_time = now_ms - 3_600_000 + int(bar)
     return SignalSpec.new(
         symbol="BTCUSDT",
         side="BUY",
         signal_type=kind,
         role=role,
-        timeframe="5m",
-        signal_bar_time_ms=bar,
+        timeframe="1h",
+        signal_bar_time_ms=source_time,
+        confirmation_time_ms=source_time,
         trigger_price=trigger,
         protective_reference=97,
+        invalidation_price=97,
         context_versions={},
+        angulation_score=2.5 if kind == SignalType.REVERSAL else 0.0,
         htf_confirmed=True,
+        created_at_ms=now_ms,
+        expires_at_ms=now_ms + 3_600_000,
     )
 
 
