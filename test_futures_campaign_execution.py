@@ -15,6 +15,13 @@ from futures_campaign_execution import (
 from market_context import ContextCache, TFMarketContext
 
 
+@pytest.fixture(autouse=True)
+def _allow_approximate_wm1_for_synthetic_execution_fixtures(monkeypatch):
+    # These tests use hand-built signals to exercise execution mechanics.
+    # A dedicated regression below explicitly removes this opt-in.
+    monkeypatch.setenv("WILLIAMS_ALLOW_APPROXIMATE_ANGULATION", "true")
+
+
 class FakeFuturesClient:
     is_usdm_futures = True
 
@@ -2612,5 +2619,24 @@ def test_tc2_initial_entry_does_not_use_synthetic_atr_target_as_rr_gate(
             candidate_risk_fraction=0.005,
         )
         assert len(client.stop_entries) == 1
+    finally:
+        db.conn.close()
+
+
+def test_execution_boundary_blocks_unverified_wm1_without_explicit_opt_in(tmp_path, monkeypatch):
+    monkeypatch.delenv("WILLIAMS_ALLOW_APPROXIMATE_ANGULATION", raising=False)
+    db = Database(str(tmp_path / "wm1-source-gate.sqlite3"))
+    try:
+        client = FakeFuturesClient(mark_price=102.0)
+        service = FuturesCampaignExecutionService(
+            client, db, execution_barrier=ExecutionBarrier(ContextCache(), db)
+        )
+        with pytest.raises(
+            FuturesCampaignExecutionError,
+            match="WM1 blocked: angulation formula is an unverified approximation",
+        ):
+            service._validate_signal(make_signal("LONG"))
+        assert client.stop_entries == []
+        assert client.protective_stops == []
     finally:
         db.conn.close()
