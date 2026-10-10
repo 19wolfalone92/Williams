@@ -1,5 +1,7 @@
 import logging
+import math
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field, replace
 from typing import Dict, List, Optional, Tuple
@@ -651,28 +653,104 @@ class MarketScanner:
             log.warning("Scanner skipped %s: %s", symbol, exc)
             return None
 
+    @staticmethod
+    def _is_tc2_early_wm1(candidate: Candidate, *, now_ms: int | None = None) -> bool:
+        """Recognize only a currently actionable H1 WM1 candidate for early admission.
+
+        This keeps the early-reversal exception tied to the actual structured
+        signal evidence. It does not let a failed WM2/WM3 or a generic boolean
+        setup bypass higher-timeframe context.
+        """
+        if (
+            not candidate.signal
+            or str(candidate.entry_signal_type).upper() != "REVERSAL"
+            or str(candidate.direction).upper() != "LONG"
+        ):
+            return False
+        now = int(time.time() * 1000) if now_ms is None else int(now_ms)
+        for raw in candidate.campaign_signal_specs or []:
+            try:
+                kind = str(raw.get("signal_type", "")).upper()
+                role = str(raw.get("role", "")).upper()
+                direction = str(raw.get("direction", "")).upper()
+                timeframe = str(raw.get("timeframe", "")).lower()
+                source_time = int(raw.get("signal_bar_time_ms", 0) or 0)
+                confirmation_time = int(
+                    raw.get("confirmation_time_ms", 0) or source_time
+                )
+                expiry = int(raw.get("expires_at_ms", 0) or 0)
+                trigger = float(raw.get("trigger_price", 0.0) or 0.0)
+                stop = float(raw.get("protective_reference", 0.0) or 0.0)
+                angle = float(raw.get("angulation_score", 0.0) or 0.0)
+            except (AttributeError, TypeError, ValueError, OverflowError):
+                continue
+            if (
+                kind == "REVERSAL"
+                and role == SignalRole.ENTRY.value
+                and direction == "LONG"
+                and timeframe == "1h"
+                and source_time == int(candidate.entry_signal_time_ms or 0)
+                and source_time > 0
+                and confirmation_time >= source_time
+                and expiry > max(now, confirmation_time)
+                and math.isfinite(trigger) and trigger > 0
+                and math.isfinite(stop) and 0 < stop < trigger
+                and math.isfinite(angle) and angle > 0
+            ):
+                return True
+        return False
+
     def analyse(self, symbol) -> Optional[Candidate]:
-        """Backward-compatible single-symbol analysis entry point."""
+        """Analyse a symbol under the selected source profile."""
         result = self._analyse_base(symbol)
         if result is None:
             return None
         candidate, closed = result
         try:
             enriched = self._apply_wave(candidate, closed)
-            if candidate.signal and self.require_htf_confirmation and not enriched.htf_confirmed:
+            early_wm1 = self._is_tc2_early_wm1(enriched)
+            if (
+                candidate.signal
+                and self.require_htf_confirmation
+                and not enriched.htf_confirmed
+                and not early_wm1
+            ):
                 return None
-            if candidate.signal and not enriched.wave_entry_allowed:
+
+            # Elliott/Wave Engine output is an optional admission overlay, not
+            # a hidden prerequisite of TC2's independent Wise-Men triggers.
+            # It remains fully computed and logged. Enable the extra veto only
+            # through an explicit configuration switch.
+            wave_admission_filter = (
+                os.getenv("WILLIAMS_WAVE_ENTRY_ADMISSION_FILTER", "false").lower()
+                == "true"
+            )
+            if candidate.signal and wave_admission_filter and not enriched.wave_entry_allowed:
                 return None
+            if candidate.signal and not wave_admission_filter:
+                enriched = replace(enriched, wave_entry_allowed=True, wave_block_reason="")
             return enriched
         except Exception as exc:
             log.warning("Wave analysis unavailable for %s: %s", candidate.symbol, exc)
-            if candidate.signal and os.getenv("NO_TRADE_WHEN_UNCERTAIN", "true").lower() == "true":
+            wave_admission_filter = (
+                os.getenv("WILLIAMS_WAVE_ENTRY_ADMISSION_FILTER", "false").lower()
+                == "true"
+            )
+            if candidate.signal and wave_admission_filter and (
+                os.getenv("NO_TRADE_WHEN_UNCERTAIN", "true").lower() == "true"
+            ):
                 return None
-            if candidate.signal and self.require_htf_confirmation:
-                if not self._htf_confirmation(candidate.symbol):
-                    return None
+            if (
+                candidate.signal
+                and self.require_htf_confirmation
+                and not self._is_tc2_early_wm1(candidate)
+                and not self._htf_confirmation(candidate.symbol)
+            ):
+                return None
             return replace(
                 candidate,
+                wave_entry_allowed=not wave_admission_filter,
+                wave_block_reason="" if not wave_admission_filter else "WAVE_ANALYSIS_UNAVAILABLE",
                 wave_reason=f"Wave analysis unavailable: {type(exc).__name__}: {exc}",
             )
 
