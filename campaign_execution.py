@@ -829,16 +829,33 @@ class CampaignExecutionService:
                                 f"is invalid for add-on average {avg:.12g}"
                             )
 
+                        # Persist the exchange-confirmed incremental fill before
+                        # resizing protection. After this commit, recovery knows the
+                        # actual total quantity even if STOP replacement is interrupted.
+                        self.engine.record_add_on_fill(
+                            campaign,
+                            quantity=executed,
+                            average_entry_price=avg,
+                            fill_order_id=str(order.get("orderId", "")),
+                            risk_quote=float(campaign.pending_risk_quote),
+                            fee_quote=0.0,
+                        )
+
                         protective_id = str(
                             campaign.tags.get("protective_order_id", "") or ""
                         )
                         if protective_id:
-                            self.replace_structural_stop(
+                            replacement = self.replace_structural_stop(
                                 campaign,
                                 existing_order_id=int(protective_id),
                                 quantity=total_qty,
                                 proposed_stop=current_stop,
                             )
+                            new_id = str(
+                                (replacement.get("newOrderResponse") or {}).get("orderId", "")
+                            )
+                            if new_id:
+                                campaign.tags["protective_order_id"] = new_id
                         else:
                             protection = self.create_hard_stop(
                                 campaign,
@@ -848,15 +865,7 @@ class CampaignExecutionService:
                             campaign.tags["protective_order_id"] = protection.get(
                                 "order_id", ""
                             )
-
-                        self.engine.record_add_on_fill(
-                            campaign,
-                            quantity=executed,
-                            average_entry_price=avg,
-                            fill_order_id=str(order.get("orderId", "")),
-                            risk_quote=float(campaign.pending_risk_quote),
-                            fee_quote=0.0,
-                        )
+                        self.db.save_campaign(campaign)
                         self.db.set_campaign_signal_state(
                             signal_id,
                             SignalState.FILLED.value,
@@ -936,15 +945,11 @@ class CampaignExecutionService:
                             f"{symbol}: campaign has no initial structural stop"
                         )
 
-                    protection = self.create_hard_stop(
-                        campaign,
-                        quantity=executed,
-                        stop_price=stop,
-                    )
-                    campaign.tags["protective_order_id"] = protection.get(
-                        "order_id", ""
-                    )
-
+                    # The Binance GET above is authoritative fill evidence.
+                    # Commit actual quantity/VWAP first so protection validation can
+                    # compare against a confirmed campaign position. If STOP creation
+                    # fails or the process dies here, the campaign remains durable
+                    # and recovery must restore protection before trading resumes.
                     self.engine.record_initial_fill(
                         campaign,
                         quantity=executed,
@@ -954,6 +959,15 @@ class CampaignExecutionService:
                         risk_quote=float(campaign.pending_risk_quote),
                         fee_quote=0.0,
                     )
+                    protection = self.create_hard_stop(
+                        campaign,
+                        quantity=executed,
+                        stop_price=stop,
+                    )
+                    campaign.tags["protective_order_id"] = protection.get(
+                        "order_id", ""
+                    )
+                    self.db.save_campaign(campaign)
                     self.db.set_campaign_signal_state(
                         signal_id,
                         SignalState.FILLED.value,
@@ -1073,6 +1087,7 @@ class CampaignExecutionService:
                 )
                 results.append({
                     "symbol": symbol,
+                    "campaign_id": campaign.campaign_id if campaign is not None else "",
                     "state": "RECONCILE_REQUIRED",
                     "error": str(exc),
                 })
