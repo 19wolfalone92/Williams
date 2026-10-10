@@ -1,9 +1,11 @@
 import pandas as pd
+import pytest
 
 from campaign_model import SignalRole, SignalSpec, SignalType
 from digital_williams_core import DigitalWilliamsCore
 from strategy import calculate_indicators, config_from_env
 from williams_signals import (
+    _timeframe_ms,
     _dedupe_and_sort_signal_specs,
     extract_long_signal_specs,
     extract_short_signal_specs,
@@ -315,3 +317,11 @@ def test_signal_order_uses_confirmation_time_not_source_bar_time():
     )
     ordered = _dedupe_and_sort_signal_specs([fractal, reversal])
     assert ordered == [reversal, fractal]
+
+
+
+def test_unknown_signal_timeframe_is_rejected_not_assumed_five_minutes():
+    assert _timeframe_ms("1h") == 3_600_000
+    assert _timeframe_ms("1M") == 2_592_000_000
+    with pytest.raises(ValueError, match="Unsupported signal timeframe"):
+        _timeframe_ms("60m")
