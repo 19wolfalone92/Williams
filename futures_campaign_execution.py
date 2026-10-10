@@ -737,6 +737,17 @@ class FuturesCampaignExecutionService:
         if signal.role != SignalRole.ENTRY:
             raise FuturesCampaignExecutionError("Initial entry requires a SignalRole.ENTRY signal")
         if signal.signal_type == SignalType.REVERSAL:
+            # The scanner blocks WM1 by default because the numeric angulation
+            # is not source-verified. Enforce the same rule at the final execution
+            # boundary so a restored, manually constructed, or stale SignalSpec
+            # cannot bypass the detector-level fail-closed gate.
+            allow_approximation = str(
+                os.getenv("WILLIAMS_ALLOW_APPROXIMATE_ANGULATION", "false")
+            ).strip().lower() in {"1", "true", "yes", "on"}
+            if not allow_approximation:
+                raise FuturesCampaignExecutionError(
+                    "WM1 blocked: angulation formula is an unverified approximation"
+                )
             try:
                 angulation = float(signal.angulation_score)
             except (TypeError, ValueError, OverflowError) as exc:
