@@ -8,7 +8,7 @@ from typing import Any, Callable, Mapping
 
 from market_context import ContextCache, MarketStateSnapshot
 from order_state_machine import OrderState, OrderStateMachine
-from execution_permit import mutation_permit
+from execution_permit import _BARRIER_ADMISSION_TOKEN, _mutation_permit
 from preflight_gate import PreflightCheckService
 
 
@@ -305,7 +305,7 @@ class ExecutionBarrier:
                 },
             )
             try:
-                with mutation_permit(self.exchange_client):
+                with _mutation_permit(self.exchange_client, admission_token=_BARRIER_ADMISSION_TOKEN):
                     response = submit()
             except Exception as exc:
                 order_fsm.state = OrderState.AMBIGUOUS
