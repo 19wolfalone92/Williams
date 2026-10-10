@@ -569,36 +569,40 @@ class FuturesRuntime:
                 f"{signal.symbol}/{signal.timeframe}: context missing after refresh"
             )
 
-        # TC2 WM1 is deliberately an early reversal setup: its verified pattern
-        # and angulation must be retained even when H1/H4 have not yet turned to
-        # the new direction. This is a narrow source-specific admission mode,
-        # not a relaxation of WM2/WM3 or of order/risk/reconciliation safety.
-        is_wm1 = signal.signal_type == SignalType.REVERSAL
-        if is_wm1:
-            try:
-                angle = float(signal.angulation_score)
-            except (TypeError, ValueError, OverflowError):
-                angle = float("nan")
-            if (
-                str(signal.timeframe).lower() != CANONICAL_DECISION_TIMEFRAME
-                or not math.isfinite(angle)
-                or angle <= 0.0
-            ):
-                raise FuturesCampaignExecutionError(
-                    f"{signal.symbol}: WM1 requires canonical H1 and finite positive angulation evidence"
-                )
-            versions = snapshot.versions(signal.symbol, list(self.context_intervals))
-            early_signal = replace(
+        tc2_core = (
+            os.getenv("WILLIAMS_STRATEGY_PROFILE", "TC2_THREE_WISE_MEN").strip().upper()
+            == "TC2_THREE_WISE_MEN"
+        )
+        if tc2_core:
+            # Pin the complete H1/H4/D1 context set. H4 supplies context rather
+            # than a second entry trigger; D1 can veto an active opposite regime.
+            required_intervals = list(dict.fromkeys(
+                ["1h", "4h", "1d"] + list(self.context_intervals)
+            ))
+            versions = snapshot.versions(signal.symbol, required_intervals)
+            prepared = replace(
                 signal,
-                htf_confirmed=False,
                 context_versions=versions,
             )
-            if not self.execution._tc2_wm1_early_context_allowed(early_signal, snapshot):
-                raise FuturesCampaignExecutionError(
-                    f"{signal.symbol}: WM1 early admission failed: H1/H4/D1 freshness, version pinning, angulation, or D1 macro veto"
-                )
-            return early_signal
 
+            if self.execution._tc2_core_context_allowed(prepared, snapshot):
+                return prepared
+
+            if (
+                signal.signal_type == SignalType.REVERSAL
+                and self.execution._tc2_core_context_allowed(
+                    prepared, snapshot, allow_early_wm1=True
+                )
+            ):
+                return replace(prepared, htf_confirmed=False)
+
+            raise FuturesCampaignExecutionError(
+                f"{signal.symbol}: TC2 H1 Wise-Men context or D1 macro airbag blocked {direction}"
+            )
+
+        # Non-TC2 profiles retain their stricter multi-timeframe admission
+        # policy. They are explicit overlays and are not presented as the
+        # canonical Three Wise Men profile.
         operative_ok = operative.allow_long if direction == "LONG" else operative.allow_short
         if not operative_ok:
             raise FuturesCampaignExecutionError(
@@ -616,9 +620,6 @@ class FuturesRuntime:
                 raise FuturesCampaignExecutionError(
                     f"{signal.symbol}: no higher timeframe available for confirmation"
                 )
-            # Strict continuation/confirmed-breakout admission: the immediate
-            # structural parent must permit this direction; larger contexts may
-            # be neutral but must not actively permit the opposite direction.
             immediate_parent = parent_intervals[0]
             parent = snapshot.context(signal.symbol, immediate_parent)
             if parent is None:
