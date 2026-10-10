@@ -1150,13 +1150,34 @@ class Database:
                           commission_amount_text,commission_asset
                    FROM exchange_fill_ledger WHERE symbol=? AND exchange_trade_id=?""",
                 (symbol, str(trade_id))).fetchone()
-            expected = values[2:8]
-            actual = tuple(row[k] for k in (
-                "order_id","quantity_text","price_text","quote_quantity_text",
-                "commission_amount_text","commission_asset")) if row else None
-            if actual != expected:
-                raise RuntimeError("exchange trade identity collision: immutable financial fields differ")
             inserted = self.conn.execute("SELECT changes()").fetchone()[0] == 1
+            if not row:
+                raise RuntimeError("exchange fill ledger insert could not be read back")
+            actual_core = tuple(row[k] for k in (
+                "order_id","quantity_text","price_text","quote_quantity_text"))
+            expected_core = values[2:6]
+            if actual_core != expected_core:
+                raise RuntimeError("exchange trade identity collision: execution fields differ")
+            existing_commission = row["commission_amount_text"]
+            existing_asset = row["commission_asset"]
+            incoming_commission = values[6]
+            incoming_asset = values[7]
+            if existing_commission is None and existing_asset is None and incoming_commission is not None and incoming_asset:
+                self.conn.execute(
+                    """UPDATE exchange_fill_ledger SET commission_amount_text=?,
+                       commission_asset=?,financial_state='CONFIRMED',raw_json=?,
+                       last_seen_at=CURRENT_TIMESTAMP
+                       WHERE symbol=? AND exchange_trade_id=?""",
+                    (incoming_commission, incoming_asset, payload, symbol, str(trade_id)))
+            elif incoming_commission is None or not incoming_asset:
+                # Do not downgrade previously confirmed fee evidence, but keep
+                # its raw observation and current timestamp for auditability.
+                self.conn.execute(
+                    """UPDATE exchange_fill_ledger SET last_seen_at=CURRENT_TIMESTAMP
+                       WHERE symbol=? AND exchange_trade_id=?""",
+                    (symbol, str(trade_id)))
+            elif (existing_commission, existing_asset) != (incoming_commission, incoming_asset):
+                raise RuntimeError("exchange trade identity collision: commission fields differ")
         return {"inserted": bool(inserted), "financial_state": state,
                 "symbol": symbol, "exchange_trade_id": str(trade_id)}
 
