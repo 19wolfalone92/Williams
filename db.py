@@ -296,7 +296,7 @@ class Database:
         self.conn.execute(
             'INSERT INTO bot_state(key,value) VALUES(?,?) '
             'ON CONFLICT(key) DO UPDATE SET value=excluded.value',
-            (key, str(value))
+            (key, redact_text(str(value)))
         )
         if not self._transaction_active:
             self.conn.commit()
@@ -310,7 +310,7 @@ class Database:
         """
         cur = self.conn.execute(
             'INSERT OR IGNORE INTO bot_state(key,value) VALUES(?,?)',
-            (str(key), str(value)),
+            (str(key), redact_text(str(value))),
         )
         if not self._transaction_active:
             self.conn.commit()
@@ -403,6 +403,7 @@ class Database:
 
     def save_wave_state(self, symbol, side, payload):
         """Persist the selected wave hypothesis/state independently of trade rows."""
+        payload = redact_value(payload)
         self.conn.execute(
             """INSERT INTO wave_state(symbol,side,phase,state_json,updated_at)
                VALUES(?,?,?,?,?)
@@ -531,6 +532,7 @@ class Database:
         return dict(r) if r else None
 
     def save_trade(self, **kwargs):
+        kwargs = {key: redact_value(value) for key, value in kwargs.items()}
         now = datetime.now(timezone.utc).isoformat()
         kwargs.setdefault('updated_at', now)
         cols = ','.join(kwargs)
@@ -877,7 +879,7 @@ class Database:
     # ------------------------------------------------------------------
 
     def save_campaign(self, campaign):
-        data = campaign.to_dict() if hasattr(campaign, "to_dict") else dict(campaign)
+        data = redact_value(campaign.to_dict() if hasattr(campaign, "to_dict") else dict(campaign))
         self.conn.execute(
             """INSERT INTO campaigns(
                 campaign_id,updated_at,symbol,side,execution_timeframe,state,
@@ -1009,8 +1011,8 @@ class Database:
         self.conn.execute(
             """INSERT INTO campaign_events(campaign_id,event,level,signal_id,order_id,reason,payload_json)
                VALUES(?,?,?,?,?,?,?)""",
-            (str(campaign_id),str(event),str(level),signal_id,order_id,str(reason),
-             json.dumps(payload,default=str,sort_keys=True) if payload is not None else None),
+            (str(campaign_id),str(event),str(level),signal_id,order_id,redact_text(str(reason)),
+             json.dumps(redact_value(payload),default=str,sort_keys=True) if payload is not None else None),
         )
         if not self._transaction_active:
             self.conn.commit()
