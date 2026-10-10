@@ -271,3 +271,34 @@ def test_invalid_explicit_structural_stop_fails_closed_instead_of_atr_fallback()
         assert result.allowed is False
         assert result.position_quote == 0.0
         assert expected in result.reason
+
+
+def test_explicit_empty_side_is_blocked_not_defaulted_to_long():
+    engine = RiskEngine(balance_quote=10_000)
+    result = engine.analyse(
+        symbol="BTCUSDT",
+        entry_price=100_000,
+        atr=500,
+        side="",
+    )
+    assert result.allowed is False
+    assert result.position_quote == 0.0
+    assert "unsupported side" in result.reason
+
+
+def test_structural_campaign_profile_can_report_low_reference_rr_without_fixed_target_veto():
+    engine = RiskEngine(
+        balance_quote=10_000,
+        min_rr=1.5,
+        require_min_rr=False,
+    )
+    result = engine.analyse(
+        symbol="BTCUSDT",
+        entry_price=100,
+        atr=10,
+        side="LONG",
+        invalidation_price=80,
+        target_atr_multiplier=1.0,
+    )
+    assert result.allowed is True
+    assert result.risk_reward < 1.5
