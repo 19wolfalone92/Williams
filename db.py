@@ -1068,8 +1068,11 @@ class Database:
             if str(existing["campaign_id"]) != str(data.get("campaign_id") or ""):
                 raise RuntimeError(f"{symbol}: exchange order identity is already owned by a different campaign")
             old_order_id = str(existing["order_id"] or "")
+            old_client_id = str(existing["client_order_id"] or "")
             if old_order_id and order_id and old_order_id != order_id:
                 raise RuntimeError(f"{symbol}: campaign client order ID collision")
+            if old_client_id and client_id and old_client_id != client_id:
+                raise RuntimeError(f"{symbol}: campaign order ID collision maps to a different clientOrderId")
             self.conn.execute(
                 """UPDATE campaign_orders SET signal_id=COALESCE(NULLIF(?,''),signal_id),
                     order_id=COALESCE(?,order_id), order_list_id=COALESCE(?,order_list_id),
@@ -1114,7 +1117,8 @@ class Database:
         if not symbol or not exchange_trade_id:
             raise ValueError("campaign fill requires symbol and stable Binance trade/execution ID; refusing non-idempotent fill")
         existing = self.conn.execute(
-            "SELECT id,campaign_id,order_id,side,quantity,price FROM campaign_fills "
+            "SELECT id,campaign_id,order_id,side,quantity,price,quote_quantity,fee_quote,"
+            "commission_base,commission_asset FROM campaign_fills "
             "WHERE symbol=? AND exchange_trade_id=? LIMIT 1",
             (symbol, exchange_trade_id),
         ).fetchone()
@@ -1125,11 +1129,17 @@ class Database:
                 str(data.get("side", "")).upper(),
                 float(data.get("quantity", 0) or 0),
                 float(data.get("price", 0) or 0),
+                float(data.get("quote_quantity", 0) or 0),
+                float(data.get("fee_quote", 0) or 0),
+                float(data.get("commission_base", 0) or 0),
+                str(data.get("commission_asset", "")).upper(),
             )
             actual = (
                 str(existing["campaign_id"] or ""), str(existing["order_id"] or ""),
                 str(existing["side"] or "").upper(), float(existing["quantity"] or 0),
-                float(existing["price"] or 0),
+                float(existing["price"] or 0), float(existing["quote_quantity"] or 0),
+                float(existing["fee_quote"] or 0), float(existing["commission_base"] or 0),
+                str(existing["commission_asset"] or "").upper(),
             )
             if actual != expected:
                 raise RuntimeError(f"{symbol}: repeated exchange fill ID {exchange_trade_id} conflicts with persisted fill")
