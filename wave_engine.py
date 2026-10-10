@@ -373,6 +373,23 @@ class MultiTimeframeWaveEngine:
             # of elapsed bars when a right-side bar ties the pivot extreme. The
             # indicator records exact confirmation and center rows; never backdate
             # confirmation to center+right for those patterns.
+            up_confirmation_by_center: dict[int, int] = {}
+            down_confirmation_by_center: dict[int, int] = {}
+            for confirmation_i in range(len(ind)):
+                for level_col, center_col, mapping in (
+                    ("confirmed_up_level", "confirmed_up_center_index", up_confirmation_by_center),
+                    ("confirmed_down_level", "confirmed_down_center_index", down_confirmation_by_center),
+                ):
+                    level_value = ind[level_col].iloc[confirmation_i]
+                    if level_value is None or pd.isna(level_value) or self._safe_float(level_value) <= 0:
+                        continue
+                    try:
+                        center_value = int(ind[center_col].iloc[confirmation_i])
+                    except (TypeError, ValueError, OverflowError):
+                        continue
+                    if center_value >= 0 and center_value < confirmation_i:
+                        mapping.setdefault(center_value, confirmation_i)
+
             for confirmed in range(len(ind)):
                 for direction, level_col, center_col, extreme_col, flag_col in (
                     (DIRECTION_UP, "confirmed_up_level", "confirmed_up_center_index", "high", "fractal_up"),
@@ -387,15 +404,19 @@ class MultiTimeframeWaveEngine:
                         continue
                     if center < left or center >= confirmed or center >= len(ind):
                         continue
-                    # A candle can qualify as both fractal directions. Keep
-                    # both flags available to the signal/visual layer, but it
-                    # is not an ordered pair of wave pivots: OHLC does not reveal
-                    # whether the high or low occurred first inside that candle.
-                    up_flag = ind["fractal_up"].iloc[center]
-                    down_flag = ind["fractal_down"].iloc[center]
-                    if pd.isna(up_flag) or pd.isna(down_flag):
-                        continue
-                    if bool(up_flag) and bool(down_flag):
+                    # A same-center double fractal is ambiguous as a wave
+                    # pivot. Crucially, do not use a future opposite confirmation
+                    # to erase a pivot that was already valid earlier in time.
+                    # If the opposite direction confirmed at/before this bar, the
+                    # current event is suppressed; if it confirms later, the
+                    # earlier pivot remains and only the later one is suppressed.
+                    opposite_map = (
+                        down_confirmation_by_center
+                        if direction == DIRECTION_UP
+                        else up_confirmation_by_center
+                    )
+                    opposite_confirmation = opposite_map.get(center)
+                    if opposite_confirmation is not None and opposite_confirmation <= confirmed:
                         continue
                     flag = ind[flag_col].iloc[center]
                     if pd.isna(flag) or not bool(flag):

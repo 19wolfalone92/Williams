@@ -336,3 +336,29 @@ def test_double_direction_fractal_is_not_promoted_to_ordered_wave_pivots():
         index=idx,
     )
     assert e._confirmed_pivots(ind) == []
+
+
+def test_later_opposite_fractal_does_not_repaint_earlier_wave_pivot():
+    e = engine(base_interval="1h", min_bars=5)
+    idx = pd.date_range("2026-01-01", periods=8, freq="h", tz="UTC")
+    ind = pd.DataFrame(
+        {
+            "fractal_up": [False, False, True, False, False, False, False, False],
+            "fractal_down": [False, False, True, False, False, False, False, False],
+            "confirmed_up_level": [float("nan")] * 5 + [10.0, float("nan"), float("nan")],
+            "confirmed_down_level": [float("nan")] * 6 + [5.0, float("nan")],
+            "confirmed_up_center_index": [-1, -1, -1, -1, -1, 2, -1, -1],
+            "confirmed_down_center_index": [-1, -1, -1, -1, -1, -1, 2, -1],
+            "high": [8.0, 9.0, 10.0, 9.0, 10.0, 8.0, 7.0, 6.0],
+            "low": [6.0, 5.5, 5.0, 6.0, 5.0, 6.0, 6.5, 5.5],
+            "close": [7.0, 8.0, 8.0, 7.0, 8.0, 7.0, 6.8, 5.8],
+            "ao": [0.0] * 8,
+            "ac": [0.0] * 8,
+        },
+        index=idx,
+    )
+    got = e._confirmed_pivots(ind)
+    assert len(got) == 1
+    assert got[0].kind == DIRECTION_UP
+    assert got[0].center_index == 2
+    assert got[0].confirmed_index == 5
