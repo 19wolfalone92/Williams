@@ -1082,6 +1082,186 @@ class CampaignExecutionService:
                 equity += float(row.get("free", 0) or 0) + float(row.get("locked", 0) or 0)
         return max(equity, 0.0)
 
+    def _reconcile_non_entry_mutations(self, symbol: str, campaign) -> None:
+        """Resolve only mutations whose current exchange state is authoritative.
+
+        A confirmed fill is not merely an order-status update: it requires position,
+        commission and campaign accounting. Until that accounting is complete, keep
+        the mutation unresolved and block new exposure.
+        """
+        unresolved = self.db.unresolved_execution_intents()
+        terminal_zero_fill = {"CANCELED", "CANCELLED", "EXPIRED", "REJECTED"}
+        active_zero_fill = {"NEW", "PENDING_NEW"}
+        for item in unresolved:
+            if (
+                str(item.get("symbol", "")).upper() != str(symbol).upper()
+                or str(item.get("campaign_id", "")) != str(campaign.campaign_id)
+            ):
+                continue
+            purpose = str(item.get("purpose", "")).upper()
+            operation = str(item.get("operation_kind", "PLACE") or "PLACE").upper()
+            cid = str(item.get("client_order_id", "") or "")
+            related_id = str(item.get("related_order_id", "") or "")
+            list_ref = str(item.get("related_order_list_id", "") or "")
+
+            # Pending entry/add-on orders are reconciled by reconcile_pending_entries.
+            if purpose in {"ENTRY", "ADD_ON", "CAMPAIGN_ENTRY", "CAMPAIGN_ADD_ON"}:
+                continue
+            # Protective place/cancelReplace intents are reconciled against the
+            # current active-stop list and stable clientOrderId below.
+            if purpose in {"PROTECTION", "CAMPAIGN_PROTECTION", "CAMPAIGN_TRAIL"} and operation in {"PLACE", "CANCEL_REPLACE"}:
+                continue
+
+            if operation == "CANCEL_OCO":
+                if not list_ref:
+                    raise CampaignExecutionError(
+                        "ambiguous OCO cancel has no durable target list identity"
+                    )
+                try:
+                    if list_ref.isdigit():
+                        order_list = self.client.order_list(symbol, order_list_id=list_ref)
+                    else:
+                        order_list = self.client.order_list(
+                            symbol,
+                            list_client_order_id=list_ref,
+                        )
+                    legs = order_list.get("orders", [])
+                    if not isinstance(legs, list) or not legs:
+                        raise CampaignExecutionError(
+                            "OCO list query did not return leg identities"
+                        )
+                    statuses = []
+                    for leg in legs:
+                        if not isinstance(leg, dict) or leg.get("orderId") is None:
+                            raise CampaignExecutionError(
+                                "OCO list leg is missing authoritative orderId"
+                            )
+                        current_leg = self.client.get_order(
+                            symbol,
+                            order_id=leg["orderId"],
+                        )
+                        status = str(current_leg.get("status", "")).upper()
+                        executed = float(current_leg.get("executedQty", 0) or 0)
+                        if executed < 0 or status not in (
+                            active_zero_fill | terminal_zero_fill | {"PARTIALLY_FILLED", "FILLED"}
+                        ):
+                            raise CampaignExecutionError(
+                                "OCO leg status or executedQty is invalid"
+                            )
+                        if executed > 0 or status in {"PARTIALLY_FILLED", "FILLED"}:
+                            raise CampaignExecutionError(
+                                "OCO cancellation raced with a fill; position reconciliation is required"
+                            )
+                        statuses.append(status)
+                    if all(status in terminal_zero_fill for status in statuses):
+                        self._mark_intent_reconciled(
+                            cid,
+                            "CANCELED",
+                            evidence="Binance orderList and every orderId leg were queried; all terminal with zero executions",
+                        )
+                        continue
+                    raise CampaignExecutionError(
+                        "OCO list still has active legs after ambiguous cancellation"
+                    )
+                except Exception as exc:
+                    self.engine.mark_reconcile_required(
+                        campaign,
+                        f"OCO cancellation is not fully reconciled: {exc}",
+                    )
+                    self.db.state_set(f"position_state:{symbol}", "RECONCILE_REQUIRED")
+                    raise CampaignExecutionError(
+                        "OCO cancellation remains ambiguous; no market exit or new entry is allowed"
+                    ) from exc
+
+            if operation == "CANCEL":
+                if not related_id:
+                    raise CampaignExecutionError(
+                        "ambiguous cancellation has no durable target orderId"
+                    )
+                try:
+                    target = self.client.get_order(symbol, order_id=related_id)
+                    status = str(target.get("status", "")).upper()
+                    executed = float(target.get("executedQty", 0) or 0)
+                    if executed < 0:
+                        raise CampaignExecutionError("cancel target has invalid executedQty")
+                    if executed > 0 or status in {"PARTIALLY_FILLED", "FILLED"}:
+                        raise CampaignExecutionError(
+                            "cancel/fill conflict confirmed; actual fills must be reconciled"
+                        )
+                    if status not in active_zero_fill | terminal_zero_fill:
+                        raise CampaignExecutionError(
+                            f"cancel target has unresolved status {status}"
+                        )
+                    # This records what GET proved, not that DELETE succeeded.
+                    # Active target means cancel did not take effect; terminal
+                    # target means it is safe to resume order-list/position checks.
+                    self._mark_intent_reconciled(
+                        cid,
+                        status,
+                        evidence="Binance GET by target orderId authoritatively resolved cancellation outcome",
+                    )
+                    continue
+                except Exception as exc:
+                    self.engine.mark_reconcile_required(
+                        campaign,
+                        f"cancel target {related_id} cannot be safely reconciled: {exc}",
+                    )
+                    self.db.state_set(f"position_state:{symbol}", "RECONCILE_REQUIRED")
+                    raise CampaignExecutionError(
+                        "cancel/fill state is ambiguous; campaign remains blocked pending exchange reconciliation"
+                    ) from exc
+
+            if purpose in {"EXIT", "CAMPAIGN_EXIT", "EMERGENCY_EXIT", "MANUAL_EXIT"} and operation == "PLACE":
+                if not cid:
+                    raise CampaignExecutionError("ambiguous exit has no stable clientOrderId")
+                try:
+                    observed = self.client.get_order(
+                        symbol,
+                        orig_client_order_id=cid,
+                    )
+                except Exception as exc:
+                    if self._authoritative_order_not_found(exc):
+                        self._mark_intent_reconciled(
+                            cid,
+                            "NOT_FOUND",
+                            evidence="Binance GET by exit clientOrderId returned explicit -2013; no exit order exists",
+                        )
+                        continue
+                    self.engine.mark_reconcile_required(
+                        campaign,
+                        f"exit order {cid} cannot be queried authoritatively: {exc}",
+                    )
+                    self.db.state_set(f"position_state:{symbol}", "RECONCILE_REQUIRED")
+                    raise CampaignExecutionError(
+                        "exit order remains UNKNOWN; blind exit retry is forbidden"
+                    ) from exc
+                status = str(observed.get("status", "")).upper()
+                executed = float(observed.get("executedQty", 0) or 0)
+                quote = float(observed.get("cummulativeQuoteQty", 0) or 0)
+                self.db.save_order(observed)
+                if executed < 0 or (executed > 0 and quote <= 0):
+                    raise CampaignExecutionError(
+                        "exit order returned invalid fill quantity/quote during recovery"
+                    )
+                if status in terminal_zero_fill and executed == 0:
+                    self._mark_intent_reconciled(
+                        cid,
+                        status,
+                        evidence="Binance GET by stable exit clientOrderId confirmed terminal order with zero fills",
+                    )
+                    continue
+                # A filled/partial market exit changes the owned position. Leave
+                # the write-ahead intent unresolved until campaign and trade rows
+                # are updated from authoritative fills; never resend it.
+                self.engine.mark_reconcile_required(
+                    campaign,
+                    f"exit order found during recovery: status={status}, executedQty={executed}; fill accounting required",
+                )
+                self.db.state_set(f"position_state:{symbol}", "RECONCILE_REQUIRED")
+                raise CampaignExecutionError(
+                    "exit order exists but campaign fill accounting is not yet reconciled; no duplicate exit permitted"
+                )
+
     def reconcile_active_campaigns(self) -> list[dict[str, Any]]:
         """Rebuild active campaign protection without invoking the legacy OCO path."""
         results = []
@@ -1137,6 +1317,7 @@ class CampaignExecutionService:
                     continue
 
                 open_orders = self.client.open_orders(symbol)
+                self._reconcile_non_entry_mutations(symbol, campaign)
                 unknown_sells = [
                     o for o in open_orders
                     if str(o.get("side", "")).upper() == "SELL"
