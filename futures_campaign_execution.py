@@ -705,7 +705,7 @@ class FuturesCampaignExecutionService:
             raise FuturesCampaignExecutionError(f"{symbol}: risk blocked entry: {risk.reason}")
 
         raw_qty = float(risk.position_quote) / trigger
-        quantity_text = self.client.normalize_quantity(symbol, raw_qty, market=False)
+        quantity_text = self.client.normalize_quantity(symbol, raw_qty, market=True)
         quantity = float(quantity_text)
         notional = quantity * trigger
         min_notional = self._min_notional(symbol)
@@ -3022,7 +3022,7 @@ class FuturesCampaignExecutionService:
             abs(trigger - stop) + (trigger * (2.0 * self.fee_buffer_per_side_pct + self.slippage_buffer_pct)),
             1e-12,
         )
-        quantity_text = self.client.normalize_quantity(symbol, raw_qty, market=False)
+        quantity_text = self.client.normalize_quantity(symbol, raw_qty, market=True)
         quantity = float(quantity_text)
         notional = quantity * trigger
         if quantity <= 0 or notional < self._min_notional(symbol):
