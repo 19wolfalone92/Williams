@@ -112,8 +112,9 @@ internal class FuturesNativeEngine(
     private var client: BinanceUsdmFuturesClient? = null
 
     private val maxLeverage = 1
-    private val maxPositions: Int
-        get() = prefs.getInt("futures_max_positions", 1).coerceIn(1, 5)
+    // This release contract permits one active campaign; persisted legacy
+    // preferences must not silently expand exposure after an app upgrade.
+    private val maxPositions: Int = 1
     private val perCampaignRiskFraction = 0.0025
     private val portfolioRiskFraction = 0.01
     private val maxDailyLossFraction = 0.01
@@ -3015,11 +3016,11 @@ internal class FuturesNativeEngine(
         val openedAt = campaign.optLong("entry_filled_at_ms", campaign.optLong("created_at_ms", 0L))
         val feeExit = campaign.optDouble("last_exit_fee_quote", Double.NaN)
         val feeEntry = campaign.optDouble("entry_fee_quote", 0.0)
-        if (!listOf(entry, exit, qty, gross, net, feeEntry).all(Double::isFinite) ||
-            entry <= 0.0 || exit <= 0.0 || qty <= 0.0 || feeEntry < 0.0 ||
-            !feeExit.isFinite() || feeExit < 0.0 || closedAt <= 0L || openedAt <= 0L
+        if (!listOf(entry, exit, qty, gross, net, risk, feeEntry, feeExit).all(Double::isFinite) ||
+            entry <= 0.0 || exit <= 0.0 || qty <= 0.0 || risk <= 0.0 ||
+            feeEntry < 0.0 || feeExit < 0.0 || closedAt <= 0L || openedAt <= 0L
         ) {
-            throw FuturesApiException("$symbol closed trade has incomplete authoritative accounting fields")
+            throw FuturesApiException("$symbol closed trade has incomplete authoritative accounting fields or invalid admitted risk")
         }
         val knownFees = !campaign.optBoolean("last_exit_fee_unknown", false) &&
             !campaign.optBoolean("exit_fee_unknown", false) &&
