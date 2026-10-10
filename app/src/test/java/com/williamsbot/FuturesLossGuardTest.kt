@@ -54,7 +54,7 @@ class FuturesLossGuardTest {
             cooldownMinutes = 30,
             nowMs = 10_000
         )
-        assertEquals("closed Futures trade has invalid PnL/timestamp", reason)
+        assertEquals("closed Futures trade has invalid PnL", reason)
     }
 
 
