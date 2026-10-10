@@ -170,3 +170,26 @@ def test_known_orders_cannot_be_marked_reconciled_by_boolean_override():
     assert report["details"]["open_orders"]["caller_override_ignored"] is True
     assert report["requires_reconciliation"] is True
     assert report["ready"] is False
+
+
+
+def test_legacy_time_check_does_not_raise_or_pass_without_budget(monkeypatch):
+    from preflight_gate import PreflightReport
+
+    monkeypatch.delenv("LIVE_MAX_TIME_OFFSET_MS", raising=False)
+    service = PreflightCheckService(FakeClient(), symbols=["BTCUSDT"])
+    report = PreflightReport()
+    assert service._check_time(report) is False
+    assert report.checks.get("server_time") != "PASS"
+    assert report.details["server_time"]["reason"] == "clock_offset_budget_unapproved"
+
+
+def test_legacy_time_check_rejects_malformed_server_time():
+    from preflight_gate import PreflightReport
+
+    client = FakeClient()
+    client.sync_time = lambda: {"serverTime": "not-a-timestamp"}
+    service = PreflightCheckService(client, symbols=["BTCUSDT"], max_offset_ms=100)
+    report = PreflightReport()
+    assert service._check_time(report) is False
+    assert report.checks["server_time"] == "FAIL"
