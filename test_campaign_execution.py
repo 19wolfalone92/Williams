@@ -1,5 +1,7 @@
 import os
 import tempfile
+
+import pytest
 from datetime import datetime, timezone
 
 from campaign_engine import CampaignEngine
@@ -75,6 +77,87 @@ def signal(kind=SignalType.REVERSAL, role=SignalRole.ENTRY, bar=100, trigger=101
 def service(db, client):
     barrier = ExecutionBarrier(FakeCache(), db)
     return CampaignExecutionService(client, db, barrier)
+
+
+@pytest.fixture(autouse=True)
+def _enable_approximate_wm1_for_synthetic_spot_tests(monkeypatch):
+    # Tests below hand-build a WM1 SignalSpec to exercise order mechanics.
+    # Source-unverified numeric angulation stays blocked in the real default.
+    monkeypatch.setenv("WILLIAMS_ALLOW_APPROXIMATE_ANGULATION", "true")
+
+
+def test_spot_tc2_admission_does_not_require_d1_context():
+    class SnapshotWithoutD1(FakeSnapshot):
+        def context(self, symbol, interval):
+            if str(interval).lower() == "1d":
+                return None
+            return super().context(symbol, interval)
+
+    with tempfile.TemporaryDirectory() as directory:
+        db = Database(os.path.join(directory, "d1-informational.sqlite3"))
+        try:
+            client = MockExchange()
+            svc = service(db, client)
+            signal_spec = signal(kind=SignalType.SUPER_AO)
+            allowed, early_wm1 = svc._tc2_spot_context_admission(
+                signal_spec,
+                SnapshotWithoutD1(),
+                expected_versions={"1h": 1, "4h": 1},
+            )
+            assert allowed is True
+            assert early_wm1 is False
+        finally:
+            db.conn.close()
+
+
+def test_spot_tc2_wm1_fails_closed_when_angulation_is_not_opted_in(monkeypatch):
+    monkeypatch.setenv("WILLIAMS_ALLOW_APPROXIMATE_ANGULATION", "false")
+    with tempfile.TemporaryDirectory() as directory:
+        db = Database(os.path.join(directory, "wm1-blocked.sqlite3"))
+        client = MockExchange()
+        svc = service(db, client)
+        try:
+            with pytest.raises(CampaignExecutionError, match="source-defined angulation"):
+                svc.arm_initial_entry(
+                    signal(kind=SignalType.REVERSAL),
+                    equity_quote=10_000,
+                    candidate_risk_pct=0.004,
+                )
+            assert client.open_orders("BTCUSDT") == []
+        finally:
+            db.conn.close()
+
+
+def test_spot_initial_entry_rechecks_total_risk_inside_reservation(monkeypatch):
+    monkeypatch.setenv("MAX_TOTAL_RISK_PCT", "0.03")
+    with tempfile.TemporaryDirectory() as directory:
+        db = Database(os.path.join(directory, "spot-risk-reservation.sqlite3"))
+        client = MockExchange()
+        svc = service(db, client)
+        calls = {"count": 0}
+
+        def racing_reserved_risk():
+            calls["count"] += 1
+            return 0.0 if calls["count"] == 1 else 295.0
+
+        svc.engine.portfolio_risk_limit_pct = 0.03
+        monkeypatch.setattr(svc.engine, "portfolio_reserved_risk_quote", racing_reserved_risk)
+        try:
+            with pytest.raises(CampaignExecutionError, match="portfolio risk capacity changed"):
+                svc.arm_initial_entry(
+                    signal(kind=SignalType.SUPER_AO),
+                    equity_quote=10_000,
+                    candidate_risk_pct=0.004,
+                )
+            assert calls["count"] >= 2
+            assert client.open_orders("BTCUSDT") == []
+            assert db.state_get("entry_client_order_id:BTCUSDT") is None
+            count = db.conn.execute(
+                "SELECT COUNT(*) FROM campaigns WHERE state NOT IN ('CLOSED','FLAT')"
+            ).fetchone()[0]
+            assert count == 0
+        finally:
+            db.conn.close()
 
 
 def test_spot_buy_stop_price_rounds_up_beyond_signal_extreme():
