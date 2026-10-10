@@ -394,3 +394,31 @@ def test_malformed_context_version_fails_closed_without_exchange_call(tmp_path):
     ).fetchone()
     assert row["status"] == "BLOCKED"
     assert "validation_error" in row["reason"]
+
+
+def test_oco_list_response_is_validated_without_confusing_it_with_a_position_fill(tmp_path):
+    cache = _context_cache()
+    db = _ready_db(tmp_path)
+    intent = OrderIntent.new(
+        "BTCUSDT",
+        "SELL",
+        "OCO",
+        purpose="PROTECTION",
+        client_order_id="TASK001_OCO_LIST",
+    )
+    response = {
+        "orderListId": 9001,
+        "listClientOrderId": "TASK001_OCO_LIST",
+        "listStatusType": "EXEC_STARTED",
+        "listOrderStatus": "EXECUTING",
+        "orderReports": [
+            {"orderId": 9002, "status": "NEW"},
+            {"orderId": 9003, "status": "NEW"},
+        ],
+    }
+    result = ExecutionBarrier(cache, db).execute(intent, lambda: response)
+    assert result.accepted is True
+    assert result.response["orderListId"] == 9001
+    # The barrier records a submission outcome; it does not create a local fill
+    # or turn an intention/order list into a confirmed position.
+    assert db.open_trade("BTCUSDT") is None
