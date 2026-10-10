@@ -203,6 +203,10 @@ class ExecutionBarrier:
             order_fsm = OrderStateMachine()
             order_fsm.transition(OrderState.ADMISSION)
             if not self._persist(intent, "PENDING"):
+                # Attempt a durable refusal record if the storage failure was transient.
+                # Regardless of whether this second write succeeds, never reach submit.
+                self._persist(intent, "BLOCKED", "execution_intent_persistence_failed")
+                self._record("ERROR", "execution_blocked", intent, "execution_intent_persistence_failed")
                 return ExecutionResult(
                     intent.intent_id,
                     False,
