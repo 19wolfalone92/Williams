@@ -537,6 +537,8 @@ private class NativeEngine(
     )
     private val tradingEventLoop = TradingEventLoop()
     private val executionGate = ExecutionGate()
+    private val mutationIntentLock = Any()
+    private val mutationIntentPrefsKey = "exchange_mutation_intents_v1"
     private val executionExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "williams-execution-io").apply { isDaemon = true }
     }
@@ -5089,7 +5091,154 @@ private class NativeEngine(
     private fun signedPost(
         path: String,
         params: String
-    ): JSONObject = signedRequest("POST", path, params)
+    ): JSONObject = durableMutation("POST", path, params)
+    private fun mutationParam(params: String, name: String): String =
+        params.split("&")
+            .firstOrNull { it.substringBefore("=") == name }
+            ?.substringAfter("=", "")
+            .orEmpty()
+
+    /**
+     * Durable write-ahead ledger for every Android Binance POST/DELETE mutation.
+     * Any prior identity is immutable: an ambiguous operation must be reconciled,
+     * never repeated merely because the client did not receive/persist its response.
+     */
+    private fun durableMutation(
+        method: String,
+        path: String,
+        originalParams: String
+    ): JSONObject {
+        val verb = method.uppercase(Locale.US)
+        require(verb == "POST" || verb == "DELETE") {
+            "Unsupported mutation verb: " + verb
+        }
+        var params = originalParams
+        var symbol = mutationParam(params, "symbol").uppercase(Locale.US)
+        require(symbol.isNotBlank()) { "Mutation blocked: symbol is missing" }
+
+        // Every newly-created Spot order/list must carry an exchange-recognized
+        // idempotency key. Do not let legacy paths submit anonymous orders.
+        if (verb == "POST" && path == "/api/v3/order" &&
+            mutationParam(params, "newClientOrderId").isBlank()
+        ) {
+            params += (if (params.isBlank()) "" else "&") +
+                "newClientOrderId=W5AUTO_" + System.nanoTime().toString(16)
+        }
+        if (verb == "POST" && path == "/api/v3/orderList/oco" &&
+            mutationParam(params, "listClientOrderId").isBlank()
+        ) {
+            params += (if (params.isBlank()) "" else "&") +
+                "listClientOrderId=W5AUTO_OCO_" + System.nanoTime().toString(16)
+        }
+
+        val clientId = mutationParam(params, "newClientOrderId")
+            .ifBlank { mutationParam(params, "listClientOrderId") }
+        val targetOrderId = mutationParam(params, "orderId")
+            .ifBlank { mutationParam(params, "cancelOrderId") }
+            .ifBlank { mutationParam(params, "origClientOrderId") }
+        val targetListId = mutationParam(params, "orderListId")
+            .ifBlank { mutationParam(params, "listClientOrderId") }
+        val identity = clientId.ifBlank { targetOrderId.ifBlank { targetListId } }
+        require(identity.isNotBlank()) {
+            "Mutation blocked: no stable client or target order identity for " + path
+        }
+        val intentKey = listOf(verb, path, symbol, identity).joinToString(":")
+        val createdAt = System.currentTimeMillis()
+
+        synchronized(mutationIntentLock) {
+            val ledger = try {
+                JSONObject(prefs.getString(mutationIntentPrefsKey, "{}") ?: "{}")
+            } catch (x: Exception) {
+                setReconcileRequired(
+                    "Durable mutation ledger is unreadable; blocked " + verb + " " + path
+                )
+                throw IllegalStateException("Durable mutation ledger is unreadable", x)
+            }
+            if (ledger.has(intentKey)) {
+                setReconcileRequired(
+                    "Duplicate mutation identity blocked pending reconciliation: " + intentKey
+                )
+                throw IllegalStateException(
+                    "Mutation identity already exists; reconcile before retry: " + intentKey
+                )
+            }
+            val record = JSONObject()
+                .put("intent_key", intentKey)
+                .put("method", verb)
+                .put("path", path)
+                .put("symbol", symbol)
+                .put("client_order_id", clientId)
+                .put("target_order_id", targetOrderId)
+                .put("target_order_list_id", targetListId)
+                .put("status", "PENDING")
+                .put("created_at_ms", createdAt)
+            ledger.put(intentKey, record)
+            if (!prefs.edit().putString(mutationIntentPrefsKey, ledger.toString()).commit()) {
+                setReconcileRequired(
+                    "Could not durably persist mutation intent before exchange request: " + intentKey
+                )
+                throw IllegalStateException(
+                    "Mutation blocked because write-ahead persistence failed: " + intentKey
+                )
+            }
+        }
+
+        val response = try {
+            signedRequest(verb, path, params)
+        } catch (x: Throwable) {
+            updateMutationIntent(intentKey, "UNKNOWN", error = x.message ?: x.javaClass.simpleName)
+            setReconcileRequired(
+                "Binance mutation result is unknown; reconcile before further exposure changes: " +
+                    intentKey
+            )
+            throw x
+        }
+
+        try {
+            updateMutationIntent(
+                intentKey,
+                "CONFIRMED",
+                response = response
+            )
+        } catch (x: Throwable) {
+            setReconcileRequired(
+                "Binance mutation succeeded but its response could not be persisted: " + intentKey
+            )
+            throw IllegalStateException(
+                "Exchange result persistence failed; reconciliation required: " + intentKey,
+                x
+            )
+        }
+        return response
+    }
+
+    private fun updateMutationIntent(
+        intentKey: String,
+        status: String,
+        response: JSONObject? = null,
+        error: String? = null
+    ) {
+        synchronized(mutationIntentLock) {
+            val ledger = JSONObject(prefs.getString(mutationIntentPrefsKey, "{}") ?: "{}")
+            val record = ledger.optJSONObject(intentKey)
+                ?: throw IllegalStateException("Durable mutation intent disappeared: " + intentKey)
+            record.put("status", status)
+            record.put("updated_at_ms", System.currentTimeMillis())
+            if (response != null) {
+                record.put("exchange_response", response.toString())
+                record.put("exchange_order_id", response.optString("orderId", ""))
+                record.put("exchange_order_list_id", response.optString("orderListId", ""))
+                record.put("exchange_status", response.optString("status", ""))
+                record.put("exchange_list_status", response.optString("listOrderStatus", ""))
+            }
+            if (error != null) record.put("error", error)
+            ledger.put(intentKey, record)
+            if (!prefs.edit().putString(mutationIntentPrefsKey, ledger.toString()).commit()) {
+                throw IllegalStateException("Could not persist mutation result status=" + status)
+            }
+        }
+    }
+
 
     /**
      * Binance cancel-replace is not truly transactional. STOP_ON_FAILURE
@@ -6370,7 +6519,7 @@ private class NativeEngine(
     private fun signedDelete(
         path: String,
         params: String
-    ): JSONObject = signedRequest("DELETE", path, params)
+    ): JSONObject = durableMutation("DELETE", path, params)
 
     private fun campaignSignalId(symbol: String, frame: String, type: String, barTimeMs: Long): String =
         symbol.uppercase(Locale.US) + ":" +
