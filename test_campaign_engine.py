@@ -152,6 +152,44 @@ def test_add_on_stays_in_campaign_and_respects_remaining_risk_budget():
             db.conn.close()
 
 
+@pytest.mark.parametrize("signal_type", [SignalType.SUPER_AO, SignalType.FRACTAL])
+def test_entry_role_wm2_wm3_is_reclassified_as_add_on_for_open_campaign(signal_type):
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "w.sqlite3"))
+        engine = CampaignEngine(db)
+        try:
+            campaign = _open_campaign_for_add_on(db, engine, open_risk=4.0, budget=5.0)
+            campaign_id = campaign.campaign_id
+            # Detectors use ENTRY so either WM2 or WM3 can start a flat campaign.
+            # The campaign coordinator must reclassify it when this campaign is open.
+            signal = make_signal(
+                signal_type,
+                role=SignalRole.ENTRY,
+                trigger=103.0 if signal_type == SignalType.SUPER_AO else 104.0,
+                bar=220,
+            )
+            armed = engine.arm_add_on(
+                campaign,
+                signal,
+                risk_quote=1.0,
+                capital_reserved_quote=25.0,
+            )
+            assert armed.campaign_id == campaign_id
+            assert armed.state == CampaignState.ADD_ON_PENDING
+            saved = [
+                row for row in db.active_campaign_signals(campaign_id)
+                if row["signal_id"] == signal.signal_id
+            ]
+            assert len(saved) == 1
+            assert saved[0]["role"] == SignalRole.ADD_ON.value
+            assert len([
+                row for row in db.open_campaigns()
+                if row.get("symbol") == "BTCUSDT"
+            ]) == 1
+        finally:
+            db.conn.close()
+
+
 def test_add_on_fill_rejects_non_finite_values_and_risk_overrun():
     with tempfile.TemporaryDirectory() as d:
         db = Database(os.path.join(d, "w.sqlite3"))
