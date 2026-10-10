@@ -186,16 +186,30 @@ def test_database_returns_only_finalized_campaign_close_events():
 
     db = Database(":memory:")
     try:
+        db.conn.execute(
+            "INSERT INTO campaigns(campaign_id,symbol,side,execution_timeframe,state,tags_json) VALUES(?,?,?,?,?,?)",
+            ("campaign-a", "BTCUSDT", "LONG", "1h", "CLOSED", '{"execution_mode":"FUTURES"}'),
+        )
+        db.conn.execute(
+            "INSERT INTO campaigns(campaign_id,symbol,side,execution_timeframe,state,tags_json) VALUES(?,?,?,?,?,?)",
+            ("campaign-spot", "ETHUSDT", "LONG", "1h", "CLOSED", '{"execution_mode":"SPOT"}'),
+        )
+        db.conn.commit()
         db.log_campaign_event(
             "campaign-a", "CAMPAIGN_CLOSED", reason="STOP_LOSS",
             payload={"realized_pnl_quote_net_known_fees": -2.0},
         )
         db.log_campaign_event(
-            "campaign-b", "EXIT_FILLED", reason="STOP_LOSS",
+            "campaign-spot", "CAMPAIGN_CLOSED", reason="STOP_LOSS",
+            payload={"realized_pnl_quote_net_known_fees": -1.0},
+        )
+        db.log_campaign_event(
+            "campaign-a", "EXIT_FILLED", reason="STOP_LOSS",
             payload={"realized_pnl_quote_net_known_fees": -1.0},
         )
         rows = db.recent_campaign_closes()
         assert len(rows) == 1
         assert rows[0]["reason"] == "STOP_LOSS"
+        assert rows[0]["payload_json"] == '{"realized_pnl_quote_net_known_fees": -2.0}'
     finally:
         db.conn.close()
