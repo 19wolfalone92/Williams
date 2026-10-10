@@ -85,6 +85,10 @@ Initial failed workflow IDs:
 5. **Release version:** `server.py`, `MainActivity.kt`, and `app/build.gradle.kts` all agree on `4.25.0` on both the task branch and `main`. The stale `ci_release_gate.py` constant `4.24.0` was the outlier. The gate now expects `4.25.0`, with a regression test comparing the gate, server, Android UI, and Gradle values.
 6. **Duplicate command safety:** an early admission failure previously could persist `BLOCKED` over an existing `SUBMITTING`/`AMBIGUOUS` intent. That would erase a recovery obligation. The barrier now preserves an existing unresolved status on a repeated blocked command; tests assert that process-death and timeout states remain unresolved and the submit callback is not re-invoked.
 
+### Follow-up Android lint failure
+
+On intermediate SHA `be8d663f85b0f093ac2604ae818f9cbad1883971`, Python backend tests passed (run [38082475956](https://github.com/19wolfalone92/Williams/actions/runs/38082475956)), but Android APK workflow [38082475940](https://github.com/19wolfalone92/Williams/actions/runs/38082475940) failed at `:app:lintDebug`: `gradle/wrapper/gradle-wrapper.properties:3: Error: A newer version of Gradle than 8.14.5 is available: 8.14.6 [AndroidGradlePluginVersion]`. The wrapper and Android CI Gradle version were both advanced to `8.14.6` on this branch, and the release gate now checks that they stay aligned. That failure is not considered resolved until the final SHA completes lint, Android unit tests, and both APK builds successfully.
+
 ### Current validation and limits
 
 The fixes above are committed only to `audit/williams-2.1-task-003-execution-safety`. Latest CI results for the final documentation-bearing SHA must still be captured below after the workflow runs complete. Until all required checks pass on one exact SHA and mutation-route review is complete, all unproven scenarios remain **NOT VERIFIED**.
