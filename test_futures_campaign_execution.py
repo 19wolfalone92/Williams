@@ -206,6 +206,21 @@ def make_context(cache, *, allow_long, allow_short):
         decision="LONG" if allow_long else "SHORT" if allow_short else "NO_TRADE",
         data_bars=220,
     ))
+    # WM1 requires an explicit versioned D1 macro context. Keep it neutral by
+    # default so each test opts into a macro veto deliberately.
+    cache.publish(TFMarketContext(
+        symbol="BTCUSDT",
+        interval="1d",
+        version=0,
+        candle_open_time_ms=1,
+        candle_close_time_ms=2,
+        price=101.0,
+        alligator_state="SLEEP",
+        allow_long=False,
+        allow_short=False,
+        decision="NO_TRADE",
+        data_bars=220,
+    ))
 
 
 def make_signal(direction):
