@@ -2985,6 +2985,64 @@ private class NativeEngine(
                 val executed = order.optString("executedQty").toDoubleOrNull() ?: 0.0
                 val quote = order.optString("cummulativeQuoteQty").toDoubleOrNull() ?: 0.0
 
+                if (status == "NEW" || status == "PENDING_NEW") {
+                    val nowMs = System.currentTimeMillis()
+                    val frameMs = frameSeconds(WilliamsTimeframeContract.CANONICAL_DECISION) * 1000L
+                    val expired =
+                        intent.signalExpiresAtMs <= 0L || nowMs >= intent.signalExpiresAtMs
+                    var invalidated = false
+                    var validationUnavailable = false
+
+                    if (!expired) {
+                        val cursor = intent.lastSignalValidationCandleTimeMs
+                        if (
+                            intent.signalBarTimeMs <= 0L ||
+                            intent.signalConfirmationTimeMs <= 0L ||
+                            intent.invalidationPrice <= 0.0 ||
+                            cursor <= 0L
+                        ) {
+                            validationUnavailable = true
+                        } else if (nowMs >= cursor + 2L * frameMs) {
+                            val history = runCatching {
+                                fetchCandles(intent.symbol, WilliamsTimeframeContract.CANONICAL_DECISION, 151)
+                            }.getOrNull()
+                            if (history == null) {
+                                validationUnavailable = true
+                            } else {
+                                val newlyClosed = history.filter {
+                                    it.t > cursor && it.t + frameMs <= nowMs
+                                }
+                                if (newlyClosed.isEmpty()) {
+                                    // No confirmed H1 candle to revalidate despite the
+                                    // expected close: keep the exchange order fail-closed.
+                                    validationUnavailable = true
+                                } else {
+                                    invalidated = newlyClosed.any { it.l <= intent.invalidationPrice }
+                                    val newCursor = newlyClosed.maxOf { it.t }
+                                    synchronized(pendingEntries) {
+                                        val stored = pendingEntries[intent.symbol]
+                                        if (stored?.clientOrderId == intent.clientOrderId) {
+                                            pendingEntries[intent.symbol] =
+                                                stored.copy(lastSignalValidationCandleTimeMs = newCursor)
+                                        }
+                                    }
+                                    savePersistedState()
+                                }
+                            }
+                        }
+                    }
+
+                    if (expired || invalidated || validationUnavailable) {
+                        val reason = when {
+                            expired -> "EXPIRED"
+                            invalidated -> "STRUCTURAL_INVALIDATION"
+                            else -> "REVALIDATION_UNAVAILABLE"
+                        }
+                        cancelCampaignEntryAndReconcile(intent, order, reason)
+                        continue
+                    }
+                }
+
                 when {
                     status == "NEW" || status == "PENDING_NEW" -> Unit
 
@@ -3067,6 +3125,64 @@ private class NativeEngine(
                         (x.message ?: x.javaClass.simpleName)
                 )
             }
+        }
+    }
+
+    /**
+     * Expired or structurally invalidated conditional BUYs are cancelled only
+     * after a REST read proved the exchange order is still NEW/PENDING_NEW.
+     * After DELETE, fetch again: a race-to-fill becomes a protected position,
+     * never a silently discarded fill.
+     */
+    private fun cancelCampaignEntryAndReconcile(
+        intent: PendingEntry,
+        observedOrder: JSONObject,
+        reason: String
+    ) {
+        val orderId = observedOrder.optLong("orderId", -1L)
+        withCampaignMutation(intent.symbol, "CAMPAIGN_ENTRY_CANCEL_$reason") {
+            if (orderId > 0L) {
+                signedDelete(
+                    "/api/v3/order",
+                    "symbol=" + intent.symbol + "&orderId=" + orderId
+                )
+            } else {
+                signedDelete(
+                    "/api/v3/order",
+                    "symbol=" + intent.symbol +
+                        "&origClientOrderId=" + intent.clientOrderId
+                )
+            }
+        }
+        val finalOrder = signedGet(
+            "/api/v3/order",
+            "symbol=" + intent.symbol + "&origClientOrderId=" + intent.clientOrderId
+        )
+        lastOrder = finalOrder
+        val finalStatus = finalOrder.optString("status", "").uppercase(Locale.US)
+        val executed = finalOrder.optString("executedQty").toDoubleOrNull() ?: 0.0
+        val quote = finalOrder.optString("cummulativeQuoteQty").toDoubleOrNull() ?: 0.0
+        when {
+            finalStatus == "FILLED" -> {
+                require(executed > 0.0 && quote > 0.0) {
+                    intent.symbol + ": filled entry after cancel lacks confirmed fill values"
+                }
+                applyCampaignFill(intent, finalOrder, executed, quote)
+            }
+            finalStatus in setOf("CANCELED", "EXPIRED", "REJECTED") -> {
+                if (executed > 0.0) {
+                    require(quote > 0.0) {
+                        intent.symbol + ": terminal partial fill lacks quote after cancellation"
+                    }
+                    applyCampaignFill(intent, finalOrder, executed, quote)
+                } else {
+                    clearCampaignPending(intent.symbol)
+                }
+            }
+            else -> setReconcileRequired(
+                intent.symbol + ": conditional-entry cancel not terminal after " + reason +
+                    "; observed=" + finalStatus
+            )
         }
     }
 
