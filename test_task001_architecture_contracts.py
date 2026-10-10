@@ -225,6 +225,18 @@ def test_android_spot_rest_mutations_have_one_fail_closed_boundary():
     assert source.count(".post(") == 1
     assert source.count(".delete()") == 1
     assert "else -> error(\"Unapproved Binance mutation route:" in wrapper
+    assert "private fun reconcileUnresolvedMutationIntents()" in source
+    assert "unresolvedMutationIntents()" in source
+    assert "resolveUnresolvedMutationIntents" not in source
+    assert 'signedGet("/api/v3/order", query)' in source
+    assert 'signedGet("/api/v3/orderList", query)' in source
+    runtime_path = Path(__file__).parent / "app/src/main/java/com/williamsbot/StandaloneRuntime.kt"
+    for other in (Path(__file__).parent / "app/src/main/java").rglob("*.kt"):
+        if other == runtime_path:
+            continue
+        text = other.read_text(encoding="utf-8")
+        assert "/api/v3/orderList/oco" not in text, f"alternate OCO writer: {other}"
+        assert "/api/v3/order/cancelReplace" not in text, f"alternate cancelReplace writer: {other}"
     # Legacy direct MARKET BUY implementations must remain tombstoned, not hidden
     # after a guard clause where they could later be re-enabled accidentally.
     legacy_start = source.index("    private fun executeBuyWithProtection(")
