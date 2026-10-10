@@ -1771,11 +1771,43 @@ class MultiPositionTrader:
             )
             if list_id or list_client:
                 cancel = getattr(self.client, "cancel_oco", None)
-                if cancel is not None:
-                    if list_id:
+                if cancel is None:
+                    raise RuntimeError("cannot safely exit: OCO cancellation endpoint is unavailable")
+                if list_client and not is_exit_id(list_client):
+                    raise RuntimeError("refusing to cancel an OCO list not owned by Williams")
+                cancel_signal_id = f"OCO_CANCEL:{symbol}:{trade['id']}:{list_id}:{list_client}"
+                cancel_cid = stable_client_order_id(
+                    f"{self.MANUAL_PREFIX}CANCEL_", cancel_signal_id
+                )
+                cancel_intent = self._intent_for_legacy_mutation(
+                    symbol, "SELL", "CANCEL", cancel_cid,
+                    purpose="CANCEL",
+                    trade_id=int(trade["id"]),
+                    signal_id=cancel_signal_id,
+                    operation_kind="CANCEL_OCO",
+                    related_order_list_id=list_id,
+                )
+
+                def _check_oco_owner(_snapshot):
+                    current_trade = self.db.open_trade(symbol)
+                    if current_trade is None or int(current_trade["id"]) != int(trade["id"]):
+                        raise RuntimeError("OCO cancellation target no longer belongs to the managed trade")
+                    current_list_id = str(current_trade.get("exit_order_list_id") or "")
+                    current_list_client = str(current_trade.get("exit_order_list_client_id") or "")
+                    if list_id and current_list_id != list_id:
+                        raise RuntimeError("OCO order-list ID changed before cancellation")
+                    if list_client and current_list_client != list_client:
+                        raise RuntimeError("OCO client identity changed before cancellation")
+
+                self._submit_mutation(
+                    cancel_intent,
+                    lambda: (
                         cancel(symbol, order_list_id=list_id)
-                    else:
-                        cancel(symbol, list_client_order_id=list_client)
+                        if list_id
+                        else cancel(symbol, list_client_order_id=list_client)
+                    ),
+                    pre_submit_checks=_check_oco_owner,
+                )
 
             account = self.client.account()
             free_qty = self._asset_balance(
@@ -1792,12 +1824,37 @@ class MultiPositionTrader:
                     f"{symbol}: managed quantity is no longer available"
                 )
 
-            sell = self.client.order_safe(
-                symbol,
-                "SELL",
-                "MARKET",
+            exit_signal_id = (
+                f"MANUAL_EXIT:{symbol}:{trade['id']}:"
+                f"{self.client.decimal_format(sell_qty)}"
+            )
+            client_id = stable_client_order_id(self.MANUAL_PREFIX, exit_signal_id)
+            exit_intent = self._intent_for_legacy_mutation(
+                symbol, "SELL", "MARKET", client_id,
+                purpose="EXIT",
                 quantity=self.client.decimal_format(sell_qty),
-                new_client_order_id=f"{self.MANUAL_PREFIX}{uuid.uuid4().hex[:20]}",
+                trade_id=int(trade["id"]),
+                signal_id=exit_signal_id,
+            )
+
+            def _check_manual_exit(_snapshot):
+                current_trade = self.db.open_trade(symbol)
+                if current_trade is None or int(current_trade["id"]) != int(trade["id"]):
+                    raise RuntimeError("managed trade ownership changed before manual exit")
+                free_now = self._asset_balance(symbol, account=self.client.account())
+                if free_now + 1e-12 < sell_qty:
+                    raise RuntimeError("manual exit exceeds currently confirmed free inventory")
+
+            sell = self._submit_mutation(
+                exit_intent,
+                lambda: self.client.order_safe(
+                    symbol,
+                    "SELL",
+                    "MARKET",
+                    quantity=self.client.decimal_format(sell_qty),
+                    new_client_order_id=client_id,
+                ),
+                pre_submit_checks=_check_manual_exit,
             )
             self.db.save_order(sell)
 
