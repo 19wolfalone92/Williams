@@ -558,8 +558,9 @@ class FuturesRuntime:
             raise FuturesCampaignExecutionError(
                 f"{signal.symbol}/{signal.timeframe}: context missing after refresh"
             )
+        wm1_reversal = signal.signal_type == SignalType.REVERSAL
         operative_ok = operative.allow_long if direction == "LONG" else operative.allow_short
-        if not operative_ok:
+        if not operative_ok and not wm1_reversal:
             raise FuturesCampaignExecutionError(
                 f"{signal.symbol}/{signal.timeframe}: operative Williams context disallows {direction}"
             )
@@ -584,10 +585,13 @@ class FuturesRuntime:
                     f"{signal.symbol}/{immediate_parent}: higher-timeframe context missing"
                 )
             parent_ok = parent.allow_long if direction == "LONG" else parent.allow_short
-            if not parent_ok:
+            if not parent_ok and not wm1_reversal:
                 raise FuturesCampaignExecutionError(
                     f"{signal.symbol}/{immediate_parent}: higher timeframe does not confirm {direction}"
                 )
+            # For WM1, a higher timeframe is context, not a requirement that
+            # the reversal already be confirmed by the new trend. Larger
+            # contexts below (including D1) still veto an active contradiction.
             for interval in parent_intervals[1:]:
                 higher = snapshot.context(signal.symbol, interval)
                 if higher is None:
