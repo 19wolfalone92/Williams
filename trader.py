@@ -51,6 +51,7 @@ class Trader:
         self.wise_men_short = WiseMenStateMachine(self.db, self.symbol, 'SHORT')
         self.client=BinanceSpotClient(api_key if api_key is not None else os.getenv('BINANCE_API_KEY',''), api_secret if api_secret is not None else os.getenv('BINANCE_API_SECRET',''), testnet=(os.getenv('TESTNET','true').lower()=='true') if testnet is None else testnet)
         self.execution_barrier.preflight_provider = self._execution_preflight
+        self.execution_barrier.exchange_client = self.client
         self.filters={}; self.base_asset=self.quote_asset=None; self.recovered=False
         self.symbol_rules = None
         self.preflight_report = None
