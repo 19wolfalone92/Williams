@@ -1631,6 +1631,19 @@ private class NativeEngine(
         paused = true
     }
 
+    private fun isPotentialOrderMutation(method: String, path: String): Boolean {
+        val verb = method.uppercase(Locale.US)
+        if (verb !in setOf("POST", "PUT", "PATCH", "DELETE")) return false
+        // Central fail-closed default: any write-like request to an order,
+        // order-list, algo-order or open-orders endpoint must be explicitly
+        // modelled above; otherwise it is rejected before opening a socket.
+        return Regex(
+            """/(?:order|orderList|algoOrder|openOrders)(?:/|$)""",
+            RegexOption.IGNORE_CASE
+        ).containsMatchIn(path) ||
+            path.contains("cancelReplace", ignoreCase = true)
+    }
+
     private fun validateAndPersistMutationIntent(spec: ExecutionMutationSpec) {
         if (spec.increasesExposure) {
             check(!killLatched) { "New entry blocked: KILL_SWITCH_LATCHED" }
@@ -1828,6 +1841,11 @@ private class NativeEngine(
         params: String
     ): JSONObject {
         val mutation = executionMutationSpec(method, path, params)
+        if (mutation == null && isPotentialOrderMutation(method, path)) {
+            throw IllegalStateException(
+                "Unsupported Binance order mutation blocked before network: $method $path"
+            )
+        }
         if (mutation != null) {
             try {
                 validateAndPersistMutationIntent(mutation)
