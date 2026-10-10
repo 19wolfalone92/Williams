@@ -1270,7 +1270,13 @@ class Trader:
             if 'commissionAsset' not in fill or not str(fill.get('commissionAsset') or '').strip():
                 raise RuntimeError(f'{self.symbol}: fill commission asset is unknown; reconciliation required')
         order['fills'] = fills
-        summary = accumulate_fills(fills)
+        base_asset = self.symbol[:-4] if self.symbol.endswith('USDT') else None
+        summary = accumulate_fills(fills, base_asset=base_asset)
+        if summary.unvalued_commission_assets:
+            raise RuntimeError(
+                f'{self.symbol}: commission conversion unavailable for '
+                f'{", ".join(summary.unvalued_commission_assets)}; reconciliation required'
+            )
         return order, summary
 
     def market_buy(self, quote):
