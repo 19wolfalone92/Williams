@@ -510,3 +510,15 @@ These are corrected on the current audit branch. The subsequent exact-head Campa
 
 **Chain impact.** Market timeframe → signal timestamp → pending expiry → exchange conditional-entry lifetime. This is a fail-closed correctness fix; it does not replace the remaining Demo proof for cancellation/trigger races.
 
+
+
+### 49. Monthly timeframe identity was lost in signal construction and restart recovery — corrected
+
+**Root cause.** Binance uses `1m` for one-minute candles and `1M` for monthly candles. `SignalSpec.new` and the persisted-signal reconstruction path lowercased every timeframe, converting monthly `1M` into minute `1m`. That could corrupt signal identity and pending-order expiry after creation or restart.
+
+**Correction.** Signal creation and recovery now preserve the case-sensitive `1M` token while normalizing other intervals to lowercase. Unsupported intervals are separately rejected by signal extraction and expiry calculation.
+
+**Regression coverage.** Added tests for monthly `SignalSpec` identity and persisted-signal reconstruction, including the stable signal ID.
+
+**Chain impact.** Candle interval → signal identity → durable serialization → restart recovery → expiry → exchange conditional order. The fix protects the temporal identity contract but does not replace the required Demo restart test.
+
