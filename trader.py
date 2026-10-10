@@ -29,9 +29,17 @@ STATES = {'FLAT','ENTRY_PENDING','OPEN','EXIT_PENDING','RECONCILE_REQUIRED'}
 def utc_now(): return datetime.now(timezone.utc).isoformat()
 
 class Trader:
-    def __init__(self, api_key=None, api_secret=None, testnet=None, context_cache=None):
+    def __init__(
+        self,
+        api_key=None,
+        api_secret=None,
+        testnet=None,
+        context_cache=None,
+        context_service=None,
+    ):
         self.config = TradingConfig.from_env()
         self.context_cache = context_cache or ContextCache()
+        self.context_service = context_service
         self.symbol=os.getenv('SYMBOL',self.config.symbols[0]).upper(); self.interval=os.getenv('INTERVAL','1h')
         self.position_fraction=float(os.getenv('POSITION_FRACTION','0.25')); self.stop_pct=float(os.getenv('STOP_LOSS_PCT','0.02')); self.target_pct=float(os.getenv('TAKE_PROFIT_PCT','0.04'))
         self.poll_seconds=int(os.getenv('POLL_SECONDS','20'))
@@ -118,6 +126,7 @@ class Trader:
                 db=self.db,
                 symbols=self.auto_scan_symbols,
                 execution_barrier=self.execution_barrier,
+                context_service=self.context_service,
             ).recover()
             if not recovery.get('ok'):
                 raise RuntimeError(
@@ -135,6 +144,7 @@ class Trader:
             db=self.db,
             symbols=self.auto_scan_symbols,
             execution_barrier=self.execution_barrier,
+            context_service=self.context_service,
         )
         recovery = self._multi_position_trader.recover()
         if not recovery.get('ok'):
@@ -1168,6 +1178,7 @@ class Trader:
                     db=self.db,
                     symbols=runtime_symbols,
                     execution_barrier=self.execution_barrier,
+                    context_service=self.context_service,
                 )
                 recovery = self._multi_position_trader.recover()
                 if not recovery.get('ok'):
