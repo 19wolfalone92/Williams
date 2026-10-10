@@ -45,3 +45,17 @@ def test_initial_williams_signal_expires_at_exact_boundary():
     chosen = choose_initial_williams_signal([expired, valid], "LONG", now_ms=now)
     assert chosen is not None
     assert chosen.signal_bar_time_ms == 2_000
+
+
+def test_canonical_williams_decision_timeframe_defaults_to_h1():
+    from trading_config import TradingConfig
+    cfg = TradingConfig.from_env({})
+    assert cfg.execution_timeframe == "1h"
+    assert cfg.structural_timeframes == ("1d", "4h", "1h", "15m")
+
+
+def test_noncanonical_signal_timeframe_is_not_the_default():
+    from futures_runtime import CANONICAL_DECISION_TIMEFRAME
+    from trading_config import TradingConfig
+    assert CANONICAL_DECISION_TIMEFRAME == "1h"
+    assert TradingConfig.from_env({"EXECUTION_TIMEFRAME": "5m"}).execution_timeframe == "5m"
