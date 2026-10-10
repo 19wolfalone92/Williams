@@ -10,7 +10,18 @@ from dataclasses import dataclass
 from typing import Mapping, Sequence
 
 
-DEFAULT_SYMBOLS = ("BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT")
+DEFAULT_SYMBOLS = (
+    "BTCUSDT",
+    "ETHUSDT",
+    "BNBUSDT",
+    "SOLUSDT",
+    "XRPUSDT",
+    "ADAUSDT",
+    "DOGEUSDT",
+    "LINKUSDT",
+    "AVAXUSDT",
+    "LTCUSDT",
+)
 DEFAULT_STRUCTURAL_TFS = ("4h", "1h", "15m")
 
 
@@ -118,7 +129,7 @@ class TradingConfig:
         max_positions = max(0, _int(source, "MAX_OPEN_POSITIONS", 3))
         risk_key = "MAX_RISK_PER_TRADE_PCT" if "MAX_RISK_PER_TRADE_PCT" in source else "RISK_PER_TRADE_PCT"
         risk = max(0.0, min(0.005, _float(source, risk_key, 0.0025)))
-        total_risk = max(0.0, min(0.01, _float(source, "MAX_TOTAL_RISK_PCT", 0.01)))
+        total_risk = max(0.0, min(0.03, _float(source, "MAX_TOTAL_RISK_PCT", 0.03)))
 
         execution_timeframe = str(source.get("EXECUTION_TIMEFRAME", "1h")).lower()
 
