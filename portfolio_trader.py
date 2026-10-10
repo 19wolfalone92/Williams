@@ -161,9 +161,11 @@ class MultiPositionTrader:
         return f"entry_client_order_id:{symbol.upper()}"
 
     def state(self, symbol):
+        # Absence is not evidence of FLAT. Recovery must establish the per-symbol
+        # exchange facts and then persist FLAT explicitly.
         state = self.db.state_get(
             self._state_key(symbol),
-            "FLAT",
+            "UNKNOWN",
         )
         return state if state in POSITION_STATES else "RECONCILE_REQUIRED"
 
@@ -233,6 +235,70 @@ class MultiPositionTrader:
                 return True
 
         return False
+
+    def _ensure_symbol_clean_before_entry(self, symbol: str) -> bool:
+        """Set per-symbol FLAT only after clean exchange and inventory evidence."""
+        symbol = str(symbol).upper()
+        key = self._state_key(symbol)
+        stored_state = self.db.state_get(key, None)
+        normalized = str(stored_state or "").upper()
+
+        # Entries are only allowed for an explicitly FLAT symbol. Never erase an
+        # existing UNKNOWN/RECONCILE_REQUIRED barrier just because one query looks clean.
+        if normalized not in {"", "FLAT"}:
+            return False
+        if self.db.open_trade(symbol) is not None:
+            self.set_state(symbol, "RECONCILE_REQUIRED")
+            self.db.log_event(
+                "ERROR", "symbol_flat_preflight_conflict",
+                "Local open trade conflicts with entry admission",
+                {"symbol": symbol, "stored_state": normalized or "UNKNOWN"},
+            )
+            return False
+        if any(row_symbol == symbol for row_symbol, _ in self._pending_entries()):
+            self.set_state(symbol, "RECONCILE_REQUIRED")
+            return False
+        active_campaign = self.campaign_execution._active_campaign_for_symbol(symbol)
+        if active_campaign is not None:
+            self.set_state(symbol, "RECONCILE_REQUIRED")
+            return False
+
+        try:
+            # Any open order on a supposedly flat symbol is ambiguous until
+            # associated with a locally persisted campaign and reconciled.
+            open_orders = self.client.open_orders(symbol)
+            if open_orders:
+                raise RuntimeError("exchange reports open orders for an untracked/flat symbol")
+            if self._bot_entry_remaining(symbol):
+                raise RuntimeError("exchange history shows an unresolved Williams BUY")
+
+            account = self.client.account()
+            base_qty = self._asset_balance(symbol, account=account)
+            filters = self._filters(symbol)
+            qty_filter = filters.get("LOT_SIZE") or filters.get("MARKET_LOT_SIZE") or {}
+            min_qty = float(qty_filter.get("minQty", 0) or 0)
+            inventory_tolerance = max(min_qty, 1e-12)
+            if base_qty >= inventory_tolerance:
+                raise RuntimeError(
+                    f"exchange holds {base_qty:.12g} base units; cannot confirm FLAT"
+                )
+
+            # Persist a positive, evidence-backed FLAT assertion for this symbol.
+            self.db.state_set(key, "FLAT")
+            self.db.log_event(
+                "INFO", "symbol_flat_reconciled",
+                "Per-symbol FLAT established from exchange orders, history and inventory",
+                {"symbol": symbol, "base_qty": base_qty},
+            )
+            return True
+        except Exception as exc:
+            self.set_state(symbol, "RECONCILE_REQUIRED")
+            self.db.log_event(
+                "ERROR", "symbol_flat_preflight_failed",
+                str(exc),
+                {"symbol": symbol},
+            )
+            return False
 
     def _repair_stale_reconcile_states(self):
         """Clear a persisted recovery barrier only after clean exchange evidence.
@@ -2104,6 +2170,14 @@ class MultiPositionTrader:
 
             signal = self.campaign_execution.engine.choose_initial_signal(specs)
             if signal is None:
+                continue
+            if not self._ensure_symbol_clean_before_entry(symbol):
+                results.append({
+                    "symbol": symbol,
+                    "campaign": True,
+                    "action": "BLOCKED_UNRECONCILED_SYMBOL",
+                    "state": self.state(symbol),
+                })
                 continue
 
             try:
