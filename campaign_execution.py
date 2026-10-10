@@ -1931,6 +1931,8 @@ class CampaignExecutionService:
                 campaign.capital_reserved_quote = 0.0
                 campaign.exit_reason = reason
                 campaign.next_action = "WAIT"
+                if campaign.state != CampaignState.EXIT_SIGNALLED:
+                    campaign.transition(CampaignState.EXIT_SIGNALLED, reason=reason)
                 campaign.transition(CampaignState.EXIT_PENDING, reason=reason)
                 campaign.transition(CampaignState.CLOSED, reason="exit fill complete")
                 self.db.save_campaign(campaign)
