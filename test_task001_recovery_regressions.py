@@ -8,6 +8,7 @@ from db import Database
 from campaign_execution import CampaignExecutionService
 from execution_barrier import ExecutionBarrier, OrderIntent
 from market_context import ContextCache, TFMarketContext
+from portfolio_trader import PortfolioTrader
 
 
 def ready_context():
@@ -645,3 +646,65 @@ def test_cancel_replace_operation_identity_is_immutable(tmp_path):
         db.create_cancel_replace_operation("op1", "intent1", "BTCUSDT", "12", "OLD", "NEW")
 
 # Release-gate note: fake-exchange recovery tests are not physical-device or Spot Testnet evidence.
+
+
+
+def test_legacy_exit_fee_reconciliation_keeps_missing_commission_unknown(tmp_path):
+    db = ready_db(tmp_path)
+
+    class FakeExchange:
+        def my_trades(self, symbol, order_id=None, limit=1000):
+            return [{
+                "id": 9901, "orderId": order_id, "symbol": symbol,
+                "qty": "0.25", "price": "40000.00", "quoteQty": "10000.00",
+                # No commission amount or asset: must not be treated as zero.
+            }]
+
+    trader = object.__new__(PortfolioTrader)
+    trader.db = db
+    trader.client = FakeExchange()
+    trader._fee_quote_for_asset = lambda asset, base_asset, trade_price=0.0: 1.0
+
+    with pytest.raises(RuntimeError, match="commission amount or asset is unknown"):
+        trader._exit_fee_quote("BTCUSDT", [{
+            "symbol": "BTCUSDT", "orderId": 99, "executedQty": "0.25",
+        }])
+
+    rows = db.exchange_fills_for_order("BTCUSDT", 99)
+    assert len(rows) == 1
+    assert rows[0]["exchange_trade_id"] == "9901"
+    assert rows[0]["financial_state"] == "UNKNOWN"
+    assert rows[0]["commission_amount_text"] is None
+    assert rows[0]["commission_asset"] is None
+    assert db.state_get("position_state") == "FLAT"
+
+
+def test_legacy_exit_fee_reconciliation_records_exact_fill_and_confirms_zero_fee(tmp_path):
+    db = ready_db(tmp_path)
+
+    class FakeExchange:
+        def my_trades(self, symbol, order_id=None, limit=1000):
+            return [{
+                "id": 9902, "orderId": order_id, "symbol": symbol,
+                "qty": "0.12500001", "price": "12345.6789",
+                "quoteQty": "1543.209876543089", "commission": "0",
+                "commissionAsset": "USDT",
+            }]
+
+    trader = object.__new__(PortfolioTrader)
+    trader.db = db
+    trader.client = FakeExchange()
+    trader._fee_quote_for_asset = lambda asset, base_asset, trade_price=0.0: 1.0
+
+    fee = trader._exit_fee_quote("BTCUSDT", [{
+        "symbol": "BTCUSDT", "orderId": 100, "executedQty": "0.12500001",
+    }])
+    assert fee == 0.0
+    rows = db.exchange_fills_for_order("BTCUSDT", 100)
+    assert len(rows) == 1
+    assert rows[0]["quantity_text"] == "0.12500001"
+    assert rows[0]["price_text"] == "12345.6789"
+    assert rows[0]["quote_quantity_text"] == "1543.209876543089"
+    assert rows[0]["commission_amount_text"] == "0"
+    assert rows[0]["commission_asset"] == "USDT"
+    assert rows[0]["financial_state"] == "CONFIRMED"
