@@ -717,7 +717,7 @@ class CampaignExecutionService:
                         initial_stop_price=stop,
                         fill_order_id=str(order.get("orderId", "")),
                         risk_quote=float(campaign.pending_risk_quote),
-                        fee_quote=0.0,
+                        fee_quote=fee_quote,
                     )
                     self.db.set_campaign_signal_state(
                         signal_id,
