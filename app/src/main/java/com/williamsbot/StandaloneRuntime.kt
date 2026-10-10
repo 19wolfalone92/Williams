@@ -1637,10 +1637,9 @@ private class NativeEngine(
         // Central fail-closed default: any write-like request to an order,
         // order-list, algo-order or open-orders endpoint must be explicitly
         // modelled above; otherwise it is rejected before opening a socket.
-        return Regex(
-            """/(?:order|orderList|algoOrder|openOrders)(?:/|$)""",
-            RegexOption.IGNORE_CASE
-        ).containsMatchIn(path) ||
+        return path.contains("/order", ignoreCase = true) ||
+            path.contains("/algoOrder", ignoreCase = true) ||
+            path.contains("/openOrders", ignoreCase = true) ||
             path.contains("cancelReplace", ignoreCase = true)
     }
 
