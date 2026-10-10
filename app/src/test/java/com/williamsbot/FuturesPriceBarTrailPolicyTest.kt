@@ -53,5 +53,10 @@ class FuturesPriceBarTrailPolicyTest {
                 "LONG", listOf(1.0, 2.0, 3.0), listOf(2.0, 3.0, 4.0), 0.0, 3
             )
         }
+        assertThrows(IllegalArgumentException::class.java) {
+            FuturesPriceBarTrailPolicy.propose(
+                "LONG", listOf(1.0, 4.0, 3.0), listOf(2.0, 3.0, 4.0), 0.1, 3
+            )
+        }
     }
 }
