@@ -98,7 +98,9 @@ class ExecutionBarrier:
         # H1 is an owner-approved execution contract, not a Williams book rule.
         # Enforce it at the last admission boundary for campaign entries so
         # callers cannot bypass the scanner or TradingConfig validation.
-        if intent.purpose.upper() == "CAMPAIGN_ENTRY":
+        purpose = str(intent.purpose or "").strip().upper()
+        entry_purposes = {"ENTRY", "CAMPAIGN_ENTRY", "ADD_ON", "CAMPAIGN_ADD_ON"}
+        if purpose in entry_purposes:
             config_blocker = execution_timeframe_blocker(os.environ)
             if config_blocker:
                 return config_blocker
@@ -106,16 +108,24 @@ class ExecutionBarrier:
             permission_tf = str(intent.permission_interval or "").strip().lower()
             if signal_tf != "1h" or permission_tf != "1h":
                 return (
-                    "CAMPAIGN_ENTRY requires signal_timeframe=1h and "
+                    f"{purpose} requires signal_timeframe=1h and "
                     "permission_interval=1h"
                 )
             now_ms = int(time.time() * 1000)
+            signal_bar_ms = int(intent.signal_bar_time_ms or 0)
+            confirmation_ms = int(intent.confirmation_time_ms or 0)
+            expires_ms = int(intent.expires_at_ms or 0)
+            # H1 timestamps are UTC epoch milliseconds. Confirmation cannot
+            # precede the close of the source H1 candle and cannot be future-dated.
             if (
-                int(intent.signal_bar_time_ms or 0) <= 0
-                or int(intent.confirmation_time_ms or 0) <= int(intent.signal_bar_time_ms or 0)
-                or int(intent.expires_at_ms or 0) <= now_ms
+                signal_bar_ms <= 0
+                or confirmation_ms < signal_bar_ms + 3_600_000
+                or confirmation_ms > now_ms
+                or expires_ms <= now_ms
+                or not str(intent.signal_id or "").strip()
+                or not str(intent.campaign_id or "").strip()
             ):
-                return "CAMPAIGN_ENTRY signal provenance is missing, invalid, or expired"
+                return f"{purpose} signal provenance is missing, invalid, future-dated, or expired"
 
         if intent.created_at_ms:
             age = int(time.time() * 1000) - intent.created_at_ms
