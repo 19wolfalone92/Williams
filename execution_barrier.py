@@ -157,15 +157,22 @@ class ExecutionBarrier:
 
         if self.db is None or not hasattr(self.db, "state_get"):
             return "durable recovery gate is unavailable"
+        recovery_state = str(self.db.state_get("recovery_state", "REQUIRED")).upper()
         # A fresh barrier instance after process restart must not bypass an
         # unresolved same-symbol intent merely by generating a new client ID.
+        # CONFIRMED is acceptable during a running READY process, but must be
+        # re-queried on startup before risk-reducing actions can resume.
         if hasattr(self.db, "conn"):
+            statuses = (
+                "'PENDING','SUBMITTED','AMBIGUOUS','RECONCILE_REQUIRED'"
+                if recovery_state == "READY"
+                else "'PENDING','SUBMITTED','AMBIGUOUS','RECONCILE_REQUIRED','CONFIRMED'"
+            )
             try:
                 unresolved = self.db.conn.execute(
                     "SELECT intent_id,status,purpose FROM execution_intents "
                     "WHERE symbol=? AND intent_id<>? "
-                    "AND UPPER(status) IN ('PENDING','SUBMITTED','AMBIGUOUS','RECONCILE_REQUIRED') "
-                    "LIMIT 1",
+                    f"AND UPPER(status) IN ({statuses}) LIMIT 1",
                     (intent.symbol.upper(), intent.intent_id),
                 ).fetchone()
             except Exception:
@@ -177,8 +184,6 @@ class ExecutionBarrier:
                     + ":"
                     + str(unresolved["status"])
                 )
-
-        recovery_state = str(self.db.state_get("recovery_state", "REQUIRED")).upper()
         if recovery_state != "READY" and not risk_reducing:
             return f"RECOVERY_REQUIRED:{recovery_state}"
         state = str(self.db.state_get("position_state", "RECONCILE_REQUIRED")).upper()
