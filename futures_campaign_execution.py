@@ -735,6 +735,9 @@ class FuturesCampaignExecutionService:
                 "entry_fill_reconciliation_pending": True,
                 "initial_stop_price": stop,
                 "last_signal_time_ms": int(signal.signal_bar_time_ms),
+                "last_signal_confirmation_time_ms": int(
+                    getattr(signal, "confirmation_time_ms", 0) or signal.signal_bar_time_ms
+                ),
                 "entry_expires_at_ms": int(signal.expires_at_ms or 0),
                 "position_side_mode": "ONE_WAY",
                 "leverage": 1,
@@ -2876,8 +2879,19 @@ class FuturesCampaignExecutionService:
             )
         if campaign.additions >= 2:
             raise FuturesCampaignExecutionError("Campaign has reached the maximum of two add-ons")
-        if int(signal.signal_bar_time_ms) <= int(campaign.tags.get("last_signal_time_ms", 0) or 0):
-            raise FuturesCampaignExecutionError("Add-on signal is not newer than the last campaign signal")
+        latest_confirmation = int(
+            campaign.tags.get(
+                "last_signal_confirmation_time_ms",
+                campaign.tags.get("last_signal_time_ms", 0),
+            ) or 0
+        )
+        signal_confirmation = int(
+            getattr(signal, "confirmation_time_ms", 0) or signal.signal_bar_time_ms
+        )
+        if signal_confirmation <= latest_confirmation:
+            raise FuturesCampaignExecutionError(
+                "Add-on signal is not newer than the last actionable confirmation"
+            )
         if self.db.state_get(f"position_state:{symbol}", "FLAT") == CampaignState.RECONCILE_REQUIRED.value:
             raise FuturesCampaignExecutionError(f"{symbol}: position reconciliation lock blocks add-on")
 
@@ -3017,6 +3031,7 @@ class FuturesCampaignExecutionService:
             "pending_add_on_original_entry": old_entry,
             "pending_add_on_direction": direction,
             "last_signal_time_ms": int(signal.signal_bar_time_ms),
+            "last_signal_confirmation_time_ms": signal_confirmation,
             "execution_mode": "FUTURES",
         })
         try:
