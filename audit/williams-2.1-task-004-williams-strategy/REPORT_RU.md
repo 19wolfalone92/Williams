@@ -282,3 +282,25 @@ Additional changed test files:
 Latest visible Campaign CI at this implementation revision: [run 38089129878](https://github.com/19wolfalone92/Williams/actions/runs/38089129878) — queued when checked. The Python backend workflow passed on earlier revision `cd74f1fe6e577a1fe1bec021808f8b5f88943dfa` ([run 38088931777](https://github.com/19wolfalone92/Williams/actions/runs/38088931777)); it does not cover the later synthetic-kline and structural-invalidation corrections. Prior Android unit-test failure was an `InvalidTestClassError` due to the provenance test being outside the class; the test was moved, but a successful rerun is not yet evidenced.
 
 **This note is not an acceptance sign-off.** The report commit changes HEAD again and triggers fresh CI. TASK 004.4 remains blocked until the final SHA's Python backend, Campaign CI, Android APK, Android unit/static checks all complete successfully and the remaining behavioural gaps are addressed.
+
+
+### Verification refresh — SHA `154bff80751bbe3b975dc5dc8e3503bb289edb2e`
+
+This refresh supersedes earlier statements above that these required workflows were still pending. At the time of this verification, branch HEAD and PR #49 head both resolved to `154bff80751bbe3b975dc5dc8e3503bb289edb2e`; base `main` remained `04da5f9c09572e99ff310be3a1908179165e528c`. PR #49 was open, Draft, and unmerged.
+
+Required workflow outcomes on that exact SHA:
+- Python backend tests: **SUCCESS**, run [38089187193](https://github.com/19wolfalone92/Williams/actions/runs/38089187193), job `backend-test`.
+- Williams Campaign CI: **SUCCESS**, run [38089187219](https://github.com/19wolfalone92/Williams/actions/runs/38089187219), jobs `Python tests` and `Android build and static checks`.
+- Build Android APK: **SUCCESS**, run [38089187276](https://github.com/19wolfalone92/Williams/actions/runs/38089187276), job `Build APKs`; Android lint, unit tests, debug/release APK build and APK validation steps completed successfully.
+
+The compare against base `04da5f9c09572e99ff310be3a1908179165e528c` reports 123 commits ahead and 0 behind. No change was made to `main`.
+
+Passing CI on this SHA verifies the configured jobs only; it does **not** close the behavioural gaps below. Acceptance remains **IN PROGRESS — NOT APPROVED** because:
+1. No Android end-to-end mutation-spy test yet proves that direct/legacy entry invocation with invalid persisted signal never reaches the actual signed order mutation.
+2. Persisted-preference corruption and process-restart permutations are not exhaustively tested.
+3. Durable consumed-signal idempotency across all initial-entry/add-on/recovery paths is not established.
+4. Python and Android do not yet execute one common end-to-end replay corpus comparing decision, rejection reason and allowed action for every requested case.
+5. A sequential future-candle mutation replay proving no historical decision changes has not been completed.
+6. Dynamic order-mutation callsites have source-level inventory, but exhaustive runtime instrumentation evidence for every production route is not available.
+
+This section records the passing CI for SHA `154bff8` specifically. If this report is edited again, the resulting new HEAD requires its own fresh CI run; success on `154bff8` must not be attributed to a later SHA.
