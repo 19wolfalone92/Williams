@@ -42,9 +42,17 @@ class MultiPositionTrader:
     EMERGENCY_PREFIX = "WILLV4_EMERGENCY_"
     MANUAL_PREFIX = "WILLV4_MANUAL_"
 
-    def __init__(self, client, db=None, symbols=None, execution_barrier=None):
+    def __init__(
+        self,
+        client,
+        db=None,
+        symbols=None,
+        execution_barrier=None,
+        context_service=None,
+    ):
         self.client = client
         self.db = db or Database()
+        self.context_service = context_service
         if symbols is not None:
             self.symbols = [str(x).strip().upper() for x in symbols if str(x).strip()]
         else:
@@ -99,6 +107,10 @@ class MultiPositionTrader:
             self.client,
             self.db,
             execution_barrier=self.execution_barrier,
+            context_refresh=(
+                self.context_service.refresh_symbol_contexts
+                if self.context_service is not None else None
+            ),
         )
         self.campaign_monitor = CampaignMonitor(
             self.client,
