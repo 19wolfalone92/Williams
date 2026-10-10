@@ -142,9 +142,28 @@ def test_restart_adopts_pending_campaign_by_client_id():
         db2 = Database(os.path.join(d, "campaign.sqlite3"))
         svc2 = service(db2, client)
         client.set_price("BTCUSDT", 101.5)
+        queried = []
+        original_get_order = client.get_order
+
+        def track_authoritative_lookup(*args, **kwargs):
+            queried.append((args, kwargs))
+            return original_get_order(*args, **kwargs)
+
+        client.get_order = track_authoritative_lookup
         out = svc2.reconcile_pending_entries()
+        assert queried, "restart must query Binance/mock exchange before adopting the order"
+        assert any(
+            kwargs.get("orig_client_order_id") == result["client_order_id"]
+            for _, kwargs in queried
+        )
         assert out[0]["campaign_id"] == campaign_id
         assert out[0]["state"] == "OPEN"
+        # Reconciliation adopts the existing conditional order; it must not
+        # submit a second order with the same logical identity.
+        assert sum(
+            1 for order in client.orders
+            if order.get("clientOrderId") == result["client_order_id"]
+        ) == 1
 
 
 def test_stop_replacement_never_lowers_stop():
