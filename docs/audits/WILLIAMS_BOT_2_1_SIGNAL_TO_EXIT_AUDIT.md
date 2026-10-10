@@ -254,3 +254,10 @@ The native Futures exit routines reconcile fills and store realized PnL, exit ID
 ### Verification boundary
 
 The latest successful Campaign CI run on the prior exact head does not verify the code added in this third pass. Fresh CI for the new head is required. Android lint/unit-test/APK status must be checked separately. No Demo orders or real orders were sent.
+
+
+### 31. WM2 Super AO was incorrectly coupled to a fractal/Balance-Line flag — corrected
+
+The Python signal extractor required the third consecutive same-colour AO bar to also pass `long_fractal_outside` / `short_fractal_outside` on the preceding row. That silently turned WM2 into a hybrid WM2+fractal condition and could suppress an otherwise valid Super AO signal before the campaign-entry logic ever saw it.
+
+**Correction:** WM2 identity is now based on the third consecutive same-colour AO bar; fractal confirmation remains its own WM3 path. Context, direction, trigger-not-already-broken, structural invalidation, expiry, risk and exchange preflight still gate execution. Updated the SHORT regression fixture so WM2 must be detected when the separate fractal-outside flag is false. Strategy semantics still require cross-engine golden-vector verification; Android parity is not claimed.
