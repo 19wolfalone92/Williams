@@ -165,3 +165,31 @@ def test_stop_replacement_never_lowers_stop():
         assert current > 0
         assert not svc.engine.propose_stop(campaign, current - 1.0, "BAD")
         assert campaign.current_stop_price == current
+
+
+
+def test_unknown_exchange_order_state_keeps_campaign_blocked():
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "campaign.sqlite3"))
+        client = MockExchange()
+        svc = service(db, client)
+        result = svc.arm_initial_entry(
+            signal(trigger=101.0),
+            equity_quote=10_000,
+            candidate_risk_pct=0.004,
+        )
+        client.set_price("BTCUSDT", 101.5)
+        original_get_order = client.get_order
+
+        def unknown_order_state(*args, **kwargs):
+            response = original_get_order(*args, **kwargs)
+            return {**response, "status": "EXCHANGE_STATE_UNKNOWN"}
+
+        client.get_order = unknown_order_state
+        recovered = svc.reconcile_pending_entries()
+        assert recovered[0]["state"] == "RECONCILE_REQUIRED"
+        assert recovered[0]["campaign_id"] == result["campaign_id"]
+        campaign = svc.engine.load_campaign(result["campaign_id"])
+        assert campaign is not None
+        assert campaign.state == CampaignState.RECONCILE_REQUIRED
+        assert db.state_get("position_state:BTCUSDT") == "RECONCILE_REQUIRED"
