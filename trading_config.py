@@ -86,7 +86,7 @@ class TradingConfig:
     max_daily_loss_pct: float = 0.01
     max_consecutive_losses: int = 2
     cooldown_minutes: int = 30
-    max_open_positions: int = 1
+    max_open_positions: int = 3
 
     min_risk_reward: float = 1.5
     atr_period: int = 14
@@ -115,7 +115,7 @@ class TradingConfig:
         if str(source.get("AUTO_SCAN_SYMBOLS", "")).strip():
             symbols = _csv(source, "AUTO_SCAN_SYMBOLS", symbols)
 
-        max_positions = max(0, _int(source, "MAX_OPEN_POSITIONS", 1))
+        max_positions = max(0, _int(source, "MAX_OPEN_POSITIONS", 3))
         risk_key = "MAX_RISK_PER_TRADE_PCT" if "MAX_RISK_PER_TRADE_PCT" in source else "RISK_PER_TRADE_PCT"
         risk = max(0.0, min(0.005, _float(source, risk_key, 0.0025)))
         total_risk = max(0.0, min(0.01, _float(source, "MAX_TOTAL_RISK_PCT", 0.01)))
