@@ -122,19 +122,61 @@ class ExecutionBarrier:
 
     @property
     def mutation_locked(self) -> bool:
-        if self._local_mutation_lock_reason:
-            return True
         if self.db is None:
-            return bool(self.require_durable_intent)
-        return bool(self.db.state_get(self.MUTATION_LOCK_KEY, ""))
+            return bool(self._local_mutation_lock_reason) or bool(self.require_durable_intent)
+        # SQLite is the cross-process source of truth. Clearing the durable lock
+        # after verified reconciliation must be observed by long-lived instances.
+        durable_reason = str(self.db.state_get(self.MUTATION_LOCK_KEY, "") or "")
+        if durable_reason:
+            self._local_mutation_lock_reason = durable_reason
+            return True
+        self._local_mutation_lock_reason = ""
+        return False
 
     @property
     def mutation_lock_reason(self) -> str:
-        if self._local_mutation_lock_reason:
-            return self._local_mutation_lock_reason
         if self.db is None:
-            return "durable execution database unavailable"
-        return str(self.db.state_get(self.MUTATION_LOCK_KEY, "") or "")
+            return self._local_mutation_lock_reason or "durable execution database unavailable"
+        durable_reason = str(self.db.state_get(self.MUTATION_LOCK_KEY, "") or "")
+        if durable_reason:
+            self._local_mutation_lock_reason = durable_reason
+            return durable_reason
+        self._local_mutation_lock_reason = ""
+        return ""
+
+    def clear_mutation_lock_after_reconciliation(
+        self,
+        *,
+        reconciliation_verified=False,
+        evidence="",
+    ) -> bool:
+        """Release the global entry lock only after account/order reconciliation completed."""
+        if not reconciliation_verified or not str(evidence or "").strip():
+            raise PermissionError("verified reconciliation evidence is required to clear the mutation lock")
+        if self.db is None:
+            if self.require_durable_intent:
+                return False
+            self._local_mutation_lock_reason = ""
+            return True
+        unresolved = getattr(self.db, "has_unresolved_execution_intents", None)
+        if not callable(unresolved) or unresolved():
+            return False
+        lock_value = str(self.db.state_get(self.MUTATION_LOCK_KEY, "") or "")
+        if not lock_value:
+            self._local_mutation_lock_reason = ""
+            return True
+        owner_intent_id = lock_value.split(":", 1)[0]
+        loader = getattr(self.db, "load_execution_intent", None)
+        owner_intent = loader(owner_intent_id) if callable(loader) else None
+        owner_status = str((owner_intent or {}).get("status", "")).upper()
+        if owner_status in {"PENDING", "SUBMITTING", "AMBIGUOUS", "RECONCILE_REQUIRED"}:
+            return False
+        if not callable(getattr(self.db, "release_state_claim", None)):
+            return False
+        self.db.release_state_claim(self.ENTRY_ADMISSION_LOCK_KEY, owner_intent_id)
+        self.db.release_state_claim(self.MUTATION_LOCK_KEY, lock_value)
+        self._local_mutation_lock_reason = ""
+        return True
 
     @staticmethod
     def _is_new_exposure(intent: OrderIntent) -> bool:
