@@ -663,8 +663,11 @@ private class NativeEngine(
     // Clamp saved preferences too; an old device setting must not widen exposure.
     private val maxOpenPositions: Int
         get() = prefs.getInt("max_open_positions", 3).coerceIn(1, 3)
+    // This autonomous runtime is the TC2 campaign runner, not the legacy
+    // fixed-target scanner. Persisted preferences cannot silently switch
+    // the order path away from the source-audited campaign lifecycle.
     private val campaignEngineEnabled: Boolean
-        get() = prefs.getBoolean("campaign_engine_enabled", true)
+        get() = true
     // H1 is the canonical TC2 decision timeframe. Ignore stale saved M5 prefs.
     private val campaignExecutionTimeframe: String
         get() = "1h"
@@ -2505,7 +2508,7 @@ private class NativeEngine(
                         val ask = book.optString("askPrice").toDoubleOrNull() ?: 0.0
                         val price = ticker.optString("lastPrice").toDoubleOrNull() ?: 0.0
                         if (
-                            quoteVolume < 0.0 ||
+                            quoteVolume <= 0.0 ||
                             price <= 0.0 ||
                             bid <= 0.0 ||
                             ask < bid
@@ -7955,6 +7958,9 @@ private class NativeEngine(
             .put("symbols_scanned", lastSymbolsScanned)
             .put("scan_universe", scannerUniverseLabel)
             .put("core_symbols", JSONArray(coreSymbols))
+            .put("active_market_symbols", JSONArray(scanSymbols))
+            .put("active_market_symbol_count", scanSymbols.size)
+            .put("unavailable_core_symbols", JSONArray(coreSymbols.filterNot { it in scanSymbols }))
             .put("daily_market_context", JSONObject().apply {
                 coreSymbols.forEach { symbol ->
                     put(
