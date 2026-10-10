@@ -999,7 +999,7 @@ internal class FuturesNativeEngine(
             // A stale earliest signal must not mask a later live WM signal.
             // Conditional orders do not inherit this local expiry after arming.
             .filter { isSignalFresh(it, bars.last().openTime, timeframe) }
-            .minByOrNull { it.signalBarTime }
+            .minByOrNull { it.confirmationTime }
         return Frame(
             bars = bars,
             atr = atr,
