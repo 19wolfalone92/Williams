@@ -249,6 +249,24 @@ class ExecutionBarrier:
         except Exception:
             return False
 
+    def _record_exchange_result(
+        self,
+        intent: OrderIntent,
+        response: Any,
+        status: str,
+        reason: str = "",
+    ) -> bool:
+        """Persist the actual exchange response, independently of telemetry."""
+        if self.db is None:
+            return not self.require_durable_intent
+        writer = getattr(self.db, "save_execution_result", None)
+        if not callable(writer):
+            return False
+        try:
+            return bool(writer(intent.intent_id, response, status, reason))
+        except Exception:
+            return False
+
     def _set_reconciliation_lock(self, intent: OrderIntent, reason: str) -> None:
         self._local_mutation_lock_reason = str(reason)
         if self.db is not None:
@@ -698,19 +716,41 @@ class ExecutionBarrier:
                 )
                 if not authoritative:
                     fsm.state = OrderState.RECONCILE_REQUIRED
+                    recorded = self._record_exchange_result(
+                        intent, response, "AMBIGUOUS", response_reason
+                    )
                     self._persist(intent, "AMBIGUOUS", response_reason)
-                    self._set_reconciliation_lock(intent, response_reason)
+                    self._set_reconciliation_lock(
+                        intent,
+                        response_reason if recorded else (
+                            f"{response_reason}; mandatory exchange-response persistence failed"
+                        ),
+                    )
                     raise ExecutionAmbiguousError(
                         f"ExecutionBarrier: {response_reason}; no retry is permitted"
                     )
 
-                # The exchange response is authoritative, but a failed durable
-                # post-state update still leaves recovery mandatory.
+                # Persist the raw Binance response and extracted exchange fields
+                # as mandatory execution state. Leave the intent SUBMITTING until
+                # the separate final-state write succeeds, so a failure in that
+                # second write remains unresolved after process restart.
+                if not self._record_exchange_result(
+                    intent, response, "SUBMITTING"
+                ):
+                    reason = (
+                        "Binance response received but mandatory exchange-result "
+                        "persistence/read-back failed; reconcile by stable exchange identity"
+                    )
+                    self._persist(intent, "AMBIGUOUS", reason)
+                    self._set_reconciliation_lock(intent, reason)
+                    raise ExecutionAmbiguousError(f"ExecutionBarrier: {reason}")
+
                 if not self._persist(intent, final_status):
                     reason = (
-                        "exchange response was received but durable final-state "
-                        "confirmation failed; reconcile before any new entry"
+                        "exchange response was durably recorded but the final intent "
+                        "state could not be confirmed; reconcile before any new entry"
                     )
+                    self._persist(intent, "RECONCILE_REQUIRED", reason)
                     self._set_reconciliation_lock(intent, reason)
                     raise ExecutionAmbiguousError(f"ExecutionBarrier: {reason}")
 
