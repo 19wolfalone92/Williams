@@ -194,3 +194,21 @@ The following checks are evidenced by the current offline CI test suites:
 - Fee reconciliation and complete post-restart account/position/protective-order equivalence against authoritative live exchange data.
 
 Therefore, green CI on SHA `a5ac0afb64d40f8e96b62cb005cf233370cef997` is necessary but **does not satisfy acceptance**. Status remains **BLOCKED — NOT ACCEPTED** pending final call-graph proof and Testnet/device recovery evidence. No Mainnet endpoint, credentials, or real trading operation was used.
+
+### Latest code validation and additional recovery guard — code SHA `4966e3aa164e61b0b2eac8f9da8b5c9c8cc7938d`
+
+All three required workflows passed on the same code SHA after the additional legacy-entry recovery guard was added:
+| Workflow | Run ID | Job ID(s) | Result |
+|---|---:|---|---|
+| Python backend tests | [38087293230](https://github.com/19wolfalone92/Williams/actions/runs/38087293230) | 114316344037 | PASS — `148 passed, 4 warnings`; release contract gate passed. |
+| Williams Campaign CI | [38087293271](https://github.com/19wolfalone92/Williams/actions/runs/38087293271) | 114316401851, 114316401716 | PASS — `181 passed, 4 warnings`; Android unit-test task, lint and debug APK assembly passed. |
+| Build Android APK | [38087293227](https://github.com/19wolfalone92/Williams/actions/runs/38087293227) | 114316343984 | PASS — release gate, Android unit tests, lint, debug/release APK builds, metadata checks and debug-signature verification passed. |
+
+Artifact evidence for SHA `4966e3aa164e61b0b2eac8f9da8b5c9c8cc7938d`:
+- Debug APK: `com.williamsbot.debug`, `4.25.0-debug`, versionCode `1792`, SHA-256 `3161b9b4cae6c43afc12c35b3705e33c1bd772f15be5b15078af503e26675217`, artifact ID `11681924176`.
+- Unsigned release APK: `com.williamsbot`, `4.25.0`, versionCode `1792`, SHA-256 `e7bceee5d94aaf4c1b7306906f60be48206ab1664ee97fff36c01b626b40f29b`, artifact ID `11682734188`.
+- Android unit-test diagnostics artifact ID `11682624265`; Campaign CI debug APK artifact ID `11682224935`; lint report artifact ID `11682764085`; backend pytest report artifact ID `11682028779`.
+
+The call-graph review identified an additional local recovery-state hazard in `Trader.market_buy`: after `ExecutionBarrier` refused a request, the legacy caller unconditionally deleted `entry_client_order_id` and wrote `FLAT`. A concurrent unresolved mutation could therefore lose its recovery key even though the Barrier still blocked the exchange mutation. The code now checks the durable unresolved-intent/global latch before reserving a new CID, and re-checks the latch after a rejected Barrier result; unresolved or unreadable state preserves the key and sets `RECONCILE_REQUIRED`. Regression test `test_legacy_trader_preserves_entry_identity_while_execution_is_unresolved` passed in Campaign CI.
+
+**Final acceptance remains BLOCKED — NOT ACCEPTED.** This code SHA's CI results are not evidence for the documentation commit that follows. That resulting PR head must independently pass all three required workflows. Live Testnet accepted-order/response-loss recovery, physical Android process-death recovery, live OCO sibling-fill races, and a fully exhaustive production call-graph proof remain **NOT VERIFIED**. No Mainnet or real trading operation was used.
