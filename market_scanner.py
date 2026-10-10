@@ -19,6 +19,23 @@ from shadow_execution import ShadowExecutionSimulator
 log = logging.getLogger("williams-scanner")
 
 
+def _separate_signal_stop_levels(raw: dict, frame_setup):
+    """Keep a Wise-Man bar stop separate from the Wave Engine's scenario invalidation.
+
+    The pattern stop sizes and protects the specific WM hypothesis. The Wave
+    invalidation remains context/diagnostic data until an explicit strategy
+    contract authorizes it to replace the pattern stop.
+    """
+    pattern_stop = float(raw.get("invalidation_price", 0.0) or 0.0)
+    if pattern_stop == 0.0:
+        pattern_stop = float(raw.get("protective_reference", 0.0) or 0.0)
+    if frame_setup is not None:
+        wave_stop = float(getattr(frame_setup, "invalidation_price", 0.0) or 0.0)
+    else:
+        wave_stop = float(raw.get("wave_invalidation_price", 0.0) or 0.0)
+    return pattern_stop, wave_stop
+
+
 def _normalize_interval(value):
     text = str(value or "").strip()
     return "1M" if text == "1M" else text.lower()
@@ -785,7 +802,8 @@ class MarketScanner:
                     trigger_price=float(raw["trigger_price"]),
                     protective_reference=float(raw["protective_reference"]),
                     trigger_buffer_ticks=int(raw.get("trigger_buffer_ticks", 1) or 1),
-                    invalidation_price=float(frame_setup.invalidation_price if frame_setup else raw.get("invalidation_price", 0.0) or 0.0),
+                    invalidation_price=_separate_signal_stop_levels(raw, frame_setup)[0],
+                    wave_invalidation_price=_separate_signal_stop_levels(raw, frame_setup)[1],
                     teeth_at_detection=float(raw.get("teeth_at_detection", 0.0) or 0.0),
                     alligator_bullish=bool(raw.get("alligator_bullish", False)),
                     alligator_bearish=bool(raw.get("alligator_bearish", False)),

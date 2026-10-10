@@ -237,6 +237,8 @@ def _latest_confirmed_fractal(
         return None
     if right < 1 or isinstance(right_value, float) and not right_value.is_integer():
         return None
+    center_index_col = "confirmed_up_center_index" if side == "LONG" else "confirmed_down_center_index"
+    has_center_index = center_index_col in ind.columns
     start = max(0, len(ind) - max(3, int(max_age_bars)))
     for confirmation_i in range(len(ind) - 1, start - 1, -1):
         row = ind.iloc[confirmation_i]
@@ -244,7 +246,17 @@ def _latest_confirmed_fractal(
         if level is None or pd.isna(level):
             continue
         center_i = confirmation_i - right
-        if center_i < 0 or not bool(ind.iloc[center_i].get(fractal_col, False)):
+        if has_center_index:
+            try:
+                stored_center = int(row.get(center_index_col, -1))
+                if stored_center >= 0:
+                    center_i = stored_center
+            except (TypeError, ValueError, OverflowError):
+                continue
+        if center_i < 0 or center_i >= len(ind):
+            continue
+        center_flag = ind.iloc[center_i].get(fractal_col, False)
+        if pd.isna(center_flag) or not bool(center_flag):
             continue
         center = ind.iloc[center_i]
         trigger_base = float(center["high"] if side == "LONG" else center["low"])
@@ -319,7 +331,8 @@ def extract_long_signal_specs(
                     trigger_price=trigger,
                     protective_reference=protective,
                     trigger_buffer_ticks=1,
-                    invalidation_price=float(wave_invalidation_price or protective),
+                    invalidation_price=float(protective),
+                    wave_invalidation_price=float(wave_invalidation_price or 0.0),
                     teeth_at_detection=float(row.get("teeth_shifted", 0.0) or 0.0),
                     alligator_bullish=bool(row.get("bullish_alligator", False)),
                     alligator_awake=bool(row.get("alligator_awake", False)),
@@ -357,7 +370,8 @@ def extract_long_signal_specs(
                     trigger_price=trigger,
                     protective_reference=protective,
                     trigger_buffer_ticks=1,
-                    invalidation_price=float(wave_invalidation_price or protective),
+                    invalidation_price=float(protective),
+                    wave_invalidation_price=float(wave_invalidation_price or 0.0),
                     teeth_at_detection=float(row.get("teeth_shifted", 0.0) or 0.0),
                     alligator_bullish=bool(row.get("bullish_alligator", False)),
                     alligator_awake=bool(row.get("alligator_awake", False)),
@@ -382,7 +396,11 @@ def extract_long_signal_specs(
         # Formation can be anywhere; trigger validity belongs to current
         # price/Teeth. At arm time a SHORT trigger must remain below Teeth.
         trigger = trigger_base + tick
-        current_trigger_valid = trigger > max(current_teeth, 0.0)
+        current_trigger_valid = (
+            math.isfinite(current_teeth) and current_teeth > 0.0
+            and math.isfinite(teeth) and teeth > 0.0
+            and trigger > current_teeth
+        )
         if _trigger_unbroken(ind, center_i, side="LONG", trigger_price=trigger) and current_trigger_valid and _invalidation_intact(ind, center_i, side="LONG", protective_level=protective):
             row = ind.iloc[center_i]
             specs.append(
@@ -397,7 +415,8 @@ def extract_long_signal_specs(
                     trigger_price=trigger,
                     protective_reference=protective,
                     trigger_buffer_ticks=1,
-                    invalidation_price=float(wave_invalidation_price or protective),
+                    invalidation_price=float(protective),
+                    wave_invalidation_price=float(wave_invalidation_price or 0.0),
                     teeth_at_detection=float(teeth),
                     alligator_bullish=bool(current.get("bullish_alligator", False)),
                     alligator_awake=bool(current.get("alligator_awake", False)),
@@ -476,7 +495,8 @@ def extract_short_signal_specs(
                     trigger_price=trigger,
                     protective_reference=protective,
                     trigger_buffer_ticks=1,
-                    invalidation_price=float(wave_invalidation_price or protective),
+                    invalidation_price=float(protective),
+                    wave_invalidation_price=float(wave_invalidation_price or 0.0),
                     teeth_at_detection=float(row.get("teeth_shifted", 0.0) or 0.0),
                     alligator_bullish=bool(row.get("bullish_alligator", False)),
                     alligator_bearish=bool(row.get("bearish_alligator", False)),
@@ -515,7 +535,8 @@ def extract_short_signal_specs(
                     trigger_price=trigger,
                     protective_reference=protective,
                     trigger_buffer_ticks=1,
-                    invalidation_price=float(wave_invalidation_price or protective),
+                    invalidation_price=float(protective),
+                    wave_invalidation_price=float(wave_invalidation_price or 0.0),
                     teeth_at_detection=float(row.get("teeth_shifted", 0.0) or 0.0),
                     alligator_bullish=bool(row.get("bullish_alligator", False)),
                     alligator_bearish=bool(row.get("bearish_alligator", False)),
@@ -541,7 +562,11 @@ def extract_short_signal_specs(
         # Formation can be anywhere; trigger validity belongs to current
         # price/Teeth.  At arm time the trigger must still be above Teeth.
         trigger = trigger_base - tick
-        current_trigger_valid = current_teeth > 0.0 and trigger < current_teeth
+        current_trigger_valid = (
+            math.isfinite(current_teeth) and current_teeth > 0.0
+            and math.isfinite(teeth) and teeth > 0.0
+            and trigger < current_teeth
+        )
         if _trigger_unbroken(ind, center_i, side="SHORT", trigger_price=trigger) and current_trigger_valid and _invalidation_intact(ind, center_i, side="SHORT", protective_level=protective):
             row = ind.iloc[center_i]
             specs.append(
@@ -556,7 +581,8 @@ def extract_short_signal_specs(
                     trigger_price=trigger,
                     protective_reference=protective,
                     trigger_buffer_ticks=1,
-                    invalidation_price=float(wave_invalidation_price or protective),
+                    invalidation_price=float(protective),
+                    wave_invalidation_price=float(wave_invalidation_price or 0.0),
                     teeth_at_detection=float(teeth),
                     alligator_bullish=bool(current.get("bullish_alligator", False)),
                     alligator_bearish=bool(current.get("bearish_alligator", False)),

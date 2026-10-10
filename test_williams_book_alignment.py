@@ -129,3 +129,21 @@ def test_live_guard_blocks_malformed_raw_indicator_override_without_parsing_cras
     assert any("JAW_SHIFT" in item for item in blockers)
     live_cfg = canonical_live_config_from_env({"JAW_SHIFT": "not-a-number"})
     assert live_cfg["jaw_shift"] == 8
+
+
+def test_equal_low_fractal_uses_two_strictly_higher_lows_even_with_a_tie():
+    # Mirrored six-bar form: the equal low is ignored and confirmation happens
+    # on the bar that supplies the second strictly higher low.
+    data = pd.DataFrame([
+        {"open": 11.0, "high": 12.0, "low": 10.0, "close": 11.0, "volume": 10.0},
+        {"open": 10.0, "high": 11.0, "low": 9.0, "close": 10.0, "volume": 10.0},
+        {"open": 8.0, "high": 10.0, "low": 7.0, "close": 8.0, "volume": 10.0},
+        {"open": 9.0, "high": 11.0, "low": 8.0, "close": 9.0, "volume": 10.0},
+        {"open": 8.0, "high": 10.0, "low": 7.0, "close": 8.0, "volume": 10.0},
+        {"open": 10.0, "high": 12.0, "low": 9.0, "close": 10.0, "volume": 10.0},
+    ])
+    ind = calculate_indicators(data, config_from_env({"FRACTAL_LEFT": "2", "FRACTAL_RIGHT": "2"}))
+    assert bool(ind["fractal_down"].iloc[2])
+    assert pd.isna(ind["confirmed_down_level"].iloc[4])
+    assert ind["confirmed_down_level"].iloc[5] == 7.0
+    assert ind["confirmed_down_center_index"].iloc[5] == 2

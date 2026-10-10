@@ -363,31 +363,109 @@ class MultiTimeframeWaveEngine:
         ).mean()
 
         raw: List[Pivot] = []
-        for i in range(left, len(ind) - right):
-            up = bool(ind["fractal_up"].iloc[i])
-            down = bool(ind["fractal_down"].iloc[i])
-            if up and down:
-                continue
-            if not (up or down):
-                continue
+        center_cols_present = {
+            "confirmed_up_level", "confirmed_down_level",
+            "confirmed_up_center_index", "confirmed_down_center_index",
+        }.issubset(ind.columns)
 
-            confirmed = i + right
-            if confirmed >= len(ind):
-                continue
+        if center_cols_present:
+            # Dynamic book fractals can require more than the configured count
+            # of elapsed bars when a right-side bar ties the pivot extreme. The
+            # indicator records exact confirmation and center rows; never backdate
+            # confirmation to center+right for those patterns.
+            up_confirmation_by_center: dict[int, int] = {}
+            down_confirmation_by_center: dict[int, int] = {}
+            for confirmation_i in range(len(ind)):
+                for level_col, center_col, mapping in (
+                    ("confirmed_up_level", "confirmed_up_center_index", up_confirmation_by_center),
+                    ("confirmed_down_level", "confirmed_down_center_index", down_confirmation_by_center),
+                ):
+                    level_value = ind[level_col].iloc[confirmation_i]
+                    if level_value is None or pd.isna(level_value) or self._safe_float(level_value) <= 0:
+                        continue
+                    try:
+                        center_value = int(ind[center_col].iloc[confirmation_i])
+                    except (TypeError, ValueError, OverflowError):
+                        continue
+                    if center_value >= 0 and center_value < confirmation_i:
+                        mapping.setdefault(center_value, confirmation_i)
 
-            row = ind.iloc[i]
-            price = self._safe_float(row.get("high" if up else "low"))
-            if price <= 0:
-                continue
+            for confirmed in range(len(ind)):
+                for direction, level_col, center_col, extreme_col, flag_col in (
+                    (DIRECTION_UP, "confirmed_up_level", "confirmed_up_center_index", "high", "fractal_up"),
+                    (DIRECTION_DOWN, "confirmed_down_level", "confirmed_down_center_index", "low", "fractal_down"),
+                ):
+                    level = ind[level_col].iloc[confirmed]
+                    if level is None or pd.isna(level):
+                        continue
+                    try:
+                        center = int(ind[center_col].iloc[confirmed])
+                    except (TypeError, ValueError, OverflowError):
+                        continue
+                    if center < left or center >= confirmed or center >= len(ind):
+                        continue
+                    # A same-center double fractal is ambiguous as a wave
+                    # pivot. Crucially, do not use a future opposite confirmation
+                    # to erase a pivot that was already valid earlier in time.
+                    # If the opposite direction confirmed at/before this bar, the
+                    # current event is suppressed; if it confirms later, the
+                    # earlier pivot remains and only the later one is suppressed.
+                    opposite_map = (
+                        down_confirmation_by_center
+                        if direction == DIRECTION_UP
+                        else up_confirmation_by_center
+                    )
+                    opposite_confirmation = opposite_map.get(center)
+                    if opposite_confirmation is not None and opposite_confirmation <= confirmed:
+                        continue
+                    flag = ind[flag_col].iloc[center]
+                    if pd.isna(flag) or not bool(flag):
+                        continue
+                    row = ind.iloc[center]
+                    price = self._safe_float(row.get(extreme_col))
+                    recorded_level = self._safe_float(level)
+                    if (
+                        price <= 0
+                        or recorded_level <= 0
+                        or abs(price - recorded_level) > max(1e-12, abs(recorded_level) * 1e-10)
+                    ):
+                        continue
+                    raw.append(Pivot(
+                        kind=direction,
+                        price=recorded_level,
+                        center_index=center,
+                        confirmed_index=confirmed,
+                        ao=self._safe_float(row.get("ao")),
+                        ac=self._safe_float(row.get("ac")),
+                    ))
+        else:
+            # Backward compatibility for pre-metadata/synthetic frames. This
+            # fixed-delay path is not used by the live indicator calculation.
+            for i in range(left, len(ind) - right):
+                up = bool(ind["fractal_up"].iloc[i])
+                down = bool(ind["fractal_down"].iloc[i])
+                if up and down:
+                    continue
+                if not (up or down):
+                    continue
 
-            raw.append(Pivot(
-                kind=DIRECTION_UP if up else DIRECTION_DOWN,
-                price=price,
-                center_index=i,
-                confirmed_index=confirmed,
-                ao=self._safe_float(row.get("ao")),
-                ac=self._safe_float(row.get("ac")),
-            ))
+                confirmed = i + right
+                if confirmed >= len(ind):
+                    continue
+
+                row = ind.iloc[i]
+                price = self._safe_float(row.get("high" if up else "low"))
+                if price <= 0:
+                    continue
+
+                raw.append(Pivot(
+                    kind=DIRECTION_UP if up else DIRECTION_DOWN,
+                    price=price,
+                    center_index=i,
+                    confirmed_index=confirmed,
+                    ao=self._safe_float(row.get("ao")),
+                    ac=self._safe_float(row.get("ac")),
+                ))
 
         raw.sort(key=lambda p: (p.confirmed_index, p.center_index))
 

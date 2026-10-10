@@ -1962,7 +1962,7 @@ private class NativeEngine(
         val previousMfiProxy = previousRange / max(candles[i - 1].v, 1e-12)
         val mfiUp = mfiProxy > previousMfiProxy
         val upFractal = latestConfirmedUpFractal(candles, i)
-        val downFractal = if (i >= 4 && isDownFractal(candles, i - 2)) i - 2 else null
+        val downFractal = latestConfirmedDownFractal(candles, i)
         return JSONObject()
             .put("symbol", symbol).put("interval", frame).put("ready", true)
             .put("time", candles[i].t).put("price", candles[i].c)
@@ -6434,13 +6434,13 @@ private class NativeEngine(
     ): List<CampaignSignalN> {
         if (candles.size < 45 || tick <= 0.0) return emptyList()
 
-        val medians = candles.map { (it.h + it.l) / 2.0 }
-        val jaw = smma(medians, 13)
-        val teeth = smma(medians, 8)
-        val lips = smma(medians, 5)
-        val jawS = shiftedSeries(jaw, 8)
-        val teethS = shiftedSeries(teeth, 5)
-        val lipsS = shiftedSeries(lips, 3)
+        val alligatorLines = WilliamsAlligatorMath.calculate(
+            highs = candles.map { it.h },
+            lows = candles.map { it.l }
+        )
+        val jawS = alligatorLines.jaw
+        val teethS = alligatorLines.teeth
+        val lipsS = alligatorLines.lips
 
         fun bullishAlligator(i: Int): Boolean =
             i in candles.indices &&
@@ -6451,35 +6451,13 @@ private class NativeEngine(
                 teethS[i] > jawS[i] &&
                 candles[i].c > lipsS[i]
 
-        fun upFractal(i: Int): Boolean {
-            if (i < 2 || i + 2 >= candles.size) return false
-            return candles[i].h > candles[i - 1].h &&
-                candles[i].h > candles[i - 2].h &&
-                candles[i].h > candles[i + 1].h &&
-                candles[i].h > candles[i + 2].h
-        }
+        val highs = candles.map { it.h }
+        val lows = candles.map { it.l }
 
-        fun downFractal(i: Int): Boolean {
-            if (i < 2 || i + 2 >= candles.size) return false
-            return candles[i].l < candles[i - 1].l &&
-                candles[i].l < candles[i - 2].l &&
-                candles[i].l < candles[i + 1].l &&
-                candles[i].l < candles[i + 2].l
-        }
-
-        fun latestUpFractal(centerLimit: Int): Int? {
-            for (i in centerLimit downTo 2) {
-                if (upFractal(i)) return i
-            }
-            return null
-        }
-
-        fun latestDownFractal(centerLimit: Int): Int? {
-            for (i in centerLimit downTo 2) {
-                if (downFractal(i)) return i
-            }
-            return null
-        }
+        // The cutoff is the last candle the signal is allowed to know about.
+        // The returned confirmation index may be later than center+2 on ties.
+        fun latestUpFractal(throughIndex: Int): WilliamsFractalConfirmation? =
+            WilliamsFractalMath.latestUp(highs, throughIndex = throughIndex, lookbackBars = 40)
 
         fun angulationScore(i: Int): Double {
             val start = max(0, i - 4)
@@ -6489,11 +6467,6 @@ private class NativeEngine(
                 max(0.0, jawS[start] - candles[start].l)
             } else 0.0
             return max(0.0, now - then) / max(candles[i].c, 1e-9) * 100.0
-        }
-
-        fun lastValidFractalLevel(at: Int): Pair<Int, Double>? {
-            val center = latestUpFractal(max(2, at - 2)) ?: return null
-            return center to candles[center].h
         }
 
         val current = candles.lastIndex
@@ -6518,7 +6491,11 @@ private class NativeEngine(
                 angulationScore(i) > 0.0
             ) {
                 val trigger = candles[i].h + tick
-                if (candles[current].c < trigger) {
+                if (
+                    current - i <= 2 &&
+                    candles[current].c < trigger &&
+                    isLongSignalStillActionable(i, current, highs, lows, trigger)
+                ) {
                     out += CampaignSignalN(
                         signalId = campaignSignalId(symbol, frame, "REVERSAL", candles[i].t),
                         type = "REVERSAL",
@@ -6535,44 +6512,47 @@ private class NativeEngine(
             }
         }
 
-        // WM2: three consecutive rising AO histogram bars, with the previously
-        // valid buy-fractal/Balance-Line context still present.
-        var streak = 0
-        for (i in candles.lastIndex downTo 35) {
-            val a = ao(candles, i)
-            val p = ao(candles, i - 1)
-            if (a > p) streak++ else break
-            if (streak == 3) {
-                val priorFractalValid = lastValidFractalLevel(i - 1)?.let { (center, level) ->
-                    teethS[center + 2].isFinite() && level > teethS[center + 2]
-                } ?: false
-                if (priorFractalValid) {
-                    val trigger = candles[i].h + tick
-                    if (candles[current].c < trigger) {
-                        out += CampaignSignalN(
-                            signalId = campaignSignalId(symbol, frame, "SUPER_AO", candles[i].t),
-                            type = "SUPER_AO",
-                            role = "ENTRY",
-                            signalBarTimeMs = candles[i].t,
-                            triggerPrice = trigger,
-                            protectivePrice = candles[i].l - tick,
-                            teethAtDetection = teethS[i].takeIf { it.isFinite() } ?: 0.0,
-                            invalidationPrice = candles[i].l - tick,
-                            reason = "WM2 Super AO: third rising AO bar; conditional trigger above price bar"
-                        )
-                    }
-                }
-                break
+        // WM2: the third rising AO bar is an independent Wise-Man signal.
+        // It does not require a prior fractal. The indexed AO helper prevents
+        // the historical scanner from backdating a three-bar run by two bars.
+        val aoSeries = candles.indices.map { ao(candles, it) }
+        val superAoIndex = (max(3, current - 80)..current)
+            .lastOrNull { isThirdSameColorAoBar(aoSeries, it, "LONG") }
+        if (superAoIndex != null && current - superAoIndex <= 2) {
+            val i = superAoIndex
+            val trigger = candles[i].h + tick
+            if (
+                candles[current].c < trigger &&
+                isLongSignalStillActionable(i, current, highs, lows, trigger)
+            ) {
+                out += CampaignSignalN(
+                    signalId = campaignSignalId(symbol, frame, "SUPER_AO", candles[i].t),
+                    type = "SUPER_AO",
+                    role = "ENTRY",
+                    signalBarTimeMs = candles[i].t,
+                    triggerPrice = trigger,
+                    protectivePrice = candles[i].l - tick,
+                    teethAtDetection = teethS[i].takeIf { it.isFinite() } ?: 0.0,
+                    invalidationPrice = candles[i].l - tick,
+                    reason = "WM2 Super AO: third rising AO bar; independent of fractal; conditional trigger above price bar"
+                )
             }
         }
 
         // WM3: most recent confirmed buy fractal. The signal is persistent,
         // but the trigger is armable only while it remains above current Teeth.
-        val fractalCenter = latestUpFractal(candles.lastIndex - 2)
-        if (fractalCenter != null) {
-            val trigger = candles[fractalCenter].h + tick
+        val fractal = latestUpFractal(candles.lastIndex)
+        if (fractal != null && current - fractal.confirmationIndex <= 8) {
+            val fractalCenter = fractal.centerIndex
+            val trigger = fractal.level + tick
             val currentTeeth = teethS[current].takeIf { it.isFinite() } ?: 0.0
-            if (candles[current].c < trigger && trigger > currentTeeth) {
+            val confirmationTeeth = teethS.getOrNull(fractal.confirmationIndex) ?: Double.NaN
+            if (confirmationTeeth.isFinite() && confirmationTeeth > 0.0 &&
+                fractal.level > confirmationTeeth &&
+                currentTeeth.isFinite() && currentTeeth > 0.0 &&
+                candles[current].c < trigger && trigger > currentTeeth &&
+                isLongSignalStillActionable(fractalCenter, current, highs, lows, trigger)
+            ) {
                 out += CampaignSignalN(
                     signalId = campaignSignalId(symbol, frame, "FRACTAL", candles[fractalCenter].t),
                     type = "FRACTAL",
@@ -6582,7 +6562,7 @@ private class NativeEngine(
                     protectivePrice = candles[fractalCenter].l - tick,
                     teethAtDetection = currentTeeth,
                     invalidationPrice = candles[fractalCenter].l - tick,
-                    reason = "WM3 confirmed buy fractal; trigger must remain above Teeth"
+                    reason = "WM3 confirmed fractal; outside Teeth at confirmation and trigger remains above current Teeth"
                 )
             }
         }
@@ -6629,6 +6609,7 @@ private class NativeEngine(
         }
 
         val closes = workCandles.map { it.c }
+        val medians = workCandles.map { (it.h + it.l) / 2.0 }
         val atrPct = atrPct(workCandles)
         val atrAbs =
             atrAbs(workCandles)
@@ -6646,7 +6627,12 @@ private class NativeEngine(
             emptyList()
         }
 
-        val alligator = alligator(closes)
+        val alligatorLines = WilliamsAlligatorMath.calculateFromMedianPrices(medians)
+        val alligator = TripleValues(
+            alligatorLines.jaw.lastOrNull() ?: Double.NaN,
+            alligatorLines.teeth.lastOrNull() ?: Double.NaN,
+            alligatorLines.lips.lastOrNull() ?: Double.NaN
+        )
         val bullish =
             alligator.lips > alligator.teeth &&
                 alligator.teeth > alligator.jaw &&
@@ -6655,15 +6641,21 @@ private class NativeEngine(
         val aoValue = ao(workCandles, i)
         val aoPositive = aoValue > 0.0
 
-        val fractalIndex = latestConfirmedUpFractal(workCandles, i)
-        val fractalHigh =
-            fractalIndex?.let { workCandles[it].h }
-        val teethSeries = smma(closes, 8)
-        val fractalTeeth =
-            fractalIndex?.let { teethSeries.getOrNull(it) }
+        val upFractal = WilliamsFractalMath.latestUp(
+            highs = workCandles.map { it.h },
+            throughIndex = i,
+            lookbackBars = 40
+        )
+        val fractalIndex = upFractal?.centerIndex
+        val fractalHigh = upFractal?.level
+        val fractalTeeth = upFractal?.let {
+            alligatorLines.teeth.getOrNull(it.confirmationIndex)
+        }
         val externalFractal =
             fractalHigh != null &&
                 fractalTeeth != null &&
+                fractalTeeth.isFinite() &&
+                fractalTeeth > 0.0 &&
                 fractalHigh > fractalTeeth
         val breakoutDistance =
             if (fractalHigh != null && fractalHigh > 0.0) {
@@ -7136,13 +7128,21 @@ private class NativeEngine(
         return count.coerceIn(0, 3)
     }
 
+    /**
+     * Bill Williams Alligator calculated from median prices and displayed with
+     * Jaw/Teeth/Lips shifts 8/5/3. Keep this helper out of any close-price-only
+     * shortcuts so the scanner summary and chart use the same indicator family
+     * as the Spot/Futures campaign signal detectors.
+     */
     private fun alligator(
-        closes: List<Double>
+        medianPrices: List<Double>
     ): TripleValues {
-        val jaw = smma(closes, 13).lastOrNull() ?: 0.0
-        val teeth = smma(closes, 8).lastOrNull() ?: 0.0
-        val lips = smma(closes, 5).lastOrNull() ?: 0.0
-        return TripleValues(jaw, teeth, lips)
+        val lines = WilliamsAlligatorMath.calculateFromMedianPrices(medianPrices)
+        return TripleValues(
+            lines.jaw.lastOrNull() ?: Double.NaN,
+            lines.teeth.lastOrNull() ?: Double.NaN,
+            lines.lips.lastOrNull() ?: Double.NaN
+        )
     }
 
     private data class TripleValues(
@@ -7215,49 +7215,48 @@ private class NativeEngine(
         candles: List<CandleN>,
         currentIndex: Int
     ): Int? {
-        val lastConfirmedCenter =
-            currentIndex - 2
+        if (currentIndex !in candles.indices) return null
+        return WilliamsFractalMath.latestUp(
+            highs = candles.take(currentIndex + 1).map { it.h },
+            throughIndex = currentIndex,
+            lookbackBars = 40
+        )?.centerIndex
+    }
 
-        if (lastConfirmedCenter < 2) return null
-
-        val start =
-            max(2, lastConfirmedCenter - 40)
-
-        for (i in lastConfirmedCenter downTo start) {
-            if (isUpFractal(candles, i)) {
-                return i
-            }
-        }
-
-        return null
+    private fun latestConfirmedDownFractal(
+        candles: List<CandleN>,
+        currentIndex: Int
+    ): Int? {
+        if (currentIndex !in candles.indices) return null
+        return WilliamsFractalMath.latestDown(
+            lows = candles.take(currentIndex + 1).map { it.l },
+            throughIndex = currentIndex,
+            lookbackBars = 40
+        )?.centerIndex
     }
 
     private fun isUpFractal(
         candles: List<CandleN>,
         i: Int
     ): Boolean {
-        if (i < 2 || i + 2 >= candles.size) {
-            return false
-        }
-
-        return candles[i].h > candles[i - 1].h &&
-            candles[i].h > candles[i - 2].h &&
-            candles[i].h > candles[i + 1].h &&
-            candles[i].h > candles[i + 2].h
+        if (i !in candles.indices || i < 2) return false
+        return WilliamsFractalMath.confirmUp(
+            highs = candles.map { it.h },
+            centerIndex = i,
+            throughIndex = candles.lastIndex
+        ) != null
     }
 
     private fun isDownFractal(
         candles: List<CandleN>,
         i: Int
     ): Boolean {
-        if (i < 2 || i + 2 >= candles.size) {
-            return false
-        }
-
-        return candles[i].l < candles[i - 1].l &&
-            candles[i].l < candles[i - 2].l &&
-            candles[i].l < candles[i + 1].l &&
-            candles[i].l < candles[i + 2].l
+        if (i !in candles.indices || i < 2) return false
+        return WilliamsFractalMath.confirmDown(
+            lows = candles.map { it.l },
+            centerIndex = i,
+            throughIndex = candles.lastIndex
+        ) != null
     }
 
     private fun fractalPivots(
@@ -7266,14 +7265,17 @@ private class NativeEngine(
         if (candles.size < 10) return emptyList()
 
         val pivots = mutableListOf<PivotN>()
-        for (i in 2 until candles.size - 2) {
-            val up = isUpFractal(candles, i)
-            val down = isDownFractal(candles, i)
+        val highs = candles.map { it.h }
+        val lows = candles.map { it.l }
+        for (center in 2 until candles.lastIndex) {
+            val up = WilliamsFractalMath.confirmUp(highs, centerIndex = center)
+            val down = WilliamsFractalMath.confirmDown(lows, centerIndex = center)
+            if (up != null && down != null) continue
 
-            if (up && !down) {
-                pivots.add(PivotN("UP", candles[i].h, i + 2))
-            } else if (down && !up) {
-                pivots.add(PivotN("DOWN", candles[i].l, i + 2))
+            if (up != null) {
+                pivots.add(PivotN("UP", up.level, up.confirmationIndex))
+            } else if (down != null) {
+                pivots.add(PivotN("DOWN", down.level, down.confirmationIndex))
             }
         }
 
@@ -7344,7 +7346,7 @@ private class NativeEngine(
             }
 
         val alligatorValues =
-            alligator(candles.map { it.c })
+            alligator(candles.map { (it.h + it.l) / 2.0 })
 
         val bullish =
             alligatorValues.lips >
@@ -7947,13 +7949,14 @@ private class NativeEngine(
         }
 
         val output = JSONArray()
-        val prices =
-            sourceCandles.map { it.c }
+        val prices = sourceCandles.map { it.c }
+        val medianPrices = sourceCandles.map { (it.h + it.l) / 2.0 }
 
         if (prices.isNotEmpty()) {
-            val jaw = smma(prices, 13)
-            val teeth = smma(prices, 8)
-            val lips = smma(prices, 5)
+            val lines = WilliamsAlligatorMath.calculateFromMedianPrices(medianPrices)
+            val jaw = lines.jaw
+            val teeth = lines.teeth
+            val lips = lines.lips
 
             val start =
                 max(0, sourceCandles.size - 120)
@@ -7989,17 +7992,13 @@ private class NativeEngine(
                         .put(
                             "long_signal",
                             i >= 40 &&
-                                alligator(
-                                    prices.subList(
-                                        0,
-                                        i + 1
-                                    )
-                                ).let { values ->
-                                    values.lips > values.teeth &&
-                                        values.teeth > values.jaw &&
-                                        prices[i] > values.lips &&
-                                        ao(sourceCandles, i) > 0.0
-                                }
+                                lips[i].isFinite() &&
+                                teeth[i].isFinite() &&
+                                jaw[i].isFinite() &&
+                                lips[i] > teeth[i] &&
+                                teeth[i] > jaw[i] &&
+                                prices[i] > lips[i] &&
+                                ao(sourceCandles, i) > 0.0
                         )
                         .put(
                             "fractal_up",

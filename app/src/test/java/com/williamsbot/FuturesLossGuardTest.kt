@@ -133,4 +133,28 @@ class FuturesLossGuardTest {
     )
     assertEquals("UTC daily stop-out limit reached: 1 >= 1", reason)
 }
+    @Test
+    fun newestUnknownFeeBlocksOnlyInsideConfiguredCooldownWindow() {
+        val yesterdayLoss = 86_400_000L - 30_000L
+        val unknown = trade(-1.0, yesterdayLoss).put("fee_known", false)
+        assertEquals(
+            "latest Futures trade has incomplete commission accounting during cooldown window",
+            FuturesLossGuard.violation(
+                listOf(unknown),
+                maxConsecutiveLosses = 2,
+                cooldownMinutes = 1,
+                nowMs = 86_400_000L + 10_000L,
+                maxStopOutsPerUtcDay = 0
+            )
+        )
+        assertNull(
+            FuturesLossGuard.violation(
+                listOf(unknown),
+                maxConsecutiveLosses = 2,
+                cooldownMinutes = 1,
+                nowMs = 86_500_000L,
+                maxStopOutsPerUtcDay = 0
+            )
+        )
+    }
 }

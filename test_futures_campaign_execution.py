@@ -2416,3 +2416,53 @@ def test_pending_entry_with_missing_expiry_is_cancelled_during_reconciliation(tm
         assert client.algo_status == "CANCELED"
     finally:
         db.conn.close()
+
+
+@pytest.mark.parametrize(
+    ("direction", "bad_invalidation"),
+    [("LONG", 106.0), ("SHORT", 94.0)],
+)
+def test_explicit_wrong_side_invalidation_is_not_hidden_by_valid_protective_reference(
+    tmp_path, direction, bad_invalidation
+):
+    from dataclasses import replace
+
+    db = Database(str(tmp_path / "invalid-stop.sqlite3"))
+    try:
+        client = FakeFuturesClient(mark_price=102.0 if direction == "LONG" else 98.0)
+        cache = ContextCache()
+        service = FuturesCampaignExecutionService(
+            client, db, execution_barrier=ExecutionBarrier(cache, db)
+        )
+        signal = replace(make_signal(direction), invalidation_price=bad_invalidation)
+
+        with pytest.raises(FuturesCampaignExecutionError, match="structural invalidation"):
+            service.arm_initial_entry(
+                signal,
+                equity_quote=10_000.0,
+                atr=2.0,
+                candidate_risk_fraction=0.0025,
+            )
+        assert client.stop_entries == []
+        assert client.protective_stops == []
+    finally:
+        db.conn.close()
+
+
+def test_legacy_signal_without_explicit_invalidation_uses_protective_reference(tmp_path):
+    from dataclasses import replace
+
+    db = Database(str(tmp_path / "legacy-stop.sqlite3"))
+    try:
+        client = FakeFuturesClient(mark_price=102.0)
+        cache = ContextCache()
+        service = FuturesCampaignExecutionService(
+            client, db, execution_barrier=ExecutionBarrier(cache, db)
+        )
+        signal = replace(make_signal("LONG"), invalidation_price=0.0)
+        direction, trigger, stop = service._validate_signal(signal)
+        assert direction == "LONG"
+        assert trigger == 105.0
+        assert stop == 100.0
+    finally:
+        db.conn.close()

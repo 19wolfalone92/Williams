@@ -13,6 +13,20 @@ data class FuturesContextState(
  * actively permits the opposite direction. Neutral D1 does not invent a signal.
  */
 object FuturesContextPolicy {
+    /**
+     * A WM3 conditional trigger must remain on the correct side of the
+     * currently observed Alligator Teeth line while it is pending. This is an
+     * execution/safety revalidation, separate from fractal formation.
+     */
+    fun fractalTriggerOutsideTeeth(direction: String, triggerPrice: Double, teeth: Double): Boolean {
+        if (!triggerPrice.isFinite() || triggerPrice <= 0.0 || !teeth.isFinite() || teeth <= 0.0) return false
+        return when (direction.trim().uppercase()) {
+            "LONG" -> triggerPrice > teeth
+            "SHORT" -> triggerPrice < teeth
+            else -> false
+        }
+    }
+
     fun allows(
         direction: String,
         operativeH1: FuturesContextState,
