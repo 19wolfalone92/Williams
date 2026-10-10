@@ -43,6 +43,17 @@ class PortfolioController:
             max_atr_pct=float(os.getenv("MAX_ATR_PCT", "0.08")),
         )
 
+    def _candidate_direction(self, candidate) -> str:
+        """Resolve direction without silently converting an unknown Futures setup to LONG."""
+        raw = str(getattr(candidate, "direction", "") or "").strip().upper()
+        if raw in {"LONG", "SHORT"}:
+            return raw
+        # Legacy Spot scanning is long-only and historically has no direction field.
+        # Futures requires an explicit directional Williams signal; unknown is BLOCKED.
+        if not bool(getattr(self.client, "is_usdm_futures", False)) and not raw:
+            return "LONG"
+        return ""
+
     def _analyse_candidates(self, candidates):
         analysed = []
         for candidate in candidates:
@@ -55,7 +66,10 @@ class PortfolioController:
                 filters = {f["filterType"]: f for f in info.get("symbols", [{}])[0].get("filters", [])}
                 notional_filter = filters.get("NOTIONAL") or filters.get("MIN_NOTIONAL") or {}
                 min_notional = float(notional_filter.get("minNotional", 0) or 0)
-                direction = str(getattr(candidate, "direction", "") or "LONG").upper()
+                direction = self._candidate_direction(candidate)
+                if direction not in {"LONG", "SHORT"}:
+                    print(f"[PORTFOLIO] {candidate.symbol}: blocked because directional signal is missing/invalid")
+                    continue
                 risk = self.risk_engine.analyse(
                     symbol=candidate.symbol,
                     entry_price=entry_price,
@@ -136,7 +150,9 @@ class PortfolioController:
             filters = {f["filterType"]: f for f in info.get("symbols", [{}])[0].get("filters", [])}
             nf = filters.get("NOTIONAL") or filters.get("MIN_NOTIONAL") or {}
             min_notional = float(nf.get("minNotional", 0) or 0)
-            direction = str(getattr(base.candidate, "direction", "") or "LONG").upper()
+            direction = self._candidate_direction(base.candidate)
+            if direction not in {"LONG", "SHORT"}:
+                continue
             r = self.risk_engine.analyse(
                 symbol=base.candidate.symbol,
                 entry_price=base.risk.entry_price,
