@@ -55,17 +55,24 @@ internal object WilliamsAlligatorMath {
     }
 
     private fun smma(values: List<Double>, period: Int): List<Double> {
-        if (values.isEmpty()) return emptyList()
         val output = MutableList(values.size) { Double.NaN }
-        output[0] = values[0]
-        for (i in 1 until values.size) {
-            val prior = output[i - 1]
+        if (period <= 0 || values.size < period) return output
+
+        // Match the canonical SMMA initialization used by the Python strategy
+        // and Native Futures engine: first SMA(period), then recursive smoothing.
+        // Propagate invalid inputs; do not silently resume after a missing bar.
+        val initial = values.take(period)
+        if (!initial.all(Double::isFinite)) return output
+        var previous = initial.average()
+        output[period - 1] = previous
+        for (i in period until values.size) {
             val current = values[i]
-            output[i] = if (prior.isFinite() && current.isFinite()) {
-                (prior * (period - 1) + current) / period
+            previous = if (current.isFinite() && previous.isFinite()) {
+                (previous * (period - 1) + current) / period
             } else {
                 Double.NaN
             }
+            output[i] = previous
         }
         return output
     }

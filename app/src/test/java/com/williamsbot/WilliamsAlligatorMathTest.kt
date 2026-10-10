@@ -12,13 +12,15 @@ class WilliamsAlligatorMathTest {
         val lows = (0..60).map { 90.0 + it * 2.0 }
         val lines = WilliamsAlligatorMath.calculate(highs, lows)
 
-        // First median is 100; before each display shift there is no prior line.
-        assertTrue(lines.jaw.take(8).all { !it.isFinite() })
-        assertTrue(lines.teeth.take(5).all { !it.isFinite() })
-        assertTrue(lines.lips.take(3).all { !it.isFinite() })
-        assertEquals(100.0, lines.jaw[8], 0.0)
-        assertEquals(100.0, lines.teeth[5], 0.0)
-        assertEquals(100.0, lines.lips[3], 0.0)
+        // SMMA first becomes available after its full period; the display shift
+        // then moves that value forward without look-ahead.
+        assertTrue(lines.jaw.take(20).all { !it.isFinite() })
+        assertTrue(lines.teeth.take(12).all { !it.isFinite() })
+        assertTrue(lines.lips.take(7).all { !it.isFinite() })
+        assertEquals(112.0, lines.jaw[20], 0.0)  // mean of first 13 medians
+        assertEquals(107.0, lines.teeth[12], 0.0) // mean of first 8 medians
+        assertEquals(104.0, lines.lips[7], 0.0)   // mean of first 5 medians
+        assertEquals((112.0 * 12.0 + 126.0) / 13.0, lines.jaw[21], 1e-10)
         assertTrue(lines.validAt(20))
     }
 
@@ -38,5 +40,8 @@ class WilliamsAlligatorMathTest {
                 116.0, 117.0, 118.0, 119.0, 120.0)
         )
         assertFalse(invalid.validAt(invalid.jaw.lastIndex))
+        // Once SMMA becomes undefined on a missing bar it does not resume
+        // from an arbitrary previous value.
+        assertTrue(invalid.jaw.drop(12).all { !it.isFinite() })
     }
 }
