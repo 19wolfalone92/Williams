@@ -279,6 +279,23 @@ class Database:
         }
         if "trade_id" not in columns:
             self.conn.execute("ALTER TABLE campaign_fills ADD COLUMN trade_id TEXT")
+        # Never delete or silently merge historical duplicates. If an old
+        # database already contains conflicting duplicate exchange IDs, fail
+        # migration with the exact keys so an operator can resolve them with an
+        # auditable repair before trading is enabled.
+        duplicates = self.conn.execute(
+            "SELECT symbol, trade_id, COUNT(*) AS n FROM campaign_fills "
+            "WHERE trade_id IS NOT NULL GROUP BY symbol, trade_id HAVING COUNT(*) > 1"
+        ).fetchall()
+        if duplicates:
+            keys = [
+                {"symbol": row["symbol"], "trade_id": row["trade_id"], "count": row["n"]}
+                for row in duplicates
+            ]
+            raise RuntimeError(
+                "campaign_fills migration blocked: historical duplicate exchange trade IDs "
+                f"require audited resolution: {json.dumps(keys, sort_keys=True)}"
+            )
         # Binance trade IDs are unique within a symbol. Legacy rows without an
         # exchange trade ID remain readable but cannot collide with new rows.
         self.conn.execute(
@@ -992,22 +1009,73 @@ class Database:
             self.conn.commit()
 
     def save_campaign_fill(self, fill):
-        """Persist one exchange fill idempotently; return False on duplicate trade ID."""
+        """Persist one exchange fill idempotently and reject conflicting replays."""
         data = fill if isinstance(fill, dict) else dict(fill)
+        symbol = str(data.get("symbol", "")).upper()
+        trade_id = data.get("trade_id")
+        if not symbol or trade_id is None or not str(trade_id).strip():
+            raise ValueError("campaign fill requires symbol and authoritative exchange trade_id")
+        normalized = {
+            "campaign_id": str(data.get("campaign_id", "")),
+            "order_id": str(data.get("order_id") or ""),
+            "trade_id": str(trade_id),
+            "symbol": symbol,
+            "side": str(data.get("side", "")).upper(),
+            "quantity": float(data.get("quantity", 0) or 0),
+            "price": float(data.get("price", 0) or 0),
+            "quote_quantity": float(data.get("quote_quantity", 0) or 0),
+            "fee_quote": float(data.get("fee_quote", 0) or 0),
+            "commission_base": float(data.get("commission_base", 0) or 0),
+            "commission_asset": str(data.get("commission_asset") or "").upper(),
+        }
+        import math
+        if (
+            normalized["side"] not in {"BUY", "SELL"}
+            or not all(math.isfinite(normalized[k]) for k in
+                       ("quantity", "price", "quote_quantity", "fee_quote", "commission_base"))
+            or normalized["quantity"] <= 0 or normalized["price"] <= 0
+            or normalized["quote_quantity"] <= 0 or normalized["fee_quote"] < 0
+            or normalized["commission_base"] < 0 or not normalized["commission_asset"]
+        ):
+            raise ValueError("campaign fill has invalid quantity, price, quote or commission fields")
         cursor = self.conn.execute(
             """INSERT OR IGNORE INTO campaign_fills(
                 campaign_id,order_id,trade_id,symbol,side,quantity,price,quote_quantity,
                 fee_quote,commission_base,commission_asset,raw_json
             ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
-                data.get("campaign_id", ""), data.get("order_id"), data.get("trade_id"),
-                str(data.get("symbol", "")).upper(), str(data.get("side", "")).upper(),
-                float(data.get("quantity", 0) or 0), float(data.get("price", 0) or 0),
-                float(data.get("quote_quantity", 0) or 0), float(data.get("fee_quote", 0) or 0),
-                float(data.get("commission_base", 0) or 0), data.get("commission_asset", ""),
-                json.dumps(data, default=str),
+                normalized["campaign_id"], normalized["order_id"], normalized["trade_id"],
+                normalized["symbol"], normalized["side"], normalized["quantity"],
+                normalized["price"], normalized["quote_quantity"], normalized["fee_quote"],
+                normalized["commission_base"], normalized["commission_asset"],
+                json.dumps(data, default=str, sort_keys=True),
             ),
         )
+        if cursor.rowcount == 0:
+            existing = self.conn.execute(
+                "SELECT campaign_id,order_id,trade_id,symbol,side,quantity,price,quote_quantity,"
+                "fee_quote,commission_base,commission_asset FROM campaign_fills "
+                "WHERE symbol=? AND trade_id=?",
+                (symbol, str(trade_id)),
+            ).fetchone()
+            if existing is None:
+                raise RuntimeError(
+                    f"campaign fill insert ignored without matching exchange key {symbol}/{trade_id}"
+                )
+            for key in normalized:
+                actual = existing[key]
+                expected = normalized[key]
+                if key in {"quantity", "price", "quote_quantity", "fee_quote", "commission_base"}:
+                    if float(actual) != float(expected):
+                        raise RuntimeError(
+                            f"conflicting replay for exchange fill {symbol}/{trade_id}: {key} "
+                            f"stored={actual!r} incoming={expected!r}"
+                        )
+                elif str(actual or "") != str(expected or ""):
+                    raise RuntimeError(
+                        f"conflicting replay for exchange fill {symbol}/{trade_id}: {key} "
+                        f"stored={actual!r} incoming={expected!r}"
+                    )
         if not self._transaction_active:
             self.conn.commit()
         return cursor.rowcount == 1

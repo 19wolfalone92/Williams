@@ -221,3 +221,48 @@ def test_separate_processes_cannot_reserve_same_portfolio_budget(tmp_path):
         assert verify.state_get("risk_entry_reservation") is not None or verify.campaign_risk_reserved_quote() > 0
     finally:
         verify.conn.close()
+
+
+def _sample_campaign_fill(**overrides):
+    fill = {
+        "campaign_id": "campaign-a",
+        "order_id": "9001",
+        "trade_id": "12345",
+        "symbol": "BTCUSDT",
+        "side": "BUY",
+        "quantity": 0.01,
+        "price": 50000.0,
+        "quote_quantity": 500.0,
+        "fee_quote": 0.5,
+        "commission_base": 0.0,
+        "commission_asset": "USDT",
+        "raw_json": {"commission": "0.5", "commissionAsset": "USDT"},
+    }
+    fill.update(overrides)
+    return fill
+
+
+def test_campaign_fill_replay_is_idempotent_and_conflicts_are_rejected():
+    db = Database(":memory:")
+    try:
+        fill = _sample_campaign_fill()
+        assert db.save_campaign_fill(fill) is True
+        assert db.save_campaign_fill(fill) is False
+        assert len(db.campaign_fills_for_order("BTCUSDT", "9001")) == 1
+        with pytest.raises(RuntimeError, match="conflicting replay"):
+            db.save_campaign_fill(_sample_campaign_fill(fee_quote=0.0))
+        assert len(db.campaign_fills_for_order("BTCUSDT", "9001")) == 1
+        assert db.campaign_fills_for_order("BTCUSDT", "9001")[0]["fee_quote"] == 0.5
+    finally:
+        db.conn.close()
+
+
+def test_campaign_fill_requires_authoritative_trade_id_and_valid_fee_fields():
+    db = Database(":memory:")
+    try:
+        with pytest.raises(ValueError, match="authoritative exchange trade_id"):
+            db.save_campaign_fill(_sample_campaign_fill(trade_id=None))
+        with pytest.raises(ValueError, match="invalid quantity"):
+            db.save_campaign_fill(_sample_campaign_fill(fee_quote=float("nan")))
+    finally:
+        db.conn.close()
