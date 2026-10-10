@@ -119,6 +119,14 @@ Recovery suite включает 10 сценариев:
 python run_backtest.py --symbol BTCUSDT --interval 1h --start 2024-01-01 --end 2026-10-01
 ```
 
+Для двунаправленного research-replay legacy-сигналов:
+
+```bash
+python run_backtest.py --symbol BTCUSDT --interval 1h --start 2024-01-01 --end 2026-10-01 --allow-shorts
+```
+
+**Ограничение:** `--allow-shorts` включает упрощённую SHORT-симуляцию по legacy boolean-сигналам и процентным stop/target. Она не моделирует funding, maintenance margin, liquidation и биржевой lifecycle Futures. Это не TC2 campaign backtester и не доказательство буквального соответствия Three Wise Men книгам или прибыльности стратегии.
+
 Исторический `fetch_klines()` поддерживает как live-вызов через Binance client, так и позиционный вызов `fetch_klines(symbol, interval, start, end)`.
 
 ## Android
