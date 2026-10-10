@@ -251,7 +251,7 @@ class Trader:
                     )
                 try:
                     target_list = self.client.order_list(
-                        symbol, order_list_id=int(target_list_id)
+                        symbol, order_list_id=target_list_id
                     )
                 except Exception as exc:
                     raise RuntimeError(
