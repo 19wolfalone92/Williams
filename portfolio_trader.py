@@ -1972,10 +1972,14 @@ class MultiPositionTrader:
             # reversal is not auto-added by default because it can represent
             # countertrend risk; this is explicitly configurable.
             if campaign is not None and campaign.position_qty > 0:
-                latest_time = int(
-                    campaign.tags.get("last_signal_time_ms", 0)
-                    or campaign.tags.get("signal_bar_time_ms", 0)
-                    or 0
+                latest_confirmation_time = int(
+                    campaign.tags.get(
+                        "last_signal_confirmation_time_ms",
+                        campaign.tags.get(
+                            "last_signal_time_ms",
+                            campaign.tags.get("signal_bar_time_ms", 0),
+                        ),
+                    ) or 0
                 )
                 allow_reversal_add = (
                     os.getenv("CAMPAIGN_ALLOW_REVERSAL_ADD", "false").lower()
@@ -1983,7 +1987,9 @@ class MultiPositionTrader:
                 )
                 eligible = [
                     s for s in specs
-                    if s.signal_bar_time_ms > latest_time
+                    if int(
+                        getattr(s, "confirmation_time_ms", 0) or s.signal_bar_time_ms
+                    ) > latest_confirmation_time
                     and (
                         s.signal_type in {SignalType.SUPER_AO, SignalType.FRACTAL}
                         or (
@@ -1996,7 +2002,10 @@ class MultiPositionTrader:
                     continue
                 signal = min(
                     eligible,
-                    key=lambda s: (s.signal_bar_time_ms, s.created_at_ms),
+                    key=lambda s: (
+                        int(getattr(s, "confirmation_time_ms", 0) or s.signal_bar_time_ms),
+                        s.created_at_ms,
+                    ),
                 )
                 add_signal = __import__(
                     "dataclasses"
