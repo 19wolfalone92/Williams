@@ -298,6 +298,34 @@ def test_ambiguous_cancel_recovers_against_persisted_target_order_id(tmp_path):
     assert db.state_get("recovery_state") == "READY"
 
 
+def test_pre_submit_journal_failure_blocks_exchange_and_latches_recovery(tmp_path):
+    db = Database(str(tmp_path / "admission_journal_failure.sqlite3"))
+    db.mark_recovery_ready(evidence())
+    barrier = ExecutionBarrier(ContextCache(), db)
+    original_event = db.save_execution_event
+
+    def fail_admission(intent_id, event_type, payload=None):
+        if event_type == "ADMISSION_STARTED":
+            raise OSError("simulated event journal write failure")
+        return original_event(intent_id, event_type, payload)
+
+    db.save_execution_event = fail_admission
+    intent = OrderIntent.new(
+        "BTCUSDT", "BUY", "MARKET", {},
+        client_order_id="WILLV5_ENTRY_event-journal-fail",
+        purpose="CAMPAIGN_ENTRY",
+        campaign_id="campaign-journal-failure",
+    )
+    calls = []
+
+    with pytest.raises(ExecutionPersistenceError, match="Binance submission was not attempted"):
+        barrier.execute(intent, lambda: calls.append("submitted") or {"status": "FILLED"})
+
+    assert calls == []
+    assert barrier._poisoned is True
+    assert db.state_get("recovery_state") == "REQUIRED"
+
+
 def test_exchange_success_with_failed_result_persistence_poison_blocks_next_mutation(tmp_path):
     db = Database(str(tmp_path / "response_persist_failure.sqlite3"))
     db.mark_recovery_ready(evidence())
