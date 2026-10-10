@@ -205,7 +205,11 @@ private data class CampaignSignalN(
     val protectivePrice: Double,
     val teethAtDetection: Double,
     val invalidationPrice: Double,
-    val reason: String
+    val reason: String,
+    // Confirmation is the first time the strategy may act on this evidence.
+    // For WM3 it is later than the fractal-centre timestamp.
+    val confirmationTimeMs: Long = 0L,
+    val expiresAtMs: Long = 0L
 )
 
 private data class BaseAnalysis(
@@ -668,7 +672,7 @@ private class NativeEngine(
     private val campaignTrailBars: Int
         get() = prefs.getInt("campaign_trail_bars", 3).coerceIn(3, 5)
     private val maxTotalRiskPct = 0.03
-    private val maxRiskPerTradePct = 0.0025
+    private val maxRiskPerTradePct = 0.01
     private val maxSpreadPct = 0.0015
     private val maxSlippagePct = 0.0015
     private val equityCircuitBreaker = EquityCircuitBreaker(maxDrawdownPct = 0.01)
@@ -6507,7 +6511,8 @@ private class NativeEngine(
                 candles[i].l < priorLow &&
                 closeLocation >= 0.50 &&
                 belowMouth &&
-                angulationScore(i) > 0.0
+                angulationScore(i) > 0.0 &&
+                prefs.getBoolean("allow_approximate_wm1_angulation", false)
             ) {
                 val trigger = candles[i].h + tick
                 if (
@@ -6524,7 +6529,9 @@ private class NativeEngine(
                         protectivePrice = candles[i].l - tick,
                         teethAtDetection = teethS[i].takeIf { it.isFinite() } ?: 0.0,
                         invalidationPrice = candles[i].l - tick,
-                        reason = "WM1 bullish reversal; waiting above signal-bar high"
+                        reason = "WM1 bullish reversal; waiting above signal-bar high",
+                        confirmationTimeMs = candles[i].t + frameSeconds(frame) * 1000L,
+                        expiresAtMs = candles[i].t + frameSeconds(frame) * 1000L * 3L
                     )
                 }
                 break
@@ -6553,7 +6560,9 @@ private class NativeEngine(
                     protectivePrice = candles[i].l - tick,
                     teethAtDetection = teethS[i].takeIf { it.isFinite() } ?: 0.0,
                     invalidationPrice = candles[i].l - tick,
-                    reason = "WM2 Super AO: third rising AO bar; independent of fractal; conditional trigger above price bar"
+                    reason = "WM2 Super AO: third rising AO bar; independent of fractal; conditional trigger above price bar",
+                    confirmationTimeMs = candles[i].t + frameSeconds(frame) * 1000L,
+                    expiresAtMs = candles[i].t + frameSeconds(frame) * 1000L * 3L
                 )
             }
         }
@@ -6581,7 +6590,9 @@ private class NativeEngine(
                     protectivePrice = candles[fractalCenter].l - tick,
                     teethAtDetection = currentTeeth,
                     invalidationPrice = candles[fractalCenter].l - tick,
-                    reason = "WM3 confirmed fractal; outside Teeth at confirmation and trigger remains above current Teeth"
+                    reason = "WM3 confirmed fractal; outside Teeth at confirmation and trigger remains above current Teeth",
+                    confirmationTimeMs = candles[fractal.confirmationIndex].t + frameSeconds(frame) * 1000L,
+                    expiresAtMs = candles[fractal.confirmationIndex].t + frameSeconds(frame) * 1000L * 9L
                 )
             }
         }
