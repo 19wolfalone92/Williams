@@ -36,15 +36,15 @@ class CampaignEngine:
         db,
         *,
         portfolio_risk_limit_pct: float = 0.01,
-        campaign_risk_limit_pct: float = 0.006,
+        campaign_risk_limit_pct: float = 0.005,
         initial_risk_fraction_of_campaign: float = 0.40,
     ) -> None:
         self.db = db
         self.portfolio_risk_limit_pct = max(0.0, min(0.01, float(portfolio_risk_limit_pct)))
-        # Keep the coordinator's hard cap aligned with the Futures executor's
-        # lifetime campaign budget. The initial tranche remains 40% of this
-        # ceiling (0.24% equity at the default 0.60% campaign cap); the
-        # remainder is only available to validated same-campaign add-ons.
+        # Keep the hard ceiling aligned with the Futures executor's lifetime
+        # campaign budget while preserving the more conservative standalone
+        # default used by other callers (including Spot). The Futures runtime
+        # explicitly passes 0.006; its 40% initial tranche is 0.24% equity.
         self.campaign_risk_limit_pct = max(0.0, min(0.006, float(campaign_risk_limit_pct)))
         self.initial_risk_fraction = max(
             0.05,
