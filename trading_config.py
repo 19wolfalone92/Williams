@@ -81,12 +81,12 @@ class TradingConfig:
     require_htf_confirmation: bool = True
     no_trade_when_uncertain: bool = True
 
-    risk_per_trade_pct: float = 0.005
-    max_total_risk_pct: float = 0.01
-    max_daily_loss_pct: float = 0.03
+    risk_per_trade_pct: float = 0.0025
+    max_total_risk_pct: float = 0.006
+    max_daily_loss_pct: float = 0.01
     max_consecutive_losses: int = 3
     cooldown_minutes: int = 30
-    max_open_positions: int = 5
+    max_open_positions: int = 1
 
     min_risk_reward: float = 1.5
     atr_period: int = 14
@@ -115,10 +115,19 @@ class TradingConfig:
         if str(source.get("AUTO_SCAN_SYMBOLS", "")).strip():
             symbols = _csv(source, "AUTO_SCAN_SYMBOLS", symbols)
 
-        max_positions = max(0, _int(source, "MAX_OPEN_POSITIONS", 5))
+        # Canonical risk limits are hard ceilings; environment variables may
+        # only reduce the budget. MAX_OPEN_POSITIONS cannot disable the limit.
+        requested_positions = _int(source, "MAX_OPEN_POSITIONS", 1)
+        max_positions = 1 if requested_positions > 0 else 0
         risk_key = "MAX_RISK_PER_TRADE_PCT" if "MAX_RISK_PER_TRADE_PCT" in source else "RISK_PER_TRADE_PCT"
-        risk = max(0.0, min(0.005, _float(source, risk_key, 0.005)))
-        total_risk = max(0.0, min(0.01, _float(source, "MAX_TOTAL_RISK_PCT", 0.01)))
+        risk = max(0.0, min(0.0025, _float(source, risk_key, 0.0025)))
+        total_risk = max(0.0, min(0.006, _float(source, "MAX_TOTAL_RISK_PCT", 0.006)))
+        if risk <= 0.0 or total_risk <= 0.0 or max_positions == 0:
+            raise ValueError("risk budget and one-campaign capacity must be positive")
+        risk = min(risk, total_risk)
+        daily_limit = max(0.0, min(0.01, _float(source, "MAX_DAILY_LOSS_PCT", 0.01)))
+        if daily_limit <= 0.0:
+            raise ValueError("MAX_DAILY_LOSS_PCT must be positive")
 
         execution_timeframe = str(source.get("EXECUTION_TIMEFRAME", "5m")).lower()
 
@@ -131,8 +140,8 @@ class TradingConfig:
             require_htf_confirmation=_bool(source, "REQUIRE_HTF_CONFIRMATION", True),
             no_trade_when_uncertain=_bool(source, "NO_TRADE_WHEN_UNCERTAIN", True),
             risk_per_trade_pct=risk,
-            max_total_risk_pct=max(total_risk, risk),
-            max_daily_loss_pct=max(0.0, _float(source, "MAX_DAILY_LOSS_PCT", 0.03)),
+            max_total_risk_pct=total_risk,
+            max_daily_loss_pct=daily_limit,
             max_consecutive_losses=max(0, _int(source, "MAX_CONSECUTIVE_LOSSES", 3)),
             cooldown_minutes=max(0, _int(source, "COOLDOWN_MINUTES", 30)),
             max_open_positions=max_positions,

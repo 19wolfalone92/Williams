@@ -1,5 +1,6 @@
 import os
 import json, sqlite3
+import threading
 from pathlib import Path
 from datetime import datetime, timezone
 from contextlib import contextmanager
@@ -17,25 +18,29 @@ class Database:
         self.conn.execute('PRAGMA journal_mode=WAL')
         self.conn.execute('PRAGMA synchronous=NORMAL')
         self._transaction_active = False
+        self._transaction_lock = threading.RLock()
         self.init()
 
     @contextmanager
     def transaction(self):
-        """Atomic transaction for multi-step DB operations."""
-        if self._transaction_active:
-            yield self
-            return
+        """Serialize multi-step state/risk writes in-process and across SQLite connections."""
+        with self._transaction_lock:
+            if self._transaction_active:
+                yield self
+                return
 
-        self._transaction_active = True
-        try:
-            self.conn.execute('BEGIN')
-            yield self
-            self.conn.commit()
-        except Exception:
-            self.conn.rollback()
-            raise
-        finally:
-            self._transaction_active = False
+            self._transaction_active = True
+            try:
+                # BEGIN IMMEDIATE takes the SQLite write reservation before the
+                # caller reads portfolio capacity, preventing read-check-write races.
+                self.conn.execute('BEGIN IMMEDIATE')
+                yield self
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
+                raise
+            finally:
+                self._transaction_active = False
 
     def init(self):
         self.conn.executescript('''
@@ -1001,7 +1006,7 @@ class Database:
     def campaign_risk_reserved_quote(self):
         row=self.conn.execute(
             "SELECT COALESCE(SUM(open_risk_quote),0)+COALESCE(SUM(pending_risk_quote),0) AS risk "
-            "FROM campaigns WHERE state NOT IN ('CLOSED','FLAT','RECONCILE_REQUIRED')"
+            "FROM campaigns WHERE state NOT IN ('CLOSED','FLAT')"
         ).fetchone()
         return float(row["risk"] or 0.0)
 
@@ -1030,6 +1035,30 @@ class Database:
                 (max(1, min(int(limit), 1000)),)
             ).fetchall()
         ]
+
+
+    def pnl_today_all(self):
+        """Return realized PnL for all closed trades since the UTC date boundary.
+
+        The trades.pnl field is the persisted net trade PnL; do not subtract the
+        same fees again here.
+        """
+        row = self.conn.execute(
+            "SELECT SUM(pnl) AS pnl FROM trades "
+            "WHERE exit_time IS NOT NULL AND exit_time >= date('now')"
+        ).fetchone()
+        if row is None or row["pnl"] is None:
+            return 0.0
+        value = float(row["pnl"])
+        if not __import__("math").isfinite(value):
+            raise ValueError("persisted realized PnL is non-finite")
+        return value
+
+    def active_campaign_count(self):
+        row = self.conn.execute(
+            "SELECT COUNT(*) AS count FROM campaigns WHERE state NOT IN ('CLOSED','FLAT')"
+        ).fetchone()
+        return int(row["count"] if row else 0)
 
     def trades_today(self, symbol):
         return int(
