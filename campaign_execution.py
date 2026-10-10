@@ -15,6 +15,7 @@ from campaign_engine import CampaignEngine
 from campaign_model import CampaignState, PendingOrderRecord, SignalSpec, SignalState, SignalType
 from decision_trace import DecisionTrace
 from execution_barrier import ExecutionBarrier, OrderIntent
+from equity_breaker import EquityCircuitBreaker
 
 
 class CampaignExecutionError(RuntimeError):
@@ -30,6 +31,9 @@ class CampaignExecutionService:
         self.client = client
         self.db = db
         self.barrier = execution_barrier
+        self.equity_breaker = EquityCircuitBreaker(
+            min(0.01, float(os.getenv("MAX_DAILY_LOSS_PCT", "0.01")))
+        )
         self.engine = CampaignEngine(
             db,
             portfolio_risk_limit_pct=min(0.006, float(os.getenv("MAX_TOTAL_RISK_PCT", "0.006"))),
@@ -356,56 +360,67 @@ class CampaignExecutionService:
 
         # Check capacity and persist the reservation in one serialized SQLite
         # transaction before the first possible Binance order mutation.
+        daily_block_reason = ""
         with self.db.transaction():
-            if self.db.state_get("risk_entry_reservation") is not None:
-                raise CampaignExecutionError("another risk reservation is already pending")
-            if self.db.active_campaign_count() >= 1:
-                raise CampaignExecutionError("maximum one active campaign already reserved")
-            reserved = self.engine.portfolio_reserved_risk_quote()
-            capacity = equity_quote * self.engine.portfolio_risk_limit_pct
-            remaining_risk = max(0.0, capacity - reserved)
-            requested_risk = min(
-                candidate_risk_pct,
-                self.engine.initial_risk_pct(),
-                remaining_risk / equity_quote,
+            daily_allowed, daily_reason = self.equity_breaker.check(
+                self.db, equity_quote
             )
-            if not math.isfinite(requested_risk) or requested_risk <= 0:
-                raise CampaignExecutionError("No portfolio risk capacity for campaign entry")
-            risk_quote = equity_quote * requested_risk
-            notional = min(
-                equity_quote * capital_fraction,
-                risk_quote / effective_loss_fraction,
-                free_usdt * 0.95,
+            if not daily_allowed:
+                daily_block_reason = daily_reason
+            else:
+                if self.db.state_get("risk_entry_reservation") is not None:
+                    raise CampaignExecutionError("another risk reservation is already pending")
+                if self.db.active_campaign_count() >= 1:
+                    raise CampaignExecutionError("maximum one active campaign already reserved")
+                reserved = self.engine.portfolio_reserved_risk_quote()
+                capacity = equity_quote * self.engine.portfolio_risk_limit_pct
+                remaining_risk = max(0.0, capacity - reserved)
+                requested_risk = min(
+                    candidate_risk_pct,
+                    self.engine.initial_risk_pct(),
+                    remaining_risk / equity_quote,
+                )
+                if not math.isfinite(requested_risk) or requested_risk <= 0:
+                    raise CampaignExecutionError("No portfolio risk capacity for campaign entry")
+                risk_quote = equity_quote * requested_risk
+                notional = min(
+                    equity_quote * capital_fraction,
+                    risk_quote / effective_loss_fraction,
+                    free_usdt * 0.95,
+                )
+                qty = self._normalized_entry_qty(signal.symbol, notional, trigger, filters=filters)
+                if qty * trigger > notional + max(1e-10, notional * 1e-10):
+                    raise CampaignExecutionError("quantity rounding would exceed approved notional")
+                realized_risk_quote = qty * trigger * effective_loss_fraction
+                if realized_risk_quote > risk_quote + max(1e-8, risk_quote * 1e-9):
+                    raise CampaignExecutionError("rounded quantity would exceed approved risk")
+
+                if not self.db.try_claim_state("risk_entry_reservation", client_id):
+                    raise CampaignExecutionError("another risk reservation is already pending")
+                if not self.db.try_claim_state(f"entry_client_order_id:{signal.symbol}", client_id):
+                    raise CampaignExecutionError(f"{signal.symbol}: another conditional entry is already reserved")
+
+                campaign = self.engine.create_campaign(signal, initial_risk_pct=requested_risk)
+                campaign.tags["signal_role"] = signal.role.value
+                campaign.tags["decision_trace"] = DecisionTrace.from_signal(signal).to_dict()
+                campaign.tags["pending_signal_expires_at_ms"] = int(signal.expires_at_ms or 0)
+                campaign.tags["initial_stop_price"] = stop
+                campaign.tags["pending_order_client_id"] = client_id
+                campaign.tags["pending_order_quantity"] = qty
+                campaign.tags["pending_order_trigger"] = trigger
+                campaign.initial_stop_price = stop
+                campaign.current_stop_price = stop
+                # Reserve at the maximum approved loss, not just the idealized fill.
+                campaign.pending_risk_quote = risk_quote
+                campaign.capital_reserved_quote = qty * trigger
+                self.db.save_campaign(campaign)
+                # Persist ENTRY_PENDING and its risk reservation before Binance.
+                self.engine.arm_entry(campaign, signal)
+                self.db.state_set(f"campaign_state:{campaign.campaign_id}", campaign.state.value)
+        if daily_block_reason:
+            raise CampaignExecutionError(
+                f"daily risk gate blocked new entry: {daily_block_reason}"
             )
-            qty = self._normalized_entry_qty(signal.symbol, notional, trigger, filters=filters)
-            if qty * trigger > notional + max(1e-10, notional * 1e-10):
-                raise CampaignExecutionError("quantity rounding would exceed approved notional")
-            realized_risk_quote = qty * trigger * effective_loss_fraction
-            if realized_risk_quote > risk_quote + max(1e-8, risk_quote * 1e-9):
-                raise CampaignExecutionError("rounded quantity would exceed approved risk")
-
-            if not self.db.try_claim_state("risk_entry_reservation", client_id):
-                raise CampaignExecutionError("another risk reservation is already pending")
-            if not self.db.try_claim_state(f"entry_client_order_id:{signal.symbol}", client_id):
-                raise CampaignExecutionError(f"{signal.symbol}: another conditional entry is already reserved")
-
-            campaign = self.engine.create_campaign(signal, initial_risk_pct=requested_risk)
-            campaign.tags["signal_role"] = signal.role.value
-            campaign.tags["decision_trace"] = DecisionTrace.from_signal(signal).to_dict()
-            campaign.tags["pending_signal_expires_at_ms"] = int(signal.expires_at_ms or 0)
-            campaign.tags["initial_stop_price"] = stop
-            campaign.tags["pending_order_client_id"] = client_id
-            campaign.tags["pending_order_quantity"] = qty
-            campaign.tags["pending_order_trigger"] = trigger
-            campaign.initial_stop_price = stop
-            campaign.current_stop_price = stop
-            # Reserve at the maximum approved loss, not just the idealized fill.
-            campaign.pending_risk_quote = risk_quote
-            campaign.capital_reserved_quote = qty * trigger
-            self.db.save_campaign(campaign)
-            # Persist ENTRY_PENDING and its risk reservation before Binance.
-            self.engine.arm_entry(campaign, signal)
-            self.db.state_set(f"campaign_state:{campaign.campaign_id}", campaign.state.value)
 
         intent = OrderIntent.new(
             signal.symbol,
@@ -1450,78 +1465,89 @@ class CampaignExecutionService:
         # Serialize portfolio and campaign capacity checks with the reservation
         # writes. Concurrent add-ons, or add-on vs initial entry, cannot spend
         # the same remaining risk budget.
+        daily_block_reason = ""
         with self.db.transaction():
-            if self.db.state_get("risk_entry_reservation") is not None:
-                raise CampaignExecutionError("another portfolio risk reservation is pending")
-            if self.db.state_get(f"entry_client_order_id:{signal.symbol}") is not None:
-                raise CampaignExecutionError(f"{signal.symbol}: another conditional order is pending")
-            campaign = self.engine.load_campaign(campaign_id)
-            if campaign is None or campaign.position_qty <= 0:
-                raise CampaignExecutionError(f"{signal.symbol}: active campaign changed during add-on reservation")
-            if signal.signal_bar_time_ms <= int(campaign.tags.get("last_signal_time_ms", 0) or 0):
-                raise CampaignExecutionError("signal is not newer than current campaign signal")
-            if float(campaign.pending_risk_quote or 0.0) > 0:
-                raise CampaignExecutionError("campaign already has unconfirmed reserved risk")
-
-            prior = self.db.conn.execute(
-                "SELECT state FROM campaign_signals WHERE campaign_id=? AND signal_id=?",
-                (campaign.campaign_id, signal.signal_id),
-            ).fetchone()
-            if prior and str(prior["state"]).upper() in {"ARMED", "TRIGGERED", "FILLED"}:
-                raise CampaignExecutionError("signal is already active or filled for this campaign")
-
-            campaign_reserved = float(campaign.open_risk_quote or 0.0)
-            campaign_capacity = equity * min(0.006, float(self.engine.campaign_risk_limit_pct))
-            portfolio_reserved = float(self.engine.portfolio_reserved_risk_quote())
-            portfolio_capacity = equity * min(0.006, float(self.engine.portfolio_risk_limit_pct))
-            remaining = max(0.0, min(
-                campaign_capacity - campaign_reserved,
-                portfolio_capacity - portfolio_reserved,
-            ))
-            requested = min(
-                remaining,
-                equity * min(candidate_risk, add_risk_cap),
+            daily_allowed, daily_reason = self.equity_breaker.check(
+                self.db, equity
             )
-            if not math.isfinite(requested) or requested <= 0:
-                raise CampaignExecutionError("campaign/portfolio risk budget exhausted")
+            if not daily_allowed:
+                daily_block_reason = daily_reason
+            else:
+                if self.db.state_get("risk_entry_reservation") is not None:
+                    raise CampaignExecutionError("another portfolio risk reservation is pending")
+                if self.db.state_get(f"entry_client_order_id:{signal.symbol}") is not None:
+                    raise CampaignExecutionError(f"{signal.symbol}: another conditional order is pending")
+                campaign = self.engine.load_campaign(campaign_id)
+                if campaign is None or campaign.position_qty <= 0:
+                    raise CampaignExecutionError(f"{signal.symbol}: active campaign changed during add-on reservation")
+                if signal.signal_bar_time_ms <= int(campaign.tags.get("last_signal_time_ms", 0) or 0):
+                    raise CampaignExecutionError("signal is not newer than current campaign signal")
+                if float(campaign.pending_risk_quote or 0.0) > 0:
+                    raise CampaignExecutionError("campaign already has unconfirmed reserved risk")
 
-            notional = min(
-                equity * capital_fraction,
-                free_usdt * 0.95,
-                requested / effective_loss_fraction,
-            )
-            qty = self._normalized_entry_qty(
-                signal.symbol, notional, trigger, filters=filters
-            )
-            rounded_notional = qty * trigger
-            rounded_risk = rounded_notional * effective_loss_fraction
-            if not all(math.isfinite(v) for v in (rounded_notional, rounded_risk)):
-                raise CampaignExecutionError("rounded add-on notional/risk is non-finite")
-            if rounded_notional > notional + max(1e-10, notional * 1e-10):
-                raise CampaignExecutionError("rounded add-on exceeds approved notional")
-            if rounded_risk > requested + max(1e-8, requested * 1e-9):
-                raise CampaignExecutionError("rounded add-on would exceed approved campaign risk")
+                prior = self.db.conn.execute(
+                    "SELECT state FROM campaign_signals WHERE campaign_id=? AND signal_id=?",
+                    (campaign.campaign_id, signal.signal_id),
+                ).fetchone()
+                if prior and str(prior["state"]).upper() in {"ARMED", "TRIGGERED", "FILLED"}:
+                    raise CampaignExecutionError("signal is already active or filled for this campaign")
 
-            if not self.db.try_claim_state("risk_entry_reservation", cid):
-                raise CampaignExecutionError("another portfolio risk reservation is pending")
-            if not self.db.try_claim_state(f"entry_client_order_id:{signal.symbol}", cid):
-                raise CampaignExecutionError(f"{signal.symbol}: another conditional order is pending")
+                campaign_reserved = float(campaign.open_risk_quote or 0.0)
+                campaign_capacity = equity * min(0.006, float(self.engine.campaign_risk_limit_pct))
+                portfolio_reserved = float(self.engine.portfolio_reserved_risk_quote())
+                portfolio_capacity = equity * min(0.006, float(self.engine.portfolio_risk_limit_pct))
+                remaining = max(0.0, min(
+                    campaign_capacity - campaign_reserved,
+                    portfolio_capacity - portfolio_reserved,
+                ))
+                requested = min(
+                    remaining,
+                    equity * min(candidate_risk, add_risk_cap),
+                )
+                if not math.isfinite(requested) or requested <= 0:
+                    raise CampaignExecutionError("campaign/portfolio risk budget exhausted")
 
-            self.db.save_campaign_signal(
-                signal, campaign.campaign_id, state=SignalState.DETECTED.value
-            )
-            campaign.tags["last_signal_time_ms"] = int(signal.signal_bar_time_ms)
-            campaign.tags["pending_add_signal_id"] = signal.signal_id
-            campaign.tags["pending_order_client_id"] = cid
-            campaign.tags["pending_order_quantity"] = qty
-            campaign.tags["pending_order_trigger"] = trigger
-            campaign.pending_risk_quote = requested
-            campaign.capital_reserved_quote = rounded_notional
-            self.engine.arm_add_on(
-                campaign,
-                signal,
-                risk_quote=requested,
-                capital_reserved_quote=rounded_notional,
+                notional = min(
+                    equity * capital_fraction,
+                    free_usdt * 0.95,
+                    requested / effective_loss_fraction,
+                )
+                qty = self._normalized_entry_qty(
+                    signal.symbol, notional, trigger, filters=filters
+                )
+                rounded_notional = qty * trigger
+                rounded_risk = rounded_notional * effective_loss_fraction
+                if not all(math.isfinite(v) for v in (rounded_notional, rounded_risk)):
+                    raise CampaignExecutionError("rounded add-on notional/risk is non-finite")
+                if rounded_notional > notional + max(1e-10, notional * 1e-10):
+                    raise CampaignExecutionError("rounded add-on exceeds approved notional")
+                if rounded_risk > requested + max(1e-8, requested * 1e-9):
+                    raise CampaignExecutionError("rounded add-on would exceed approved campaign risk")
+
+                if not self.db.try_claim_state("risk_entry_reservation", cid):
+                    raise CampaignExecutionError("another portfolio risk reservation is pending")
+                if not self.db.try_claim_state(f"entry_client_order_id:{signal.symbol}", cid):
+                    raise CampaignExecutionError(f"{signal.symbol}: another conditional order is pending")
+
+                self.db.save_campaign_signal(
+                    signal, campaign.campaign_id, state=SignalState.DETECTED.value
+                )
+                campaign.tags["last_signal_time_ms"] = int(signal.signal_bar_time_ms)
+                campaign.tags["pending_add_signal_id"] = signal.signal_id
+                campaign.tags["pending_order_client_id"] = cid
+                campaign.tags["pending_order_quantity"] = qty
+                campaign.tags["pending_order_trigger"] = trigger
+                campaign.pending_risk_quote = requested
+                campaign.capital_reserved_quote = rounded_notional
+                self.engine.arm_add_on(
+                    campaign,
+                    signal,
+                    risk_quote=requested,
+                    capital_reserved_quote=rounded_notional,
+                )
+        if daily_block_reason:
+            raise CampaignExecutionError(
+                f"daily risk gate blocked add-on: {daily_block_reason}"
             )
 
         intent = OrderIntent.new(
