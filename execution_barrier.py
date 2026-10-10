@@ -27,6 +27,7 @@ class OrderIntent:
     quote_order_quantity: str = ""
     client_order_id: str = ""
     target_order_id: str = ""
+    target_order_list_id: str = ""
     purpose: str = "ENTRY"
     permission_interval: str = ""
     campaign_id: str = ""
@@ -286,10 +287,17 @@ class ExecutionBarrier:
                     ) from journal_exc
                 raise
 
-            if intent.order_type != "CANCEL":
+            if intent.order_type not in {"CANCEL", "CANCEL_OCO"}:
                 status = str(response.get("status", "") if isinstance(response, dict) else "").upper()
                 if status:
                     order_fsm.observe_exchange_status(status, float(response.get("executedQty", 0) or 0))
+                elif (
+                    intent.order_type == "OCO"
+                    and isinstance(response, dict)
+                    and response.get("orderListId") is not None
+                    and str(response.get("listClientOrderId") or intent.client_order_id) == intent.client_order_id
+                ):
+                    order_fsm.state = OrderState.OPEN
                 elif isinstance(response, dict) and str(response.get("newOrderResult", "")).upper() == "SUCCESS":
                     order_fsm.state = OrderState.OPEN
                 else:
