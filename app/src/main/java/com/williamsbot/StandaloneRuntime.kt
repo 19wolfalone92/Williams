@@ -6608,6 +6608,59 @@ private class NativeEngine(
             type.uppercase(Locale.US) + ":" +
             barTimeMs
 
+    /**
+     * Causal pending-entry check for a bullish Wise-Man setup.
+     *
+     * The signal is no longer actionable if price has already crossed its
+     * conditional trigger after the setup bar or if a later closed candle has
+     * breached the setup bar's structural low. Missing/non-finite OHLC data
+     * blocks the candidate rather than silently reviving a stale signal.
+     */
+    private fun isLongSignalStillActionable(
+        signalIndex: Int,
+        currentIndex: Int,
+        highs: List<Double>,
+        lows: List<Double>,
+        trigger: Double
+    ): Boolean {
+        if (
+            signalIndex !in highs.indices ||
+            signalIndex !in lows.indices ||
+            currentIndex !in highs.indices ||
+            currentIndex !in lows.indices ||
+            currentIndex < signalIndex ||
+            !trigger.isFinite() ||
+            trigger <= 0.0
+        ) return false
+
+        val signalHigh = highs[signalIndex]
+        val signalLow = lows[signalIndex]
+        if (
+            !signalHigh.isFinite() ||
+            !signalLow.isFinite() ||
+            signalLow <= 0.0 ||
+            signalHigh < signalLow ||
+            signalHigh >= trigger
+        ) return false
+
+        if (currentIndex == signalIndex) return true
+        for (i in (signalIndex + 1)..currentIndex) {
+            val high = highs[i]
+            val low = lows[i]
+            if (
+                !high.isFinite() ||
+                !low.isFinite() ||
+                low <= 0.0 ||
+                high < low
+            ) return false
+            // A historical crossing cannot be replayed as a new stop entry.
+            if (high >= trigger) return false
+            // The source bar's low is the structural invalidation reference.
+            if (low < signalLow) return false
+        }
+        return true
+    }
+
     private fun longCampaignSignals(
         symbol: String,
         candles: List<CandleN>,
