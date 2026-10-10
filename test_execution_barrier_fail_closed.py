@@ -104,6 +104,7 @@ def test_pending_intent_write_failure_never_calls_submit():
     assert not result.accepted
     assert result.reason == "execution_intent_persistence_failed"
     assert calls == []
+    assert db.intents[result.intent_id][0] == "BLOCKED"
 
 
 def test_admission_event_write_failure_never_calls_submit():
@@ -262,3 +263,14 @@ def test_concurrent_duplicate_buy_intents_submit_once():
     assert calls == ["submit"]
     assert sum(1 for result in results if result.accepted) == 1
     assert sum(1 for result in results if not result.accepted) == 1
+
+
+def test_pending_and_blocked_persistence_both_fail_never_calls_submit():
+    db = FakeDB(fail_intent_status={"PENDING", "BLOCKED"})
+    barrier = _barrier(db)
+    calls = []
+    result = barrier.execute(_intent("CID_DOUBLE_PERSISTENCE_FAILURE"), lambda: calls.append("submit"), pre_submit_checks=_pre_submit)
+    assert not result.accepted
+    assert result.reason == "execution_intent_persistence_failed"
+    assert calls == []
+    assert result.intent_id not in db.intents
