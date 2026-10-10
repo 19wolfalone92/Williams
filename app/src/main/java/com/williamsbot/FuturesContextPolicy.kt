@@ -8,9 +8,10 @@ data class FuturesContextState(
 )
 
 /**
- * Canonical H1 entry context contract:
- * H1 and H4 must permit the direction; D1 is a macro veto only when it
- * actively permits the opposite direction. Neutral D1 does not invent a signal.
+ * Canonical TC2 context contract:
+ * H1 decides the Wise-Man setup. H4 is validated context, not a duplicate
+ * direction trigger. D1 is a macro airbag: only an active opposite H1-like
+ * Alligator/AO state may veto the signal; it never creates an entry.
  */
 object FuturesContextPolicy {
     /**
@@ -82,15 +83,23 @@ object FuturesContextPolicy {
     ): Boolean {
         val side = direction.trim().uppercase()
         if (side !in setOf("LONG", "SHORT")) return false
+        if (
+            !operativeH1.ao.isFinite() ||
+            !parentH4.ao.isFinite() ||
+            !macroD1.ao.isFinite()
+        ) return false
+
         fun permits(state: FuturesContextState, wanted: String): Boolean =
             state.awake && state.ao.isFinite() && when (wanted) {
                 "LONG" -> state.bullish && state.ao > 0.0
                 "SHORT" -> state.bearish && state.ao < 0.0
                 else -> false
             }
+
         val opposite = if (side == "LONG") "SHORT" else "LONG"
-        return permits(operativeH1, side) &&
-            permits(parentH4, side) &&
-            !permits(macroD1, opposite)
+        // H1 owns entry direction. H4 has already been fetched and must contain
+        // finite indicator context, but it must not become a second signal gate.
+        // The D1 airbag vetoes only an active opposite Alligator/AO regime.
+        return permits(operativeH1, side) && !permits(macroD1, opposite)
     }
 }
