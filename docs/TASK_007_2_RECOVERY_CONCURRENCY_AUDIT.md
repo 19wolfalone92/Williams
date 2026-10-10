@@ -12,10 +12,10 @@ This report is an evidence record, not a declaration of production readiness. No
 - Task 007.2 starting SHA: `01d8472dbadf3d903b243d618de627bd2962aed7`
 - Baseline `main` SHA: `04da5f9c09572e99ff310be3a1908179165e528c`
 - Implementation SHA exercised by the latest Python CI at report authoring: `9fcbc5f148adadceb3c6f7ee61125fcc419faedb`
-- Compare result for implementation SHA: 108 commits ahead, 0 behind baseline.
+- Compare result for implementation SHA: 111 commits ahead, 0 behind baseline.
 - `main` was rechecked and remains at `04da5f9c09572e99ff310be3a1908179165e528c`.
 - No PR exists for this exact recovery branch. Existing PR #43 is on `fix/task-007-risk-management`, not this branch. No PR was created and no merge was performed.
-- CI run for implementation SHA: [run 38088137178](https://github.com/19wolfalone92/Williams/actions/runs/38088137178). Python job passed: **195 passed, 4 warnings**. Android build/unit tests/lint were still in progress when this report was authored. This report-only commit will trigger a new run; the exact resulting branch HEAD must be checked independently.
+- CI run for implementation SHA: [run 38089861539](https://github.com/19wolfalone92/Williams/actions/runs/38089861539). Python job passed: **196 passed, 4 warnings**. Android build/unit tests/lint were still in progress when this report was authored. Updating this report will trigger a new run; the exact resulting branch HEAD must be checked independently.
 
 ## 2. Changes made in this continuation
 
@@ -53,8 +53,9 @@ These changes reduce known risks but do not close the entire TASK 007.2 acceptan
 | Scenario | Evidence | Status |
 |---|---|---|
 | Two independent DB connections claim different intents for the same symbol concurrently | Threaded test with separate SQLite connections; only one durable claim is accepted | TEST-CONFIRMED |
-| Two independent runtime barriers attempt same-symbol entries | Controlled race test with separate DB connections, separate ExecutionBarrier and ContextCache objects; only one submit callback is reached | TEST-CONFIRMED on implementation SHA after CI passes; exact report-commit SHA still needs CI |
+| Two independent runtime barriers attempt same-symbol entries | Controlled race test with separate DB connections, separate ExecutionBarrier and ContextCache objects; only one submit callback is reached | TEST-CONFIRMED on implementation SHA `4da4643e2ca3115556df727440fa5aceb07ce500`; latest exact SHA adds an independent-process claim test |
 | Reuse of an existing intent ID across independent connections | Regression test rejects reuse | TEST-CONFIRMED |
+| Two independent OS processes race for same-symbol claim | `test_two_independent_processes_cannot_claim_conflicting_symbol_intents`; each worker opens its own SQLite connection; Python suite passed on SHA `7333b94263c14180efdc7713a40928af48d46277` | TEST-CONFIRMED |
 | Reuse of clientOrderId | Unique index and existing regression tests | TEST-CONFIRMED for covered fixtures |
 | SQLite BUSY / locked DB during claim | Fail-closed transaction path is implemented | NOT VERIFIED across a deterministic busy/timeout matrix |
 | Commit failure and read-after-commit failure | Some persistence failure windows have tests | PARTIALLY VERIFIED; not all required fault points |
@@ -62,7 +63,7 @@ These changes reduce known risks but do not close the entire TASK 007.2 acceptan
 | Cancel racing with fill | No exhaustive independent-runtime race matrix | NOT VERIFIED |
 | Recovery racing with new entry / runtime restart during second runtime | One same-symbol submit race covered; broader lifecycle race matrix remains | PARTIALLY VERIFIED |
 
-The atomic claim prevents the previously identified check-then-insert race for a symbol. It does not by itself prove all lifecycle transitions, multi-symbol portfolio reservation, or concurrent recovery are safe.
+The atomic claim prevents the previously identified check-then-insert race for a symbol in both threaded independent-connection and independent-process tests. It does not by itself prove all lifecycle transitions, multi-symbol portfolio reservation, or concurrent recovery are safe.
 
 ## 5. Financial reconciliation
 
@@ -121,7 +122,7 @@ No Futures readiness claim is made.
 
 ## 9. CI evidence
 
-- Implementation SHA `9fcbc5f148adadceb3c6f7ee61125fcc419faedb`: Python job passed, **195 passed, 4 warnings**, in [workflow run 38088137178](https://github.com/19wolfalone92/Williams/actions/runs/38088137178). Android job was still running at report authoring.
+- Exact implementation SHA `7333b94263c14180efdc7713a40928af48d46277`: Python job passed, **196 passed, 4 warnings**, in [workflow run 38089861539](https://github.com/19wolfalone92/Williams/actions/runs/38089861539). Android build/unit tests/lint were still running at report authoring.
 - Prior exact-SHA runs with Python failures were investigated and corrected; they are not treated as passes.
 - The report commit changes documentation only, but creates a new HEAD. The new run must be checked on the resulting SHA; success on an earlier SHA is not transferred.
 - Android job command in workflow: `gradle --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --stacktrace`. A job still in progress is not PASS.
