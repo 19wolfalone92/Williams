@@ -241,14 +241,14 @@ class ExecutionBarrier:
         pre_submit_checks: Callable[[MarketStateSnapshot], None] | None = None,
     ) -> ExecutionResult:
         with self.context_cache.execution_lock:
+            # Identity reuse is never a retry mechanism. Even a risk-reducing
+            # order can be duplicated if the previous response was ambiguous.
+            self._assert_fresh_intent_identity(intent)
             if self._poisoned:
                 return ExecutionResult(
                     intent.intent_id, False,
                     reason="execution_barrier_poisoned_reconciliation_required",
                 )
-            # Identity reuse is never a retry mechanism. Even a risk-reducing
-            # order can be duplicated if the previous response was ambiguous.
-            self._assert_fresh_intent_identity(intent)
             order_fsm = OrderStateMachine()
             order_fsm.transition(OrderState.ADMISSION)
 
