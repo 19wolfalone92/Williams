@@ -123,6 +123,31 @@ AO is momentum evidence; AC is acceleration evidence, not a universal entry trig
 - Futures: LONG and SHORT require separate, explicit position-side and reduce-only semantics, leverage/margin checks, and exchange reconciliation.
 - No averaging down; campaign/add-on limits and portfolio risk are hard gates.
 
+## 6. TC2 campaign trailing policy
+
+The TC2 core runtime now uses a source-profile price-bar structural trail instead
+of silently combining the previous two-bar Alligator/AO exit and Teeth/fractal/ATR
+stop formula:
+
+- Default: stop one exchange tick beyond the extreme of the last **3 closed H1 price bars**.
+- Optional source-profile variant: **5 closed H1 price bars**, selected explicitly with
+  `WILLIAMS_TC2_TRAILING_BARS=5` in Python or the matching native setting
+  `tc2_trailing_bars=5`. Both runtimes default to 3 and accept only 3 or 5.
+- LONG trail: below the lowest low in the selected window. SHORT trail: above the
+  highest high in the selected window. Exchange tick rounding is direction-aware.
+- A proposed stop is accepted only when it is valid relative to the current mark and
+  strictly reduces risk. The previous exchange-side protection remains until a
+  replacement stop is confirmed; ambiguous replacement/cancellation enters reconciliation.
+- The former two-bar Alligator/Teeth/AO exit is a **disabled-by-default system overlay**
+  (`WILLIAMS_TC2_TWO_BAR_REVERSAL_EXIT=true` / native
+  `tc2_two_bar_reversal_exit`). It must not be described as the canonical TC2 core
+  trailing rule.
+
+The exact 3-versus-5-bar selection is a profile choice that still needs to be tied to
+the verified source edition/figure and replay acceptance vectors. The implementation
+makes this choice explicit rather than pretending that ATR/Teeth trailing is the
+literal author rule.
+
 ## 6. Source-of-truth and implementation status
 
 The following must remain marked SOURCE_VERIFICATION_REQUIRED until the exact edition text and figures have been compared to the implementation: WM1 reversal-bar and angulation definitions; Alligator smoothing/shift semantics; WM3 Teeth timing/location; legacy AO Zero-Line/Saucer/Twin Peaks exact conditions; campaign add-on sequencing/position sizing; trailing and exhaustion exits.
