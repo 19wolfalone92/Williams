@@ -269,3 +269,60 @@ Exact Library file: `Билл_Вильямс_Новые_измерения_в_б
 - **Fractal edge case added:** Course PDF p.62 / printed p.30 gives an equal-extreme case requiring six bars. It needs a golden vector before declaring Python/Android parity.
 - **AO formula remains UNRESOLVED:** source scans visibly contain `(H-L)/2` notation in both books, while the expected arithmetic midpoint is ordinarily `(H+L)/2`. Do not change the bot or rewrite source wording without further independent primary-source adjudication.
 - The full all-book independent-rule register, complete Python/Android call graph to every order/cancel mutation, and executed identical golden vectors are still incomplete. No test has been run on the forensic branch in this pass; no order was submitted; no Mainnet was used; no strategy code was modified.
+
+
+## J. Active-path source-to-code trace — baseline main SHA `04da5f9c09572e99ff310be3a1908179165e528c`
+
+All file/line references in this section are from the stated baseline `main`; blob SHA values identify the exact file content inspected. No execution tests were run from the forensic branch.
+
+### J.1 Python Spot campaign path (static call chain established)
+
+1. **Runtime entry:** `server.py::State.loop` calls `Trader.process()` while the server runtime is running.
+2. **Autonomous dispatch:** `trader.py::Trader._auto_scan_process` constructs/reuses `MultiPositionTrader` and calls `recover()`, then `scan_and_execute()`.
+3. **Recovery/management first:** `portfolio_trader.py::MultiPositionTrader.scan_and_execute` calls `recover()`; in campaign mode it then calls pending-entry reconciliation, active-campaign reconciliation, and `CampaignMonitor.monitor_all()` before selecting new opportunities.
+4. **OHLCV → indicators → signal candidates:** `market_scanner.py::MarketScanner._analyse_base` fetches klines, explicitly removes the final candle with `df.iloc[:-1]`, calls `strategy.calculate_indicators`, then `williams_signals.extract_long_signal_specs`. It builds a `Candidate` with campaign signal specs. The wave-enrichment stage re-evaluates closed candles and attaches the enriched specs.
+5. **Risk/selection → campaign:** portfolio selection creates per-symbol selections; `MultiPositionTrader.execute_campaign` chooses an initial `SignalSpec` or a later add-on and calls `CampaignExecutionService.arm_initial_entry` / `arm_add_on`.
+6. **Entry order mutation:** `campaign_execution.py::CampaignExecutionService._submit` requires a non-null canonical `ExecutionBarrier` and invokes `ExecutionBarrier.execute`; the submitted callback reaches `BinanceClient.order_safe` → `BinanceClient.order` → signed `POST /api/v3/order`.
+7. **Protection/trailing/cancel/exit:** campaign protection, stop replacement, pending-entry cancellation and market exit are methods on `CampaignExecutionService`; cancellation goes through its cancel submission helper. `CampaignMonitor` drives active campaign monitoring. Actual exchange orders/fills are reconciled by querying Binance and persisted by the campaign service.
+
+Relevant exact baseline blobs: `server.py` `f7d93c014975949a7172323801f0fb485013895e`; `trader.py` `b2d9287a10da7d803c8ce14912c24745453033d7`; `market_scanner.py` `b8e0b441726209319304a951e51393e5e8662422`; `strategy.py` `53b56c828ed626607e30d16b47733b6ffbe81429`; `williams_signals.py` `a19937002e00c3731a1f619275d7e675dd51cf00`; `portfolio_trader.py` `c2be9d6faaa5d7e16610fd2941a31995e36ed945`; `campaign_execution.py` `4478e30c0bf09fc3c2d1e2c18ffb00b843745713`; `campaign_monitor.py` `7ef9e1bed030a3fe18bc5299170853b3926c5f7f`; `execution_barrier.py` `860edaa38ffc569b67533822b470a7b7a3fe7996`; `binance_client.py` `774b17505729b5b9f10d4f4c961e9defc046468e`.
+
+### J.2 Confirmed alternate Python mutation paths outside the canonical campaign barrier
+
+These are not merely additional function names; the route to the exchange mutation is explicit in the source:
+
+- Authenticated API route `server.py::manual_sell` (`POST /api/v1/control/sell`) → `MultiPositionTrader.manual_sell` → optional `BinanceClient.cancel_oco` (signed `DELETE /api/v3/orderList`) → `BinanceClient.order_safe` → `BinanceClient.order` (signed `POST /api/v3/order`). This manual exit does not call `ExecutionBarrier.execute`.
+- In `MultiPositionTrader.execute`, when `CAMPAIGN_ENGINE=false`, the non-campaign legacy branch can submit a market BUY through `client.order_safe` and then create OCO protection directly. `scan_and_execute` chooses this branch when the campaign engine flag is false. This is a flag-conditional entry route outside the canonical campaign barrier, not evidence that it is the default path.
+- `MultiPositionTrader._emergency_market_sell` also submits directly through `order_safe`; exact call-site circumstances still need an exhaustive call-site trace.
+- `BinanceClient.order_safe` supplies client-order-ID requirement and ambiguous-transport reconciliation, but it is not itself the central `ExecutionBarrier`; it ultimately calls `order()`.
+
+**Architecture finding:** a complete “every mutation must cross one canonical execution door” claim is not supported on baseline. The manual-sell API route proves at least one order/cancel mutation path that does not pass through `ExecutionBarrier.execute`; whether a separately documented emergency/manual-exit exception is authorized remains a contract question. No code changed.
+
+### J.3 Android campaign path and snapshot consumer result
+
+Static call chain on baseline `StandaloneRuntime.kt` blob `c971551ca65eedcfa5c9124576dc57aadd1608c8`:
+
+1. `requestScan()` checks running/paused/reconcile/kill/history/REST-market readiness and dispatches `performScan()`; with `campaignEngineEnabled`, this dispatches to `performCampaignScan()`.
+2. `performCampaignScan()` first attempts pending-entry recovery, position reconciliation and campaign management; it loads the universe, fetches candles for `campaignExecutionTimeframe`, calls `analyseBase()`, enriches/ranks candidates and dispatches `submitCampaignAddOn` or `submitCampaignEntry`.
+3. `analyseBase()` calls `longCampaignSignals()`. That function calculates median prices and displaced Alligator lines, builds WM1/WM2/WM3 candidate signals, and includes a prior-fractal/Balance-Line condition for WM2.
+4. `submitCampaignEntry()` validates candidate readiness, position/pending state, risk/capital/quantity/price constraints and the un-crossed trigger; it persists pending state and calls `withCampaignMutation()`. That function checks running, pause, reconcile-required and kill-latch, then reserves the per-symbol `ExecutionGate`; the block calls `signedPost("/api/v3/order", ...)` → `signedRequest` → HTTP POST. Protection, trail cancel-replace, campaign exit, partial-entry cancellation and emergency exit also have explicit `withCampaignMutation` call sites.
+5. This is a different implementation boundary from Python: Android does **not** call the Python `ExecutionBarrier`; `ExecutionGate` is a per-symbol reservation plus limited state checks. The exact equivalence of all fail-closed requirements across the two runtimes remains unproven.
+
+**OBS-002 consumer check:** all call sites of private `buildIndicatorSnapshot` within this Kotlin file are now enumerated: WebSocket candle update (around line 1858), history warm-up/cache population (around line 1993), and the `indicators()` diagnostic/API fallback (around line 7885). The result is written to `indicatorSnapshots` and returned through the indicators/status API. The campaign decision path calls `analyseBase` → `longCampaignSignals` directly on candle arrays; no read of `indicatorSnapshots` was found in that path. Therefore the snapshot’s close-price/unshifted Alligator discrepancy is **confirmed diagnostic/UI divergence**, but no direct trading-decision impact is demonstrated by this code path. This finding is scoped to the private method and all its in-file call sites on the exact baseline blob.
+
+### J.4 OBS-003 — source/code mismatch now established on both campaign paths
+
+- **Source:** TC2 Second Edition PDF p.155 / printed p.140, Chapter 12 explicitly describes the case where Super AO is the first signal after the reversal and says to enter above the price bar corresponding to the third green Super AO bar; the classic sequence is not an unconditional prerequisite chain.
+- **Python:** baseline `strategy.py` constructs `long_super_ao_signal` only when `super_ao_long` and `long_fractal_outside.shift(1)` are true; `williams_signals.py::_latest_super_ao` independently retains a prior fractal/Balance-Line gate. These feed `extract_long_signal_specs`, then `MarketScanner`, then `MultiPositionTrader.execute_campaign` and `CampaignExecutionService.arm_initial_entry`.
+- **Android:** baseline `StandaloneRuntime.kt::longCampaignSignals` only emits WM2 after three rising AO bars if `lastValidFractalLevel(i - 1)` returns a valid buy-fractal above displaced Teeth.
+- **Conclusion:** the selected TC2 scenario “Super AO is the first actionable signal before WM3/fractal” is **MISMATCH** in the current baseline campaign-signal implementations. This is a static source-to-code proof through both decision paths, not a test-run claim. No rule was changed. A paired no-fractal WM2 golden vector remains required to measure/lock the expected behavior once separately authorized.
+
+### J.5 Execution-safety gate question still open on Android
+
+- `executionReady()` reports runtime, pause, reconciliation, kill, market freshness, account readiness, history, FSM permission and equity-circuit-breaker state.
+- Static call-site inventory shows `executionReady()` is used by status/diagnostics, not directly inside `submitCampaignEntry`, `withCampaignMutation` or `signedRequest`. The scan dispatcher separately gates running/paused/reconcile/kill/history/REST-market, and campaign scan later gates credentials/account readiness and daily guard. The remaining question is whether FSM execution permission and the equity circuit breaker are guaranteed by an earlier state transition or daily guard on every order path. Until all state transitions/callers are proven, record this as **UNRESOLVED safety-gate equivalence**, not as a confirmed live bypass.
+
+### J.6 Test evidence boundary
+
+- No Python/Android golden vector was executed against the forensic branch in this follow-up. Static line-level comparison establishes the WM2 gating mismatch; numeric parity, Alligator/SMMA deltas, look-ahead tests, expiry/invalidation, fills, and campaign lifecycle vectors remain **NOT RUN** on this branch.
+- PR #49’s Android AO/AC test failure and five campaign Python test failures are described in §I.2 and remain PR-only evidence.
