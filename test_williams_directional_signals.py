@@ -15,6 +15,13 @@ from williams_signals import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _enable_approximate_angulation_for_detector_tests(monkeypatch):
+    # These tests validate the deterministic geometry only. Production defaults
+    # to blocking WM1 until the approximation is source-verified.
+    monkeypatch.setenv("WILLIAMS_ALLOW_APPROXIMATE_ANGULATION", "true")
+
+
 def frame():
     rows = []
     for i in range(12):
@@ -44,6 +51,18 @@ def frame():
             "alligator_awake": True,
         })
     return pd.DataFrame(rows)
+
+
+def test_wm1_is_blocked_by_default_when_angulation_is_only_an_approximation(monkeypatch):
+    monkeypatch.delenv("WILLIAMS_ALLOW_APPROXIMATE_ANGULATION", raising=False)
+    data = frame()
+    data.loc[8, "bearish_reversal_bar"] = True
+
+    signals = extract_short_signal_specs(
+        "BTCUSDT", data, timeframe="1h", tick_size=0.1,
+        wave_invalidation_price=115.0,
+    )
+    assert not [s for s in signals if s.signal_type is SignalType.REVERSAL]
 
 
 def test_short_reversal_uses_low_minus_tick_and_high_as_invalidation():
