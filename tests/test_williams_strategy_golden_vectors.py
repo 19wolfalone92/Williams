@@ -16,6 +16,8 @@ from strategy import (
     canonical_williams_parameter_blockers,
     config_from_env,
 )
+from trading_config import TradingConfig, execution_timeframe_blocker
+from williams_signals import _timeframe_ms
 from trading_config import TradingConfig
 from williams_signals import (
     _invalidation_intact,
@@ -339,3 +341,21 @@ def test_canonical_environment_blocks_non_h1_execution_timeframe(timeframe):
 def test_canonical_environment_allows_h1_and_default():
     assert not canonical_williams_environment_blockers({})
     assert not canonical_williams_environment_blockers({"EXECUTION_TIMEFRAME": "1h"})
+
+
+
+@pytest.mark.parametrize("timeframe", ["5m", "15m", "", "unknown"])
+def test_trading_config_execution_timeframe_guard_blocks_non_h1(timeframe):
+    assert execution_timeframe_blocker({"EXECUTION_TIMEFRAME": timeframe}) is not None
+    assert TradingConfig.from_env({"EXECUTION_TIMEFRAME": timeframe}).execution_timeframe == timeframe.lower()
+
+
+def test_trading_config_execution_timeframe_guard_accepts_h1_or_default():
+    assert execution_timeframe_blocker({}) is None
+    assert execution_timeframe_blocker({"EXECUTION_TIMEFRAME": "1h"}) is None
+
+
+def test_signal_timestamp_math_has_no_unknown_timeframe_m5_fallback():
+    assert _timeframe_ms("1h") == 3_600_000
+    assert _timeframe_ms("5m") == 300_000
+    assert _timeframe_ms("unknown") == 0
