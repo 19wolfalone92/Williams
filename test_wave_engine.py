@@ -314,3 +314,25 @@ def test_equal_high_fractal_confirmation_time_is_not_backdated():
     assert got[0].center_index == 2
     # Tie at index 4 means the second qualifying lower high arrives at index 5.
     assert got[0].confirmed_index == 5
+
+
+def test_double_direction_fractal_is_not_promoted_to_ordered_wave_pivots():
+    e = engine(base_interval="1h", min_bars=5)
+    idx = pd.date_range("2026-01-01", periods=8, freq="h", tz="UTC")
+    ind = pd.DataFrame(
+        {
+            "fractal_up": [False, False, True, False, False, False, False, False],
+            "fractal_down": [False, False, True, False, False, False, False, False],
+            "confirmed_up_level": [float("nan")] * 6 + [10.0, float("nan")],
+            "confirmed_down_level": [float("nan")] * 6 + [5.0, float("nan")],
+            "confirmed_up_center_index": [-1, -1, -1, -1, -1, -1, 2, -1],
+            "confirmed_down_center_index": [-1, -1, -1, -1, -1, -1, 2, -1],
+            "high": [7.0, 8.0, 10.0, 9.0, 10.0, 8.0, 7.0, 6.0],
+            "low": [11.0, 10.0, 5.0, 6.0, 5.0, 7.0, 8.0, 9.0],
+            "close": [6.0, 7.0, 8.0, 7.0, 8.0, 7.0, 7.0, 7.0],
+            "ao": [0.0] * 8,
+            "ac": [0.0] * 8,
+        },
+        index=idx,
+    )
+    assert e._confirmed_pivots(ind) == []

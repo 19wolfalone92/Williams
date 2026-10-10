@@ -387,6 +387,16 @@ class MultiTimeframeWaveEngine:
                         continue
                     if center < left or center >= confirmed or center >= len(ind):
                         continue
+                    # A candle can qualify as both fractal directions. Keep
+                    # both flags available to the signal/visual layer, but it
+                    # is not an ordered pair of wave pivots: OHLC does not reveal
+                    # whether the high or low occurred first inside that candle.
+                    up_flag = ind["fractal_up"].iloc[center]
+                    down_flag = ind["fractal_down"].iloc[center]
+                    if pd.isna(up_flag) or pd.isna(down_flag):
+                        continue
+                    if bool(up_flag) and bool(down_flag):
+                        continue
                     flag = ind[flag_col].iloc[center]
                     if pd.isna(flag) or not bool(flag):
                         continue

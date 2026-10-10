@@ -559,13 +559,24 @@ class FuturesCampaignExecutionService:
             raise FuturesCampaignExecutionError("Signal trigger price must be finite and positive")
         if int(signal.expires_at_ms or 0) <= int(time.time() * 1000):
             raise FuturesCampaignExecutionError("Williams signal has expired or has no valid expiry")
-        raw_stop = float(signal.invalidation_price or 0.0)
-        if direction == "LONG":
-            valid_stop = 0 < raw_stop < float(signal.trigger_price)
-        else:
-            valid_stop = raw_stop > float(signal.trigger_price)
-        if not valid_stop:
-            raw_stop = float(signal.protective_reference or 0.0)
+        # Zero means an older SignalSpec did not provide a separate
+        # invalidation field; only that legacy/missing case may use the
+        # protective reference. An explicit malformed or wrong-side stop is a
+        # contract violation and must never be silently replaced by another
+        # level while preserving entry authorization.
+        try:
+            raw_stop = float(signal.invalidation_price or 0.0)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise FuturesCampaignExecutionError("Structural invalidation is not numeric") from exc
+        if not math.isfinite(raw_stop):
+            raise FuturesCampaignExecutionError("Structural invalidation must be finite")
+        if raw_stop == 0.0:
+            try:
+                raw_stop = float(signal.protective_reference or 0.0)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise FuturesCampaignExecutionError("Protective reference is not numeric") from exc
+            if not math.isfinite(raw_stop):
+                raise FuturesCampaignExecutionError("Protective reference must be finite")
         if direction == "LONG" and not 0 < raw_stop < float(signal.trigger_price):
             raise FuturesCampaignExecutionError("LONG structural invalidation must be below entry trigger")
         if direction == "SHORT" and not raw_stop > float(signal.trigger_price):
