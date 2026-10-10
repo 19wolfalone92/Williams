@@ -904,6 +904,22 @@ internal class FuturesNativeEngine(
         return max(0.0, (baseline - equity) / baseline)
     }
 
+    private fun currentContextAllows(
+        exchange: BinanceUsdmFuturesClient,
+        symbol: String,
+        direction: String
+    ): Boolean {
+        val h1 = analyseFrame(exchange, symbol, "1h") ?: return false
+        val h4 = analyseFrame(exchange, symbol, "4h") ?: return false
+        val d1 = analyseFrame(exchange, symbol, "1d") ?: return false
+        return FuturesContextPolicy.allows(
+            direction,
+            FuturesContextState(h1.bullish, h1.bearish, h1.awake, h1.ao),
+            FuturesContextState(h4.bullish, h4.bearish, h4.awake, h4.ao),
+            FuturesContextState(d1.bullish, d1.bearish, d1.awake, d1.ao)
+        )
+    }
+
     private fun findSignal(exchange: BinanceUsdmFuturesClient, symbol: String): Signal? {
         val tf = interval()
         if (tf != "1h") {
@@ -1349,6 +1365,12 @@ internal class FuturesNativeEngine(
         if (signal.direction == "SHORT" && !(triggerValue < mark && mark < stopValue)) {
             throw FuturesApiException("$symbol SHORT entry became stale at final validation")
         }
+        // Re-fetch closed H1/H4/D1 context immediately before the durable intent
+        // and exchange mutation. A candle boundary between scanning and arming
+        // must not leave an order authorized by stale context.
+        if (!currentContextAllows(exchange, symbol, signal.direction)) {
+            throw FuturesApiException("$symbol directional context changed or is unavailable at final entry validation")
+        }
 
         // Tick normalization can widen the actual trigger-to-stop distance.
         // Re-check the submitted prices/quantity, not only the raw signal inputs.
@@ -1672,6 +1694,17 @@ internal class FuturesNativeEngine(
                             "RECONCILE_REQUIRED",
                             "Pending entry order does not match durable side/type/trigger/quantity intent"
                         )
+                    }
+                    val contextStillAllows = runCatching {
+                        currentContextAllows(exchange, symbol, direction)
+                    }.getOrDefault(false)
+                    if (!contextStillAllows) {
+                        cancelPendingEntry(exchange, campaign, "CONTEXT_INVALIDATED_OR_UNAVAILABLE")
+                        return JSONObject()
+                            .put("symbol", symbol)
+                            .put("state", campaign.optString("state", "CLOSED"))
+                            .put("action", "ENTRY_CANCELLED")
+                            .put("reason", "CONTEXT_INVALIDATED_OR_UNAVAILABLE")
                     }
                     val expiresAt = campaign.optLong("entry_expires_at_ms", 0L)
                     if (expiresAt <= 0L || System.currentTimeMillis() >= expiresAt) {
