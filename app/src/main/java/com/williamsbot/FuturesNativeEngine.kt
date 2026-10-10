@@ -58,6 +58,63 @@ internal fun isThirdSameColorAoBar(values: List<Double>, index: Int, direction: 
 }
 
 /** Increasing price-to-Jaw separation used by the Python WM1 detector. */
+internal fun williamsAngulationScore(
+    jaw: List<Double>,
+    lows: List<Double>,
+    highs: List<Double>,
+    closes: List<Double>,
+    index: Int,
+    direction: String,
+    window: Int = 5
+): Double? {
+    if (
+        index < 0 || index >= jaw.size ||
+        jaw.size != lows.size || jaw.size != highs.size || jaw.size != closes.size
+    ) return null
+    val side = direction.uppercase(Locale.US)
+    if (side !in setOf("LONG", "SHORT")) return null
+    val start = max(0, index - max(3, window) + 1)
+    if (index - start + 1 < 3) return null
+    for (i in start..index) {
+        if (!jaw[i].isFinite() || !lows[i].isFinite() ||
+            !highs[i].isFinite() || !closes[i].isFinite()
+        ) return null
+    }
+
+    val bullishDistance = (start..index).map { i -> max(0.0, jaw[i] - lows[i]) }
+    val bearishDistance = (start..index).map { i -> max(0.0, highs[i] - jaw[i]) }
+    val bullishDelta = bullishDistance.last() - bullishDistance.first()
+    val bearishDelta = bearishDistance.last() - bearishDistance.first()
+
+    fun regressionSlope(values: List<Double>): Double {
+        val n = values.size.toDouble()
+        val xMean = (n - 1.0) / 2.0
+        val yMean = values.average()
+        var numerator = 0.0
+        var denominator = 0.0
+        for (i in values.indices) {
+            val dx = i.toDouble() - xMean
+            numerator += dx * (values[i] - yMean)
+            denominator += dx * dx
+        }
+        return if (denominator > 0.0) numerator / denominator else 0.0
+    }
+
+    val directionValid = if (side == "LONG") {
+        bullishDelta > 0.0 && regressionSlope(bullishDistance) > 0.0
+    } else {
+        bearishDelta > 0.0 && regressionSlope(bearishDistance) > 0.0
+    }
+    if (!directionValid) return null
+
+    // Match the Python WM1 evidence score: the score is the larger increase in
+    // separation (either side of Jaw) normalized by current price/Jaw.
+    val base = max(max(kotlin.math.abs(closes[index]), kotlin.math.abs(jaw[index])), 1e-9)
+    val score = max(max(bullishDelta, bearishDelta) / base * 100.0, 0.0)
+    return score.takeIf { it.isFinite() }
+}
+
+/** Boolean compatibility wrapper for existing tests/callers. */
 internal fun hasIncreasingWilliamsAngulation(
     jaw: List<Double>,
     lows: List<Double>,
@@ -66,29 +123,8 @@ internal fun hasIncreasingWilliamsAngulation(
     direction: String,
     window: Int = 5
 ): Boolean {
-    if (index < 0 || index >= jaw.size || jaw.size != lows.size || jaw.size != highs.size) return false
-    val side = direction.uppercase(Locale.US)
-    if (side !in setOf("LONG", "SHORT")) return false
-    val start = max(0, index - max(3, window) + 1)
-    if (index - start + 1 < 3) return false
-    for (i in start..index) {
-        if (!jaw[i].isFinite() || !lows[i].isFinite() || !highs[i].isFinite()) return false
-    }
-    val distances = (start..index).map { i ->
-        if (side == "LONG") max(0.0, jaw[i] - lows[i]) else max(0.0, highs[i] - jaw[i])
-    }
-    if (distances.last() - distances.first() <= 0.0) return false
-    val n = distances.size.toDouble()
-    val xMean = (n - 1.0) / 2.0
-    val yMean = distances.average()
-    var numerator = 0.0
-    var denominator = 0.0
-    for (i in distances.indices) {
-        val dx = i.toDouble() - xMean
-        numerator += dx * (distances[i] - yMean)
-        denominator += dx * dx
-    }
-    return denominator > 0.0 && numerator / denominator > 0.0
+    val closes = highs.indices.map { i -> (highs[i] + lows[i]) / 2.0 }
+    return williamsAngulationScore(jaw, lows, highs, closes, index, direction, window) != null
 }
 
 /**
@@ -135,7 +171,8 @@ internal class FuturesNativeEngine(
         val stop: Double,
         val atr: Double,
         val reason: String,
-        val confirmationTime: Long = signalBarTime
+        val confirmationTime: Long = signalBarTime,
+        val angulationScore: Double = 0.0
     )
 
     private data class Frame(
