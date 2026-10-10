@@ -1528,6 +1528,7 @@ def test_python_tc2_trailing_candidate_matches_native_price_bar_contract():
         ("SHORT", [1.0, float("nan"), 3.0], [2.0, 3.0, 4.0], 0.1, 3),
         ("LONG", [1.0, 2.0, 3.0], [2.0, 3.0, 4.0], 0.0, 3),
         ("LONG", [1.0, 2.0, 3.0], [2.0, 3.0, 4.0], 0.1, 4),
+        ("LONG", [1.0, 4.0, 3.0], [2.0, 3.0, 4.0], 0.1, 3),
     ],
 )
 def test_tc2_trailing_candidate_rejects_ambiguous_or_invalid_input(direction,lows,highs,tick,bars):
