@@ -85,6 +85,24 @@ class FakeBinance:
         self.oco_calls = 0
         self.open_orders_calls = 0
 
+    def my_trades(self, symbol, order_id=None, limit=1000):
+        rows = []
+        for order in self.all_orders(symbol, limit=1000):
+            if order_id is not None and str(order.get("orderId")) != str(order_id):
+                continue
+            qty = float(order.get("executedQty", 0) or 0)
+            quote = float(order.get("cummulativeQuoteQty", 0) or 0)
+            if qty <= 0:
+                continue
+            price = quote / qty if quote > 0 else float(order.get("price", 0) or 0)
+            rows.append({
+                "id": f"fixture-trade-{order.get('orderId')}",
+                "orderId": order.get("orderId"),
+                "price": str(price), "qty": str(qty),
+                "commission": "0", "commissionAsset": "USDT",
+            })
+        return rows[-limit:]
+
     def all_orders(self, symbol, limit=1000):
         rows = [
             {
