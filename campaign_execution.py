@@ -161,6 +161,64 @@ class CampaignExecutionService:
             raise CampaignExecutionError(f"{symbol}: invalid current market price")
         return price
 
+    def _validate_h1_signal_market_state(self, signal: SignalSpec):
+        """Independently revalidate source/confirmation candles at the final entry gate."""
+        try:
+            import pandas as pd
+            from data import fetch_klines
+
+            history = fetch_klines(self.client, signal.symbol, "1h", limit=160)
+            if history is None or history.empty:
+                raise CampaignExecutionError("H1 source history unavailable")
+            history = history.copy()
+            history.index = pd.to_datetime(history.index, utc=True, errors="coerce")
+            history = history.loc[~history.index.isna()].sort_index()
+            if history.empty:
+                raise CampaignExecutionError("H1 source history has no valid UTC timestamps")
+            now = pd.Timestamp.now(tz="UTC")
+            frame = pd.Timedelta(hours=1)
+            closed = history.loc[history.index + frame <= now]
+            if closed.empty:
+                raise CampaignExecutionError("No closed H1 candles available")
+            latest_close = closed.index[-1] + frame
+            if now - latest_close > 2 * frame:
+                raise CampaignExecutionError("H1 market data is stale")
+            source_time = pd.to_datetime(int(signal.signal_bar_time_ms), unit="ms", utc=True)
+            if source_time not in closed.index:
+                raise CampaignExecutionError("Signal source H1 candle is unavailable or not closed")
+            confirmation_ms = int(signal.confirmation_time_ms or 0)
+            if (
+                confirmation_ms < int(signal.signal_bar_time_ms) + 3_600_000
+                or confirmation_ms > int(now.timestamp() * 1000)
+            ):
+                raise CampaignExecutionError("Signal confirmation is premature or future-dated")
+            source = closed.loc[source_time]
+            source_high = float(source["high"])
+            source_low = float(source["low"])
+            if (
+                not pd.notna(source_high) or not pd.notna(source_low)
+                or source_low <= 0 or source_high < source_low
+                or float(signal.trigger_price) <= source_high
+                or float(signal.invalidation_price or 0) <= 0
+            ):
+                raise CampaignExecutionError("Signal source candle/trigger/invalidation is invalid")
+            later_closed = closed.loc[
+                (closed.index > source_time)
+                & ((closed.index + frame).astype("int64") // 1_000_000 > confirmation_ms)
+            ]
+            if not later_closed.empty and (
+                pd.to_numeric(later_closed["low"], errors="coerce")
+                <= float(signal.invalidation_price)
+            ).any():
+                raise CampaignExecutionError("Signal was structurally invalidated after confirmation")
+            return closed
+        except CampaignExecutionError:
+            raise
+        except Exception as exc:
+            raise CampaignExecutionError(
+                f"H1 signal revalidation failed closed: {type(exc).__name__}: {exc}"
+            ) from exc
+
     def _check_algo_capacity(self, symbol: str, additional: int = 1) -> None:
         filters = self._rules(symbol)
         open_orders = self.client.open_orders(symbol)
@@ -328,25 +386,18 @@ class CampaignExecutionService:
                     f"{signal.symbol}: trigger already crossed at {now_price:.12g}"
                 )
 
-            # For the fractal signal, validity is specifically evaluated at
-            # trigger time relative to Teeth. At arm time we require trigger
-            # to remain above the latest Teeth as an early sanity check.
+            closed_h1 = self._validate_h1_signal_market_state(signal)
+
+            # WM3 also requires the current H1 Teeth relationship. This remains
+            # separate from the generic source-candle and structural checks.
             if signal.signal_type == SignalType.FRACTAL:
                 try:
-                    from data import fetch_klines
                     from strategy import calculate_indicators, config_from_env
-                    df = fetch_klines(
-                        self.client,
-                        signal.symbol,
-                        signal.timeframe,
-                        limit=160,
-                    )
-                    closed = df.iloc[:-1].copy() if len(df) > 1 else df
-                    ind = calculate_indicators(closed, config_from_env())
+                    ind = calculate_indicators(closed_h1, config_from_env())
                     teeth = float(ind.iloc[-1].get("teeth_shifted", 0.0) or 0.0)
-                    if teeth > 0 and trigger <= teeth:
+                    if teeth <= 0 or trigger <= teeth:
                         raise CampaignExecutionError(
-                            f"{signal.symbol}: fractal trigger {trigger:.12g} is now not above Teeth {teeth:.12g}"
+                            f"{signal.symbol}: fractal trigger is not valid above current H1 Teeth"
                         )
                 except CampaignExecutionError:
                     raise
