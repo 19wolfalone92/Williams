@@ -473,7 +473,7 @@ class MarketScanner:
                     if int(spec.expires_at_ms or 0) > now_ms
                 ),
                 key=lambda s: (
-                    s.signal_bar_time_ms,
+                    int(getattr(s, "confirmation_time_ms", 0) or s.signal_bar_time_ms),
                     s.created_at_ms,
                     s.direction,
                     s.signal_type.value,
