@@ -698,7 +698,7 @@ class Database:
         """
         intent_id = str(intent_id or "").strip()
         status = str(final_status or "").upper()
-        if not intent_id or status not in {"SUBMITTED", "AMBIGUOUS", "RECONCILE_REQUIRED"}:
+        if not intent_id or status not in {"SUBMITTING", "SUBMITTED", "AMBIGUOUS", "RECONCILE_REQUIRED"}:
             raise ValueError("valid intent_id and execution result status are required")
         try:
             response_json = json.dumps(
