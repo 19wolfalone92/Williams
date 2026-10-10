@@ -103,7 +103,7 @@ def test_short_super_ao_and_fractal_use_bearish_trigger_geometry():
     assert fractal.role is SignalRole.ENTRY
     assert fractal.trigger_price < float(data.loc[9, "low"])
     assert fractal.trigger_price < float(data.loc[11, "teeth_shifted"])
-    assert fractal.protective_reference == float(data.loc[9, "high"])
+    assert fractal.protective_reference == pytest.approx(max(data.loc[9:11, "high"]) + 0.1)
 
 
 def test_short_signal_is_not_armed_after_price_has_already_broken_trigger():
