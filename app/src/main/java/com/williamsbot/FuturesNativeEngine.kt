@@ -2916,10 +2916,10 @@ internal class FuturesNativeEngine(
         if (favorable / frame.atr < 0.5) return
         val oldStop = campaign.optDouble("stop_price", 0.0)
         val candidate = if (direction == "LONG") {
-            val fractal = frame.latestDownFractal?.second ?: 0.0
+            val fractal = frame.latestDownFractal?.level ?: 0.0
             max(frame.teeth, fractal) - frame.atr * 0.25
         } else {
-            val fractal = frame.latestUpFractal?.second ?: 0.0
+            val fractal = frame.latestUpFractal?.level ?: 0.0
             min(frame.teeth, if (fractal > 0.0) fractal else frame.teeth) + frame.atr * 0.25
         }
         val tighter = if (direction == "LONG") candidate > oldStop else oldStop <= 0.0 || candidate < oldStop
