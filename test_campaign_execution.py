@@ -110,6 +110,67 @@ def test_spot_tc2_admission_does_not_require_d1_context():
             db.conn.close()
 
 
+def test_spot_tc2_wm2_does_not_need_directional_alligator_alignment():
+    class SleepingH1Snapshot(FakeSnapshot):
+        def context(self, symbol, interval):
+            context = super().context(symbol, interval)
+            if str(interval).lower() == "1h":
+                context.alligator_state = "SLEEP"
+                context.alligator_awake = False
+                context.allow_long = False
+            return context
+
+    with tempfile.TemporaryDirectory() as directory:
+        db = Database(os.path.join(directory, "wm2-sleeping-h1.sqlite3"))
+        try:
+            svc = service(db, MockExchange())
+            allowed, early = svc._tc2_spot_context_admission(
+                signal(kind=SignalType.SUPER_AO),
+                SleepingH1Snapshot(),
+                expected_versions={"1h": 1, "4h": 1},
+            )
+            assert allowed is True
+            assert early is False
+        finally:
+            db.conn.close()
+
+
+def test_spot_tc2_wm3_requires_trigger_beyond_h1_teeth():
+    class SleepingH1Snapshot(FakeSnapshot):
+        def context(self, symbol, interval):
+            context = super().context(symbol, interval)
+            if str(interval).lower() == "1h":
+                context.alligator_state = "SLEEP"
+                context.alligator_awake = False
+                context.teeth = 100.0
+            return context
+
+    with tempfile.TemporaryDirectory() as directory:
+        db = Database(os.path.join(directory, "wm3-teeth.sqlite3"))
+        try:
+            svc = service(db, MockExchange())
+            valid = signal(kind=SignalType.FRACTAL)
+            allowed, early = svc._tc2_spot_context_admission(
+                valid,
+                SleepingH1Snapshot(),
+                expected_versions={"1h": 1, "4h": 1},
+            )
+            assert allowed is True
+            assert early is False
+
+            from dataclasses import replace
+            invalid = replace(valid, trigger_price=99.0)
+            allowed, early = svc._tc2_spot_context_admission(
+                invalid,
+                SleepingH1Snapshot(),
+                expected_versions={"1h": 1, "4h": 1},
+            )
+            assert allowed is False
+            assert early is False
+        finally:
+            db.conn.close()
+
+
 def test_spot_tc2_wm1_fails_closed_when_angulation_is_not_opted_in(monkeypatch):
     monkeypatch.setenv("WILLIAMS_ALLOW_APPROXIMATE_ANGULATION", "false")
     with tempfile.TemporaryDirectory() as directory:
