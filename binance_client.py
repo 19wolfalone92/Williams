@@ -109,7 +109,7 @@ class BinanceSpotClient:
                     time.sleep(delays[attempt])
                     continue
                 raise BinanceAPIError(
-                    f'Binance transport error: {exc}',
+                    f'Binance transport error: {type(exc).__name__}',
                     unknown_execution=method in {"POST", "DELETE"},
                 ) from exc
 
@@ -188,10 +188,10 @@ class BinanceSpotClient:
                 except ValueError:
                     payload = {'code': r.status_code, 'msg': r.text}
                 raise BinanceAPIError(
-                    f'Binance {r.status_code}: {payload}',
+                    f'Binance HTTP {r.status_code}; API code {payload.get("code", "unknown") if isinstance(payload, dict) else "unknown"}',
                     unknown_execution=method in {"POST", "DELETE"},
                     status_code=r.status_code,
-                    payload=payload,
+                    payload={"code": payload.get("code", r.status_code) if isinstance(payload, dict) else r.status_code, "msg": "response body redacted"},
                 )
 
             try:
