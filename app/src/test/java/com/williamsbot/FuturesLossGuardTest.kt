@@ -7,7 +7,7 @@ import org.junit.Test
 
 class FuturesLossGuardTest {
     private fun trade(pnl: Double, closedAt: Long) =
-        JSONObject().put("net_pnl", pnl.toString()).put("closed_at", closedAt.toString())
+        JSONObject().put("net_pnl", pnl.toString()).put("closed_at", closedAt.toString()).put("fee_known", true)
 
     @Test
     fun blocksAtConsecutiveLossLimit() {
