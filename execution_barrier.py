@@ -169,6 +169,10 @@ class ExecutionBarrier:
 
     def _assert_fresh_intent_identity(self, intent: OrderIntent) -> None:
         """Prevent reusing a durable intent or clientOrderId after any outcome."""
+        if not str(intent.client_order_id or "").strip():
+            raise ExecutionPersistenceError(
+                "stable clientOrderId is required before any exchange mutation"
+            )
         if self.db is None or not hasattr(self.db, "conn"):
             raise ExecutionPersistenceError(
                 "durable identity lookup is unavailable; refusing order submission"
