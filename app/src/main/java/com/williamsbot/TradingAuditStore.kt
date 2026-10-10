@@ -496,15 +496,47 @@ class TradingAuditStore(context: Context) :
         val observed = runCatching {
             responseJson?.let { JSONObject(it) }
         }.getOrNull()
+        val reports = observed?.optJSONArray("orderReports")
+        var reportHasFill = false
+        var reportStatesKnown = reports != null && reports.length() > 0
+        if (reports != null) {
+            for (i in 0 until reports.length()) {
+                val leg = reports.optJSONObject(i)
+                if (leg == null) {
+                    reportStatesKnown = false
+                    continue
+                }
+                val legStatus = leg.optString("status").uppercase(Locale.US)
+                val legQty = leg.optString("executedQty").toDoubleOrNull()
+                if (legQty == null || legQty < 0.0 ||
+                    legStatus in setOf("PARTIALLY_FILLED", "FILLED") ||
+                    (legQty > 0.0)
+                ) {
+                    reportHasFill = true
+                }
+                if (legStatus !in setOf(
+                        "NEW", "PENDING_NEW", "FILLED", "PARTIALLY_FILLED",
+                        "CANCELED", "CANCELLED", "EXPIRED", "REJECTED"
+                    )
+                ) reportStatesKnown = false
+            }
+        }
         val executed = observed?.optString("executedQty")?.toDoubleOrNull() ?: 0.0
         val normalizedExchangeStatus = exchangeStatus.uppercase(Locale.US)
+        val orderKnownZeroFill = normalizedExchangeStatus in setOf(
+            "NEW", "PENDING_NEW", "CANCELED", "CANCELLED", "EXPIRED", "REJECTED"
+        ) && executed <= 0.0
+        val ocoKnownNoFill = reports != null && reportStatesKnown && !reportHasFill &&
+            (0 until reports.length()).all { index ->
+                val state = reports.optJSONObject(index)?.optString("status").orEmpty().uppercase(Locale.US)
+                state in setOf("NEW", "PENDING_NEW", "CANCELED", "CANCELLED", "EXPIRED", "REJECTED")
+            }
         val status = when {
             notFound -> "ABORTED_NOT_FOUND"
-            executed > 0.0 || normalizedExchangeStatus in setOf("PARTIALLY_FILLED", "FILLED") ->
+            reportHasFill || executed > 0.0 ||
+                normalizedExchangeStatus in setOf("PARTIALLY_FILLED", "FILLED") ->
                 "RECONCILE_REQUIRED"
-            normalizedExchangeStatus in setOf(
-                "NEW", "PENDING_NEW", "CANCELED", "CANCELLED", "EXPIRED", "REJECTED"
-            ) -> "RECONCILED"
+            orderKnownZeroFill || ocoKnownNoFill -> "RECONCILED"
             else -> "RECONCILE_REQUIRED"
         }
         val values = ContentValues().apply {
@@ -554,6 +586,71 @@ class TradingAuditStore(context: Context) :
             "target_order_id=? AND method='DELETE' AND status IN ('PENDING','SUBMITTING','AMBIGUOUS','RECONCILE_REQUIRED')",
             arrayOf(targetOrderId)
         )
+    }
+
+    @Synchronized
+    fun reconcileExecutionMutationByTargetOrderListId(
+        targetOrderListId: String,
+        responseJson: String?
+    ) {
+        if (targetOrderListId.isBlank()) return
+        val response = runCatching { responseJson?.let { JSONObject(it) } }.getOrNull()
+        val reports = response?.optJSONArray("orderReports")
+        val listStatus = response?.optString("listOrderStatus").orEmpty().uppercase(Locale.US)
+            .ifBlank { response?.optString("listStatusType").orEmpty().uppercase(Locale.US) }
+        var anyFill = false
+        var allKnown = reports != null && reports.length() > 0
+        var allOpen = allKnown
+        var allTerminal = allKnown
+        if (reports != null) {
+            for (i in 0 until reports.length()) {
+                val leg = reports.optJSONObject(i)
+                if (leg == null) {
+                    allKnown = false
+                    allOpen = false
+                    allTerminal = false
+                    continue
+                }
+                val state = leg.optString("status").uppercase(Locale.US)
+                val qty = leg.optString("executedQty").toDoubleOrNull()
+                if (qty == null || qty < 0.0 ||
+                    state in setOf("PARTIALLY_FILLED", "FILLED") || qty > 0.0
+                ) anyFill = true
+                if (state !in setOf(
+                        "NEW", "PENDING_NEW", "FILLED", "PARTIALLY_FILLED",
+                        "CANCELED", "CANCELLED", "EXPIRED", "REJECTED"
+                    )
+                ) allKnown = false
+                if (state !in setOf("NEW", "PENDING_NEW") || qty != 0.0) allOpen = false
+                if (state !in setOf("CANCELED", "CANCELLED", "EXPIRED", "REJECTED") || qty != 0.0) allTerminal = false
+            }
+        }
+        val status = when {
+            anyFill || !allKnown -> "RECONCILE_REQUIRED"
+            allOpen -> "RECONCILED_ACTIVE"
+            allTerminal -> "RECONCILED"
+            listStatus in setOf("EXEC_STARTED", "EXECUTING") -> "RECONCILE_REQUIRED"
+            else -> "RECONCILE_REQUIRED"
+        }
+        val db = writableDatabase
+        val values = ContentValues().apply {
+            put("status", status)
+            put("exchange_status", listStatus)
+            put("response_json", responseJson)
+            put("reason", "authoritative Binance GET by orderListId; legs=" + (reports?.length() ?: 0))
+            put("updated_at", System.currentTimeMillis())
+        }
+        db.update(
+            "execution_intents",
+            values,
+            "target_order_list_id=? AND method='DELETE' AND status IN ('PENDING','SUBMITTING','AMBIGUOUS','RECONCILE_REQUIRED')",
+            arrayOf(targetOrderListId)
+        )
+        val reread = db.rawQuery(
+            "SELECT COUNT(*) FROM execution_intents WHERE target_order_list_id=? AND method='DELETE' AND status=?",
+            arrayOf(targetOrderListId, status)
+        ).use { cursor -> cursor.moveToFirst() && cursor.getInt(0) >= 0 }
+        if (!reread) throw IllegalStateException("order-list reconciliation read-back failed")
     }
 
     @Synchronized
