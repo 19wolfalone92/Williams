@@ -1430,6 +1430,7 @@ class CampaignExecutionService:
             required_context_versions=dict(signal.context_versions),
             hypothesis_id=f"WILLIAMS_ADD_{signal.signal_type.value}",
             invalidation_level=stop,
+            signal_trigger_price=trigger,
             quantity=self.client.decimal_format(qty),
             client_order_id=cid,
             purpose="CAMPAIGN_ADD_ON",
