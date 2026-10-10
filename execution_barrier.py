@@ -69,10 +69,14 @@ class ExecutionBarrier:
     is performed by this layer.
     """
 
-    def __init__(self, context_cache: ContextCache, db=None, *, preflight_provider: Callable[[], Mapping[str, Any]] | None = None, exchange_client=None, max_preflight_age_ms: int = 2_000) -> None:
+    def __init__(self, context_cache: ContextCache, db=None, *, preflight_service: PreflightCheckService | None = None, preflight_provider=None, exchange_client=None, max_preflight_age_ms: int = 2_000) -> None:
         self.context_cache = context_cache
         self.db = db
-        self.preflight_provider = preflight_provider
+        # Production admission accepts a concrete PreflightCheckService, never a
+        # caller-supplied callback/dict. `preflight_provider` is retained only to
+        # fail closed for older callers; it is deliberately never invoked.
+        self.preflight_service = preflight_service
+        self._legacy_preflight_provider = preflight_provider
         self.exchange_client = exchange_client
         self.max_preflight_age_ms = max(1, int(max_preflight_age_ms))
 
@@ -110,10 +114,16 @@ class ExecutionBarrier:
             or getattr(self.exchange_client, "base_url", None) != "https://testnet.binance.vision"
         ):
             return "execution_client_not_pinned_to_spot_testnet"
-        if not callable(self.preflight_provider):
-            return "mandatory_preflight_provider_missing"
+        service = self.preflight_service
+        # Require the concrete trusted implementation and object identity binding:
+        # the service must inspect the exact client whose mutation permit is issued.
+        # A dict or arbitrary callback is never accepted as an execution proof.
+        if type(service) is not PreflightCheckService:
+            return "trusted_preflight_service_missing_or_invalid"
+        if getattr(service, "client", None) is not self.exchange_client:
+            return "preflight_execution_client_mismatch"
         try:
-            report = self.preflight_provider()
+            report = service.verify_all()
         except Exception as exc:
             return f"preflight_exception:{type(exc).__name__}"
         if not isinstance(report, Mapping):
