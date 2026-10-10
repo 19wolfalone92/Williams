@@ -2991,6 +2991,7 @@ private class NativeEngine(
                     val expired =
                         intent.signalExpiresAtMs <= 0L || nowMs >= intent.signalExpiresAtMs
                     var invalidated = false
+                    var supersededByNewerFractal = false
                     var validationUnavailable = false
 
                     if (!expired) {
@@ -3018,6 +3019,18 @@ private class NativeEngine(
                                     validationUnavailable = true
                                 } else {
                                     invalidated = newlyClosed.any { it.l <= intent.invalidationPrice }
+                                    if (intent.signalType.equals("FRACTAL", ignoreCase = true)) {
+                                        val latest = WilliamsFractalMath.latestUp(
+                                            highs = history.map { it.h },
+                                            throughIndex = history.lastIndex,
+                                            lookbackBars = 80
+                                        )
+                                        supersededByNewerFractal =
+                                            latest != null &&
+                                                latest.centerIndex in history.indices &&
+                                                history[latest.centerIndex].t > intent.signalBarTimeMs
+                                        if (supersededByNewerFractal) invalidated = true
+                                    }
                                     val newCursor = newlyClosed.maxOf { it.t }
                                     synchronized(pendingEntries) {
                                         val stored = pendingEntries[intent.symbol]
@@ -3035,6 +3048,7 @@ private class NativeEngine(
                     if (expired || invalidated || validationUnavailable) {
                         val reason = when {
                             expired -> "EXPIRED"
+                            supersededByNewerFractal -> "NEWER_FRACTAL"
                             invalidated -> "STRUCTURAL_INVALIDATION"
                             else -> "REVALIDATION_UNAVAILABLE"
                         }
