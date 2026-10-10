@@ -174,8 +174,9 @@ class CampaignEngine:
         ]
         if not candidates:
             return None
-        # Book model: first available valid signal starts the campaign.  We
-        # therefore order primarily by signal-bar time, not by a score.
+        # Book model: the first signal that became actionable starts the
+        # campaign. For WM3, confirmation occurs after the source/center bar,
+        # so rank by confirmation chronology rather than historical center time.
         return min(candidates, key=lambda s: (int(getattr(s, "confirmation_time_ms", 0) or s.signal_bar_time_ms), s.created_at_ms))
 
     @staticmethod
