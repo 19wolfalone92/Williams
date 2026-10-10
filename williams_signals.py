@@ -58,62 +58,98 @@ def _angulation(
     window: int = 5,
     side: str | None = None,
 ) -> tuple[float, bool]:
-    """Approximate increasing separation of price from the Alligator Jaw."""
-    if index < 1 or "jaw_shifted" not in ind.columns:
+    """Operationalize TC2's price-vs-Alligator angulation geometry.
+
+    TC2 describes angulation as the price edge moving away more steeply than
+    the Alligator, particularly the Jaw, and requires the reversal bar to be
+    outside the Alligator mouth. It does not prescribe a numeric slope cutoff;
+    this deterministic profile therefore requires strictly divergent regression
+    slopes, increasing separation, and the signal-side extreme beyond all three
+    shifted mouth lines. This is an implementation contract, not an author-
+    certified numeric formula.
+    """
+    required = {"jaw_shifted", "teeth_shifted", "lips_shifted", "low", "high", "close"}
+    if index < 2 or index >= len(ind) or not required.issubset(ind.columns):
+        return 0.0, False
+
+    side_key = str(side or "").upper()
+    if side_key not in {"LONG", "SHORT"}:
         return 0.0, False
 
     start = max(0, index - max(3, int(window)) + 1)
-    rows = ind.iloc[start:index + 1].copy()
-    if len(rows) < 3 or rows["jaw_shifted"].isna().all():
+    rows = ind.iloc[start:index + 1]
+    if len(rows) < 3:
         return 0.0, False
 
-    jaw = pd.to_numeric(rows["jaw_shifted"], errors="coerce")
-    low = pd.to_numeric(rows["low"], errors="coerce")
-    high = pd.to_numeric(rows["high"], errors="coerce")
-    close = pd.to_numeric(rows["close"], errors="coerce")
-
-    if low.isna().any() or high.isna().any() or jaw.isna().any():
+    columns = {
+        key: pd.to_numeric(rows[key], errors="coerce").to_numpy(dtype=float)
+        for key in ("jaw_shifted", "teeth_shifted", "lips_shifted", "low", "high", "close")
+    }
+    if any(not all(math.isfinite(float(value)) for value in values) for values in columns.values()):
+        return 0.0, False
+    if any(value <= 0.0 for key in ("jaw_shifted", "teeth_shifted", "lips_shifted", "low", "high", "close")
+           for value in columns[key]):
+        return 0.0, False
+    if any(float(low) > float(high) for low, high in zip(columns["low"], columns["high"])):
         return 0.0, False
 
-    bullish_distance = (jaw - low).clip(lower=0.0)
-    bearish_distance = (high - jaw).clip(lower=0.0)
+    jaw = columns["jaw_shifted"]
+    low = columns["low"]
+    high = columns["high"]
 
-    # A reversal has to be outside the mouth and the separation must increase.
-    bull_delta = float(bullish_distance.iloc[-1] - bullish_distance.iloc[0])
-    bear_delta = float(bearish_distance.iloc[-1] - bearish_distance.iloc[0])
+    def slope(values) -> float:
+        count = len(values)
+        x_mean = (count - 1.0) / 2.0
+        y_mean = sum(float(value) for value in values) / count
+        denominator = sum((i - x_mean) ** 2 for i in range(count))
+        if denominator <= 0.0:
+            return 0.0
+        return sum(
+            (i - x_mean) * (float(values[i]) - y_mean)
+            for i in range(count)
+        ) / denominator
 
-    base = max(
-        abs(float(close.iloc[-1])),
-        abs(float(jaw.iloc[-1])),
-        1e-9,
-    )
-    score = max(bull_delta, bear_delta) / base * 100.0
+    bullish_distance = [max(0.0, jaw[i] - low[i]) for i in range(len(rows))]
+    bearish_distance = [max(0.0, high[i] - jaw[i]) for i in range(len(rows))]
+    bull_delta = bullish_distance[-1] - bullish_distance[0]
+    bear_delta = bearish_distance[-1] - bearish_distance[0]
+    bull_distance_slope = slope(bullish_distance)
+    bear_distance_slope = slope(bearish_distance)
 
-    # Also require positive regression slope on the separation itself.
-    k = len(rows)
-    x = list(range(k))
+    jaw_slope = slope(jaw)
+    low_slope = slope(low)
+    high_slope = slope(high)
+    bull_angle_divergence = jaw_slope - low_slope
+    bear_angle_divergence = high_slope - jaw_slope
 
-    def slope(values: pd.Series) -> float:
-        y = values.to_list()
-        xm = sum(x) / k
-        ym = sum(y) / k
-        denom = sum((v - xm) ** 2 for v in x)
-        return 0.0 if denom <= 0 else sum((x[i] - xm) * (y[i] - ym) for i in range(k)) / denom
-
-    bull_slope = slope(bullish_distance)
-    bear_slope = slope(bearish_distance)
-    side_key = str(side or "").upper()
+    last = rows.iloc[-1]
+    mouth = [
+        float(last["jaw_shifted"]),
+        float(last["teeth_shifted"]),
+        float(last["lips_shifted"]),
+    ]
     if side_key == "LONG":
-        valid = bull_delta > 0 and bull_slope > 0
-    elif side_key == "SHORT":
-        valid = bear_delta > 0 and bear_slope > 0
-    else:
+        outside_mouth = float(last["low"]) < min(mouth)
         valid = (
-            (bull_delta > 0 and bull_slope > 0)
-            or (bear_delta > 0 and bear_slope > 0)
+            outside_mouth
+            and bull_delta > 0.0
+            and bull_distance_slope > 0.0
+            and bull_angle_divergence > 0.0
         )
-    return float(max(score, 0.0)), bool(valid)
+        divergence = bull_angle_divergence
+    else:
+        outside_mouth = float(last["high"]) > max(mouth)
+        valid = (
+            outside_mouth
+            and bear_delta > 0.0
+            and bear_distance_slope > 0.0
+            and bear_angle_divergence > 0.0
+        )
+        divergence = bear_angle_divergence
 
+    base = max(abs(float(columns["close"][-1])), abs(float(jaw[-1])), 1e-9)
+    score = max(divergence, 0.0) / base * 100.0
+    return float(score), bool(valid and math.isfinite(score) and score > 0.0)
 
 def _invalidation_intact(
     ind: pd.DataFrame,
