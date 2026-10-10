@@ -12,6 +12,18 @@ from typing import Mapping, Sequence
 
 DEFAULT_SYMBOLS = ("BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT")
 DEFAULT_STRUCTURAL_TFS = ("1d", "4h", "1h", "15m", "5m")
+CANONICAL_EXECUTION_TIMEFRAME = "1h"
+
+
+def execution_timeframe_blocker(env: Mapping[str, str]) -> str | None:
+    """Fail closed when runtime config requests a non-canonical signal timeframe."""
+    requested = str(env.get("EXECUTION_TIMEFRAME", CANONICAL_EXECUTION_TIMEFRAME)).strip().lower()
+    if requested != CANONICAL_EXECUTION_TIMEFRAME:
+        return (
+            f"EXECUTION_TIMEFRAME={requested or '<empty>'} is not permitted; "
+            "canonical Williams signals require H1 (1h)."
+        )
+    return None
 
 
 def _bool(env: Mapping[str, str], key: str, default: bool) -> bool:
