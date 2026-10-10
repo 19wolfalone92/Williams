@@ -208,7 +208,7 @@ class FuturesRuntime:
         self.require_htf_confirmation = _env_bool("REQUIRE_HTF_CONFIRMATION", True)
         self.max_open_positions = max(1, int(max_open_positions or self.config.max_open_positions or 5))
         self.max_daily_loss_pct = min(
-            0.25, max(0.0, float(os.getenv("MAX_DAILY_LOSS_PCT", "0.03")))
+            0.25, max(0.0, float(os.getenv("MAX_DAILY_LOSS_PCT", "0.01")))
         )
         self.poll_seconds = max(10, int(os.getenv("FUTURES_SCAN_SECONDS", "30")))
         self.context_intervals = tuple(dict.fromkeys(
@@ -239,7 +239,7 @@ class FuturesRuntime:
             execution_barrier=self.execution_barrier,
             max_open_positions=self.max_open_positions,
             portfolio_risk_limit_pct=self.config.max_total_risk_pct,
-            campaign_risk_limit_pct=min(0.005, self.config.risk_per_trade_pct),
+            campaign_risk_limit_pct=min(0.006, max(0.0, float(os.getenv("CAMPAIGN_RISK_LIMIT_PCT", "0.006")))),
         )
         self._lock = threading.RLock()
         self._cycle_lock = threading.RLock()
