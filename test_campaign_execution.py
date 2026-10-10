@@ -130,7 +130,14 @@ def test_partial_conditional_entry_is_cancelled_and_residual_protected():
             and str(o.get("clientOrderId", "")).startswith(svc.STOP_PREFIX)
         ]
         assert len(protected) == 1
-        assert float(protected[0]["origQty"]) == pytest.approx(campaign.position_qty)
+        # The exchange filter is a 0.001 base-asset step. Protect all sellable
+        # filled quantity, rounding down only the sub-step dust; never round up.
+        filled_qty = float(order["executedQty"])
+        protected_qty = float(protected[0]["origQty"])
+        assert campaign.position_qty == pytest.approx(filled_qty)
+        assert protected_qty <= filled_qty
+        assert filled_qty - protected_qty < 0.001
+        assert protected_qty == pytest.approx(int(filled_qty / 0.001) * 0.001)
 
 
 def test_restart_adopts_pending_campaign_by_client_id():

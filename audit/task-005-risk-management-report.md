@@ -1,8 +1,8 @@
 # WILLIAMS BOT 2.1 — Task 005: Risk Engine / Portfolio Limits / Position Sizing
 
-**Status:** implementation changes on an isolated audit branch; acceptance remains **BLOCKED pending CI and Testnet recovery verification**.  
+**Status:** IN PROGRESS — NOT APPROVED. The TASK 005 branch is isolated; no associated PR exists at the time of this audit. CI remains blocked pending exact-head verification and Testnet recovery evidence.  
 **Baseline main:** `04da5f9c09572e99ff310be3a1908179165e528c`  
-**PR #43:** examined but not merged/copied wholesale. Its head was based on older main and diverged from the current base.  
+**PR mapping correction (2026-10-10):** PR #43 is TASK 007 (`fix/task-007-risk-management`, HEAD `c4892b6ab08aafcf75485be2e548eb767cd571df`, base `3fe008d85c06c90ed00d8035484b22aae657317b`). It is not TASK 005 and must not be used as TASK 005 evidence. The TASK 005 branch `audit/williams-2.1-task-005-risk-management` currently has HEAD `4e5652eaf6f83ea7063af21853b67d03d4253765`, base `main` HEAD `04da5f9c09572e99ff310be3a1908179165e528c`, and no associated PR was found in the repository PR listing. The failed run referenced below is exactly this TASK 005 HEAD; no result is transferred from TASK 007 or another SHA.  
 **Live trading:** no real exchange order was sent by this task; entry-path tests use `MockExchange`.
 
 ## Execution graph and control points
@@ -80,7 +80,7 @@ These are deterministic arithmetic examples, not profitability forecasts or a cl
 
 ## Verification status
 
-The repository CI workflow `Williams Campaign CI` runs Python tests/static compile and Android build/unit tests. Runs are automatically superseded when a new commit is pushed; the current head's run must finish before this task can be accepted. Older intermediate runs were failing while the previous test expectations still assumed looser multi-position limits; those expectations were updated, and further test output must be reviewed at the final head.
+The repository CI workflow `Williams Campaign CI` runs Python tests/static compile and Android build/unit tests. Runs are automatically superseded when a new commit is pushed; the current head's run must finish before this task can be accepted. Run `38078333681` on exact HEAD `4e5652eaf6f83ea7063af21853b67d03d4253765` failed: Python 5 failed / 155 passed; Android unit tests 1 failed / 27 completed. The regression fixes in the current revision must be validated on a new exact-head run before acceptance.
 
 **Do not enable live trading based on this report alone.** Acceptance requires a successful run on the exact final SHA and simulated/Testnet cases proving the entry → partial fill → stop protection → exit → restart/reconciliation path. No actual order has been placed by this task.
 

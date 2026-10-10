@@ -93,7 +93,9 @@ class EquityCircuitBreaker(
         val drawdown = if (baselineValid) {
             ((startEquity - equity) / startEquity).coerceAtLeast(0.0)
         } else 0.0
-        if (baselineValid && drawdown >= maxDrawdownPct) tripped = true
+        // Floating-point division can represent an exact 1% drawdown just below
+        // the configured boundary. Epsilon corrects representation error only.
+        if (baselineValid && drawdown + 1e-12 >= maxDrawdownPct) tripped = true
 
         lastObservedEquity = equity
         lastObservedAtMs = nowMs

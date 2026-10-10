@@ -41,7 +41,7 @@ def test_direct_market_buy_blocks_live_without_allow_live(monkeypatch):
     monkeypatch.setenv("ALLOW_LIVE", "false")
     t = make_trader(FakeClient())
 
-    with pytest.raises(RuntimeError, match="ALLOW_LIVE=true"):
+    with pytest.raises(RuntimeError, match="direct Trader.market_buy is disabled"):
         t.market_buy(100.0)
 
 
@@ -50,7 +50,7 @@ def test_dry_run_blocks_before_db_mutation(monkeypatch):
     t = make_trader(FakeDryRunClient())
     t.dry_run = True
 
-    with pytest.raises(RuntimeError, match="DRY_RUN=true"):
+    with pytest.raises(RuntimeError, match="direct Trader.market_buy is disabled"):
         t.market_buy(100.0)
 
 
