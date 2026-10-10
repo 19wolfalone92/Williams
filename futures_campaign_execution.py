@@ -903,6 +903,10 @@ class FuturesCampaignExecutionService:
             side=direction,
             invalidation_price=stop,
             min_notional=self._min_notional(symbol),
+            # TC2's core exit is structural trailing/exhaustion, not a
+            # synthetic ATR take-profit. Keep the legacy R:R admission gate
+            # only for explicitly non-TC2 profiles.
+            enforce_min_rr=not tc2_core,
         )
         if not risk.allowed:
             raise FuturesCampaignExecutionError(f"{symbol}: risk blocked entry: {risk.reason}")
