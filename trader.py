@@ -15,6 +15,7 @@ from trading_config import TradingConfig
 from market_context import ContextCache, TFMarketContext
 from hypothesis_engine import build_hypotheses
 from execution_barrier import ExecutionBarrier, OrderIntent
+from order_identity import stable_client_order_id
 from execution_accumulator import accumulate_order, accumulate_fills
 from l2_slippage import L2SlippageGuard
 from equity_breaker import EquityCircuitBreaker
@@ -1032,7 +1033,14 @@ class Trader:
             tf: snap.context(self.symbol, tf).version
             for tf in self.config.structural_timeframes
         }
-        cid = f'WILLV4_ENTRY_{uuid.uuid4().hex[:20]}'
+        operative_context = snap.context(self.symbol, self.interval)
+        if operative_context is None:
+            raise RuntimeError('BUY blocked: operative market context is unavailable')
+        signal_id = (
+            f'{self.symbol}:{self.interval.lower()}:ENTRY:'
+            f'{int(operative_context.candle_close_time_ms)}'
+        )
+        cid = stable_client_order_id('WILLV4_ENTRY_', signal_id)
         intent = OrderIntent.new(
             self.symbol,
             'BUY',
@@ -1041,6 +1049,7 @@ class Trader:
             purpose='ENTRY',
             permission_interval=self.interval,
             client_order_id=cid,
+            signal_id=signal_id,
             quote_order_quantity=self.client.decimal_format(quote_d),
         )
 
@@ -1200,15 +1209,25 @@ class Trader:
             self.refresh_execution_context(self.symbol)
             snap = self.context_cache.snapshot()
             required_versions = {tf: snap.context(self.symbol, tf).version for tf in self.config.structural_timeframes}
+            operative_context = snap.context(self.symbol, self.interval)
+            exit_signal_id = (
+                f'{self.symbol}:{self.interval.lower()}:EXIT:'
+                f'{int(operative_context.candle_close_time_ms) if operative_context else 0}:'
+                f'{trade_id if trade_id is not None else "UNTRACKED"}:'
+                f'{self.client.decimal_format(actual_qty)}:'
+                f'{self.client.decimal_format(sl_d)}:{self.client.decimal_format(tp_d)}'
+            )
+            cid = stable_client_order_id('WILLV4_OCO_', exit_signal_id)
             intent = OrderIntent.new(
                 self.symbol,
                 'SELL',
                 'OCO',
                 required_context_versions=required_versions,
                 purpose='EXIT',
+                signal_id=exit_signal_id,
+                client_order_id=cid,
                 quantity=self.client.decimal_format(actual_qty),
             )
-            cid = f'WILLV4_OCO_{uuid.uuid4().hex[:20]}'
             self._set_state('EXIT_PENDING')
             result = self.execution_barrier.execute(
                 intent,
