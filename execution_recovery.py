@@ -16,7 +16,11 @@ _ORDER_STATES = {
     "NEW", "PARTIALLY_FILLED", "FILLED", "CANCELED", "REJECTED",
     "EXPIRED", "EXPIRED_IN_MATCH",
 }
+_TERMINAL_ORDER_STATES = {
+    "FILLED", "CANCELED", "REJECTED", "EXPIRED", "EXPIRED_IN_MATCH",
+}
 _LIST_STATES = {"EXEC_STARTED", "EXECUTING", "ALL_DONE", "REJECT"}
+_TERMINAL_LIST_STATES = {"ALL_DONE", "REJECT"}
 _UNRESOLVED_STATES = {"PENDING", "AMBIGUOUS", "SUBMITTING", "RECONCILE_REQUIRED"}
 
 
@@ -127,7 +131,10 @@ class ExecutionRecoveryResolver:
                 order_id=target_order_id,
                 client_order_id=target_client_id,
             )
-            if row is None:
+            if row is None or str(row.get("status", "")).upper() not in _TERMINAL_ORDER_STATES:
+                # If the target is still live/partially filled, the cancel may
+                # not have taken effect. Keep the intent globally unresolved;
+                # a new cancel intent must not be issued as an automatic retry.
                 return None
             return "RECONCILED", [row], {
                 "mutation_kind": kind, "target_order_id": str(row["orderId"]),
@@ -156,13 +163,17 @@ class ExecutionRecoveryResolver:
             list_state = self._text(payload.get("listStatusType")).upper()
             if list_state not in _LIST_STATES or payload.get("orderListId") is None:
                 return None
+            if list_state not in _TERMINAL_LIST_STATES:
+                # The list is still active, so the unknown cancel has not been
+                # proven complete. Preserve the global barrier and do not retry.
+                return None
             reports = payload.get("orders") or payload.get("orderReports") or []
             rows = []
             for item in reports:
                 order_id = self._text(item.get("orderId"))
                 leg_cid = self._text(item.get("clientOrderId"))
                 row = self._get_order(symbol, order_id=order_id, client_order_id=leg_cid)
-                if row is None:
+                if row is None or str(row.get("status", "")).upper() not in _TERMINAL_ORDER_STATES:
                     return None
                 row = dict(row)
                 row["orderListId"] = payload["orderListId"]
@@ -186,6 +197,10 @@ class ExecutionRecoveryResolver:
             # Both legs must be independently visible. A missing replacement is
             # not proof of rejection and therefore cannot resolve the intent.
             if old is None or new is None:
+                return None
+            if str(old.get("status", "")).upper() not in _TERMINAL_ORDER_STATES:
+                # Cancel-replace is non-atomic. Do not resolve while the old
+                # order remains live, or another replacement could be attempted.
                 return None
             return "RECONCILED", [old, new], {
                 "mutation_kind": kind,
