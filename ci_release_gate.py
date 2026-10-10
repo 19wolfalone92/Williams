@@ -6,7 +6,7 @@ import ast
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-EXPECTED_VERSION = '4.24.0'
+EXPECTED_VERSION = '4.25.0'
 
 def read(path: str) -> str:
     p = ROOT / path
@@ -76,6 +76,13 @@ def main() -> None:
     must(android, "val maxOpenPositions: Int = 5", "MainActivity.kt")
     runtime = read("app/src/main/java/com/williamsbot/StandaloneRuntime.kt")
     must(runtime, 'prefs.getInt("max_open_positions", 5)', "StandaloneRuntime.kt")
+    must(runtime, "LocalApiAuthorization.isAuthorized", "StandaloneRuntime.kt")
+    must(runtime, "RuntimeFreshnessContract.isFresh", "StandaloneRuntime.kt")
+    must(runtime, "user_stream_disconnected", "StandaloneRuntime.kt")
+    must(runtime, "candidate_snapshot_fresh", "StandaloneRuntime.kt")
+    authorization = read("app/src/main/java/com/williamsbot/LocalApiAuthorization.kt")
+    must(authorization, "MessageDigest.isEqual", "LocalApiAuthorization.kt")
+    must(authorization, 'equals("Bearer", ignoreCase = true)', "LocalApiAuthorization.kt")
     must(runtime, "private val maxSlippagePct = 0.0015", "StandaloneRuntime.kt")
     must(runtime, "control/self-heal", "StandaloneRuntime.kt")
     must(runtime, "activeHistoryTasks", "StandaloneRuntime.kt")
