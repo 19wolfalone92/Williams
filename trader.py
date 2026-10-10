@@ -1051,6 +1051,10 @@ class Trader:
             client_order_id=cid,
             signal_id=signal_id,
             quote_order_quantity=self.client.decimal_format(quote_d),
+            risk_quote=float(quote_d) * max(
+                0.0, float(os.getenv("STOP_LOSS_PCT", "0.02"))
+            ),
+            capital_reserved_quote=float(quote_d),
         )
 
         # Durable reservation is written BEFORE the Binance POST. If the
