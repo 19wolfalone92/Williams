@@ -1455,8 +1455,7 @@ internal class FuturesNativeEngine(
                             "$symbol context invalidated immediately before conditional entry submission"
                         )
                     }
-                    val latestMark = exchange.markPrice(symbol).toDoubleOrNull()
-                        ?: throw FuturesApiException("$symbol mark price invalid at submission boundary")
+                    val latestMark = exchange.markPrice(symbol)
                     if (!latestMark.isFinite() ||
                         (signal.direction == "LONG" && !(stopValue < latestMark && latestMark < triggerValue)) ||
                         (signal.direction == "SHORT" && !(triggerValue < latestMark && latestMark < stopValue))
