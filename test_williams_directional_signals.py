@@ -551,3 +551,13 @@ def test_wm1_angulation_is_directionally_symmetric_for_short():
     assert valid
     assert score > 0.0
 
+
+
+def test_tc2_live_decision_timeframe_is_h1_only():
+    from market_scanner import MarketScanner
+
+    assert MarketScanner._tc2_decision_timeframe_allowed("TC2_THREE_WISE_MEN", "1h")
+    assert MarketScanner._tc2_decision_timeframe_allowed("TC2_THREE_WISE_MEN", "1H")
+    assert not MarketScanner._tc2_decision_timeframe_allowed("TC2_THREE_WISE_MEN", "15m")
+    assert not MarketScanner._tc2_decision_timeframe_allowed("TC2_THREE_WISE_MEN", "5m")
+    assert MarketScanner._tc2_decision_timeframe_allowed("LEGACY", "5m")
