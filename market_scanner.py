@@ -176,6 +176,10 @@ class MarketScanner:
         self.stop_pct = float(os.getenv("STOP_LOSS_PCT", "0.02"))
         self.target_pct = float(os.getenv("TAKE_PROFIT_PCT", "0.04"))
         self.min_rr = self.min_risk_reward
+        # Futures campaign management uses structural exits rather than a
+        # submitted fixed target. Keep the configured R:R as a diagnostic score,
+        # but do not let a hypothetical target suppress valid TC2 signal specs.
+        self.require_min_rr_gate = not bool(getattr(client, "is_usdm_futures", False))
         self.htf_interval = _normalize_interval(os.getenv("HTF_INTERVAL", "4h"))
 
         self.wave_engine = MultiTimeframeWaveEngine(
@@ -522,7 +526,7 @@ class MarketScanner:
                 return None
 
             rr = self.target_pct / max(self.stop_pct, 1e-9)
-            if rr < self.min_rr:
+            if self.require_min_rr_gate and rr < self.min_rr:
                 return None
 
             legacy_strict_signal = bool(
