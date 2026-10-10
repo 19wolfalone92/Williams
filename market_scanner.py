@@ -799,6 +799,10 @@ class MarketScanner:
                     role=SignalRole(str(raw["role"])),
                     timeframe=str(raw["timeframe"]),
                     signal_bar_time_ms=int(raw["signal_bar_time_ms"]),
+                    confirmation_time_ms=int(
+                        raw.get("confirmation_time_ms", 0)
+                        or raw["signal_bar_time_ms"]
+                    ),
                     trigger_price=float(raw["trigger_price"]),
                     protective_reference=float(raw["protective_reference"]),
                     trigger_buffer_ticks=int(raw.get("trigger_buffer_ticks", 1) or 1),
