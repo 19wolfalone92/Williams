@@ -323,6 +323,21 @@ class Database:
         if not self._transaction_active:
             self.conn.commit()
 
+    def find_execution_intent(self, intent_id, client_order_id=''):
+        """Find an existing intent before admitting any repeated mutation."""
+        if client_order_id:
+            row = self.conn.execute(
+                "SELECT * FROM execution_intents WHERE intent_id=? OR client_order_id=? "
+                "ORDER BY CASE WHEN intent_id=? THEN 0 ELSE 1 END LIMIT 1",
+                (str(intent_id), str(client_order_id), str(intent_id)),
+            ).fetchone()
+        else:
+            row = self.conn.execute(
+                "SELECT * FROM execution_intents WHERE intent_id=? LIMIT 1",
+                (str(intent_id),),
+            ).fetchone()
+        return dict(row) if row is not None else None
+
     def save_execution_intent(self, intent, status, reason=''):
         self.conn.execute(
             '''INSERT OR REPLACE INTO execution_intents(
