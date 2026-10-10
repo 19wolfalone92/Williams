@@ -1939,11 +1939,10 @@ private class NativeEngine(
                     // did not execute the mutation. Keep the same durable intent
                     // and retry once with corrected time; never mint a new ID.
                     if (attempt == 0 && lastBody.contains("-1021")) {
-                        runCatching {
-                            auditStore.recordRestCall(
-                                method, path, response.code, params.ifBlank { null }, lastBody
-                            )
-                        }
+                        // Binance explicitly rejected this timestamped request before
+                        // mutation. Keep optional REST telemetry out of the mandatory
+                        // execution-result path; the same durable intent is retried
+                        // with corrected time and the same clientOrderId.
                         runCatching { syncServerTime() }
                         return@use
                     }
