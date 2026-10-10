@@ -85,7 +85,7 @@ One high-risk scenario remains to prove under controlled Spot Testnet testing: i
 ### Scope and safety
 This follow-up continues only on `audit/williams-2.1-task-006-android-runtime` and PR #46. It does not modify `main`, merge the PR, enable Mainnet, or send exchange mutations. Recovery tests use a local SQLite database and a fake exchange only.
 
-The recovery implementation source immediately before this audit/CI-trigger commit is `eaaf4e6d7d79567f2ab302070497d25764e9e206`. The audit/CI-trigger commit adds this report and comments to workflow files to force all required checks to run again on one exact candidate SHA. **Do not use the earlier CI results below as acceptance evidence for the final candidate SHA; use only workflow runs whose `head_sha` exactly equals the PR's final head.**
+The recovery implementation source immediately before this audit/CI-trigger commit is `0d25d7337225563c83a58dca756f3e5382c9435b`. The audit/CI-trigger commit adds this report and comments to workflow files to force all required checks to run again on one exact candidate SHA. **Do not use the earlier CI results below as acceptance evidence for the final candidate SHA; use only workflow runs whose `head_sha` exactly equals the PR's final head.**
 
 ### Recovery resolver implementation
 - Added `execution_recovery.py`, a read-only resolver. It never invokes order mutations.
@@ -138,3 +138,13 @@ The final audit/CI-trigger commit changes this document and workflow comments on
 - Do not enable live trading or remove any fail-closed guard based on CI alone.
 
 **Acceptance status: BLOCKED — NOT ACCEPTED.** Keep PR #46 open as Draft, keep `main` unchanged, and do not enable Mainnet or send real orders.
+
+
+### Additional fail-closed correction before final validation
+The resolver was tightened after review of cancellation semantics:
+- A single-order cancel is not resolved while the target order remains `NEW` or `PARTIALLY_FILLED`; it stays globally blocked until the target is in a terminal, exchange-confirmed state.
+- An OCO cancel is not resolved while the list remains `EXEC_STARTED`/`EXECUTING`, or while either leg remains live/partially filled.
+- Cancel-replace is not resolved while the original order remains live, even if a replacement order is also visible.
+- Added regressions for each live/ambiguous case. They assert the intent stays unresolved and no mutation method is called.
+These changes are included in the final validation candidate; results from SHA `50465d88a5cbc6c83e4a01d824c36e905be41fec` are not acceptance evidence for this updated code.
+
