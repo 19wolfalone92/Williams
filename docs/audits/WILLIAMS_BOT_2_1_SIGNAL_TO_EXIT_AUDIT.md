@@ -332,3 +332,25 @@ The expiry timer was also based on the center/signal candle's open time. Since a
 ### Revalidation required
 
 These changes were committed after the previous green CI run. The latest exact SHA must pass Python tests, Campaign CI, and Android build/static checks before this correction can be considered verified. Demo order lifecycle remains untested. The overall release status remains **NOT READY FOR LIVE TRADING**.
+
+
+## Supplement — native Android Futures signal path
+
+### Defect found: native WM2 was not equivalent to the Python WM2 contract
+
+The Android detector required an already-confirmed fractal before it could emit Super AO and inspected only three AO values. Three consecutive same-colour AO histogram bars require three consecutive AO changes, i.e. four AO values. This implementation could miss valid WM2 signals and tied a supposedly independent Wise-Man signal to WM3.
+
+### Correction applied
+
+- Native WM2 no longer requires a fractal input.
+- The colour rule is now a small independently tested function requiring four finite AO values and three consecutive rises (LONG) or falls (SHORT).
+- Native signal records distinguish source-bar time from confirmation time. WM3 confirmation is the open time of the second right-side bar; scanner selection and pending expiry use confirmation chronology.
+- Native entry permission now checks both operative Alligator direction and the structural parent direction, rather than treating a trigger as sufficient permission.
+
+### Remaining Python/Android strategy mismatch
+
+The Android implementation still builds WM1 reversal and WM3 fractal candidates only inside the `configLong/configShort` branches, which require directional Alligator plus AO/AC sign agreement; its reversal detector also adds an AO/AC momentum-improving condition. Python signal extraction does not apply those same gates inside the WM1/WM2/WM3 detectors and leaves context admission downstream. This is a material behavior difference, not a mere implementation detail. It must be resolved by an explicit, source-audited strategy contract and cross-runtime parity tests before treating Android and Python as the same strategy. This audit does not silently remove the Android gates without validating their intended role.
+
+### Revalidation required
+
+The native changes and new Kotlin unit tests were committed after the previous green Campaign CI run. The latest exact SHA must pass Python/Campaign CI and Android unit/build checks. Demo LONG/SHORT lifecycles remain outstanding.
