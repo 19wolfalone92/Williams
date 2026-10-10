@@ -470,7 +470,7 @@ class MarketScanner:
             campaign_specs = sorted(
                 (
                     spec for spec in long_specs + short_specs
-                    if not spec.expires_at_ms or int(spec.expires_at_ms) > now_ms
+                    if int(spec.expires_at_ms or 0) > now_ms
                 ),
                 key=lambda s: (
                     s.signal_bar_time_ms,
