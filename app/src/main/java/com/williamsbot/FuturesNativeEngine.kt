@@ -1371,6 +1371,11 @@ internal class FuturesNativeEngine(
         if (!currentContextAllows(exchange, symbol, signal.direction)) {
             throw FuturesApiException("$symbol directional context changed or is unavailable at final entry validation")
         }
+        val signalExpiresAt = signal.confirmationTime +
+            intervalMillis(interval()) * (pendingBarsForSignal(signal.type) + 1)
+        if (signalExpiresAt <= 0L || System.currentTimeMillis() >= signalExpiresAt) {
+            throw FuturesApiException("$symbol Williams signal expired during final entry validation")
+        }
 
         // Tick normalization can widen the actual trigger-to-stop distance.
         // Re-check the submitted prices/quantity, not only the raw signal inputs.
