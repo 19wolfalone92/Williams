@@ -149,78 +149,134 @@ class PreflightCheckService:
         report.passed("open_orders")
         return True
 
+    REQUIRED_CHECKS = (
+        "environment", "api_reachable", "server_time", "credentials",
+        "authentication", "account", "balances", "exchange_info",
+        "exchange_filters", "candles", "market_websocket",
+        "user_data_stream", "scanner_heartbeat", "market_context",
+        "diagnostics_freshness", "storage_integrity", "reconciliation",
+        "execution_state_known", "open_orders", "android_freshness",
+    )
+
+    @staticmethod
+    def _safe_reason(exc):
+        # Do not serialize raw exception text: requests exceptions may contain
+        # signed URLs, query parameters, or other request material.
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        code = getattr(exc, "code", None)
+        kind = type(exc).__name__
+        bits = [kind]
+        if status is not None:
+            bits.append("http_status=" + str(int(status)))
+        if code is not None and isinstance(code, (str, int)):
+            bits.append("error_code=" + str(code)[:40])
+        return "; ".join(bits)
+
     def verify_all(self, *, allow_reconciled_orders=False):
+        # Every required condition starts UNKNOWN. Only a check performed by
+        # this method may replace UNKNOWN with PASS. Unimplemented runtime
+        # proofs deliberately remain UNKNOWN and therefore cannot enable entry.
         report = PreflightReport(
-            environment="TESTNET" if self.client.testnet else "LIVE"
+            environment="TESTNET" if getattr(self.client, "testnet", None) is True else "LIVE"
+            if getattr(self.client, "testnet", None) is False else "UNKNOWN"
         )
-        if not self.client.api_key or not self.client.api_secret:
+        for name in self.REQUIRED_CHECKS:
+            report.checks[name] = "UNKNOWN"
+            report.details[name] = {"reason": "required proof not performed"}
+
+        if report.environment != "TESTNET":
+            report.fail("environment", "Spot Testnet is not explicitly selected")
+            return report.as_dict()
+        if not getattr(self.client, "api_key", None) or not getattr(self.client, "api_secret", None):
             report.fail("credentials", "Binance API credentials are missing")
             return report.as_dict()
+        report.passed("credentials", present=True)
 
-        if not self._check_time(report):
+        try:
+            server = self.client.sync_time()
+            offset = int(getattr(self.client, "time_offset_ms", 0))
+            if not isinstance(server, dict) or "serverTime" not in server:
+                report.fail("server_time", "server time response is invalid")
+                return report.as_dict()
+            if abs(offset) > self.max_offset_ms:
+                report.fail("server_time", "clock offset exceeds safety limit",
+                            offset_ms=offset, max_offset_ms=self.max_offset_ms)
+                return report.as_dict()
+            report.passed("server_time", offset_ms=offset, max_offset_ms=self.max_offset_ms)
+        except Exception as exc:
+            report.fail("server_time", "time synchronization failed",
+                        error=self._safe_reason(exc))
             return report.as_dict()
 
         try:
             self.client.ping()
             report.passed("api_reachable")
         except Exception as exc:
-            report.fail("api_reachable", str(exc))
+            report.fail("api_reachable", "REST connectivity check failed",
+                        error=self._safe_reason(exc))
             return report.as_dict()
 
-        if not self.client.testnet:
-            try:
-                restrictions = self.client.api_restrictions()
-            except Exception as exc:
-                report.fail("api_restrictions", str(exc))
+        # Spot Testnet authenticated account read is required. This is the
+        # authentication proof; failures are sanitized and fail closed.
+        try:
+            account = self.client.account()
+            if not isinstance(account, dict):
+                report.fail("authentication", "account response is invalid")
                 return report.as_dict()
-            if not self.verify_api_permissions(restrictions):
-                report.fail(
-                    "api_restrictions",
-                    "API key must allow reading + Spot trading and must have withdrawals disabled",
-                    restrictions={
-                        key: restrictions.get(key)
-                        for key in (
-                            "enableReading",
-                            "enableSpotAndMarginTrading",
-                            "enableWithdrawals",
-                        )
-                    },
-                )
+            report.passed("authentication")
+            status = str(account.get("status", "TRADING")).upper()
+            account_type = account.get("accountType")
+            if status != "TRADING" or account_type not in (None, "SPOT"):
+                report.fail("account", "account status/type is not acceptable",
+                            status=status, account_type=account_type)
                 return report.as_dict()
-            report.passed("api_restrictions")
-            try:
-                trading_status = self.client.api_trading_status()
-                data = trading_status.get("data", {}) if isinstance(trading_status, dict) else {}
-                if bool(data.get("isLocked", False)):
-                    report.fail(
-                        "api_trading_status",
-                        "Binance API trading is currently locked",
-                        planned_recover_time=data.get("plannedRecoverTime"),
-                    )
-                    return report.as_dict()
-                report.passed(
-                    "api_trading_status",
-                    is_locked=False,
-                    planned_recover_time=data.get("plannedRecoverTime", 0),
-                )
-            except Exception as exc:
-                report.fail("api_trading_status", str(exc))
+            balances = account.get("balances")
+            if not isinstance(balances, list):
+                report.fail("balances", "account balances are missing or malformed")
                 return report.as_dict()
-
-        if not self._check_account(report):
-            return report.as_dict()
-        if not self._check_symbols(report):
-            return report.as_dict()
-        if not self._check_orders(report, allow_known_orders=allow_reconciled_orders):
+            report.passed("account", status=status, account_type=account_type or "SPOT")
+            report.passed("balances", count=len(balances))
+        except Exception as exc:
+            report.fail("authentication", "authenticated account read failed",
+                        error=self._safe_reason(exc))
+            report.fail("account", "account state could not be confirmed")
+            report.fail("balances", "balances could not be confirmed")
             return report.as_dict()
 
-        # Position count is intentionally NOT a safety gate. The portfolio
-        # risk budget determines how many independent positions may exist.
-        report.passed(
-            "position_capacity",
-            mode="RISK_BUDGET",
-            max_total_risk_pct=os.getenv("MAX_TOTAL_RISK_PCT", "0.01"),
-            max_risk_per_trade_pct=os.getenv("MAX_RISK_PER_TRADE_PCT", "0.005"),
-        )
-        report.ready = True
+        try:
+            if not self._check_symbols(report):
+                return report.as_dict()
+        except Exception as exc:
+            report.fail("exchange_info", "symbol metadata check failed",
+                        error=self._safe_reason(exc))
+            report.fail("exchange_filters", "symbol filters could not be confirmed")
+            return report.as_dict()
+
+        # The current architecture does not yet provide verifiable freshness
+        # proofs for these runtime components. Keep them UNKNOWN instead of
+        # manufacturing PASS from method existence or cached status fields.
+        try:
+            if not self._check_orders(report, allow_known_orders=allow_reconciled_orders):
+                return report.as_dict()
+        except Exception as exc:
+            report.fail("open_orders", "open-order reconciliation read failed",
+                        error=self._safe_reason(exc))
+            return report.as_dict()
+
+        # Account access alone does not prove candles, market/user WebSocket
+        # freshness, scanner/context/diagnostic heartbeats, SQLite↔Binance
+        # reconciliation, known execution state, or Android freshness.
+        missing = [name for name in self.REQUIRED_CHECKS
+                   if report.checks.get(name) != "PASS"]
+        report.ready = not missing and not report.requires_reconciliation
+        if missing:
+            report.details["readiness"] = {
+                "reason": "required checks are not all PASS",
+                "blocking_checks": missing,
+            }
+        if report.requires_reconciliation:
+            report.ready = False
+            report.details["readiness"] = {
+                "reason": "reconciliation is required before new entries"
+            }
         return report.as_dict()
