@@ -546,11 +546,12 @@ class FuturesCampaignExecutionService:
     ) -> bool:
         """Validate TC2's H1 signal context plus the D1 macro airbag.
 
-        H1 is the canonical decision timeframe. H4 is required as fresh context,
-        but it is not a duplicate signal trigger. A WM1 may be admitted before H1
-        has turned only when its positive angulation evidence is present. WM2/WM3
-        require H1 Alligator direction, awakening, and AO direction. D1 may veto
-        an active opposite regime but never creates an entry.
+        H1 is the canonical decision timeframe. H4 must be fresh context, not
+        a duplicate directional trigger. WM1 requires its reversal/angulation
+        evidence; WM2 requires its third same-colour AO bar; WM3 requires a
+        confirmed fractal trigger beyond Teeth at confirmation and at submission.
+        A fully aligned H1 Alligator is not a universal gate for all Wise Men.
+        D1 may veto an active opposite regime as a declared system overlay.
         """
         direction = str(getattr(signal, "direction", "") or "").upper()
         timeframe = str(getattr(signal, "timeframe", "") or "").lower()
