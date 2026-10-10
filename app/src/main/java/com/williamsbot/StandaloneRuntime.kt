@@ -586,8 +586,12 @@ private class NativeEngine(
     private val primarySymbol = "BTCUSDT"
     private val interval = "1h"
 
-    // Deep-analysis universe: five core USDT pairs only.
-    private val coreSymbols = listOf("BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT")
+    // The active intraday universe is fixed to ten pre-approved USDT pairs.
+    // The exchange metadata/order gate must still validate each instrument.
+    private val coreSymbols = listOf(
+        "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
+        "ADAUSDT", "DOGEUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT"
+    )
     private val analysisFrames = listOf("1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w", "1M")
     // Startup only needs the frames that directly participate in execution.
     // The complete 15-TF matrix is analysis metadata, not a startup blocker.
@@ -596,8 +600,8 @@ private class NativeEngine(
     // leaving headroom for the currently forming candle.
     private val startupHistoryLimit = 180
     private val minStartupHistoryCandles = 150
-    private val maxScanSymbols = 5
-    private val waveTopN = 5
+    private val maxScanSymbols = 10
+    private val waveTopN = 10
     private val scanExecutor = Executors.newFixedThreadPool(12)
     private val historyBackfillExecutor = Executors.newFixedThreadPool(6) { runnable ->
         Thread(runnable, "williams-history-backfill").apply { isDaemon = true }
@@ -624,7 +628,7 @@ private class NativeEngine(
 
     private val scanCacheTtlMs = 12_000L
     private val deepWatchTopN = 10
-    private val scannerUniverseLabel = "CORE_5_BTC_ETH_BNB_SOL_XRP"
+    private val scannerUniverseLabel = "CORE_10_BTC_ETH_BNB_SOL_XRP_ADA_DOGE_LINK_AVAX_LTC"
 
     @Volatile
     private var running = false
@@ -647,24 +651,27 @@ private class NativeEngine(
     private var primaryCandles = emptyList<CandleN>()
     private var lastScanDurationMs = 0L
     private var lastSymbolsScanned = 0
-    // Default supports the portfolio model: up to five independent positions;
-    // aggregate risk remains capped separately at 1%.
+    // Shared project policy: three concurrent campaigns maximum.
+    // Clamp saved preferences too; an old device setting must not widen exposure.
     private val maxOpenPositions: Int
-        get() = prefs.getInt("max_open_positions", 5).coerceIn(1, 10)
+        get() = prefs.getInt("max_open_positions", 3).coerceIn(1, 3)
     private val campaignEngineEnabled: Boolean
         get() = prefs.getBoolean("campaign_engine_enabled", true)
+    // H1 is the canonical TC2 decision timeframe. Ignore stale saved M5 prefs.
     private val campaignExecutionTimeframe: String
-        get() = prefs.getString("campaign_execution_timeframe", "5m") ?: "5m"
-    private val campaignRiskLimitPct = 0.005
-    private val campaignInitialRiskPct = 0.002
+        get() = "1h"
+    private val campaignRiskLimitPct = 0.01
+    // Initial risk aim is 40% of the campaign budget, but never above the
+    // separate per-entry equity ceiling; remaining campaign risk stays reserved.
+    private val campaignInitialRiskPct = 0.004
     private val campaignAddRiskCapPct = 0.002
     private val campaignTrailBars: Int
-        get() = prefs.getInt("campaign_trail_bars", 5).coerceIn(3, 5)
-    private val maxTotalRiskPct = 0.01
-    private val maxRiskPerTradePct = 0.005
+        get() = prefs.getInt("campaign_trail_bars", 3).coerceIn(3, 5)
+    private val maxTotalRiskPct = 0.03
+    private val maxRiskPerTradePct = 0.0025
     private val maxSpreadPct = 0.0015
     private val maxSlippagePct = 0.0015
-    private val equityCircuitBreaker = EquityCircuitBreaker(maxDrawdownPct = 0.05)
+    private val equityCircuitBreaker = EquityCircuitBreaker(maxDrawdownPct = 0.01)
     @Volatile private var lastEquityCheckMs = 0L
     @Volatile private var circuitBreakerTripInProgress = false
     private val feeBufferPerSidePct = 0.001
@@ -2653,10 +2660,13 @@ private class NativeEngine(
         }
     }
 
-    private fun campaignEntryCandidate(candidate: BaseAnalysis): CampaignSignalN? =
-        candidate.campaignSignals
-            .sortedBy { it.signalBarTimeMs }
+    private fun campaignEntryCandidate(candidate: BaseAnalysis): CampaignSignalN? {
+        val now = System.currentTimeMillis() + serverTimeOffsetMs
+        return candidate.campaignSignals
+            .filter { it.expiresAtMs > now && it.confirmationTimeMs > 0L }
+            .sortedWith(compareBy<CampaignSignalN> { it.confirmationTimeMs }.thenBy { it.signalBarTimeMs })
             .firstOrNull()
+    }
 
     private fun submitCampaignEntry(candidate: BaseAnalysis) {
         if (!campaignEngineEnabled || !candidate.campaignReady) return
@@ -7625,9 +7635,9 @@ private class NativeEngine(
                 "WIN", "BREAKEVEN" -> break
             }
         }
-        val cooldown = consecutiveLosses >= 2 && lastLossAt > 0L &&
+        val cooldown = consecutiveLosses >= 1 && lastLossAt > 0L &&
             System.currentTimeMillis() - lastLossAt < 30L * 60L * 1000L
-        val hardPause = consecutiveLosses >= 3
+        val hardPause = consecutiveLosses >= 2
         return JSONObject()
             .put("trades_today", count)
             .put("daily_pnl_usdt", pnl)
@@ -7887,7 +7897,7 @@ private class NativeEngine(
             .put("stop_loss_pct", 0.02)
             .put("take_profit_pct", if (campaignEngineEnabled) 0.0 else 0.04)
             .put("risk_per_trade_pct", maxRiskPerTradePct)
-            .put("max_daily_loss_pct", 0.03)
+            .put("max_daily_loss_pct", 0.01)
             .put("trades_today", dailyGuard.optInt("trades_today", 0))
             .put("daily_pnl_usdt", dailyGuard.optDouble("daily_pnl_usdt", 0.0))
             .put("consecutive_losses", dailyGuard.optInt("consecutive_losses", 0))
@@ -8180,7 +8190,7 @@ private class NativeEngine(
         test("history_ready", "database", historyReady, "WARN", if (historyReady) "Market history is ready" else "history_state=" + historyState + "; error=" + (historyLastError ?: "pending"))
         test("scanner_state", "scanner", scannerState == "READY" || (scannerState == "RUNNING" && scanning), "WARN", "state=" + scannerState + "; run_id=" + scanRunId + "; progress=" + scanProgressSymbols + "/" + scanSymbols.size + "; last_progress_ms=" + scanLastProgressAt)
         test("state_machine", "runtime", stateMachine.state.name.isNotBlank(), "FAIL", "fsm_state=" + stateMachine.state.name)
-        test("risk_limits", "risk", maxRiskPerTradePct > 0.0 && maxRiskPerTradePct <= 0.005 && maxTotalRiskPct <= 0.01, "FAIL", "per_trade=" + maxRiskPerTradePct + "; total=" + maxTotalRiskPct)
+        test("risk_limits", "risk", maxRiskPerTradePct > 0.0 && maxRiskPerTradePct <= 0.01 && maxTotalRiskPct > 0.0 && maxTotalRiskPct <= 0.03, "FAIL", "per_trade=" + maxRiskPerTradePct + "; campaign_cap=" + campaignRiskLimitPct + "; total=" + maxTotalRiskPct)
         test("self_heal_contract", "runtime", true, "FAIL", "safe_only=true; endpoint=/api/v1/control/self-heal")
         return tests
     }
@@ -8369,7 +8379,7 @@ private class NativeEngine(
             .put("risk_per_trade_pct", maxRiskPerTradePct)
             .put("max_daily_loss_pct", 0.03)
             .put("max_trades_per_day", 0)
-            .put("max_consecutive_losses", 3)
+            .put("max_consecutive_losses", 2)
             .put("cooldown_minutes", 30)
             .put("min_risk_reward", 1.5)
             .put("atr_period", 14)
