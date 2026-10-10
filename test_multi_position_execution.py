@@ -9,6 +9,8 @@ def _legacy_campaign_mode(monkeypatch):
 
 from portfolio_trader import MultiPositionTrader
 from db import Database
+from execution_barrier import ExecutionBarrier
+from market_context import ContextCache, TFMarketContext
 
 
 class FakeClient:
@@ -147,6 +149,7 @@ class Selection:
     def __init__(self, symbol):
         self.candidate = type("Candidate", (), {
             "symbol": symbol,
+            "timeframe": "1h",
         })()
         self.risk = type("Risk", (), {
             "risk_pct": 0.5,
@@ -180,7 +183,30 @@ def test_multi_position_execution_creates_independent_trades(tmp_path, monkeypat
 
     client = FakeClient()
     db = Database(str(tmp_path / "trades.sqlite3"))
-    trader = MultiPositionTrader(client, db=db, symbols=["BTCUSDT", "ETHUSDT"])
+    cache = ContextCache()
+    for symbol in ("BTCUSDT", "ETHUSDT"):
+        cache.publish(TFMarketContext(
+            symbol=symbol,
+            interval="1h",
+            version=0,
+            candle_open_time_ms=1_000,
+            candle_close_time_ms=2_000,
+            price=100.0,
+            allow_long=True,
+            allow_short=False,
+            decision="LONG",
+            long_probability=0.7,
+            short_probability=0.1,
+            no_trade_probability=0.2,
+            data_bars=100,
+        ))
+    barrier = ExecutionBarrier(cache, db)
+    trader = MultiPositionTrader(
+        client,
+        db=db,
+        symbols=["BTCUSDT", "ETHUSDT"],
+        execution_barrier=barrier,
+    )
     # Exercise the production allocation path, including fee and slippage
     # buffers, so the test protects the real aggregate-risk contract.
 
