@@ -18,12 +18,12 @@ class FakeDB:
         self.events = []
         self.states = {}
         self.claims = set()
-        self.fail_intent_status = fail_intent_status
+        self.fail_intent_status = set(fail_intent_status) if isinstance(fail_intent_status, (set, list, tuple)) else ({fail_intent_status} if fail_intent_status else set())
         self.fail_event = fail_event
         self.fail_claim = fail_claim
 
     def save_execution_intent(self, intent, status, reason=""):
-        if self.fail_intent_status == status:
+        if status in self.fail_intent_status:
             raise OSError("synthetic SQLite write failure")
         self.intents[intent.intent_id] = (status, reason, intent.client_order_id)
         return True
@@ -183,3 +183,77 @@ def test_direct_binance_order_mutation_is_denied_outside_barrier():
     with pytest.raises(RuntimeError, match="ExecutionBarrier permit required"):
         client.order("BTCUSDT", "BUY", "MARKET", quantity="0.001", new_client_order_id="CID_DIRECT")
     assert not session.called
+
+
+def test_blocked_state_write_failure_still_never_calls_submit():
+    db = FakeDB(fail_intent_status={"BLOCKED"})
+    stale = dict(_ready_preflight(), checked_at_ms=int(time.time() * 1000) - 10_000)
+    barrier = _barrier(db, provider=lambda: stale)
+    calls = []
+    result = barrier.execute(_intent("CID_BLOCKED_WRITE_FAIL"), lambda: calls.append("submit"), pre_submit_checks=_pre_submit)
+    assert not result.accepted
+    assert result.reason == "preflight_result_stale_or_future"
+    assert calls == []
+
+
+def test_submit_timeout_is_ambiguous_and_requires_reconciliation_without_retry():
+    db = FakeDB()
+    barrier = _barrier(db)
+    calls = []
+
+    def uncertain_submit():
+        calls.append("submit")
+        raise TimeoutError("synthetic response lost after possible exchange acceptance")
+
+    with pytest.raises(TimeoutError):
+        barrier.execute(_intent("CID_TIMEOUT_UNKNOWN"), uncertain_submit, pre_submit_checks=_pre_submit)
+
+    assert calls == ["submit"]
+    assert db.states["position_state"] == "RECONCILE_REQUIRED"
+    row = next(iter(db.intents.values()))
+    assert row[0] == "AMBIGUOUS"
+    assert row[2] == "CID_TIMEOUT_UNKNOWN"
+
+
+def test_submitted_state_write_failure_marks_reconciliation_and_does_not_retry():
+    db = FakeDB(fail_intent_status={"SUBMITTED"})
+    barrier = _barrier(db)
+    calls = []
+
+    with pytest.raises(RuntimeError, match="durable result persistence failed"):
+        barrier.execute(
+            _intent("CID_SUBMITTED_WRITE_FAIL"),
+            lambda: (calls.append("submit") or {"status": "FILLED", "executedQty": "1"}),
+            pre_submit_checks=_pre_submit,
+        )
+
+    assert calls == ["submit"]
+    assert db.states["position_state"] == "RECONCILE_REQUIRED"
+    assert db.intents[next(iter(db.intents))][0] == "PENDING"
+
+
+def test_concurrent_duplicate_buy_intents_submit_once():
+    import threading
+
+    db = FakeDB()
+    barrier = _barrier(db)
+    calls = []
+    results = []
+
+    def run():
+        results.append(barrier.execute(
+            _intent("CID_CONCURRENT_DUPLICATE"),
+            lambda: (calls.append("submit") or {"status": "FILLED", "executedQty": "1"}),
+            pre_submit_checks=_pre_submit,
+        ))
+
+    threads = [threading.Thread(target=run) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=2)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert calls == ["submit"]
+    assert sum(1 for result in results if result.accepted) == 1
+    assert sum(1 for result in results if not result.accepted) == 1
