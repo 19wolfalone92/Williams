@@ -261,3 +261,10 @@ The latest successful Campaign CI run on the prior exact head does not verify th
 The Python signal extractor required the third consecutive same-colour AO bar to also pass `long_fractal_outside` / `short_fractal_outside` on the preceding row. That silently turned WM2 into a hybrid WM2+fractal condition and could suppress an otherwise valid Super AO signal before the campaign-entry logic ever saw it.
 
 **Correction:** WM2 identity is now based on the third consecutive same-colour AO bar; fractal confirmation remains its own WM3 path. Context, direction, trigger-not-already-broken, structural invalidation, expiry, risk and exchange preflight still gate execution. Updated the SHORT regression fixture so WM2 must be detected when the separate fractal-outside flag is false. Strategy semantics still require cross-engine golden-vector verification; Android parity is not claimed.
+
+
+### 32. Exact-expiry boundary was still inconsistent in the last-mile path — corrected
+
+Although initial signal selection treated `now >= expires_at_ms` as expired, the scanner and last-mile Python entry/add-on methods still used strict `<`/ `>=` comparisons. A signal at the exact expiry millisecond could therefore remain in scanner output and pass the last-mile expiry check if called directly or during a timing race.
+
+**Correction:** scanner candidates require `expires_at_ms > now`; both initial-entry and add-on execution checks reject `expires_at_ms <= now`; runtime add-on selection uses the same boundary. Added LONG/SHORT regression tests that set the initial signal expiry exactly equal to the current mocked time and assert no conditional order is submitted.
