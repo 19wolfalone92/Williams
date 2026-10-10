@@ -346,10 +346,19 @@ def test_exit_with_missing_trade_history_stays_reconcile_required():
 def test_exit_with_unvalued_fee_asset_stays_reconcile_required():
     class UnknownFeeExchange(MockExchange):
         def my_trades(self, symbol, order_id=None, limit=1000):
+            order = next(
+                (
+                    item for item in self.orders
+                    if item.get("symbol") == symbol
+                    and str(item.get("orderId")) == str(order_id)
+                ),
+                None,
+            )
             rows = super().my_trades(symbol, order_id=order_id, limit=limit)
-            for row in rows:
-                row["commission"] = "0.001"
-                row["commissionAsset"] = "BNB"
+            if order and str(order.get("side", "")).upper() == "SELL":
+                for row in rows:
+                    row["commission"] = "0.001"
+                    row["commissionAsset"] = "BNB"
             return rows
 
     with tempfile.TemporaryDirectory() as d:
