@@ -2498,6 +2498,7 @@ internal class FuturesNativeEngine(
                     campaign.put("position_amt", 0.0)
                     campaign.put("protection_active", false)
                     campaign.put("closed_at_ms", System.currentTimeMillis())
+                    recordClosedFuturesTrade(campaign, campaign.optString("exit_reason", reason))
                     campaign.remove("pending_exit_client_order_id")
                     campaign.remove("pending_exit_reason")
                     campaign.remove("pending_exit_expected_qty")
@@ -2574,6 +2575,7 @@ internal class FuturesNativeEngine(
             campaign.put("position_amt", 0.0)
             campaign.put("protection_active", false)
             campaign.put("closed_at_ms", System.currentTimeMillis())
+            recordClosedFuturesTrade(campaign, campaign.optString("exit_reason", reason))
             campaign.remove("pending_exit_client_order_id")
             campaign.remove("pending_exit_reason")
             campaign.remove("pending_exit_expected_qty")
@@ -2965,6 +2967,67 @@ internal class FuturesNativeEngine(
         return null
     }
 
+
+    /**
+     * Idempotently materialize a reconciled native Futures close into the app's
+     * unified trade history. The campaign ID is the stable key for crash recovery.
+     */
+    private fun recordClosedFuturesTrade(campaign: JSONObject, reason: String) {
+        val symbol = campaign.optString("symbol").uppercase(Locale.US)
+        val direction = campaign.optString("direction").uppercase(Locale.US)
+        if (direction !in setOf("LONG", "SHORT")) {
+            throw FuturesApiException("$symbol closed trade has invalid direction")
+        }
+        val entry = campaign.optDouble("entry_price", Double.NaN)
+        val exit = campaign.optDouble("last_exit_avg_price", Double.NaN)
+        val qty = campaign.optDouble("last_exit_qty", Double.NaN)
+        val gross = campaign.optDouble("last_exit_gross_pnl", Double.NaN)
+        val net = campaign.optDouble("realized_pnl_quote", Double.NaN)
+        val risk = campaign.optDouble("risk_quote", Double.NaN)
+        val closedAt = campaign.optLong("closed_at_ms", 0L)
+        val openedAt = campaign.optLong("entry_filled_at_ms", campaign.optLong("created_at_ms", 0L))
+        val feeExit = campaign.optDouble("last_exit_fee_quote", Double.NaN)
+        val feeEntry = campaign.optDouble("entry_fee_quote", 0.0)
+        if (!listOf(entry, exit, qty, gross, net, feeEntry).all(Double::isFinite) ||
+            entry <= 0.0 || exit <= 0.0 || qty <= 0.0 || feeEntry < 0.0 ||
+            !feeExit.isFinite() || feeExit < 0.0 || closedAt <= 0L || openedAt <= 0L
+        ) {
+            throw FuturesApiException("$symbol closed trade has incomplete authoritative accounting fields")
+        }
+        val knownFees = !campaign.optBoolean("last_exit_fee_unknown", false) &&
+            !campaign.optBoolean("exit_fee_unknown", false) &&
+            !campaign.optBoolean("entry_fee_unknown", false)
+        val feeTotal = feeEntry + feeExit
+        if (!feeTotal.isFinite()) throw FuturesApiException("$symbol closed trade fees are non-finite")
+        val riskMultiple = if (risk.isFinite() && risk > 0.0) net / risk else 0.0
+        val outcome = when {
+            net > 0.0 -> "WIN"
+            net < 0.0 -> "LOSS"
+            else -> "FLAT"
+        }
+        val campaignId = campaign.optString("campaign_id")
+        if (campaignId.isBlank()) throw FuturesApiException("$symbol closed trade has no stable campaign ID")
+        auditStore.recordTrade(
+            tradeId = "FUTURES:$campaignId",
+            symbol = symbol,
+            entryPrice = entry,
+            exitPrice = exit,
+            qty = qty,
+            notionalUsdt = entry * qty,
+            grossPnl = gross,
+            netPnl = net,
+            rMultiple = riskMultiple,
+            openedAt = openedAt,
+            closedAt = closedAt,
+            outcome = outcome,
+            reason = reason,
+            rawJson = campaign.toString(),
+            feeUsdt = feeTotal,
+            feeKnown = knownFees,
+            side = direction
+        )
+    }
+
     private fun recordMarketExit(exchange: BinanceUsdmFuturesClient, campaign: JSONObject, response: JSONObject, reason: String) {
         if (campaign.has("unreconciled_position_quantity_mismatch")) {
             throw FuturesApiException("Position quantity mismatch ledger must be reconciled before PnL finalization")
@@ -3007,6 +3070,7 @@ internal class FuturesNativeEngine(
         var feesQuote = 0.0
         var feeUnknown = false
         var tradeQty = 0.0
+        var exitNotional = 0.0
         for (i in 0 until trades.length()) {
             val row = trades.optJSONObject(i)
                 ?: throw FuturesApiException("$symbol market exit userTrades contains a malformed row")
@@ -3033,6 +3097,7 @@ internal class FuturesNativeEngine(
                 throw FuturesApiException("$symbol market exit commission asset is missing")
             }
             tradeQty += qty
+            exitNotional += qty * price
             realized += pnl
             when (feeAsset) {
                 "USDT", "USDC" -> feesQuote += fee
@@ -3052,6 +3117,9 @@ internal class FuturesNativeEngine(
         }
         campaign.put("realized_pnl_quote", campaign.optDouble("realized_pnl_quote", 0.0) + realized - feesQuote - entryFee)
         campaign.put("last_exit_order_id", orderId)
+        campaign.put("last_exit_avg_price", exitNotional / tradeQty)
+        campaign.put("last_exit_qty", tradeQty)
+        campaign.put("last_exit_gross_pnl", realized)
         campaign.put("last_exit_fee_quote", feesQuote)
         campaign.put("last_exit_fee_unknown", feeUnknown || campaign.optBoolean("entry_fee_unknown", false))
         campaign.put("last_exit_accounted", true)
@@ -3102,6 +3170,7 @@ internal class FuturesNativeEngine(
         var feeQuote = 0.0
         var unknown = false
         var tradeQty = 0.0
+        var exitNotional = 0.0
         for (i in 0 until trades.length()) {
             val row = trades.optJSONObject(i)
                 ?: throw FuturesApiException("$symbol protective userTrades contains a malformed row")
@@ -3122,6 +3191,7 @@ internal class FuturesNativeEngine(
             val asset = row.optString("commissionAsset").uppercase(Locale.US)
             if (fee > 0.0 && asset.isBlank()) throw FuturesApiException("$symbol protective commission asset is missing")
             tradeQty += qty
+            exitNotional += qty * price
             realized += pnl
             when (asset) {
                 "USDT", "USDC" -> feeQuote += fee
@@ -3135,6 +3205,10 @@ internal class FuturesNativeEngine(
         val entryFee = campaign.optDouble("entry_fee_quote", 0.0)
         if (!entryFee.isFinite() || entryFee < 0.0) throw FuturesApiException("$symbol persisted entry fee is invalid")
         campaign.put("realized_pnl_quote", campaign.optDouble("realized_pnl_quote", 0.0) + realized - feeQuote - entryFee)
+        campaign.put("last_exit_avg_price", exitNotional / tradeQty)
+        campaign.put("last_exit_qty", tradeQty)
+        campaign.put("last_exit_gross_pnl", realized)
+        campaign.put("last_exit_fee_quote", feeQuote)
         campaign.put("entry_fee_accounted", true)
         campaign.put("exit_reason", reason)
         campaign.put("protection_active", false)
@@ -3145,6 +3219,7 @@ internal class FuturesNativeEngine(
         campaign.put("exchange_exit_accounted", true)
         campaign.put("exit_fee_unknown", unknown || campaign.optBoolean("entry_fee_unknown", false))
         campaign.put("state", "CLOSED")
+        recordClosedFuturesTrade(campaign, reason)
         auditStore.saveFuturesCampaign(symbol, campaign)
         updateIntentByClientId(campaign.optString("protection_client_algo_id"), "CONFIRMED", actualOrder.toString())
     }
