@@ -30,7 +30,8 @@ def _timeframe_ms(timeframe: str) -> int:
         "8h": 28_800_000, "12h": 43_200_000, "1d": 86_400_000,
         "3d": 259_200_000, "1w": 604_800_000, "1M": 2_592_000_000,
     }
-    normalized = "1M" if str(timeframe) == "1M" else str(timeframe).strip().lower()
+    raw = str(timeframe).strip()
+    normalized = "1M" if raw == "1M" else raw.lower()
     if normalized not in values:
         raise ValueError(f"Unsupported signal timeframe: {timeframe!r}")
     return int(values[normalized])
