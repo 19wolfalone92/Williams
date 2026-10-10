@@ -1380,26 +1380,97 @@ class CampaignExecutionService:
         self.db.save_order(order)
         executed = float(order.get("executedQty", 0) or 0)
         quote = float(order.get("cummulativeQuoteQty", 0) or 0)
-        if executed <= 0 or quote <= 0:
-            raise CampaignExecutionError(
-                f"{symbol}: campaign exit returned no authoritative fill"
-            )
+        order_id = str(order.get("orderId", "") or "")
         self.db.save_campaign_order(
             PendingOrderRecord(
-                order_id=str(order.get("orderId", "") or ""),
+                order_id=order_id,
                 client_order_id=cid,
                 symbol=symbol,
                 side="SELL",
                 order_type="MARKET",
                 purpose="EXIT",
-                status=str(order.get("status", "FILLED")),
-                quantity=executed,
+                status=str(order.get("status", "UNKNOWN")),
+                quantity=float(order.get("origQty", qty) or qty),
                 campaign_id=campaign.campaign_id,
                 signal_id=campaign.current_signal_id,
             )
         )
+
+        # Order-level RESULT responses omit commissions. Reconcile the exact
+        # order's trade history before closing the campaign or recording PnL.
+        try:
+            if executed <= 0 or not order_id:
+                raise CampaignExecutionError("market exit has no authoritative executed quantity/order ID")
+            fills = self.client.my_trades(symbol, order_id=order_id, limit=1000)
+            if not isinstance(fills, list) or not fills:
+                raise CampaignExecutionError("market exit has no authoritative trade history")
+            total_fill_qty = 0.0
+            total_fill_quote = 0.0
+            exit_fee_quote = 0.0
+            exit_fee_base = 0.0
+            base_asset = symbol[:-4] if symbol.endswith("USDT") else ""
+            for fill in fills:
+                trade_id = fill.get("id", fill.get("tradeId", fill.get("trade_id")))
+                fill_order_id = fill.get("orderId")
+                fill_qty = float(fill.get("qty", 0) or 0)
+                fill_price = float(fill.get("price", 0) or 0)
+                commission = float(fill.get("commission", 0) or 0)
+                fee_asset = str(fill.get("commissionAsset") or "").upper()
+                if (
+                    trade_id is None or fill_qty <= 0 or fill_price <= 0
+                    or commission < 0
+                    or (fill_order_id is not None and str(fill_order_id) != order_id)
+                ):
+                    raise CampaignExecutionError("market exit trade history contains an invalid fill")
+                if commission > 0 and fee_asset not in {"USDT", base_asset}:
+                    raise CampaignExecutionError(
+                        f"market exit commission asset {fee_asset or 'UNKNOWN'} cannot be valued safely"
+                    )
+                total_fill_qty += fill_qty
+                total_fill_quote += fill_qty * fill_price
+                if fee_asset == "USDT":
+                    exit_fee_quote += commission
+                elif fee_asset == base_asset:
+                    exit_fee_base += commission
+                    exit_fee_quote += commission * fill_price
+                self.db.save_campaign_fill({
+                    "campaign_id": campaign.campaign_id,
+                    "order_id": order_id,
+                    "exchange_trade_id": str(trade_id),
+                    "symbol": symbol,
+                    "side": "SELL",
+                    "quantity": fill_qty,
+                    "price": fill_price,
+                    "quote_quantity": fill_qty * fill_price,
+                    "fee_quote": commission if fee_asset == "USDT" else 0.0,
+                    "commission_base": commission if fee_asset == base_asset else 0.0,
+                    "commission_asset": fee_asset,
+                    "raw_json": fill,
+                })
+            tolerance = max(1e-8, executed * 1e-6)
+            if abs(total_fill_qty - executed) > tolerance:
+                raise CampaignExecutionError(
+                    f"market exit trade quantity {total_fill_qty} disagrees with executedQty {executed}"
+                )
+            if quote > 0 and abs(total_fill_quote - quote) > max(1e-6, quote * 1e-6):
+                raise CampaignExecutionError(
+                    f"market exit trade quote {total_fill_quote} disagrees with cumulative quote {quote}"
+                )
+            if quote <= 0:
+                quote = total_fill_quote
+            if quote <= 0:
+                raise CampaignExecutionError("market exit has no authoritative quote quantity")
+        except Exception as exc:
+            self.engine.mark_reconcile_required(
+                campaign,
+                f"market exit fill/commission reconciliation failed: {exc}",
+            )
+            raise CampaignExecutionError(
+                f"{symbol}: market exit fill/commission state requires reconciliation"
+            ) from exc
         exit_price = quote / executed
-        remaining = max(0.0, float(campaign.position_qty) - executed)
+        campaign.tags["last_exit_fee_quote"] = float(exit_fee_quote)
+        remaining = max(0.0, float(campaign.position_qty) - executed - exit_fee_base)
         self.db.log_campaign_event(
             campaign.campaign_id,
             "EXIT_SUBMITTED",
@@ -1428,7 +1499,7 @@ class CampaignExecutionService:
             if trade is not None:
                 entry = float(trade.get("entry_price") or campaign.average_entry_price or 0.0)
                 entry_fee = float(trade.get("fees") or 0.0)
-                pnl = quote - entry * float(trade.get("quantity") or campaign.position_qty) - entry_fee
+                pnl = quote - entry * float(trade.get("quantity") or campaign.position_qty) - entry_fee - exit_fee_quote
                 self.db.close_trade(
                     trade["id"],
                     datetime.now(timezone.utc).isoformat(),
@@ -1436,7 +1507,7 @@ class CampaignExecutionService:
                     pnl,
                     (exit_price / entry - 1.0) if entry > 0 else 0.0,
                     reason,
-                    fees=entry_fee,
+                    fees=entry_fee + exit_fee_quote,
                 )
             self.db.state_set(f"position_state:{symbol}", "FLAT")
             return {
