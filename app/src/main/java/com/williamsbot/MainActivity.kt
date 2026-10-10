@@ -406,8 +406,8 @@ private class BackendApi(context: Context) {
         val normalized = url.trim().trimEnd('/')
         require(normalized.isNotBlank()) { "Backend URL не задан" }
         val localRuntime = isLocalRuntimeUrl(normalized)
-        if (!normalized.startsWith("https://") && !localRuntime) {
-            error("Удалённый Backend URL должен использовать HTTPS; local mode must use exactly http://127.0.0.1:18080 or http://localhost:18080.")
+        if (!localRuntime && !BackendUrlContract.isSecureRemoteUrl(normalized)) {
+            error("Удалённый Backend URL должен быть корректным HTTPS URL; local mode must use exactly http://127.0.0.1:18080 or http://localhost:18080.")
         }
         if (!localRuntime && token.trim().length < 32) {
             error("Для удалённого Backend нужен Mobile API Token (минимум 32 символа).")
@@ -428,8 +428,8 @@ private class BackendApi(context: Context) {
         body: String?
     ): String {
         val localRuntime = isLocalRuntimeUrl(backendUrl)
-        require(localRuntime || backendUrl.startsWith("https://")) {
-            "Укажите HTTPS Backend URL или используйте автономный Williams Runtime."
+        require(localRuntime || BackendUrlContract.isSecureRemoteUrl(backendUrl)) {
+            "Укажите корректный HTTPS Backend URL или используйте автономный Williams Runtime."
         }
         if (!localRuntime) {
             require(mobileToken.isNotBlank()) {
