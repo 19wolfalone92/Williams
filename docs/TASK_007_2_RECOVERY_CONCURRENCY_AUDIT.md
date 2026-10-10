@@ -12,10 +12,10 @@ This report is an evidence record, not a declaration of production readiness. No
 - Task 007.2 starting SHA: `01d8472dbadf3d903b243d618de627bd2962aed7`
 - Baseline `main` SHA: `04da5f9c09572e99ff310be3a1908179165e528c`
 - Implementation SHA exercised by the latest Python CI at report authoring: `9fcbc5f148adadceb3c6f7ee61125fcc419faedb`
-- Compare result for implementation SHA: 117 commits ahead, 0 behind baseline.
+- Compare result for implementation SHA: 120 commits ahead, 0 behind baseline.
 - `main` was rechecked and remains at `04da5f9c09572e99ff310be3a1908179165e528c`.
 - No PR exists for this exact recovery branch. Existing PR #43 is on `fix/task-007-risk-management`, not this branch. No PR was created and no merge was performed.
-- The latest completed all-jobs PASS is [run 38088262297](https://github.com/19wolfalone92/Williams/actions/runs/38088262297) at SHA `4da4643e2ca3115556df727440fa5aceb07ce500`; it is not evidence for subsequent code changes. Python passed **196 tests, 4 warnings** at SHA `7333b94263c14180efdc7713a40928af48d46277`, before the latest commission-valuation changes. The exact code SHA `b3b7c7ee007d53457ff012a171e513830de78b0f` has a pending workflow run [38090025435](https://github.com/19wolfalone92/Williams/actions/runs/38090025435); it is not yet accepted. This report update creates a documentation commit and another run, which must be checked independently.
+- Exact code SHA `66354eb53ee456a788a01cdd2293d8068b728b83` passed [workflow run 38090157504](https://github.com/19wolfalone92/Williams/actions/runs/38090157504): Python **199 passed, 4 warnings**; Android debug build, unit tests and lint/static checks completed successfully. This report update creates a documentation commit and a new workflow run; its resulting HEAD must be checked independently before finalizing.
 
 ## 2. Changes made in this continuation
 
@@ -27,7 +27,8 @@ This report is an evidence record, not a declaration of production readiness. No
 6. Updated test adapters to provide explicit, deterministic fill/commission records rather than relying on implicit zero-fee fallbacks.
 7. Added regression tests for missing commission evidence and the independent-runtime mutation race.
 8. Added an independent-process SQLite claim race test: two OS processes open separate SQLite connections and attempt to claim the same symbol; exactly one durable claim is expected. It passed in the Python suite on SHA `7333b94263c14180efdc7713a40928af48d46277`.
-9. Found and patched a further financial-integrity gap: the shared execution accumulator previously left nonzero third-asset commissions out of quote-equivalent fees, and legacy `Trader` did not account for base-asset commissions. The accumulator now reports unvalued fee assets; legacy reconciliation blocks if any remain unvalued; portfolio conversion rejects non-positive market prices. Regression tests were added, but these latest changes still require CI on the exact SHA.
+9. Found and patched a further financial-integrity gap: the shared execution accumulator previously left nonzero third-asset commissions out of quote-equivalent fees, and legacy `Trader` did not account for base-asset commissions. The accumulator now reports unvalued fee assets; legacy reconciliation blocks if any remain unvalued; portfolio conversion rejects non-positive market prices.
+10. Removed a swallowed failure in `CampaignExecutionService.reconcile_pending_entries()`: if an executed conditional entry has no usable cumulative quote amount, missing/unavailable/empty fill history now raises and leaves the symbol `RECONCILE_REQUIRED` instead of continuing toward protection sizing. A regression test verifies no SELL/protection mutation is issued in that condition. This passed in exact-SHA CI `66354eb53ee456a788a01cdd2293d8068b728b83`.
 
 These changes reduce known risks but do not close the entire TASK 007.2 acceptance matrix.
 
@@ -76,7 +77,7 @@ The cumulative compare against baseline `04da5f9c09572e99ff310be3a1908179165e528
 | Android mutations | `signedPost/signedDelete` → `durableMutation` → encrypted SharedPreferences PENDING commit → `signedRequest` | Signed REST POST/DELETE | Static write-ahead contract observed | Static contract tests exist; process-kill/fault-injection matrix is NOT VERIFIED. |
 | Recovery | `Trader.recover_state`, `MultiPositionTrader.recover`, campaign recovery | Read-only queries plus durable state writes; recovery may schedule later mutations | Recovery queries and mutation paths are separated in reviewed code | Two simultaneous recovery executors and every REST/history window are NOT VERIFIED. |
 
-**Important:** low-level mutation wrappers exist in the Binance adapter. The table above records reviewed routes, not a proof of exhaustive repository-wide call-graph closure. A full call-site/indirect-call audit remains a P0.
+**Static sweep evidence:** a targeted regex scan covered 16 high-risk production files (including `binance_client.py`, `trader.py`, `portfolio_trader.py`, `campaign_execution.py`, `server.py`, `StandaloneRuntime.kt`, and `ExecutionGate.kt`). The raw signed POST/DELETE methods found in the Python adapter are order create, cancel, cancel-all, cancel/replace, OCO create and OCO cancel; Android signed mutations in the reviewed runtime call through `signedPost`/`signedDelete` → `durableMutation`. This is useful but is not a repository-wide scan of all 146 Python/Kotlin source files and is not a proof of full indirect reachability. The exhaustive production call graph remains a P0.
 
 ## 4. Concurrency and SQLite matrix
 
@@ -125,6 +126,7 @@ Status: **PARTIALLY VERIFIED — NOT CLOSED**.
 | Partial fill / residual exposure | Existing multi-position lifecycle tests and deterministic fixtures | PARTIALLY TEST-CONFIRMED |
 | Missing fill/commission history | New fail-closed regression tests | TEST-CONFIRMED for reviewed paths |
 | Every create-order crash boundary (commit/read-back/process kill) | Not all points injected | NOT VERIFIED |
+| Executed conditional entry with missing/unavailable fill history | New test forces zero quote and failing trade-history lookup; recovery remains RECONCILE_REQUIRED and submits no protection SELL | TEST-CONFIRMED on SHA `66354eb53ee456a788a01cdd2293d8068b728b83` |
 | Protection absent locally / absent at exchange / partial protection | Some recovery coverage only | NOT VERIFIED as a complete matrix |
 | OCO cancel accepted but response lost; child fill during cancel | Some target-list recovery code/tests | NOT VERIFIED as a complete matrix |
 | Full exit but local persistence fails; duplicate delivery | Partial persistence/idempotency coverage | NOT VERIFIED as a complete matrix |
@@ -154,7 +156,7 @@ No Futures readiness claim is made.
 
 ## 9. CI evidence
 
-- Exact implementation SHA `7333b94263c14180efdc7713a40928af48d46277`: Python job passed, **196 passed, 4 warnings**, in [workflow run 38089861539](https://github.com/19wolfalone92/Williams/actions/runs/38089861539). Android build/unit tests/lint were still running at report authoring.
+- Exact implementation SHA `66354eb53ee456a788a01cdd2293d8068b728b83`: [workflow run 38090157504](https://github.com/19wolfalone92/Williams/actions/runs/38090157504) completed successfully. Python tests: **199 passed, 4 warnings**. Android build job completed `:app:testDebugUnitTest`, `:app:lintDebug`, and `:app:assembleDebug` successfully; debug APK and lint report artifacts were uploaded.
 - Prior exact-SHA runs with Python failures were investigated and corrected; they are not treated as passes.
 - The report commit changes documentation only, but creates a new HEAD. The new run must be checked on the resulting SHA; success on an earlier SHA is not transferred.
 - Android job command in workflow: `gradle --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --stacktrace`. A job still in progress is not PASS.
