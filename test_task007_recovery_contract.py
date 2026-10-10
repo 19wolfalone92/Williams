@@ -36,6 +36,24 @@ def evidence(**overrides):
     return data
 
 
+
+def _process_claim_same_symbol(path, client_id, start_gate, results):
+    """Independent process/SQLite connection used by the cross-process claim test."""
+    db = Database(path)
+    intent = OrderIntent.new(
+        "SOLUSDT", "BUY", "MARKET", {},
+        client_order_id=client_id, purpose="CAMPAIGN_ENTRY",
+    )
+    start_gate.wait(timeout=10)
+    try:
+        db.claim_execution_intent(intent)
+        results.put(("claimed", client_id))
+    except Exception as exc:
+        results.put(("blocked", type(exc).__name__, str(exc)))
+    finally:
+        db.conn.close()
+
+
 def test_new_database_starts_reconciliation_required_not_flat():
     with tempfile.TemporaryDirectory() as tmp:
         db = Database(os.path.join(tmp, "state.sqlite3"))
@@ -767,3 +785,40 @@ def test_two_independent_runtime_barriers_cannot_submit_conflicting_same_symbol_
     ).fetchone()[0] >= 1
     db_a.conn.close()
     db_b.conn.close()
+
+
+def test_two_independent_processes_cannot_claim_conflicting_symbol_intents(tmp_path):
+    import multiprocessing
+
+    # This is a real process boundary: each worker opens its own Database and
+    # SQLite connection; no in-memory lock or shared Python connection is used.
+    ctx = multiprocessing.get_context("fork")
+    path = str(tmp_path / "two-process-runtimes.sqlite3")
+    parent_db = Database(path)
+    parent_db.mark_recovery_ready(evidence())
+    start_gate = ctx.Barrier(3)
+    results = ctx.Queue()
+    workers = [
+        ctx.Process(
+            target=_process_claim_same_symbol,
+            args=(path, f"process-client-{index}", start_gate, results),
+        )
+        for index in range(2)
+    ]
+    for worker in workers:
+        worker.start()
+    start_gate.wait(timeout=10)
+    outcomes = [results.get(timeout=15) for _ in workers]
+    for worker in workers:
+        worker.join(timeout=15)
+        assert not worker.is_alive(), "worker hung during atomic SQLite claim"
+        assert worker.exitcode == 0
+
+    assert sum(item[0] == "claimed" for item in outcomes) == 1, outcomes
+    assert sum(item[0] == "blocked" for item in outcomes) == 1, outcomes
+    rows = parent_db.conn.execute(
+        "SELECT status,client_order_id FROM execution_intents WHERE symbol='SOLUSDT'"
+    ).fetchall()
+    assert len(rows) == 1, [dict(row) for row in rows]
+    assert rows[0]["status"] == "PENDING"
+    parent_db.conn.close()
