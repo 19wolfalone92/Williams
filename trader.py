@@ -92,6 +92,184 @@ class Trader:
         try:self.tg.send(text)
         except Exception as e:log.error('Telegram error: %s',e)
 
+    def _finalize_recovery_gate(self, report, recovery, portfolio):
+        """Unlock entries only after fresh, read-only exchange evidence is complete."""
+        if not isinstance(report, dict) or not report.get("ready"):
+            raise RuntimeError("recovery gate cannot unlock without a passing preflight report")
+        if not isinstance(recovery, dict) or not recovery.get("ok"):
+            raise RuntimeError("recovery gate cannot unlock without successful canonical reconciliation")
+
+        checks = report.get("checks") or {}
+        if checks.get("api_reachable") != "PASS" or checks.get("account") != "PASS":
+            raise RuntimeError("recovery gate requires fresh API reachability and account checks")
+
+        # Re-read authoritative account/open-order snapshots after recovery. Do
+        # not derive READY from a local FLAT value or an empty local database.
+        account = self.client.account()
+        if not isinstance(account, dict) or not isinstance(account.get("balances"), list):
+            raise RuntimeError("recovery gate received an invalid Binance account snapshot")
+        open_orders = self.client.open_orders()
+        open_lists = self.client.open_order_lists()
+        if not isinstance(open_orders, list) or not isinstance(open_lists, list):
+            raise RuntimeError("recovery gate received invalid open-order snapshots")
+        known, unknown = PreflightCheckService.classify_open_orders(open_orders, open_lists)
+        if unknown:
+            raise RuntimeError(f"recovery gate found unknown exchange orders: {len(unknown)}")
+
+        symbols = set(str(x).upper() for x in (self.auto_scan_symbols or [self.symbol]))
+        symbols.update(str(x["symbol"]).upper() for x in portfolio.open_trades())
+        symbols.update(str(x["symbol"]).upper() for x in self.db.open_campaigns())
+        symbols.update(str(x[0]).upper() for x in portfolio._pending_entries())
+        if not symbols:
+            raise RuntimeError("recovery gate cannot establish a checked symbol universe")
+
+        # Fetch order history for each configured/managed symbol. Validate fill
+        # history for bot-owned executions; missing IDs, incomplete quantities,
+        # invalid commissions or unsupported fee assets keep execution blocked.
+        history_by_key = {}
+        for symbol in sorted(symbols):
+            history = self.client.all_orders(symbol, limit=1000)
+            if not isinstance(history, list):
+                raise RuntimeError(f"{symbol}: Binance order history response is invalid")
+            for order in history:
+                if not isinstance(order, dict) or str(order.get("symbol", symbol)).upper() != symbol:
+                    raise RuntimeError(f"{symbol}: malformed order-history record")
+                self.db.save_order(order)
+                client_id = str(order.get("clientOrderId") or "")
+                if client_id:
+                    history_by_key[(symbol, client_id)] = order
+                order_id = order.get("orderId")
+                if order_id is not None:
+                    history_by_key[(symbol, str(order_id))] = order
+                executed = float(order.get("executedQty", 0) or 0)
+                if executed <= 0 or not PreflightCheckService._is_known_client_id(client_id):
+                    continue
+                if order_id is None:
+                    raise RuntimeError(f"{symbol}: managed executed order has no exchange order ID")
+                fills = self.client.my_trades(symbol, order_id=order_id, limit=1000)
+                if not isinstance(fills, list) or not fills:
+                    raise RuntimeError(f"{symbol}: managed executed order has incomplete trade history")
+                total_qty = 0.0
+                for fill in fills:
+                    trade_id = fill.get("id", fill.get("tradeId", fill.get("trade_id")))
+                    qty = float(fill.get("qty", 0) or 0)
+                    price = float(fill.get("price", 0) or 0)
+                    commission = float(fill.get("commission", 0) or 0)
+                    fee_asset = str(fill.get("commissionAsset") or "").upper()
+                    if trade_id is None or qty <= 0 or price <= 0 or commission < 0:
+                        raise RuntimeError(f"{symbol}: invalid or non-idempotent fill record")
+                    if commission > 0 and not fee_asset:
+                        raise RuntimeError(f"{symbol}: commission asset is unknown")
+                    if commission > 0 and fee_asset not in {symbol[:-4], "USDT"}:
+                        raise RuntimeError(
+                            f"{symbol}: fee asset {fee_asset} cannot be valued safely during recovery"
+                        )
+                    total_qty += qty
+                    campaign_order = self.db.conn.execute(
+                        "SELECT campaign_id FROM campaign_orders WHERE symbol=? "
+                        "AND (order_id=? OR client_order_id=?) ORDER BY id DESC LIMIT 1",
+                        (symbol, str(order_id), client_id),
+                    ).fetchone()
+                    if campaign_order:
+                        self.db.save_campaign_fill({
+                            "campaign_id": campaign_order["campaign_id"],
+                            "order_id": str(order_id),
+                            "exchange_trade_id": str(trade_id),
+                            "symbol": symbol,
+                            "side": str(fill.get("isBuyer") and "BUY" or order.get("side", "")),
+                            "quantity": qty,
+                            "price": price,
+                            "quote_quantity": qty * price,
+                            "fee_quote": commission if fee_asset == "USDT" else 0.0,
+                            "commission_base": commission if fee_asset == symbol[:-4] else 0.0,
+                            "commission_asset": fee_asset,
+                            "raw_json": fill,
+                        })
+                tolerance = max(1e-8, executed * 1e-6)
+                if abs(total_qty - executed) > tolerance:
+                    raise RuntimeError(
+                        f"{symbol}: trade history quantity {total_qty} disagrees with order executedQty {executed}"
+                    )
+
+        # A protection is accepted only if the live exchange snapshot contains
+        # the correctly sized managed stop for every active campaign.
+        unprotected = []
+        for row in self.db.open_campaigns():
+            campaign_id = str(row.get("campaign_id") or "")
+            symbol = str(row.get("symbol") or "").upper()
+            qty = float(row.get("position_qty", 0) or 0)
+            if qty <= 0:
+                unprotected.append(f"{symbol}:{campaign_id}:nonpositive_campaign_quantity")
+                continue
+            stops = [
+                order for order in open_orders
+                if str(order.get("symbol", "")).upper() == symbol
+                and str(order.get("side", "")).upper() == "SELL"
+                and str(order.get("clientOrderId", "")).startswith("WILLV5_STOP_")
+                and str(order.get("type", "")).upper() in {"STOP_LOSS", "STOP_LOSS_LIMIT"}
+            ]
+            tolerance = max(1e-8, qty * 0.005)
+            if len(stops) != 1 or abs(float(stops[0].get("origQty", 0) or 0) - qty) > tolerance:
+                unprotected.append(f"{symbol}:{campaign_id}:exchange_stop_not_confirmed")
+        if unprotected:
+            raise RuntimeError("recovery gate found unprotected campaign exposure: " + ", ".join(unprotected))
+
+        unresolved_symbols = portfolio.unresolved_symbols()
+        pending_entries = portfolio._pending_entries()
+        if unresolved_symbols or pending_entries:
+            raise RuntimeError(
+                f"recovery gate unresolved state: symbols={unresolved_symbols}, pending_entries={pending_entries}"
+            )
+
+        unresolved_intents = self.db.conn.execute(
+            "SELECT intent_id,symbol,client_order_id,status FROM execution_intents "
+            "WHERE UPPER(status) IN ('PENDING','SUBMITTED','AMBIGUOUS','RECONCILE_REQUIRED')"
+        ).fetchall()
+        for intent in unresolved_intents:
+            symbol = str(intent["symbol"] or "").upper()
+            client_id = str(intent["client_order_id"] or "")
+            if not client_id or (symbol, client_id) not in history_by_key:
+                raise RuntimeError(
+                    f"recovery gate cannot resolve intent {intent['intent_id']} by exchange history"
+                )
+            self.db.conn.execute(
+                "UPDATE execution_intents SET status='RECONCILED', reason=? WHERE intent_id=?",
+                ("exchange order history confirmed during startup reconciliation", intent["intent_id"]),
+            )
+        self.db.conn.commit()
+
+        campaigns = self.db.open_campaigns()
+        unknown_campaigns = [
+            str(row.get("campaign_id"))
+            for row in campaigns
+            if str(row.get("state", "")).upper() in {"", "UNKNOWN", "RECONCILE_REQUIRED"}
+            or str(row.get("reconciliation_state", "CLEAN")).upper() != "CLEAN"
+        ]
+        if unknown_campaigns:
+            raise RuntimeError("recovery gate found unresolved campaigns: " + ", ".join(unknown_campaigns))
+
+        canonical_state = str(recovery.get("state") or self.db.state_get("position_state", "FLAT")).upper()
+        if canonical_state not in {"FLAT", "OPEN"}:
+            raise RuntimeError(f"recovery gate cannot accept canonical state {canonical_state}")
+        self.db.mark_recovery_ready({
+            "exchange_reachable": True,
+            "account_checked": True,
+            "open_orders_checked": True,
+            "order_history_checked": True,
+            "fills_checked": True,
+            "positions_checked": True,
+            "protection_checked": True,
+            "campaigns_checked": True,
+            "intents_checked": True,
+            "unresolved_symbols": [],
+            "pending_entries": [],
+            "unknown_orders": [],
+            "inventory_mismatches": [],
+            "unprotected_positions": [],
+            "unknown_campaigns": [],
+            "canonical_position_state": canonical_state,
+        })
+
     def _setup_multi_position_mode(self):
         """Initialize autonomous Spot portfolio mode without legacy single-position state gates."""
         if not self.client.testnet and os.getenv('ALLOW_LIVE','false').lower() != 'true':
@@ -143,6 +321,7 @@ class Trader:
                 + str(recovery)
             )
 
+        self._finalize_recovery_gate(report, recovery, self._multi_position_trader)
         self.recovered = True
         positions = self._multi_position_trader.open_positions()
         self.db.log_event(
@@ -268,6 +447,7 @@ class Trader:
                 'LIVE SAFETY GATE BLOCKED: canonical state requires reconciliation'
             )
 
+        self._finalize_recovery_gate(self.preflight_report, recovery, self._multi_position_trader)
         self.recovered = True
 
         self.notify(
