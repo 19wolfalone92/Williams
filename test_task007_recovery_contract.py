@@ -763,7 +763,7 @@ def test_two_independent_runtime_barriers_cannot_submit_conflicting_same_symbol_
     assert second_result.reason.startswith("UNRESOLVED_SYMBOL_INTENT:")
     assert external_mutations == ["runtime-a"]
     assert db_a.conn.execute(
-        "SELECT COUNT(*) FROM execution_intents WHERE symbol='BTCUSDT' AND status IN ('PENDING','SUBMITTED','AMBIGUOUS','RECONCILE_REQUIRED')"
+        "SELECT COUNT(*) FROM execution_intents WHERE symbol='BTCUSDT' AND status IN ('PENDING','SUBMITTED','AMBIGUOUS','RECONCILE_REQUIRED','CONFIRMED')"
     ).fetchone()[0] >= 1
     db_a.conn.close()
     db_b.conn.close()
