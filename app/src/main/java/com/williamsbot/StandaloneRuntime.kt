@@ -205,7 +205,9 @@ private data class CampaignSignalN(
     val protectivePrice: Double,
     val teethAtDetection: Double,
     val invalidationPrice: Double,
-    val reason: String
+    val reason: String,
+    val confirmationTimeMs: Long = signalBarTimeMs,
+    val expiresAtMs: Long = Long.MAX_VALUE
 )
 
 private data class BaseAnalysis(
@@ -609,15 +611,19 @@ private class NativeEngine(
     // aggregate risk remains capped separately at 1%.
     private val maxOpenPositions: Int
         get() = prefs.getInt("max_open_positions", 5).coerceIn(1, 10)
+    // Canonical autonomous runtime is the campaign runner. Legacy signal-to-market
+    // entry is not allowed to switch this path off.
     private val campaignEngineEnabled: Boolean
-        get() = prefs.getBoolean("campaign_engine_enabled", true)
+        get() = true
+    // H1 is the only canonical decision timeframe. Stale persisted M5/M15
+    // preferences are ignored; those frames are monitoring/diagnostics only.
     private val campaignExecutionTimeframe: String
-        get() = prefs.getString("campaign_execution_timeframe", "5m") ?: "5m"
+        get() = WilliamsTimeframeContract.CANONICAL_DECISION
     private val campaignRiskLimitPct = 0.005
     private val campaignInitialRiskPct = 0.002
     private val campaignAddRiskCapPct = 0.002
     private val campaignTrailBars: Int
-        get() = prefs.getInt("campaign_trail_bars", 5).coerceIn(3, 5)
+        get() = prefs.getInt("campaign_trail_bars", 3).coerceIn(3, 5)
     private val maxTotalRiskPct = 0.01
     private val maxRiskPerTradePct = 0.005
     private val maxSpreadPct = 0.0015
@@ -6390,93 +6396,80 @@ private class NativeEngine(
         frame: String,
         tick: Double
     ): List<CampaignSignalN> {
-        if (candles.size < 45 || tick <= 0.0) return emptyList()
+        // This is a canonical live-entry path, not a chart diagnostic. Require
+        // a complete closed H1 history and fail closed on malformed math inputs.
+        if (frame != WilliamsTimeframeContract.CANONICAL_DECISION ||
+            candles.size < 140 || !tick.isFinite() || tick <= 0.0
+        ) return emptyList()
 
-        val medians = candles.map { (it.h + it.l) / 2.0 }
-        val jaw = smma(medians, 13)
-        val teeth = smma(medians, 8)
-        val lips = smma(medians, 5)
-        val jawS = shiftedSeries(jaw, 8)
-        val teethS = shiftedSeries(teeth, 5)
-        val lipsS = shiftedSeries(lips, 3)
+        val highs = candles.map { it.h }
+        val lows = candles.map { it.l }
+        val medians = candles.indices.map { (candles[it].h + candles[it].l) / 2.0 }
+        val alligator = WilliamsAlligatorMath.calculate(highs, lows)
+        val jawS = alligator.jaw
+        val teethS = alligator.teeth
+        val lipsS = alligator.lips
+        val current = candles.lastIndex
+        if (!alligator.validAt(current)) return emptyList()
 
-        fun bullishAlligator(i: Int): Boolean =
-            i in candles.indices &&
-                jawS[i].isFinite() &&
-                teethS[i].isFinite() &&
-                lipsS[i].isFinite() &&
-                lipsS[i] > teethS[i] &&
-                teethS[i] > jawS[i] &&
-                candles[i].c > lipsS[i]
+        fun latestUpFractal(throughIndex: Int): WilliamsFractalConfirmation? =
+            WilliamsFractalMath.latestUp(
+                highs = highs,
+                throughIndex = throughIndex,
+                lookbackBars = 80
+            )
 
-        fun upFractal(i: Int): Boolean {
-            if (i < 2 || i + 2 >= candles.size) return false
-            return candles[i].h > candles[i - 1].h &&
-                candles[i].h > candles[i - 2].h &&
-                candles[i].h > candles[i + 1].h &&
-                candles[i].h > candles[i + 2].h
-        }
-
-        fun downFractal(i: Int): Boolean {
-            if (i < 2 || i + 2 >= candles.size) return false
-            return candles[i].l < candles[i - 1].l &&
-                candles[i].l < candles[i - 2].l &&
-                candles[i].l < candles[i + 1].l &&
-                candles[i].l < candles[i + 2].l
-        }
-
-        fun latestUpFractal(centerLimit: Int): Int? {
-            for (i in centerLimit downTo 2) {
-                if (upFractal(i)) return i
-            }
-            return null
-        }
-
-        fun latestDownFractal(centerLimit: Int): Int? {
-            for (i in centerLimit downTo 2) {
-                if (downFractal(i)) return i
-            }
-            return null
-        }
-
+        // Source descriptions of "good angulation" are qualitative; this
+        // numeric slope/separation score is an approximation and stays blocked
+        // unless a tester explicitly opts it in for research/replay.
         fun angulationScore(i: Int): Double {
             val start = max(0, i - 4)
-            if (i - start < 2 || !jawS[i].isFinite()) return 0.0
+            if (i - start < 2 || !jawS[i].isFinite() || !candles[i].c.isFinite() || candles[i].c <= 0.0) {
+                return 0.0
+            }
+            if (!jawS[start].isFinite()) return 0.0
             val now = max(0.0, jawS[i] - candles[i].l)
-            val then = if (jawS[start].isFinite()) {
-                max(0.0, jawS[start] - candles[start].l)
-            } else 0.0
+            val then = max(0.0, jawS[start] - candles[start].l)
             return max(0.0, now - then) / max(candles[i].c, 1e-9) * 100.0
         }
 
-        fun lastValidFractalLevel(at: Int): Pair<Int, Double>? {
-            val center = latestUpFractal(max(2, at - 2)) ?: return null
-            return center to candles[center].h
-        }
+        fun actionable(signalIndex: Int, trigger: Double): Boolean =
+            candles[current].c < trigger &&
+                WilliamsSignalMath.isLongSignalStillActionable(
+                    signalIndex = signalIndex,
+                    currentIndex = current,
+                    highs = highs,
+                    lows = lows,
+                    trigger = trigger
+                )
 
-        val current = candles.lastIndex
+        val frameMs = frameSeconds(frame) * 1000L
         val out = mutableListOf<CampaignSignalN>()
 
-        // WM1: bullish reversal bar. It is the context bar; execution waits
-        // for a break above its high. Countertrend WM1 is intentionally allowed.
-        val reversalStart = max(2, candles.lastIndex - 20)
-        for (i in candles.lastIndex downTo reversalStart) {
+        // WM1: reversal bar may be the first Wise Man, even while the
+        // Alligator is not yet in bullish alignment. Conditional entry only.
+        val wm1TtlBars = max(1, prefs.getInt("pending_reversal_bars", 2))
+        val reversalStart = max(2, current - 20)
+        for (i in current downTo reversalStart) {
             val priorLow = min(candles[i - 1].l, candles[i - 2].l)
             val range = max(candles[i].h - candles[i].l, 1e-12)
             val closeLocation = (candles[i].c - candles[i].l) / range
+            val mouthValues = listOf(jawS[i], teethS[i], lipsS[i])
             val belowMouth =
-                jawS[i].isFinite() &&
-                    teethS[i].isFinite() &&
-                    lipsS[i].isFinite() &&
-                    candles[i].l < min(jawS[i], min(teethS[i], lipsS[i]))
+                mouthValues.all { it.isFinite() } &&
+                    candles[i].l < mouthValues.minOrNull()!!
+            val approximateAngulationOptedIn =
+                prefs.getBoolean("allow_approximate_wm1_angulation", false)
             if (
                 candles[i].l < priorLow &&
                 closeLocation >= 0.50 &&
                 belowMouth &&
-                angulationScore(i) > 0.0
+                angulationScore(i) > 0.0 &&
+                approximateAngulationOptedIn
             ) {
                 val trigger = candles[i].h + tick
-                if (candles[current].c < trigger) {
+                val ageBars = current - i
+                if (ageBars < wm1TtlBars && actionable(i, trigger)) {
                     out += CampaignSignalN(
                         signalId = campaignSignalId(symbol, frame, "REVERSAL", candles[i].t),
                         type = "REVERSAL",
@@ -6484,70 +6477,93 @@ private class NativeEngine(
                         signalBarTimeMs = candles[i].t,
                         triggerPrice = trigger,
                         protectivePrice = candles[i].l - tick,
-                        teethAtDetection = teethS[i].takeIf { it.isFinite() } ?: 0.0,
-                        invalidationPrice = candles[i].l - tick,
-                        reason = "WM1 bullish reversal; waiting above signal-bar high"
+                        teethAtDetection = teethS[i],
+                        invalidationPrice = candles[i].l,
+                        reason = "WM1 reversal candidate; approximate angulation explicitly opted in; conditional trigger above signal bar",
+                        confirmationTimeMs = candles[i].t + frameMs,
+                        expiresAtMs = candles[i].t + frameMs * (1L + wm1TtlBars)
                     )
                 }
+                // A newer reversal supersedes this search even when it is no
+                // longer actionable; never revive an older stale candidate.
                 break
             }
         }
 
-        // WM2: three consecutive rising AO histogram bars, with the previously
-        // valid buy-fractal/Balance-Line context still present.
-        var streak = 0
-        for (i in candles.lastIndex downTo 35) {
-            val a = ao(candles, i)
-            val p = ao(candles, i - 1)
-            if (a > p) streak++ else break
-            if (streak == 3) {
-                val priorFractalValid = lastValidFractalLevel(i - 1)?.let { (center, level) ->
-                    teethS[center + 2].isFinite() && level > teethS[center + 2]
-                } ?: false
-                if (priorFractalValid) {
-                    val trigger = candles[i].h + tick
-                    if (candles[current].c < trigger) {
-                        out += CampaignSignalN(
-                            signalId = campaignSignalId(symbol, frame, "SUPER_AO", candles[i].t),
-                            type = "SUPER_AO",
-                            role = "ENTRY",
-                            signalBarTimeMs = candles[i].t,
-                            triggerPrice = trigger,
-                            protectivePrice = candles[i].l - tick,
-                            teethAtDetection = teethS[i].takeIf { it.isFinite() } ?: 0.0,
-                            invalidationPrice = candles[i].l - tick,
-                            reason = "WM2 Super AO: third rising AO bar; conditional trigger above price bar"
-                        )
-                    }
-                }
-                break
-            }
-        }
-
-        // WM3: most recent confirmed buy fractal. The signal is persistent,
-        // but the trigger is armable only while it remains above current Teeth.
-        val fractalCenter = latestUpFractal(candles.lastIndex - 2)
-        if (fractalCenter != null) {
-            val trigger = candles[fractalCenter].h + tick
-            val currentTeeth = teethS[current].takeIf { it.isFinite() } ?: 0.0
-            if (candles[current].c < trigger && trigger > currentTeeth) {
+        // WM2: three consecutive same-colour AO changes. It is independent of
+        // a prior fractal. The price-bar high supplies a conditional BUY STOP.
+        val aoSeries = WilliamsOscillatorMath.aoSeries(medians)
+        val wm2TtlBars = max(1, prefs.getInt("pending_super_ao_bars", 2))
+        val superAoIndex = (max(3, current - 80)..current)
+            .lastOrNull { WilliamsOscillatorMath.isThirdSameColorAoBar(aoSeries, it, "LONG") }
+        if (superAoIndex != null && current - superAoIndex < wm2TtlBars) {
+            val i = superAoIndex
+            val trigger = candles[i].h + tick
+            if (actionable(i, trigger)) {
                 out += CampaignSignalN(
-                    signalId = campaignSignalId(symbol, frame, "FRACTAL", candles[fractalCenter].t),
-                    type = "FRACTAL",
+                    signalId = campaignSignalId(symbol, frame, "SUPER_AO", candles[i].t),
+                    type = "SUPER_AO",
                     role = "ENTRY",
-                    signalBarTimeMs = candles[fractalCenter].t,
+                    signalBarTimeMs = candles[i].t,
                     triggerPrice = trigger,
-                    protectivePrice = candles[fractalCenter].l - tick,
-                    teethAtDetection = currentTeeth,
-                    invalidationPrice = candles[fractalCenter].l - tick,
-                    reason = "WM3 confirmed buy fractal; trigger must remain above Teeth"
+                    protectivePrice = candles[i].l - tick,
+                    teethAtDetection = teethS[i],
+                    invalidationPrice = candles[i].l,
+                    reason = "WM2 Super AO: third rising AO bar; independent of fractal; conditional trigger above corresponding price bar",
+                    confirmationTimeMs = candles[i].t + frameMs,
+                    expiresAtMs = candles[i].t + frameMs * (1L + wm2TtlBars)
                 )
             }
         }
 
-        // Keep at most one signal per family, ordered by formation time. The
-        // campaign engine chooses the earliest still-valid first-entry signal.
-        return out.distinctBy { it.signalId }.sortedBy { it.signalBarTimeMs }
+        // WM3: a confirmed fractal is valid only against Teeth at confirmation
+        // and remains armable only if its trigger is still outside current Teeth.
+        val wm3TtlBars = max(1, prefs.getInt("pending_fractal_bars", 8))
+        val fractal = latestUpFractal(current)
+        if (fractal != null && current - fractal.confirmationIndex < wm3TtlBars) {
+            val center = fractal.centerIndex
+            val confirmation = fractal.confirmationIndex
+            val trigger = fractal.level + tick
+            val confirmationTeeth = teethS.getOrNull(confirmation) ?: Double.NaN
+            val currentTeeth = teethS[current]
+            val stopWindowStart = max(0, current - campaignTrailBars + 1)
+            val protectiveStop = lows.subList(stopWindowStart, current + 1).minOrNull()
+                ?.minus(tick) ?: Double.NaN
+            val teethValid =
+                confirmationTeeth.isFinite() && confirmationTeeth > 0.0 &&
+                    fractal.level > confirmationTeeth &&
+                    currentTeeth.isFinite() && currentTeeth > 0.0 &&
+                    trigger > currentTeeth
+            if (
+                teethValid &&
+                protectiveStop.isFinite() &&
+                protectiveStop > 0.0 &&
+                protectiveStop < candles[current].c &&
+                actionable(center, trigger)
+            ) {
+                out += CampaignSignalN(
+                    signalId = campaignSignalId(symbol, frame, "FRACTAL", candles[center].t),
+                    type = "FRACTAL",
+                    role = "ENTRY",
+                    signalBarTimeMs = candles[center].t,
+                    triggerPrice = trigger,
+                    protectivePrice = protectiveStop,
+                    teethAtDetection = confirmationTeeth,
+                    invalidationPrice = candles[center].l,
+                    reason = "WM3 confirmed fractal; Teeth validated at confirmation and at current activation; stop provenance kept separate from fractal invalidation",
+                    confirmationTimeMs = candles[confirmation].t + frameMs,
+                    expiresAtMs = candles[confirmation].t + frameMs * (1L + wm3TtlBars)
+                )
+            }
+        }
+
+        // Campaign chronology is based on when each signal became confirmed,
+        // not the historical centre bar used to draw a fractal.
+        return out.distinctBy { it.signalId }.sortedWith(
+            compareBy<CampaignSignalN> { it.confirmationTimeMs }
+                .thenBy { it.signalBarTimeMs }
+                .thenBy { it.type }
+        )
     }
 
     private fun analyseBase(
