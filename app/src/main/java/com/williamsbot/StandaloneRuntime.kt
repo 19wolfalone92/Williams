@@ -1651,13 +1651,25 @@ private class NativeEngine(
                         require(executionGate.isReserved(symbol)) {
                             "Spot entry bypassed ExecutionGate reservation"
                         }
-                        require(stateMachine.state == TradingState.ENTRY_PENDING) {
-                            "Spot entry blocked: FSM is not ENTRY_PENDING"
-                        }
                         val pending = synchronized(pendingEntries) { pendingEntries[symbol] }
                         require(pending != null && pending.clientOrderId == clientOrderId &&
-                            pending.signalId.isNotBlank() && pending.signalType.isNotBlank()) {
+                            pending.signalId.isNotBlank() && pending.signalType.isNotBlank() &&
+                            pending.campaignId.isNotBlank()) {
                             "Spot entry has no matching persisted Williams PendingSignal"
+                        }
+                        if (clientOrderId.startsWith("W5E_ADD_")) {
+                            require(positionList().any {
+                                it.symbol == symbol &&
+                                    it.campaignId.isNotBlank() &&
+                                    it.campaignId == pending.campaignId
+                            }) {
+                                "Campaign add-on does not belong to a confirmed open campaign"
+                            }
+                        } else {
+                            require(clientOrderId.startsWith("W5E_") &&
+                                stateMachine.state == TradingState.ENTRY_PENDING) {
+                                "Spot initial entry is not a canonical ENTRY_PENDING Williams intent"
+                            }
                         }
                         val signalParts = pending.signalId.split(":")
                         require(signalParts.size >= 4) {
