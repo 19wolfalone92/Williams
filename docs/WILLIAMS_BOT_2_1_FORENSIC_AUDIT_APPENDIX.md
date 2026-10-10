@@ -326,3 +326,70 @@ Static call chain on baseline `StandaloneRuntime.kt` blob `c971551ca65eedcfa5c91
 
 - No Python/Android golden vector was executed against the forensic branch in this follow-up. Static line-level comparison establishes the WM2 gating mismatch; numeric parity, Alligator/SMMA deltas, look-ahead tests, expiry/invalidation, fills, and campaign lifecycle vectors remain **NOT RUN** on this branch.
 - PR #49’s Android AO/AC test failure and five campaign Python test failures are described in §I.2 and remain PR-only evidence.
+
+
+> Matrix correction: SRC-005 status is MISMATCH based on the TC2 Second Edition page/figure evidence and active baseline call paths documented in §J.4; the older preliminary row above is superseded by this correction.
+
+## K. Additional visually verified source evidence and defect cards
+
+### K.1 Alligator construction — New Trading Dimensions and TC2 Second Edition
+
+- New Trading Dimensions PDF p.36 / printed p.36, Fig. 3-4 “Построение Аллигатора”: visually verified 13-period smoothed average shifted 8 bars forward (Jaw), 8-period shifted 5 (Teeth), 5-period shifted 3 (Lips) in the boxed definition. The prose immediately below the box describes the green Lips line as shifted 2 bars, conflicting with the boxed definition on the same page.
+- TC2 Second Edition PDF p.117 / printed p.102, Fig. 8.9 “Конструкция Аллигатора”: visually verified 13/8, 8/5, 5/3 smoothed moving averages and forward displacements 8/5/3. This independently corroborates the 5/3 specification in TC2. It does not establish the exact recursive seed/initialization rule.
+- Rule status: Alligator period/displacement values are source-supported for the selected TC2 edition; New Trading Dimensions contains an internal 2-vs-3 Lips-shift contradiction. SMMA seed convention and exact numerical parity remain UNRESOLVED.
+
+### K.2 Angulation — figures and limiting language visually confirmed
+
+- TC2 PDF p.123 / printed p.108, Figs. 9.3 “Мартовские облигации, дневной график” and 9.4 “Дневной график APPX”: the diagrams label price-bar slope/angle relative to the Alligator/Jaw and show price moving away at a steeper angle.
+- TC2 PDF p.124 / printed p.109, Fig. 9.5 “Дневной график UOPX”: the text states a reversal signal is not valid if the angle does not increase, describes the requirement as essential, and provides additional qualitative construction instructions.
+- Conclusion: the source provides a visual/geometric decision principle and requires increasing angulation; the inspected pages do not specify one unique numeric regression formula, lookback length, unit normalization, or universal numeric threshold. Python and Android numeric formulas differ, so exact parity is not established. Status stays UNRESOLVED for source-exact numeric compliance; engineering implementation difference is confirmed.
+
+### K.3 Confirmed defect cards (no repairs applied)
+
+#### DEF-WM2-001 — Prior-fractal gate suppresses source-permitted first Super AO
+- Severity: P1 strategy mismatch.
+- Source: TC2 Second Edition PDF p.155 / printed p.140 and PDF p.156 / printed p.141, Chapter 12 explicitly discusses Super AO as the first signal and specifies an entry above the third-green-AO corresponding price bar.
+- Python: baseline blobs 53b56c828ed626607e30d16b47733b6ffbe81429 (strategy.py, long_super_ao_signal requires prior long_fractal_outside) and a19937002e00c3731a1f619275d7e675dd51cf00 (williams_signals.py::_latest_super_ao prior gate). Active path proven in §J.1.
+- Android: baseline blob c971551ca65eedcfa5c9124576dc57aadd1608c8, longCampaignSignals around source lines 6480–6510, checks lastValidFractalLevel before adding WM2. Active path proven in §J.3.
+- Reproduction: inspect the gate with a 3-bar rising AO sequence and no prior valid buy fractal; both functions suppress WM2. This is static reproduction, NOT a test run.
+- Expected result: WM2 candidate is permitted as first actionable signal under the cited TC2 scenario; exact trigger buffer/price-tick normalization remains implementation-specific.
+- Actual test: NOT RUN on the forensic branch. PR #49 Android AO/AC vector test failed, but it is not evidence for this baseline reproduction.
+- Disposition: confirmed source-to-code mismatch; no code change without separate authorization.
+
+#### DEF-SNAPSHOT-001 — Android indicator snapshot diverges from campaign Alligator but is diagnostic-only
+- Severity: P2 diagnostics.
+- Code: StandaloneRuntime.kt baseline blob c971551ca65eedcfa5c9124576dc57aadd1608c8; buildIndicatorSnapshot call sites around lines 1858, 1993 and 7885; snapshot uses Close-based, undisplaced SMMA while campaign longCampaignSignals uses median price and 8/5/3 displaced lines.
+- Consumer proof: snapshot is cached in indicatorSnapshots and exposed by indicators(); campaign path calls analyseBase/longCampaignSignals on candle arrays directly. No read of the snapshot by the decision path was found.
+- Disposition: mismatch in displayed/diagnostic values confirmed; direct trading-decision impact not demonstrated. No code change.
+
+#### DEF-ORDER-DOOR-001 — Manual exit route does not pass through Python ExecutionBarrier
+- Severity: P1 architecture-contract discrepancy; policy exception unresolved.
+- Code path: baseline server.py blob f7d93c014975949a7172323801f0fb485013895e, authenticated POST /api/v1/control/sell → MultiPositionTrader.manual_sell; portfolio_trader.py blob c2be9d6faaa5d7e16610fd2941a31995e direct client.cancel_oco and client.order_safe; binance_client.py blob 774b17505729b5b9f10d4f4c961e9defc046468e signed DELETE /api/v3/orderList and signed POST /api/v3/order.
+- Actual mutation proof: route contains direct cancellation and market-sell calls and does not call ExecutionBarrier.execute. order_safe reconciles ambiguous transport outcomes but is not the central barrier.
+- Related conditional path: when CAMPAIGN_ENGINE=false, MultiPositionTrader.execute has a legacy market-BUY/OCO path via order_safe; the flag is default-true in the inspected constructor, so this is reachable but not the default campaign route.
+- Disposition: confirmed non-barrier mutation path; whether manual/emergency exits are explicitly exempt from the canonical execution-door contract is unresolved. No code change.
+
+#### DEF-SMMA-001 — Python/Android SMMA initialization differs
+- Severity: P1 parity investigation.
+- Code: Python strategy.py::smma seeds from the initial period average; Android StandaloneRuntime.kt::smma initializes each output to the first input sample and recursively updates immediately.
+- Actual numerical deltas: NOT RUN; no exact input/output vector is claimed.
+- Source: TC2 Alligator periods/shifts are visually verified, but inspected source does not settle the recursive seed convention.
+- Disposition: confirmed algorithm divergence, source-conformance status UNRESOLVED pending common-vector outputs.
+
+#### DEF-ANGULATION-001 — Python/Android angulation implementations differ
+- Severity: P1 parity investigation.
+- Code: Python williams_signals.py::_angulation uses windowed regression/distance logic; Android longCampaignSignals::angulationScore compares normalized distance-to-Jaw changes across a short window.
+- Source: TC2 Figs. 9.3–9.5 and printed pp.107–109 establish the geometric principle and increasing-angle requirement, not a unique numeric formula.
+- Actual numerical deltas: NOT RUN.
+- Disposition: code divergence confirmed; do not label either formula author-exact. Source-exact numerical conformance remains UNRESOLVED.
+
+### K.4 Golden-vector status update
+
+Source-supported cases ready to be formalized, but NOT YET EXECUTED:
+1. WM2 first actionable signal with 3 rising AO histogram bars and no prior valid fractal: expected candidate allowed under TC2 Second Edition pp.140–141.
+2. Fractal equal-extreme case: course PDF p.62 / printed p.30; an equal fifth-bar extreme may require a sixth bar before the middle bar is strictly extreme.
+3. Alligator line construction: TC2 PDF p.117 / printed p.102, Fig. 8.9; 13/8, 8/5, 5/3 with 8/5/3 forward displacement.
+4. Angulation source case: TC2 PDF pp.123–124 / printed pp.108–109, Figs. 9.3–9.5; increasing geometric angle required, no source-defined universal numeric score.
+5. AO formula must remain blocked until the visible (H-L)/2 vs conventional midpoint discrepancy is adjudicated. Do not generate an expected numeric AO vector by silently substituting (H+L)/2.
+
+No test files or trading code were modified in this follow-up. No golden vector is claimed to have passed.
