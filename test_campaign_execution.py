@@ -1,5 +1,6 @@
 import os
 import tempfile
+import time
 from datetime import datetime, timezone
 
 from campaign_engine import CampaignEngine
@@ -37,12 +38,16 @@ def signal(kind=SignalType.REVERSAL, role=SignalRole.ENTRY, bar=100, trigger=101
         side="BUY",
         signal_type=kind,
         role=role,
-        timeframe="5m",
+        timeframe="1h",
         signal_bar_time_ms=bar,
         trigger_price=trigger,
         protective_reference=97,
+        invalidation_price=97,
         context_versions={},
         htf_confirmed=True,
+        created_at_ms=int(time.time() * 1000),
+        confirmation_time_ms=int(time.time() * 1000),
+        expires_at_ms=int(time.time() * 1000) + 60 * 60 * 1000,
     )
 
 
