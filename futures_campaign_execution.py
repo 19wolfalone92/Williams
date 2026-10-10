@@ -536,8 +536,11 @@ class FuturesCampaignExecutionService:
 
     def _context_versions(self, signal: SignalSpec) -> dict[str, int]:
         snapshot = self.barrier.context_cache.snapshot()
-        versions = {str(k).lower(): int(v) for k, v in dict(signal.context_versions or {}).items()}
-        operative = str(signal.timeframe).lower()
+        versions = {
+            ("1M" if str(k).strip() == "1M" else str(k).strip().lower()): int(v)
+            for k, v in dict(signal.context_versions or {}).items()
+        }
+        operative = "1M" if str(signal.timeframe).strip() == "1M" else str(signal.timeframe).strip().lower()
         ctx = snapshot.context(signal.symbol, operative)
         if ctx is None:
             raise FuturesCampaignExecutionError(
