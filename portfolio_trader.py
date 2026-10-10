@@ -1009,17 +1009,54 @@ class MultiPositionTrader:
                 f"{symbol}: invalid rounded TP/SL"
             )
 
-        client_id = f"{self.OCO_PREFIX}{uuid.uuid4().hex[:20]}"
+        signal_id = (
+            f"OCO_PROTECTION:{symbol}:{trade_id}:"
+            f"{self.client.decimal_format(qty)}:"
+            f"{self.client.decimal_format(tp)}:"
+            f"{self.client.decimal_format(sl)}:"
+            f"{self.client.decimal_format(sl_limit)}"
+        )
+        client_id = stable_client_order_id(self.OCO_PREFIX, signal_id)
         self.set_state(symbol, "EXIT_PENDING")
 
+        intent = self._intent_for_legacy_mutation(
+            symbol, "SELL", "OCO", client_id,
+            purpose="PROTECTION",
+            quantity=self.client.decimal_format(qty),
+            trade_id=trade_id,
+            signal_id=signal_id,
+        )
         create_oco = getattr(self.client, "create_oco_sell_safe", None) or self.client.create_oco_sell
-        result = create_oco(
-            symbol,
-            self.client.decimal_format(qty),
-            self.client.decimal_format(tp),
-            self.client.decimal_format(sl),
-            self.client.decimal_format(sl_limit),
-            client_id,
+
+        def _check_oco_protection(_snapshot):
+            owned_trade = next(
+                (
+                    row for row in self.open_trades()
+                    if int(row.get("id", -1)) == int(trade_id)
+                    and str(row.get("symbol", "")).upper() == symbol
+                ),
+                None,
+            )
+            if owned_trade is None:
+                raise RuntimeError("OCO protection rejected: managed position is not durable")
+            free_now = self._asset_balance(symbol, account=self.client.account())
+            if free_now + 1e-12 < qty:
+                raise RuntimeError("OCO protection quantity exceeds confirmed free inventory")
+            current_price = float(self.client.ticker_price(symbol).get("price", 0) or 0)
+            if current_price <= 0 or not (tp > current_price > sl):
+                raise RuntimeError("OCO protection levels no longer bracket current market price")
+
+        result = self._submit_mutation(
+            intent,
+            lambda: create_oco(
+                symbol,
+                self.client.decimal_format(qty),
+                self.client.decimal_format(tp),
+                self.client.decimal_format(sl),
+                self.client.decimal_format(sl_limit),
+                client_id,
+            ),
+            pre_submit_checks=_check_oco_protection,
         )
 
         for leg in result.get("orderReports", []):
