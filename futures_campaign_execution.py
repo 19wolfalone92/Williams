@@ -589,6 +589,10 @@ class FuturesCampaignExecutionService:
             return False
 
         if allow_early_wm1:
+            # Defense in depth: no call site may silently activate the current
+            # numeric angulation approximation while its source rule is open.
+            if os.getenv("WILLIAMS_ALLOW_APPROXIMATE_ANGULATION", "false").strip().lower() != "true":
+                return False
             if not is_reversal:
                 return False
             try:
