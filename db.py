@@ -1,12 +1,13 @@
 import os
 import json, sqlite3
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from datetime import datetime, timezone
 from contextlib import contextmanager
 
 
 class Database:
-    SCHEMA_VERSION = 7
+    SCHEMA_VERSION = 8
 
     def __init__(self, path=None):
         path = path or os.getenv('WILLIAMS_DB_PATH') or 'data/trader.sqlite3'
@@ -253,6 +254,23 @@ class Database:
             commission_asset TEXT,
             raw_json TEXT
         );
+        CREATE TABLE IF NOT EXISTS exchange_fill_ledger(
+            symbol TEXT NOT NULL,
+            exchange_trade_id TEXT NOT NULL,
+            order_id TEXT NOT NULL,
+            quantity_text TEXT NOT NULL,
+            price_text TEXT NOT NULL,
+            quote_quantity_text TEXT,
+            commission_amount_text TEXT,
+            commission_asset TEXT,
+            financial_state TEXT NOT NULL DEFAULT 'UNKNOWN',
+            raw_json TEXT NOT NULL,
+            first_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY(symbol, exchange_trade_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_exchange_fill_order
+            ON exchange_fill_ledger(symbol, order_id);
         CREATE TABLE IF NOT EXISTS campaign_events(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             campaign_id TEXT NOT NULL,
@@ -1082,6 +1100,72 @@ class Database:
         )
         if not self._transaction_active:
             self.conn.commit()
+
+    def record_exchange_fill(self, symbol, trade):
+        """Persist one Binance Spot trade idempotently using exact decimal strings.
+
+        Trade identity is (symbol, exchange trade id), never the local intent id.
+        Re-delivery with different immutable financial fields is treated as a
+        reconciliation conflict, not silently overwritten.
+        """
+        if not isinstance(trade, dict):
+            raise ValueError("exchange trade must be an object")
+        symbol = str(symbol or "").upper()
+        trade_id = trade.get("id")
+        order_id = trade.get("orderId")
+        if not symbol or trade_id in (None, "") or order_id in (None, ""):
+            raise ValueError("exchange trade lacks symbol/trade id/order id")
+        def exact_decimal(name, required=True):
+            value = trade.get(name)
+            if value is None or value == "":
+                if required:
+                    raise ValueError(f"exchange trade lacks {name}")
+                return None
+            try:
+                number = Decimal(str(value))
+            except (InvalidOperation, ValueError) as exc:
+                raise ValueError(f"exchange trade has invalid {name}") from exc
+            if not number.is_finite() or number < 0:
+                raise ValueError(f"exchange trade has invalid {name}")
+            return format(number, "f")
+        qty = exact_decimal("qty")
+        price = exact_decimal("price")
+        quote_qty = exact_decimal("quoteQty", required=False)
+        commission = exact_decimal("commission", required=False)
+        asset_value = trade.get("commissionAsset")
+        asset = str(asset_value).upper() if asset_value not in (None, "") else None
+        state = "CONFIRMED" if commission is not None and asset else "UNKNOWN"
+        payload = json.dumps(trade, sort_keys=True, separators=(",", ":"), default=str)
+        values = (symbol, str(trade_id), str(order_id), qty, price, quote_qty,
+                  commission, asset, state, payload)
+        with self.transaction():
+            self.conn.execute(
+                """INSERT OR IGNORE INTO exchange_fill_ledger(
+                    symbol,exchange_trade_id,order_id,quantity_text,price_text,
+                    quote_quantity_text,commission_amount_text,commission_asset,
+                    financial_state,raw_json
+                ) VALUES(?,?,?,?,?,?,?,?,?,?)""", values)
+            row = self.conn.execute(
+                """SELECT order_id,quantity_text,price_text,quote_quantity_text,
+                          commission_amount_text,commission_asset
+                   FROM exchange_fill_ledger WHERE symbol=? AND exchange_trade_id=?""",
+                (symbol, str(trade_id))).fetchone()
+            expected = values[2:8]
+            actual = tuple(row[k] for k in (
+                "order_id","quantity_text","price_text","quote_quantity_text",
+                "commission_amount_text","commission_asset")) if row else None
+            if actual != expected:
+                raise RuntimeError("exchange trade identity collision: immutable financial fields differ")
+            inserted = self.conn.execute("SELECT changes()").fetchone()[0] == 1
+        return {"inserted": bool(inserted), "financial_state": state,
+                "symbol": symbol, "exchange_trade_id": str(trade_id)}
+
+    def exchange_fills_for_order(self, symbol, order_id):
+        rows = self.conn.execute(
+            """SELECT * FROM exchange_fill_ledger
+               WHERE symbol=? AND order_id=? ORDER BY CAST(exchange_trade_id AS INTEGER), exchange_trade_id""",
+            (str(symbol).upper(), str(order_id))).fetchall()
+        return [dict(row) for row in rows]
 
     def save_campaign_fill(self, fill):
         data=fill if isinstance(fill,dict) else dict(fill)
