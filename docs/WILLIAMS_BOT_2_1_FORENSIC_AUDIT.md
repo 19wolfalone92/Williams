@@ -144,3 +144,18 @@ The `main` workflow lookup returned no runs for the baseline SHA; an empty API r
 - Visual source review now verifies course scan locators (PDF pp.61–64, printed pp.29–32; PDF p.91, printed p.15) and selected TC2 Second Edition pages/figures. The source proves that Super AO may be the first actionable signal before WM1 or WM3/fractal (TC2 PDF p.155, printed p.140, Chapter 12; Fig. 12.1 cited). Angulation is qualitative/geometric in the inspected text; no author-exact universal numeric formula was found in those pages.
 - New primary-source ambiguity: TC2 PDF p.136 / printed p.121, Fig. 10.1 and New Trading Dimensions PDF p.55 / printed p.55, Figs. 5-1/5-2 visibly print the midpoint expression `(H-L)/2`. This conflicts with the conventional high/low midpoint `(H+L)/2`; the audit leaves the AO input formula UNRESOLVED pending independent source adjudication rather than silently correcting it.
 - Status remains **IN PROGRESS — NOT ACCEPTED**. No strategy/runtime code changed; no PR merged; no orders submitted; no Mainnet used. See the appendix for run/job IDs, per-page source notes, OCR limits, and rule-level consequences.
+
+
+## Active-path audit progress — baseline code trace
+
+The baseline Python campaign route is now traced from `server.py::State.loop` → `Trader.process` → `Trader._auto_scan_process` → `MultiPositionTrader.scan_and_execute` → `MarketScanner._analyse_base` / `calculate_indicators` / `extract_long_signal_specs` → `MultiPositionTrader.execute_campaign` → `CampaignExecutionService` → `ExecutionBarrier.execute` → `BinanceClient.order_safe/order`. Campaign protection/trailing/cancel/exit methods are owned by the campaign service.
+
+A proven exception/alternate route remains: authenticated `POST /api/v1/control/sell` reaches `MultiPositionTrader.manual_sell`, which directly calls `cancel_oco` and `order_safe` without `ExecutionBarrier.execute`; the legacy entry branch when `CAMPAIGN_ENGINE=false` also directly submits via `order_safe`. This establishes an architecture-contract discrepancy to resolve, not permission to change code.
+
+The Android campaign route is traced from `requestScan` → `performCampaignScan` → `analyseBase` → `longCampaignSignals` → `submitCampaignEntry/AddOn` → `withCampaignMutation` → `signedPost/signedRequest` to Binance REST order mutation; recovery, fills, protection, trailing and exits have distinct call sites. Android’s `ExecutionGate` is not the Python `ExecutionBarrier`, and exact safety-contract parity remains open.
+
+**OBS-002 narrowed:** `buildIndicatorSnapshot` is private and all in-file callers write to `indicatorSnapshots` / the indicators API. The campaign decision path uses candle arrays directly and does not read that snapshot, so the known Close/unshifted diagnostic discrepancy is not shown to affect trade decisions on baseline.
+
+**OBS-003 resolved against TC2 Second Edition:** the source explicitly allows Super AO to be the first actionable signal before WM1/WM3/fractal (PDF p.155, printed p.140, Chapter 12, Fig. 12.1 cited). Both baseline Python campaign signal extraction and Android `longCampaignSignals` require a prior valid fractal/Balance-Line condition. This is now a static source-to-code **MISMATCH** on both paths; no golden vector was run and no code changed.
+
+The complete mutation inventory, full rule registry, golden vectors and all campaign lifecycle proofs remain incomplete. Overall status remains **IN PROGRESS — NOT ACCEPTED**.
