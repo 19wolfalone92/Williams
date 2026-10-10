@@ -287,3 +287,30 @@ def test_monthly_binance_interval_is_not_collapsed_to_one_minute():
     assert "1M" in e.intervals
     assert "1m" in e.intervals
     assert e.intervals.index("1M") < e.intervals.index("1m")
+
+
+def test_equal_high_fractal_confirmation_time_is_not_backdated():
+    e = engine(base_interval="1h", min_bars=5)
+    idx = pd.date_range("2026-01-01", periods=6, freq="h", tz="UTC")
+    ind = pd.DataFrame(
+        {
+            "fractal_up": [False, False, True, False, False, False],
+            "fractal_down": [False] * 6,
+            "confirmed_up_level": [float("nan")] * 5 + [10.0],
+            "confirmed_down_level": [float("nan")] * 6,
+            "confirmed_up_center_index": [-1, -1, -1, -1, -1, 2],
+            "confirmed_down_center_index": [-1] * 6,
+            "high": [7.0, 8.0, 10.0, 9.0, 10.0, 8.0],
+            "low": [5.0, 5.5, 6.0, 6.2, 6.5, 6.7],
+            "close": [6.0, 7.0, 9.0, 8.0, 9.0, 7.5],
+            "ao": [0.0] * 6,
+            "ac": [0.0] * 6,
+        },
+        index=idx,
+    )
+    got = e._confirmed_pivots(ind)
+    assert len(got) == 1
+    assert got[0].kind == DIRECTION_UP
+    assert got[0].center_index == 2
+    # Tie at index 4 means the second qualifying lower high arrives at index 5.
+    assert got[0].confirmed_index == 5
