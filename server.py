@@ -18,6 +18,7 @@ from feature_store import FeatureStore
 from binance_client import BinanceSpotClient
 from digital_williams_core import DigitalWilliamsCore
 from diagnostics import DiagnosticManager
+from safe_logging import redact_text, redact_value
 
 load_dotenv()
 API_TOKEN = os.getenv('MOBILE_API_TOKEN', '').strip()
@@ -242,7 +243,7 @@ class ControlState:
                     try:
                         t.process()
                     except Exception as e:
-                        self.last_error = f'{type(e).__name__}: {e}'
+                        self.last_error = redact_text(f'{type(e).__name__}: {e}')
                         incident = self.diagnostics.classify("trading_loop", e)
                         try:
                             incident = self.diagnostics.run_safe_heal(
@@ -536,12 +537,12 @@ def _runtime_supervisor():
                     latched = str(t.db.state_get('kill_switch_latched', 'false')).lower() == 'true'
                     unresolved = bool(state.ensure_multi().unresolved_symbols())
                 except Exception as exc:
-                    state.last_error = f'supervisor probe: {type(exc).__name__}: {exc}'
+                    state.last_error = redact_text(f'supervisor probe: {type(exc).__name__}: {exc}')
                     continue
                 if not latched and not unresolved:
                     state.start()
         except Exception as exc:
-            state.last_error = f'supervisor: {type(exc).__name__}: {exc}'
+            state.last_error = redact_text(f'supervisor: {type(exc).__name__}: {exc}')
 
 
 def _heartbeat_loop():
