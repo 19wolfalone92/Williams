@@ -90,6 +90,9 @@ def accumulate_fills(fills, base_asset=None, asset_quote_values=None) -> Executi
 
         q = _decimal(fill, "qty", positive=True)
         p = _decimal(fill, "price", positive=True)
+        # myTrades supplies quoteQty. Use the exchange-reported per-trade quote
+        # amount when present rather than re-deriving it from rounded price/qty.
+        trade_quote = _decimal(fill, "quoteQty", positive=True) if "quoteQty" in fill else q * p
         commission = _decimal(fill, "commission")
         asset = str(fill.get("commissionAsset") or "").strip().upper()
         if not asset:
@@ -97,7 +100,7 @@ def accumulate_fills(fills, base_asset=None, asset_quote_values=None) -> Executi
         # A zero fee is accepted only when the exchange explicitly returned both
         # commission=0 and a non-empty commissionAsset.
         qty += q
-        quote += q * p
+        quote += trade_quote
         if asset in quote_assets:
             fee_quote += commission
             fee_quote_equivalent += commission
