@@ -188,7 +188,7 @@ class FuturesRuntime:
             raise ValueError("Futures mainnet requires allow_live=True and ALLOW_LIVE=true")
 
         self.config = TradingConfig.from_env()
-        self.interval = str(interval or os.getenv("EXECUTION_TIMEFRAME", "5m")).lower()
+        self.interval = str(interval or os.getenv("EXECUTION_TIMEFRAME", "1h")).lower()
         raw_symbols = list(symbols or [
             x.strip().upper()
             for x in os.getenv(
