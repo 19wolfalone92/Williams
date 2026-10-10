@@ -220,6 +220,51 @@ def test_restart_adopts_pending_campaign_by_client_id():
         assert out[0]["state"] == "OPEN"
 
 
+def test_filled_protective_stop_during_cancel_blocks_followup_market_sell():
+    class StopFillRaceExchange(MockExchange):
+        def cancel_order(self, symbol, order_id=None, orig_client_order_id=None):
+            current = self.get_order(
+                symbol, order_id=order_id, orig_client_order_id=orig_client_order_id
+            )
+            if str(current.get("status", "")).upper() == "FILLED":
+                raise RuntimeError("mock cancel raced with protective fill")
+            return super().cancel_order(
+                symbol, order_id=order_id, orig_client_order_id=orig_client_order_id
+            )
+
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "campaign.sqlite3"))
+        client = StopFillRaceExchange()
+        svc = service(db, client)
+        result = svc.arm_initial_entry(
+            signal(trigger=101.0),
+            equity_quote=10_000,
+            candidate_risk_pct=0.004,
+        )
+        client.set_price("BTCUSDT", 101.5)
+        recovered = svc.reconcile_pending_entries()
+        assert recovered[0]["state"] == "OPEN"
+        campaign = svc.engine.load_campaign(result["campaign_id"])
+        stop_id = str(campaign.tags["protective_order_id"])
+        client.set_price("BTCUSDT", float(campaign.current_stop_price) - 0.1)
+        market_sells_before = sum(
+            1 for row in client.orders
+            if row.get("side") == "SELL" and row.get("type") == "MARKET"
+        )
+
+        import pytest
+        with pytest.raises(Exception, match="protective stop filled"):
+            svc.exit_market(campaign, reason="TEST_EXIT")
+
+        market_sells_after = sum(
+            1 for row in client.orders
+            if row.get("side") == "SELL" and row.get("type") == "MARKET"
+        )
+        assert market_sells_after == market_sells_before
+        assert db.state_get(f"position_state:BTCUSDT") == "RECONCILE_REQUIRED"
+        assert client.get_order("BTCUSDT", order_id=stop_id)["status"] == "FILLED"
+
+
 def test_stop_replacement_never_lowers_stop():
     with tempfile.TemporaryDirectory() as d:
         db = Database(os.path.join(d, "campaign.sqlite3"))
