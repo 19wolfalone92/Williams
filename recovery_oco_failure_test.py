@@ -1,5 +1,6 @@
 import os
 import tempfile
+import time
 # TEST SAFETY: never use production DB
 from test_db_guard import assert_test_db_safe
 _test_db_fd, _test_db_path = tempfile.mkstemp(
@@ -13,9 +14,11 @@ assert_test_db_safe()
 
 from trader import Trader
 from binance_rules import SymbolRules
+from preflight_gate import PreflightCheckService
 
 class FakeClient:
     testnet=True
+    base_url = "https://testnet.binance.vision"
     def decimal_format(self,x): return f"{x:.8f}"
     def decimal_floor(self,x,step):
         x=float(x)
@@ -53,11 +56,29 @@ class FakeClient:
             }]
         }
 
+def fake_ready_preflight():
+    # Synthetic preflight is confined to this isolated FakeClient recovery test.
+    return {
+        "ready": True,
+        "environment": "TESTNET",
+        "product": "SPOT",
+        "checked_at_ms": int(time.time() * 1000),
+        "checks": {name: "PASS" for name in PreflightCheckService.REQUIRED_CHECKS},
+        "requires_reconciliation": False,
+    }
+
+
+def bind_fake_execution(trader):
+    trader.execution_barrier.exchange_client = trader.client
+    trader.execution_barrier.preflight_provider = fake_ready_preflight
+
+
 os.environ["MAX_OPEN_POSITIONS"] = "1"
 t=Trader(testnet=True)
 # TEST ONLY: FakeClient simulation, no real exchange.
 t.dry_run=False
 t.client=FakeClient()
+bind_fake_execution(t)
 t.symbol="BTCUSDT"
 t.active_symbol="BTCUSDT"
 t.filters={"LOT_SIZE":{"minQty":"0.00001","stepSize":"0.00001"},"PRICE_FILTER":{"tickSize":"0.01"},"NOTIONAL":{"minNotional":"5"}}
@@ -94,6 +115,7 @@ t2=Trader(testnet=True)
 # TEST ONLY: FakeClient simulation, no real exchange.
 t2.dry_run=False
 t2.client=t.client
+bind_fake_execution(t2)
 t2.symbol="BTCUSDT"
 t2.active_symbol="BTCUSDT"
 t2.filters=t.filters
