@@ -303,3 +303,19 @@ def test_unknown_pending_signal_timeframe_is_rejected_not_assumed_five_minutes()
     assert _bar_ms("1M") == 2_592_000_000
     with pytest.raises(ValueError, match="Unsupported pending-signal timeframe"):
         _bar_ms("60m")
+
+
+
+def test_signal_spec_preserves_case_sensitive_monthly_timeframe():
+    monthly = SignalSpec.new(
+        symbol="BTCUSDT",
+        side="BUY",
+        signal_type=SignalType.REVERSAL,
+        role=SignalRole.ENTRY,
+        timeframe="1M",
+        signal_bar_time_ms=1_800_000_000_000,
+        trigger_price=101.0,
+        protective_reference=95.0,
+    )
+    assert monthly.timeframe == "1M"
+    assert ":1M:" in monthly.signal_id
