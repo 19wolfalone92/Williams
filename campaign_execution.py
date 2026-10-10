@@ -468,6 +468,29 @@ class CampaignExecutionService:
                     else campaign.current_signal_id
                 )
 
+                def persist_recovered_campaign_order(snapshot):
+                    self.db.save_campaign_order(
+                        PendingOrderRecord(
+                            order_id=str(snapshot.get("orderId", "") or ""),
+                            client_order_id=client_id,
+                            symbol=symbol,
+                            side=str(snapshot.get("side", "BUY") or "BUY").upper(),
+                            order_type=str(snapshot.get("type", "STOP_LOSS") or "STOP_LOSS").upper(),
+                            purpose=purpose,
+                            status=str(snapshot.get("status", "") or ""),
+                            stop_price=float(snapshot.get("stopPrice", 0) or 0),
+                            quantity=float(
+                                snapshot.get("origQty", snapshot.get("executedQty", 0)) or 0
+                            ),
+                            campaign_id=campaign.campaign_id,
+                            signal_id=signal_id,
+                        )
+                    )
+
+                # Rebuild the local campaign-order link from exchange identity.
+                # This covers a crash after Binance accepted the order but
+                # before campaign_orders was committed.
+                persist_recovered_campaign_order(order)
                 executed = float(order.get("executedQty", 0) or 0)
                 quote = float(order.get("cummulativeQuoteQty", 0) or 0)
                 if quote <= 0 and executed > 0 and hasattr(self.client, "my_trades"):
@@ -522,6 +545,9 @@ class CampaignExecutionService:
                                 f"{symbol}: conditional BUY remains non-terminal after cancel; "
                                 f"status={status or 'UNKNOWN'}"
                             )
+                        # Persist the final post-cancel snapshot as well;
+                        # the first response may have been PARTIALLY_FILLED.
+                        persist_recovered_campaign_order(order)
                         if executed > 0 and quote <= 0:
                             fills = self.client.my_trades(
                                 symbol, order_id=order_id, limit=1000
