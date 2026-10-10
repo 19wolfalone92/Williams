@@ -69,10 +69,11 @@ class PendingSignal:
     protective_reference: float
     created_at_ms: int
     expires_at_ms: int
-    # For a fractal, actionable confirmation can occur well after the center bar.
-    confirmation_time_ms: int = 0
     state: str = SignalState.DETECTED.value
     replacement_of: str = ""
+    # Appended after legacy defaulted fields to preserve positional compatibility.
+    # For a fractal, actionable confirmation can occur well after the center bar.
+    confirmation_time_ms: int = 0
 
     @classmethod
     def from_spec(
