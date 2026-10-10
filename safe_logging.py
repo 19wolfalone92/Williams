@@ -25,10 +25,10 @@ def redact_text(value: Any) -> str:
     text = str(value)
     for secret in sorted(_SENSITIVE_VALUES, key=len, reverse=True):
         text = text.replace(secret, "[REDACTED]")
-    text = _SENSITIVE_ASSIGNMENT.sub(r"\1\2[REDACTED]", text)
     text = _BEARER.sub(r"\1[REDACTED]", text)
     text = _API_HEADER.sub(r"\1[REDACTED]", text)
     text = _SIGNATURE_QUERY.sub(r"\1[REDACTED]", text)
+    text = _SENSITIVE_ASSIGNMENT.sub(r"\1\2[REDACTED]", text)
     return text
 
 
@@ -38,10 +38,11 @@ def redact_value(value: Any) -> Any:
         for key, item in value.items():
             normalized = str(key).lower().replace("-", "_")
             if normalized in {
-                "api_key", "apikey", "api_secret", "secret", "authorization",
-                "token", "access_token", "refresh_token", "password", "signature",
-                "bearer_token",
-            }:
+                "api_key", "apikey", "x_mbx_apikey", "api_secret", "apisecret",
+                "secret", "authorization", "token", "access_token", "accesstoken",
+                "refresh_token", "refreshtoken", "password", "signature",
+                "bearer_token", "bearertoken",
+            } or any(part in normalized for part in ("secret", "token", "password", "signature", "authorization")):
                 out[key] = "[REDACTED]"
             else:
                 out[key] = redact_value(item)
