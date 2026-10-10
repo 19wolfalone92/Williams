@@ -47,6 +47,10 @@ class FreshnessEvidence:
     valid: bool
     generation: str
     details: Mapping[str, object] = field(default_factory=dict)
+    # Optional process-local monotonic clock evidence. It is usable only when
+    # evaluated in the same declared monotonic session (process/boot epoch).
+    observed_monotonic_ns: int | None = None
+    monotonic_session_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -64,7 +68,8 @@ def evaluate_freshness(
     *,
     now_ms: int | None = None,
     max_age_ms: int | None = None,
-    future_tolerance_ms: int = 1_000,
+    now_monotonic_ns: int | None = None,
+    monotonic_session_id: str | None = None,
 ) -> FreshnessResult:
     """Return PASS only for valid, source-bound, fresh, non-future evidence."""
     now = int(time.time() * 1000) if now_ms is None else int(now_ms)
@@ -84,11 +89,30 @@ def evaluate_freshness(
     except (TypeError, ValueError, OverflowError):
         return FreshnessResult(component, "UNKNOWN", "measurement_timestamp_invalid", source=evidence.source)
     age = now - observed
-    if age < -max(0, int(future_tolerance_ms)):
-        return FreshnessResult(component, "UNKNOWN", "measurement_timestamp_in_future", age, evidence.source)
     if age < 0:
-        # Even a small future timestamp is suspicious for an execution gate.
-        return FreshnessResult(component, "UNKNOWN", "measurement_clock_skew", age, evidence.source)
+        return FreshnessResult(component, "UNKNOWN", "measurement_timestamp_in_future", age, evidence.source)
+    if evidence.observed_monotonic_ns is not None:
+        if now_monotonic_ns is None or not monotonic_session_id:
+            return FreshnessResult(
+                component, "UNKNOWN", "monotonic_observation_context_missing", age, evidence.source
+            )
+        if evidence.monotonic_session_id != monotonic_session_id:
+            return FreshnessResult(
+                component, "UNKNOWN", "monotonic_session_mismatch", age, evidence.source
+            )
+        try:
+            monotonic_age_ns = int(now_monotonic_ns) - int(evidence.observed_monotonic_ns)
+        except (TypeError, ValueError, OverflowError):
+            return FreshnessResult(
+                component, "UNKNOWN", "monotonic_timestamp_invalid", age, evidence.source
+            )
+        if monotonic_age_ns < 0:
+            return FreshnessResult(
+                component, "UNKNOWN", "monotonic_timestamp_in_future", age, evidence.source
+            )
+        # Monotonic time is used for elapsed age; wall time remains the source
+        # measurement timestamp and is still checked above for clock anomalies.
+        age = monotonic_age_ns // 1_000_000
     if not evidence.valid:
         return FreshnessResult(component, "FAIL", "component_measurement_invalid", age, evidence.source)
     if max_age_ms is None:
