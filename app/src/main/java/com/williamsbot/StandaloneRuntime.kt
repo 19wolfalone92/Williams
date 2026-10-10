@@ -777,7 +777,8 @@ private class NativeEngine(
             restAccountReady &&
             historyReady &&
             stateMachine.executionAllowed() &&
-            !equityCircuitBreaker.isTripped()
+            !equityCircuitBreaker.isTripped() &&
+            !auditStore.hasUnresolvedMutationIntents()
 
     private fun executionBlockers(): List<String> =
         buildList {
@@ -790,6 +791,7 @@ private class NativeEngine(
             if (!historyReady) add("history_not_ready")
             if (!stateMachine.executionAllowed()) add("fsm_not_execution_allowed")
             if (equityCircuitBreaker.isTripped()) add("equity_circuit_breaker")
+            if (auditStore.hasUnresolvedMutationIntents()) add("unresolved_exchange_mutation_journal")
         }
 
     private fun stateName(): String =
@@ -1178,6 +1180,12 @@ private class NativeEngine(
                         ?: 0.0
                 }
             equityCircuitBreaker.reset(estimateManagedEquity())
+            // A process may die after an exchange request was sent but before
+            // its outcome row was committed. Resolve only after the full REST
+            // recovery/audit sequence above succeeds.
+            auditStore.resolveUnresolvedMutationIntents(
+                "startup exchange reconciliation completed"
+            )
         } catch (x: Exception) {
             setReconcileRequired(
                 "startup exchange synchronization failed: " +
@@ -1415,6 +1423,10 @@ private class NativeEngine(
             clearReconcileRequired()
             recoverPendingEntries()
             reconcilePositionsWithExchange()
+            auditManagedOpenOrders()
+            auditStore.resolveUnresolvedMutationIntents(
+                "manual exchange reconciliation completed"
+            )
 
             JSONObject()
                 .put("recovered", !reconcileRequired)
@@ -1632,8 +1644,9 @@ private class NativeEngine(
                             "Spot entry blocked by runtime/reconciliation state"
                         }
                         require(marketDataFresh() && restAccountReady && historyReady &&
-                            !equityCircuitBreaker.isTripped()) {
-                            "Spot entry blocked: market/account/history/risk readiness failed"
+                            !equityCircuitBreaker.isTripped() &&
+                            !auditStore.hasUnresolvedMutationIntents()) {
+                            "Spot entry blocked: market/account/history/risk/journal readiness failed"
                         }
                         require(executionGate.isReserved(symbol)) {
                             "Spot entry bypassed ExecutionGate reservation"
@@ -4338,11 +4351,13 @@ private class NativeEngine(
                         require(qty >= rules.minQty) {
                             "Emergency SELL quantity below Binance minimum"
                         }
+                        val emergencyClientOrderId = "W5EM_" + System.nanoTime().toString(16)
                         val sell = signedPost(
                             "/api/v3/order",
                             "symbol=" + stored.symbol +
                                 "&side=SELL&type=MARKET&quantity=" +
-                                fmtQty(qty, rules.decimals)
+                                fmtQty(qty, rules.decimals) +
+                                "&newClientOrderId=" + emergencyClientOrderId
                         )
                         val exitPrice = sell.optString("cummulativeQuoteQty")
                             .toDoubleOrNull()
@@ -6205,12 +6220,14 @@ private class NativeEngine(
 
                         if (emergency.isFailure) {
                             runCatching {
+                                val emergencyClientOrderId = "W5EM_" + System.nanoTime().toString(16)
                                 signedPost(
                                     "/api/v3/order",
                                     "symbol=" + candidate.symbol +
                                         "&side=SELL&type=MARKET" +
                                         "&quantity=" +
-                                        fmtQty(filled, rules.decimals)
+                                        fmtQty(filled, rules.decimals) +
+                                        "&newClientOrderId=" + emergencyClientOrderId
                                 )
                             }.onFailure {
                                 setReconcileRequired(
@@ -6493,6 +6510,7 @@ private class NativeEngine(
                     .put("state", stateName())
             }
 
+            val manualClientOrderId = "W5X_" + System.nanoTime().toString(16)
             val sell =
                 signedPost(
                     "/api/v3/order",
@@ -6502,7 +6520,8 @@ private class NativeEngine(
                         fmtQty(
                             qty,
                             rules.decimals
-                        )
+                        ) +
+                        "&newClientOrderId=" + manualClientOrderId
                 )
 
             val exitPrice =
