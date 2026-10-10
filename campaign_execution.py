@@ -1257,6 +1257,16 @@ class CampaignExecutionService:
                                     "cancelReplace old/new order pair is not fully reconciled"
                                 )
                         self.db.save_order(observed)
+                        self._mark_intent_reconciled(
+                            pending_cid,
+                            observed_status,
+                            evidence="Binance GET by stable clientOrderId confirms the active protective stop and quantity",
+                            related_order_id=(
+                                pending_intent.get("related_order_id")
+                                if pending_operation == "CANCEL_REPLACE"
+                                else None
+                            ),
+                        )
                         managed_stops.append(observed)
 
                     if not managed_stops and unresolved_for_campaign:
@@ -1319,6 +1329,26 @@ class CampaignExecutionService:
                     continue
 
                 campaign.tags["protective_order_id"] = str(stop.get("orderId", ""))
+                # The open-order query is authoritative exchange evidence for
+                # an ambiguously acknowledged protective STOP. Persist campaign
+                # state first, then resolve the write-ahead intent.
+                stop_client_id = str(stop.get("clientOrderId", "") or "")
+                self.db.save_order(stop)
+                intent_row = (
+                    self.db.find_execution_intent_by_client_order_id(stop_client_id)
+                    if stop_client_id and callable(getattr(self.db, "find_execution_intent_by_client_order_id", None))
+                    else None
+                )
+                self._mark_intent_reconciled(
+                    stop_client_id,
+                    str(stop.get("status", "NEW")).upper(),
+                    evidence="Binance openOrders contains the campaign-owned active protective STOP",
+                    related_order_id=(
+                        intent_row.get("related_order_id")
+                        if intent_row and str(intent_row.get("operation_kind", "")).upper() == "CANCEL_REPLACE"
+                        else None
+                    ),
+                )
                 campaign.health = "GREEN"
                 campaign.next_action = "MONITOR_CAMPAIGN"
                 campaign.reconciliation_state = "CLEAN"
