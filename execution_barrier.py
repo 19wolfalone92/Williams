@@ -296,6 +296,12 @@ class ExecutionBarrier:
                 # Recovery must query the same clientOrderId; never blind-resubmit.
                 self._poisoned = True
                 try:
+                    self.db.mark_recovery_required(
+                        f"ambiguous exchange mutation intent={intent.intent_id} client_order_id={intent.client_order_id}"
+                    )
+                except Exception:
+                    pass
+                try:
                     self._persist(intent, "AMBIGUOUS", f"{type(exc).__name__}: {exc}")
                     self._record(
                         "ERROR", "execution_ambiguous", intent,
@@ -329,6 +335,10 @@ class ExecutionBarrier:
                     self._poisoned = True
                     reason = "exchange response did not contain authoritative order state"
                     try:
+                        self.db.mark_recovery_required(reason)
+                    except Exception:
+                        pass
+                    try:
                         self._persist(intent, "AMBIGUOUS", reason)
                         self._record(
                             "ERROR", "execution_ambiguous", intent, reason,
@@ -359,6 +369,12 @@ class ExecutionBarrier:
                 )
             except Exception as exc:
                 self._poisoned = True
+                try:
+                    self.db.mark_recovery_required(
+                        "exchange operation may have succeeded but its result was not durably recorded"
+                    )
+                except Exception:
+                    pass
                 raise ExecutionPersistenceError(
                     "exchange operation may have succeeded but its result was not durably recorded; reconciliation required"
                 ) from exc
