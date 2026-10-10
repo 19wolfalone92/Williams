@@ -122,9 +122,15 @@ class TradingConfig:
         # seed symbol for legacy status/chart paths instead of treating ALL as a symbol.
         if len(symbols) == 1 and symbols[0].upper() in {"ALL", "AUTO", "*"}:
             symbols = DEFAULT_SYMBOLS
-        # AUTO_SCAN_SYMBOLS remains a backwards-compatible override.
-        if str(source.get("AUTO_SCAN_SYMBOLS", "")).strip():
-            symbols = _csv(source, "AUTO_SCAN_SYMBOLS", symbols)
+        # AUTO_SCAN_SYMBOLS remains a backwards-compatible list override.
+        # Sentinel values select the configured CORE_10; dynamic exchange-wide
+        # discovery is an explicit MarketScanner setting, not a fake symbol.
+        auto_scan_symbols = str(source.get("AUTO_SCAN_SYMBOLS", "")).strip()
+        if auto_scan_symbols:
+            if auto_scan_symbols.upper() in {"ALL", "AUTO", "*"}:
+                symbols = DEFAULT_SYMBOLS
+            else:
+                symbols = _csv(source, "AUTO_SCAN_SYMBOLS", symbols)
 
         max_positions = max(0, _int(source, "MAX_OPEN_POSITIONS", 3))
         risk_key = "MAX_RISK_PER_TRADE_PCT" if "MAX_RISK_PER_TRADE_PCT" in source else "RISK_PER_TRADE_PCT"
