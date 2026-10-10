@@ -106,6 +106,28 @@ def test_repeated_fill_identity_is_idempotent_and_conflicts_fail_closed():
         conflicting = dict(fill, quantity=0.5)
         with pytest.raises(RuntimeError, match="conflicts with persisted fill"):
             db.save_campaign_fill(conflicting)
+        conflicting_fee = dict(fill, fee_quote=0.25)
+        with pytest.raises(RuntimeError, match="conflicts with persisted fill"):
+            db.save_campaign_fill(conflicting_fee)
+
+
+def test_campaign_order_identity_cannot_be_rebound_to_another_client_id():
+    with tempfile.TemporaryDirectory() as tmp:
+        db = Database(os.path.join(tmp, "state.sqlite3"))
+        base = {
+            "campaign_id": "campaign-1",
+            "symbol": "BTCUSDT",
+            "side": "BUY",
+            "purpose": "ENTRY",
+            "order_type": "STOP_LOSS",
+            "order_id": "900",
+            "client_order_id": "client-a",
+            "status": "NEW",
+            "quantity": 1.0,
+        }
+        assert db.save_campaign_order(base) is True
+        with pytest.raises(RuntimeError, match="different clientOrderId"):
+            db.save_campaign_order(dict(base, client_order_id="client-b"))
 
 
 def test_fill_without_stable_exchange_identity_is_rejected():
