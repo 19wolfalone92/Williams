@@ -3345,30 +3345,101 @@ class FuturesCampaignExecutionService:
 
         client_algo_id = "W2FA_" + uuid.uuid4().hex[:24]
         claim_key = f"futures_entry_pending:{symbol}"
-        if not self.db.try_claim_state(claim_key, client_algo_id):
-            raise FuturesCampaignExecutionError(f"{symbol}: another entry/add-on intent is pending")
-        campaign.tags.update({
-            "pending_add_on_client_algo_id": client_algo_id,
-            "pending_add_on_trigger_price": trigger,
-            "pending_add_on_stop_price": stop,
-            "pending_add_on_quantity": quantity,
-            "pending_add_on_risk_quote": actual_risk,
-            "pending_add_on_expires_at_ms": int(signal.expires_at_ms or 0),
-            "pending_add_on_original_qty": old_qty,
-            "pending_add_on_original_entry": old_entry,
-            "pending_add_on_direction": direction,
-            "last_signal_time_ms": int(signal.signal_bar_time_ms),
-            "last_signal_confirmation_time_ms": signal_confirmation,
-            "execution_mode": "FUTURES",
-        })
-        try:
+
+        # Reserve this add-on atomically with the global risk recheck. A claim
+        # scoped only to this symbol does not serialize risk reservations on
+        # other symbols, so the portfolio ceiling must be tested inside BEGIN
+        # IMMEDIATE before pending risk becomes durable and before any submit.
+        with self.db.transaction(immediate=True):
+            if not self.db.try_claim_state(claim_key, client_algo_id):
+                raise FuturesCampaignExecutionError(
+                    f"{symbol}: another entry/add-on intent is pending"
+                )
+
+            latest_campaign = self.engine.load_campaign(campaign.campaign_id)
+            if latest_campaign is None:
+                raise FuturesCampaignExecutionError(
+                    f"{symbol}: durable campaign disappeared before add-on reservation"
+                )
+            campaign = latest_campaign
+            if campaign.state not in {
+                CampaignState.OPEN_INITIAL,
+                CampaignState.TREND_ACTIVE,
+                CampaignState.TRAILING,
+            } or campaign.position_qty <= 0:
+                raise FuturesCampaignExecutionError(
+                    f"{symbol}: campaign state changed before add-on reservation"
+                )
+            if campaign.additions >= 2:
+                raise FuturesCampaignExecutionError(
+                    f"{symbol}: campaign reached add-on cap before reservation"
+                )
+            latest_confirmation = int(
+                campaign.tags.get(
+                    "last_signal_confirmation_time_ms",
+                    campaign.tags.get("last_signal_time_ms", 0),
+                ) or 0
+            )
+            if signal_confirmation <= latest_confirmation:
+                raise FuturesCampaignExecutionError(
+                    f"{symbol}: add-on signal became stale before durable reservation"
+                )
+            latest_qty = float(campaign.position_qty)
+            if not math.isfinite(latest_qty) or abs(latest_qty - old_qty) > max(1e-8, old_qty * 1e-6):
+                raise FuturesCampaignExecutionError(
+                    f"{symbol}: persisted position changed before add-on reservation"
+                )
+
+            portfolio_capacity_quote = equity * self.engine.portfolio_risk_limit_pct
+            reserved_at_commit = self.engine.portfolio_reserved_risk_quote()
+            portfolio_tolerance = max(1e-8, portfolio_capacity_quote * 1e-9)
+            if reserved_at_commit + actual_risk > portfolio_capacity_quote + portfolio_tolerance:
+                raise FuturesCampaignExecutionError(
+                    f"{symbol}: portfolio risk capacity changed before add-on reservation"
+                )
+
+            budget = float(campaign.tags.get("risk_budget_quote", 0.0) or 0.0)
+            open_risk = float(campaign.open_risk_quote or 0.0)
+            pending_risk = float(campaign.pending_risk_quote or 0.0)
+            if (
+                not all(math.isfinite(value) for value in (budget, open_risk, pending_risk))
+                or budget <= 0 or open_risk < 0 or pending_risk < 0
+            ):
+                raise FuturesCampaignExecutionError(
+                    f"{symbol}: campaign risk reservation is invalid at commit"
+                )
+            campaign_tolerance = max(1e-8, budget * 1e-9)
+            if open_risk + pending_risk + actual_risk > budget + campaign_tolerance:
+                raise FuturesCampaignExecutionError(
+                    f"{symbol}: add-on would exceed campaign risk cap at commit"
+                )
+
+            campaign.tags.update({
+                "pending_add_on_client_algo_id": client_algo_id,
+                "pending_add_on_trigger_price": trigger,
+                "pending_add_on_stop_price": stop,
+                "pending_add_on_quantity": quantity,
+                "pending_add_on_risk_quote": actual_risk,
+                "pending_add_on_expires_at_ms": int(signal.expires_at_ms or 0),
+                "pending_add_on_original_qty": old_qty,
+                "pending_add_on_original_entry": old_entry,
+                "pending_add_on_direction": direction,
+                "last_signal_time_ms": int(signal.signal_bar_time_ms),
+                "last_signal_confirmation_time_ms": signal_confirmation,
+                "execution_mode": "FUTURES",
+            })
             self.engine.arm_add_on(
                 campaign,
                 signal,
                 risk_quote=actual_risk,
                 capital_reserved_quote=notional,
             )
-            self.db.state_set(f"campaign_state:{campaign.campaign_id}", CampaignState.ADD_ON_PENDING.value)
+            self.db.state_set(
+                f"campaign_state:{campaign.campaign_id}",
+                CampaignState.ADD_ON_PENDING.value,
+            )
+
+        try:
             order_side = "BUY" if direction == "LONG" else "SELL"
             intent = OrderIntent.new(
                 symbol,
