@@ -909,17 +909,25 @@ internal class FuturesNativeEngine(
     private fun currentContextAllows(
         exchange: BinanceUsdmFuturesClient,
         symbol: String,
-        direction: String
+        direction: String,
+        signalType: String? = null,
+        triggerPrice: Double? = null
     ): Boolean {
         val h1 = analyseFrame(exchange, symbol, "1h") ?: return false
         val h4 = analyseFrame(exchange, symbol, "4h") ?: return false
         val d1 = analyseFrame(exchange, symbol, "1d") ?: return false
-        return FuturesContextPolicy.allows(
+        val contextAllowed = FuturesContextPolicy.allows(
             direction,
             FuturesContextState(h1.bullish, h1.bearish, h1.awake, h1.ao),
             FuturesContextState(h4.bullish, h4.bearish, h4.awake, h4.ao),
             FuturesContextState(d1.bullish, d1.bearish, d1.awake, d1.ao)
         )
+        if (!contextAllowed) return false
+        if (signalType.equals("FRACTAL", ignoreCase = true)) {
+            val trigger = triggerPrice ?: return false
+            return FuturesContextPolicy.fractalTriggerOutsideTeeth(direction, trigger, h1.teeth)
+        }
+        return true
     }
 
     private fun findSignal(exchange: BinanceUsdmFuturesClient, symbol: String): Signal? {
@@ -1374,7 +1382,7 @@ internal class FuturesNativeEngine(
         // Re-fetch closed H1/H4/D1 context immediately before the durable intent
         // and exchange mutation. A candle boundary between scanning and arming
         // must not leave an order authorized by stale context.
-        if (!currentContextAllows(exchange, symbol, signal.direction)) {
+        if (!currentContextAllows(exchange, symbol, signal.direction, signal.type, triggerValue)) {
             throw FuturesApiException("$symbol directional context changed or is unavailable at final entry validation")
         }
         val signalExpiresAt = signal.confirmationTime +
@@ -1454,7 +1462,7 @@ internal class FuturesNativeEngine(
                 clientAlgoId,
                 params,
                 preSubmitCheck = {
-                    if (!currentContextAllows(exchange, symbol, signal.direction)) {
+                    if (!currentContextAllows(exchange, symbol, signal.direction, signal.type, triggerValue)) {
                         throw FuturesApiException(
                             "$symbol context invalidated immediately before conditional entry submission"
                         )
@@ -1726,7 +1734,13 @@ internal class FuturesNativeEngine(
                         )
                     }
                     val contextStillAllows = runCatching {
-                        currentContextAllows(exchange, symbol, direction)
+                        currentContextAllows(
+                            exchange,
+                            symbol,
+                            direction,
+                            campaign.optString("signal_type"),
+                            campaign.optDouble("entry_trigger", 0.0)
+                        )
                     }.getOrDefault(false)
                     if (!contextStillAllows) {
                         cancelPendingEntry(exchange, campaign, "CONTEXT_INVALIDATED_OR_UNAVAILABLE")
