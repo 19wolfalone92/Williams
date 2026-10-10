@@ -5,7 +5,7 @@ from pathlib import Path
 from release_contract import (
     ReleaseContractError, assert_version_alignment, execution_start_blocker,
     parse_apk_version_from_badging, read_canonical_version,
-    validate_android_gradle_version_source, validate_android_ui_contract,
+    validate_android_gradle_version_source, validate_android_ui_contract, validate_gradle_wrapper_version,
     validate_artifact_version, validate_release_contract, _validate_workflows,
 )
 
@@ -60,6 +60,10 @@ class ReleaseContractTests(unittest.TestCase):
     def test_android_gradle_rejects_a_hard_coded_version(self):
         with self.assertRaises(ReleaseContractError):
             validate_android_gradle_version_source('android { defaultConfig { versionName = "4.24.0" } }')
+
+    def test_outdated_gradle_wrapper_is_rejected(self):
+        with self.assertRaises(ReleaseContractError):
+            validate_gradle_wrapper_version("distributionUrl=https\\://services.gradle.org/distributions/gradle-8.14.5-bin.zip")
 
     def test_current_repository_release_contract_passes(self):
         self.assertEqual(validate_release_contract(ROOT), read_canonical_version(ROOT / "VERSION"))

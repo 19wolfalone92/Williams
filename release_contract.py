@@ -148,6 +148,17 @@ def _validate_config(root: Path, env: Mapping[str, str]) -> None:
     if "def execution_start_blocker(" not in (root / "trading_config.py").read_text(encoding="utf-8"):
         raise ReleaseContractError("Trading start mode/credential validator is missing.")
 
+def validate_gradle_wrapper_version(source: str) -> None:
+    match = re.search(r"(?m)^distributionUrl=.*gradle-([0-9]+(?:\\.[0-9]+)+)-bin\\.zip$", source)
+    if not match:
+        raise ReleaseContractError("Gradle wrapper distribution URL is missing or malformed.")
+    version = tuple(int(part) for part in match.group(1).split("."))
+    if version < (8, 14, 6):
+        raise ReleaseContractError(
+            "Gradle wrapper must be at least 8.14.6; the current Android lint gate rejects 8.14.5."
+        )
+
+
 def _validate_workflows(root: Path) -> None:
     texts = {}
     for name in WORKFLOWS:
@@ -189,7 +200,7 @@ def validate_release_contract(root: Path | str) -> str:
         "version_contract.py", "release_contract.py", "server.py", "trading_config.py", "ci_release_gate.py",
         "market_scanner.py", "portfolio_controller.py", "portfolio_trader.py", "trader.py",
         "wave_engine.py", "binance_client.py", "preflight_gate.py", "test_testnet_release_gate.py",
-        "test_release_contract.py", "app/build.gradle.kts", "app/src/main/java/com/williamsbot/MainActivity.kt",
+        "test_release_contract.py", "gradle/wrapper/gradle-wrapper.properties", "app/build.gradle.kts", "app/src/main/java/com/williamsbot/MainActivity.kt",
         "app/src/main/java/com/williamsbot/StandaloneRuntime.kt", "app/src/main/java/com/williamsbot/BinanceUserDataStream.kt",
         ".env.example", "README.md", "docs/RELEASE_CONTRACT.md",
     )
@@ -199,6 +210,7 @@ def validate_release_contract(root: Path | str) -> str:
     server = (root / "server.py").read_text(encoding="utf-8")
     validate_backend_version_source(server, (root / "version_contract.py").read_text(encoding="utf-8"))
     validate_android_gradle_version_source((root / "app/build.gradle.kts").read_text(encoding="utf-8"))
+    validate_gradle_wrapper_version((root / "gradle/wrapper/gradle-wrapper.properties").read_text(encoding="utf-8"))
     validate_android_ui_contract((root / "app/src/main/java/com/williamsbot/MainActivity.kt").read_text(encoding="utf-8"))
     for name in ("health", "status", "settings"):
         if not _api_returns_version(server, name):
