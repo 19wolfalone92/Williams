@@ -87,27 +87,6 @@ internal fun williamsAngulationScore(
         if (lows[i] > highs[i]) return null
     }
 
-    fun slope(values: List<Double>): Double {
-        val count = (index - start + 1).toDouble()
-        val xMean = (count - 1.0) / 2.0
-        val yMean = (start..index).sumOf { values[it] } / count
-        var numerator = 0.0
-        var denominator = 0.0
-        var x = 0.0
-        for (i in start..index) {
-            val dx = x - xMean
-            numerator += dx * (values[i] - yMean)
-            denominator += dx * dx
-            x += 1.0
-        }
-        return if (denominator > 0.0) numerator / denominator else 0.0
-    }
-
-    val bullishDistance = (start..index).map { i -> max(0.0, jaw[i] - lows[i]) }
-    val bearishDistance = (start..index).map { i -> max(0.0, highs[i] - jaw[i]) }
-    val bullishDelta = bullishDistance.last() - bullishDistance.first()
-    val bearishDelta = bearishDistance.last() - bearishDistance.first()
-
     fun localSlope(values: List<Double>): Double {
         val normalized = values.subList(start, index + 1)
         val count = normalized.size.toDouble()
