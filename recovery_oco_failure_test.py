@@ -25,16 +25,16 @@ class FakeClient:
         return float(f"{(int(x/step)*step):.8f}")
     def order(self,symbol,side,otype,**kw):
         print("[FAKE] BUY",symbol,side,otype,kw)
-        return {"orderId":"1001","status":"FILLED","executedQty":"0.01","cummulativeQuoteQty":"100.0"}
+        return {"symbol": symbol, "orderId":"1001","status":"FILLED","executedQty":"0.01","cummulativeQuoteQty":"100.0"}
     def get_order(self, symbol, order_id=None, orig_client_order_id=None):
-        return {"orderId": order_id or "1001", "status": "FILLED", "executedQty": "0.01", "cummulativeQuoteQty": "100.0"}
+        return {"symbol": symbol, "orderId": order_id or "1001", "status": "FILLED", "executedQty": "0.01", "cummulativeQuoteQty": "100.0"}
     def create_oco_sell(self,*a,**kw):
         print("[FAKE] OCO -> FAILURE")
         raise RuntimeError("SIMULATED OCO FAILURE")
     def open_orders(self,*a,**kw): return []
     def open_order_lists(self,*a,**kw): return []
     def all_order_lists(self,*a,**kw): return []
-    def all_orders(self,*a,**kw): return [{"orderId":"1001","status":"FILLED","side":"BUY","executedQty":"0.01","cummulativeQuoteQty":"100.0"}]
+    def all_orders(self,*a,**kw): return [{"symbol":"BTCUSDT","orderId":"1001","status":"FILLED","side":"BUY","executedQty":"0.01","cummulativeQuoteQty":"100.0"}]
     def account(self):
         return {"balances":[{"asset":"BTC","free":"0.01","locked":"0"},{"asset":"USDT","free":"9900","locked":"0"}]}
 
