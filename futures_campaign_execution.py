@@ -534,6 +534,61 @@ class FuturesCampaignExecutionService:
                     )
         return 0.0
 
+    def _tc2_wm1_early_context_allowed(self, signal: SignalSpec, snapshot=None) -> bool:
+        """Validate the narrow TC2 early-WM1 exception to strict trend admission.
+
+        WM1 may lead an H1/H4 Alligator+AO alignment, but it is never a context-
+        free entry: the detector must provide positive angulation evidence,
+        H1/H4/D1 context must be fresh and version-pinned, and active opposite D1
+        context remains a hard macro veto.
+        """
+        if (
+            signal.signal_type != SignalType.REVERSAL
+            or str(signal.timeframe).lower() != "1h"
+            or str(signal.direction).upper() not in {"LONG", "SHORT"}
+        ):
+            return False
+        try:
+            angulation = float(signal.angulation_score)
+        except (TypeError, ValueError, OverflowError):
+            return False
+        if not math.isfinite(angulation) or angulation <= 0.0:
+            return False
+
+        snapshot = snapshot or self.barrier.context_cache.snapshot()
+        versions = {
+            str(key).lower(): int(value)
+            for key, value in dict(signal.context_versions or {}).items()
+        }
+        now_ms = int(time.time() * 1000)
+        intervals_ms = {"1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000}
+        contexts = {}
+        for interval, duration_ms in intervals_ms.items():
+            context = snapshot.context(signal.symbol, interval)
+            if context is None or interval not in versions:
+                return False
+            if int(context.version) != versions[interval]:
+                return False
+            try:
+                close_ms = int(context.candle_close_time_ms)
+            except (TypeError, ValueError, OverflowError):
+                return False
+            age_ms = now_ms - close_ms
+            if (
+                close_ms <= 0
+                or age_ms < -60_000
+                or age_ms > max(120_000, 2 * duration_ms)
+            ):
+                return False
+            contexts[interval] = context
+
+        macro = contexts["1d"]
+        if signal.direction == "LONG" and macro.allow_short:
+            return False
+        if signal.direction == "SHORT" and macro.allow_long:
+            return False
+        return True
+
     def _context_versions(self, signal: SignalSpec) -> dict[str, int]:
         snapshot = self.barrier.context_cache.snapshot()
         versions = {str(k).lower(): int(v) for k, v in dict(signal.context_versions or {}).items()}
@@ -619,9 +674,10 @@ class FuturesCampaignExecutionService:
                 f"{symbol}: spread {spread:.4%} exceeds {self.max_spread_pct:.4%}"
             )
         if self.require_htf_confirmation and not bool(signal.htf_confirmed):
-            raise FuturesCampaignExecutionError(
-                f"{symbol}: direction-specific higher-timeframe confirmation is required"
-            )
+            if not self._tc2_wm1_early_context_allowed(signal):
+                raise FuturesCampaignExecutionError(
+                    f"{symbol}: strict higher-timeframe confirmation is absent and TC2 WM1 early-reversal admission is not proven"
+                )
 
     def _actual_risk_quote(self, quantity: float, entry: float, stop: float) -> float:
         notional = quantity * entry
