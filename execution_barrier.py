@@ -205,6 +205,16 @@ class ExecutionBarrier:
             permission_ctx = snapshot.context(intent.symbol, permission_tf) if permission_tf else None
             if permission_ctx is None:
                 return f"missing permission context {intent.symbol} {permission_tf}"
+            tc2_core_profile = (
+                os.getenv("WILLIAMS_STRATEGY_PROFILE", "TC2_THREE_WISE_MEN").strip().upper()
+                == "TC2_THREE_WISE_MEN"
+            )
+            if (
+                tc2_core_profile
+                and purpose in {"CAMPAIGN_ENTRY", "CAMPAIGN_ADD_ON"}
+                and permission_tf != "1h"
+            ):
+                return "TC2 Three Wise Men campaign mutations require canonical H1 decision context"
 
             admission_mode = str(
                 getattr(intent, "context_admission_mode", "STRICT_DIRECTIONAL") or "STRICT_DIRECTIONAL"
@@ -264,31 +274,25 @@ class ExecutionBarrier:
                         if not bool(ctx.williams_core_ready):
                             return f"TC2 entry requires valid Williams indicator context on {tf}"
 
-                if not permission_ctx.williams_core_ready:
-                    return (
-                        f"context {permission_tf} does not allow {direction.upper()}: "
-                        "canonical Williams indicator evidence is missing/invalid"
-                    )
-                state = str(permission_ctx.alligator_state or "").strip().upper()
-                try:
-                    ao_value = float(permission_ctx.ao_value)
-                    awake = bool(permission_ctx.alligator_awake)
-                except (TypeError, ValueError, OverflowError):
-                    return f"context {permission_tf} does not allow {direction.upper()}: invalid Williams evidence"
-                if not math.isfinite(ao_value):
-                    return f"context {permission_tf} does not allow {direction.upper()}: non-finite AO"
-                if direction == "long" and not (
-                    state == "BULLISH" and awake and ao_value > 0.0
-                ):
-                    return f"context {permission_tf} does not allow LONG"
-                if direction == "short" and not (
-                    state == "BEARISH" and awake and ao_value < 0.0
-                ):
-                    return f"context {permission_tf} does not allow SHORT"
+                    state = str(permission_ctx.alligator_state or "").strip().upper()
+                    try:
+                        ao_value = float(permission_ctx.ao_value)
+                        awake = bool(permission_ctx.alligator_awake)
+                    except (TypeError, ValueError, OverflowError):
+                        return f"context {permission_tf} does not allow {direction.upper()}: invalid Williams evidence"
+                    if not math.isfinite(ao_value):
+                        return f"context {permission_tf} does not allow {direction.upper()}: non-finite AO"
+                    if direction == "long" and not (
+                        state == "BULLISH" and awake and ao_value > 0.0
+                    ):
+                        return "context 1h does not allow LONG"
+                    if direction == "short" and not (
+                        state == "BEARISH" and awake and ao_value < 0.0
+                    ):
+                        return "context 1h does not allow SHORT"
 
-                # D1 is the macro airbag. Its opposite active Alligator/AO state
-                # may veto a new campaign, but it does not create a signal.
-                if permission_tf == "1h":
+                    # D1 is the macro airbag. Its opposite active Alligator/AO state
+                    # may veto a new campaign, but it does not create a signal.
                     macro = snapshot.context(intent.symbol, "1d")
                     if macro is None or not macro.williams_core_ready:
                         return "missing/invalid D1 Williams macro context"
@@ -313,6 +317,13 @@ class ExecutionBarrier:
                         return "active opposite D1 macro context blocks LONG"
                     if direction == "short" and (macro.allow_long or macro_opposes_short):
                         return "active opposite D1 macro context blocks SHORT"
+                else:
+                    # Explicit legacy/profile integrations remain separate from
+                    # TC2 and preserve their own directional permission contract.
+                    if direction == "long" and not permission_ctx.allow_long:
+                        return f"context {permission_tf} does not allow LONG"
+                    if direction == "short" and not permission_ctx.allow_short:
+                        return f"context {permission_tf} does not allow SHORT"
             else:
                 return f"unsupported context admission mode {admission_mode}"
 
