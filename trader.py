@@ -235,19 +235,37 @@ class Trader:
             )
 
         unresolved_intents = self.db.conn.execute(
-            "SELECT intent_id,symbol,client_order_id,status FROM execution_intents "
+            "SELECT intent_id,symbol,client_order_id,status,order_type,target_order_id "
+            "FROM execution_intents "
             "WHERE UPPER(status) IN ('PENDING','SUBMITTED','AMBIGUOUS','RECONCILE_REQUIRED')"
         ).fetchall()
         for intent in unresolved_intents:
             symbol = str(intent["symbol"] or "").upper()
             client_id = str(intent["client_order_id"] or "")
-            if not client_id or (symbol, client_id) not in history_by_key:
-                raise RuntimeError(
-                    f"recovery gate cannot resolve intent {intent['intent_id']} by exchange history"
+            if str(intent["order_type"] or "").upper() == "CANCEL":
+                target_id = str(intent["target_order_id"] or "")
+                target = history_by_key.get((symbol, target_id)) if target_id else None
+                target_status = str(target.get("status", "")).upper() if target else ""
+                if target is None or target_status not in {
+                    "CANCELED", "EXPIRED", "REJECTED", "FILLED"
+                }:
+                    raise RuntimeError(
+                        f"recovery gate cannot resolve cancel intent {intent['intent_id']}: "
+                        f"target_order_id={target_id or 'MISSING'} status={target_status or 'UNKNOWN'}"
+                    )
+                reason = (
+                    "target order reached terminal state during startup reconciliation: "
+                    + target_status
                 )
+            else:
+                if not client_id or (symbol, client_id) not in history_by_key:
+                    raise RuntimeError(
+                        f"recovery gate cannot resolve intent {intent['intent_id']} by exchange history"
+                    )
+                reason = "exchange order history confirmed during startup reconciliation"
             self.db.conn.execute(
                 "UPDATE execution_intents SET status='RECONCILED', reason=? WHERE intent_id=?",
-                ("exchange order history confirmed during startup reconciliation", intent["intent_id"]),
+                (reason, intent["intent_id"]),
             )
         self.db.conn.commit()
 
