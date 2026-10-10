@@ -277,6 +277,77 @@ def test_ambiguous_cancel_recovers_against_persisted_target_order_id(tmp_path):
     assert db.state_get("recovery_state") == "READY"
 
 
+def test_duplicate_durable_client_order_id_is_rejected_by_sqlite(tmp_path):
+    db = Database(str(tmp_path / "unique_client_order.sqlite3"))
+    first = OrderIntent.new(
+        "BTCUSDT", "BUY", "MARKET", {},
+        client_order_id="WILLV5_ENTRY_unique",
+        purpose="CAMPAIGN_ENTRY",
+        campaign_id="campaign-one",
+    )
+    second = OrderIntent.new(
+        "BTCUSDT", "BUY", "MARKET", {},
+        client_order_id="WILLV5_ENTRY_unique",
+        purpose="CAMPAIGN_ENTRY",
+        campaign_id="campaign-two",
+    )
+    db.save_execution_intent(first, "PENDING")
+    with pytest.raises(sqlite3.IntegrityError):
+        db.save_execution_intent(second, "PENDING")
+
+
+def test_legacy_portfolio_mutation_without_barrier_never_calls_exchange(tmp_path):
+    db = Database(str(tmp_path / "legacy_no_barrier.sqlite3"))
+    client = MockExchange()
+    portfolio = MultiPositionTrader(client, db=db, symbols=["BTCUSDT"])
+    calls = []
+
+    with pytest.raises(ExecutionPersistenceError, match="ExecutionBarrier is unavailable"):
+        portfolio._execute_mutation(
+            "BTCUSDT",
+            "BUY",
+            "MARKET",
+            "CAMPAIGN_ENTRY",
+            "WILLV4_ENTRY_should-not-submit",
+            lambda: calls.append("submitted") or {"status": "FILLED"},
+            trade_id="legacy-entry:BTCUSDT",
+        )
+    assert calls == []
+
+
+def test_ambiguous_oco_cancel_recovers_only_from_terminal_exchange_list(tmp_path):
+    db, client, runtime, portfolio, report, recovery = _recovery_gate_fixture(
+        str(tmp_path / "cancel_oco.sqlite3")
+    )
+    client.order_list = lambda symbol, order_list_id=None, list_client_order_id=None: {
+        "symbol": symbol,
+        "orderListId": str(order_list_id or "list-7"),
+        "listOrderStatus": "ALL_DONE",
+        "listStatusType": "ALL_DONE",
+    }
+    intent = OrderIntent.new(
+        "BTCUSDT",
+        "SELL",
+        "CANCEL_OCO",
+        required_context_versions={},
+        client_order_id="WILLV5_CANCEL_OCO_unique",
+        target_order_list_id="list-7",
+        purpose="CAMPAIGN_PROTECTION_CANCEL",
+        campaign_id="campaign-oco",
+    )
+    db.save_execution_intent(intent, "AMBIGUOUS", "cancel response lost")
+
+    runtime._finalize_recovery_gate(report, recovery, portfolio)
+
+    stored = db.conn.execute(
+        "SELECT status,target_order_list_id FROM execution_intents WHERE intent_id=?",
+        (intent.intent_id,),
+    ).fetchone()
+    assert stored["status"] == "RECONCILED"
+    assert stored["target_order_list_id"] == "list-7"
+    assert db.state_get("recovery_state") == "READY"
+
+
 def test_ambiguous_submission_cannot_be_retried_with_same_intent_or_client_id(tmp_path):
     db = Database(str(tmp_path / "ambiguous.sqlite3"))
     db.mark_recovery_ready(evidence())
