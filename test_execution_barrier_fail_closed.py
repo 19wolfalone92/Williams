@@ -10,6 +10,7 @@ from binance_client import BinanceSpotClient
 from execution_barrier import ExecutionBarrier, OrderIntent
 from market_context import ContextCache, TFMarketContext, WaveHypothesis
 from preflight_gate import PreflightCheckService
+from execution_permit import mutation_permit, require_mutation_permit
 
 
 class FakeDB:
@@ -402,3 +403,30 @@ def test_preflight_integrity_violations_never_submit(violation):
     )
     assert not result.accepted
     assert calls == []
+
+
+def test_execution_permit_is_one_shot_even_after_first_mutation_raises():
+    client = FakeSpotClient()
+    with mutation_permit(client):
+        require_mutation_permit(client)
+        with pytest.raises(RuntimeError, match="one mutation per ExecutionBarrier permit"):
+            require_mutation_permit(client)
+
+
+def test_execution_permit_cannot_be_reused_for_second_exchange_mutation():
+    client = BinanceSpotClient("test-key", "test-secret", testnet=True)
+
+    class NoNetworkSession:
+        calls = 0
+        def request(self, *args, **kwargs):
+            self.calls += 1
+            raise TimeoutError("synthetic timeout")
+
+    session = NoNetworkSession()
+    client.session = session
+    with mutation_permit(client):
+        with pytest.raises(TimeoutError):
+            client.order("BTCUSDT", "BUY", "MARKET", quantity="0.001", new_client_order_id="CID_ONE_SHOT")
+        with pytest.raises(RuntimeError, match="one mutation per ExecutionBarrier permit"):
+            client.cancel_order("BTCUSDT", orig_client_order_id="CID_ONE_SHOT")
+    assert session.calls == 1
