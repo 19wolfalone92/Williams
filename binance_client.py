@@ -109,7 +109,7 @@ class BinanceSpotClient:
                     time.sleep(delays[attempt])
                     continue
                 raise BinanceAPIError(
-                    f'Binance transport error: {exc}',
+                    f'Binance transport error: {type(exc).__name__}',
                     unknown_execution=method in {"POST", "DELETE"},
                 ) from exc
 
@@ -140,15 +140,16 @@ class BinanceSpotClient:
                 and path == "/api/v3/order/cancelReplace"
             ):
                 try:
-                    payload_409 = r.json()
+                    parsed_409 = r.json()
+                    safe_code = parsed_409.get("code", 409) if isinstance(parsed_409, dict) else 409
                 except ValueError:
-                    payload_409 = {"code": 409, "msg": r.text}
+                    safe_code = 409
                 raise BinanceAPIError(
-                    f"Binance 409: cancelReplace partially succeeded; "
-                    "reconciliation is required before retry. payload={payload_409}",
+                    f"Binance 409 (API code {safe_code}); cancelReplace may have partially succeeded; "
+                    "reconciliation is required before retry.",
                     unknown_execution=True,
                     status_code=409,
-                    payload=payload_409,
+                    payload={"code": safe_code, "msg": "response body redacted"},
                 )
 
             if r.status_code in (418, 429):
@@ -172,11 +173,7 @@ class BinanceSpotClient:
                     'order mutation requires reconciliation before retry.',
                     unknown_execution=method in {"POST", "DELETE"},
                     status_code=r.status_code,
-                    payload=(
-                        r.json()
-                        if r.content
-                        else {"code": r.status_code, "msg": r.text}
-                    ),
+                    payload={"code": r.status_code, "msg": "response body redacted"},
                 )
 
             if r.status_code >= 500:
@@ -184,20 +181,21 @@ class BinanceSpotClient:
                     time.sleep(delays[attempt])
                     continue
                 try:
-                    payload = r.json()
+                    parsed = r.json()
+                    safe_code = parsed.get("code", r.status_code) if isinstance(parsed, dict) else r.status_code
                 except ValueError:
-                    payload = {'code': r.status_code, 'msg': r.text}
+                    safe_code = r.status_code
                 raise BinanceAPIError(
-                    f'Binance {r.status_code}: {payload}',
+                    f'Binance HTTP {r.status_code}; API code {safe_code}',
                     unknown_execution=method in {"POST", "DELETE"},
                     status_code=r.status_code,
-                    payload=payload,
+                    payload={"code": safe_code, "msg": "response body redacted"},
                 )
 
             try:
                 payload = r.json()
             except ValueError:
-                payload = {'code': r.status_code, 'msg': r.text}
+                payload = {'code': r.status_code, 'msg': 'response body redacted'}
 
             # -1021 means Binance rejected the request because of timestamp.
             # The matching engine did not accept it, so one time-sync retry is safe.
@@ -216,9 +214,9 @@ class BinanceSpotClient:
                 and payload.get('code', 0) < 0
             ):
                 raise BinanceAPIError(
-                    f'Binance {r.status_code}: {payload}',
+                    f'Binance HTTP {r.status_code}; API code {payload.get("code", "unknown") if isinstance(payload, dict) else "unknown"}',
                     status_code=r.status_code,
-                    payload=payload,
+                    payload={"code": payload.get("code", r.status_code) if isinstance(payload, dict) else r.status_code, "msg": "response body redacted"},
                 )
 
             if method == "GET" and path == "/api/v3/exchangeInfo":
@@ -228,9 +226,9 @@ class BinanceSpotClient:
 
         if last_exc is not None:
             raise BinanceAPIError(
-                f'Binance request failed: {last_exc}',
+                f'Binance request failed: {type(last_exc).__name__}',
                 unknown_execution=method in {"POST", "DELETE"},
-            ) from last_exc
+            ) from None
 
         raise BinanceAPIError(
             f'Binance request failed: {method} {path}'
