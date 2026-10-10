@@ -73,6 +73,7 @@ jobs:
             test_atomic_switch_rollback.py \
             test_buy_safety.py \
             test_williams_book_alignment.py \
+            tests/test_williams_strategy_golden_vectors.py \
             test_book_wave_safety.py \
             test_trade_journal.py \
             test_multi_position_lifecycle.py \
