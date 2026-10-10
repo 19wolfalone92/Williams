@@ -1566,11 +1566,40 @@ private class NativeEngine(
                                 "Binance order-list lookup returned a different listClientOrderId"
                             }
                         }
+                        val children = orderList.optJSONArray("orders")
+                            ?: orderList.optJSONArray("orderReports")
+                        require(children != null && children.length() >= 2) {
+                            "Binance order-list lookup did not identify both child orders"
+                        }
+                        val childEvidence = JSONArray()
+                        val seenChildIds = mutableSetOf<Long>()
+                        for (childIndex in 0 until children!!.length()) {
+                            val child = children.optJSONObject(childIndex)
+                                ?: error("Malformed order-list child descriptor")
+                            val childId = child.optLong("orderId", 0L)
+                            require(childId > 0L && seenChildIds.add(childId)) {
+                                "Order-list child order ID is missing or duplicated"
+                            }
+                            val childOrder = signedGet(
+                                "/api/v3/order",
+                                "symbol=" + symbol + "&orderId=" + childId
+                            )
+                            val childStatus = childOrder.optString("status").uppercase(Locale.US)
+                            require(
+                                childOrder.optString("symbol").equals(symbol, ignoreCase = true) &&
+                                    childOrder.optLong("orderId", 0L) == childId &&
+                                    childStatus in orderStatuses
+                            ) {
+                                "Binance OCO child order state is not authoritative"
+                            }
+                            childEvidence.put(childOrder)
+                        }
                         JSONObject()
                             .put("lookup", "orderList")
                             .put("method", method)
                             .put("path", path)
                             .put("query_order_list", orderList)
+                            .put("child_orders", childEvidence)
                     }
 
                     "/api/v3/order/cancelReplace" -> {
