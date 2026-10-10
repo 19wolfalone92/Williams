@@ -7836,11 +7836,17 @@ private class NativeEngine(
                 "WIN", "BREAKEVEN" -> break
             }
         }
-        val unrealizedPnl = positionList().sumOf { position ->
+        var unrealizedPnlKnown = true
+        var unrealizedPnl = 0.0
+        positionList().forEach { position ->
             val mark = livePrices[position.symbol]
                 ?: if (position.symbol == primarySymbol) primaryCandles.lastOrNull()?.c ?: 0.0
                 else 0.0
-            if (mark > 0.0) (mark - position.entry) * position.qty else 0.0
+            if (mark > 0.0 && mark.isFinite()) {
+                unrealizedPnl += (mark - position.entry) * position.qty
+            } else {
+                unrealizedPnlKnown = false
+            }
         }
         val equity = estimateManagedEquity()
         val dailyLimitQuote = equity * 0.01
@@ -7857,10 +7863,12 @@ private class NativeEngine(
             .put("daily_loss_limit_usdt", dailyLimitQuote)
             .put("max_daily_loss_pct", 0.01)
             .put("daily_loss_limit_reached", dailyLossLimit)
+            .put("open_pnl_known", unrealizedPnlKnown)
             .put("consecutive_losses", consecutiveLosses)
-            .put("allow", !dailyLossLimit && !cooldown && !hardPause)
+            .put("allow", !dailyLossLimit && !cooldown && !hardPause && unrealizedPnlKnown)
             .put("mode", when {
                 dailyLossLimit -> "DAILY_LOSS_LIMIT"
+                !unrealizedPnlKnown -> "OPEN_PNL_UNAVAILABLE"
                 hardPause -> "PAUSED"
                 cooldown -> "COOLDOWN"
                 else -> "ACTIVE"
@@ -8416,7 +8424,10 @@ private class NativeEngine(
         test("history_ready", "database", historyReady, "WARN", if (historyReady) "Market history is ready" else "history_state=" + historyState + "; error=" + (historyLastError ?: "pending"))
         test("scanner_state", "scanner", scannerState == "READY" || (scannerState == "RUNNING" && scanning), "WARN", "state=" + scannerState + "; run_id=" + scanRunId + "; progress=" + scanProgressSymbols + "/" + scanSymbols.size + "; last_progress_ms=" + scanLastProgressAt)
         test("state_machine", "runtime", stateMachine.state.name.isNotBlank(), "FAIL", "fsm_state=" + stateMachine.state.name)
-        test("risk_limits", "risk", maxRiskPerTradePct > 0.0 && maxRiskPerTradePct <= 0.01 && maxTotalRiskPct > 0.0 && maxTotalRiskPct <= 0.03, "FAIL", "per_trade=" + maxRiskPerTradePct + "; campaign_cap=" + campaignRiskLimitPct + "; total=" + maxTotalRiskPct)
+        test("core10_universe", "scanner", coreSymbols.size == 10 && coreSymbols.toSet().size == 10, "FAIL", "universe=" + scannerUniverseLabel + "; symbols=" + coreSymbols.joinToString(","))
+        test("canonical_tc2_timeframe", "strategy", campaignExecutionTimeframe == "1h", "FAIL", "decision_tf=" + campaignExecutionTimeframe + "; M15/M5 are not signal frames")
+        test("d1_is_informational", "strategy", true, "FAIL", "D1 overview is dashboard-only and cannot veto or create TC2 signals")
+        test("risk_limits", "risk", maxRiskPerTradePct > 0.0 && maxRiskPerTradePct <= 0.01 && campaignRiskLimitPct <= 0.01 && maxTotalRiskPct > 0.0 && maxTotalRiskPct <= 0.03, "FAIL", "per_trade=" + maxRiskPerTradePct + "; campaign_cap=" + campaignRiskLimitPct + "; total=" + maxTotalRiskPct)
         test("self_heal_contract", "runtime", true, "FAIL", "safe_only=true; endpoint=/api/v1/control/self-heal")
         return tests
     }
