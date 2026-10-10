@@ -611,6 +611,10 @@ def test_release_version_contracts_are_consistent():
     wrapper = (root / "gradle" / "wrapper" / "gradle-wrapper.properties").read_text(encoding="utf-8")
     android_ci = (root / ".github" / "workflows" / "android-apk.yml").read_text(encoding="utf-8")
     campaign_ci = (root / ".github" / "workflows" / "campaign-ci.yml").read_text(encoding="utf-8")
+    wrapper_match = re.search(r"gradle-([0-9.]+)-bin\\.zip", wrapper)
+    android_gradle_match = re.search(r"GRADLE_VERSION:\\s*['\"]([^'\"]+)['\"]", android_ci)
+    campaign_gradle_match = re.search(r"gradle-version:\\s*['\"]([^'\"]+)['\"]", campaign_ci)
+    assert wrapper_match and android_gradle_match and campaign_gradle_match
     gate_match = re.search(r'EXPECTED_VERSION\s*=\s*[\'"]([^\'"]+)[\'"]', gate)
     server_match = re.search(r'^VERSION\s*=\s*[\'"]([^\'"]+)[\'"]', server, re.MULTILINE)
     gradle_match = re.search(r'versionName\s*=\s*"([^"]+)"', gradle)
@@ -620,9 +624,10 @@ def test_release_version_contracts_are_consistent():
     assert gate_match.group(1) == canonical
     assert gradle_match.group(1) == canonical
     assert f"Williams {canonical}" in activity
-    assert "gradle-8.14.6-bin.zip" in wrapper
-    assert "GRADLE_VERSION: '8.14.6'" in android_ci
-    assert 'gradle-version: "8.14.6"' in campaign_ci
+    wrapper_version = wrapper_match.group(1)
+    assert android_gradle_match.group(1) == wrapper_version
+    assert campaign_gradle_match.group(1) == wrapper_version
+    assert wrapper_version == "8.14.6", "unexpected wrapper version; review Android toolchain contract"
 
 
 
