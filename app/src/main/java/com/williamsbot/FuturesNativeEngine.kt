@@ -92,7 +92,7 @@ internal class FuturesNativeEngine(
         val spreadPct: Double,
         val latestUpFractal: Pair<Int, Double>?,
         val latestDownFractal: Pair<Int, Double>?,
-        val lastSignal: Signal?
+        val signalCandidates: List<Signal>
     )
 
     private val lock = Any()
@@ -851,7 +851,7 @@ internal class FuturesNativeEngine(
         val higherTf = parentInterval(tf)
         val higher = analyseFrame(exchange, symbol, higherTf) ?: return null
         val currentClosedBarTime = primary.bars.lastOrNull()?.openTime ?: return null
-        val candidates = listOfNotNull(primary.lastSignal)
+        val candidates = primary.signalCandidates
             .filter { signal ->
                 // A trigger is not permission by itself: operative Alligator
                 // context and the structural parent must both support direction.
@@ -1037,12 +1037,11 @@ internal class FuturesNativeEngine(
                 }
             }
         }
-        val signal = signalCandidates
+        val actionableSignals = signalCandidates
             .filter { isSignalStillValid(bars, it) }
-            // A stale earliest signal must not mask a later live WM signal.
             // Conditional orders do not inherit this local expiry after arming.
             .filter { isSignalFresh(it, bars.last().openTime, timeframe) }
-            .minByOrNull { it.confirmationTime }
+            .sortedBy { it.confirmationTime }
         return Frame(
             bars = bars,
             atr = atr,
@@ -1060,7 +1059,7 @@ internal class FuturesNativeEngine(
             spreadPct = spreadPct,
             latestUpFractal = upFractal,
             latestDownFractal = downFractal,
-            lastSignal = signal
+            signalCandidates = actionableSignals
         )
     }
 
@@ -2766,27 +2765,18 @@ internal class FuturesNativeEngine(
         if (campaign.optString("state") != "OPEN_PROTECTED") return
         if (frame.bars.size < 3 || frame.atr <= 0.0) return
         val lastTwo = frame.bars.takeLast(2)
-        val opposite = if (direction == "LONG") {
-            lastTwo.all { bar ->
-                val index = frame.bars.indexOf(bar)
-                val values = indicatorTuple(frame.bars, index)
-                val teethAtBar = values[1]
-                val aoAtBar = values[3]
-                val acAtBar = values[5]
-                bar.close < teethAtBar && aoAtBar.isFinite() && acAtBar.isFinite() &&
-                    aoAtBar < 0.0 && acAtBar < 0.0
-            }
-        } else {
-            lastTwo.all { bar ->
-                val index = frame.bars.indexOf(bar)
-                val values = indicatorTuple(frame.bars, index)
-                val teethAtBar = values[1]
-                val aoAtBar = values[3]
-                val acAtBar = values[5]
-                bar.close > teethAtBar && aoAtBar.isFinite() && acAtBar.isFinite() &&
-                    aoAtBar > 0.0 && acAtBar > 0.0
-            }
+        val exitBars = lastTwo.map { bar ->
+            val index = frame.bars.indexOf(bar)
+            val values = indicatorTuple(frame.bars, index)
+            WilliamsExitBar(
+                close = bar.close,
+                jaw = values[0],
+                teeth = values[1],
+                lips = values[2],
+                ao = values[3]
+            )
         }
+        val opposite = FuturesStructuralExitPolicy.shouldExit(direction, exitBars)
         if (opposite) {
             exitPosition(exchange, campaign, "WILLIAMS_TWO_BAR_STRUCTURAL_REVERSAL")
             return
