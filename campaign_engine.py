@@ -473,6 +473,11 @@ class CampaignEngine:
         campaign.mark_reconcile_required(reason)
         campaign.next_action = "RECONCILE"
         self.db.save_campaign(campaign)
+        # A campaign reconciliation failure must also reach the execution gate;
+        # campaign state alone is not enough for callers checking per-symbol or
+        # legacy global position state.
+        self.db.state_set(f"position_state:{campaign.symbol.upper()}", "RECONCILE_REQUIRED")
+        self.db.state_set("position_state", "RECONCILE_REQUIRED")
         self.db.log_campaign_event(
             campaign.campaign_id,
             CampaignEventType.RECONCILE_REQUIRED.value,
