@@ -1,5 +1,6 @@
 import os
 import tempfile
+import time
 
 import pytest
 
@@ -27,6 +28,8 @@ def make_signal(signal_type=SignalType.REVERSAL, role=SignalRole.ENTRY, trigger=
         trigger_price=trigger,
         protective_reference=97.0,
         htf_confirmed=True,
+        created_at_ms=int(time.time() * 1000),
+        expires_at_ms=int(time.time() * 1000) + 3_600_000,
     )
 
 
@@ -37,6 +40,31 @@ def test_first_available_signal_starts_campaign():
         make_signal(SignalType.SUPER_AO, bar=20),
     ]
     assert CampaignEngine.choose_initial_signal(signals).signal_type == SignalType.REVERSAL
+
+
+def test_initial_selection_skips_expired_signal_and_blocks_missing_expiry():
+    now = int(time.time() * 1000)
+    expired = make_signal(SignalType.REVERSAL, bar=10)
+    expired = __import__("dataclasses").replace(expired, expires_at_ms=now)
+    missing_expiry = make_signal(SignalType.SUPER_AO, bar=20)
+    missing_expiry = __import__("dataclasses").replace(missing_expiry, expires_at_ms=0)
+    later_valid = make_signal(SignalType.FRACTAL, bar=30)
+    later_valid = __import__("dataclasses").replace(
+        later_valid,
+        signal_bar_time_ms=30,
+        confirmation_time_ms=40,
+        expires_at_ms=now + 60_000,
+    )
+
+    selected = CampaignEngine.choose_initial_signal(
+        [expired, missing_expiry, later_valid],
+        now_ms=now,
+    )
+    assert selected is later_valid
+    assert CampaignEngine.choose_initial_signal(
+        [expired, missing_expiry],
+        now_ms=now,
+    ) is None
 
 
 def test_initial_signal_order_uses_confirmation_not_fractal_center_time():
