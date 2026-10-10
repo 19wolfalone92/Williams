@@ -332,7 +332,7 @@ def test_exchange_success_with_failed_result_persistence_poison_blocks_next_muta
     original_save = db.save_execution_intent
 
     def fail_submitted(intent, status, reason=""):
-        if status == "SUBMITTED":
+        if status == "CONFIRMED":
             raise OSError("simulated SQLite result write failure")
         return original_save(intent, status, reason)
 
@@ -433,7 +433,7 @@ def test_legacy_portfolio_mutation_persists_intent_before_exchange_call(tmp_path
         "SELECT status FROM execution_intents WHERE symbol=? AND client_order_id=?",
         ("BTCUSDT", client_id),
     ).fetchone()
-    assert row["status"] == "SUBMITTED"
+    assert row["status"] == "CONFIRMED"
 
 
 def test_legacy_portfolio_mutation_without_barrier_never_calls_exchange(tmp_path):
