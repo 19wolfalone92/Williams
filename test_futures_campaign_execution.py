@@ -2342,3 +2342,23 @@ def test_initial_signal_expiring_at_current_millisecond_is_rejected(tmp_path, mo
         assert client.stop_entries == []
     finally:
         db.conn.close()
+
+
+@pytest.mark.parametrize("direction", ["LONG", "SHORT"])
+def test_add_on_expiring_at_current_millisecond_is_rejected(tmp_path, monkeypatch, direction):
+    from dataclasses import replace
+    import futures_campaign_execution as execution_module
+
+    now_ms = 1_800_000_000_000
+    monkeypatch.setattr(execution_module.time, "time", lambda: now_ms / 1000.0)
+    db, client, service, campaign = _prepare_open_campaign_for_add_on(tmp_path, direction)
+    try:
+        signal = replace(_make_add_on_signal(direction), expires_at_ms=now_ms)
+        with pytest.raises(FuturesCampaignExecutionError, match="add-on signal has expired"):
+            service.arm_add_on(
+                signal, equity_quote=10000.0, candidate_risk_fraction=0.001,
+                available_quote=5000.0,
+            )
+        assert len(client.stop_entries) == 1  # only the original campaign entry
+    finally:
+        db.conn.close()
