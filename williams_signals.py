@@ -30,7 +30,10 @@ def _timeframe_ms(timeframe: str) -> int:
         "8h": 28_800_000, "12h": 43_200_000, "1d": 86_400_000,
         "3d": 259_200_000, "1w": 604_800_000, "1M": 2_592_000_000,
     }
-    return int(values.get(str(timeframe), 300_000))
+    normalized = "1M" if str(timeframe) == "1M" else str(timeframe).strip().lower()
+    if normalized not in values:
+        raise ValueError(f"Unsupported signal timeframe: {timeframe!r}")
+    return int(values[normalized])
 
 def _tick_buffer(tick_size: float, ticks: int = 1) -> float:
     return max(float(tick_size), 0.0) * max(int(ticks), 1)
