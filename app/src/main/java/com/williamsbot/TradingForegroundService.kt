@@ -42,7 +42,7 @@ class TradingForegroundService : Service() {
                 .setSmallIcon(R.drawable.ic_launcher)
                 .setContentTitle("Williams Trader")
                 .setContentText(
-                    "Binance Testnet: торговый двигатель активен"
+                    "Runtime service alive • Testnet only • execution state must be checked"
                 )
                 .setOngoing(true)
                 .setCategory(
@@ -66,8 +66,24 @@ class TradingForegroundService : Service() {
             }
         )
 
+        // Bind the loopback API promptly, but keep signed REST recovery and
+        // historical-data startup off Android's main service lifecycle thread.
         StandaloneRuntime.start(this)
-        StandaloneRuntime.autostart(this)
+        Thread({
+            try {
+                StandaloneRuntime.autostart(applicationContext)
+            } catch (failure: Exception) {
+                // Deliberately omit exception messages; diagnostics may contain
+                // request details and must never become a credential-leak channel.
+                android.util.Log.e(
+                    "WilliamsRuntime",
+                    "Runtime auto-start failed: " + failure.javaClass.simpleName
+                )
+            }
+        }, "williams-service-autostart").apply {
+            isDaemon = true
+            start()
+        }
     }
 
     override fun onStartCommand(
