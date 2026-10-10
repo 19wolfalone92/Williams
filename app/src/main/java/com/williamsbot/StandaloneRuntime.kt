@@ -6459,9 +6459,6 @@ private class NativeEngine(
         fun latestUpFractal(throughIndex: Int): WilliamsFractalConfirmation? =
             WilliamsFractalMath.latestUp(highs, throughIndex = throughIndex, lookbackBars = 40)
 
-        fun latestDownFractal(throughIndex: Int): WilliamsFractalConfirmation? =
-            WilliamsFractalMath.latestDown(lows, throughIndex = throughIndex, lookbackBars = 40)
-
         fun angulationScore(i: Int): Double {
             val start = max(0, i - 4)
             if (i - start < 2 || !jawS[i].isFinite()) return 0.0
@@ -6471,9 +6468,6 @@ private class NativeEngine(
             } else 0.0
             return max(0.0, now - then) / max(candles[i].c, 1e-9) * 100.0
         }
-
-        fun lastValidFractalLevel(throughIndex: Int): WilliamsFractalConfirmation? =
-            latestUpFractal(throughIndex)
 
         val current = candles.lastIndex
         val out = mutableListOf<CampaignSignalN>()
