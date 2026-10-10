@@ -445,12 +445,17 @@ class TradingAuditStore(context: Context) :
         reason: String,
         rawJson: String?,
         feeUsdt: Double = 0.0,
-        feeKnown: Boolean = true
+        feeKnown: Boolean = true,
+        side: String = "BUY"
     ) {
+        val normalizedSide = side.trim().uppercase()
+        require(normalizedSide in setOf("BUY", "SELL", "LONG", "SHORT")) {
+            "trade side must be an explicit supported direction"
+        }
         val values = ContentValues()
         values.put("trade_id", tradeId)
         values.put("symbol", symbol)
-        values.put("side", "BUY")
+        values.put("side", normalizedSide)
         values.put("entry_price", entryPrice)
         values.put("exit_price", exitPrice)
         values.put("qty", qty)
