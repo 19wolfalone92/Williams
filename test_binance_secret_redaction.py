@@ -46,7 +46,7 @@ def test_http_error_payload_and_traceback_do_not_expose_marker(status):
 
     try:
         if method == "POST":
-            with mutation_permit():
+            with mutation_permit(client):
                 client._request(method, path, {}, signed=False)
         else:
             client._request(method, path, {}, signed=False)
