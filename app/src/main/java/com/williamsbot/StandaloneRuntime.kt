@@ -1597,7 +1597,17 @@ private class NativeEngine(
                     .build()
             }
             rateGuard.beforeRequest()
-            http.newCall(request).execute().use { response ->
+            val exchangeResponse = try {
+                http.newCall(request).execute()
+            } catch (_: java.io.IOException) {
+                error(
+                    if (method == "POST" || method == "DELETE")
+                        "Binance mutation transport outcome unknown; request details redacted"
+                    else
+                        "Binance transport error; request details redacted"
+                )
+            }
+            exchangeResponse.use { response ->
                 rateGuard.observe(response.headers, response.code)
                 lastBody = response.body?.string() ?: "{}"
                 auditStore.recordRestCall(
@@ -1648,7 +1658,12 @@ private class NativeEngine(
                 .build()
 
             rateGuard.beforeRequest()
-            http.newCall(request).execute().use { response ->
+            val exchangeResponse = try {
+                http.newCall(request).execute()
+            } catch (_: java.io.IOException) {
+                error("Binance signed GET transport error; request details redacted")
+            }
+            exchangeResponse.use { response ->
                 rateGuard.observe(response.headers, response.code)
                 lastBody = response.body?.string() ?: "{}"
                 auditStore.recordRestCall(
