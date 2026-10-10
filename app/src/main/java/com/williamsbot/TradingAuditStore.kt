@@ -370,12 +370,13 @@ class TradingAuditStore(context: Context) :
             put("raw_json", campaign.toString())
             put("updated_at", System.currentTimeMillis())
         }
-        writableDatabase.insertWithOnConflict(
+        val inserted = writableDatabase.insertWithOnConflict(
             "futures_campaigns",
             null,
             values,
             SQLiteDatabase.CONFLICT_REPLACE
         )
+        check(inserted != -1L) { "Failed to persist Futures campaign state for $normalized" }
     }
 
     @Synchronized
@@ -470,12 +471,13 @@ class TradingAuditStore(context: Context) :
         values.put("raw_json", rawJson)
         values.put("fee_usdt", feeUsdt)
         values.put("fee_known", if (feeKnown) 1 else 0)
-        writableDatabase.insertWithOnConflict(
+        val inserted = writableDatabase.insertWithOnConflict(
             "trades",
             null,
             values,
             SQLiteDatabase.CONFLICT_REPLACE
         )
+        check(inserted != -1L) { "Failed to persist closed trade history for $symbol/$tradeId" }
     }
 
     @Synchronized
