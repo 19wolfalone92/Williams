@@ -1583,7 +1583,7 @@ internal class FuturesNativeEngine(
                         )
                     }
                     val expiresAt = campaign.optLong("entry_expires_at_ms", 0L)
-                    if (expiresAt > 0L && System.currentTimeMillis() >= expiresAt) {
+                    if (expiresAt <= 0L || System.currentTimeMillis() >= expiresAt) {
                         // Binance conditional orders do not expire with the local
                         // Signal object. Cancel the stable Algo identity and
                         // reconcile any triggered child before releasing risk.
