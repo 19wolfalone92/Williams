@@ -6766,8 +6766,9 @@ private class NativeEngine(
                 campaignExecutionTimeframe != interval
             ) {
                 runCatching {
-                    fetchCandles(symbol, campaignExecutionTimeframe, 150)
-                }.getOrElse { candles }
+                    val raw = fetchCandles(symbol, campaignExecutionTimeframe, 151)
+                    if (raw.size >= 2) raw.dropLast(1) else emptyList()
+                }.getOrElse { emptyList() }
             } else {
                 candles
             }
@@ -7001,6 +7002,7 @@ private class NativeEngine(
                     dailyContextOverview[symbol] = JSONObject()
                         .put("symbol", symbol)
                         .put("interval", "1d")
+                        .put("available", true)
                         .put("informational_only", true)
                         .put("last_closed_candle_open_ms", closed.last().t)
                         .put("state", when {
@@ -8615,7 +8617,7 @@ private class NativeEngine(
             .put("startup_history_frames", startupFrames.joinToString(","))
             .put("testnet_live_execution", true)
             .put("risk_per_trade_pct", maxRiskPerTradePct)
-            .put("max_daily_loss_pct", 0.03)
+            .put("max_daily_loss_pct", 0.01)
             .put("max_trades_per_day", 0)
             .put("max_consecutive_losses", 2)
             .put("cooldown_minutes", 30)
