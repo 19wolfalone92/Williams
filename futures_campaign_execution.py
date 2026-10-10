@@ -699,8 +699,12 @@ class FuturesCampaignExecutionService:
         )
         operative = str(signal.timeframe).lower()
         if tc2_core:
-            # D1 is intentionally excluded from the TC2 admission dependency set.
-            versions.pop("1d", None)
+            # The TC2 admission dependency set is exactly H1 decision + H4 context.
+            # M15 is execution monitoring; D1 is informational only.
+            versions = {
+                key: value for key, value in versions.items()
+                if key in {"1h", "4h"}
+            }
             if operative != "1h":
                 raise FuturesCampaignExecutionError(
                     f"{signal.symbol}: TC2 campaigns require H1 as the decision timeframe"
