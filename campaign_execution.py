@@ -275,28 +275,38 @@ class CampaignExecutionService:
         h1 = contexts["1h"]
         try:
             h1_ao = float(h1.ao_value)
+            h1_teeth = float(h1.teeth)
             angle = float(signal.angulation_score)
+            trigger = float(signal.trigger_price)
         except (TypeError, ValueError, OverflowError):
             return False, False
-        if not math.isfinite(h1_ao):
+        if not all(math.isfinite(value) for value in (h1_ao, h1_teeth, angle, trigger)):
             return False, False
 
         h1_long = (
             str(h1.alligator_state or "").upper() == "BULLISH"
             and bool(h1.alligator_awake)
         )
-        if h1_long:
+
+        # WM2 is an independent three-AO-bar presenting signal, not a
+        # fractal/Alligator alignment conjunction. The detector already checks
+        # its AO-bar evidence; this gate confirms fresh H1/H4 data only.
+        if signal.signal_type == SignalType.SUPER_AO:
             return True, False
 
-        # WM1 is an early presenting signal and may precede an aligned H1
-        # Alligator. The caller must opt in to the detector's approximate numeric
-        # angulation; that approximation is intentionally blocked by default.
-        if (
-            signal.signal_type == SignalType.REVERSAL
-            and math.isfinite(angle)
-            and angle > 0.0
-        ):
-            return True, True
+        # WM3 is actionable only after the fractal is confirmed and its
+        # conditional trigger remains beyond the operative Teeth balance line.
+        if signal.signal_type == SignalType.FRACTAL:
+            return trigger > h1_teeth, False
+
+        # WM1 may be an early presenting reversal before the H1 Alligator turns.
+        # The numeric angulation implementation is approximate and stays blocked
+        # by default at the final execution boundary.
+        if signal.signal_type == SignalType.REVERSAL:
+            if h1_long:
+                return True, False
+            if math.isfinite(angle) and angle > 0.0:
+                return True, True
         return False, False
 
     def arm_initial_entry(
