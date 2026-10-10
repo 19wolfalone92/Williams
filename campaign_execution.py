@@ -495,18 +495,54 @@ class CampaignExecutionService:
                     })
                     continue
 
-                if status == "PARTIALLY_FILLED" and order.get("orderId") is not None:
+                if status == "PARTIALLY_FILLED":
+                    order_id = order.get("orderId")
+                    if order_id is None:
+                        raise CampaignExecutionError(
+                            f"{symbol}: partially filled conditional BUY has no exchange order ID"
+                        )
                     cancel = getattr(self.client, "cancel_order", None)
                     if cancel is None:
                         raise CampaignExecutionError(
                             f"{symbol}: partial conditional BUY cannot be safely cancelled"
                         )
                     try:
-                        cancel(symbol, order_id=order.get("orderId"))
+                        # Cancellation races with matching-engine fills. The
+                        # cancel response is not the final source of truth:
+                        # re-read the order after the mutation before sizing
+                        # protection or updating campaign exposure.
+                        cancel(symbol, order_id=order_id)
+                        order = self.client.get_order(symbol, order_id=order_id)
+                        self.db.save_order(order)
+                        status = str(order.get("status", "")).upper()
+                        executed = float(order.get("executedQty", 0) or 0)
+                        quote = float(order.get("cummulativeQuoteQty", 0) or 0)
+                        if status not in {"CANCELED", "FILLED", "EXPIRED", "REJECTED"}:
+                            raise CampaignExecutionError(
+                                f"{symbol}: conditional BUY remains non-terminal after cancel; "
+                                f"status={status or 'UNKNOWN'}"
+                            )
+                        if executed > 0 and quote <= 0:
+                            fills = self.client.my_trades(
+                                symbol, order_id=order_id, limit=1000
+                            )
+                            if not fills:
+                                raise CampaignExecutionError(
+                                    f"{symbol}: post-cancel partial fill has no authoritative trade history"
+                                )
+                            quote = sum(
+                                float(x.get("price", 0) or 0)
+                                * float(x.get("qty", x.get("executedQty", 0)) or 0)
+                                for x in fills
+                            )
+                            if quote <= 0:
+                                raise CampaignExecutionError(
+                                    f"{symbol}: post-cancel trade history has no valid quote quantity"
+                                )
                     except Exception as exc:
                         self.engine.mark_reconcile_required(
                             campaign,
-                            f"partial conditional BUY cancel ambiguous: {exc}",
+                            f"partial conditional BUY cancel/requery ambiguous: {exc}",
                         )
                         raise
 
