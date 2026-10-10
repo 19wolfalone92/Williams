@@ -108,3 +108,15 @@ def test_wm2_short_signal_is_independent_of_fractal_outside_flag():
     assert third.any()
     assert ind.loc[third, "short_super_ao_signal"].all()
     assert (~ind["short_fractal_outside"].shift(1).fillna(False).astype(bool) & third).any()
+
+
+def test_live_futures_parameter_guard_rejects_noncanonical_book_constants():
+    from strategy import canonical_williams_parameter_blockers, config_from_env
+
+    assert canonical_williams_parameter_blockers(config_from_env({})) == []
+    changed = config_from_env({"JAW_SHIFT": "7", "FRACTAL_RIGHT": "3", "SUPER_AO_BARS": "4"})
+    blockers = canonical_williams_parameter_blockers(changed)
+    assert len(blockers) == 3
+    assert any("jaw_shift=7" in item for item in blockers)
+    assert any("fractal_right=3" in item for item in blockers)
+    assert any("super_ao_bars=4" in item for item in blockers)
