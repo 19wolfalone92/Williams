@@ -243,6 +243,16 @@ class MultiPositionTrader:
         Williams BUY with remaining quantity.
         """
         repaired = []
+        # An unresolved durable execution intent is a global fail-closed
+        # condition. A clean open-orders snapshot alone must not erase its
+        # per-symbol recovery barrier; the intent resolver must first reconcile
+        # the exact mutation identity and persist the terminal evidence.
+        unresolved_intents = self.db.unresolved_execution_intents()
+        intent_blocked_symbols = {
+            str(row.get("symbol", "")).upper()
+            for row in unresolved_intents
+            if str(row.get("symbol", "")).strip()
+        }
 
         symbols = {
             str(symbol).upper()
@@ -267,6 +277,8 @@ class MultiPositionTrader:
 
         for symbol in sorted(symbols):
             if self.state(symbol) != "RECONCILE_REQUIRED":
+                continue
+            if symbol in intent_blocked_symbols:
                 continue
             if self.db.open_trade(symbol) is not None:
                 continue
