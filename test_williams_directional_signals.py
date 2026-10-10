@@ -1,4 +1,5 @@
 import pandas as pd
+import pytest
 
 from campaign_model import SignalRole, SignalSpec, SignalType
 from digital_williams_core import DigitalWilliamsCore
