@@ -322,7 +322,7 @@ def test_cancel_replace_partial_old_fill_is_ambiguous(tmp_path):
     assert calls == ["cancelReplace"]
     row = db.load_execution_intent(intent.intent_id)
     assert row["status"] == "AMBIGUOUS"
-    assert row["exchange_executed_qty"] == "" or row["exchange_executed_qty"] == "None"
+    assert row["exchange_executed_qty"] is None
     assert db.state_get(ExecutionBarrier.MUTATION_LOCK_KEY, "")
 
 
