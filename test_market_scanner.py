@@ -10,6 +10,22 @@ class FakeClient:
     pass
 
 
+def test_default_scanner_uses_core_ten_without_dynamic_discovery(monkeypatch):
+    from trading_config import DEFAULT_SYMBOLS
+
+    monkeypatch.delenv("SCAN_SYMBOLS", raising=False)
+    monkeypatch.setenv("SCAN_ALL_USDT", "false")
+    monkeypatch.setenv("SCAN_MAX_SYMBOLS", "10")
+    monkeypatch.setenv("LIQUIDITY_PRESELECT", "10")
+
+    scanner = MarketScanner(FakeClient(), symbols=None)
+
+    assert scanner.symbols == list(DEFAULT_SYMBOLS)
+    assert scanner.scan_all_usdt is False
+    assert scanner.scan_max_symbols == 10
+    assert scanner.liquidity_preselect == 10
+
+
 def test_best_prefers_strict_signal():
     scanner = MarketScanner(
         FakeClient(),
