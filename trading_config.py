@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Mapping, Sequence
 
 
-DEFAULT_SYMBOLS = ("BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT")
+DEFAULT_SYMBOLS = ("BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT")
 DEFAULT_STRUCTURAL_TFS = ("4h", "1h", "15m")
 
 
