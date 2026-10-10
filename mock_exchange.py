@@ -21,6 +21,7 @@ class MockExchange:
         self.open_oco: dict[str, dict] = {}
         self.timeout_next = False
         self.partial_fill_ratio = 1.0
+        self.commission_rate = 0.001
         self.sequence_gap_next = False
 
     def ticker_price(self, symbol):
@@ -301,6 +302,30 @@ class MockExchange:
         }
         self.open_oco[symbol] = item
         return item
+
+    def my_trades(self, symbol, order_id=None, limit=1000):
+        """Deterministic synthetic trade ledger with explicit quote-asset fees."""
+        rows = []
+        for order in self.orders:
+            if order["symbol"] != symbol:
+                continue
+            if order_id is not None and str(order.get("orderId")) != str(order_id):
+                continue
+            qty = float(order.get("executedQty", 0) or 0)
+            if qty <= 0:
+                continue
+            quote_qty = float(order.get("cummulativeQuoteQty", 0) or 0)
+            price = quote_qty / qty if quote_qty > 0 else float(self.prices[symbol])
+            rows.append({
+                "symbol": symbol,
+                "orderId": int(order["orderId"]),
+                "id": int(order["orderId"]) * 1000,
+                "price": str(price),
+                "qty": str(qty),
+                "commission": str(quote_qty * float(self.commission_rate)),
+                "commissionAsset": "USDT",
+            })
+        return rows[-int(limit):]
 
     def all_orders(self, symbol, limit=1000):
         return [o for o in self.orders if o["symbol"] == symbol][-limit:]
