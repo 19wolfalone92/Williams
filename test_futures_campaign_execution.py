@@ -413,9 +413,13 @@ def test_short_entry_is_blocked_by_non_bearish_operational_context(tmp_path):
             db,
             execution_barrier=ExecutionBarrier(cache, db),
         )
+        # This regression is about the strict trend-following context gate,
+        # not the special early-reversal admission contract for WM1.
+        signal = make_signal("SHORT")
+        signal = SignalSpec(**{**signal.__dict__, "signal_type": SignalType.SUPER_AO})
         with pytest.raises(FuturesCampaignExecutionError, match="does not allow SHORT"):
             service.arm_initial_entry(
-                make_signal("SHORT"),
+                signal,
                 equity_quote=10000.0,
                 atr=2.0,
                 candidate_risk_fraction=0.005,
