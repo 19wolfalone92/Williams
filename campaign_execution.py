@@ -202,15 +202,17 @@ class CampaignExecutionService:
                 or float(signal.invalidation_price or 0) <= 0
             ):
                 raise CampaignExecutionError("Signal source candle/trigger/invalidation is invalid")
-            later_closed = closed.loc[
-                (closed.index > source_time)
-                & ((closed.index + frame).astype("int64") // 1_000_000 > confirmation_ms)
-            ]
-            if not later_closed.empty and (
-                pd.to_numeric(later_closed["low"], errors="coerce")
-                <= float(signal.invalidation_price)
-            ).any():
-                raise CampaignExecutionError("Signal was structurally invalidated after confirmation")
+            # Use explicit UTC epoch-ms comparisons rather than relying on
+            # pandas index dtype coercion at the confirmation boundary.
+            for candle_open, candle in closed.loc[closed.index > source_time].iterrows():
+                candle_close_ms = int((candle_open + frame).timestamp() * 1000)
+                if candle_close_ms <= confirmation_ms:
+                    continue
+                low = float(candle["low"])
+                if not pd.notna(low) or low <= float(signal.invalidation_price):
+                    raise CampaignExecutionError(
+                        "Signal was structurally invalidated after confirmation"
+                    )
             return closed
         except CampaignExecutionError:
             raise
