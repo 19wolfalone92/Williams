@@ -56,14 +56,15 @@ class MultiPositionTrader:
         self.context_service = context_service
         self.config = TradingConfig.from_env()
         if symbols is not None:
-            self.symbols = [str(x).strip().upper() for x in symbols if str(x).strip()]
+            configured_symbols = [str(x).strip().upper() for x in symbols if str(x).strip()]
         else:
-            raw_symbols = os.getenv("AUTO_SCAN_SYMBOLS", "ALL").strip()
-            self.symbols = (
+            raw_symbols = os.getenv("AUTO_SCAN_SYMBOLS", "").strip()
+            configured_symbols = (
                 []
-                if raw_symbols.upper() in {"ALL", "AUTO", "*"}
+                if not raw_symbols or raw_symbols.upper() in {"ALL", "AUTO", "*"}
                 else [x.strip().upper() for x in raw_symbols.split(",") if x.strip()]
             )
+        self.symbols = configured_symbols or list(self.config.symbols)
         self.max_open_positions = self.config.max_open_positions
         self.max_total_risk_pct = self.config.max_total_risk_pct
         self.max_risk_per_trade_pct = min(
