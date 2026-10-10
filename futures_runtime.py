@@ -562,9 +562,20 @@ class FuturesRuntime:
             raise FuturesCampaignExecutionError(
                 f"{candidate.symbol}: no valid, unexpired {direction} campaign signal"
             )
-        # Evaluate context per candidate. A valid but context-vetoed older
-        # signal must not hide a later actionable Wise-Man setup.
+        # Evaluate market geometry and context per candidate. A valid but
+        # stale/context-vetoed older signal must not hide a later actionable setup.
         live.sort(key=lambda item: (item[0], item[1]))
+        try:
+            mark_row = self.client.mark_price(candidate.symbol)
+            mark = float(mark_row.get("markPrice"))
+        except Exception as exc:
+            raise FuturesCampaignExecutionError(
+                f"{candidate.symbol}: cannot validate candidate triggers against current mark"
+            ) from exc
+        if not math.isfinite(mark) or mark <= 0:
+            raise FuturesCampaignExecutionError(
+                f"{candidate.symbol}: current mark is invalid during candidate admission"
+            )
         snapshot = self.context_cache.snapshot()
         seconds = {iv: _interval_seconds(iv) for iv in self.context_intervals}
         parent_intervals = sorted(
@@ -573,6 +584,24 @@ class FuturesRuntime:
         )
         vetoes = []
         for _, _, signal in live:
+            try:
+                trigger = float(signal.trigger_price)
+                stop = float(signal.invalidation_price or 0.0)
+                if signal.direction == "LONG":
+                    if not 0 < stop < trigger:
+                        stop = float(signal.protective_reference or 0.0)
+                    geometry_ok = 0 < stop < mark < trigger
+                else:
+                    if not stop > trigger:
+                        stop = float(signal.protective_reference or 0.0)
+                    geometry_ok = trigger < mark < stop
+            except (TypeError, ValueError, OverflowError):
+                geometry_ok = False
+            if not geometry_ok:
+                vetoes.append(
+                    f"{signal.signal_type.value}: trigger is stale, stop is breached, or stop geometry is invalid"
+                )
+                continue
             operative = snapshot.context(signal.symbol, signal.timeframe)
             if operative is None:
                 raise FuturesCampaignExecutionError(
