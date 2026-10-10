@@ -686,8 +686,11 @@ class CampaignExecutionService:
             campaign, f"{reason}; {protection_note}"
         )
 
-    def _account_order_fills(self, symbol: str, campaign_id: str, order: dict[str, Any]) -> dict[str, float]:
-        """Persist authoritative per-trade fills once and derive net Spot base inventory."""
+    def _account_order_fills(self, symbol: str, campaign_id: str, order: dict[str, Any], expected_side: str = "BUY") -> dict[str, float]:
+        """Persist authoritative per-trade fills once and derive net Spot inventory effect."""
+        expected_side = str(expected_side).upper()
+        if expected_side not in {"BUY", "SELL"}:
+            raise CampaignExecutionError(f"{symbol}: unsupported fill-accounting side {expected_side}")
         order_id = order.get("orderId")
         if order_id is None:
             raise CampaignExecutionError(f"{symbol}: executed order has no authoritative orderId")
@@ -721,8 +724,8 @@ class CampaignExecutionService:
             for fill in fills:
                 if str(fill.get("orderId", "")) != str(order_id):
                     continue
-                if not bool(fill.get("isBuyer", True)):
-                    raise CampaignExecutionError(f"{symbol}: non-BUY fill returned for entry order {order_id}")
+                if bool(fill.get("isBuyer", True)) != (expected_side == "BUY"):
+                    raise CampaignExecutionError(f"{symbol}: fill side conflicts with {expected_side} order {order_id}")
                 trade_id = fill.get("id")
                 if trade_id is None or str(trade_id).strip() == "":
                     raise CampaignExecutionError(f"{symbol}: trade history row lacks exchange trade ID")
@@ -761,7 +764,7 @@ class CampaignExecutionService:
                     "order_id": str(order_id),
                     "trade_id": str(trade_id),
                     "symbol": symbol.upper(),
-                    "side": "BUY" if bool(fill.get("isBuyer", True)) else "SELL",
+                    "side": expected_side,
                     "quantity": qty,
                     "price": price,
                     "quote_quantity": quote_qty,
@@ -788,14 +791,19 @@ class CampaignExecutionService:
             raise CampaignExecutionError(
                 f"{symbol}: durable fill quote ({quote_qty:.12g}) does not reconcile to exchange quote ({exchange_quote:.12g})"
             )
-        net_qty = gross_qty - commission_base
-        if not math.isfinite(net_qty) or net_qty <= 0:
-            raise CampaignExecutionError(f"{symbol}: net Spot inventory is non-positive after base-asset commission")
+        if expected_side == "BUY":
+            net_qty = gross_qty - commission_base
+            average_price = quote_qty / net_qty if net_qty > 0 else 0.0
+        else:
+            net_qty = gross_qty + commission_base
+            average_price = quote_qty / gross_qty if gross_qty > 0 else 0.0
+        if not math.isfinite(net_qty) or net_qty <= 0 or not math.isfinite(average_price) or average_price <= 0:
+            raise CampaignExecutionError(f"{symbol}: invalid net Spot inventory effect after commission")
         return {
             "gross_quantity": gross_qty,
             "net_quantity": net_qty,
             "quote_quantity": quote_qty,
-            "average_entry_price": quote_qty / net_qty,
+            "average_entry_price": average_price,
             "fee_quote": fee_quote,
             "commission_base": commission_base,
         }
