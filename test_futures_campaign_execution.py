@@ -2317,3 +2317,28 @@ def test_pause_keeps_management_monitor_required_while_futures_campaign_is_activ
     assert result["state"] == "PAUSED"
     assert result["management_only_monitor_required"] is True
     assert "management monitor alive" in result["warning"]
+
+
+@pytest.mark.parametrize("direction", ["LONG", "SHORT"])
+def test_initial_signal_expiring_at_current_millisecond_is_rejected(tmp_path, monkeypatch, direction):
+    from dataclasses import replace
+    import futures_campaign_execution as execution_module
+
+    now_ms = 1_800_000_000_000
+    monkeypatch.setattr(execution_module.time, "time", lambda: now_ms / 1000.0)
+    db = Database(str(tmp_path / f"exact-expiry-{direction}.sqlite3"))
+    try:
+        cache = ContextCache()
+        make_context(cache, allow_long=True, allow_short=True)
+        client = FakeFuturesClient(mark_price=102.0 if direction == "LONG" else 98.0)
+        service = FuturesCampaignExecutionService(
+            client, db, execution_barrier=ExecutionBarrier(cache, db)
+        )
+        signal = replace(make_signal(direction), expires_at_ms=now_ms)
+        with pytest.raises(FuturesCampaignExecutionError, match="signal has expired"):
+            service.arm_initial_entry(
+                signal, equity_quote=10000.0, atr=2.0, candidate_risk_fraction=0.005
+            )
+        assert client.stop_entries == []
+    finally:
+        db.conn.close()
