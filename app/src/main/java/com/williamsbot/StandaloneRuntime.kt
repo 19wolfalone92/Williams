@@ -3643,6 +3643,9 @@ private class NativeEngine(
         position: PositionState
     ) {
         if (!campaignEngineEnabled || position.campaignId.isBlank()) return
+        // Match the campaign engine's hard limit; more pairs do not mean a
+        // reverse-pyramid add-on may bypass the two-addition risk policy.
+        if (position.additions >= 2) return
 
         val latestSignalTime =
             position.signalId.substringAfterLast(':').toLongOrNull()
@@ -7300,6 +7303,8 @@ private class NativeEngine(
                                 .put("type", s.type)
                                 .put("role", s.role)
                                 .put("signal_bar_time_ms", s.signalBarTimeMs)
+                                .put("confirmation_time_ms", s.confirmationTimeMs)
+                                .put("expires_at_ms", s.expiresAtMs)
                                 .put("trigger_price", s.triggerPrice)
                                 .put("protective_price", s.protectivePrice)
                                 .put("teeth_at_detection", s.teethAtDetection)
