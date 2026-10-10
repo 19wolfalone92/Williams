@@ -41,6 +41,19 @@ class FuturesWilliamsSignalMathTest {
     }
 
     @Test
+    fun wm1AngulationScoreIsFinitePositiveEvidenceAndRejectsInvalidDirection() {
+        val jaw = listOf(10.0, 10.0, 10.0, 10.0, 10.0)
+        val lows = listOf(9.0, 8.0, 7.0, 6.0, 5.0)
+        val highs = listOf(11.0, 11.0, 11.0, 11.0, 11.0)
+        val closes = listOf(10.0, 9.8, 9.5, 9.0, 8.5)
+
+        val score = williamsAngulationScore(jaw, lows, highs, closes, 4, "LONG")
+        assertTrue(score != null && score.isFinite() && score > 0.0)
+        assertTrue(williamsAngulationScore(jaw, lows, highs, closes, 4, "BUY") == null)
+        assertTrue(williamsAngulationScore(jaw, lows.reversed(), highs, closes, 4, "LONG") == null)
+    }
+
+    @Test
     fun wm1AngulationRequiresIncreasingSeparationFromJaw() {
         val jaw = listOf(10.0, 10.0, 10.0, 10.0, 10.0)
         val risingLows = listOf(9.0, 8.0, 7.0, 6.0, 5.0)
