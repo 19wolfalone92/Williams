@@ -11,7 +11,7 @@ from typing import Mapping, Sequence
 
 
 DEFAULT_SYMBOLS = ("BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT")
-DEFAULT_STRUCTURAL_TFS = ("1d", "4h", "1h", "15m")
+DEFAULT_STRUCTURAL_TFS = ("4h", "1h", "15m")
 
 
 def _bool(env: Mapping[str, str], key: str, default: bool) -> bool:
@@ -57,7 +57,7 @@ def _tf_chain(execution: str, env: Mapping[str, str]) -> tuple[str, ...]:
         "5m": ("1d", "4h", "1h", "15m", "5m"),
         "15m": ("1d", "4h", "1h", "15m"),
         "30m": ("1d", "4h", "1h", "30m", "15m"),
-        "1h": ("1d", "4h", "1h", "15m"),
+        "1h": ("4h", "1h", "15m"),
         "2h": ("1w", "1d", "4h", "2h", "1h"),
         "4h": ("1w", "1d", "4h", "1h"),
         "6h": ("1w", "1d", "6h", "4h"),
