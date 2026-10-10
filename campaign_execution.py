@@ -198,6 +198,7 @@ class CampaignExecutionService:
         requested_quantity: float,
         *,
         exclude_order_id=None,
+        target_order_id=None,
         require_no_other_stop=False,
     ):
         """Final ownership/state check for position-reducing/protection mutations."""
@@ -215,6 +216,37 @@ class CampaignExecutionService:
             raise CampaignExecutionError(
                 f"{campaign.symbol}: campaign state {latest_state} forbids this mutation"
             )
+        if target_order_id is not None:
+            target_text = str(target_order_id)
+            stored_target = self.db.conn.execute(
+                "SELECT campaign_id,symbol,side,status FROM campaign_orders "
+                "WHERE order_id=? AND symbol=? ORDER BY id DESC LIMIT 1",
+                (target_text, str(campaign.symbol).upper()),
+            ).fetchone()
+            tag_owned = str(latest.tags.get("protective_order_id", "")) == target_text
+            if stored_target is None:
+                if not tag_owned:
+                    raise CampaignExecutionError(
+                        f"{campaign.symbol}: replacement target ownership cannot be proven"
+                    )
+            elif str(stored_target["campaign_id"]) != str(campaign.campaign_id):
+                raise CampaignExecutionError(
+                    f"{campaign.symbol}: replacement target belongs to another campaign"
+                )
+            target = self.client.get_order(
+                campaign.symbol,
+                order_id=target_text,
+            )
+            target_status = str(target.get("status", "")).upper()
+            try:
+                target_executed = float(target.get("executedQty", 0) or 0)
+            except (TypeError, ValueError):
+                target_executed = -1.0
+            if target_status not in {"NEW", "PENDING_NEW"} or target_executed != 0.0:
+                raise CampaignExecutionError(
+                    f"{campaign.symbol}: replacement target is not an untouched active order; reconcile first"
+                )
+
         confirmed_qty = float(latest.position_qty or 0.0)
         requested_qty = float(requested_quantity or 0.0)
         tolerance = max(
@@ -2093,7 +2125,11 @@ class CampaignExecutionService:
             ),
             0.0,
         )
-        qty = self._normalize_qty(symbol, free_qty)
+        # Sell no more than the confirmed campaign lot. The account may
+        # contain unrelated base-asset inventory; free balance is a ceiling,
+        # not proof that every unit belongs to this campaign.
+        campaign_qty = max(0.0, float(campaign.position_qty or 0.0))
+        qty = self._normalize_qty(symbol, min(free_qty, campaign_qty))
         if qty <= 0:
             raise CampaignExecutionError(
                 f"{symbol}: no free campaign inventory after protection cancel"
@@ -2253,6 +2289,7 @@ class CampaignExecutionService:
                     campaign,
                     quantity,
                     exclude_order_id=existing_order_id,
+                    target_order_id=existing_order_id,
                     require_no_other_stop=True,
                 ),
                 self._check_algo_capacity(campaign.symbol, 0),
