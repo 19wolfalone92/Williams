@@ -186,3 +186,29 @@ The TC2 supplied edition’s Chapter 12 page image (PDF p.153 / printed p.138) g
   - Build Android APKs, run `38078748322`: completed / failure. Job `114291103213`: Android unit test `WilliamsStrategyGoldenVectorsTest > aoAndAcMatchSharedFormulaVectorsAndUseExactly34SlowSamples` failed at `WilliamsStrategyGoldenVectorsTest.kt:64`; 29 tests completed, 1 failed. APK build/version/signature steps were skipped after unit-test failure. The log also emitted a missing `WILLIAMS_DEBUG_KEYSTORE_B64` configuration error; exact causal relation to the unit-test failure is not established.
   - Williams Campaign CI, run `38078748306`: completed / failure. Job `114291334892`: 5 failed, 164 passed; five `test_campaign_execution.py` cases fail with `CampaignExecutionError: Canonical Spot campaign entries require H1 signals` because the tests supply signals rejected by the changed H1 gate. Job `114291335137` also failed Android unit tests with the same AO/AC golden-vector assertion.
 - PR #49 changes are not part of the baseline `main`; none of the above outcomes may be represented as baseline CI or audit-branch CI.
+
+
+## K. Further primary-source image checks (2026-10-10)
+
+### New Trading Dimensions — `Билл_Вильямс_Новые_измерения_в_биржевой_торговле_2_книга.pdf`
+
+- **Edition/bibliography:** The supplied title page visibly reads “Новые измерения в биржевой торговле; как извлечь прибыль из хаоса: рынки акций, облигаций и фьючерсов”, Bill Williams, Doctor of Science. The supplied title page does not visibly establish a publication year, publisher, or edition number; those bibliographic fields remain UNRESOLVED.
+- **PDF p.55 / printed p.55 / Fig. 5-2, “Что такое AO?” — image inspected.** The page says AO measures current market force over the last five bars relative to the last 34 bars. It explicitly prints median-point expressions as “(H-L)/2” and describes subtracting a five-period simple moving average from a 34-period simple moving average in the surrounding text/figure callout. This supplied Russian edition therefore contains a formula notation that does not match the conventional median price `(H+L)/2` used by the baseline code. Do not silently “fix” the book or treat the code as author-certified from convention; reconcile translation/edition and figure context. **SRC-001/SRC-007: UNRESOLVED.**
+- **PDF p.35 / printed page visible in footer to be recorded after image check; Alligator chapter** is a further locator for the Alligator explanation, but this pass did not complete its detailed diagram/shift review. No Alligator MATCH is claimed.
+
+### Trading Chaos, supplied Russian copy — `1. Торговый Хаос - 1.pdf`
+
+- **Title image, PDF p.1 / printed p.1:** visibly titled “Торговый хаос: экспертные методики максимизации прибыли”, “Д-р Билл Вильямс”. This copy’s visible title page does not establish the original edition, translator, publisher, or year; those remain UNRESOLVED.
+- **PDF p.42 / printed p.42, heading “Индекс облегчения рынка (MFI)” — image inspected.** The formula is visibly `MFI = Range (High − Low) / Volume`; the prose describes volume as **tick volume**. The page does not make MFI a universal entry Boolean.
+- **PDF p.43 / printed p.43:** the text explicitly compares the current bar’s MFI to the immediately preceding bar’s MFI and says the approach is not based on optimizing a fixed value. The page describes MFI as an effectiveness/price-movement measure.
+- **PDF p.44 / printed p.44:** the four Profitunity windows are shown: Green `(+ tick volume, +MFI)`, Fading `(−, −)`, Fake `(−, +)`, Squat `(+, −)`. The accompanying discussion interprets the combinations as market behaviour, not a universal buy/sell order by themselves.
+- **Implementation linkage:** baseline Python `strategy.py::_profitunity_window` maps the four volume/MFI directions to GREEN/FADING/FAKE/SQUAT. Its `calculate_indicators` comment explicitly treats Binance traded volume as a proxy because it is not necessarily original tick-count volume. Android `buildIndicatorSnapshot` uses `(H-L)/volume` as `mfiProxy`, with no proof that it is a mandatory campaign entry gate. Formula resemblance is established; semantic parity of volume input and every consumer is not. **Rule MFI-001: PARTIAL** for four-state classification; volume equivalence and entry-path role remain UNRESOLVED.
+
+### Edition and locator policy
+
+The first-page images establish that the TC2 PDF is the Russian **second edition** of *Trading Chaos: Maximize Profits with Proven Technical Techniques*, by Justine Gregory-Williams and Bill M. Williams, published in the visible imprint as Moscow, IK Analitika, 2005. This is the only one of the four supplied files whose edition and year are fully visible in the inspected title image. TC1, New Trading Dimensions, and the Course must retain their supplied filenames and provisional edition metadata until their own bibliographic pages are verified. A PDF page index and a printed folio are never interchangeable.
+
+### Current audit branch commit sequence
+
+- Before the source-image appendix update, the branch was advanced by commit `b489227576eed06eadcacafe92714c8d8d7b560e` (“docs: add visually verified Williams source locators and exact PR CI evidence”). The file read back from the named audit branch returned the new appendix blob `4dc609dec45577ed9bd61297a3ab401591210f67`, confirming the write is visible on that branch.
+- This does not supply a local Git working tree or staged-diff report. No local checkout is present in this execution runtime. After the next documentation commit, use the returned commit SHA as the exact new audit-branch tip at the time of write; the connector still lacks a branch-ref endpoint that directly returns the ref SHA.
