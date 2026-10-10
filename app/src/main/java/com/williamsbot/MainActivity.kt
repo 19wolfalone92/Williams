@@ -12,7 +12,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.ComponentActivity
 import androidx.core.content.ContextCompat
-import androidx.core.content.edit
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import androidx.activity.compose.setContent
@@ -412,9 +411,16 @@ private class BackendApi(context: Context) {
         if (!localRuntime && token.trim().length < 32) {
             error("Для удалённого Backend нужен Mobile API Token (минимум 32 символа).")
         }
-        securePrefs.edit {
-            putString("backend_url", normalized)
-            putString("mobile_token", token.trim())
+        val normalizedToken = token.trim()
+        val committed = securePrefs.edit()
+            .putString("backend_url", normalized)
+            .putString("mobile_token", normalizedToken)
+            .commit()
+        val verified = committed &&
+            securePrefs.getString("backend_url", null) == normalized &&
+            securePrefs.getString("mobile_token", null) == normalizedToken
+        require(verified) {
+            "Backend connection persistence/read-back verification failed"
         }
     }
 
