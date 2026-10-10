@@ -315,6 +315,65 @@ def test_campaign_exit_never_sells_foreign_base_inventory():
         assert float(market_sells[0]["origQty"]) <= managed_qty + 1e-8
 
 
+def test_exit_with_missing_trade_history_stays_reconcile_required():
+    class MissingTradeHistoryExchange(MockExchange):
+        def my_trades(self, symbol, order_id=None, limit=1000):
+            return []
+
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "campaign.sqlite3"))
+        client = MissingTradeHistoryExchange()
+        svc = service(db, client)
+        result = svc.arm_initial_entry(
+            signal(trigger=101.0),
+            equity_quote=10_000,
+            candidate_risk_pct=0.004,
+        )
+        client.set_price("BTCUSDT", 101.5)
+        assert svc.reconcile_pending_entries()[0]["state"] == "OPEN"
+        campaign = svc.engine.load_campaign(result["campaign_id"])
+
+        import pytest
+        with pytest.raises(Exception, match="fill/commission state requires reconciliation"):
+            svc.exit_market(campaign, reason="TEST_MISSING_TRADES")
+
+        stored = svc.engine.load_campaign(result["campaign_id"])
+        assert stored.state.value == "RECONCILE_REQUIRED"
+        assert db.state_get("position_state:BTCUSDT") == "RECONCILE_REQUIRED"
+        assert db.open_trade("BTCUSDT") is not None
+
+
+def test_exit_with_unvalued_fee_asset_stays_reconcile_required():
+    class UnknownFeeExchange(MockExchange):
+        def my_trades(self, symbol, order_id=None, limit=1000):
+            rows = super().my_trades(symbol, order_id=order_id, limit=limit)
+            for row in rows:
+                row["commission"] = "0.001"
+                row["commissionAsset"] = "BNB"
+            return rows
+
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "campaign.sqlite3"))
+        client = UnknownFeeExchange()
+        svc = service(db, client)
+        result = svc.arm_initial_entry(
+            signal(trigger=101.0),
+            equity_quote=10_000,
+            candidate_risk_pct=0.004,
+        )
+        client.set_price("BTCUSDT", 101.5)
+        assert svc.reconcile_pending_entries()[0]["state"] == "OPEN"
+        campaign = svc.engine.load_campaign(result["campaign_id"])
+
+        import pytest
+        with pytest.raises(Exception, match="fill/commission state requires reconciliation"):
+            svc.exit_market(campaign, reason="TEST_UNVALUED_FEE")
+
+        stored = svc.engine.load_campaign(result["campaign_id"])
+        assert stored.state.value == "RECONCILE_REQUIRED"
+        assert db.state_get("position_state:BTCUSDT") == "RECONCILE_REQUIRED"
+
+
 def test_filled_protective_stop_during_cancel_blocks_followup_market_sell():
     class StopFillRaceExchange(MockExchange):
         def cancel_order(self, symbol, order_id=None, orig_client_order_id=None):
