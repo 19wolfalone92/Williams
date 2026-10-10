@@ -82,7 +82,7 @@ def scenario_restart():
 
 def scenario_foreign_balance():
     with tempfile.TemporaryDirectory() as d:
-        c=FakeClient(base_free=2);t=new_trader(os.path.join(d,'x.sqlite3'),c);t.db.state_set('foreign_base_balance:BTCUSDT',2.0);t.recover_state();assert t.db.open_trade() is None;assert t.state()=='FLAT';assert c.created_oco_count==0
+        c=FakeClient(base_free=2);t=new_trader(os.path.join(d,'x.sqlite3'),c);t.db.state_set('foreign_base_balance:BTCUSDT',2.0);t.recover_state();assert t.db.open_trade() is None;assert t.state()=='RECONCILE_REQUIRED';assert t.db.state_get('recovery_state')=='REQUIRED';assert c.created_oco_count==0
 
 def scenario_excess_balance_blocks():
     with tempfile.TemporaryDirectory() as d:
@@ -177,7 +177,7 @@ def run():
         ('BUY -> OCO -> crash -> SL',lambda:scenario_exit(98)),
         ('BUY -> crash -> missing OCO',scenario_missing),
         ('BUY -> OCO -> crash -> restart',scenario_restart),
-        ('foreign BTC is never a bot position',scenario_foreign_balance),
+        ('foreign BTC is never a bot position; incomplete recovery stays gated',scenario_foreign_balance),
         ('excess BTC enters RECONCILE_REQUIRED',scenario_excess_balance_blocks),
         ('RECONCILE_REQUIRED blocks new entry',scenario_state_machine_blocks_entry),
         ('missing BUY result becomes a hard reconcile block',scenario_missing_entry_result_blocks),
