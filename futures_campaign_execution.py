@@ -684,6 +684,10 @@ class FuturesCampaignExecutionService:
             max_atr_pct=self.max_atr_pct,
             fee_buffer_per_side_pct=self.fee_buffer_per_side_pct,
             slippage_buffer_pct=self.slippage_buffer_pct,
+            # The campaign is managed by Williams structural exits and a
+            # monotonic stop, not a fixed ATR take-profit. R:R remains reported
+            # but is not a hard admission gate for this execution profile.
+            require_min_rr=False,
         ).analyse(
             symbol=symbol,
             entry_price=trigger,
