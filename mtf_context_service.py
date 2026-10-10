@@ -155,8 +155,12 @@ class MultiTimeframeContextService:
                 and hypothesis_summary.margin >= self.config.probability_margin_threshold
                 and hypothesis_summary.entropy <= self.config.entropy_threshold
             )
-        long_ok = bullish and bool(last.get("alligator_awake", False)) and self.config.allow_long and strong
-        short_ok = bearish and bool(last.get("alligator_awake", False)) and self.config.allow_short and strong
+        # D1/H4 are context-only; M15/M5 are execution diagnostics/replay.
+        # A frame other than canonical H1 may publish market facts, but cannot
+        # independently emit a canonical direction decision.
+        canonical_decision_frame = interval.lower() == "1h"
+        long_ok = canonical_decision_frame and bullish and bool(last.get("alligator_awake", False)) and self.config.allow_long and strong
+        short_ok = canonical_decision_frame and bearish and bool(last.get("alligator_awake", False)) and self.config.allow_short and strong
         decision = "LONG" if long_ok else "SHORT" if short_ok else "NO_TRADE"
         if hypothesis_summary is not None and hypothesis_summary.decision in {"UNCERTAIN", "NO_TRADE"}:
             decision = "NO_TRADE"
