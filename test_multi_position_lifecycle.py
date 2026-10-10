@@ -96,6 +96,14 @@ class FakeClient:
             and (symbol is None or str(x.get("symbol", "")).upper() == symbol.upper())
         ]
 
+    def order_list(self, symbol, order_list_id=None, list_client_order_id=None):
+        return {
+            "symbol": symbol,
+            "orderListId": str(order_list_id or "10"),
+            "listOrderStatus": "ALL_DONE",
+            "listStatusType": "ALL_DONE",
+        }
+
     def open_order_lists(self, symbol=None):
         rows = list(self.open_lists)
         if symbol:
@@ -400,7 +408,7 @@ def test_filled_pending_buy_is_recovered_into_its_own_position(tmp_path: Path):
         "ENTRY_PENDING",
     )
 
-    multi = MultiPositionTrader(client, db=db)
+    multi = MultiPositionTrader(client, db=db, execution_barrier=_test_execution_barrier(db))
     result = multi.recover_pending_entries()
 
     assert result[0]["symbol"] == "SOLUSDT"
@@ -620,7 +628,7 @@ def test_partial_emergency_sell_never_closes_trade_as_flat(tmp_path: Path):
         risk_pct=0.5,
     )
     db.state_set("position_state:BTCUSDT", "OPEN")
-    trader = MultiPositionTrader(client, db=db, symbols=["BTCUSDT"])
+    trader = MultiPositionTrader(client, db=db, symbols=["BTCUSDT"], execution_barrier=_test_execution_barrier(db))
     trader.dry_run = False
     result = trader._emergency_market_sell("BTCUSDT", 1.0, trade_id, "TEST_PARTIAL")
 
