@@ -2963,59 +2963,114 @@ internal class FuturesNativeEngine(
         val symbol = campaign.optString("symbol").uppercase(Locale.US)
         val direction = campaign.optString("direction").uppercase(Locale.US)
         if (campaign.optString("state") != "OPEN_PROTECTED") return
-        if (frame.bars.size < 3 || frame.atr <= 0.0) return
-        val lastTwo = frame.bars.takeLast(2)
-        val exitBars = lastTwo.map { bar ->
-            val index = frame.bars.indexOf(bar)
-            val values = indicatorTuple(frame.bars, index)
-            WilliamsExitBar(
-                close = bar.close,
-                jaw = values[0],
-                teeth = values[1],
-                lips = values[2],
-                ao = values[3]
+
+        val trailBars = prefs.getInt("tc2_trailing_bars", 3)
+        if (trailBars !in setOf(3, 5)) {
+            setCampaignState(
+                campaign,
+                "RECONCILE_REQUIRED",
+                "Invalid TC2 trailing profile: tc2_trailing_bars must be 3 or 5"
             )
+            return
         }
-        val opposite = FuturesStructuralExitPolicy.shouldExit(direction, exitBars)
-        if (opposite) {
-            exitPosition(exchange, campaign, "WILLIAMS_TWO_BAR_STRUCTURAL_REVERSAL")
+        if (frame.bars.size < trailBars) return
+
+        // A two-bar Alligator/AO exit is a separate system overlay, not the
+        // TC2 core stop rule. Keep it disabled unless an operator explicitly
+        // enables the versioned preference.
+        if (prefs.getBoolean("tc2_two_bar_reversal_exit", false)) {
+            val lastTwo = frame.bars.takeLast(2)
+            val exitBars = lastTwo.map { bar ->
+                val index = frame.bars.indexOf(bar)
+                val values = indicatorTuple(frame.bars, index)
+                WilliamsExitBar(
+                    close = bar.close,
+                    jaw = values[0],
+                    teeth = values[1],
+                    lips = values[2],
+                    ao = values[3]
+                )
+            }
+            if (FuturesStructuralExitPolicy.shouldExit(direction, exitBars)) {
+                exitPosition(exchange, campaign, "SYSTEM_OVERLAY_TWO_BAR_STRUCTURAL_REVERSAL")
+                return
+            }
+        }
+
+        val window = frame.bars.takeLast(trailBars)
+        val priceFilter = exchange.symbolFilters(symbol)["PRICE_FILTER"]
+            ?: throw FuturesApiException("$symbol has no PRICE_FILTER for TC2 trailing")
+        val tick = priceFilter.optString("tickSize").toDoubleOrNull()
+            ?: throw FuturesApiException("$symbol PRICE_FILTER tickSize is malformed")
+        if (!tick.isFinite() || tick <= 0.0) {
+            throw FuturesApiException("$symbol PRICE_FILTER tickSize must be finite and positive")
+        }
+
+        val structuralExtreme: Double
+        val rawCandidate: Double
+        if (direction == "LONG") {
+            val lows = window.map { it.low }
+            if (!lows.all { it.isFinite() && it > 0.0 }) {
+                throw FuturesApiException("$symbol TC2 trailing lows are malformed")
+            }
+            structuralExtreme = lows.minOrNull() ?: return
+            rawCandidate = structuralExtreme - tick
+        } else if (direction == "SHORT") {
+            val highs = window.map { it.high }
+            if (!highs.all { it.isFinite() && it > 0.0 }) {
+                throw FuturesApiException("$symbol TC2 trailing highs are malformed")
+            }
+            structuralExtreme = highs.maxOrNull() ?: return
+            rawCandidate = structuralExtreme + tick
+        } else {
+            setCampaignState(campaign, "RECONCILE_REQUIRED", "Unknown direction in TC2 trailing")
             return
         }
 
-        val position = position(exchange, symbol)
-        val mark = exchange.markPrice(symbol)
-        val entry = position.optString("entryPrice").toDoubleOrNull() ?: campaign.optDouble("entry_price", 0.0)
-        if (entry <= 0.0) return
-        val favorable = if (direction == "LONG") mark - entry else entry - mark
-        if (favorable / frame.atr < 0.5) return
-        val oldStop = campaign.optDouble("stop_price", 0.0)
-        val candidate = if (direction == "LONG") {
-            val fractal = frame.latestDownFractal?.level ?: 0.0
-            max(frame.teeth, fractal) - frame.atr * 0.25
-        } else {
-            val fractal = frame.latestUpFractal?.level ?: 0.0
-            min(frame.teeth, if (fractal > 0.0) fractal else frame.teeth) + frame.atr * 0.25
+        if (!rawCandidate.isFinite() || rawCandidate <= 0.0) {
+            throw FuturesApiException("$symbol TC2 structural stop candidate is invalid")
         }
+
+        val position = position(exchange, symbol)
+        val positionAmount = position.optString("positionAmt").toDoubleOrNull()
+            ?: throw FuturesApiException("$symbol positionAmt is malformed during TC2 trailing")
+        if (!positionAmount.isFinite() ||
+            (direction == "LONG" && positionAmount <= 0.0) ||
+            (direction == "SHORT" && positionAmount >= 0.0)
+        ) {
+            setCampaignState(campaign, "RECONCILE_REQUIRED", "Position direction/quantity mismatch during TC2 trailing")
+            return
+        }
+
+        val mark = exchange.markPrice(symbol)
+        if (!mark.isFinite() || mark <= 0.0) {
+            throw FuturesApiException("$symbol mark price is invalid during TC2 trailing")
+        }
+        val oldStop = campaign.optDouble("stop_price", 0.0)
+        val candidate = exchange.normalizePrice(symbol, rawCandidate, direction, "STOP").toDouble()
         val tighter = if (direction == "LONG") candidate > oldStop else oldStop <= 0.0 || candidate < oldStop
-        val safe = if (direction == "LONG") candidate > 0.0 && candidate < mark - frame.atr * 0.1
-            else candidate > mark + frame.atr * 0.1
+        val safe = if (direction == "LONG") candidate > 0.0 && candidate < mark
+            else candidate > mark
+        if (!candidate.isFinite() || candidate <= 0.0) {
+            throw FuturesApiException("$symbol normalized TC2 stop is invalid")
+        }
         if (!tighter || !safe) return
 
-        val normalized = exchange.normalizePrice(symbol, candidate, direction, "STOP").toDouble()
         val oldClientId = campaign.optString("protection_client_algo_id")
-        // Install a new confirmed stop first. Only then cancel the prior stop,
-        // never leaving a live position without server-side protection.
+        // Install and verify the replacement before cancelling the previous
+        // stop, preserving the exchange-side protection gap invariant.
         val newClientId = clientOrderId("W2FP_")
         val side = exchange.directionToProtectiveSide(direction)
         val newParams = JSONObject().put("symbol", symbol).put("side", side)
-            .put("type", "STOP_MARKET").put("triggerPrice", normalized).put("closePosition", true)
-            .put("clientAlgoId", newClientId).put("reason", "STRUCTURAL_TRAIL")
+            .put("type", "STOP_MARKET").put("triggerPrice", candidate).put("closePosition", true)
+            .put("clientAlgoId", newClientId).put("reason", "TC2_PRICE_BAR_TRAIL")
+            .put("trailingBars", trailBars).put("structuralExtreme", structuralExtreme)
         campaign.put("pending_protection_client_algo_id", newClientId)
-        campaign.put("pending_protection_trigger_price", normalized)
-        campaign.put("pending_protection_reason", "STRUCTURAL_TRAIL")
+        campaign.put("pending_protection_trigger_price", candidate)
+        campaign.put("pending_protection_reason", "TC2_PRICE_BAR_TRAIL")
         auditStore.saveFuturesCampaign(symbol, campaign)
         val newProtection = executeMutation(exchange, symbol, "PROTECTION_REPLACE", direction, side, newClientId, newParams) {
-            exchange.submitConditional(symbol, side, "STOP_MARKET", null, normalized.toString(), newClientId, closePosition = true)
+            exchange.submitConditional(symbol, side, "STOP_MARKET", null, candidate.toString(), newClientId, closePosition = true)
         }
         val algoId = newProtection.optString("algoId")
         val responseStatus = newProtection.optString("algoStatus").uppercase(Locale.US)
@@ -3023,7 +3078,7 @@ internal class FuturesNativeEngine(
             setCampaignState(
                 campaign,
                 "RECONCILE_REQUIRED",
-                "Replacement stop lookup is unresolved; old protection remains recorded: ${it.message ?: it.javaClass.simpleName}"
+                "TC2 replacement stop lookup is unresolved; old protection remains recorded: ${it.message ?: it.javaClass.simpleName}"
             )
             return
         }
@@ -3040,12 +3095,12 @@ internal class FuturesNativeEngine(
             verified.optString("orderType", verified.optString("type")).uppercase(Locale.US) != "STOP_MARKET" ||
             !verified.optBoolean("closePosition", false) ||
             verifiedTrigger == null || !verifiedTrigger.isFinite() ||
-            abs(verifiedTrigger - normalized) > 1e-8
+            abs(verifiedTrigger - candidate) > 1e-8
         ) {
             setCampaignState(
                 campaign,
                 "RECONCILE_REQUIRED",
-                "Replacement stop failed authoritative identity/side/type/trigger verification; prior stop was not canceled"
+                "TC2 replacement stop failed authoritative identity/side/type/trigger verification; prior stop was not cancelled"
             )
             return
         }
@@ -3056,7 +3111,7 @@ internal class FuturesNativeEngine(
         }
         campaign.put("protection_client_algo_id", newClientId)
         campaign.put("protection_algo_id", algoId)
-        campaign.put("stop_price", normalized)
+        campaign.put("stop_price", candidate)
         campaign.put("protection_active", true)
         campaign.remove("pending_protection_client_algo_id")
         campaign.remove("pending_protection_trigger_price")
@@ -3071,7 +3126,7 @@ internal class FuturesNativeEngine(
                     setCampaignState(
                         campaign,
                         "RECONCILE_REQUIRED",
-                        "Replacement stop is verified but previous stop is not confirmed terminal"
+                        "TC2 replacement stop is verified but previous stop is not confirmed terminal"
                     )
                     return
                 }
@@ -3084,7 +3139,7 @@ internal class FuturesNativeEngine(
                 setCampaignState(
                     campaign,
                     "RECONCILE_REQUIRED",
-                    "Replacement stop is verified but previous stop cancellation is unresolved: ${x.message ?: x.javaClass.simpleName}"
+                    "TC2 replacement stop is verified but previous stop cancellation is unresolved: ${x.message ?: x.javaClass.simpleName}"
                 )
                 return
             }
