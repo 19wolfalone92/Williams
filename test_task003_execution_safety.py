@@ -468,3 +468,69 @@ def test_corrupt_db_or_missing_store_never_sends_order():
     )
     assert not result.accepted
     assert calls == []
+
+
+def test_native_android_signed_order_mutations_are_fenced_before_network():
+    from pathlib import Path
+
+    runtime = (
+        Path(__file__).parent
+        / "app"
+        / "src"
+        / "main"
+        / "java"
+        / "com"
+        / "williamsbot"
+        / "StandaloneRuntime.kt"
+    ).read_text(encoding="utf-8")
+    signed_start = runtime.index("private fun signedRequest(")
+    signed_end = runtime.index("private fun signedRawGet(", signed_start)
+    signed_request = runtime[signed_start:signed_end]
+
+    # The only native network send primitive in this method must occur after
+    # durable intent creation and the SUBMITTING commit/read-back.
+    assert signed_request.index("validateAndPersistMutationIntent(mutation)") < signed_request.index(
+        "http.newCall(request).execute()"
+    )
+    assert signed_request.index("auditStore.recordExecutionMutationResult(") < signed_request.index(
+        "return JSONObject(lastBody)"
+    )
+    assert "auditStore.markExecutionMutationAmbiguous(" in signed_request
+    assert "latchMutationReconciliation(" in signed_request
+
+    # All supported REST mutation endpoints pass through this exact boundary.
+    for endpoint in (
+        "/api/v3/order",
+        "/api/v3/orderList/oco",
+        "/api/v3/order/cancelReplace",
+        "/api/v3/orderList",
+    ):
+        assert endpoint in runtime
+    assert "stable clientOrderId/listClientOrderId missing" in runtime
+    assert "unresolvedExecutionMutationCount()" in runtime
+    assert "unresolvedExecutionMutationCount(spec.symbol)" in runtime
+
+
+def test_native_optional_rest_telemetry_is_not_execution_authority():
+    from pathlib import Path
+
+    runtime = (
+        Path(__file__).parent
+        / "app"
+        / "src"
+        / "main"
+        / "java"
+        / "com"
+        / "williamsbot"
+        / "StandaloneRuntime.kt"
+    ).read_text(encoding="utf-8")
+    signed_start = runtime.index("private fun signedRequest(")
+    signed_end = runtime.index("private fun signedRawGet(", signed_start)
+    signed_request = runtime[signed_start:signed_end]
+    assert "runCatching {\n                        auditStore.recordRestCall(" in signed_request
+    assert "auditStore.recordExecutionMutationResult(" in signed_request
+    # A REST telemetry failure is swallowed; the durable mutation result write
+    # is outside that runCatching and forces RCR if its commit/read-back fails.
+    result_write = signed_request.index("auditStore.recordExecutionMutationResult(")
+    telemetry_write = signed_request.index("auditStore.recordRestCall(")
+    assert result_write < telemetry_write
