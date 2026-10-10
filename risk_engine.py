@@ -196,23 +196,37 @@ class RiskEngine:
             take_profit_price = entry - target_distance
 
         if (
-            not math.isfinite(stop_price) or not math.isfinite(take_profit_price)
-            or stop_price <= 0 or take_profit_price <= 0
-            or stop_price == entry or take_profit_price == entry
+            not math.isfinite(stop_price) or stop_price <= 0
+            or stop_price == entry
         ):
-            return self._blocked(symbol, side, entry, "calculated stop/target prices are invalid")
+            return self._blocked(symbol, side, entry, "calculated structural stop price is invalid")
 
         stop_distance = abs(entry - stop_price)
-        target_distance_actual = abs(take_profit_price - entry)
+        if not math.isfinite(stop_distance) or stop_distance <= 0:
+            return self._blocked(symbol, side, entry, "calculated stop distance is invalid")
+        stop_pct = stop_distance / entry
+
+        # For structural Futures campaigns, an ATR target is diagnostic only.
+        # A target outside the positive price domain must not become a hidden
+        # admission veto when the live strategy does not submit that target.
         if (
-            not math.isfinite(stop_distance) or stop_distance <= 0
-            or not math.isfinite(target_distance_actual) or target_distance_actual <= 0
+            not math.isfinite(take_profit_price)
+            or take_profit_price <= 0
+            or take_profit_price == entry
+        ):
+            if self.require_min_rr:
+                return self._blocked(symbol, side, entry, "calculated stop/target prices are invalid")
+            take_profit_price = 0.0
+            target_distance_actual = 0.0
+        else:
+            target_distance_actual = abs(take_profit_price - entry)
+        if self.require_min_rr and (
+            not math.isfinite(target_distance_actual) or target_distance_actual <= 0
         ):
             return self._blocked(symbol, side, entry, "calculated stop/target distance is invalid")
-        stop_pct = stop_distance / entry
-        target_pct = target_distance_actual / entry
+        target_pct = target_distance_actual / entry if target_distance_actual > 0 else 0.0
 
-        rr = target_distance_actual / stop_distance
+        rr = target_distance_actual / stop_distance if target_distance_actual > 0 else 0.0
         if not math.isfinite(rr):
             return self._blocked(symbol, side, entry, "calculated risk/reward is non-finite")
 
