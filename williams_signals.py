@@ -489,14 +489,15 @@ def extract_long_signal_specs(
     fractal = _latest_confirmed_fractal(ind, side="LONG")
     if fractal is not None:
         confirmation_i, center_i, trigger_base, fractal_extreme, teeth = fractal
-        # Formation can be anywhere; trigger validity belongs to current
-        # price/Teeth. At arm time a SHORT trigger must remain below Teeth.
+        # The fractal price level itself must be outside the current Teeth
+        # balance line. Do not let a one-tick trigger buffer turn an in-mouth
+        # fractal into an eligible WM3.
         trigger = trigger_base + tick
         protective = _tc2_initial_fractal_stop(ind, side="LONG", tick_size=tick)
         current_trigger_valid = (
             math.isfinite(current_teeth) and current_teeth > 0.0
             and math.isfinite(teeth) and teeth > 0.0
-            and trigger > current_teeth
+            and trigger_base > current_teeth
         )
         if (
             protective is not None
@@ -667,14 +668,15 @@ def extract_short_signal_specs(
     fractal = _latest_confirmed_fractal(ind, side="SHORT")
     if fractal is not None:
         confirmation_i, center_i, trigger_base, fractal_extreme, teeth = fractal
-        # Formation can be anywhere; trigger validity belongs to current
-        # price/Teeth.  At arm time the trigger must still be above Teeth.
+        # The fractal price level itself must be outside the current Teeth
+        # balance line. Do not let a one-tick trigger buffer turn an in-mouth
+        # fractal into an eligible WM3.
         trigger = trigger_base - tick
         protective = _tc2_initial_fractal_stop(ind, side="SHORT", tick_size=tick)
         current_trigger_valid = (
             math.isfinite(current_teeth) and current_teeth > 0.0
             and math.isfinite(teeth) and teeth > 0.0
-            and trigger < current_teeth
+            and trigger_base < current_teeth
         )
         if (
             protective is not None
