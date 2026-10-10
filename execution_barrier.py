@@ -232,9 +232,14 @@ class ExecutionBarrier:
                     ):
                         return f"TC2_WM1_EARLY stale/invalid {tf} candle"
                 macro = snapshot.context(intent.symbol, "1d")
-                if direction == "long" and macro.allow_short:
+                macro_state = str(macro.alligator_state or "").strip().upper()
+                if direction == "long" and (
+                    macro.allow_short or macro_state == "BEARISH"
+                ):
                     return "TC2_WM1_EARLY blocked by active opposite D1 context"
-                if direction == "short" and macro.allow_long:
+                if direction == "short" and (
+                    macro.allow_long or macro_state == "BULLISH"
+                ):
                     return "TC2_WM1_EARLY blocked by active opposite D1 context"
             elif admission_mode == "STRICT_DIRECTIONAL":
                 if direction == "long" and not permission_ctx.allow_long:
