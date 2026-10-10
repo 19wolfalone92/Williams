@@ -58,7 +58,7 @@ def _decimal(fill: dict, key: str, *, positive: bool = False) -> Decimal:
     return value
 
 
-def accumulate_fills(fills, base_asset=None) -> ExecutionSummary:
+def accumulate_fills(fills, base_asset=None, asset_quote_values=None) -> ExecutionSummary:
     qty = Decimal("0")
     quote = Decimal("0")
     fee_quote = Decimal("0")
@@ -68,6 +68,9 @@ def accumulate_fills(fills, base_asset=None) -> ExecutionSummary:
     trade_ids: list[str] = []
     quote_assets = {"USDT", "USDC", "FDUSD", "BUSD"}
     base = str(base_asset or "").upper()
+    fee_values = {str(k).upper(): Decimal(str(v)) for k, v in (asset_quote_values or {}).items()}
+    if any(not v.is_finite() or v <= 0 for v in fee_values.values()):
+        raise ExecutionDataIncomplete("invalid_commission_conversion_rate")
 
     for index, fill in enumerate(fills or []):
         if not isinstance(fill, dict):
@@ -101,6 +104,8 @@ def accumulate_fills(fills, base_asset=None) -> ExecutionSummary:
         elif base and asset == base:
             commission_base += commission
             fee_quote_equivalent += commission * p
+        elif asset in fee_values:
+            fee_quote_equivalent += commission * fee_values[asset]
         elif commission != 0:
             # Third-asset valuation must be performed by a caller with a
             # separately verified conversion price; never assume zero value.
@@ -113,7 +118,7 @@ def accumulate_fills(fills, base_asset=None) -> ExecutionSummary:
     )
 
 
-def accumulate_order(order: dict, base_asset=None) -> ExecutionSummary:
+def accumulate_order(order: dict, base_asset=None, asset_quote_values=None) -> ExecutionSummary:
     if not isinstance(order, dict):
         raise ExecutionDataIncomplete("order_not_object")
     fills = order.get("fills")
@@ -127,7 +132,7 @@ def accumulate_order(order: dict, base_asset=None) -> ExecutionSummary:
         raise ExecutionDataIncomplete("order_invalid_quote_quantity")
 
     if fills:
-        summary = accumulate_fills(fills, base_asset=base_asset)
+        summary = accumulate_fills(fills, base_asset=base_asset, asset_quote_values=asset_quote_values)
         # Compare exact exchange aggregates against per-trade history. Binance
         # decimal totals can differ only by serialization precision; no tolerance
         # is used here because both fields are exchange-reported decimals.
