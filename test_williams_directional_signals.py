@@ -155,7 +155,8 @@ def test_long_super_ao_and_fractal_are_independent_initial_entry_candidates():
     assert by_type[SignalType.SUPER_AO].role is SignalRole.ENTRY
     assert by_type[SignalType.FRACTAL].role is SignalRole.ENTRY
     assert len([signal for signal in signals if signal.role is SignalRole.ENTRY]) == 2
-    selected = CampaignEngine.choose_initial_signal(signals)
+    # The fixture uses small synthetic row indices as candle timestamps.
+    selected = CampaignEngine.choose_initial_signal(signals, now_ms=1)
     assert selected is by_type[SignalType.SUPER_AO]
     # Either signal family is independently eligible; WM2 is first by confirmation time here.
 
