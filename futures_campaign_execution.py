@@ -555,6 +555,10 @@ class FuturesCampaignExecutionService:
         direction = str(getattr(signal, "direction", "") or "").upper()
         timeframe = str(getattr(signal, "timeframe", "") or "").lower()
         is_reversal = signal.signal_type == SignalType.REVERSAL
+        is_super_ao = signal.signal_type == SignalType.SUPER_AO
+        is_fractal = signal.signal_type == SignalType.FRACTAL
+        if not (is_reversal or is_super_ao or is_fractal):
+            return False
         if direction not in {"LONG", "SHORT"} or timeframe != "1h":
             return False
 
@@ -614,18 +618,38 @@ class FuturesCampaignExecutionService:
             return False
         if not math.isfinite(ao_value):
             return False
-        if not allow_early_wm1:
-            # The setup-specific WM2/WM3 detectors already establish AO/fractal
-            # evidence. Do not turn AO's zero-line sign into a universal gate;
-            # the H1 Alligator regime is context and AO remains recorded evidence.
-            if direction == "LONG" and not (
-                state == "BULLISH" and operative.alligator_awake
-            ):
+        if is_reversal:
+            # WM1 is a counter-trend presenting signal. In the strict first
+            # pass it may pass only when the H1 Alligator already permits the
+            # new side; the caller retries with allow_early_wm1=True after its
+            # independently validated positive angulation evidence.
+            if not allow_early_wm1:
+                if direction == "LONG" and not (
+                    state == "BULLISH" and operative.alligator_awake
+                ):
+                    return False
+                if direction == "SHORT" and not (
+                    state == "BEARISH" and operative.alligator_awake
+                ):
+                    return False
+        elif is_fractal:
+            # TC2 WM3 is filtered at execution by the operative red Balance
+            # Line (Teeth), not by requiring the whole Alligator mouth to have
+            # already aligned with the breakout direction.
+            try:
+                trigger = float(signal.trigger_price)
+                teeth_now = float(operative.teeth)
+            except (TypeError, ValueError, OverflowError):
                 return False
-            if direction == "SHORT" and not (
-                state == "BEARISH" and operative.alligator_awake
-            ):
+            if not math.isfinite(trigger) or trigger <= 0.0 or not math.isfinite(teeth_now) or teeth_now <= 0.0:
                 return False
+            if direction == "LONG" and trigger <= teeth_now:
+                return False
+            if direction == "SHORT" and trigger >= teeth_now:
+                return False
+        # WM2 (Super AO) is independent of a pre-existing fractal and is not
+        # universally gated by the sign of AO or an already-awake directional
+        # Alligator. Its detector must prove the three same-colour AO bars.
 
         macro = contexts["1d"]
         macro_state = str(macro.alligator_state or "").strip().upper()
