@@ -182,7 +182,7 @@ def test_score_only_legacy_entries_are_blocked_without_williams_context(tmp_path
 
     client = FakeClient()
     db = Database(str(tmp_path / "trades.sqlite3"))
-    trader = MultiPositionTrader(client, db=db6632, execution_barrier=ExecutionBarrier(ContextCache(), db))
+    trader = MultiPositionTrader(client, db=db, execution_barrier=ExecutionBarrier(ContextCache(), db))
     # Legacy score-only selections have no canonical SignalSpec or
     # versioned market-context evidence. They must be blocked before exchange I/O.
     result = trader.execute([Selection("BTCUSDT"), Selection("ETHUSDT")])
