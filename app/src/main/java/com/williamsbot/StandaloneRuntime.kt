@@ -945,18 +945,30 @@ private class NativeEngine(
             TradingState.RECONCILE_REQUIRED,
             reason
         )
-        prefs.edit()
-            .putBoolean("reconcile_required", true)
-            .apply()
-        lastError = "RECONCILE_REQUIRED: " + reason
+        val persisted = runCatching {
+            prefs.edit()
+                .putBoolean("reconcile_required", true)
+                .commit()
+        }.getOrDefault(false)
+        lastError = "RECONCILE_REQUIRED: " + reason +
+            if (persisted) "" else "; persistent safety latch write failed"
         stop()
     }
 
     private fun clearReconcileRequired() {
+        val persisted = runCatching {
+            prefs.edit()
+                .putBoolean("reconcile_required", false)
+                .commit()
+        }.getOrDefault(false)
+        if (!persisted) {
+            reconcileRequired = true
+            val reason = "Cannot durably clear reconciliation latch"
+            stateMachine.force(TradingState.RECONCILE_REQUIRED, reason)
+            lastError = "RECONCILE_REQUIRED: " + reason
+            throw IllegalStateException(reason)
+        }
         reconcileRequired = false
-        prefs.edit()
-            .putBoolean("reconcile_required", false)
-            .apply()
         if (!killLatched && pendingEntries.isEmpty() && positions.isEmpty()) {
             stateMachine.force(
                 TradingState.READY_FLAT,
