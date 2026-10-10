@@ -90,3 +90,21 @@ def test_reversal_bar_needs_followup_extreme_breakout():
     out = calculate_indicators(df, config_from_env())
     assert bool(out['bullish_reversal_bar'].iloc[70]) is True
     assert bool(out['long_wise_reversal_entry'].iloc[70]) is False
+
+
+def test_wm2_long_signal_is_independent_of_fractal_outside_flag():
+    prices = [100 + (i * 0.05) ** 2 for i in range(80)]
+    ind = calculate_indicators(frame(prices), config_from_env())
+    third = ind["ao_green_streak"].eq(3)
+    assert third.any()
+    assert ind.loc[third, "long_super_ao_signal"].all()
+    assert (~ind["long_fractal_outside"].shift(1).fillna(False).astype(bool) & third).any()
+
+
+def test_wm2_short_signal_is_independent_of_fractal_outside_flag():
+    prices = [200 - (i * 0.05) ** 2 for i in range(80)]
+    ind = calculate_indicators(frame(prices), config_from_env())
+    third = ind["ao_red_streak"].eq(3)
+    assert third.any()
+    assert ind.loc[third, "short_super_ao_signal"].all()
+    assert (~ind["short_fractal_outside"].shift(1).fillna(False).astype(bool) & third).any()
