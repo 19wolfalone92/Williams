@@ -367,7 +367,7 @@ def test_missing_oco_is_restored_from_persisted_position(tmp_path: Path):
         "time": 100,
     }]
 
-    multi = MultiPositionTrader(client, db=db)
+    multi = MultiPositionTrader(client, db=db, execution_barrier=_test_execution_barrier(db))
     result = multi.reconcile_open_positions()
 
     assert result[0]["trade_id"] == trade_id
