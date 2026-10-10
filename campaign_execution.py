@@ -423,6 +423,65 @@ class CampaignExecutionService:
                 return self.engine.load_campaign(str(item["campaign_id"]))
         return None
 
+    def _executed_fee_quote(
+        self, symbol: str, order: dict[str, Any], executed_qty: float, average_price: float
+    ) -> float:
+        """Calculate actual commissions from Binance trade records, never assume zero."""
+        order_id = order.get("orderId")
+        if order_id in (None, ""):
+            raise CampaignExecutionError(f"{symbol}: filled order lacks orderId for commission lookup")
+        trade_reader = getattr(self.client, "my_trades", None)
+        if not callable(trade_reader):
+            raise CampaignExecutionError(f"{symbol}: exchange trade/commission lookup is unavailable")
+        trades = trade_reader(symbol, order_id=int(order_id))
+        if not isinstance(trades, list) or not trades:
+            raise CampaignExecutionError(f"{symbol}: no authoritative trade records for filled order {order_id}")
+        info = self.client.exchange_info(symbol)
+        rows = info.get("symbols", [])
+        if not rows:
+            raise CampaignExecutionError(f"{symbol}: exchange assets unavailable for commission conversion")
+        base_asset = str(rows[0].get("baseAsset", "")).upper()
+        quote_asset = str(rows[0].get("quoteAsset", "")).upper()
+        quantity_sum = 0.0
+        fee_quote = 0.0
+        for trade in trades:
+            if not isinstance(trade, dict):
+                raise CampaignExecutionError(f"{symbol}: malformed trade record for order {order_id}")
+            if str(trade.get("symbol", "")).upper() != symbol.upper():
+                raise CampaignExecutionError(f"{symbol}: trade lookup returned a different symbol")
+            if int(trade.get("orderId", 0) or 0) != int(order_id):
+                raise CampaignExecutionError(f"{symbol}: trade lookup returned a different orderId")
+            qty = float(trade.get("qty", 0) or 0)
+            price = float(trade.get("price", 0) or 0)
+            commission = float(trade.get("commission", 0) or 0)
+            asset = str(trade.get("commissionAsset", "")).upper()
+            if qty <= 0 or price <= 0 or commission < 0 or not asset:
+                raise CampaignExecutionError(f"{symbol}: invalid quantity/price/commission trade fields")
+            quantity_sum += qty
+            if asset == quote_asset:
+                fee_quote += commission
+            elif asset == base_asset:
+                fee_quote += commission * price
+            else:
+                fee_pair = asset + quote_asset
+                try:
+                    fee_price = float(self.client.ticker_price(fee_pair).get("price", 0) or 0)
+                except Exception as exc:
+                    raise CampaignExecutionError(
+                        f"{symbol}: cannot convert {asset} commission to {quote_asset}"
+                    ) from exc
+                if fee_price <= 0:
+                    raise CampaignExecutionError(
+                        f"{symbol}: invalid {fee_pair} commission conversion price"
+                    )
+                fee_quote += commission * fee_price
+        tolerance = max(1e-8, abs(float(executed_qty)) * 1e-6)
+        if abs(quantity_sum - float(executed_qty)) > tolerance:
+            raise CampaignExecutionError(
+                f"{symbol}: trade quantities {quantity_sum:.12g} do not match executedQty {executed_qty:.12g}"
+            )
+        return fee_quote
+
     def reconcile_pending_entries(self) -> list[dict[str, Any]]:
         """Adopt conditional BUYs after triggers, partial fills, restart or crash."""
         rows = self.db.conn.execute(
@@ -522,6 +581,7 @@ class CampaignExecutionService:
                             f"{symbol}: executed conditional BUY has no authoritative quote quantity"
                         )
                     avg = quote / executed
+                    fee_quote = self._executed_fee_quote(symbol, order, executed, avg)
 
                     if purpose == "ADD_ON" or campaign.state == CampaignState.ADD_ON_PENDING:
                         if campaign.state == CampaignState.ADD_ON_PENDING:
@@ -565,7 +625,7 @@ class CampaignExecutionService:
                             average_entry_price=avg,
                             fill_order_id=str(order.get("orderId", "")),
                             risk_quote=float(campaign.pending_risk_quote),
-                            fee_quote=0.0,
+                            fee_quote=fee_quote,
                         )
                         self.db.set_campaign_signal_state(
                             signal_id,
@@ -579,7 +639,7 @@ class CampaignExecutionService:
                             )
                             self.db.conn.execute(
                                 "UPDATE trades SET entry_price=?, stop_price=?, "
-                                "risk_pct=?, updated_at=CURRENT_TIMESTAMP "
+                                "risk_pct=?, fees=COALESCE(fees,0)+?, updated_at=CURRENT_TIMESTAMP "
                                 "WHERE id=? AND exit_time IS NULL",
                                 (
                                     campaign.average_entry_price,
@@ -588,6 +648,7 @@ class CampaignExecutionService:
                                         campaign.open_risk_quote /
                                         max(self._current_equity_quote(), 1e-12)
                                     ) * 100.0,
+                                    fee_quote,
                                     int(trade["id"]),
                                 ),
                             )
@@ -685,7 +746,7 @@ class CampaignExecutionService:
                             risk_pct=float(
                                 campaign.tags.get("initial_risk_pct", 0.0) or 0.0
                             ) * 100.0,
-                            fees=0.0,
+                            fees=fee_quote,
                         )
 
                     self.db.state_delete(f"entry_client_order_id:{symbol}")
