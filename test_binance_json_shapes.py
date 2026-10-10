@@ -1,6 +1,7 @@
 import pytest
 
 from binance_client import BinanceAPIError, BinanceSpotClient
+from execution_permit import mutation_permit
 
 
 def make_client():
@@ -100,12 +101,13 @@ def test_signed_post_retries_once_only_for_timestamp_rejection(monkeypatch):
     monkeypatch.setattr(client.session, "request", fake_request)
     monkeypatch.setattr(client, "sync_time", lambda: setattr(client, "time_offset_ms", 123))
 
-    result = client._request(
-        "POST",
-        "/api/v3/order",
-        {"symbol": "BTCUSDT"},
-        signed=True,
-    )
+    with mutation_permit(client):
+        result = client._request(
+            "POST",
+            "/api/v3/order",
+            {"symbol": "BTCUSDT"},
+            signed=True,
+        )
 
     assert result == {"ok": True}
     assert len(calls) == 2
@@ -123,12 +125,13 @@ def test_signed_post_transport_error_is_not_retried(monkeypatch):
     monkeypatch.setattr(client.session, "request", fake_request)
 
     with pytest.raises(BinanceAPIError) as exc:
-        client._request(
-            "POST",
-            "/api/v3/order",
-            {"symbol": "BTCUSDT"},
-            signed=True,
-        )
+        with mutation_permit(client):
+            client._request(
+                "POST",
+                "/api/v3/order",
+                {"symbol": "BTCUSDT"},
+                signed=True,
+            )
 
     assert exc.value.unknown_execution is True
     assert len(calls) == 1
@@ -255,12 +258,13 @@ def test_cancel_replace_http_409_is_unknown_and_not_retried(monkeypatch):
     monkeypatch.setattr(client.session, "request", fake_request)
 
     with pytest.raises(BinanceAPIError) as exc:
-        client._request(
-            "POST",
-            "/api/v3/order/cancelReplace",
-            {"symbol": "BTCUSDT", "cancelReplaceMode": "STOP_ON_FAILURE"},
-            signed=True,
-        )
+        with mutation_permit(client):
+            client._request(
+                "POST",
+                "/api/v3/order/cancelReplace",
+                {"symbol": "BTCUSDT", "cancelReplaceMode": "STOP_ON_FAILURE"},
+                signed=True,
+            )
 
     assert exc.value.unknown_execution is True
     assert exc.value.status_code == 409
@@ -293,12 +297,13 @@ def test_order_mutation_rate_limit_is_unknown_and_not_retried(monkeypatch):
     monkeypatch.setattr(client.session, "request", fake_request)
 
     with pytest.raises(BinanceAPIError) as exc:
-        client._request(
-            "POST",
-            "/api/v3/order",
-            {"symbol": "BTCUSDT"},
-            signed=True,
-        )
+        with mutation_permit(client):
+            client._request(
+                "POST",
+                "/api/v3/order",
+                {"symbol": "BTCUSDT"},
+                signed=True,
+            )
 
     assert exc.value.unknown_execution is True
     assert exc.value.status_code == 429
