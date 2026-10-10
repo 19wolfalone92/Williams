@@ -4,6 +4,8 @@
 **Status: BLOCKED / NOT ACCEPTED**  
 **Branch:** `audit/williams-2.1-task-008-spot-testnet`  
 **Requested starting SHA:** `afe90cc71a572869d4f8d58ee381c8a70424effc`  
+**Actual HEAD found at the start of this continuation:** `34a3472c13d86be332a536a9b8f8939c647a6616` (different from the requested SHA; continued from actual HEAD without reset)  
+**Source/test HEAD after bounded changes:** `37401a82f91df3ee6f1a2e3c842a0bb1f3909a6e`  
 **Baseline:** `d7634adc1f6a1d25ef334294a4903f7c9134e06b`
 
 ## 1. Repository integrity
@@ -30,6 +32,14 @@
 4. `95a7c02ae7e64f4c1db3b7a6a5d9e740c99329de` — `test_preflight_gate.py`
    - Added tests for the legacy time-check path without an approved budget and for malformed server-time data.
 
+5. `15ea3cd9e35fdfde721ae038d655277b03df1c3d` — `runtime_freshness.py`
+   - Added optional monotonic observation timestamps bound to a monotonic session identifier.
+   - If monotonic evidence is supplied, missing evaluation context, a session mismatch, invalid monotonic timestamps, or a monotonic timestamp in the future returns UNKNOWN. Elapsed age uses monotonic time only within the same declared session; wall-clock source time is still validated.
+   - This is an evidence-contract capability only; no producer-to-Preflight integration is claimed.
+
+6. `37401a82f91df3ee6f1a2e3c842a0bb1f3909a6e` — `test_runtime_freshness.py`
+   - Added tests for stale candle/account/reconciliation evidence, missing scanner heartbeat, WebSocket with no recent event, failed SQLite integrity probe, non-numeric freshness budget, and monotonic-session enforcement.
+
 These tests were added but **were not executed** in a local test runner or confirmed by CI. Their status is NOT RUN, not PASS.
 
 ## 3. Freshness evidence trace
@@ -50,7 +60,7 @@ These tests were added but **were not executed** in a local test runner or confi
 | Android runtime | Android execution/runtime sources exist | No verified heartbeat contract consumed by the Python execution gate | UNKNOWN | UNKNOWN |
 | Diagnostics | Report creation timestamp | Report timestamp is not treated as component last-success time | Not applicable as execution evidence | Cannot authorize execution |
 
-The new validator change hardens the evidence API, but it does **not** connect all producers to Preflight. No age threshold has been invented. `LIVE_MAX_TIME_OFFSET_MS` remains a configuration value, not a verified approved policy contract.
+The validator changes harden the evidence API, including optional monotonic-age validation and session binding, but they do **not** connect all producers to Preflight. No age threshold has been invented. `LIVE_MAX_TIME_OFFSET_MS` remains a configuration value, not a verified approved policy contract.
 
 **P0-A: BLOCKED.** The required real producer-to-Preflight-to-barrier trace is incomplete. The existing required checks remain UNKNOWN where proofs are absent, which should prevent readiness.
 
@@ -162,7 +172,7 @@ No trading operations were performed.
 - Final-SHA combined status: no status entries returned by the available connector.
 - Workflow-run lookup: no runs returned; that connector only surfaces PR-triggered runs and cannot establish all workflow activity.
 - Python backend tests: NOT RUN / UNKNOWN.
-- Freshness and Preflight tests: NOT RUN.
+- Freshness and Preflight tests: NOT RUN; additional tests in `test_runtime_freshness.py` and `test_preflight_gate.py` were not executed locally or by a confirmed workflow.
 - ExecutionBarrier and recovery tests: NOT RUN.
 - Campaign CI: UNKNOWN.
 - Android lint/unit/APK build: UNKNOWN.
@@ -186,3 +196,23 @@ No CI workflow is marked PASS without an actual result tied to the final SHA.
 10. Prove read-only capability technically before any Testnet request.
 
 **Final status: BLOCKED / NOT ACCEPTED.** The source changes harden invalid-budget and generation-mismatch handling, but TASK 008.7 acceptance criteria remain unmet. No trading-readiness conclusion is justified.
+
+
+## 13. Continuation addendum — source/test SHA `37401a82f91df3ee6f1a2e3c842a0bb1f3909a6e`
+
+The branch HEAD was rechecked before this continuation. It was `34a3472c13d86be332a536a9b8f8939c647a6616`, not the requested starting SHA `afe90cc71a572869d4f8d58ee381c8a70424effc`. Work continued from the actual branch HEAD; no reset or force push was performed.
+
+The two continuation commits are:
+- `15ea3cd9e35fdfde721ae038d655277b03df1c3d`: optional monotonic freshness age and same-session binding in `runtime_freshness.py`.
+- `37401a82f91df3ee6f1a2e3c842a0bb1f3909a6e`: additional freshness unit tests in `test_runtime_freshness.py`.
+
+Current verification:
+- Branch comparison against baseline: 39 commits ahead, 0 behind.
+- Combined status query: no status entries returned.
+- Available workflow-run query: no runs returned; this connector exposes PR-triggered runs only.
+- PR search for this head branch: no matching PR found.
+- The new tests were **not run**. No PASS is claimed.
+- The monotonic/session functionality is not yet wired to trusted runtime producers or mandatory Preflight.
+- P0-A, P0-B, P0-C, P0-D and read-only Testnet criteria remain BLOCKED/UNKNOWN as detailed above.
+
+The report itself is documentation, not a substitute for the missing production integration or executed tests.
