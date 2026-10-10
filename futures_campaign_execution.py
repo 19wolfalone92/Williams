@@ -557,7 +557,7 @@ class FuturesCampaignExecutionService:
             raise FuturesCampaignExecutionError("Initial entry requires a SignalRole.ENTRY signal")
         if not math.isfinite(float(signal.trigger_price)) or float(signal.trigger_price) <= 0:
             raise FuturesCampaignExecutionError("Signal trigger price must be finite and positive")
-        if signal.expires_at_ms and int(signal.expires_at_ms) < int(time.time() * 1000):
+        if signal.expires_at_ms and int(signal.expires_at_ms) <= int(time.time() * 1000):
             raise FuturesCampaignExecutionError("Williams signal has expired")
         raw_stop = float(signal.invalidation_price or 0.0)
         if direction == "LONG":
