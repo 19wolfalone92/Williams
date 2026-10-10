@@ -252,3 +252,48 @@ Acceptance remains blocked because:
 - static route inventory is not a complete dynamic proof of every possible mutation path.
 
 **Next acceptance gate:** close the cancel/replace durable-identity gap, add the remaining OCO/partial-fill restart cases, obtain the exact-SHA CI results, then run the bounded Spot Testnet matrix and physical-device Android crash/restart matrix. Keep PR #47 open and do not merge. main remains unchanged.
+
+
+---
+
+## 9.6 TASK 001 deterministic recovery follow-up — 2026-10-11
+
+**Test-source parent SHA:** `0fec5080aff5f2fd34dc29b6cb6bf6fd8537269c`  
+**Recovery regression test commit:** `442c6d7668ccce13ab86d1d012b1a7e389f91f5d`  
+**Branch:** `audit/williams-2.1-task-001-architecture`  
+**PR:** [#47](https://github.com/19wolfalone92/Williams/pull/47), open, draft, not merged.  
+**main:** remains `04da5f9c09572e99ff310be3a1908179165e528c`.
+
+### Added deterministic cases
+
+- Added parameterized recovery tests for OCO child descriptors with an unknown state, missing state, or missing child ID. These assert the unresolved intent remains ambiguous, both child lookups are attempted where possible, the reconciliation latch remains set, and recovery never creates duplicate protection.
+- Added a cancel/replace restart test proving the current durable schema cannot infer the old leg from a replacement-only client ID. Recovery must leave the intent unresolved and must not POST another cancel/replace.
+- Tests use fake exchange implementations and local SQLite. They submit no real exchange orders and do not call Binance Mainnet.
+
+### Current evidence and CI
+
+The prior verified CI results on SHA `e7017ed27b2167f6fd8feaf428cf1f7255ee9d13` are preserved:
+- [Python backend tests — run 38081059348](https://github.com/19wolfalone92/Williams/actions/runs/38081059348) — SUCCESS.
+- [Williams Campaign CI — run 38081059304](https://github.com/19wolfalone92/Williams/actions/runs/38081059304) — SUCCESS.
+- [Build Android APK — run 38081059292](https://github.com/19wolfalone92/Williams/actions/runs/38081059292) — SUCCESS.
+
+These are historical CI evidence only and are not proof of recovery safety. On regression-test SHA `442c6d7668ccce13ab86d1d012b1a7e389f91f5d`, the current runs were started and are pending at the time of this report update:
+- [Python backend tests — run 38088218639](https://github.com/19wolfalone92/Williams/actions/runs/38088218639).
+- [Williams Campaign CI — run 38088218627](https://github.com/19wolfalone92/Williams/actions/runs/38088218627).
+- [Build Android APK — run 38088218651](https://github.com/19wolfalone92/Williams/actions/runs/38088218651).
+
+The final report-only commit will have a different SHA; CI must be checked again against that exact final SHA before reporting final CI status. Do not transfer green results across SHAs.
+
+### Acceptance remains blocked
+
+**TASK 001 status: FAIL — NOT ACCEPTED.**
+
+Still not proven:
+1. End-to-end cancel/replace recovery with both old and replacement order identities durably persisted and independently reconciled.
+2. Full OCO partial-fill → restart → real exposure/protection/commission reconciliation lifecycle.
+3. Combined partial fill + process restart + protection quantity + actual fee reconciliation end-to-end.
+4. Physical Android process-death tests. Hardware evidence: **NOT VERIFIED**.
+5. Bounded Spot Testnet mutation/restart matrix with dedicated Testnet credentials. **NOT RUN / NOT VERIFIED**.
+6. Complete dynamic proof of every possible production mutation route. Bulk `DELETE /api/v3/openOrders` remains disabled in Python and unapproved in Android production transport.
+
+No Mainnet requests or orders were used. Do not merge PR #47.
