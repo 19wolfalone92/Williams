@@ -12,6 +12,7 @@ from campaign_execution import CampaignExecutionService, CampaignExecutionError
 from campaign_model import SignalSpec, SignalType, SignalRole
 from campaign_monitor import CampaignMonitor
 from order_identity import is_entry_id, is_exit_id, is_managed_order
+from execution_barrier import OrderIntent
 
 
 POSITION_STATES = {
@@ -105,6 +106,35 @@ class MultiPositionTrader:
             self.db,
             self.campaign_execution,
         )
+
+    def _execute_mutation(self, symbol, side, order_type, client_order_id, submit, purpose, pre_submit_checks=None):
+        """Route legacy portfolio mutations through the canonical barrier.
+
+        Purposes are explicitly campaign-scoped so the barrier knows these
+        operations are not signal-entry admissions. This helper is not an
+        emergency bypass: missing preflight/reconciliation evidence blocks them.
+        """
+        if self.execution_barrier is None:
+            raise RuntimeError("Portfolio mutation blocked: canonical ExecutionBarrier unavailable")
+        intent = OrderIntent.new(
+            str(symbol).upper(),
+            str(side).upper(),
+            str(order_type).upper(),
+            required_context_versions={},
+            client_order_id=str(client_order_id),
+            purpose="CAMPAIGN_" + str(purpose).upper(),
+        )
+        result = self.execution_barrier.execute(
+            intent,
+            submit,
+            pre_submit_checks=pre_submit_checks,
+        )
+        if not result.accepted:
+            self.set_state(symbol, "RECONCILE_REQUIRED")
+            raise RuntimeError(
+                f"{symbol}: mutation blocked by ExecutionBarrier: {result.reason}"
+            )
+        return result.response
 
     # ------------------------------------------------------------------
     # Durable state
@@ -719,12 +749,16 @@ class MultiPositionTrader:
             )
 
         client_id = f"{self.EMERGENCY_PREFIX}{uuid.uuid4().hex[:16]}"
-        sell = self.client.order_safe(
-            symbol,
-            "SELL",
-            "MARKET",
-            quantity=self.client.decimal_format(sell_qty),
-            new_client_order_id=client_id,
+        sell = self._execute_mutation(
+            symbol, "SELL", "MARKET", client_id,
+            lambda: self.client.order_safe(
+                symbol,
+                "SELL",
+                "MARKET",
+                quantity=self.client.decimal_format(sell_qty),
+                new_client_order_id=client_id,
+            ),
+            "EMERGENCY_EXIT",
         )
         self.db.save_order(sell)
 
@@ -1655,10 +1689,16 @@ class MultiPositionTrader:
             if list_id or list_client:
                 cancel = getattr(self.client, "cancel_oco", None)
                 if cancel is not None:
-                    if list_id:
-                        cancel(symbol, order_list_id=list_id)
-                    else:
-                        cancel(symbol, list_client_order_id=list_client)
+                    cancel_client_id = f"{self.MANUAL_PREFIX}CANCEL_{uuid.uuid4().hex[:16]}"
+                    self._execute_mutation(
+                        symbol, "SELL", "CANCEL", cancel_client_id,
+                        lambda: (
+                            cancel(symbol, order_list_id=list_id)
+                            if list_id
+                            else cancel(symbol, list_client_order_id=list_client)
+                        ),
+                        "MANUAL_PROTECTION_CANCEL",
+                    )
 
             account = self.client.account()
             free_qty = self._asset_balance(
@@ -1675,12 +1715,17 @@ class MultiPositionTrader:
                     f"{symbol}: managed quantity is no longer available"
                 )
 
-            sell = self.client.order_safe(
-                symbol,
-                "SELL",
-                "MARKET",
-                quantity=self.client.decimal_format(sell_qty),
-                new_client_order_id=f"{self.MANUAL_PREFIX}{uuid.uuid4().hex[:20]}",
+            client_id = f"{self.MANUAL_PREFIX}{uuid.uuid4().hex[:20]}"
+            sell = self._execute_mutation(
+                symbol, "SELL", "MARKET", client_id,
+                lambda: self.client.order_safe(
+                    symbol,
+                    "SELL",
+                    "MARKET",
+                    quantity=self.client.decimal_format(sell_qty),
+                    new_client_order_id=client_id,
+                ),
+                "MANUAL_EXIT",
             )
             self.db.save_order(sell)
 
@@ -2214,12 +2259,19 @@ class MultiPositionTrader:
                     float(quote),
                 )
 
-                order = self.client.order_safe(
-                    symbol,
-                    "BUY",
-                    "MARKET",
-                    quote_order_qty=self.client.decimal_format(quote),
-                    new_client_order_id=client_id,
+                order = self._execute_mutation(
+                    symbol, "BUY", "MARKET", client_id,
+                    lambda: self.client.order_safe(
+                        symbol,
+                        "BUY",
+                        "MARKET",
+                        quote_order_qty=self.client.decimal_format(quote),
+                        new_client_order_id=client_id,
+                    ),
+                    "ENTRY",
+                    pre_submit_checks=lambda _snapshot: self.l2_guard.check_buy_quote(
+                        self.client, symbol, float(quote)
+                    ),
                 )
                 self.db.save_order(order)
 
