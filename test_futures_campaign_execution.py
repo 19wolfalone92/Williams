@@ -189,23 +189,40 @@ class FakeFuturesClient:
 
 
 def make_context(cache, *, allow_long, allow_short):
-    cache.publish(TFMarketContext(
-        symbol="BTCUSDT",
-        interval="5m",
-        version=0,
-        candle_open_time_ms=1,
-        candle_close_time_ms=2,
-        price=101.0,
-        atr=2.0,
-        jaw=100.0,
-        teeth=100.5,
-        lips=100.8,
-        alligator_state="BULLISH" if allow_long else "BEARISH" if allow_short else "SLEEP",
-        allow_long=allow_long,
-        allow_short=allow_short,
-        decision="LONG" if allow_long else "SHORT" if allow_short else "NO_TRADE",
-        data_bars=220,
-    ))
+    now_ms = int(time.time() * 1000)
+    specs = (
+        ("1h", allow_long, allow_short, 20_000),
+        ("4h", False, False, 40_000),
+        ("1d", False, False, 60_000),
+    )
+    for interval, interval_long, interval_short, age_ms in specs:
+        awake = bool(interval_long or interval_short)
+        state = (
+            "BULLISH" if interval_long
+            else "BEARISH" if interval_short
+            else "SLEEP"
+        )
+        cache.publish(TFMarketContext(
+            symbol="BTCUSDT",
+            interval=interval,
+            version=0,
+            candle_open_time_ms=now_ms - age_ms - 60_000,
+            candle_close_time_ms=now_ms - age_ms,
+            price=101.0,
+            atr=2.0,
+            jaw=100.0,
+            teeth=100.5,
+            lips=100.8,
+            alligator_state=state,
+            alligator_awake=awake,
+            ao_value=1.0 if interval_long else -1.0 if interval_short else 0.0,
+            ac_value=0.0,
+            williams_core_ready=True,
+            allow_long=interval_long,
+            allow_short=interval_short,
+            decision="LONG" if interval_long else "SHORT" if interval_short else "NO_TRADE",
+            data_bars=220,
+        ))
 
 
 def make_signal(direction):
@@ -219,8 +236,9 @@ def make_signal(direction):
         direction=direction,
         signal_type=SignalType.REVERSAL,
         role=SignalRole.ENTRY,
-        timeframe="5m",
+        timeframe="1h",
         signal_bar_time_ms=1000,
+        confirmation_time_ms=1000,
         trigger_price=trigger,
         protective_reference=stop,
         invalidation_price=stop,
