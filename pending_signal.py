@@ -33,7 +33,8 @@ _TF_MS = {
 
 
 def _bar_ms(timeframe: str) -> int:
-    normalized = "1M" if str(timeframe) == "1M" else str(timeframe).strip().lower()
+    raw = str(timeframe).strip()
+    normalized = "1M" if raw == "1M" else raw.lower()
     if normalized not in _TF_MS:
         raise ValueError(f"Unsupported pending-signal timeframe: {timeframe!r}")
     return _TF_MS[normalized]
