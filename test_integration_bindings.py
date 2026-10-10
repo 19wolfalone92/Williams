@@ -220,7 +220,7 @@ def test_terminal_partial_entry_is_materialized_and_protected(tmp_path):
             return []
 
     client = NoOpenOrdersFakeBinance(entry_status="CANCELED", entry_qty="0.4")
-    trader = MultiPositionTrader(client, db=db6948, execution_barrier=ExecutionBarrier(ContextCache(), db))
+    trader = MultiPositionTrader(client, db=db, execution_barrier=ExecutionBarrier(ContextCache(), db))
 
     db.state_set("entry_client_order_id:BTCUSDT", "WILLV4_ENTRY_TEST")
     db.state_set("position_state:BTCUSDT", "ENTRY_PENDING")
@@ -248,7 +248,7 @@ def test_terminal_partial_oco_is_counted_once_and_reprotected(tmp_path):
         entry_qty="1.0",
         exit_qty="0.3",
     )
-    trader = MultiPositionTrader(client, db=db7820, execution_barrier=ExecutionBarrier(ContextCache(), db))
+    trader = MultiPositionTrader(client, db=db, execution_barrier=ExecutionBarrier(ContextCache(), db))
 
     trade_id = db.save_trade(
         entry_time="1970-01-01T00:00:01+00:00",
@@ -284,7 +284,7 @@ def test_terminal_partial_oco_is_counted_once_and_reprotected(tmp_path):
 def test_pending_entry_is_a_durable_duplicate_entry_barrier(tmp_path):
     db = Database(str(tmp_path / "dedupe.sqlite3"))
     client = FakeBinance()
-    trader = MultiPositionTrader(client, db=db9110, execution_barrier=ExecutionBarrier(ContextCache(), db))
+    trader = MultiPositionTrader(client, db=db, execution_barrier=ExecutionBarrier(ContextCache(), db))
 
     db.state_set("entry_client_order_id:BTCUSDT", "WILLV4_ENTRY_TEST")
     db.state_set("position_state:BTCUSDT", "ENTRY_PENDING")
@@ -397,7 +397,7 @@ def test_active_oco_two_legs_represent_one_quantity(tmp_path):
             }]
 
     client = ActiveOcoBinance(entry_status="FILLED", entry_qty="1.0")
-    trader = MultiPositionTrader(client, db=db12630, execution_barrier=ExecutionBarrier(ContextCache(), db))
+    trader = MultiPositionTrader(client, db=db, execution_barrier=ExecutionBarrier(ContextCache(), db))
     trade_id = db.save_trade(
         entry_time="1970-01-01T00:00:01+00:00",
         symbol="BTCUSDT",
@@ -518,7 +518,7 @@ def test_active_oco_partial_fill_keeps_second_leg_as_shared_protection(tmp_path)
         entry_status="FILLED",
         entry_qty="1.0",
     )
-    trader = MultiPositionTrader(client, db=db16857, execution_barrier=ExecutionBarrier(ContextCache(), db))
+    trader = MultiPositionTrader(client, db=db, execution_barrier=ExecutionBarrier(ContextCache(), db))
 
     trade_id = db.save_trade(
         entry_time="1970-01-01T00:00:01+00:00",
