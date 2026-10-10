@@ -574,16 +574,20 @@ class CampaignExecutionService:
         """
         if amount == 0:
             return 0.0
-        minute_start = int(timestamp_ms) - (int(timestamp_ms) % 60_000)
         for pair, inverse in ((f"{asset}{quote_asset}", False), (f"{quote_asset}{asset}", True)):
             try:
-                candles = self.client.klines(
-                    pair, "1m", limit=1,
-                    start_time=minute_start, end_time=minute_start + 60_000,
-                )
-                if not isinstance(candles, list) or not candles:
-                    continue
-                close = float(candles[0][4])
+                historical_price = getattr(self.client, "historical_price", None)
+                if callable(historical_price):
+                    close = float(historical_price(pair, int(timestamp_ms)))
+                else:
+                    minute_start = int(timestamp_ms) - (int(timestamp_ms) % 60_000)
+                    candles = self.client.klines(
+                        pair, "1m", limit=1,
+                        start_time=minute_start, end_time=minute_start + 60_000,
+                    )
+                    if not isinstance(candles, list) or not candles:
+                        continue
+                    close = float(candles[0][4])
                 if not math.isfinite(close) or close <= 0:
                     continue
                 return float(amount) / close if inverse else float(amount) * close
@@ -591,6 +595,48 @@ class CampaignExecutionService:
                 continue
         raise CampaignExecutionError(
             f"cannot value {asset} commission in {quote_asset} at fill time; reconciliation required"
+        )
+
+    def _emergency_protect_unaccounted_fill(self, campaign, symbol: str, order: dict[str, Any], reason: str) -> None:
+        """Best-effort protection for an already-filled Spot order whose fees cannot be valued."""
+        protection_note = "emergency protection unavailable"
+        try:
+            gross = float(order.get("executedQty", 0) or 0)
+            info = self.client.exchange_info(symbol)
+            rows = info.get("symbols", []) if isinstance(info, dict) else []
+            if gross > 0 and rows:
+                base_asset = str(rows[0].get("baseAsset", "")).upper()
+                account = self.client.account()
+                balances = account.get("balances", []) if isinstance(account, dict) else []
+                free_qty = float(next(
+                    (b.get("free", 0) for b in balances
+                     if str(b.get("asset", "")).upper() == base_asset),
+                    0.0,
+                ))
+                stop = float(
+                    campaign.initial_stop_price
+                    or campaign.tags.get("initial_stop_price", 0.0)
+                    or 0.0
+                )
+                emergency_qty = min(gross, free_qty)
+                if emergency_qty > 0 and stop > 0:
+                    protection = self.create_hard_stop(
+                        campaign, quantity=emergency_qty, stop_price=stop
+                    )
+                    campaign.tags["protective_order_id"] = str(protection.get("order_id", ""))
+                    protected_qty = float(protection.get("quantity", 0) or 0)
+                    gap = max(0.0, emergency_qty - protected_qty)
+                    campaign.tags["protection_state"] = "UNKNOWN"
+                    campaign.tags["fee_accounting_state"] = "UNKNOWN"
+                    campaign.tags["unprotected_exposure_qty"] = repr(gap)
+                    protection_note = (
+                        f"emergency stop quantity={protected_qty:.12g}; "
+                        f"accounting unresolved; measured stop gap={gap:.12g}"
+                    )
+        except Exception as exc:
+            protection_note = f"emergency stop failed: {type(exc).__name__}: {exc}"
+        self.engine.mark_reconcile_required(
+            campaign, f"{reason}; {protection_note}"
         )
 
     def _account_order_fills(self, symbol: str, campaign_id: str, order: dict[str, Any]) -> dict[str, float]:
@@ -764,9 +810,16 @@ class CampaignExecutionService:
                 quote = float(order.get("cummulativeQuoteQty", 0) or 0)
                 fee_quote = 0.0
                 if gross_executed > 0:
-                    fill_accounting = self._account_order_fills(
-                        symbol, campaign.campaign_id, order
-                    )
+                    try:
+                        fill_accounting = self._account_order_fills(
+                            symbol, campaign.campaign_id, order
+                        )
+                    except Exception as exc:
+                        self._emergency_protect_unaccounted_fill(
+                            campaign, symbol, order,
+                            f"fill accounting failed: {type(exc).__name__}: {exc}",
+                        )
+                        raise
                     executed = fill_accounting["net_quantity"]
                     quote = fill_accounting["quote_quantity"]
                     fee_quote = fill_accounting["fee_quote"]
@@ -796,9 +849,16 @@ class CampaignExecutionService:
                         gross_executed = float(order.get("executedQty", 0) or 0)
                         executed = gross_executed
                         if gross_executed > 0:
-                            fill_accounting = self._account_order_fills(
-                                symbol, campaign.campaign_id, order
-                            )
+                            try:
+                                fill_accounting = self._account_order_fills(
+                                    symbol, campaign.campaign_id, order
+                                )
+                            except Exception as exc:
+                                self._emergency_protect_unaccounted_fill(
+                                    campaign, symbol, order,
+                                    f"post-cancel fill accounting failed: {type(exc).__name__}: {exc}",
+                                )
+                                raise
                             executed = fill_accounting["net_quantity"]
                             quote = fill_accounting["quote_quantity"]
                             fee_quote = fill_accounting["fee_quote"]

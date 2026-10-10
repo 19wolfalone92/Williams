@@ -154,6 +154,11 @@ class MockExchange:
         stamp = int(start_time or time.time() * 1000)
         return [[stamp, close, close, close, close, "0", stamp + 59999, "0", 0, "0", "0", "0"]]
 
+    def historical_price(self, symbol, timestamp_ms):
+        if symbol not in self.prices:
+            raise RuntimeError(f"mock historical symbol unavailable: {symbol}")
+        return float(self.prices[symbol])
+
     def _new_order(self, symbol, side, qty, status="FILLED", client_order_id="", order_type="MARKET", stop_price=0.0):
         oid = str(len(self.orders) + 1)
         executed = (

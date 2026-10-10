@@ -263,3 +263,34 @@ def test_third_asset_commission_uses_fill_minute_conversion():
         trade = db.open_trade("BTCUSDT")
         assert trade is not None, recovered
         assert float(trade["fees"]) == pytest.approx(expected_fee_quote)
+
+
+def test_unknown_fee_history_keeps_risk_reserved_and_attempts_protection():
+    class MissingTradeHistoryExchange(MockExchange):
+        def my_trades(self, symbol, order_id=None, limit=1000):
+            raise OSError("trade history temporarily unavailable")
+
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "campaign.sqlite3"))
+        client = MissingTradeHistoryExchange()
+        svc = service(db, client)
+        result = svc.arm_initial_entry(
+            signal(trigger=101.0), equity_quote=10_000, candidate_risk_pct=0.004
+        )
+        client.set_price("BTCUSDT", 101.5)
+        recovered = svc.reconcile_pending_entries()
+        assert recovered[0]["state"] == CampaignState.RECONCILE_REQUIRED.value
+        campaign = svc.engine.load_campaign(result["campaign_id"])
+        assert campaign is not None
+        assert campaign.state == CampaignState.RECONCILE_REQUIRED
+        assert campaign.tags["fee_accounting_state"] == "UNKNOWN"
+        assert db.campaign_risk_reserved_quote() > 0
+        stops = [
+            order for order in client.open_orders("BTCUSDT")
+            if order["side"] == "SELL"
+            and str(order.get("clientOrderId", "")).startswith(svc.STOP_PREFIX)
+        ]
+        assert len(stops) == 1
+        assert float(stops[0]["origQty"]) <= float(
+            next(b["free"] for b in client.account()["balances"] if b["asset"] == "BTC")
+        )

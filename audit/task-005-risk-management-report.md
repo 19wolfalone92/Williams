@@ -123,3 +123,10 @@ Changes staged for this task's working branch:
 - Release gate risk ceilings and Gradle lint issue have been corrected; older run results do not prove the newer head.
 
 **Known limitations/blockers:** the fill ledger and entry path are now under validation, but full exit-fill fee accounting, unknown-history emergency protection, crash recovery across each exchange/DB boundary, multi-process daily-baseline initialization, and Futures SHORT behavior still require explicit tests and audit. Do not treat this section as acceptance evidence until exact-head CI and those scenarios are complete.
+
+
+### TASK 005.1 follow-up on SHA `0668c4289c1c217aa881dc1c1786d60292f304c9`
+
+Campaign CI on that exact SHA reported 1 failing test (`test_third_asset_commission_uses_fill_minute_conversion`); the other 162 tests passed. The failure was fail-closed behavior: historical BNB/USDT conversion could not be retrieved through the mock's generic klines path, so the code did not write a trade with zero fees. The mock and adapter now expose a dedicated historical-price contract, and an additional regression test verifies that missing authoritative trade history keeps risk reserved, attempts a protective stop using exchange-available base inventory, and leaves the campaign in `RECONCILE_REQUIRED`.
+
+The DB now also rejects conflicting replays of an existing `(symbol, trade_id)` rather than silently ignoring them. These changes require fresh exact-head CI. Previous results remain tied to their own SHA.

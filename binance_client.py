@@ -1,4 +1,4 @@
-import hashlib, hmac, time
+import hashlib, hmac, time, math
 from decimal import Decimal, ROUND_DOWN
 from urllib.parse import urlencode
 import requests
@@ -275,6 +275,21 @@ class BinanceSpotClient:
         if end_time is not None:
             params['endTime'] = int(end_time)
         return self._request('GET', '/api/v3/klines', params)
+
+    def historical_price(self, symbol, timestamp_ms):
+        """Return the close of the 1-minute candle containing timestamp_ms."""
+        minute_start = int(timestamp_ms) - (int(timestamp_ms) % 60_000)
+        rows = self.klines(
+            symbol, "1m", limit=1,
+            start_time=minute_start, end_time=minute_start + 60_000,
+        )
+        if not isinstance(rows, list) or not rows:
+            raise BinanceAPIError(f"No historical fee conversion candle for {symbol}")
+        price = float(rows[0][4])
+        if not math.isfinite(price) or price <= 0:
+            raise BinanceAPIError(f"Invalid historical fee conversion price for {symbol}")
+        return price
+
     def account(self): return self._request('GET','/api/v3/account',signed=True)
     def api_restrictions(self): return self._request('GET','/sapi/v1/account/apiRestrictions',{},signed=True)
     def api_trading_status(self): return self._request('GET','/sapi/v1/account/apiTradingStatus',{},signed=True)
