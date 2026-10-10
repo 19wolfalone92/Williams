@@ -388,7 +388,7 @@ def test_ambiguous_oco_cancel_recovers_only_from_terminal_exchange_list(tmp_path
     )
     client.order_list = lambda symbol, order_list_id=None, list_client_order_id=None: {
         "symbol": symbol,
-        "orderListId": str(order_list_id or "list-7"),
+        "orderListId": str(order_list_id or "77"),
         "listOrderStatus": "ALL_DONE",
         "listStatusType": "ALL_DONE",
     }
@@ -398,7 +398,7 @@ def test_ambiguous_oco_cancel_recovers_only_from_terminal_exchange_list(tmp_path
         "CANCEL_OCO",
         required_context_versions={},
         client_order_id="WILLV5_CANCEL_OCO_unique",
-        target_order_list_id="list-7",
+        target_order_list_id="77",
         purpose="CAMPAIGN_PROTECTION_CANCEL",
         campaign_id="campaign-oco",
     )
@@ -411,7 +411,7 @@ def test_ambiguous_oco_cancel_recovers_only_from_terminal_exchange_list(tmp_path
         (intent.intent_id,),
     ).fetchone()
     assert stored["status"] == "RECONCILED"
-    assert stored["target_order_list_id"] == "list-7"
+    assert stored["target_order_list_id"] == "77"
     assert db.state_get("recovery_state") == "READY"
 
 
