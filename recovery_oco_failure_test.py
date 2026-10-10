@@ -26,6 +26,13 @@ class FakeClient:
     def order(self,symbol,side,otype,**kw):
         print("[FAKE] BUY",symbol,side,otype,kw)
         return {"orderId":"1001","symbol":symbol,"status":"FILLED","executedQty":"0.01","cummulativeQuoteQty":"100.0","fills":[{"tradeId":"5001","orderId":"1001","symbol":symbol,"price":"10000.0","qty":"0.01","quoteQty":"100.0","commission":"0","commissionAsset":"USDT"}]}
+    def my_trades(self, symbol, order_id=None, limit=1000):
+        return [{
+            "id": "5001", "tradeId": "5001", "orderId": order_id or "1001",
+            "symbol": symbol, "price": "10000.0", "qty": "0.01",
+            "quoteQty": "100.0", "commission": "0", "commissionAsset": "USDT",
+        }]
+
     def get_order(self, symbol, order_id=None, orig_client_order_id=None):
         return {"orderId": order_id or "1001", "status": "FILLED", "executedQty": "0.01", "cummulativeQuoteQty": "100.0"}
     def create_oco_sell(self,*a,**kw):
