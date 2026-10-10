@@ -971,6 +971,22 @@ class FuturesCampaignExecutionService:
             try:
                 with self.db.transaction(immediate=True):
                     self._assert_position_capacity()
+                    # Re-read aggregate risk under the same SQLite write lock
+                    # that persists this campaign. Pre-transaction capacity reads
+                    # are advisory only: two different symbols could otherwise
+                    # both spend the same remaining portfolio risk.
+                    reserved_at_commit = self.engine.portfolio_reserved_risk_quote()
+                    portfolio_tolerance = max(1e-8, capacity_quote * 1e-9)
+                    if reserved_at_commit + actual_risk > capacity_quote + portfolio_tolerance:
+                        raise FuturesCampaignExecutionError(
+                            f"{symbol}: portfolio risk capacity changed before durable entry reservation"
+                        )
+                    campaign_capacity_quote = equity * self.campaign_risk_limit_pct
+                    campaign_tolerance = max(1e-8, campaign_capacity_quote * 1e-9)
+                    if actual_risk > campaign_capacity_quote + campaign_tolerance:
+                        raise FuturesCampaignExecutionError(
+                            f"{symbol}: initial entry exceeds the hard campaign risk cap"
+                        )
                     if not self.db.try_claim_state(claim_key, client_algo_id):
                         raise FuturesCampaignExecutionError(
                             f"{symbol}: another Futures entry intent is already reserved"
