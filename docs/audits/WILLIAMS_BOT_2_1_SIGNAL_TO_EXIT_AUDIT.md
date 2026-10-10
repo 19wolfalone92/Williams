@@ -474,3 +474,27 @@ The WM1 context correction is now committed on the audit branch with regression 
 **Correction.** Current mark/trigger/stop geometry is now a pure predicate and is applied to every fresh, context-approved candidate before chronology ranking. The native engine can skip a stale WM1/WM2/WM3 candidate and select a later still-actionable one. Final tick-normalized checks in sizing/arming remain in place.
 
 **Regression coverage.** Added Kotlin tests for LONG and SHORT trigger geometry, crossed triggers, invalid direction and non-finite inputs. These tests still require a completed Android build/unit-test run on the exact head.
+
+
+## Fifth-pass continuation — 2026-10-10
+
+### Exact-head CI compile errors found and corrected; verification pending
+
+The Campaign CI Android build at head `4bbcdb8d518b4a9bbb8a910c93880a3c8b350ff5` failed at Kotlin compilation with four concrete errors:
+
+- `FuturesLossGuard.kt` referenced the nonexistent `cooldown` identifier instead of the function parameter `cooldownMinutes`.
+- Two native context-admission call sites omitted the newly required `signalType`, so WM1/WM2/WM3-specific admission could not compile.
+- The pre-submit freshness check called `toDoubleOrNull()` on `markPrice()`, whose API already returns a `Double`.
+
+These are corrected on the current audit branch. The subsequent exact-head Campaign CI run includes the Python suite (passed) and Android build/unit tests (still running at the last status check). The compile correction is not considered verified until that run completes successfully.
+
+### Evidence status and remaining hard blockers
+
+- Latest code-level audit covers data → Williams candidates → context → risk → durable intent → conditional entry → fill reconciliation → exchange-side protection → campaign management → exit → accounting → restart/release.
+- Source study is grounded in the four Library primary-source files: *Trading Chaos*, *New Trading Dimensions*, *Trading Chaos 2*, and *Trading Chaos Course*. Differences between editions, visual/qualitative rules and explicit system-safety overlays remain separately labelled; no engineering threshold is represented as a literal book rule.
+- Python Futures has a durable aggregate ledger for market-exit/protective-child races. Native Android intentionally fails closed on unresolved multi-exit/protective-child races, but does not yet fully aggregate all those fills automatically.
+- Funding and non-quote commissions are not yet completely converted into the same net-PnL ledger across Python and Android.
+- Python and Android still require a shared golden-vector suite over identical OHLCV for WM1/WM2/WM3 source/confirmation time, trigger, stop, context veto and exit decision.
+- Authorized Binance Futures Demo LONG and SHORT lifecycles, forced race/partial-fill/restart scenarios, and the read-only release gate have not been executed from this audit environment. No Demo credentials were available to this GitHub audit workflow, and no live order was sent.
+
+**Current decision remains NOT READY FOR LIVE TRADING.**
