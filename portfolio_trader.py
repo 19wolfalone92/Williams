@@ -709,22 +709,32 @@ class MultiPositionTrader:
         payload = dict(order or {})
         fills = list(payload.get("fills") or [])
         order_id = payload.get("orderId")
-        if not fills and order_id is not None and hasattr(self.client, "my_trades"):
+        inline_has_trade_identity = bool(fills) and all(
+            isinstance(row, dict)
+            and row.get("tradeId", row.get("id")) is not None
+            and str(row.get("tradeId", row.get("id"))).strip() != ""
+            for row in fills
+        )
+        # Binance order-response fills commonly omit trade IDs. They are useful
+        # for display but cannot form the durable idempotency key; prefer the
+        # authoritative per-order myTrades history in that case.
+        if order_id is not None and hasattr(self.client, "my_trades") and not inline_has_trade_identity:
             try:
                 rows = self.client.my_trades(symbol, order_id=order_id, limit=1000)
                 fills = [
                     {
                         "tradeId": row.get("id", row.get("tradeId")),
                         "orderId": row.get("orderId", order_id),
+                        "symbol": row.get("symbol", symbol),
                         "price": row.get("price"),
                         "qty": row.get("qty"),
+                        "quoteQty": row.get("quoteQty"),
                         "commission": row.get("commission"),
                         "commissionAsset": row.get("commissionAsset"),
                     }
                     for row in (rows or [])
                 ]
-                if fills:
-                    payload["fills"] = fills
+                payload["fills"] = fills
             except Exception as exc:
                 self.db.log_event(
                     "WARNING",
@@ -733,6 +743,14 @@ class MultiPositionTrader:
                     {"order_id": order_id, "error_type": type(exc).__name__},
                 )
                 raise RuntimeError(f"{symbol}: authoritative fill history unavailable") from None
+
+        # Every row must belong to the exact exchange order and instrument. A
+        # filtered query is not sufficient evidence if the response contradicts it.
+        for row in fills:
+            if row.get("orderId") is not None and str(row.get("orderId")) != str(order_id):
+                raise RuntimeError(f"{symbol}: fill order identity mismatch")
+            if row.get("symbol") is not None and str(row.get("symbol")).upper() != str(symbol).upper():
+                raise RuntimeError(f"{symbol}: fill symbol identity mismatch")
 
         base_asset = symbol[:-4] if symbol.endswith("USDT") else ""
         if not fills and Decimal(str(payload.get("executedQty", "0") or "0")) > 0:
