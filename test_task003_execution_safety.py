@@ -319,6 +319,52 @@ def test_optional_telemetry_failure_does_not_block_safe_exit(tmp_path, monkeypat
     )
     assert result.accepted
     assert len(calls) == 1
+    # A mandatory execution result is not optional telemetry. The actual
+    # Binance response and fill quantities must survive a process restart.
+    row = db.find_execution_intent_by_client_order_id(cid)
+    assert row is not None
+    assert row["exchange_status"] == "FILLED"
+    assert row["exchange_order_id"] == "102"
+    assert row["exchange_executed_qty"] == "1"
+    assert row["exchange_cumulative_quote_qty"] == "99"
+    assert '"executedQty":"1"' in row["exchange_response_json"]
+
+
+def test_mandatory_exchange_result_persistence_failure_stays_ambiguous(tmp_path, monkeypatch):
+    db = Database(str(tmp_path / "state.sqlite3"))
+    barrier = ExecutionBarrier(_cache(), db)
+    intent = _entry_intent()
+    calls = []
+
+    def fail_result_persistence(*_args, **_kwargs):
+        raise RuntimeError("injected mandatory result-store failure")
+
+    monkeypatch.setattr(db, "save_execution_result", fail_result_persistence)
+    with pytest.raises(ExecutionAmbiguousError):
+        barrier.execute(
+            intent,
+            lambda: calls.append("exchange_may_have_accepted") or {
+                **_filled(),
+                "clientOrderId": intent.client_order_id,
+            },
+            pre_submit_checks=lambda _snapshot: None,
+        )
+
+    # The exchange call may have succeeded. The code must not claim a durable
+    # success or try again; the unresolved intent and global latch force GET/
+    # account reconciliation with this exact stable clientOrderId.
+    assert calls == ["exchange_may_have_accepted"]
+    assert db.state_get(ExecutionBarrier.MUTATION_LOCK_KEY, "")
+    assert db.has_unresolved_execution_intents()
+    row = db.load_execution_intent(intent.intent_id)
+    assert row is not None
+    assert row["status"] in {"AMBIGUOUS", "SUBMITTING", "RECONCILE_REQUIRED"}
+    assert not barrier.execute(
+        _entry_intent(signal_id="BTCUSDT:1h:next"),
+        lambda: calls.append("blind_retry") or _filled(),
+        pre_submit_checks=lambda _snapshot: None,
+    ).accepted
+    assert calls == ["exchange_may_have_accepted"]
 
 
 def test_corrupt_db_or_missing_store_never_sends_order():
