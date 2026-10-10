@@ -163,6 +163,9 @@ def test_fractal_signal_uses_configured_confirmation_delay_not_hardcoded_two_bar
     assert len(fractals) == 1
     assert fractals[0].protective_reference == float(data.loc[8, "high"])
     assert fractals[0].trigger_price < float(data.loc[8, "low"])
+    assert fractals[0].signal_bar_time_ms == 8
+    assert fractals[0].confirmation_time_ms == 11
+    assert fractals[0].expires_at_ms == 11 + 9 * 300_000
 
 
 def test_strict_short_signal_requires_sell_fractal_outside_teeth():
@@ -276,3 +279,16 @@ def test_short_reversal_is_rejected_if_later_candle_crossed_trigger_or_stop():
     data.loc[11, ["open", "high", "low", "close"]] = [111.8, 112.4, 111.4, 112.0]
     signals = extract_short_signal_specs("BTCUSDT", data, timeframe="5m", tick_size=0.1)
     assert not [s for s in signals if s.signal_type is SignalType.REVERSAL]
+
+
+
+def test_short_reversal_has_confirmation_timestamp_and_full_pending_lifetime():
+    data = frame()
+    data.loc[8, "bearish_reversal_bar"] = True
+    data.loc[9, [ "open", "high", "low", "close" ]] = [112.2, 112.8, 111.8, 112.4]
+    data.loc[10, [ "open", "high", "low", "close" ]] = [112.0, 112.6, 111.6, 112.2]
+    data.loc[11, [ "open", "high", "low", "close" ]] = [111.8, 112.4, 111.4, 112.0]
+    signals = extract_short_signal_specs("BTCUSDT", data, timeframe="5m", tick_size=0.1)
+    signal = next(s for s in signals if s.signal_type is SignalType.REVERSAL)
+    assert signal.confirmation_time_ms == signal.signal_bar_time_ms
+    assert signal.expires_at_ms == signal.confirmation_time_ms + 3 * 300_000
