@@ -1665,10 +1665,10 @@ private class NativeEngine(
                     runCatching { syncServerTime() }
                     return@use
                 }
-                error("Binance " + response.code + ": " + lastBody)
+                error(safeApiFailure(response.code, lastBody))
             }
         }
-        error("Binance signed GET failed: " + lastBody)
+        error("Binance signed GET failed; response body redacted; API code=" + safeApiCode(lastBody))
     }
 
     private fun hmac(value: String, secretValue: String): String {
