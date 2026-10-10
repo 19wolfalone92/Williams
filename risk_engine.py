@@ -59,6 +59,7 @@ class RiskEngine:
         max_atr_pct: float = 0.08,
         fee_buffer_per_side_pct: float = 0.001,
         slippage_buffer_pct: float = 0.0015,
+        require_min_rr: bool = True,
     ):
         values = {
             "balance_quote": balance_quote,
@@ -98,6 +99,9 @@ class RiskEngine:
         self.max_atr_pct = parsed["max_atr_pct"]
         self.fee_buffer_per_side_pct = parsed["fee_buffer_per_side_pct"]
         self.slippage_buffer_pct = parsed["slippage_buffer_pct"]
+        if not isinstance(require_min_rr, bool):
+            raise ValueError("require_min_rr must be a boolean")
+        self.require_min_rr = require_min_rr
 
     @staticmethod
     def _clamp(value, low, high):
@@ -120,7 +124,9 @@ class RiskEngine:
         min_notional: float = 0.0,
     ) -> RiskAnalysis:
 
-        side = str(side or "LONG").upper()
+        # The function default preserves legacy Spot calls, but an explicitly
+        # empty/invalid side must never be silently reinterpreted as LONG.
+        side = str(side).strip().upper()
         try:
             entry = float(entry_price)
             atr = float(atr)
@@ -210,7 +216,7 @@ class RiskEngine:
         if not math.isfinite(rr):
             return self._blocked(symbol, side, entry, "calculated risk/reward is non-finite")
 
-        if rr < self.min_rr:
+        if self.require_min_rr and rr < self.min_rr:
             return self._blocked(symbol, side, entry, f"R:R {rr:.3f} below minimum {self.min_rr:.3f}")
 
         # Maximum money we are allowed to lose on this trade. Size against the
