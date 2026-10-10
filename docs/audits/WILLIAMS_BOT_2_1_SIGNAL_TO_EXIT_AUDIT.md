@@ -498,3 +498,15 @@ These are corrected on the current audit branch. The subsequent exact-head Campa
 - Authorized Binance Futures Demo LONG and SHORT lifecycles, forced race/partial-fill/restart scenarios, and the read-only release gate have not been executed from this audit environment. No Demo credentials were available to this GitHub audit workflow, and no live order was sent.
 
 **Current decision remains NOT READY FOR LIVE TRADING.**
+
+
+### 48. Unknown timeframe silently became a five-minute signal lifetime — corrected
+
+**Root cause.** Both signal extraction and durable pending-signal expiry used a five-minute fallback for an unrecognized timeframe. A typo, unsupported interval, or contract mismatch could therefore assign a materially incorrect expiry and allow a pending entry to remain armed longer or shorter than the intended number of bars.
+
+**Correction.** Signal extraction and pending-signal expiry now normalize supported intervals while preserving Binance's case-sensitive monthly `1M` distinction. Unknown intervals raise explicit validation errors instead of inheriting a five-minute duration.
+
+**Regression coverage.** Added tests asserting known 1h and monthly 1M durations and rejecting unsupported `60m` in both signal extraction and pending expiry.
+
+**Chain impact.** Market timeframe → signal timestamp → pending expiry → exchange conditional-entry lifetime. This is a fail-closed correctness fix; it does not replace the remaining Demo proof for cancellation/trigger races.
+
