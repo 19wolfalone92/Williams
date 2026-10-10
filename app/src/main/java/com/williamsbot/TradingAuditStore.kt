@@ -13,7 +13,7 @@ import org.json.JSONObject
  * Binance told the bot, without relying on RAM or SharedPreferences.
  */
 class TradingAuditStore(context: Context) :
-    SQLiteOpenHelper(context, "williams_trading_audit.db", null, 3) {
+    SQLiteOpenHelper(context, "williams_trading_audit.db", null, 4) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("""
@@ -106,6 +106,7 @@ class TradingAuditStore(context: Context) :
                 created_at INTEGER NOT NULL
             )
         """.trimIndent())
+        createMutationIntentTable(db)
     }
 
     override fun onUpgrade(
@@ -175,6 +176,105 @@ class TradingAuditStore(context: Context) :
                 created_at INTEGER NOT NULL
             )
         """.trimIndent())
+        createMutationIntentTable(db)
+    }
+
+    private fun createMutationIntentTable(db: SQLiteDatabase) {
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS mutation_intents(
+                intent_id TEXT PRIMARY KEY,
+                method TEXT NOT NULL,
+                path TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                side TEXT,
+                client_order_id TEXT,
+                status TEXT NOT NULL,
+                request_json TEXT NOT NULL,
+                response_json TEXT,
+                error TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            )
+        """.trimIndent())
+    }
+
+    /**
+     * Persist the mutation intent before any signed POST/DELETE reaches Binance.
+     * Insertion failure is a hard execution block.
+     */
+    @Synchronized
+    fun beginMutationIntent(
+        intentId: String,
+        method: String,
+        path: String,
+        symbol: String,
+        side: String?,
+        clientOrderId: String?,
+        requestJson: String
+    ) {
+        val now = System.currentTimeMillis()
+        val values = ContentValues()
+        values.put("intent_id", intentId)
+        values.put("method", method)
+        values.put("path", path)
+        values.put("symbol", symbol)
+        values.put("side", side)
+        values.put("client_order_id", clientOrderId)
+        values.put("status", "PENDING")
+        values.put("request_json", requestJson)
+        values.put("created_at", now)
+        values.put("updated_at", now)
+        val rowId = writableDatabase.insertOrThrow("mutation_intents", null, values)
+        if (rowId < 0L) error("Unable to persist mutation intent")
+    }
+
+    /**
+     * Outcome persistence is also mandatory. UNKNOWN rows survive process death
+     * and keep the runtime behind its reconciliation barrier.
+     */
+    @Synchronized
+    fun finishMutationIntent(
+        intentId: String,
+        status: String,
+        responseJson: String? = null,
+        error: String? = null
+    ) {
+        val values = ContentValues()
+        values.put("status", status)
+        values.put("response_json", responseJson)
+        values.put("error", error)
+        values.put("updated_at", System.currentTimeMillis())
+        val changed = writableDatabase.update(
+            "mutation_intents",
+            values,
+            "intent_id=?",
+            arrayOf(intentId)
+        )
+        if (changed != 1) error("Mutation intent not found: " + intentId)
+    }
+
+    @Synchronized
+    fun hasUnresolvedMutationIntents(): Boolean {
+        readableDatabase.rawQuery(
+            "SELECT 1 FROM mutation_intents WHERE status IN ('PENDING','UNKNOWN') LIMIT 1",
+            null
+        ).use { cursor ->
+            return cursor.moveToFirst()
+        }
+    }
+
+    @Synchronized
+    fun resolveUnresolvedMutationIntents(reason: String): Int {
+        val values = ContentValues()
+        values.put("status", "RECONCILED")
+        values.put("error", reason)
+        values.put("updated_at", System.currentTimeMillis())
+        return writableDatabase.update(
+            "mutation_intents",
+            values,
+            "status IN ('PENDING','UNKNOWN')",
+            null
+        )
     }
 
     @Synchronized
