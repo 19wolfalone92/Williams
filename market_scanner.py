@@ -435,8 +435,22 @@ class MarketScanner:
     def _clamp(value, low, high):
         return max(low, min(high, value))
 
+    @staticmethod
+    def _tc2_decision_timeframe_allowed(strategy_profile: str, interval: str) -> bool:
+        """TC2 live signals are decided on H1; lower TFs are execution/diagnostics only."""
+        profile = str(strategy_profile or "").strip().upper()
+        timeframe = _normalize_interval(interval)
+        return profile != "TC2_THREE_WISE_MEN" or timeframe == "1h"
+
     def _analyse_base(self, symbol, metadata=None) -> Optional[Tuple[Candidate, pd.DataFrame]]:
         symbol = str(symbol).upper()
+        if not self._tc2_decision_timeframe_allowed(self.strategy_profile, self.interval):
+            log.error(
+                "%s: blocking TC2 signal generation on non-H1 timeframe %s; H1 is the decision timeframe",
+                symbol,
+                self.interval,
+            )
+            return None
         try:
             if not self._symbol_is_valid(symbol, metadata):
                 return None
