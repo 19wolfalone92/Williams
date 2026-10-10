@@ -146,3 +146,51 @@ The report-bearing SHA `b0917134f8df906289281e053bdf8bdf603e3e19` was then check
 For SHA `b0917134f8df906289281e053bdf8bdf603e3e19`, the debug APK was version `4.25.0-debug`, versionCode `1769`, SHA-256 `4f6fa6845daa1449df80ef5a9904f96351c69ef6f2314e5912e1d6e6406473f6`; the unsigned release APK was version `4.25.0`, versionCode `1769`, SHA-256 `9faada8ce27505174bb7774b6361aeb1727ed8cb4f881d15e9b8d50cf0a13402`. The workflow uploaded debug artifact ID `11681319295` and unsigned release artifact ID `11681463984`; debug signature verification passed.
 
 Validation evidence is SHA-specific: the documentation-only commit that follows this record must also pass all three required workflows. Green CI does not, by itself, remove the overall `BLOCKED — NOT ACCEPTED` status while live Testnet lost-response recovery and physical-device crash recovery remain unverified.
+
+### Latest exact-HEAD validation — code SHA `a5ac0afb64d40f8e96b62cb005cf233370cef997`
+
+The branch and PR head were re-read from GitHub before recording this section. At the time of validation:
+- Branch `audit/williams-2.1-task-003-execution-safety` HEAD: `a5ac0afb64d40f8e96b62cb005cf233370cef997`.
+- PR #48 is open, draft, base `main`, and not merged.
+- `main` HEAD remains `04da5f9c09572e99ff310be3a1908179165e528c`.
+- The initial failing SHA `953d2c4e2831d1685f5531c76ac03fcedd42d00a` remains an incident baseline only; it is not used as proof for this SHA.
+
+All three required workflows completed successfully on the same current HEAD SHA:
+| Workflow | Run ID | Job ID(s) | Result |
+|---|---:|---|---|
+| Python backend tests | [38084552710](https://github.com/19wolfalone92/Williams/actions/runs/38084552710) | 114308236511 | PASS — `148 passed, 4 warnings`; release contract gate passed. |
+| Williams Campaign CI | [38084552721](https://github.com/19wolfalone92/Williams/actions/runs/38084552721) | 114308294130, 114308294356 | PASS — `180 passed, 4 warnings`; Android unit-test task, `:app:lintDebug`, and debug APK assembly passed. |
+| Build Android APK | [38084552703](https://github.com/19wolfalone92/Williams/actions/runs/38084552703) | 114308236635 | PASS — release gate, Android unit tests, lint, debug/release assembly, APK metadata checks and persistent debug-signature verification passed. |
+
+APK evidence from Build Android APK run `38084552703`:
+- Debug package `com.williamsbot.debug`, version `4.25.0-debug`, versionCode `1771`; APK SHA-256 `5519a4c565ca5ef6eb4f4ab5c87d9e55921cba1af7ee0e80c021b437389ce211`; artifact ID `11682280166`.
+- Unsigned release package `com.williamsbot`, version `4.25.0`, versionCode `1771`; APK SHA-256 `aecf0dcccaf0cc041d9e27504674f00a58db8ae4d535ca6fd25cb55c4f805a18`; artifact ID `11681514552`.
+- Debug APK signature matched the configured persistent debug keystore and `apksigner verify` succeeded.
+- Campaign CI debug APK artifact ID `11681584299`; lint report artifact ID `11682120747`; backend pytest report artifact ID `11681930559`.
+
+### Mutation-route review and explicit verification boundary
+
+The current Android source has exactly three raw OkHttp `execute()` call sites in `StandaloneRuntime.kt`:
+1. `NativeEngine.getBody(path)` — unsigned GET to `baseUrl + path` for read-only market/time data. It builds only GET requests; it is not a Binance order mutation boundary.
+2. `NativeEngine.signedRequest(method, path, params)` — signed Binance request helper. Supported writes are classified by `executionMutationSpec`; `validateAndPersistMutationIntent` and the durable SQLite `PENDING → SUBMITTING` write/read-back occur before network submission. Unsupported order-like write endpoints fail closed. Mutation response state is committed and read back before the caller receives a successful return; failure latches `RECONCILE_REQUIRED`. REST telemetry is wrapped as optional best-effort logging after the mandatory result write.
+3. `NativeEngine.signedRawGet(path, params)` — signed Binance GET-only helper; request construction has no POST/PUT/PATCH/DELETE branch. It records optional REST telemetry but does not submit orders.
+
+Android write routes presently modeled in `executionMutationSpec`: POST `/api/v3/order`, POST `/api/v3/orderList/oco`, POST `/api/v3/order/cancelReplace`, DELETE `/api/v3/order`, and DELETE `/api/v3/orderList`. The DELETE open-orders bulk-cancel path and unmodeled order/algo-order write endpoints are intentionally blocked by the fail-closed classifier, not supported as a successful production feature. OCO cancellation/recovery requires child-leg state evidence; list-level acknowledgements alone are not sufficient.
+
+The following checks are evidenced by the current offline CI test suites:
+- Intent INSERT/save/commit/read-back failures prevent the Python exchange callback from being called.
+- Duplicate parallel logical entries are serialized; ambiguous timeout and process-death-after-SUBMITTING tests forbid blind re-send.
+- Mandatory exchange-result persistence failure remains ambiguous and blocks new exposure.
+- Partial fill, cancel/fill race, OCO cancel/fill race, cancelReplace old-order partial fill, stale context and `RECONCILE_REQUIRED` gates have regression tests.
+- Optional telemetry failure is not used as an execution result; release version regression checks `server.py`, `ci_release_gate.py`, Gradle and the Android UI.
+- Campaign tests cover restart lookup by the stable `clientOrderId`, same-order adoption without duplicate placement, recovery into `OPEN` only after exchange-confirmed fill/protection, and blocking on genuinely unknown exchange state.
+
+**NOT VERIFIED / acceptance blockers remain:**
+- Live Binance Spot Testnet lost-response test in which Binance accepts a real Testnet order but the client deliberately drops the response; no trade was run as part of this task.
+- Physical Android process-kill/restart recovery against actual Testnet order/fill/stop state.
+- Live partial OCO fill with concurrent sibling fill/cancel and proof of exact residual inventory protection.
+- Full repository-wide proof that no legacy/external caller can bypass the Python `ExecutionBarrier`; the branch has static checks and known call-path evidence, but the final call-graph inventory across every production call site remains to be completed.
+- All Binance mass-cancel variants and unsupported algo-order mutation semantics.
+- Fee reconciliation and complete post-restart account/position/protective-order equivalence against authoritative live exchange data.
+
+Therefore, green CI on SHA `a5ac0afb64d40f8e96b62cb005cf233370cef997` is necessary but **does not satisfy acceptance**. Status remains **BLOCKED — NOT ACCEPTED** pending final call-graph proof and Testnet/device recovery evidence. No Mainnet endpoint, credentials, or real trading operation was used.
