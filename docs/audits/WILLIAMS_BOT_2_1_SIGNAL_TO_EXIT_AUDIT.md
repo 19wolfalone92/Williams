@@ -390,3 +390,20 @@ Native Futures previously allowed up to three campaigns by default and used a 3%
 - Android aggregation of multiple market exits racing with protective-child fills remains fail-closed but incomplete.
 - Authorized Demo LONG/SHORT entry → protection → trailing/exit → accounting → restart-recovery and read-only release-gate runs remain outstanding.
 - **NOT READY FOR LIVE TRADING.** No real orders were sent.
+
+
+### 41. Configurable indicator parameters could silently change the book strategy — corrected with a live-trading guard
+
+The research/backtest layer supports environment overrides for Alligator periods/displacements, AO/AC periods, fractal left/right bars and Super AO length. Those are useful for controlled research, but the Futures live path could otherwise trade a parameter variant while still describing it as the canonical Williams method.
+
+Added an explicit canonical parameter contract: Alligator 13/8/5 with displacements 8/5/3; AO 5/34; AC 5; strict 2-left/2-right fractal; and three-bar Super AO. The Futures runtime now blocks new exposure if any of these constants differ or are malformed. Existing positions continue through management/reconciliation. Research callers can still explore alternate values, but those runs must not be confused with canonical live execution. Regression tests cover both the canonical defaults and parameter drift.
+
+### 42. Add-on chronology used a fractal's source candle instead of when it became actionable — corrected
+
+Initial signal selection already ranked by `confirmation_time_ms`, but the add-on path still compared and ranked `signal_bar_time_ms`. A WM3 fractal's center candle is historical; its signal is not actionable until the right-side confirmation bars close. This mismatch could accept/reject an add-on based on the wrong chronology.
+
+Python Futures now persists `last_signal_confirmation_time_ms` for the campaign and uses confirmation chronology in both add-on selection and the final execution guard. Legacy campaigns fall back to the previously persisted source timestamp conservatively. Added a regression test proving that a fractal with an older center but later confirmation does not outrank a signal that became actionable earlier.
+
+### Verification note
+
+These additions were committed after earlier green runs. They are **not verified until CI passes on the exact current head**. Android native signal semantics still differ from Python for WM1 admission and hard exits; the shared golden-vector suite is still outstanding. No Demo or real orders were sent.
