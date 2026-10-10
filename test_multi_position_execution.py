@@ -109,6 +109,23 @@ class FakeClient:
                 return row
         raise AssertionError("order not found")
 
+    def my_trades(self, symbol, order_id=None, limit=1000):
+        order = self.get_order(symbol, order_id=order_id)
+        qty = float(order.get("executedQty", 0) or 0)
+        quote = float(order.get("cummulativeQuoteQty", 0) or 0)
+        if qty <= 0:
+            return []
+        return [{
+            "id": str(order.get("orderId", order_id)),
+            "orderId": order.get("orderId", order_id),
+            "symbol": symbol,
+            "price": str(quote / qty),
+            "qty": str(qty),
+            "quoteQty": str(quote),
+            "commission": "0",
+            "commissionAsset": "USDT",
+        }]
+
     def order_safe(self, symbol, side, type_, *, quote_order_qty=None, quantity=None, new_client_order_id=None, **kwargs):
         assert side == "BUY"
         self.buy_calls += 1
