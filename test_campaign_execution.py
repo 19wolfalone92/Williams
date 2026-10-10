@@ -297,7 +297,11 @@ def test_missing_source_h1_candle_blocks_before_fake_exchange_mutation(monkeypat
         svc = service(db, client)
         spec = signal()
         now = pd.Timestamp.now(tz="UTC").floor("h")
-        idx = pd.date_range(end=now - pd.Timedelta(hours=1), periods=3, freq="h", tz="UTC")
+        idx = pd.DatetimeIndex([
+            now - pd.Timedelta(hours=3),
+            now - pd.Timedelta(hours=1),
+            now,
+        ])
         frame = pd.DataFrame(
             {"open": [100.0] * 3, "high": [100.5] * 3,
              "low": [98.0] * 3, "close": [100.0] * 3, "volume": [1000.0] * 3},
