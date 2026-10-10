@@ -9,6 +9,7 @@ from equity_breaker import EquityCircuitBreaker
 from l2_slippage import L2SlippageGuard
 from execution_accumulator import ExecutionSummary, accumulate_order
 from campaign_execution import CampaignExecutionService, CampaignExecutionError
+from execution_barrier import OrderIntent
 from campaign_model import SignalSpec, SignalType, SignalRole
 from campaign_monitor import CampaignMonitor
 from order_identity import is_entry_id, is_exit_id, is_managed_order
@@ -21,6 +22,10 @@ POSITION_STATES = {
     "EXIT_PENDING",
     "RECONCILE_REQUIRED",
 }
+
+
+class ExecutionAdmissionRejected(RuntimeError):
+    """The common execution barrier rejected the intent before exchange I/O."""
 
 
 class MultiPositionTrader:
@@ -105,6 +110,45 @@ class MultiPositionTrader:
             self.db,
             self.campaign_execution,
         )
+
+    def _submit_via_execution_barrier(
+        self,
+        symbol,
+        side,
+        order_type,
+        purpose,
+        submit,
+        *,
+        client_order_id="",
+        required_context_versions=None,
+        permission_interval="",
+        campaign_id="",
+        signal_id="",
+        risk_quote=0.0,
+    ):
+        """Sole path for legacy Spot mutations; fail closed without the shared barrier."""
+        if self.execution_barrier is None:
+            raise RuntimeError(
+                "Spot order mutation blocked: canonical ExecutionBarrier was not injected"
+            )
+        intent = OrderIntent.new(
+            str(symbol).upper(),
+            str(side).upper(),
+            str(order_type).upper(),
+            required_context_versions=dict(required_context_versions or {}),
+            client_order_id=str(client_order_id or ""),
+            purpose=str(purpose).upper(),
+            permission_interval=str(permission_interval or ""),
+            campaign_id=str(campaign_id or ""),
+            signal_id=str(signal_id or ""),
+            risk_quote=float(risk_quote or 0.0),
+        )
+        result = self.execution_barrier.execute(intent, submit)
+        if not result.accepted:
+            raise ExecutionAdmissionRejected(
+                f"ExecutionBarrier blocked {purpose}: {result.reason}"
+            )
+        return result.response
 
     # ------------------------------------------------------------------
     # Durable state
@@ -719,12 +763,19 @@ class MultiPositionTrader:
             )
 
         client_id = f"{self.EMERGENCY_PREFIX}{uuid.uuid4().hex[:16]}"
-        sell = self.client.order_safe(
+        sell = self._submit_via_execution_barrier(
             symbol,
             "SELL",
             "MARKET",
-            quantity=self.client.decimal_format(sell_qty),
-            new_client_order_id=client_id,
+            "EMERGENCY_EXIT",
+            lambda: self.client.order_safe(
+                symbol,
+                "SELL",
+                "MARKET",
+                quantity=self.client.decimal_format(sell_qty),
+                new_client_order_id=client_id,
+            ),
+            client_order_id=client_id,
         )
         self.db.save_order(sell)
 
@@ -933,13 +984,20 @@ class MultiPositionTrader:
         self.set_state(symbol, "EXIT_PENDING")
 
         create_oco = getattr(self.client, "create_oco_sell_safe", None) or self.client.create_oco_sell
-        result = create_oco(
+        result = self._submit_via_execution_barrier(
             symbol,
-            self.client.decimal_format(qty),
-            self.client.decimal_format(tp),
-            self.client.decimal_format(sl),
-            self.client.decimal_format(sl_limit),
-            client_id,
+            "SELL",
+            "OCO",
+            "PROTECTION",
+            lambda: create_oco(
+                symbol,
+                self.client.decimal_format(qty),
+                self.client.decimal_format(tp),
+                self.client.decimal_format(sl),
+                self.client.decimal_format(sl_limit),
+                client_id,
+            ),
+            client_order_id=client_id,
         )
 
         for leg in result.get("orderReports", []):
@@ -1656,9 +1714,17 @@ class MultiPositionTrader:
                 cancel = getattr(self.client, "cancel_oco", None)
                 if cancel is not None:
                     if list_id:
-                        cancel(symbol, order_list_id=list_id)
+                        self._submit_via_execution_barrier(
+                            symbol, "SELL", "CANCEL", "CAMPAIGN_EXIT_CANCEL",
+                            lambda: cancel(symbol, order_list_id=list_id),
+                            client_order_id=list_client or list_id,
+                        )
                     else:
-                        cancel(symbol, list_client_order_id=list_client)
+                        self._submit_via_execution_barrier(
+                            symbol, "SELL", "CANCEL", "CAMPAIGN_EXIT_CANCEL",
+                            lambda: cancel(symbol, list_client_order_id=list_client),
+                            client_order_id=list_client,
+                        )
 
             account = self.client.account()
             free_qty = self._asset_balance(
@@ -1675,12 +1741,20 @@ class MultiPositionTrader:
                     f"{symbol}: managed quantity is no longer available"
                 )
 
-            sell = self.client.order_safe(
+            manual_client_id = f"{self.MANUAL_PREFIX}{uuid.uuid4().hex[:20]}"
+            sell = self._submit_via_execution_barrier(
                 symbol,
                 "SELL",
                 "MARKET",
-                quantity=self.client.decimal_format(sell_qty),
-                new_client_order_id=f"{self.MANUAL_PREFIX}{uuid.uuid4().hex[:20]}",
+                "MANUAL_EXIT",
+                lambda: self.client.order_safe(
+                    symbol,
+                    "SELL",
+                    "MARKET",
+                    quantity=self.client.decimal_format(sell_qty),
+                    new_client_order_id=manual_client_id,
+                ),
+                client_order_id=manual_client_id,
             )
             self.db.save_order(sell)
 
@@ -2214,12 +2288,24 @@ class MultiPositionTrader:
                     float(quote),
                 )
 
-                order = self.client.order_safe(
+                # Legacy score-only scanner has no SignalSpec/context version
+                # contract. Route it through the common barrier, which rejects it
+                # until a canonical Williams signal and fresh context are supplied.
+                order = self._submit_via_execution_barrier(
                     symbol,
                     "BUY",
                     "MARKET",
-                    quote_order_qty=self.client.decimal_format(quote),
-                    new_client_order_id=client_id,
+                    "ENTRY",
+                    lambda: self.client.order_safe(
+                        symbol,
+                        "BUY",
+                        "MARKET",
+                        quote_order_qty=self.client.decimal_format(quote),
+                        new_client_order_id=client_id,
+                    ),
+                    client_order_id=client_id,
+                    required_context_versions={},
+                    permission_interval="1h",
                 )
                 self.db.save_order(order)
 
@@ -2310,21 +2396,29 @@ class MultiPositionTrader:
                     }
                 )
             except Exception as exc:
-                # Do NOT issue an emergency SELL here. The durable entry
-                # intent remains on disk and startup/next cycle recovery
-                # will inspect the exact Binance clientOrderId.
-                self.set_state(
-                    symbol,
-                    "RECONCILE_REQUIRED",
-                )
+                if isinstance(exc, ExecutionAdmissionRejected):
+                    # The common barrier guarantees that this rejection occurred
+                    # before exchange I/O; release the reservation without
+                    # manufacturing an exchange order or position.
+                    self.db.state_delete(self._pending_key(symbol))
+                    self.set_state(symbol, "FLAT")
+                    self.db.log_event(
+                        "WARNING",
+                        "multi_position_entry_blocked",
+                        str(exc),
+                        {"symbol": symbol, "clientOrderId": client_id},
+                    )
+                    results.append(
+                        {"symbol": symbol, "status": "BLOCKED", "reason": str(exc)}
+                    )
+                    continue
+                # Any error after an exchange mutation may have begun is ambiguous.
+                self.set_state(symbol, "RECONCILE_REQUIRED")
                 self.db.log_event(
                     "ERROR",
                     "multi_position_entry_error",
                     str(exc),
-                    {
-                        "symbol": symbol,
-                        "clientOrderId": client_id,
-                    },
+                    {"symbol": symbol, "clientOrderId": client_id},
                 )
                 results.append(
                     {
