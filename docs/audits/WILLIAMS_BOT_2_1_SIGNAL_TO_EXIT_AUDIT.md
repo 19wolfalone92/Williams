@@ -534,3 +534,15 @@ These are corrected on the current audit branch. The subsequent exact-head Campa
 
 **Chain impact.** Configuration → market-data interval → context hierarchy → signal freshness → pending expiry. Invalid timeframe configuration now prevents runtime construction instead of risking a wrong context/expiry contract.
 
+
+
+### 51. Persisted signal recovery could misread direction and booleans — corrected
+
+**Root cause.** Recovery reconstructed a `SignalSpec` directly from persisted fields without validating that the exchange side agreed with intended direction. It also used Python's generic `bool(value)`, under which the serialized string `"false"` is truthy. A malformed or legacy row could therefore restore a false HTF confirmation as true or pair BUY with SHORT.
+
+**Correction.** Recovery now validates the signal object, allowed side, side/direction agreement, non-empty timeframe and context-version shape. Boolean fields accept only explicit booleans, 0/1 or the corresponding textual tokens; ambiguous values raise an error and block recovery/admission.
+
+**Regression coverage.** Added tests for BUY/SHORT mismatch, textual false values, and malformed boolean tokens.
+
+**Chain impact.** SQLite/persisted event → recovered SignalSpec → context admission → direction mapping → order intent. This is a fail-closed recovery fix; restart and exchange reconciliation still need Demo E2E proof.
+
