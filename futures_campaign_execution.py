@@ -744,11 +744,28 @@ class FuturesCampaignExecutionService:
             raise FuturesCampaignExecutionError(
                 f"{symbol}: spread {spread:.4%} exceeds {self.max_spread_pct:.4%}"
             )
-        if self.require_htf_confirmation and not bool(signal.htf_confirmed):
-            if not self._tc2_wm1_early_context_allowed(signal):
-                raise FuturesCampaignExecutionError(
-                    f"{symbol}: strict higher-timeframe confirmation is absent and TC2 WM1 early-reversal admission is not proven"
+        tc2_core = (
+            os.getenv("WILLIAMS_STRATEGY_PROFILE", "TC2_THREE_WISE_MEN").strip().upper()
+            == "TC2_THREE_WISE_MEN"
+        )
+        if tc2_core:
+            snapshot = self.barrier.context_cache.snapshot()
+            context_ok = self._tc2_core_context_allowed(signal, snapshot)
+            if (
+                not context_ok
+                and signal.signal_type == SignalType.REVERSAL
+            ):
+                context_ok = self._tc2_core_context_allowed(
+                    signal, snapshot, allow_early_wm1=True
                 )
+            if not context_ok:
+                raise FuturesCampaignExecutionError(
+                    f"{symbol}: TC2 H1 signal context, H4 context validity, or D1 macro airbag failed"
+                )
+        elif self.require_htf_confirmation and not bool(signal.htf_confirmed):
+            raise FuturesCampaignExecutionError(
+                f"{symbol}: selected profile requires higher-timeframe confirmation"
+            )
 
     def _actual_risk_quote(self, quantity: float, entry: float, stop: float) -> float:
         notional = quantity * entry
@@ -923,7 +940,24 @@ class FuturesCampaignExecutionService:
                 ctx = snapshot.context(symbol, signal.timeframe)
                 if ctx is None:
                     raise FuturesCampaignExecutionError("operative MarketContext disappeared")
-                if signal.signal_type == SignalType.REVERSAL:
+                tc2_core = (
+                    os.getenv("WILLIAMS_STRATEGY_PROFILE", "TC2_THREE_WISE_MEN").strip().upper()
+                    == "TC2_THREE_WISE_MEN"
+                )
+                if tc2_core:
+                    context_ok = self._tc2_core_context_allowed(signal, snapshot)
+                    if (
+                        not context_ok
+                        and signal.signal_type == SignalType.REVERSAL
+                    ):
+                        context_ok = self._tc2_core_context_allowed(
+                            signal, snapshot, allow_early_wm1=True
+                        )
+                    if not context_ok:
+                        raise FuturesCampaignExecutionError(
+                            "TC2 context became stale or no longer admits this Wise-Man signal"
+                        )
+                elif signal.signal_type == SignalType.REVERSAL:
                     if not self._tc2_wm1_early_context_allowed(signal, snapshot):
                         raise FuturesCampaignExecutionError(
                             "WM1 early context/angulation/D1 macro admission no longer valid"
@@ -3130,8 +3164,18 @@ class FuturesCampaignExecutionService:
             raise FuturesCampaignExecutionError(
                 f"{symbol}: add-on trigger is stale or structural stop geometry is invalid"
             )
-        if self.require_htf_confirmation and not bool(signal.htf_confirmed):
-            raise FuturesCampaignExecutionError(f"{symbol}: add-on requires higher-timeframe confirmation")
+        tc2_core = (
+            os.getenv("WILLIAMS_STRATEGY_PROFILE", "TC2_THREE_WISE_MEN").strip().upper()
+            == "TC2_THREE_WISE_MEN"
+        )
+        if tc2_core:
+            snapshot = self.barrier.context_cache.snapshot()
+            if not self._tc2_core_context_allowed(signal, snapshot):
+                raise FuturesCampaignExecutionError(
+                    f"{symbol}: TC2 add-on requires fresh H1 same-direction context and no active opposite D1 macro regime"
+                )
+        elif self.require_htf_confirmation and not bool(signal.htf_confirmed):
+            raise FuturesCampaignExecutionError(f"{symbol}: selected profile requires add-on higher-timeframe confirmation")
         spread = self._spread_pct(symbol)
         if spread > self.max_spread_pct:
             raise FuturesCampaignExecutionError(
