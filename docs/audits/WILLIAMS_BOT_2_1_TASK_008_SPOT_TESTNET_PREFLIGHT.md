@@ -146,3 +146,48 @@ When separately authorized, each order-cycle stage must persist intent before su
 ## Final decision
 
 **TASK 008 = BLOCKED / NOT ACCEPTED.** Endpoint strings and parts of the gate are source-consistent, but the full read-only preflight has not been run and the code's current `ready=true` condition is insufficient evidence for the requested operational state. Do not run a trading cycle until the missing gates are implemented and proven, prior tasks are accepted, and separate Testnet order permission is issued.
+
+
+---
+
+## Follow-up: fail-closed repair (2026-10-10)
+
+**Current reviewed branch HEAD:** `24deb366446c60bd3cc0a6ccfb837308e1d8f2cf`  
+**Base `main` SHA:** `04da5f9c09572e99ff310be3a1908179165e528c`  
+**Branch comparison:** 5 commits ahead, 0 behind.  
+**CI status:** GitHub combined status returned no status entries; this is NOT a passing test result.  
+**Execution status:** Tests have not been run in a local Python environment in this session. No live preflight or exchange mutation was performed.
+
+### Changes added
+
+- `preflight_gate.py`: readiness now starts with explicit required checks in `UNKNOWN`; only performed checks can become PASS. Environment must explicitly be Spot Testnet. REST/time/auth/account/symbol/order read exceptions are converted to structured failures without serializing raw exception messages. Gate cannot return ready while required candles, WebSocket freshness, scanner heartbeat, market context, diagnostics, storage integrity, reconciliation, execution-state certainty, and Android freshness remain UNKNOWN.
+- `binance_client.py`: transport exception text no longer embeds raw exception content; server/API response bodies are redacted from error payloads for the reviewed error paths.
+- `test_preflight_fail_closed.py`: added isolated fake-client behavioral tests for missing required proofs, REST failure, time-sync exception, account/auth failure, order-read exception, wrong environment, excessive time offset, missing credentials, and UNKNOWN reconciliation state. These are unit tests only, not live Testnet evidence.
+
+### Follow-up acceptance matrix
+
+| Requirement | State | Evidence / limitation |
+|---|---|---|
+| Correct current branch/HEAD identified | PASS | Branch comparison anchored to exact `main` SHA above |
+| Unknown required runtime proof blocks ready | Implemented; test execution UNKNOWN | Behavioral tests added but not executed in this environment |
+| REST/time/auth/order exceptions fail closed | Implemented; test execution UNKNOWN | Sanitized structured error paths added; tests not executed |
+| Missing/stale balances and candles block readiness | FAIL-CLOSED by UNKNOWN, freshness proof not implemented | No balance timestamp/freshness source or candle check in gate |
+| Market and user WebSocket freshness | UNKNOWN | Not integrated as measured readiness proofs |
+| Scanner/context/diagnostic freshness | UNKNOWN | Not integrated as measured readiness proofs |
+| SQLite↔Binance reconciliation | UNKNOWN | No successful reconciliation proof in preflight |
+| Android freshness/parity | UNKNOWN | No local Android runtime available |
+| Credential filesystem permissions/backups/Android Keystore | PARTIAL / UNKNOWN | Existing Fernet fallback key remains in data directory; backup policy and Android Keystore integration not verified |
+| Error-secret redaction | PARTIAL | Reviewed REST transport/API error paths changed; whole-repository log/diagnostic sink audit and tests remain outstanding |
+| Idempotency/order unknown-result/Execution Barrier | UNKNOWN | No full execution-path behavioral suite executed in this follow-up |
+| Live read-only Testnet preflight | UNKNOWN | DNS resolution failed in prior environment probe; no authorized local credentials/runtime available |
+| Mainnet not used; no orders sent | PASS for this audit session | No Mainnet requests or order mutations were issued by this session |
+
+### Remaining blockers
+
+1. Run the Python test suite and regression suite on this exact SHA; capture command, exit code, and output.
+2. Review and test all error serialization/logging sinks, not only the modified REST client paths.
+3. Implement measured freshness probes for candles, market WebSocket, user stream, scanner, market context, diagnostics, SQLite integrity/reconciliation, and Android status. Keep each UNKNOWN until evidence exists.
+4. Add and execute behavioral tests for intent-before-submit, concurrent BUY idempotency, partial fills, OCO residual protection, restart recovery, WebSocket gap REST catch-up, safe close, and execution barrier enforcement.
+5. Execute read-only preflight from an authorized local Spot Testnet runtime and attach sanitized results. Do not run order E2E without separate explicit authorization.
+
+**Follow-up decision: STILL BLOCKED / NOT ACCEPTED.** The code changes are committed to the audit branch, but tests have not been executed and the full runtime readiness contract remains incomplete. Do not enable trading.
