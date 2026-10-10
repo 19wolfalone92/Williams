@@ -1364,7 +1364,23 @@ class CampaignExecutionService:
                         order_id=int(protective_id),
                     )
                     status = str(current.get("status", "")).upper()
-                    if status not in {"CANCELED", "EXPIRED", "FILLED", "REJECTED"}:
+                    try:
+                        executed_during_cancel = float(current.get("executedQty", 0) or 0)
+                    except (TypeError, ValueError):
+                        executed_during_cancel = -1.0
+                    if executed_during_cancel < 0:
+                        raise CampaignExecutionError(
+                            "protective order returned invalid executedQty during cancellation"
+                        )
+                    if status in {"FILLED", "PARTIALLY_FILLED"} or executed_during_cancel > 0:
+                        self.engine.mark_reconcile_required(
+                            campaign,
+                            "protective order filled/part-filled during cancellation; reconcile fills before market exit",
+                        )
+                        raise CampaignExecutionError(
+                            "protection cancel raced with execution; market exit is forbidden until fills are reconciled"
+                        )
+                    if status not in {"CANCELED", "EXPIRED", "REJECTED"}:
                         raise
                 except Exception:
                     self.engine.mark_reconcile_required(
