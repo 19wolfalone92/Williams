@@ -1531,11 +1531,23 @@ class MultiPositionTrader:
 
         trades = list(self.open_trades())
         results = list(pending)
+        # A pending-entry recovery can materialize a trade and install its
+        # protection. Do not immediately run the same trade through a second
+        # reconciliation pass in this startup cycle: exchange snapshots may lag
+        # the successful protection response, and that could create a duplicate.
+        recovered_trade_ids = {
+            int(item["trade_id"])
+            for item in pending
+            if item.get("trade_id") is not None
+            and str(item.get("state", "")).upper() in {"OPEN", "EXIT_PENDING"}
+        }
 
         if not trades:
             return results
 
         for trade in list(trades):
+            if int(trade["id"]) in recovered_trade_ids:
+                continue
             symbol = str(trade["symbol"]).upper()
             try:
                 results.append(
