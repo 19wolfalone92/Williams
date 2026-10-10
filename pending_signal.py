@@ -69,6 +69,8 @@ class PendingSignal:
     protective_reference: float
     created_at_ms: int
     expires_at_ms: int
+    # For a fractal, actionable confirmation can occur well after the center bar.
+    confirmation_time_ms: int = 0
     state: str = SignalState.DETECTED.value
     replacement_of: str = ""
 
@@ -94,6 +96,9 @@ class PendingSignal:
             protective_reference=float(signal.protective_reference),
             created_at_ms=int(signal.created_at_ms),
             expires_at_ms=default_expiry_ms(signal),
+            confirmation_time_ms=int(
+                getattr(signal, "confirmation_time_ms", 0) or signal.signal_bar_time_ms
+            ),
             state=state.value,
             replacement_of=replacement_of,
         )
@@ -126,7 +131,9 @@ def should_replace(old: PendingSignal, new: PendingSignal, min_price_delta: floa
         return True
     if old.is_expired() and not new.is_expired():
         return True
+    old_actionable_time = int(old.confirmation_time_ms or old.signal_bar_time_ms)
+    new_actionable_time = int(new.confirmation_time_ms or new.signal_bar_time_ms)
     return (
-        new.signal_bar_time_ms > old.signal_bar_time_ms
+        new_actionable_time > old_actionable_time
         and abs(new.trigger_price - old.trigger_price) >= max(0.0, min_price_delta)
     )
