@@ -65,20 +65,42 @@ internal fun williamsAngulationScore(
     closes: List<Double>,
     index: Int,
     direction: String,
-    window: Int = 5
+    window: Int = 5,
+    teeth: List<Double>? = null,
+    lips: List<Double>? = null
 ): Double? {
+    val teethLine = teeth ?: return null
+    val lipsLine = lips ?: return null
     if (
-        index < 0 || index >= jaw.size ||
-        jaw.size != lows.size || jaw.size != highs.size || jaw.size != closes.size
+        index < 2 || index >= jaw.size ||
+        jaw.size != lows.size || jaw.size != highs.size || jaw.size != closes.size ||
+        jaw.size != teethLine.size || jaw.size != lipsLine.size
     ) return null
     val side = direction.uppercase(Locale.US)
     if (side !in setOf("LONG", "SHORT")) return null
     val start = max(0, index - max(3, window) + 1)
     if (index - start + 1 < 3) return null
     for (i in start..index) {
-        if (!jaw[i].isFinite() || !lows[i].isFinite() ||
-            !highs[i].isFinite() || !closes[i].isFinite()
-        ) return null
+        if (!listOf(jaw[i], teethLine[i], lipsLine[i], lows[i], highs[i], closes[i]).all { it.isFinite() && it > 0.0 }) {
+            return null
+        }
+        if (lows[i] > highs[i]) return null
+    }
+
+    fun slope(values: List<Double>): Double {
+        val count = (index - start + 1).toDouble()
+        val xMean = (count - 1.0) / 2.0
+        val yMean = (start..index).sumOf { values[it] } / count
+        var numerator = 0.0
+        var denominator = 0.0
+        var x = 0.0
+        for (i in start..index) {
+            val dx = x - xMean
+            numerator += dx * (values[i] - yMean)
+            denominator += dx * dx
+            x += 1.0
+        }
+        return if (denominator > 0.0) numerator / denominator else 0.0
     }
 
     val bullishDistance = (start..index).map { i -> max(0.0, jaw[i] - lows[i]) }
@@ -86,32 +108,47 @@ internal fun williamsAngulationScore(
     val bullishDelta = bullishDistance.last() - bullishDistance.first()
     val bearishDelta = bearishDistance.last() - bearishDistance.first()
 
-    fun regressionSlope(values: List<Double>): Double {
-        val n = values.size.toDouble()
-        val xMean = (n - 1.0) / 2.0
-        val yMean = values.average()
+    fun localSlope(values: List<Double>): Double {
+        val normalized = values.subList(start, index + 1)
+        val count = normalized.size.toDouble()
+        val xMean = (count - 1.0) / 2.0
+        val yMean = normalized.average()
         var numerator = 0.0
         var denominator = 0.0
-        for (i in values.indices) {
+        for (i in normalized.indices) {
             val dx = i.toDouble() - xMean
-            numerator += dx * (values[i] - yMean)
+            numerator += dx * (normalized[i] - yMean)
             denominator += dx * dx
         }
         return if (denominator > 0.0) numerator / denominator else 0.0
     }
 
-    val directionValid = if (side == "LONG") {
-        bullishDelta > 0.0 && regressionSlope(bullishDistance) > 0.0
-    } else {
-        bearishDelta > 0.0 && regressionSlope(bearishDistance) > 0.0
-    }
-    if (!directionValid) return null
+    val jawSlope = localSlope(jaw)
+    val lowSlope = localSlope(lows)
+    val highSlope = localSlope(highs)
+    val bullDistanceSlope = localSlope(bullishDistance)
+    val bearDistanceSlope = localSlope(bearishDistance)
+    val bullAngleDivergence = jawSlope - lowSlope
+    val bearAngleDivergence = highSlope - jawSlope
+    val mouthMin = min(jaw[index], min(teethLine[index], lipsLine[index]))
+    val mouthMax = max(jaw[index], max(teethLine[index], lipsLine[index]))
 
-    // Match the Python WM1 evidence score: the score is the larger increase in
-    // separation (either side of Jaw) normalized by current price/Jaw.
-    val base = max(max(kotlin.math.abs(closes[index]), kotlin.math.abs(jaw[index])), 1e-9)
-    val score = max(max(bullishDelta, bearishDelta) / base * 100.0, 0.0)
-    return score.takeIf { it.isFinite() }
+    val divergence = if (side == "LONG") bullAngleDivergence else bearAngleDivergence
+    val valid = if (side == "LONG") {
+        lows[index] < mouthMin &&
+            bullishDelta > 0.0 &&
+            bullDistanceSlope > 0.0 &&
+            bullAngleDivergence > 0.0
+    } else {
+        highs[index] > mouthMax &&
+            bearishDelta > 0.0 &&
+            bearDistanceSlope > 0.0 &&
+            bearAngleDivergence > 0.0
+    }
+    if (!valid || !divergence.isFinite()) return null
+    val base = max(kotlin.math.abs(closes[index]), kotlin.math.abs(jaw[index])).coerceAtLeast(1e-9)
+    val score = divergence / base * 100.0
+    return score.takeIf { it.isFinite() && it > 0.0 }
 }
 
 /** Boolean compatibility wrapper for existing tests/callers. */
@@ -124,7 +161,10 @@ internal fun hasIncreasingWilliamsAngulation(
     window: Int = 5
 ): Boolean {
     val closes = highs.indices.map { i -> (highs[i] + lows[i]) / 2.0 }
-    return williamsAngulationScore(jaw, lows, highs, closes, index, direction, window) != null
+    return williamsAngulationScore(
+        jaw, lows, highs, closes, index, direction, window,
+        teeth = jaw, lips = jaw
+    ) != null
 }
 
 /**
@@ -1271,7 +1311,7 @@ internal class FuturesNativeEngine(
                 val belowMouth = bar.low < min(jawAt, min(teethAt, lipsAt))
                 val trigger = bar.high + tickSize
                 val stop = bar.low - tickSize
-                val angulationScore = williamsAngulationScore(jaw, lows, highs, closes, i, "LONG")
+                val angulationScore = williamsAngulationScore(jaw, lows, highs, closes, i, "LONG", teeth = teeth, lips = lips)
                 if (freshLow && belowMouth && closeLocation >= 0.50 &&
                     angulationScore != null && stop > 0.0
                 ) {
@@ -1287,7 +1327,7 @@ internal class FuturesNativeEngine(
                 val aboveMouth = bar.high > max(jawAt, max(teethAt, lipsAt))
                 val trigger = bar.low - tickSize
                 val stop = bar.high + tickSize
-                val angulationScore = williamsAngulationScore(jaw, lows, highs, closes, i, "SHORT")
+                val angulationScore = williamsAngulationScore(jaw, lows, highs, closes, i, "SHORT", teeth = teeth, lips = lips)
                 if (freshHigh && aboveMouth && closeLocation <= 0.50 &&
                     angulationScore != null && stop > trigger
                 ) {
