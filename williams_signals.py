@@ -363,7 +363,10 @@ def extract_long_signal_specs(
                     symbol=symbol,
                     side="BUY",
                     signal_type=SignalType.SUPER_AO,
-                    role=SignalRole.ADD_ON,
+                    # Any Wise-Man signal may start a flat campaign. The campaign
+                    # coordinator reclassifies later WM2/WM3 events as ADD_ON
+                    # when a position is already open.
+                    role=SignalRole.ENTRY,
                     timeframe=timeframe,
                     signal_bar_time_ms=_row_time_ms(row),
                     confirmation_time_ms=_row_time_ms(row),
@@ -408,7 +411,9 @@ def extract_long_signal_specs(
                     symbol=symbol,
                     side="BUY",
                     signal_type=SignalType.FRACTAL,
-                    role=SignalRole.ADD_ON,
+                    # A confirmed WM3 may be the first actionable signal.
+                    # Active-campaign callers explicitly reclassify it as ADD_ON.
+                    role=SignalRole.ENTRY,
                     timeframe=timeframe,
                     signal_bar_time_ms=_row_time_ms(row),
                     confirmation_time_ms=_row_time_ms(ind.iloc[confirmation_i]),
@@ -528,7 +533,10 @@ def extract_short_signal_specs(
                     symbol=symbol,
                     side="SELL",
                     signal_type=SignalType.SUPER_AO,
-                    role=SignalRole.ADD_ON,
+                    # Any Wise-Man signal may start a flat campaign. The campaign
+                    # coordinator reclassifies later WM2/WM3 events as ADD_ON
+                    # when a position is already open.
+                    role=SignalRole.ENTRY,
                     timeframe=timeframe,
                     signal_bar_time_ms=_row_time_ms(row),
                     confirmation_time_ms=_row_time_ms(row),
@@ -574,7 +582,9 @@ def extract_short_signal_specs(
                     symbol=symbol,
                     side="SELL",
                     signal_type=SignalType.FRACTAL,
-                    role=SignalRole.ADD_ON,
+                    # A confirmed WM3 may be the first actionable signal.
+                    # Active-campaign callers explicitly reclassify it as ADD_ON.
+                    role=SignalRole.ENTRY,
                     timeframe=timeframe,
                     signal_bar_time_ms=_row_time_ms(row),
                     confirmation_time_ms=_row_time_ms(ind.iloc[confirmation_i]),
