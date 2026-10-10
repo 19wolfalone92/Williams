@@ -214,23 +214,19 @@ This is the reviewed call-path inventory for known repository-owned Spot mutatio
 
 **Boundary interpretation:** Python's exchange adapter contains Spot `/api/v3/*` mutation endpoints; Android signed REST mutations converge on the guarded `signedRequest` transport. The AST/static checks are regression guards, not a formal proof against arbitrary dynamic calls. The bulk-cancel primitive and non-atomic cancel/replace deserve explicit deny/allow tests before this task can be accepted.
 
-### 9.3 Recovery tests: proven versus missing
+### 9.3 Recovery tests: proven versus missing — follow-up
 
-**Covered by offline tests/code-level evidence**
-- SQLite restart persistence for `RECONCILE_REQUIRED` plus a pending execution intent: `test_task001_architecture_contracts.py`.
-- Intent persistence failure prevents the exchange callback from running: same file.
-- Campaign pending-entry recovery and client-order-ID adoption: `test_campaign_execution.py::test_restart_adopts_pending_campaign_by_client_id`.
-- Partial-fill recovery path: `test_campaign_execution.py` exercises a simulated 40% partial fill and calls `reconcile_pending_entries()`.
-- UNKNOWN/RECONCILE_REQUIRED blocks new entries while explicit risk-reducing intents use a separate gate.
-- Android mutation intent journal and unknown/reconcile code path are checked by source-level regression tests; Android CI compiles and tests the app.
+Deterministic offline regressions added in this follow-up:
 
-**Not yet proven; these tests/evidence are required**
-1. **Android process-death recovery:** instrumentation/device test that kills the process after journal commit but before response, after response but before outcome commit, and during reconciliation; restart must keep entries blocked until exchange evidence resolves the intent.
-2. **Python post-submit persistence failure:** fake exchange records a successful submit, DB outcome persistence throws; assert state becomes `RECONCILE_REQUIRED`, no retry occurs, and next start queries by clientOrderId before any new entry.
-3. **Partial fill + restart + protection:** fake exchange returns partial fill, process/service restarts, recovery queries order/trades, computes executed quantity/commission, installs or verifies protection for actual filled quantity only, and never treats requested quantity as filled.
-4. **Cancel/replace two-leg ambiguity:** table-driven cases for both legs succeeding, old cancel only, replacement only, neither, timeout and malformed response; unresolved cases must persist the barrier.
-5. **OCO lifecycle matrix:** create response accepted but child status unknown, partial execution, cancel timeout, restart before/after list lookup, and child-order fills must reconcile from exchange data.
-6. **Spot Testnet end-to-end:** no production account; verify order create/cancel/protection and deliberately interrupted recovery with a dedicated Testnet account. No such live Testnet run is claimed in this report.
+1. **Post-submit SQLite outcome-write failure.** A fake exchange accepts one order, then the injected SUBMITTED SQLite write fails. The barrier best-effort persists AMBIGUOUS, sets global and symbol state to RECONCILE_REQUIRED, and raises a non-retryable execution error. A startup recovery path performs a read-only lookup by the stable client order ID; it does not submit a second POST. If the database is too broken even to persist the ambiguity, the durable PENDING row is treated as unresolved and blocks another mutation.
+2. **Cancel/replace response matrix.** Regression cases cover both legs succeeding, cancellation succeeding while replacement fails, replacement succeeding while cancellation fails, timeout, and malformed response. Only a response with authoritative identifiers/status for both legs is admitted as submitted; all other cases stay ambiguous and require reconciliation. **Restart resolution of campaign stop replacement remains blocked** because the Python durable intent schema does not yet store the old target order ID independently from the replacement client ID.
+3. **Bulk cancel.** BinanceSpotClient.cancel_open_orders is disabled and raises before network I/O. The Android mutation allowlist does not authorize DELETE /api/v3/openOrders; its openOrders usages reviewed here are reads. Static regression checks cover the known Python wrapper and Android route guard. This is a fail-closed restriction, not proof against every possible dynamically constructed request.
+4. **OCO timeout/restart.** Recovery now verifies the order-list identity/status and then queries both child orders by their exchange order IDs. Creation/cancel timeout tests prove read-only lookup of the list and both children, and the portfolio latch remains RECONCILE_REQUIRED after the lookup. Missing or malformed child evidence leaves the intent unresolved; no duplicate protection is sent by recovery.
+5. **Partial fill, protection, and fees.** Campaign fill materialization reads actual exchange trade records, validates their total quantity against executedQty, converts commission assets to quote value, and no longer assumes fees are zero. Protection is installed for the actual executed quantity before the ancillary commission lookup. The fake-exchange partial-fill regression checks executed quantity, protective-stop quantity, and the known synthetic commission. **A combined partial-fill + process restart + real exchange fee reconciliation scenario is not yet proven end-to-end.**
+6. **Android process death.** The runtime recovery path now queries OCO child orders as well as the list. Source/static tests and CI are not hardware evidence. Killing the Android process at journal-commit, response-before-outcome-commit, and in-reconciliation points on a physical device remains NOT VERIFIED.
+7. **Spot Testnet.** No bounded Spot Testnet order-create/cancel/protection/restart run is claimed. All new recovery regressions are offline fake-exchange tests; no Mainnet requests or real orders were sent.
+
+The full mutation inventory remains code/static evidence, not a formal proof against dynamically generated routes or every production runtime state. CI on the final report SHA is tracked separately from the earlier successful source-SHA runs in §9.1; earlier green CI is not evidence of complete recovery safety.
 
 ### 9.4 PR #43 / #44 overlap reconciliation
 
@@ -244,11 +240,15 @@ Neither PR was merged. The overlap review is contract-based; do not cherry-pick 
 
 **TASK 001 status: FAIL — NOT ACCEPTED.**
 
-The four required CI runs listed above passed for `6f6839c8419795f50bf99c71f5be3175d6895dcd`, but acceptance criteria are stricter than CI:
-- no successful Android physical-device/Testnet mutation-journal crash/restart test exists;
-- Python post-submit outcome-persistence failure and no-retry/reconcile behavior need a dedicated regression;
-- cancel/replace two-leg ambiguity and OCO lifecycle matrices are incomplete;
-- the dangerous bulk-cancel primitive still needs explicit call-site proof and regression coverage;
-- full repository mutation-path review remains a static/code review, not a complete dynamic proof.
+The prior four required CI runs on 6f6839c8419795f50bf99c71f5be3175d6895dcd succeeded (links and counts are preserved in §9.1). They do not establish recovery safety. The follow-up introduced code and deterministic tests, and the exact final report SHA must have its own Python backend, Williams Campaign CI, and Android APK results recorded before treating the branch CI as green.
 
-**Next acceptance gate:** add the missing deterministic failure-injection tests (especially post-submit persistence failure, cancel/replace two-leg ambiguity, bulk-cancel deny/allow, and OCO cancel/restart), rerun all CI on the resulting exact SHA, then run the bounded Spot Testnet recovery matrix. Keep PR #47 open and draft; do not merge.
+Acceptance remains blocked because:
+
+- campaign stop cancel/replace restart recovery cannot prove both legs until the old order ID is durably stored alongside the replacement client order ID;
+- a combined partial-fill + restart + protection + actual commission-reconciliation scenario is not yet demonstrated end-to-end;
+- OCO partial execution followed by restart and exposure/fee accounting still needs a full lifecycle regression, beyond list/child-state lookup;
+- Android physical-device process-death tests are NOT VERIFIED;
+- bounded Spot Testnet recovery tests with dedicated test credentials have not been run;
+- static route inventory is not a complete dynamic proof of every possible mutation path.
+
+**Next acceptance gate:** close the cancel/replace durable-identity gap, add the remaining OCO/partial-fill restart cases, obtain the exact-SHA CI results, then run the bounded Spot Testnet matrix and physical-device Android crash/restart matrix. Keep PR #47 open and do not merge. main remains unchanged.
