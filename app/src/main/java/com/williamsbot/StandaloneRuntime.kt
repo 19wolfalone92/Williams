@@ -1553,12 +1553,10 @@ private class NativeEngine(
     }
 
     private fun safeApiCode(body: String): String =
-        runCatching { JSONObject(body).opt("code")?.toString()?.take(32) }
-            .getOrNull()
-            ?: "unknown"
+        BinanceErrorRedactor.safeApiCode(body)
 
     private fun safeApiFailure(code: Int, body: String): String =
-        "Binance HTTP " + code + "; API code=" + safeApiCode(body) + "; response body redacted"
+        BinanceErrorRedactor.safeFailure(code, body)
 
     private fun signedAccount(): JSONObject =
         signedRequest(
@@ -1607,7 +1605,7 @@ private class NativeEngine(
                     path,
                     response.code,
                     null,
-                    "response body redacted"
+                    BinanceErrorRedactor.REDACTED_BODY
                 )
                 if (response.isSuccessful) return JSONObject(lastBody)
                 if (attempt == 0 && lastBody.contains("-1021")) {
@@ -1658,7 +1656,7 @@ private class NativeEngine(
                     path,
                     response.code,
                     null,
-                    "response body redacted"
+                    BinanceErrorRedactor.REDACTED_BODY
                 )
                 if (response.isSuccessful) return lastBody
                 if (attempt == 0 && lastBody.contains("-1021")) {
