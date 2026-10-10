@@ -327,6 +327,21 @@ class ExecutionBarrier:
         resolved: list[str] = []
         unresolved: list[str] = []
         allowed = {"NEW", "PARTIALLY_FILLED", "FILLED", "CANCELED", "REJECTED", "EXPIRED", "EXPIRED_IN_MATCH"}
+        # Any startup discovery of unresolved order intent requires full account/
+        # campaign reconciliation even if the individual order lookup succeeds.
+        if rows and callable(getattr(self.db, "state_set", None)):
+            try:
+                self.db.state_set("position_state", "RECONCILE_REQUIRED")
+            except Exception:
+                pass
+            for pending_row in rows:
+                try:
+                    self.db.state_set(
+                        f"position_state:{str(pending_row["symbol"]).upper()}",
+                        "RECONCILE_REQUIRED",
+                    )
+                except Exception:
+                    pass
         for row in rows:
             intent_id = str(row["intent_id"])
             symbol = str(row["symbol"] or "").upper()
