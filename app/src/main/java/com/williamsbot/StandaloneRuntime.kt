@@ -885,9 +885,12 @@ private class NativeEngine(
     }
 
     private fun marketDataFresh(maxAgeMs: Long = 30_000L): Boolean =
-        restMarketReady &&
-            restLastSuccessMs > 0L &&
-            System.currentTimeMillis() - restLastSuccessMs <= maxAgeMs
+        RuntimeFreshnessContract.isFresh(
+            available = restMarketReady,
+            lastSuccessAtMs = restLastSuccessMs,
+            nowMs = System.currentTimeMillis(),
+            maxAgeMs = maxAgeMs
+        )
 
     private fun executionReady(): Boolean =
         running &&
@@ -897,6 +900,8 @@ private class NativeEngine(
             marketDataFresh() &&
             restAccountReady &&
             historyReady &&
+            userStreamConnected &&
+            !userStreamSyncRequired &&
             stateMachine.executionAllowed() &&
             !equityCircuitBreaker.isTripped()
 
@@ -909,6 +914,8 @@ private class NativeEngine(
             if (!marketDataFresh()) add("rest_market_stale_or_not_ready")
             if (!restAccountReady) add("rest_account_not_ready")
             if (!historyReady) add("history_not_ready")
+            if (!userStreamConnected) add("user_stream_disconnected")
+            if (userStreamSyncRequired) add("user_stream_sync_required")
             if (!stateMachine.executionAllowed()) add("fsm_not_execution_allowed")
             if (equityCircuitBreaker.isTripped()) add("equity_circuit_breaker")
         }
@@ -7798,8 +7805,19 @@ private class NativeEngine(
         }
     }
 
-    private fun scannerSnapshot(): JSONObject =
-        JSONObject()
+    private fun scannerSnapshot(): JSONObject {
+        val now = System.currentTimeMillis()
+        val scanAgeMs = RuntimeFreshnessContract.ageMs(lastScanAt, now)
+        val candidateSnapshotFresh = RuntimeFreshnessContract.isScanSnapshotFresh(
+            state = scannerState,
+            lastScanAtMs = lastScanAt,
+            nowMs = now,
+            maxAgeMs = 60_000L,
+            error = scannerError
+        )
+        val visibleCandidates = if (candidateSnapshotFresh) candidates else JSONArray()
+
+        return JSONObject()
             .put("version", BuildConfig.VERSION_NAME)
             .put("cached", true)
             .put("scanning", scanning)
@@ -7811,19 +7829,22 @@ private class NativeEngine(
             .put("last_progress_at", scanLastProgressAt)
             .put("last_error", lastError ?: JSONObject.NULL)
             .put("last_scan_at", lastScanAt)
+            .put("last_scan_age_ms", scanAgeMs ?: JSONObject.NULL)
+            .put("candidate_snapshot_fresh", candidateSnapshotFresh)
             .put("last_scan_duration_ms", lastScanDurationMs)
             .put("symbols_scanned", lastSymbolsScanned)
             .put("scan_universe", scannerUniverseLabel)
             .put("deep_wave_targets", waveTopN)
-            .put("candidates", candidates)
+            .put("candidates", visibleCandidates)
             .put(
                 "best_candidate",
-                if (candidates.length() > 0) {
-                    candidates.getJSONObject(0)
+                if (visibleCandidates.length() > 0) {
+                    visibleCandidates.getJSONObject(0)
                 } else {
-                    JSONObject().put("symbol", primarySymbol)
+                    JSONObject.NULL
                 }
             )
+    }
 
     fun scanner(refresh: Boolean): JSONObject {
         if (refresh) {
@@ -7844,21 +7865,17 @@ private class NativeEngine(
             }
         }
 
-        var balance: Double? = liveUsdtBalance.takeIf { it > 0.0 }
+        val marketFresh = marketDataFresh()
+        var balance: Double? = liveUsdtBalance.takeIf { it > 0.0 && restAccountReady }
         var livePnl = 0.0
         var livePnlPct = 0.0
 
-        positionList().forEach { position ->
-            val mark = (
-                livePrices[position.symbol]
-                    ?: if (position.symbol == primarySymbol) {
-                        primaryCandles.lastOrNull()?.c
-                    } else {
-                        null
-                    }
-                ) ?: 0.0
-            if (mark > 0.0) {
-                livePnl += (mark - position.entry) * position.qty
+        if (marketFresh) {
+            positionList().forEach { position ->
+                val mark = livePrices[position.symbol] ?: 0.0
+                if (mark > 0.0) {
+                    livePnl += (mark - position.entry) * position.qty
+                }
             }
         }
         val totalEntryNotional =
@@ -7869,8 +7886,9 @@ private class NativeEngine(
 
         if (!fast && key().isNotBlank() && secret().isNotBlank() && !restAccountReady) {
             runCatching {
-                val balances =
-                    signedAccount().getJSONArray("balances")
+                val account = signedAccount()
+                val balances = account.getJSONArray("balances")
+                restAccountReady = account.has("balances")
                 for (i in 0 until balances.length()) {
                     val item = balances.getJSONObject(i)
                     if (item.optString("asset") == "USDT") {
@@ -7921,13 +7939,13 @@ private class NativeEngine(
             )
             .put(
                 "price",
-                livePrices[primarySymbol]
-                    ?: primaryCandles.lastOrNull()?.c
-                    ?: JSONObject.NULL
+                if (marketFresh) livePrices[primarySymbol] ?: JSONObject.NULL
+                else JSONObject.NULL
             )
             .put(
                 "quote_balance",
-                balance ?: JSONObject.NULL
+                if (restAccountReady) balance ?: JSONObject.NULL
+                else JSONObject.NULL
             )
             .put(
                 "position",
@@ -7962,8 +7980,8 @@ private class NativeEngine(
             .put("max_total_risk_pct", maxTotalRiskPct)
             .put("max_risk_per_trade_pct", maxRiskPerTradePct)
             .put("reconcile_required", reconcileRequired)
-            .put("pnl", if (positionList().isEmpty()) JSONObject.NULL else livePnl)
-            .put("pnl_pct", if (positionList().isEmpty()) JSONObject.NULL else livePnlPct)
+            .put("pnl", if (positionList().isEmpty() || !marketFresh) JSONObject.NULL else livePnl)
+            .put("pnl_pct", if (positionList().isEmpty() || !marketFresh) JSONObject.NULL else livePnlPct)
             .put(
                 "take_profit_price",
                 if (campaignEngineEnabled) JSONObject.NULL
@@ -7992,7 +8010,7 @@ private class NativeEngine(
             .put("fsm_state", stateMachine.state.name)
             .put("kill_switch_latched", killLatched)
             .put("live_prices", JSONObject().apply {
-                livePrices.forEach { (symbol, price) -> put(symbol, price) }
+                if (marketFresh) livePrices.forEach { (symbol, price) -> put(symbol, price) }
             })
             .put("rate_limits", rateGuard.snapshot())
             .put("history", historyStore.status(coreSymbols, analysisFrames))
