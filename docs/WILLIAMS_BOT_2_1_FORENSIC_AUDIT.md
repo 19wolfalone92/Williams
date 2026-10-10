@@ -87,3 +87,50 @@ The appendix intentionally marks unresolved claims UNRESOLVED and does not claim
 **Overall strategy conformance: IN PROGRESS — NOT ACCEPTED / UNRESOLVED.**
 
 The primary-source files have been acquired, their text-layer condition assessed, and initial code differences documented. The complete rule registry, printed-page/figure verification, active entry-to-order/exit call graph, baseline cross-runtime golden-vector results, and full test proof are not complete. No strategy correction is authorized by this audit artifact.
+
+
+## Latest continuation — 2026-10-10
+
+**Status remains: IN PROGRESS — NOT ACCEPTED.** This is an evidence update, not acceptance and not a strategy-code change.
+
+### Repository state and separation
+
+- Baseline `main`: `04da5f9c09572e99ff310be3a1908179165e528c`. GitHub's default-branch commit search still returns this as the newest commit; the compare endpoint resolves it as the `main` base.
+- Audit documentation commit immediately before this report update: `6ca90a5412c50b5b3c93e0e43718304a1bf2c8d8` (“docs: verify AO and MFI source-page images”).
+- A GitHub compare of `main...6ca90a5412c50b5b3c93e0e43718304a1bf2c8d8` returned `ahead`, 6 commits ahead / 0 behind. The six commits contain audit documentation only. The exact new tip after this report update is the commit SHA returned by the write operation; do not use the preceding SHA as the final tip once the write completes.
+- This runtime has no local Git checkout. `git status`, `git branch --show-current`, `git rev-parse HEAD` and `git log` cannot report local worktree/staging state. The GitHub branch compare is the available independent ancestry comparison; it does not substitute for a local worktree status.
+- PR #49 remains open, draft, unmerged, based on `main` at `04da5f9c09572e99ff310be3a1908179165e528c`; its current head is `334967f55a10f47a798d31951d31d8278c9a15d5` on `audit/williams-2.1-task-004-williams-strategy`. Do not conflate that PR branch with this forensic documentation branch.
+
+### Source-image findings added to the appendix
+
+- **TC2, Russian second edition (Moscow, IK Analitika, 2005):** visually verified PDF p.122 / printed p.107 (angulation; Figs. 9-3/9-4 referenced), p.125 / printed p.110 (conditional trigger and protective stop; Fig. 9.6), p.136 / printed p.121 (AO; Fig. 10.1), and pp.153–155 / printed pp.138–140 (ordered WM1 → WM2 → WM3; Fig. 12.1 and strategy checklist).
+- **New Trading Dimensions:** visually verified PDF/printed p.55, Fig. 5-2. This Russian page also prints the median-point expression as `(H-L)/2`, not the conventional `(H+L)/2`. Because the supplied Russian TC2 page has the same notation, source-vs-translation-vs-conventional-formula interpretation remains **UNRESOLVED**; the code must not be silently changed based on convention.
+- **Trading Chaos (TC1):** visually verified PDF/printed pp.42–44: MFI is `(High − Low) / Volume`, explicitly tied to tick volume, and the four Profitunity windows combine tick-volume direction and MFI direction. The source does not establish MFI as a universal entry Boolean. Python four-state mapping exists; Binance volume equivalence and active entry-path use remain unresolved.
+- **Trading Chaos Course:** visual review confirms PDF p.62 / Level II page 30 “PRISTINE FRACTAL” diagrams and text, including shared up/down fractals and a six-bar equal-high case. The 122-page scan is not exhaustively reviewed; no whole-course completeness claim is made.
+
+### OBS-003 — clarified, not closed
+
+The TC2 page image at PDF p.153 / printed p.138 explicitly lists the classic order as reversal bar (WM1), Super AO (three consecutive same-colour bars, WM2), then fractal (WM3). Its worked example places the three-green-AO signal before the later fractal entries. A requirement for a previously confirmed WM3/fractal is therefore **not supported by this illustrated classic sequence**. The page does not establish that WM2 is always the first presenting entry when WM1 is absent; it illustrates WM2 as the second/add-on stage. Baseline Python and Android have prior-fractal-related gates. Keep final rule status **UNRESOLVED** until the field semantics and every active caller are traced. No strategy change was made.
+
+### Exact-head PR #49 CI (not baseline CI)
+
+For PR head `334967f55a10f47a798d31951d31d8278c9a15d5`:
+
+| Workflow | Run ID | Conclusion | Specific result |
+|---|---:|---|---|
+| Python backend tests | `38078748291` | SUCCESS | Release gate, compile, static safety audit and offline tests passed on this PR head only. |
+| Build Android APKs | `38078748322` | FAILURE | Android test `WilliamsStrategyGoldenVectorsTest.aoAndAcMatchSharedFormulaVectorsAndUseExactly34SlowSamples` failed at `WilliamsStrategyGoldenVectorsTest.kt:64`; 29 tests, 1 failed. APK build/version/signature steps skipped. |
+| Williams Campaign CI | `38078748306` | FAILURE | 5 failed, 164 passed; five campaign-execution tests were rejected by the changed H1-only signal gate. Android unit tests also failed with the AO/AC vector assertion. |
+
+The `main` workflow lookup returned no runs for the baseline SHA; an empty API result is not a passing CI result. None of the PR outcomes above is attributed to `main` or to this audit branch.
+
+### Remaining proof blockers
+
+1. Full branch-ref SHA/worktree status cannot be retrieved from the current runtime; the local checkout is absent. Use the commit returned by the latest write and verify ancestry with the compare endpoint.
+2. The Course scan has only partial OCR/visual coverage; bibliographic metadata is not established.
+3. AO formula notation in the two supplied Russian source pages needs source/translation adjudication; do not resolve by assumption.
+4. Full caller graph from configuration/OHLCV through all Python and Android decision routes to every order/cancel mutation is not yet complete.
+5. The 13-row matrix remains preliminary. TC1, New Trading Dimensions, TC2 and Course rules still need an exhaustive independent-rule registry.
+6. No baseline Python/Android shared golden vectors have been run in this audit. PR #49's staged tests are not a substitute and the current PR CI is not fully green.
+7. No source-to-code proof has yet established look-ahead absence across all active routes.
+8. No claim is made that all four books have been fully audited. The audit cannot be accepted until the rule registry, active call graph, causal-time tests, reproducible defect cards, and exact-SHA cross-runtime vectors are complete.
