@@ -60,8 +60,9 @@ class WilliamsStrategyGoldenVectorsTest {
         }
         val colors = data.getJSONObject("colors").getJSONArray("ao")
         val aoColors = (0 until colors.length()).map { colors.getDouble(it) }
-        assertTrue(WilliamsOscillatorMath.isThirdSameColorAoBar(aoColors, 5, "LONG"))
-        assertFalse(WilliamsOscillatorMath.isThirdSameColorAoBar(aoColors, 4, "LONG"))
+        val expectedThird = data.getJSONObject("colors").getInt("thirdRisingIndex")
+        assertTrue(WilliamsOscillatorMath.isThirdSameColorAoBar(aoColors, expectedThird, "LONG"))
+        assertFalse(WilliamsOscillatorMath.isThirdSameColorAoBar(aoColors, expectedThird - 1, "LONG"))
     }
 
     @Test
