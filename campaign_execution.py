@@ -1520,6 +1520,25 @@ class CampaignExecutionService:
                     if stop_client_id and callable(getattr(self.db, "find_execution_intent_by_client_order_id", None))
                     else None
                 )
+                if intent_row and str(intent_row.get("operation_kind", "")).upper() == "CANCEL_REPLACE":
+                    old_target = self.client.get_order(
+                        symbol,
+                        order_id=intent_row.get("related_order_id"),
+                    )
+                    old_status = str(old_target.get("status", "")).upper()
+                    old_executed = float(old_target.get("executedQty", 0) or 0)
+                    if (
+                        old_status not in {"CANCELED", "CANCELLED", "EXPIRED", "REJECTED"}
+                        or old_executed != 0
+                    ):
+                        self.engine.mark_reconcile_required(
+                            campaign,
+                            "new replacement STOP is visible but the old STOP is not proven terminal without fills",
+                        )
+                        self.db.state_set(f"position_state:{symbol}", "RECONCILE_REQUIRED")
+                        raise CampaignExecutionError(
+                            "cancelReplace old/new STOP pair requires authoritative reconciliation"
+                        )
                 self._mark_intent_reconciled(
                     stop_client_id,
                     str(stop.get("status", "NEW")).upper(),
