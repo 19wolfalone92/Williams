@@ -994,10 +994,14 @@ class CampaignExecutionService:
             raise CampaignExecutionError(f"{symbol}: add-on campaign ownership is not confirmed")
         if campaign.state == CampaignState.RECONCILE_REQUIRED:
             raise CampaignExecutionError(f"{symbol}: campaign requires reconciliation before add-on")
-        if campaign.current_signal_id == signal.signal_id:
-            raise CampaignExecutionError(f"{symbol}: add-on signal was already consumed")
-        if int(campaign.tags.get("last_signal_time_ms", 0) or 0) >= int(signal.signal_bar_time_ms):
-            raise CampaignExecutionError(f"{symbol}: add-on signal is stale or already consumed")
+        if str(campaign.tags.get("pending_add_signal_id", "")) != signal.signal_id:
+            raise CampaignExecutionError(
+                f"{symbol}: pending add-on signal no longer owns this campaign admission"
+            )
+        if campaign.state != CampaignState.ADD_ON_PENDING:
+            raise CampaignExecutionError(
+                f"{symbol}: campaign state changed before add-on submission ({campaign.state.value})"
+            )
         signal_row = self.db.conn.execute(
             "SELECT state FROM campaign_signals WHERE campaign_id=? AND signal_id=?",
             (campaign_id, signal.signal_id),
