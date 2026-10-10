@@ -1,6 +1,7 @@
-"""P0 serialized execution barrier for Williams."""
+"""Durable, fail-closed order-mutation boundary for Williams Bot 2.1."""
 from __future__ import annotations
 
+import json
 import time
 import uuid
 from dataclasses import dataclass
@@ -8,7 +9,10 @@ from typing import Any, Callable, Mapping
 
 from market_context import ContextCache, MarketStateSnapshot
 from order_state_machine import OrderState, OrderStateMachine
-from order_state_machine import OrderState, OrderStateMachine
+
+
+class ExecutionAmbiguousError(RuntimeError):
+    """The exchange may have applied a mutation; authoritative reconciliation is required."""
 
 
 @dataclass(frozen=True)
@@ -27,10 +31,14 @@ class OrderIntent:
     permission_interval: str = ""
     campaign_id: str = ""
     signal_id: str = ""
+    signal_type: str = ""
     risk_quote: float = 0.0
     capital_reserved_quote: float = 0.0
     created_at_ms: int = 0
     max_age_ms: int = 15_000
+    operation_kind: str = "PLACE"
+    related_order_id: str = ""
+    related_order_list_id: str = ""
 
     @classmethod
     def new(
@@ -43,9 +51,9 @@ class OrderIntent:
     ) -> "OrderIntent":
         return cls(
             intent_id=uuid.uuid4().hex,
-            symbol=symbol.upper(),
-            side=side.upper(),
-            order_type=order_type.upper(),
+            symbol=str(symbol).upper(),
+            side=str(side).upper(),
+            order_type=str(order_type).upper(),
             required_context_versions=dict(required_context_versions),
             created_at_ms=int(time.time() * 1000),
             **kwargs,
@@ -61,82 +69,353 @@ class ExecutionResult:
 
 
 class ExecutionBarrier:
-    """The final, serialized admission point before Binance REST.
+    """The single admission door before a Binance order-state mutation.
 
-    Context reads, dependency validation, exchange-specific preflight and the
-    actual POST happen while the shared execution lock is held. No blind retry
-    is performed by this layer.
+    A durable PENDING and SUBMITTING record must be committed and read back
+    before submit() is called. Ambiguous outcomes retain identity claims and
+    block all new exposure until the unresolved intent is reconciled.
+    Optional telemetry is deliberately not part of the execution commit path.
     """
 
-    def __init__(self, context_cache: ContextCache, db=None) -> None:
+    MUTATION_LOCK_KEY = "execution_mutation_lock"
+    ENTRY_ADMISSION_LOCK_KEY = "execution_entry_admission_lock"
+    NEW_EXPOSURE_PURPOSES = frozenset({
+        "ENTRY", "ADD_ON", "CAMPAIGN_ENTRY", "CAMPAIGN_ADD_ON",
+        "REVERSE_ENTRY", "CAMPAIGN_REVERSE_ENTRY",
+    })
+    EXIT_PURPOSES = frozenset({
+        "EXIT", "CAMPAIGN_EXIT", "EMERGENCY_EXIT", "MANUAL_EXIT",
+        "PROTECTION", "CAMPAIGN_PROTECTION", "CAMPAIGN_TRAIL",
+    })
+    KNOWN_ORDER_STATES = frozenset({
+        "PENDING_NEW", "NEW", "PARTIALLY_FILLED", "FILLED",
+        "CANCELED", "CANCELLED", "EXPIRED", "REJECTED",
+    })
+
+    def __init__(
+        self,
+        context_cache: ContextCache,
+        db=None,
+        *,
+        require_durable_intent: bool = True,
+    ) -> None:
         self.context_cache = context_cache
         self.db = db
+        # False is intended only for isolated deterministic tests without a DB.
+        self.require_durable_intent = bool(require_durable_intent)
+        self._local_mutation_lock_reason = ""
 
-    def _persist(self, intent: OrderIntent, status: str, reason: str = "") -> None:
-        if self.db is not None and hasattr(self.db, "save_execution_intent"):
-            try:
-                self.db.save_execution_intent(intent, status, reason)
-            except Exception:
-                pass
+    @property
+    def mutation_locked(self) -> bool:
+        if self._local_mutation_lock_reason:
+            return True
+        if self.db is None:
+            return bool(self.require_durable_intent)
+        return bool(self.db.state_get(self.MUTATION_LOCK_KEY, ""))
+
+    @property
+    def mutation_lock_reason(self) -> str:
+        if self._local_mutation_lock_reason:
+            return self._local_mutation_lock_reason
+        if self.db is None:
+            return "durable execution database unavailable"
+        return str(self.db.state_get(self.MUTATION_LOCK_KEY, "") or "")
+
+    @staticmethod
+    def _is_new_exposure(intent: OrderIntent) -> bool:
+        return str(intent.purpose or "").strip().upper() in ExecutionBarrier.NEW_EXPOSURE_PURPOSES
 
     def _record(self, level: str, event: str, intent: OrderIntent, message: str, raw=None) -> None:
-        if self.db is not None and hasattr(self.db, "log_event"):
+        """Best-effort telemetry only; never substitutes for a durable intent."""
+        logger = getattr(self.db, "log_event", None) if self.db is not None else None
+        if callable(logger):
             try:
-                self.db.log_event(level, event, message, raw or {"intent_id": intent.intent_id})
+                logger(
+                    level,
+                    event,
+                    message,
+                    raw or {"intent_id": intent.intent_id},
+                )
             except Exception:
                 pass
 
-    def _validate(self, intent: OrderIntent, snapshot: MarketStateSnapshot) -> str:
-        if intent.created_at_ms:
-            age = int(time.time() * 1000) - intent.created_at_ms
-            if age > intent.max_age_ms:
+    @staticmethod
+    def _immutable_identity(intent: OrderIntent) -> tuple:
+        return (
+            str(intent.symbol).upper(),
+            str(intent.side).upper(),
+            str(intent.order_type).upper(),
+            str(intent.purpose).upper(),
+            json.dumps(dict(intent.required_context_versions), sort_keys=True),
+            str(intent.client_order_id or ""),
+            str(intent.campaign_id or ""),
+            str(intent.signal_id or ""),
+        )
+
+    def _persist(self, intent: OrderIntent, status: str, reason: str = "") -> bool:
+        """Return True only after durable save and post-commit read-back succeed."""
+        if self.db is None:
+            return not self.require_durable_intent
+        save = getattr(self.db, "save_execution_intent", None)
+        load = getattr(self.db, "load_execution_intent", None)
+        if not callable(save) or not callable(load):
+            return False
+        try:
+            save(intent, str(status).upper(), reason)
+            row = load(intent.intent_id)
+            if not isinstance(row, dict):
+                return False
+            expected = self._immutable_identity(intent)
+            actual = (
+                str(row.get("symbol", "")).upper(),
+                str(row.get("side", "")).upper(),
+                str(row.get("order_type", "")).upper(),
+                str(row.get("purpose", "")).upper(),
+                str(row.get("required_context_versions_json", "")),
+                str(row.get("client_order_id") or ""),
+                str(row.get("campaign_id") or ""),
+                str(row.get("signal_id") or ""),
+            )
+            return (
+                actual == expected
+                and str(row.get("status", "")).upper() == str(status).upper()
+                and str(row.get("reason") or "") == str(reason or "")
+            )
+        except Exception:
+            return False
+
+    def _set_reconciliation_lock(self, intent: OrderIntent, reason: str) -> None:
+        self._local_mutation_lock_reason = str(reason)
+        if self.db is not None:
+            try:
+                self.db.state_set(
+                    self.MUTATION_LOCK_KEY,
+                    f"{intent.intent_id}:{reason}",
+                )
+            except Exception:
+                # Durable SUBMITTING intent still blocks new exposure on restart.
+                pass
+        self._record(
+            "ERROR",
+            "execution_reconciliation_required",
+            intent,
+            str(reason),
+            {"intent_id": intent.intent_id, "client_order_id": intent.client_order_id},
+        )
+
+    def _release_entry_admission(self, intent: OrderIntent) -> None:
+        if self.db is None:
+            return
+        release = getattr(self.db, "release_state_claim", None)
+        if callable(release):
+            release(self.ENTRY_ADMISSION_LOCK_KEY, intent.intent_id)
+        else:
+            if self.db.state_get(self.ENTRY_ADMISSION_LOCK_KEY, "") == intent.intent_id:
+                self.db.state_delete(self.ENTRY_ADMISSION_LOCK_KEY)
+
+    def _release_identity_claims(self, intent: OrderIntent) -> None:
+        if self.db is None:
+            return
+        release = getattr(self.db, "release_execution_identity", None)
+        logical_key = self._logical_key(intent)
+        if callable(release):
+            release(intent.intent_id, intent.client_order_id, logical_key)
+
+    @staticmethod
+    def _logical_key(intent: OrderIntent) -> str:
+        if not str(intent.signal_id or "").strip():
+            return ""
+        return (
+            f"{str(intent.symbol).upper()}:"
+            f"{str(intent.purpose).upper()}:"
+            f"{str(intent.signal_id).strip()}"
+        )
+
+    def _claim_entry_admission(self, intent: OrderIntent) -> bool:
+        if self.db is None:
+            return not self.require_durable_intent
+        claim = getattr(self.db, "try_claim_state", None)
+        if not callable(claim):
+            return False
+        return bool(claim(self.ENTRY_ADMISSION_LOCK_KEY, intent.intent_id))
+
+    def _claim_identities(self, intent: OrderIntent) -> bool:
+        if self.db is None:
+            return not self.require_durable_intent
+        claim = getattr(self.db, "claim_execution_identity", None)
+        if not callable(claim):
+            return False
+        if not str(intent.client_order_id or "").strip():
+            return False
+        return bool(
+            claim(
+                intent.intent_id,
+                intent.client_order_id,
+                self._logical_key(intent),
+            )
+        )
+
+    def _validate(
+        self,
+        intent: OrderIntent,
+        snapshot: MarketStateSnapshot,
+        *,
+        pre_submit_checks_supplied: bool,
+    ) -> str:
+        purpose = str(intent.purpose or "").strip().upper()
+        operation = str(intent.operation_kind or "PLACE").strip().upper()
+        is_entry = self._is_new_exposure(intent)
+
+        # An unresolved mutation is a portfolio-wide entry veto, not a reason
+        # to strand a confirmed-position reduction or a targeted cancellation.
+        if is_entry and self.mutation_locked:
+            return f"MUTATION_LOCKED_RECONCILIATION_REQUIRED: {self.mutation_lock_reason}"
+
+        if is_entry and intent.created_at_ms:
+            age = int(time.time() * 1000) - int(intent.created_at_ms)
+            if age < 0 or age > int(intent.max_age_ms):
                 return f"stale intent age={age}ms"
 
-        # Campaign orders may be armed from a freshly constructed signal before
-        # the context service has assigned persistent versions.  They still
-        # require at least one live snapshot; the campaign pre-submit validator
-        # is responsible for the exact strategy/risk re-check.
-        if not intent.required_context_versions:
-            if not intent.purpose.upper().startswith("CAMPAIGN_"):
-                return "missing required_context_versions"
-        for tf, required in intent.required_context_versions.items():
-            ctx = snapshot.context(intent.symbol, tf)
-            if ctx is None:
-                return f"missing context {intent.symbol} {tf}"
-            if int(ctx.version) != int(required):
-                return f"stale context {tf}: required={required} current={ctx.version}"
-
-        direction = "long" if intent.side == "BUY" else "short" if intent.side == "SELL" else ""
-        if not direction:
+        if not str(intent.symbol or "").strip():
+            return "missing symbol"
+        if str(intent.side or "").upper() not in {"BUY", "SELL"}:
             return f"unsupported side {intent.side}"
+        if operation not in {"PLACE", "CANCEL", "CANCEL_OCO", "CANCEL_REPLACE"}:
+            return f"unsupported mutation operation {operation}"
 
-        # All declared TFs are version dependencies, but the permission
-        # decision belongs to one operative/entry timeframe. Higher TFs provide
-        # structural context and must not be required to emit a duplicate trigger.
-        if intent.purpose.upper() == "ENTRY":
-            permission_tf = (intent.permission_interval or "").lower()
+        if operation in {"CANCEL", "CANCEL_REPLACE"} and not str(intent.related_order_id or "").strip():
+            return "cancel target order identity missing"
+        if operation == "CANCEL_OCO" and not (
+            str(intent.related_order_list_id or "").strip()
+            or str(intent.client_order_id or "").strip()
+        ):
+            return "cancel target order-list identity missing"
+
+        if operation == "PLACE" and str(intent.order_type).upper() != "CANCEL":
+            if not str(intent.client_order_id or "").strip():
+                return "missing stable client_order_id"
+
+        if is_entry:
+            if not str(intent.signal_id or "").strip():
+                return "missing stable signal_id; repeated PendingSignal cannot be deduplicated"
+            if not pre_submit_checks_supplied:
+                return "missing mandatory final risk/position pre-submit checks"
+            if not intent.required_context_versions:
+                return "missing required context versions"
+            for tf, required in intent.required_context_versions.items():
+                ctx = snapshot.context(intent.symbol, tf)
+                if ctx is None:
+                    return f"missing context {intent.symbol} {tf}"
+                if int(ctx.version) != int(required):
+                    return f"stale context {tf}: required={required} current={ctx.version}"
+
+            permission_tf = str(intent.permission_interval or "").strip()
+            if permission_tf != "1M":
+                permission_tf = permission_tf.lower()
             permission_ctx = snapshot.context(intent.symbol, permission_tf) if permission_tf else None
             if permission_ctx is None:
                 return f"missing permission context {intent.symbol} {permission_tf}"
+            direction = "long" if str(intent.side).upper() == "BUY" else "short"
             if direction == "long" and not permission_ctx.allow_long:
                 return f"context {permission_tf} does not allow LONG"
             if direction == "short" and not permission_ctx.allow_short:
                 return f"context {permission_tf} does not allow SHORT"
 
-        if self.db is not None and hasattr(self.db, "state_get"):
-            state = str(self.db.state_get("position_state", "FLAT"))
-            if state == "RECONCILE_REQUIRED":
-                return "RECONCILE_REQUIRED"
-            campaign_state = str(
-                self.db.state_get(
-                    f"campaign_state:{intent.campaign_id}",
-                    "CLEAN"
-                )
-            ) if intent.campaign_id else "CLEAN"
-            if campaign_state == "RECONCILE_REQUIRED":
-                return "campaign_reconcile_required"
+            if self.db is None and self.require_durable_intent:
+                return "durable execution database unavailable"
+            if self.db is not None:
+                state_get = getattr(self.db, "state_get", None)
+                if not callable(state_get):
+                    return "durable execution state API unavailable"
+                global_state = str(state_get("position_state", "FLAT"))
+                if global_state == "RECONCILE_REQUIRED":
+                    return "RECONCILE_REQUIRED"
+                symbol_state = str(state_get(f"position_state:{intent.symbol}", "FLAT"))
+                if symbol_state == "RECONCILE_REQUIRED":
+                    return f"{intent.symbol}: RECONCILE_REQUIRED"
+                if intent.campaign_id:
+                    campaign_state = str(
+                        state_get(f"campaign_state:{intent.campaign_id}", "CLEAN")
+                    )
+                    if campaign_state == "RECONCILE_REQUIRED":
+                        return "campaign_reconcile_required"
+                unresolved = getattr(self.db, "has_unresolved_execution_intents", None)
+                if not callable(unresolved):
+                    return "unresolved-intent lookup unavailable"
+                try:
+                    if unresolved():
+                        return "unresolved execution intent exists; reconcile before new exposure"
+                except Exception as exc:
+                    return f"unresolved-intent lookup failed: {type(exc).__name__}: {exc}"
 
+        # All protection, exit and cancel calls still require durable intent
+        # persistence; this branch only avoids stale *strategy* context vetoing
+        # a safety action. Its callback must confirm the current owner/order.
+        if not is_entry and self.db is not None:
+            state_get = getattr(self.db, "state_get", None)
+            if callable(state_get) and intent.campaign_id:
+                if str(state_get(f"campaign_state:{intent.campaign_id}", "")) == "FOREIGN":
+                    return "campaign ownership is not established"
         return ""
+
+    @staticmethod
+    def _response_status(response: Any) -> str:
+        if not isinstance(response, dict):
+            return ""
+        return str(
+            response.get("status")
+            or response.get("algoStatus")
+            or response.get("listStatusType")
+            or ""
+        ).upper().strip()
+
+    @staticmethod
+    def _mutation_response_is_authoritative(intent: OrderIntent, response: Any) -> tuple[bool, str, str]:
+        """Return (authoritative, persisted_status, reason) without guessing."""
+        operation = str(intent.operation_kind or "PLACE").upper()
+        if not isinstance(response, dict):
+            return False, "AMBIGUOUS", "mutation response is not an object"
+
+        # cancelReplace is non-atomic. Both legs must have explicit outcomes.
+        if operation == "CANCEL_REPLACE" or (
+            "cancelResult" in response and "newOrderResult" in response
+        ):
+            cancel_result = str(response.get("cancelResult", "")).upper()
+            new_result = str(response.get("newOrderResult", "")).upper()
+            cancel_ok = cancel_result in {"SUCCESS", "NOT_FOUND"}
+            new_ok = new_result in {"SUCCESS", "NOT_ATTEMPTED"}
+            new_response = response.get("newOrderResponse")
+            new_status = ExecutionBarrier._response_status(new_response)
+            if cancel_ok and new_ok and (new_result != "SUCCESS" or new_status in ExecutionBarrier.KNOWN_ORDER_STATES):
+                if new_result == "SUCCESS" and new_status in {"NEW", "PARTIALLY_FILLED", "FILLED"}:
+                    return True, "SUBMITTED", ""
+                if cancel_result == "SUCCESS" and new_result == "NOT_ATTEMPTED":
+                    return True, "SUBMITTED", ""
+            return False, "AMBIGUOUS", f"cancelReplace ambiguous: cancel={cancel_result or 'UNKNOWN'} new={new_result or 'UNKNOWN'}"
+
+        # Spot OCO returns order-list fields rather than one order status.
+        if response.get("orderListId") is not None and isinstance(response.get("orderReports"), list):
+            reports = [row for row in response.get("orderReports", []) if isinstance(row, dict)]
+            statuses = [ExecutionBarrier._response_status(row) for row in reports]
+            if reports and all(status in ExecutionBarrier.KNOWN_ORDER_STATES for status in statuses):
+                if all(status == "FILLED" for status in statuses):
+                    return True, "SUBMITTED", ""
+                return True, "SUBMITTED", ""
+            return False, "AMBIGUOUS", "OCO response lacks authoritative leg statuses"
+
+        status = ExecutionBarrier._response_status(response)
+        if operation in {"CANCEL", "CANCEL_OCO"}:
+            if status in ExecutionBarrier.KNOWN_ORDER_STATES or status in {"ALL_DONE", "EXEC_STARTED"}:
+                return True, "SUBMITTED", ""
+            # Binance cancel endpoints differ in envelope shape. An absent or
+            # unfamiliar status must trigger a read-only query by target ID.
+            return False, "AMBIGUOUS", "cancellation response lacks authoritative target state"
+
+        if status in ExecutionBarrier.KNOWN_ORDER_STATES:
+            return True, "SUBMITTED", ""
+        if str(response.get("newOrderResult", "")).upper() == "SUCCESS":
+            return True, "SUBMITTED", ""
+        return False, "AMBIGUOUS", "exchange response lacks authoritative order state"
 
     def execute(
         self,
@@ -146,151 +425,187 @@ class ExecutionBarrier:
         pre_submit_checks: Callable[[MarketStateSnapshot], None] | None = None,
     ) -> ExecutionResult:
         with self.context_cache.execution_lock:
-            order_fsm = OrderStateMachine()
-            order_fsm.transition(OrderState.ADMISSION)
-            self._persist(intent, "PENDING")
-            if self.db is not None and hasattr(self.db, "save_execution_event"):
-                try:
-                    self.db.save_execution_event(intent.intent_id, "ADMISSION_STARTED", dict(intent.required_context_versions))
-                except Exception:
-                    pass
+            fsm = OrderStateMachine()
+            fsm.transition(OrderState.ADMISSION)
+            is_entry = self._is_new_exposure(intent)
+            claimed_entry_lock = False
+            claimed_identity = False
+            submit_started = False
+
             snapshot = self.context_cache.snapshot()
-            reason = self._validate(intent, snapshot)
+            reason = self._validate(
+                intent,
+                snapshot,
+                pre_submit_checks_supplied=pre_submit_checks is not None,
+            )
             if reason:
-                try:
-                    order_fsm.transition(OrderState.CANCELED)
-                except ValueError:
-                    order_fsm.state = OrderState.RECONCILE_REQUIRED
                 self._record("WARNING", "execution_blocked", intent, reason)
+                # Persisting a BLOCKED diagnostic is useful but not allowed to
+                # turn a failed admission into an apparent execution.
                 self._persist(intent, "BLOCKED", reason)
                 return ExecutionResult(intent.intent_id, False, reason=reason)
 
-            if pre_submit_checks is not None:
+            if is_entry:
                 try:
-                    pre_submit_checks(snapshot)
+                    claimed_entry_lock = self._claim_entry_admission(intent)
                 except Exception as exc:
-                    try:
-                        order_fsm.transition(OrderState.CANCELED)
-                    except ValueError:
-                        order_fsm.state = OrderState.RECONCILE_REQUIRED
-                    reason = f"pre_submit_check_failed: {type(exc).__name__}: {exc}"
-                    self._persist(intent, "BLOCKED", reason)
+                    reason = f"entry admission lock failed: {type(exc).__name__}: {exc}"
+                    self._record("ERROR", "execution_entry_lock_failed", intent, reason)
+                    return ExecutionResult(intent.intent_id, False, reason=reason)
+                if not claimed_entry_lock:
+                    reason = "another entry mutation is active or its owner requires reconciliation"
                     self._record("WARNING", "execution_blocked", intent, reason)
                     return ExecutionResult(intent.intent_id, False, reason=reason)
 
-            order_fsm.transition(OrderState.SUBMITTING)
-            order_fsm.transition(OrderState.SUBMITTING)
-            self._record(
-                "INFO",
-                "execution_admitted",
-                intent,
-                "Final P0 validation passed; submitting to Binance",
-                {
-                    "intent_id": intent.intent_id,
-                    "symbol": intent.symbol,
-                    "side": intent.side,
-                    "required_context_versions": dict(intent.required_context_versions),
-                    "hypothesis_id": intent.hypothesis_id,
-                    "purpose": intent.purpose,
-                    "client_order_id": intent.client_order_id,
-                },
-            )
             try:
-                response = submit()
-            except Exception as exc:
-                order_fsm.state = OrderState.AMBIGUOUS
-                order_fsm.state = OrderState.AMBIGUOUS
-                self._persist(intent, "AMBIGUOUS", f"{type(exc).__name__}: {exc}")
-                self._record(
-                    "ERROR",
-                    "execution_ambiguous",
-                    intent,
-                    "Binance submission failed or timed out; reconciliation required",
-                    {"error": f"{type(exc).__name__}: {exc}"},
-                )
-                raise
+                if intent.operation_kind.upper() == "PLACE" and str(intent.order_type).upper() != "CANCEL":
+                    try:
+                        claimed_identity = self._claim_identities(intent)
+                    except Exception as exc:
+                        reason = f"execution identity claim failed: {type(exc).__name__}: {exc}"
+                        self._record("ERROR", "execution_identity_claim_failed", intent, reason)
+                        return ExecutionResult(intent.intent_id, False, reason=reason)
+                    if not claimed_identity:
+                        reason = "duplicate clientOrderId or logical signal claim refused"
+                        self._record("ERROR", "execution_duplicate_mutation_blocked", intent, reason)
+                        return ExecutionResult(intent.intent_id, False, reason=reason)
 
-            if intent.order_type != "CANCEL":
-                status = str(
-                    response.get("status", "")
-                    if isinstance(response, dict)
-                    else ""
-                ).upper()
-                if status:
-                    order_fsm.observe_exchange_status(
-                        status,
-                        float(
-                            response.get("executedQty", 0) or 0
-                            if isinstance(response, dict)
-                            else 0
-                        ),
-                    )
-                elif (
-                    isinstance(response, dict)
-                    and str(response.get("newOrderResult", "")).upper() == "SUCCESS"
-                ):
-                    order_fsm.state = OrderState.OPEN
-                else:
-                    order_fsm.state = OrderState.RECONCILE_REQUIRED
-                    self._persist(
-                        intent,
-                        "AMBIGUOUS",
-                        "exchange response did not contain authoritative order state",
-                    )
-                    self._record(
-                        "ERROR",
-                        "execution_ambiguous",
-                        intent,
-                        "Exchange accepted an operation without authoritative state",
-                        {"response_keys": list(response.keys()) if isinstance(response, dict) else []},
-                    )
-                    raise RuntimeError(
-                        "ExecutionBarrier: exchange response lacks authoritative order state"
-                    )
-            if intent.order_type != "CANCEL":
-                status = str(
-                    response.get("status", "")
-                    if isinstance(response, dict)
-                    else ""
-                ).upper()
-                if status:
-                    order_fsm.observe_exchange_status(
-                        status,
-                        float(
-                            response.get("executedQty", 0) or 0
-                            if isinstance(response, dict)
-                            else 0
-                        ),
-                    )
-                elif (
-                    isinstance(response, dict)
-                    and str(response.get("newOrderResult", "")).upper() == "SUCCESS"
-                ):
-                    order_fsm.state = OrderState.OPEN
-                else:
-                    order_fsm.state = OrderState.RECONCILE_REQUIRED
-                    self._persist(
-                        intent,
-                        "AMBIGUOUS",
-                        "exchange response did not contain authoritative order state",
-                    )
-                    self._record(
-                        "ERROR",
-                        "execution_ambiguous",
-                        intent,
-                        "Exchange accepted an operation without authoritative state",
-                        {"response_keys": list(response.keys()) if isinstance(response, dict) else []},
-                    )
-                    raise RuntimeError(
-                        "ExecutionBarrier: exchange response lacks authoritative order state"
-                    )
-            self._persist(intent, "SUBMITTED")
-            if self.db is not None and hasattr(self.db, "save_execution_event"):
+                if pre_submit_checks is not None:
+                    try:
+                        pre_submit_checks(snapshot)
+                    except Exception as exc:
+                        reason = f"pre_submit_check_failed: {type(exc).__name__}: {exc}"
+                        self._persist(intent, "BLOCKED", reason)
+                        self._record("WARNING", "execution_blocked", intent, reason)
+                        if claimed_identity:
+                            self._release_identity_claims(intent)
+                        return ExecutionResult(intent.intent_id, False, reason=reason)
+
+                # First durable marker proves the logical mutation was admitted.
+                # Then SUBMITTING is committed immediately before the network
+                # call. A crash from this point onward is treated as ambiguous.
+                if not self._persist(intent, "PENDING"):
+                    reason = "execution_intent_persistence_failed: no order mutation was sent"
+                    self._record("ERROR", "execution_intent_persistence_failed", intent, reason)
+                    if claimed_identity:
+                        self._release_identity_claims(intent)
+                    return ExecutionResult(intent.intent_id, False, reason=reason)
+
+                if not self._persist(intent, "SUBMITTING"):
+                    reason = "SUBMITTING durability confirmation failed: no order mutation was sent"
+                    self._record("ERROR", "execution_submitting_persistence_failed", intent, reason)
+                    if claimed_identity:
+                        self._release_identity_claims(intent)
+                    return ExecutionResult(intent.intent_id, False, reason=reason)
+
+                fsm.transition(OrderState.SUBMITTING)
+                submit_started = True
+                self._record(
+                    "INFO",
+                    "execution_admitted",
+                    intent,
+                    "Durable intent committed/read back; sending one exchange mutation",
+                    {
+                        "intent_id": intent.intent_id,
+                        "symbol": intent.symbol,
+                        "side": intent.side,
+                        "operation_kind": intent.operation_kind,
+                        "purpose": intent.purpose,
+                        "client_order_id": intent.client_order_id,
+                        "signal_id": intent.signal_id,
+                    },
+                )
                 try:
-                    self.db.save_execution_event(intent.intent_id, "BINANCE_SUBMITTED", {"symbol": intent.symbol, "side": intent.side})
-                except Exception:
-                    pass
-            self._record("INFO", "execution_submitted", intent, "Binance accepted request", {
-                "intent_id": intent.intent_id,
-            })
-            return ExecutionResult(intent.intent_id, True, response=response)
+                    response = submit()
+                except Exception as exc:
+                    # Even a transport exception can occur after Binance accepted
+                    # the request. Never retry under a fresh clientOrderId.
+                    fsm.state = OrderState.AMBIGUOUS
+                    reason = f"{type(exc).__name__}: {exc}"
+                    self._persist(intent, "AMBIGUOUS", reason)
+                    self._set_reconciliation_lock(intent, reason)
+                    raise ExecutionAmbiguousError(
+                        "Binance mutation outcome is UNKNOWN; reconcile by stable client/order identity"
+                    ) from exc
+
+                authoritative, final_status, response_reason = self._mutation_response_is_authoritative(
+                    intent, response
+                )
+                if not authoritative:
+                    fsm.state = OrderState.RECONCILE_REQUIRED
+                    self._persist(intent, "AMBIGUOUS", response_reason)
+                    self._set_reconciliation_lock(intent, response_reason)
+                    raise ExecutionAmbiguousError(
+                        f"ExecutionBarrier: {response_reason}; no retry is permitted"
+                    )
+
+                # The exchange response is authoritative, but a failed durable
+                # post-state update still leaves recovery mandatory.
+                if not self._persist(intent, final_status):
+                    reason = (
+                        "exchange response was received but durable final-state "
+                        "confirmation failed; reconcile before any new entry"
+                    )
+                    self._set_reconciliation_lock(intent, reason)
+                    raise ExecutionAmbiguousError(f"ExecutionBarrier: {reason}")
+
+                status = self._response_status(response)
+                if status in {"NEW", "PENDING_NEW"}:
+                    fsm.observe_exchange_status(status, float(response.get("executedQty", 0) or 0))
+                elif status == "PARTIALLY_FILLED":
+                    fsm.observe_exchange_status(status, float(response.get("executedQty", 0) or 0))
+                elif status in {"FILLED", "CANCELED", "CANCELLED", "EXPIRED", "REJECTED"}:
+                    fsm.observe_exchange_status(
+                        "CANCELED" if status == "CANCELLED" else status,
+                        float(response.get("executedQty", 0) or 0),
+                    )
+                elif intent.operation_kind.upper() in {"CANCEL", "CANCEL_OCO", "CANCEL_REPLACE"}:
+                    # The cancel result was authoritative in the operation-specific
+                    # envelope, but still reconcile its target before concluding flat.
+                    fsm.state = OrderState.RECONCILE_REQUIRED
+                else:
+                    fsm.state = OrderState.RECONCILE_REQUIRED
+
+                if fsm.state == OrderState.RECONCILE_REQUIRED:
+                    self._set_reconciliation_lock(
+                        intent,
+                        "order state transition needs authoritative reconciliation",
+                    )
+                    raise ExecutionAmbiguousError(
+                        "order state requires authoritative reconciliation"
+                    )
+
+                if self.db is not None:
+                    save_event = getattr(self.db, "save_execution_event", None)
+                    if callable(save_event):
+                        try:
+                            save_event(intent.intent_id, "BINANCE_MUTATION_CONFIRMED", {
+                                "symbol": intent.symbol,
+                                "side": intent.side,
+                                "status": status,
+                                "executedQty": response.get("executedQty", 0) if isinstance(response, dict) else None,
+                            })
+                        except Exception:
+                            pass
+                self._record(
+                    "INFO",
+                    "execution_mutation_confirmed",
+                    intent,
+                    "Binance returned an authoritative mutation response",
+                    {"intent_id": intent.intent_id, "status": status},
+                )
+                return ExecutionResult(intent.intent_id, True, response=response)
+            finally:
+                # On pre-submit failures or authoritative results the transient
+                # entry mutex may be released. Any ambiguous path deliberately
+                # retains it and the persistent reconciliation lock.
+                if claimed_entry_lock and not self._local_mutation_lock_reason and not submit_started:
+                    try:
+                        self._release_entry_admission(intent)
+                    except Exception:
+                        pass
+                elif claimed_entry_lock and submit_started and not self._local_mutation_lock_reason:
+                    try:
+                        self._release_entry_admission(intent)
+                    except Exception:
+                        pass
