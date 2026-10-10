@@ -2,6 +2,7 @@ import hashlib, hmac, time
 from decimal import Decimal, ROUND_DOWN
 from urllib.parse import urlencode
 import requests
+from execution_permit import require_mutation_permit
 
 class BinanceAPIError(RuntimeError):
     def __init__(self, message, *, unknown_execution=False, status_code=None, payload=None):
@@ -55,6 +56,8 @@ class BinanceSpotClient:
                 or path.startswith("/api/v3/orderList")
                 or path.startswith("/api/v3/openOrders")
             )
+            if is_order_mutation:
+                require_mutation_permit()
 
             # Proactive governor: slow down before Binance returns 429/418.
             # REQUEST_WEIGHT applies to all REST requests; ORDERS applies to
