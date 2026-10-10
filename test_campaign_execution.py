@@ -1,5 +1,6 @@
 import os
 import tempfile
+import time
 from datetime import datetime, timezone
 
 from campaign_engine import CampaignEngine
@@ -13,6 +14,7 @@ from db import Database
 class FakeContext:
     def __init__(self, version=1):
         self.version = version
+        self.candle_close_time_ms = int(time.time() * 1000)
         self.allow_long = True
         self.allow_short = False
 
@@ -41,12 +43,15 @@ def signal(kind=SignalType.REVERSAL, role=SignalRole.ENTRY, bar=100, trigger=101
         signal_bar_time_ms=bar,
         trigger_price=trigger,
         protective_reference=97,
-        context_versions={},
+        context_versions={"5m": 1},
         htf_confirmed=True,
     )
 
 
 def service(db, client):
+    # These fixtures represent a completed successful exchange reconciliation.
+    db.state_set("position_state", "FLAT")
+    db.state_set("position_state:BTCUSDT", "FLAT")
     barrier = ExecutionBarrier(FakeCache(), db)
     return CampaignExecutionService(client, db, barrier)
 
