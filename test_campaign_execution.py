@@ -253,6 +253,35 @@ def test_restart_adopts_pending_campaign_by_client_id():
         assert out[0]["state"] == "OPEN"
 
 
+def test_campaign_exit_never_sells_foreign_base_inventory():
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "campaign.sqlite3"))
+        client = MockExchange()
+        svc = service(db, client)
+        result = svc.arm_initial_entry(
+            signal(trigger=101.0),
+            equity_quote=10_000,
+            candidate_risk_pct=0.004,
+        )
+        client.set_price("BTCUSDT", 101.5)
+        assert svc.reconcile_pending_entries()[0]["state"] == "OPEN"
+        campaign = svc.engine.load_campaign(result["campaign_id"])
+        managed_qty = float(campaign.position_qty)
+
+        # The wallet also contains BTC that is not owned by this campaign.
+        client.balances["BTC"] += 0.02
+        outcome = svc.exit_market(campaign, reason="TEST_FOREIGN_BALANCE")
+
+        assert outcome["state"] == "CLOSED"
+        assert abs(client.balances["BTC"] - 0.02) < 1e-8
+        market_sells = [
+            row for row in client.orders
+            if row.get("side") == "SELL" and row.get("type") == "MARKET"
+        ]
+        assert len(market_sells) == 1
+        assert float(market_sells[0]["origQty"]) <= managed_qty + 1e-8
+
+
 def test_filled_protective_stop_during_cancel_blocks_followup_market_sell():
     class StopFillRaceExchange(MockExchange):
         def cancel_order(self, symbol, order_id=None, orig_client_order_id=None):
