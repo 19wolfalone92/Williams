@@ -56,11 +56,10 @@ class FuturesLossGuardTest {
         )
         assertEquals("closed Futures trade has invalid PnL/timestamp", reason)
     }
-}
 
 
-@Test
-fun dailyStopOutLimitUsesUtcDayAndOnlyLosingStopExits() {
+    @Test
+    fun dailyStopOutLimitUsesUtcDayAndOnlyLosingStopExits() {
     val reason = FuturesLossGuard.violation(
         listOf(
             JSONObject().put("net_pnl", "-2").put("closed_at", "9900").put("reason", "STOP_LOSS"),
@@ -72,4 +71,5 @@ fun dailyStopOutLimitUsesUtcDayAndOnlyLosingStopExits() {
         maxStopOutsPerUtcDay = 1
     )
     assertEquals("UTC daily stop-out limit reached: 1 >= 1", reason)
+}
 }
