@@ -63,6 +63,26 @@ t.active_symbol="BTCUSDT"
 t.filters={"LOT_SIZE":{"minQty":"0.00001","stepSize":"0.00001"},"PRICE_FILTER":{"tickSize":"0.01"},"NOTIONAL":{"minNotional":"5"}}
 t.symbol_rules=SymbolRules.from_exchange_info(t.client.exchange_info("BTCUSDT"), "BTCUSDT")
 t.foreign_base_balance=0
+# This scenario begins after a successful, mocked reconciliation. Do not bypass
+# the production recovery gate: seed its full evidence contract explicitly.
+t.db.mark_recovery_ready({
+    "exchange_reachable": True,
+    "account_checked": True,
+    "open_orders_checked": True,
+    "order_history_checked": True,
+    "fills_checked": True,
+    "positions_checked": True,
+    "protection_checked": True,
+    "campaigns_checked": True,
+    "intents_checked": True,
+    "unresolved_symbols": [],
+    "pending_entries": [],
+    "unknown_orders": [],
+    "inventory_mismatches": [],
+    "unprotected_positions": [],
+    "unknown_campaigns": [],
+    "canonical_position_state": "FLAT",
+})
 t.db.state_set("position_state","FLAT")
 
 # Simulate the baseline that the real application persists
