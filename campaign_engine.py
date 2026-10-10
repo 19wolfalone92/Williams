@@ -164,7 +164,6 @@ class CampaignEngine:
     # ------------------------------------------------------------------
 
     @staticmethod
-    @staticmethod
     def pending_signal(signal: SignalSpec, *, campaign_id: str = "") -> PendingSignal:
         return PendingSignal.from_spec(signal, campaign_id=campaign_id)
 
