@@ -129,6 +129,9 @@ class SignalSpec:
     created_at_ms: int = field(default_factory=lambda: int(time.time() * 1000))
     expires_at_ms: int = 0
     source_candle_index: int = -1
+    # True event time; for WM3 this is the close that confirms the fractal,
+    # not the earlier center-bar timestamp used for chart annotation.
+    confirmation_time_ms: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
