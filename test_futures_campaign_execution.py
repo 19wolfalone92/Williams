@@ -1,6 +1,9 @@
 import pytest
 import time
 import pandas as pd
+import json
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 from binance_usdm_futures_client import FuturesAPIError
 from campaign_model import SignalRole, SignalSpec, SignalType
@@ -486,6 +489,59 @@ def test_execution_service_enforces_campaign_cap_for_direct_callers(tmp_path):
         ).fetchone()["n"] == 0
     finally:
         db.conn.close()
+
+
+def test_campaign_capacity_admission_serializes_across_database_connections(tmp_path):
+    db_path = str(tmp_path / "futures-capacity-concurrent.sqlite3")
+    start_together = threading.Barrier(2)
+
+    def attempt_admission():
+        db = Database(db_path)
+        try:
+            cache = ContextCache()
+            make_context(cache, allow_long=True, allow_short=False)
+            service = FuturesCampaignExecutionService(
+                FakeFuturesClient(mark_price=102.0),
+                db,
+                execution_barrier=ExecutionBarrier(cache, db),
+                max_open_positions=1,
+                portfolio_risk_limit_pct=0.01,
+                campaign_risk_limit_pct=0.006,
+            )
+            start_together.wait(timeout=5)
+            try:
+                # Mirror the production critical section: capacity is rechecked
+                # under BEGIN IMMEDIATE, then the durable campaign is written
+                # before releasing SQLite's admission lock.
+                with db.transaction(immediate=True):
+                    service._assert_position_capacity()
+                    campaign = service.engine.create_campaign(
+                        make_signal("LONG"),
+                        initial_risk_pct=0.0024,
+                    )
+                    campaign.tags["execution_mode"] = "FUTURES"
+                    db.save_campaign(campaign)
+                return "ADMITTED"
+            except FuturesCampaignExecutionError:
+                return "BLOCKED"
+        finally:
+            db.conn.close()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(lambda _index: attempt_admission(), range(2)))
+
+    assert outcomes.count("ADMITTED") == 1
+    assert outcomes.count("BLOCKED") == 1
+
+    verify = Database(db_path)
+    try:
+        open_futures = [
+            row for row in verify.open_campaigns()
+            if json.loads(row.get("tags_json") or "{}").get("execution_mode") == "FUTURES"
+        ]
+        assert len(open_futures) == 1
+    finally:
+        verify.conn.close()
 
 
 def test_futures_entry_is_blocked_when_available_margin_is_insufficient(tmp_path):
