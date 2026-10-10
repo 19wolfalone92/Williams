@@ -2667,8 +2667,15 @@ private class NativeEngine(
     private fun campaignEntryCandidate(candidate: BaseAnalysis): CampaignSignalN? {
         val now = System.currentTimeMillis() + serverTimeOffsetMs
         return candidate.campaignSignals
-            .filter { it.expiresAtMs > now && it.confirmationTimeMs > 0L }
-            .sortedWith(compareBy<CampaignSignalN> { it.confirmationTimeMs }.thenBy { it.signalBarTimeMs })
+            .filter {
+                it.expiresAtMs > now &&
+                    it.confirmationTimeMs > 0L &&
+                    it.confirmationTimeMs <= now + 60_000L
+            }
+            .sortedWith(
+                compareBy<CampaignSignalN> { it.confirmationTimeMs }
+                    .thenBy { it.signalBarTimeMs }
+            )
             .firstOrNull()
     }
 
@@ -2680,6 +2687,12 @@ private class NativeEngine(
         if (positionList().size >= maxOpenPositions) return
 
         val signal = campaignEntryCandidate(candidate) ?: return
+        val nowMs = System.currentTimeMillis() + serverTimeOffsetMs
+        if (
+            signal.expiresAtMs <= nowMs ||
+            signal.confirmationTimeMs <= 0L ||
+            signal.confirmationTimeMs > nowMs + 60_000L
+        ) return
         val equity = estimateManagedEquity()
         val remainingRisk = campaignRemainingRiskPct(equity)
         val riskPct = min(
@@ -3548,12 +3561,19 @@ private class NativeEngine(
         val latestSignalTime =
             position.signalId.substringAfterLast(':').toLongOrNull()
                 ?: position.openedAt
+        val nowMs = System.currentTimeMillis() + serverTimeOffsetMs
         val signal = candidate.campaignSignals
             .filter {
                 it.type in setOf("SUPER_AO", "FRACTAL") &&
-                    it.signalBarTimeMs > latestSignalTime
+                    it.signalBarTimeMs > latestSignalTime &&
+                    it.confirmationTimeMs > 0L &&
+                    it.confirmationTimeMs <= nowMs + 60_000L &&
+                    it.expiresAtMs > nowMs
             }
-            .sortedBy { it.signalBarTimeMs }
+            .sortedWith(
+                compareBy<CampaignSignalN> { it.confirmationTimeMs }
+                    .thenBy { it.signalBarTimeMs }
+            )
             .firstOrNull()
             ?: return
 
@@ -3708,11 +3728,19 @@ private class NativeEngine(
             scanExecutor.submit(
                 Callable {
                     try {
-                        val candles = fetchCandles(
+                        val rawCandles = fetchCandles(
                             symbol,
                             campaignExecutionTimeframe,
-                            150
+                            151
                         )
+                        // Binance includes the still-forming candle. TC2 decisions
+                        // may only consume completed H1 bars; drop it before both
+                        // indicator and three-Wise-Men evaluation.
+                        val candles = if (rawCandles.size >= 2) {
+                            rawCandles.dropLast(1)
+                        } else {
+                            emptyList()
+                        }
                         val result = analyseBase(
                             symbol = symbol,
                             candles = candles,
@@ -6835,11 +6863,40 @@ private class NativeEngine(
         // allowed inside a parent Wave 3 OR a parent Wave 5.
         // MTF enrichment reads the already-warmed execution cache. The
         // scanner must never trigger full-history reconstruction itself.
-        val mtfFrames = listOf("5m", "15m", "30m", "1h", "4h", "1d")
+        // H4 is context and D1 is a dashboard-only market overview. M5/M15
+        // cannot create a TC2 signal or change the selected entry timeframe.
+        val mtfFrames = listOf("4h", "1d")
         for (frame in mtfFrames) {
-            runCatching { fetchCandles(symbol, frame, 150) }
-                .getOrNull()?.takeIf { it.size >= 40 }
-                ?.let { frames.add(waveInfo(it, frame)) }
+            val raw = runCatching { fetchCandles(symbol, frame, 151) }.getOrNull()
+            val closed = if (raw != null && raw.size >= 2) raw.dropLast(1) else emptyList()
+            if (closed.size >= 40) {
+                val waveContext = waveInfo(closed, frame)
+                frames.add(waveContext)
+                if (frame == "1d") {
+                    dailyContextOverview[symbol] = JSONObject()
+                        .put("symbol", symbol)
+                        .put("interval", "1d")
+                        .put("informational_only", true)
+                        .put("last_closed_candle_open_ms", closed.last().t)
+                        .put("state", when {
+                            waveContext.alligatorBullish && waveContext.aoPositive -> "BULLISH"
+                            waveContext.direction == "DOWN" -> "BEARISH"
+                            else -> "MIXED_OR_SLEEPING"
+                        })
+                        .put("wave_direction", waveContext.direction)
+                        .put("alligator_bullish", waveContext.alligatorBullish)
+                        .put("ao_positive", waveContext.aoPositive)
+                        .put("updated_at_ms", System.currentTimeMillis())
+                }
+            } else if (frame == "1d") {
+                dailyContextOverview[symbol] = JSONObject()
+                    .put("symbol", symbol)
+                    .put("interval", "1d")
+                    .put("informational_only", true)
+                    .put("available", false)
+                    .put("reason", "Insufficient closed daily candles")
+                    .put("updated_at_ms", System.currentTimeMillis())
+            }
         }
 
         val setup = baseCandidate.wave
@@ -6854,7 +6911,8 @@ private class NativeEngine(
                 htf4h.direction == "UP"
 
         if (htfConfirmed) bonus += 8.0
-        if (frames.any { it.path.startsWith("1d:") && it.direction == "UP" }) bonus += 4.0
+        // D1 remains visible in the overview but cannot rank, veto, or create
+        // an intraday TC2 entry signal.
         if (setup.position == 3) {
             bonus += 6.0
             exhaustion = min(exhaustion, 30.0)
@@ -6971,18 +7029,23 @@ private class NativeEngine(
 
         var score = (baseCandidate.score + bonus).coerceIn(0.0, 100.0)
 
-        // Entry is no longer tied to the 1h candle's breakout. We enter on the
-        // lower-TF Wave 3 after higher-TF context confirms the direction.
+        // The TC2 order is created by typed H1 Wise-Men evidence. Elliott/Wave
+        // enrichment is advisory metadata, not a second Boolean strategy gate.
+        // H4 data must exist; its direction does not erase countertrend WM1.
+        val nowMs = System.currentTimeMillis() + serverTimeOffsetMs
+        val validWiseManSignal = baseCandidate.campaignSignals.any {
+            it.confirmationTimeMs > 0L &&
+                it.confirmationTimeMs <= nowMs + 60_000L &&
+                it.expiresAtMs > nowMs
+        }
         val finalSignal =
             if (campaignEngineEnabled) {
-                baseCandidate.campaignSignals.isNotEmpty() &&
+                validWiseManSignal &&
+                    baseCandidate.atrPct > 0.0 &&
                     baseCandidate.atrPct <= 0.08 &&
-                    baseCandidate.spreadPct <= 0.0015 &&
-                    htfConfirmed &&
-                    !countertrendCorrectionImpulse &&
-                    junior != null &&
-                    !entryInsideCorrection &&
-                    middle?.position !in listOf(2, 4)
+                    baseCandidate.spreadPct >= 0.0 &&
+                    baseCandidate.spreadPct <= maxSpreadPct &&
+                    htf4h != null
             } else {
                 entrySignal &&
                     baseCandidate.atrPct <= 0.08 &&
@@ -7008,6 +7071,8 @@ private class NativeEngine(
             middle?.path?.substringBefore(":") ?: ""
 
         val reason = when {
+            finalSignal && campaignEngineEnabled ->
+                "TC2 ENTRY: valid typed H1 Wise-Man signal; H4 data available; D1 is informational"
             entrySignal && middle?.position == 3 ->
                 "MTF ENTRY: $entryFrame Wave 3 inside parent $parentFrame Wave 3"
             countertrendCorrectionImpulse && !entrySignal ->
