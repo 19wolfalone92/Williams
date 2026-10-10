@@ -599,12 +599,25 @@ class CampaignExecutionService:
                             campaign.tags.get("protective_order_id", "") or ""
                         )
                         if protective_id:
-                            self.replace_structural_stop(
+                            replacement = self.replace_structural_stop(
                                 campaign,
                                 existing_order_id=int(protective_id),
                                 quantity=total_qty,
                                 proposed_stop=current_stop,
                             )
+                            replacement_id = str(
+                                (replacement.get("newOrderResponse") or {}).get("orderId", "")
+                            )
+                            if not replacement_id:
+                                self.engine.mark_reconcile_required(
+                                    campaign,
+                                    "add-on fill stop replacement has no confirmed new order ID",
+                                )
+                                raise CampaignExecutionError(
+                                    f"{symbol}: add-on protection replacement ID is unknown"
+                                )
+                            campaign.tags["protective_order_id"] = replacement_id
+                            campaign.current_stop_price = current_stop
                         else:
                             protection = self.create_hard_stop(
                                 campaign,
