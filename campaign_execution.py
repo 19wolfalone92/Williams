@@ -1482,32 +1482,61 @@ class CampaignExecutionService:
 
         cancel_result = str(result.get("cancelResult", "")).upper()
         new_result = str(result.get("newOrderResult", "")).upper()
-        # Any non-success or transport ambiguity must be reconciled before
-        # another mutation; cancelReplace is not atomic.
+        # cancelReplace is not atomic. A success-shaped response is not enough:
+        # independently query both identities before declaring protection live.
         if cancel_result not in {"SUCCESS", "NOT_FOUND"} or new_result not in {"SUCCESS", ""}:
-            campaign.mark_reconcile_required(
-                f"cancelReplace ambiguous: cancel={cancel_result} new={new_result}"
+            self.engine.mark_reconcile_required(
+                campaign,
+                f"cancelReplace ambiguous: cancel={cancel_result} new={new_result}",
             )
-            self.db.save_campaign(campaign)
             raise CampaignExecutionError(
                 f"{campaign.symbol}: structural stop replacement ambiguous"
             )
 
+        try:
+            old_order = self.client.get_order(
+                campaign.symbol, order_id=existing_order_id
+            )
+            new_order = self.client.get_order(
+                campaign.symbol, orig_client_order_id=cid
+            )
+            self.db.save_order(old_order)
+            self.db.save_order(new_order)
+        except Exception as exc:
+            self.engine.mark_reconcile_required(
+                campaign,
+                f"cancelReplace state verification failed: {exc}",
+            )
+            raise CampaignExecutionError(
+                f"{campaign.symbol}: replacement orders cannot be verified"
+            ) from exc
+
+        old_status = str(old_order.get("status", "")).upper()
+        new_status = str(new_order.get("status", "")).upper()
+        if old_status not in {"CANCELED", "EXPIRED", "REJECTED"} or new_status not in {"NEW", "PENDING_NEW"}:
+            self.engine.mark_reconcile_required(
+                campaign,
+                f"cancelReplace post-state ambiguous: old={old_status or 'UNKNOWN'} new={new_status or 'UNKNOWN'}",
+            )
+            raise CampaignExecutionError(
+                f"{campaign.symbol}: replacement stop is not confirmed active with old stop terminal"
+            )
+
         self.db.save_campaign_order(
             PendingOrderRecord(
-                order_id=str(
-                    (result.get("newOrderResponse") or {}).get("orderId", "")
-                ),
+                order_id=str(new_order.get("orderId", "") or ""),
                 client_order_id=cid,
                 symbol=campaign.symbol,
                 side="SELL",
                 order_type="STOP_LOSS",
                 purpose="PROTECTION",
-                status="NEW",
+                status=new_status,
                 stop_price=new_stop,
                 quantity=quantity,
                 campaign_id=campaign.campaign_id,
                 signal_id=campaign.current_signal_id,
+                raw_json=new_order,
             )
         )
+        result["newOrderResponse"] = new_order
         return result
