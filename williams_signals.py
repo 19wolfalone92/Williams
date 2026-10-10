@@ -103,12 +103,62 @@ def _angulation(ind: pd.DataFrame, index: int, *, window: int = 5) -> tuple[floa
     return float(max(score, 0.0)), bool(valid)
 
 
+def _invalidation_intact(
+    ind: pd.DataFrame,
+    source_index: int,
+    *,
+    side: str,
+    protective_level: float,
+) -> bool:
+    """Fail closed if a later closed candle breached the signal's structural extreme."""
+    if source_index < 0 or source_index >= len(ind):
+        return False
+    if side not in {"LONG", "SHORT"} or not math.isfinite(float(protective_level)) or protective_level <= 0:
+        return False
+    later = ind.iloc[source_index + 1:]
+    if later.empty:
+        return True
+    column = "low" if side == "LONG" else "high"
+    values = pd.to_numeric(later[column], errors="coerce").to_numpy(dtype=float)
+    if not all(math.isfinite(float(v)) for v in values):
+        return False
+    return bool((values > protective_level).all()) if side == "LONG" else bool((values < protective_level).all())
+
+
+def _trigger_unbroken(
+    ind: pd.DataFrame,
+    source_index: int,
+    *,
+    side: str,
+    trigger_price: float,
+) -> bool:
+    """A conditional stop is not re-armed after any later candle traded through it."""
+    if source_index < 0 or source_index >= len(ind):
+        return False
+    if side not in {"LONG", "SHORT"} or not math.isfinite(float(trigger_price)) or trigger_price <= 0:
+        return False
+    later = ind.iloc[source_index + 1:]
+    if later.empty:
+        return True
+    column = "high" if side == "LONG" else "low"
+    values = pd.to_numeric(later[column], errors="coerce").to_numpy(dtype=float)
+    if not all(math.isfinite(float(v)) for v in values):
+        return False
+    return bool((values < trigger_price).all()) if side == "LONG" else bool((values > trigger_price).all())
+
+
 def _latest_reversal(
     ind: pd.DataFrame,
     *,
     side: str,
     max_age_bars: int = 20,
 ) -> tuple[int, float, float] | None:
+    # "Good angulation" is described qualitatively, while the available
+    # editions do not provide a deterministic threshold proving this linear
+    # separation approximation author-exact. Default to blocked; the explicit
+    # flag is for research/replay only until the source rule is resolved.
+    if str(os.getenv("WILLIAMS_ALLOW_APPROXIMATE_WM1_ANGULATION", "false")).lower() != "true":
+        return None
     column = "bullish_reversal_bar" if side == "LONG" else "bearish_reversal_bar"
     if column not in ind.columns:
         return None
@@ -142,16 +192,9 @@ def _latest_super_ao(
             streak = int(row.get(streak_col, 0) or 0)
         except (TypeError, ValueError):
             streak = 0
-        # The book's third same-colour bar is the specific signal bar.
-        # Williams' Super AO is a continuation signal inside an established
-        # structure, so retain the existing valid fractal/Balance-Line gate.
-        fractal_gate_col = "long_fractal_outside" if side == "LONG" else "short_fractal_outside"
-        gate_i = max(0, i - 1)
-        gate_ok = (
-            fractal_gate_col not in ind.columns
-            or bool(ind.iloc[gate_i].get(fractal_gate_col, False))
-        )
-        if streak == 3 and gate_ok:
+        # WM2 is identified by the third bar independently of WM3. Campaign
+        # context and the conditional price trigger are checked downstream.
+        if streak == 3:
             trigger_base = float(row["high"] if side == "LONG" else row["low"])
             protective = float(row["low"] if side == "LONG" else row["high"])
             return i, trigger_base, protective
@@ -169,7 +212,17 @@ def _latest_confirmed_fractal(
     if level_col not in ind.columns or fractal_col not in ind.columns:
         return None
 
-    right = 2
+    right_value = ind.iloc[-1].get("fractal_right_bars", 2)
+    try:
+        right = int(right_value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if right < 1 or (isinstance(right_value, float) and not right_value.is_integer()):
+        return None
+    center_index_col = (
+        "confirmed_up_center_index" if side == "LONG" else "confirmed_down_center_index"
+    )
+    has_center_metadata = center_index_col in ind.columns
     start = max(0, len(ind) - max(3, int(max_age_bars)))
     for confirmation_i in range(len(ind) - 1, start - 1, -1):
         row = ind.iloc[confirmation_i]
@@ -177,11 +230,21 @@ def _latest_confirmed_fractal(
         if level is None or pd.isna(level):
             continue
         center_i = confirmation_i - right
-        if center_i < 0 or not bool(ind.iloc[center_i].get(fractal_col, False)):
+        if has_center_metadata:
+            try:
+                stored_center = int(row.get(center_index_col, -1))
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if stored_center >= 0:
+                center_i = stored_center
+        if center_i < 0 or center_i >= len(ind):
+            continue
+        if not bool(ind.iloc[center_i].get(fractal_col, False)):
             continue
         center = ind.iloc[center_i]
         trigger_base = float(center["high"] if side == "LONG" else center["low"])
         protective = float(center["low"] if side == "LONG" else center["high"])
+        # Teeth belongs to the actual confirmation row, not center+2.
         teeth = float(row.get("teeth_shifted", 0.0) or 0.0)
         return confirmation_i, center_i, trigger_base, protective, teeth
     return None
@@ -225,7 +288,14 @@ def extract_long_signal_specs(
     if reversal is not None:
         i, trigger_base, protective = reversal
         trigger = trigger_base + tick
-        if current_close < trigger:
+        ttl_bars = max(1, int(os.getenv("WILLIAMS_PENDING_REVERSAL_BARS", "2")))
+        age_bars = len(ind) - 1 - i
+        if (
+            current_close < trigger
+            and age_bars <= ttl_bars
+            and _trigger_unbroken(ind, i, side="LONG", trigger_price=trigger)
+            and _invalidation_intact(ind, i, side="LONG", protective_level=protective)
+        ):
             row = ind.iloc[i]
             score, _ = _angulation(ind, i)
             specs.append(
@@ -263,7 +333,14 @@ def extract_long_signal_specs(
     if super_ao is not None:
         i, trigger_base, protective = super_ao
         trigger = trigger_base + tick
-        if current_close < trigger:
+        ttl_bars = max(1, int(os.getenv("WILLIAMS_PENDING_SUPER_AO_BARS", "2")))
+        age_bars = len(ind) - 1 - i
+        if (
+            current_close < trigger
+            and age_bars <= ttl_bars
+            and _trigger_unbroken(ind, i, side="LONG", trigger_price=trigger)
+            and _invalidation_intact(ind, i, side="LONG", protective_level=protective)
+        ):
             row = ind.iloc[i]
             specs.append(
                 SignalSpec.new(
@@ -301,8 +378,21 @@ def extract_long_signal_specs(
         # Formation can be anywhere; trigger validity belongs to current
         # price/Teeth.  At arm time the trigger must still be above Teeth.
         trigger = trigger_base + tick
-        current_trigger_valid = trigger > max(current_teeth, 0.0)
-        if current_close < trigger and current_trigger_valid:
+        ttl_bars = max(1, int(os.getenv("WILLIAMS_PENDING_FRACTAL_BARS", "8")))
+        age_bars = len(ind) - 1 - confirmation_i
+        current_trigger_valid = (
+            math.isfinite(current_teeth) and current_teeth > 0.0
+            and math.isfinite(teeth) and teeth > 0.0
+            and trigger_base > teeth
+            and trigger > current_teeth
+        )
+        if (
+            current_close < trigger
+            and current_trigger_valid
+            and age_bars <= ttl_bars
+            and _trigger_unbroken(ind, center_i, side="LONG", trigger_price=trigger)
+            and _invalidation_intact(ind, center_i, side="LONG", protective_level=protective)
+        ):
             row = ind.iloc[center_i]
             specs.append(
                 SignalSpec.new(
@@ -326,10 +416,8 @@ def extract_long_signal_specs(
                     reason="WM3 buy fractal; trigger only while price/trigger remains above Teeth",
                     source_candle_index=center_i,
                     expires_at_ms=(
-                        _row_time_ms(row)
-                        + _timeframe_ms(timeframe) * max(
-                            1, int(os.getenv("WILLIAMS_PENDING_FRACTAL_BARS", "8"))
-                        )
+                        _row_time_ms(ind.iloc[confirmation_i])
+                        + _timeframe_ms(timeframe) * (1 + ttl_bars)
                     ),
                 )
             )
