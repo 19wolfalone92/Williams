@@ -20,6 +20,7 @@ from l2_slippage import L2SlippageGuard
 from equity_breaker import EquityCircuitBreaker
 from wise_men import WiseMenStateMachine
 
+from safe_logging import redact_text
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(message)s')
 log = logging.getLogger('williams-v4')
@@ -986,7 +987,7 @@ class Trader:
                 self.db.log_event(
                     'WARNING', 'execution_fill_lookup_failed',
                     'Could not refresh authoritative fills; using order accumulator',
-                    {'orderId': order_id, 'error': f'{type(exc).__name__}: {exc}'},
+                    {'orderId': order_id, 'error': f'{type(exc).__name__}: {redact_text(str(exc))}'},
                 )
         if fills:
             order['fills'] = fills
