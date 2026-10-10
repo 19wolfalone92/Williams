@@ -1953,6 +1953,13 @@ private class NativeEngine(
         val teeth = alligatorLines.teeth
         val lips = alligatorLines.lips
         val i = candles.lastIndex
+        if (!alligatorLines.validAt(i)) {
+            return JSONObject()
+                .put("symbol", symbol)
+                .put("interval", frame)
+                .put("ready", false)
+                .put("reason", "ALLIGATOR_LINE_NOT_READY")
+        }
         val aoNow = ao(candles, i)
         val aoPrev = ao(candles, i - 1)
         val acNow = aoNow - (0 until 5).map { ao(candles, i - it) }.average()
@@ -6427,12 +6434,6 @@ private class NativeEngine(
             frame.lowercase(Locale.US) + ":" +
             type.uppercase(Locale.US) + ":" +
             barTimeMs
-
-    private fun shiftedSeries(values: List<Double>, shift: Int): List<Double> =
-        List(values.size) { i ->
-            val source = i - shift
-            if (source >= 0) values[source] else Double.NaN
-        }
 
     private fun longCampaignSignals(
         symbol: String,
