@@ -212,15 +212,42 @@ def _loss_streak_allows_entry(
         return False, f"loss-streak/cooldown state unavailable; new entries blocked ({type(exc).__name__}: {exc})"
 
 
+def _strict_signal_bool(raw: Any, field: str) -> bool:
+    if raw is True or raw == 1:
+        return True
+    if raw is False or raw == 0:
+        return False
+    if isinstance(raw, str):
+        normalized = raw.strip().lower()
+        if normalized in {"true", "1"}:
+            return True
+        if normalized in {"false", "0"}:
+            return False
+    raise ValueError(f"Persisted signal field {field} is not an unambiguous boolean")
+
+
 def signal_spec_from_dict(raw: dict[str, Any]) -> SignalSpec:
-    """Rebuild the canonical domain signal without losing direction metadata."""
-    side = str(raw.get("side", "")).upper()
-    direction = str(raw.get("direction", "") or "").upper()
+    """Rebuild a validated canonical signal without trusting serialized truthiness."""
+    if not isinstance(raw, dict):
+        raise ValueError("Persisted signal must be an object")
+    side = str(raw.get("side", "")).strip().upper()
+    direction = str(raw.get("direction", "") or "").strip().upper()
     if not direction:
         direction = {
             "BUY": "LONG", "LONG": "LONG",
             "SELL": "SHORT", "SHORT": "SHORT",
         }.get(side, "")
+    if side not in {"BUY", "SELL", "LONG", "SHORT"}:
+        raise ValueError("Persisted signal side is invalid")
+    expected_direction = "LONG" if side in {"BUY", "LONG"} else "SHORT"
+    if direction not in {"LONG", "SHORT"} or direction != expected_direction:
+        raise ValueError("Persisted signal side/direction conflict")
+    timeframe = "1M" if str(raw.get("timeframe", "")).strip() == "1M" else str(raw.get("timeframe", "")).strip().lower()
+    if not timeframe:
+        raise ValueError("Persisted signal timeframe is missing")
+    context_versions = raw.get("context_versions", {}) or {}
+    if not isinstance(context_versions, dict):
+        raise ValueError("Persisted signal context_versions must be an object")
     return SignalSpec(
         signal_id=str(raw["signal_id"]),
         symbol=str(raw["symbol"]).upper(),
@@ -228,24 +255,21 @@ def signal_spec_from_dict(raw: dict[str, Any]) -> SignalSpec:
         direction=direction,
         signal_type=SignalType(str(raw["signal_type"])),
         role=SignalRole(str(raw["role"])),
-        timeframe=(
-            "1M" if str(raw["timeframe"]).strip() == "1M"
-            else str(raw["timeframe"]).strip().lower()
-        ),
+        timeframe=timeframe,
         signal_bar_time_ms=int(raw["signal_bar_time_ms"]),
         trigger_price=float(raw["trigger_price"]),
         protective_reference=float(raw["protective_reference"]),
         trigger_buffer_ticks=int(raw.get("trigger_buffer_ticks", 1) or 1),
         invalidation_price=float(raw.get("invalidation_price", 0.0) or 0.0),
         teeth_at_detection=float(raw.get("teeth_at_detection", 0.0) or 0.0),
-        alligator_bullish=bool(raw.get("alligator_bullish", False)),
-        alligator_bearish=bool(raw.get("alligator_bearish", False)),
-        alligator_awake=bool(raw.get("alligator_awake", False)),
+        alligator_bullish=_strict_signal_bool(raw.get("alligator_bullish", False), "alligator_bullish"),
+        alligator_bearish=_strict_signal_bool(raw.get("alligator_bearish", False), "alligator_bearish"),
+        alligator_awake=_strict_signal_bool(raw.get("alligator_awake", False), "alligator_awake"),
         angulation_score=float(raw.get("angulation_score", 0.0) or 0.0),
         wave_confidence=float(raw.get("wave_confidence", 0.0) or 0.0),
         wave_exhaustion_risk=float(raw.get("wave_exhaustion_risk", 0.0) or 0.0),
-        htf_confirmed=bool(raw.get("htf_confirmed", False)),
-        context_versions=dict(raw.get("context_versions", {}) or {}),
+        htf_confirmed=_strict_signal_bool(raw.get("htf_confirmed", False), "htf_confirmed"),
+        context_versions=dict(context_versions),
         reason=str(raw.get("reason", "")),
         created_at_ms=int(raw.get("created_at_ms", 0) or 0),
         confirmation_time_ms=int(raw.get("confirmation_time_ms", 0) or 0),
