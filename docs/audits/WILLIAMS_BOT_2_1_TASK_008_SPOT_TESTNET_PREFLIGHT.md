@@ -191,3 +191,65 @@ When separately authorized, each order-cycle stage must persist intent before su
 5. Execute read-only preflight from an authorized local Spot Testnet runtime and attach sanitized results. Do not run order E2E without separate explicit authorization.
 
 **Follow-up decision: STILL BLOCKED / NOT ACCEPTED.** The code changes are committed to the audit branch, but tests have not been executed and the full runtime readiness contract remains incomplete. Do not enable trading.
+
+
+---
+
+## Follow-up: execution, integration, and evidence attempt (2026-10-10)
+
+**Latest code commit created in this follow-up:** `c707b55f5e882facb8a457f6bf52f72e8455ee21` (`execution_barrier.py`).  
+**Branch comparison after this commit:** `audit/williams-2.1-task-008-spot-testnet` is 8 commits ahead of `main`, 0 behind; merge base / observed main SHA is `04da5f9c09572e99ff310be3a1908179165e528c`.  
+**CI evidence:** combined status returned an empty status list; commit workflow-run lookup returned no runs. This is not a pass.  
+**PR state:** the branch exists in GitHub; available connector calls in this session did not provide a pull-request lookup endpoint, so PR number/open/draft state is UNKNOWN and not inferred.  
+**Execution environment:** `git clone https://github.com/19wolfalone92/Williams.git /tmp/Williams` failed with exit code 128: `Could not resolve host: github.com`. Therefore no local checkout was available and none of the requested repository test commands could be executed in this environment.
+
+### New source findings and safety changes
+
+- `binance_client.py`: found remaining raw Binance response-body exposure after the earlier redaction change: HTTP 409 cancelReplace, HTTP 418/429 response payloads, and general HTTP/API errors could still place raw response content in exception messages or `BinanceAPIError.payload`. Updated these paths to emit bounded API-code/status summaries and `response body redacted`; transport exception summaries use the exception type rather than raw text. This is a source change, not a tested redaction claim.
+- `execution_barrier.py`: found that durable intent persistence exceptions were swallowed and execution could continue; the barrier now returns a blocked result if the initial intent cannot be persisted. ENTRY intents also block if no pre-submit callback is supplied. Exception messages written to blocked/ambiguous state were reduced to exception type to avoid propagating raw error text. This change has not been executed by tests.
+- **Integration remains unproven:** the barrier's optional callback is not itself proof that `PreflightCheckService.verify_all()` was called or that its result was fresh. No verified call-chain evidence shows the preflight result is bound to each order mutation, invalidated by age, or rechecked atomically immediately before submit. Do not claim integration complete.
+- **Known compatibility risk identified by source inspection, not test execution:** existing `test_preflight_gate.py` contains a fake client with `testnet = False` while expecting a successful live preflight and expects `api_restrictions` / `api_trading_status` checks that the new required-check list does not include. These expectations conflict with the new unconditional Spot Testnet gate and are likely to fail. This is not labelled as an executed FAIL because the suite could not run.
+
+### Test execution ledger
+
+| Command / check | Result | Exit code / evidence |
+|---|---|---|
+| `git clone https://github.com/19wolfalone92/Williams.git /tmp/Williams` | FAIL — DNS resolution prevented checkout | `128`; `Could not resolve host: github.com` |
+| `python -m pytest -q test_preflight_fail_closed.py` | NOT RUN | Repository checkout unavailable; no test exit code |
+| Existing preflight tests | NOT RUN | No local checkout; no test exit code |
+| Binance client tests | NOT RUN | No local checkout; no test exit code |
+| Python backend suite | NOT RUN | No local checkout; no test exit code |
+| Campaign CI | NOT RUN / UNKNOWN | No repository runner or confirmed Actions run available |
+| Release gate | NOT RUN | No local checkout; no test exit code |
+| `python full_safety_audit.py` | NOT RUN | No local checkout; no test exit code |
+| GitHub combined status for `c707b55f5e882facb8a457f6bf52f72e8455ee21` | UNKNOWN | Empty status list |
+| GitHub workflow runs for that commit | UNKNOWN | No runs returned by available PR-run lookup |
+
+### Current acceptance matrix
+
+| Requirement | Status | Evidence |
+|---|---|---|
+| Branch exists and is ahead of main | PASS | GitHub compare: 8 ahead / 0 behind, merge base SHA recorded above |
+| Current branch HEAD independently re-read as a ref SHA | UNKNOWN | Connector exposes branch search but not branch tip SHA; latest created commit is known, but a concurrent later update cannot be ruled out |
+| Requested PR state | UNKNOWN | Pull-request lookup unavailable through tools exposed in this session |
+| Fail-closed preflight logic | PARTIAL | Required checks initialize UNKNOWN and missing runtime proofs block; tests not executed |
+| Preflight integrated with every order mutation | UNKNOWN / BLOCKER | No proof the callback always invokes and binds a fresh preflight result; no complete call-site audit/test execution |
+| Stale-result invalidation / measured freshness | FAIL — not implemented as measured probes | No per-component timestamp/age contract in the gate for candles, market/private WS, scanner, context, diagnostics, SQLite reconciliation, Android |
+| Persistence before order | PARTIAL — code changed, tests UNKNOWN | Missing/failed initial intent persistence now blocks; no behavioral test executed |
+| Unknown order outcome / no blind retry | PARTIAL | Client has conservative ambiguous handling in reviewed paths; recovery/reconciliation behavior not tested end-to-end |
+| Secret redaction in Binance errors | PARTIAL — code changed, tests UNKNOWN | Remaining raw payload interpolation removed in reviewed REST error paths; whole-repository sinks, traceback, HTTP responses, diagnostics and serialization not proven |
+| Existing preflight test compatibility | BLOCKER / likely regression | Source expectations conflict with new Spot Testnet-only semantics; tests not executed |
+| Live read-only Spot Testnet preflight | UNKNOWN | DNS failed; no authorized credentials/runtime available |
+| Mainnet used / order mutations sent | PASS for this session | No Mainnet request or order mutation was issued by this session |
+
+### Remaining blockers
+
+1. Run the exact commit in a network-enabled checkout/CI runner and capture command, SHA, exit code, and logs for every requested suite.
+2. Reconcile/update existing preflight tests to the Spot Testnet-only contract; add behavioral tests for API permission restrictions and every exception path.
+3. Make a required, non-optional execution admission contract that verifies a fresh preflight report, correct Spot Testnet endpoint/product, and reconciliation status inside the serialized execution barrier immediately before order submission. A caller-supplied no-op callback must not satisfy this.
+4. Add explicit monotonic timestamps/age limits and invalidation for every required runtime proof; absent/expired proofs must be UNKNOWN and block.
+5. Add deterministic tests for intent persistence failure, concurrent BUY admission, timeout after submit, partial fill, WS gap/reconnect, restart, SQLite↔Binance mismatch, protection-order uncertainty, and idempotent reconciliation.
+6. Complete secret-marker tests across API error payloads, exception chaining/tracebacks, logs, diagnostics, HTTP responses, and JSON serialization.
+7. Run read-only Testnet preflight only from an authorized, connected runtime. No orders are authorized by this task.
+
+**Decision: STILL BLOCKED / NOT ACCEPTED.** The safety fixes above were committed, but neither their syntax/runtime behavior nor the test suite was executed. Freshness, reconciliation, and preflight-to-order integration are not proven. Do not enable trading, merge the PR, or run order E2E.
