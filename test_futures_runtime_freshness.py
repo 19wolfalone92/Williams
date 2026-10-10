@@ -57,6 +57,18 @@ def test_default_universe_is_core_ten():
     assert TradingConfig.from_env({}).symbols == DEFAULT_SYMBOLS
 
 
+def test_futures_runtime_default_symbols_follow_core_ten():
+    from futures_runtime import _resolve_futures_symbols
+    from trading_config import DEFAULT_SYMBOLS
+
+    assert _resolve_futures_symbols(None, env={}) == DEFAULT_SYMBOLS
+    assert _resolve_futures_symbols(
+        None, env={"FUTURES_SYMBOLS": "BTCUSDT,ETHUSDT"}
+    ) == ("BTCUSDT", "ETHUSDT")
+    # An explicitly empty list must not silently expand to the default universe.
+    assert _resolve_futures_symbols([], env={}) == ()
+
+
 def test_canonical_williams_decision_timeframe_defaults_to_h1():
     from trading_config import TradingConfig
     cfg = TradingConfig.from_env({})
