@@ -237,9 +237,46 @@ def test_terminal_partial_oco_is_counted_once_and_reprotected(tmp_path):
     db = Database(str(tmp_path / "partial-oco.sqlite3"))
 
     class TerminalOcoFakeBinance(FakeBinance):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.created_lists = []
+
+        def create_oco_sell_safe(
+            self, symbol, quantity, take_profit_price, stop_price,
+            stop_limit_price, list_client_order_id,
+        ):
+            result = super().create_oco_sell_safe(
+                symbol, quantity, take_profit_price, stop_price,
+                stop_limit_price, list_client_order_id,
+            )
+            result = dict(result)
+            result["listOrderStatus"] = "EXECUTING"
+            self.created_lists.append(result)
+            return result
+
+        def open_order_lists(self, symbol=None):
+            return [
+                dict(row) for row in self.created_lists
+                if symbol is None or row.get("symbol") == symbol
+            ]
+
+        def all_order_lists(self, symbol=None, limit=100):
+            historical = super().all_order_lists(symbol=symbol, limit=limit)
+            created = [
+                dict(row) for row in self.created_lists
+                if symbol is None or row.get("symbol") == symbol
+            ]
+            return (historical + created)[:limit]
+
         def open_orders(self, symbol=None):
             self.open_orders_calls += 1
-            return []
+            rows = [
+                leg
+                for order_list in self.created_lists
+                if symbol is None or order_list.get("symbol") == symbol
+                for leg in order_list.get("orderReports", [])
+            ]
+            return [dict(row) for row in rows]
 
     client = TerminalOcoFakeBinance(
         entry_status="FILLED",
@@ -276,7 +313,7 @@ def test_terminal_partial_oco_is_counted_once_and_reprotected(tmp_path):
     second = trader._reconcile_trade(trade_id)
     assert second["state"] == "OPEN"
     assert abs(float(db.open_trade("BTCUSDT")["quantity"]) - 0.7) < 1e-9
-    assert client.oco_calls == 2
+    assert client.oco_calls == 1
 
 
 def test_pending_entry_is_a_durable_duplicate_entry_barrier(tmp_path):
