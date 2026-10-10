@@ -25,7 +25,7 @@ class PortfolioController:
         self.config = TradingConfig.from_env()
         self.max_open_positions = self.config.max_open_positions
         self.max_total_risk_pct = self.config.max_total_risk_pct
-        self.max_risk_per_trade_pct = min(0.005, max(0.0, self.config.risk_per_trade_pct))
+        self.max_risk_per_trade_pct = min(0.01, max(0.0, self.config.risk_per_trade_pct))
         self.min_risk_allocation_pct = min(
             self.max_risk_per_trade_pct,
             max(0.0, float(os.getenv("MIN_RISK_ALLOCATION_PCT", "0.001"))),
