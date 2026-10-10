@@ -1,5 +1,6 @@
 import pytest
 import time
+import pandas as pd
 
 from binance_usdm_futures_client import FuturesAPIError
 from campaign_model import SignalRole, SignalSpec, SignalType
@@ -1488,6 +1489,56 @@ def _prepare_open_campaign_for_add_on(tmp_path, direction="LONG"):
     db.state_set("position_state:BTCUSDT", CampaignState.OPEN_INITIAL.value)
     db.save_campaign(campaign)
     return db, client, service, campaign
+
+
+@pytest.mark.parametrize("direction", ["LONG", "SHORT"])
+@pytest.mark.parametrize("trail_bars", [3, 5])
+def test_tc2_trailing_uses_closed_price_bar_extremes_not_atr_or_teeth(
+    tmp_path, monkeypatch, direction, trail_bars
+):
+    db, client, service, campaign = _prepare_open_campaign_for_add_on(tmp_path, direction)
+    try:
+        monkeypatch.setenv("WILLIAMS_STRATEGY_PROFILE", "TC2_THREE_WISE_MEN")
+        monkeypatch.setenv("WILLIAMS_TC2_TRAILING_BARS", str(trail_bars))
+        rows = []
+        if direction == "LONG":
+            client.mark = 103.0
+            lows = [100.5, 100.8, 101.0, 101.1, 101.2][-trail_bars:]
+            highs = [102.0, 102.5, 102.8, 102.9, 103.0][-trail_bars:]
+            for low, high in zip(lows, highs):
+                rows.append({"low": low, "high": high, "close": (low + high) / 2})
+            expected = round(min(lows) - 0.01, 2)
+        else:
+            client.mark = 97.0
+            highs = [99.5, 99.2, 99.0, 98.8, 98.6][-trail_bars:]
+            lows = [98.0, 97.8, 97.6, 97.4, 97.2][-trail_bars:]
+            for low, high in zip(lows, highs):
+                rows.append({"low": low, "high": high, "close": (low + high) / 2})
+            expected = round(max(highs) + 0.01, 2)
+
+        def replace_stop(target_campaign, *, stop_price):
+            target_campaign.current_stop_price = float(stop_price)
+            return {"action": "TRAILING_STOP_MOVED", "stop_price": float(stop_price)}
+
+        service.replace_protection = replace_stop
+        result = service.manage_campaign(
+            campaign,
+            pd.DataFrame(rows),
+            atr=float("nan"),  # TC2 price-bar trailing must not depend on ATR.
+        )
+
+        assert result["action"] == "TRAILING_STOP_MOVED"
+        assert result["source_profile"] == "TC2_THREE_WISE_MEN"
+        assert result["trailing_bars"] == trail_bars
+        assert result["stop_price"] == pytest.approx(expected)
+        if direction == "LONG":
+            assert campaign.current_stop_price > 100.0
+            assert campaign.current_stop_price < client.mark
+        else:
+            assert campaign.current_stop_price < 100.0
+            assert campaign.current_stop_price > client.mark
+    finally:
+        db.conn.close()
 
 
 @pytest.mark.parametrize("direction", ["LONG", "SHORT"])
