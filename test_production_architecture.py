@@ -49,6 +49,7 @@ def test_execution_barrier_rejects_stale_context(tmp_path):
     intent = OrderIntent.new(
         "BTCUSDT", "BUY", "MARKET",
         required_context_versions={"1h": snap.context("BTCUSDT", "1h").version},
+        client_order_id="WILL_TEST_STALE_CONTEXT_001",
     )
     calls = []
     result = barrier.execute(intent, lambda: calls.append("sent"))
@@ -85,6 +86,7 @@ def test_execution_barrier_serializes_publish_and_submit(tmp_path):
         "MARKET",
         {"1h": version},
         permission_interval="1h",
+        client_order_id="WILL_TEST_SERIALIZED_SUBMIT_002",
     )
     result = barrier.execute(intent, submit)
     t.join()
