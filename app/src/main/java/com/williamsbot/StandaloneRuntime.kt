@@ -677,7 +677,8 @@ private class NativeEngine(
     private val maxRiskPerTradePct = 0.01
     private val maxSpreadPct = 0.0015
     private val maxSlippagePct = 0.0015
-    private val equityCircuitBreaker = EquityCircuitBreaker(maxDrawdownPct = 0.01)
+    // Long-horizon circuit breaker remains separate from the 1% daily loss stop.
+    private val equityCircuitBreaker = EquityCircuitBreaker(maxDrawdownPct = 0.05)
     @Volatile private var lastEquityCheckMs = 0L
     @Volatile private var circuitBreakerTripInProgress = false
     private val feeBufferPerSidePct = 0.001
@@ -7677,7 +7678,7 @@ private class NativeEngine(
 
 
     private fun dailyTradeGuard(): JSONObject {
-        val start = Calendar.getInstance().apply {
+        val start = Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC")).apply {
             set(Calendar.HOUR_OF_DAY, 0)
             set(Calendar.MINUTE, 0)
             set(Calendar.SECOND, 0)
@@ -7713,15 +7714,31 @@ private class NativeEngine(
                 "WIN", "BREAKEVEN" -> break
             }
         }
+        val unrealizedPnl = positionList().sumOf { position ->
+            val mark = livePrices[position.symbol]
+                ?: if (position.symbol == primarySymbol) primaryCandles.lastOrNull()?.c ?: 0.0
+                else 0.0
+            if (mark > 0.0) (mark - position.entry) * position.qty else 0.0
+        }
+        val equity = estimateManagedEquity()
+        val dailyLimitQuote = equity * 0.01
+        val netDailyPnl = pnl + unrealizedPnl
+        val dailyLossLimit = equity > 0.0 && netDailyPnl <= -dailyLimitQuote
         val cooldown = consecutiveLosses >= 1 && lastLossAt > 0L &&
             System.currentTimeMillis() - lastLossAt < 30L * 60L * 1000L
         val hardPause = consecutiveLosses >= 2
         return JSONObject()
             .put("trades_today", count)
-            .put("daily_pnl_usdt", pnl)
+            .put("daily_pnl_usdt", netDailyPnl)
+            .put("realized_daily_pnl_usdt", pnl)
+            .put("unrealized_open_pnl_usdt", unrealizedPnl)
+            .put("daily_loss_limit_usdt", dailyLimitQuote)
+            .put("max_daily_loss_pct", 0.01)
+            .put("daily_loss_limit_reached", dailyLossLimit)
             .put("consecutive_losses", consecutiveLosses)
-            .put("allow", !cooldown && !hardPause)
+            .put("allow", !dailyLossLimit && !cooldown && !hardPause)
             .put("mode", when {
+                dailyLossLimit -> "DAILY_LOSS_LIMIT"
                 hardPause -> "PAUSED"
                 cooldown -> "COOLDOWN"
                 else -> "ACTIVE"
