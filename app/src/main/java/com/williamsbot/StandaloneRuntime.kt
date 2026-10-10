@@ -7808,13 +7808,14 @@ private class NativeEngine(
     private fun scannerSnapshot(): JSONObject {
         val now = System.currentTimeMillis()
         val scanAgeMs = RuntimeFreshnessContract.ageMs(lastScanAt, now)
-        val candidateSnapshotFresh = RuntimeFreshnessContract.isScanSnapshotFresh(
-            state = scannerState,
-            lastScanAtMs = lastScanAt,
-            nowMs = now,
-            maxAgeMs = 60_000L,
-            error = scannerError
-        )
+        val candidateSnapshotFresh = marketDataFresh() &&
+            RuntimeFreshnessContract.isScanSnapshotFresh(
+                state = scannerState,
+                lastScanAtMs = lastScanAt,
+                nowMs = now,
+                maxAgeMs = 60_000L,
+                error = scannerError
+            )
         val visibleCandidates = if (candidateSnapshotFresh) candidates else JSONArray()
 
         return JSONObject()
@@ -8166,12 +8167,14 @@ private class NativeEngine(
                     .put("symbol", symbol)
                     .put(
                         "price",
-                        livePrices[symbol] ?: priceMap[symbol] ?: JSONObject.NULL
+                        priceMap[symbol] ?: JSONObject.NULL
                     )
             )
         }
         return JSONObject()
             .put("symbols", JSONArray(coreSymbols))
+            .put("fresh", priceMap.size == coreSymbols.size)
+            .put("as_of", System.currentTimeMillis())
             .put("pairs", pairs)
     }
 
