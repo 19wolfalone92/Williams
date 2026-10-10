@@ -1,5 +1,7 @@
 """Double-failure and replay regression tests. No network or real orders are used."""
 import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -236,3 +238,40 @@ def test_sqlite_unresolved_intent_query_requires_submitted_event(tmp_path):
 
     db.save_execution_event(intent.intent_id, "BINANCE_SUBMITTED", {"client_order_id": intent.client_order_id})
     assert db.unresolved_execution_intents() == []
+
+
+
+def test_persisted_pending_intent_blocks_after_process_restart(tmp_path):
+    db = Database(str(tmp_path / "crash-before-submit.sqlite3"))
+    intent = _intent("WILL_TASK006_CRASH_BEFORE_SUBMIT_009")
+    db.save_execution_intent(intent, "PENDING")
+    calls = []
+
+    restarted = ExecutionBarrier(_Cache(), db)
+    result = restarted.execute(intent, lambda: calls.append("submit"))
+
+    assert not result.accepted
+    assert "prior_intent_exists:PENDING" in result.reason
+    assert calls == []
+    assert db.unresolved_execution_intents()[0]["client_order_id"] == intent.client_order_id
+
+
+def test_concurrent_calls_for_same_intent_submit_at_most_once():
+    db = _DB()
+    barrier = ExecutionBarrier(_Cache(), db)
+    intent = _intent("WILL_TASK006_CONCURRENT_010")
+    calls = []
+    call_lock = threading.Lock()
+
+    def submit():
+        with call_lock:
+            calls.append("submit")
+        time.sleep(0.05)
+        return {"status": "FILLED", "executedQty": "0.1"}
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _n: barrier.execute(intent, submit), range(2)))
+
+    assert sum(1 for result in results if result.accepted) == 1
+    assert sum(1 for result in results if not result.accepted) == 1
+    assert calls == ["submit"]
