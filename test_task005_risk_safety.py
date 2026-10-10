@@ -1,5 +1,6 @@
 """Task 005 fail-closed regression tests; all execution tests use MockExchange only."""
 from concurrent.futures import ThreadPoolExecutor
+import multiprocessing
 from dataclasses import replace
 
 import pytest
@@ -159,3 +160,64 @@ def test_closed_trade_with_null_pnl_is_unknown_not_zero():
     allowed, reason = EquityCircuitBreaker().check(db, 10_000.0)
     assert not allowed
     assert "realized PnL unavailable" in reason
+
+
+def _process_arm_entry(db_path, symbol, start_event, result_queue):
+    """Spawn-safe worker: each process owns an independent SQLite connection."""
+    from db import Database
+    from mock_exchange import MockExchange
+    from campaign_execution import CampaignExecutionError
+    from test_campaign_execution import service, signal
+
+    if not start_event.wait(timeout=10):
+        result_queue.put((symbol, "start-timeout"))
+        return
+    db = Database(db_path)
+    client = MockExchange()
+    svc = service(db, client)
+    try:
+        svc.arm_initial_entry(
+            signal(symbol=symbol),
+            equity_quote=10_000.0,
+            candidate_risk_pct=0.0024,
+        )
+        result_queue.put((symbol, "accepted"))
+    except CampaignExecutionError:
+        result_queue.put((symbol, "blocked"))
+    except Exception as exc:
+        result_queue.put((symbol, f"error:{type(exc).__name__}:{exc}"))
+    finally:
+        db.conn.close()
+
+
+def test_separate_processes_cannot_reserve_same_portfolio_budget(tmp_path):
+    """Independent processes must serialize through SQLite, not a Python lock."""
+    ctx = multiprocessing.get_context("spawn")
+    db_path = str(tmp_path / "risk-reservation.sqlite3")
+    db = Database(db_path)
+    db.conn.close()  # schema exists before both independent processes start
+
+    start_event = ctx.Event()
+    result_queue = ctx.Queue()
+    workers = [
+        ctx.Process(target=_process_arm_entry, args=(db_path, symbol, start_event, result_queue))
+        for symbol in ("BTCUSDT", "ETHUSDT")
+    ]
+    for worker in workers:
+        worker.start()
+    start_event.set()
+    results = [result_queue.get(timeout=20) for _ in workers]
+    for worker in workers:
+        worker.join(timeout=20)
+        assert not worker.is_alive()
+        assert worker.exitcode == 0
+
+    outcomes = [state for _, state in results]
+    assert outcomes.count("accepted") == 1, results
+    assert outcomes.count("blocked") == 1, results
+    verify = Database(db_path)
+    try:
+        assert verify.active_campaign_count() == 1
+        assert verify.state_get("risk_entry_reservation") is not None or verify.campaign_risk_reserved_quote() > 0
+    finally:
+        verify.conn.close()
