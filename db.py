@@ -6,7 +6,7 @@ from contextlib import contextmanager
 
 
 class Database:
-    SCHEMA_VERSION = 6
+    SCHEMA_VERSION = 7
 
     def __init__(self, path=None):
         path = path or os.getenv('WILLIAMS_DB_PATH') or 'data/trader.sqlite3'
@@ -38,6 +38,13 @@ class Database:
             self._transaction_active = False
 
     def init(self):
+        # A new process must reconcile against the exchange even when the last
+        # persisted snapshot looked clean. Never infer FLAT from an empty DB.
+        self._validate_existing_schema_version()
+        check = self.conn.execute("PRAGMA quick_check").fetchone()
+        if not check or str(check[0]).lower() != "ok":
+            raise RuntimeError(f"SQLite quick_check failed: {check[0] if check else 'no result'}")
+
         self.conn.executescript('''
         CREATE TABLE IF NOT EXISTS bot_state(
             key TEXT PRIMARY KEY,
@@ -221,6 +228,7 @@ class Database:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             campaign_id TEXT NOT NULL,
             order_id TEXT,
+            exchange_trade_id TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             symbol TEXT NOT NULL,
             side TEXT NOT NULL,
@@ -261,9 +269,81 @@ class Database:
             ON campaign_events(campaign_id, id);
         ''')
         self._migrate_trade_columns()
+        self._migrate_recovery_schema()
         self.state_set('schema_version', self.SCHEMA_VERSION)
-        self.state_set('position_state', self.state_get('position_state', 'FLAT'))
+        self.state_set('recovery_state', 'REQUIRED')
+        self.state_set('recovery_reason', 'process_start_requires_exchange_reconciliation')
+        self.state_set('recovery_boot_started_at', datetime.now(timezone.utc).isoformat())
+        self.state_set('position_state', 'RECONCILE_REQUIRED')
         self.conn.commit()
+
+    def _validate_existing_schema_version(self):
+        table = self.conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='bot_state'"
+        ).fetchone()
+        if not table:
+            return
+        row = self.conn.execute(
+            "SELECT value FROM bot_state WHERE key='schema_version'"
+        ).fetchone()
+        if row is None:
+            return
+        try:
+            version = int(row['value'])
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError('Unrecognized SQLite schema_version; refusing to rewrite unknown state') from exc
+        if version > self.SCHEMA_VERSION:
+            raise RuntimeError(
+                f"SQLite schema version {version} is newer than supported {self.SCHEMA_VERSION}; "
+                "refusing destructive downgrade"
+            )
+
+    def _migrate_recovery_schema(self):
+        columns = {
+            row['name']
+            for row in self.conn.execute('PRAGMA table_info(campaign_fills)').fetchall()
+        }
+        if 'exchange_trade_id' not in columns:
+            self.conn.execute('ALTER TABLE campaign_fills ADD COLUMN exchange_trade_id TEXT')
+        self.conn.execute(
+            'CREATE INDEX IF NOT EXISTS idx_campaign_fills_exchange_trade '
+            'ON campaign_fills(symbol, exchange_trade_id)'
+        )
+
+    def mark_recovery_required(self, reason: str) -> None:
+        """Latch the global execution barrier until authoritative reconciliation succeeds."""
+        with self.transaction():
+            self.state_set('recovery_state', 'REQUIRED')
+            self.state_set('recovery_reason', str(reason or 'reconciliation_required'))
+            self.state_set('position_state', 'RECONCILE_REQUIRED')
+            self.state_set('recovery_updated_at', datetime.now(timezone.utc).isoformat())
+
+    def mark_recovery_ready(self, evidence: dict) -> None:
+        """Unlock execution only for a complete, non-ambiguous evidence bundle."""
+        required_checks = (
+            'exchange_reachable', 'account_checked', 'open_orders_checked',
+            'order_history_checked', 'fills_checked', 'positions_checked',
+            'protection_checked', 'campaigns_checked', 'intents_checked',
+        )
+        required_empty = (
+            'unresolved_symbols', 'pending_entries', 'unknown_orders',
+            'inventory_mismatches', 'unprotected_positions', 'unknown_campaigns',
+        )
+        if not isinstance(evidence, dict):
+            raise TypeError('recovery evidence must be a dictionary')
+        failed = [key for key in required_checks if evidence.get(key) is not True]
+        missing = [key for key in required_empty if not isinstance(evidence.get(key), list)]
+        nonempty = [key for key in required_empty if isinstance(evidence.get(key), list) and evidence[key]]
+        if failed or missing or nonempty:
+            raise RuntimeError(
+                'recovery evidence incomplete: '
+                f'failed_checks={failed}, missing_lists={missing}, unresolved={{{", ".join(nonempty)}}}'
+            )
+        with self.transaction():
+            self.state_set('recovery_evidence', json.dumps(evidence, default=str, sort_keys=True))
+            self.state_set('recovery_reason', '')
+            self.state_set('recovery_state', 'READY')
+            self.state_set('recovery_updated_at', datetime.now(timezone.utc).isoformat())
 
     def _migrate_trade_columns(self):
         columns = {
@@ -324,23 +404,22 @@ class Database:
             self.conn.commit()
 
     def save_execution_intent(self, intent, status, reason=''):
+        # UPDATE-in-place preserves creation time and makes repeated observations
+        # idempotent; SQLite REPLACE would delete/recreate the durable intent.
         self.conn.execute(
-            '''INSERT OR REPLACE INTO execution_intents(
+            '''INSERT INTO execution_intents(
                 intent_id,symbol,side,order_type,purpose,
                 required_context_versions_json,hypothesis_id,invalidation_level,status,reason,client_order_id
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?)''',
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(intent_id) DO UPDATE SET
+                status=excluded.status, reason=excluded.reason,
+                client_order_id=COALESCE(NULLIF(excluded.client_order_id,''), execution_intents.client_order_id)''',
             (
-                intent.intent_id,
-                intent.symbol,
-                intent.side,
-                intent.order_type,
+                intent.intent_id, intent.symbol, intent.side, intent.order_type,
                 intent.purpose,
                 json.dumps(dict(intent.required_context_versions), sort_keys=True),
-                intent.hypothesis_id,
-                float(intent.invalidation_level or 0.0),
-                status,
-                reason,
-                getattr(intent, 'client_order_id', ''),
+                intent.hypothesis_id, float(intent.invalidation_level or 0.0),
+                status, reason, getattr(intent, 'client_order_id', ''),
             ),
         )
         if not self._transaction_active:
@@ -413,63 +492,60 @@ class Database:
             return None
 
     def save_order(self, data):
-        oid = (
-            str(data.get('orderId'))
-            if data.get('orderId') is not None
-            else None
-        )
-        vals = (
-            data.get('side'),
-            data.get('type'),
-            str(data.get('orderListId'))
-            if data.get('orderListId') is not None
-            else None,
-            data.get('clientOrderId'),
-            data.get('status'),
-            self._num(data.get('price')),
-            self._num(data.get('stopPrice')),
-            self._num(data.get('origQty')),
-            json.dumps(data, default=str)
-        )
-        if oid:
-            r = self.conn.execute(
-                'SELECT id FROM orders WHERE symbol=? AND order_id=?',
-                (data.get('symbol'), oid)
-            ).fetchone()
-            if r:
-                self.conn.execute(
-                    'UPDATE orders SET side=?,type=?,order_list_id=?,'
-                    'client_order_id=?,status=?,price=?,stop_price=?,'
-                    'quantity=?,raw_json=? WHERE id=?',
-                    vals + (r['id'],)
-                )
-                if not self._transaction_active:
-                    self.conn.commit()
-                return
+        symbol = str(data.get('symbol') or '').upper()
+        oid = str(data.get('orderId')) if data.get('orderId') is not None else None
+        cid = str(data.get('clientOrderId') or '').strip() or None
+        if not symbol or (not oid and not cid):
+            raise ValueError('exchange order persistence requires symbol and orderId or clientOrderId')
+
+        by_order = self.conn.execute(
+            'SELECT * FROM orders WHERE symbol=? AND order_id=? LIMIT 1',
+            (symbol, oid),
+        ).fetchone() if oid else None
+        by_client = self.conn.execute(
+            'SELECT * FROM orders WHERE symbol=? AND client_order_id=? LIMIT 1',
+            (symbol, cid),
+        ).fetchone() if cid else None
+        if by_order and by_client and by_order['id'] != by_client['id']:
+            raise RuntimeError(f'{symbol}: orderId/clientOrderId identify conflicting local rows')
+        existing = by_order or by_client
+        list_id = str(data.get('orderListId')) if data.get('orderListId') is not None else None
+        raw = json.dumps(data, default=str)
+        if existing:
+            old_oid = str(existing['order_id'] or '')
+            old_cid = str(existing['client_order_id'] or '')
+            if old_oid and oid and old_oid != oid:
+                raise RuntimeError(f'{symbol}: clientOrderId collision maps to different orderId')
+            if old_cid and cid and old_cid != cid:
+                raise RuntimeError(f'{symbol}: orderId collision maps to different clientOrderId')
+            self.conn.execute(
+                'UPDATE orders SET side=?,type=?,order_id=COALESCE(?,order_id),'
+                'order_list_id=COALESCE(?,order_list_id),client_order_id=COALESCE(?,client_order_id),'
+                'status=?,price=?,stop_price=?,quantity=?,raw_json=? WHERE id=?',
+                (
+                    data.get('side'), data.get('type'), oid, list_id, cid,
+                    data.get('status'), self._num(data.get('price')),
+                    self._num(data.get('stopPrice')), self._num(data.get('origQty')),
+                    raw, existing['id'],
+                ),
+            )
+            if not self._transaction_active:
+                self.conn.commit()
+            return False
 
         self.conn.execute(
             'INSERT INTO orders('
-            'symbol,side,type,order_id,order_list_id,client_order_id,'
-            'status,price,stop_price,quantity,raw_json'
+            'symbol,side,type,order_id,order_list_id,client_order_id,status,price,stop_price,quantity,raw_json'
             ') VALUES(?,?,?,?,?,?,?,?,?,?,?)',
             (
-                data.get('symbol'),
-                data.get('side'),
-                data.get('type'),
-                oid,
-                str(data.get('orderListId'))
-                if data.get('orderListId') is not None
-                else None,
-                data.get('clientOrderId'),
-                data.get('status'),
-                self._num(data.get('price')),
-                self._num(data.get('stopPrice')),
-                self._num(data.get('origQty')),
-                json.dumps(data, default=str)
-            )
+                symbol, data.get('side'), data.get('type'), oid, list_id, cid,
+                data.get('status'), self._num(data.get('price')),
+                self._num(data.get('stopPrice')), self._num(data.get('origQty')), raw,
+            ),
         )
         if not self._transaction_active:
             self.conn.commit()
+        return True
 
     @staticmethod
     def _num(v):
@@ -952,41 +1028,111 @@ class Database:
         return [dict(r) for r in rows]
 
     def save_campaign_order(self, record):
-        data=record.to_dict() if hasattr(record,"to_dict") else dict(record)
+        data = record.to_dict() if hasattr(record, "to_dict") else dict(record)
+        symbol = str(data.get("symbol") or "").upper()
+        order_id = str(data.get("order_id") or "").strip() or None
+        client_id = str(data.get("client_order_id") or "").strip() or None
+        if not symbol or (not order_id and not client_id):
+            raise ValueError("campaign order persistence requires symbol and stable exchange/client identity")
+
+        by_order = self.conn.execute(
+            "SELECT * FROM campaign_orders WHERE symbol=? AND order_id=? ORDER BY id LIMIT 1",
+            (symbol, order_id),
+        ).fetchone() if order_id else None
+        by_client = self.conn.execute(
+            "SELECT * FROM campaign_orders WHERE symbol=? AND client_order_id=? ORDER BY id LIMIT 1",
+            (symbol, client_id),
+        ).fetchone() if client_id else None
+        if by_order and by_client and by_order["id"] != by_client["id"]:
+            raise RuntimeError(f"{symbol}: campaign order identities point to different local rows")
+        existing = by_order or by_client
+        if existing:
+            if str(existing["campaign_id"]) != str(data.get("campaign_id") or ""):
+                raise RuntimeError(f"{symbol}: exchange order identity is already owned by a different campaign")
+            old_order_id = str(existing["order_id"] or "")
+            if old_order_id and order_id and old_order_id != order_id:
+                raise RuntimeError(f"{symbol}: campaign client order ID collision")
+            self.conn.execute(
+                """UPDATE campaign_orders SET signal_id=COALESCE(NULLIF(?,''),signal_id),
+                    order_id=COALESCE(?,order_id), order_list_id=COALESCE(?,order_list_id),
+                    client_order_id=COALESCE(?,client_order_id), status=?, price=?, stop_price=?,
+                    quantity=?, risk_quote=?, capital_reserved_quote=?, raw_json=? WHERE id=?""",
+                (
+                    str(data.get("signal_id") or ""), order_id, data.get("order_list_id"), client_id,
+                    data.get("status", ""), float(data.get("price", 0) or 0),
+                    float(data.get("stop_price", 0) or 0), float(data.get("quantity", 0) or 0),
+                    float(data.get("risk_quote", 0) or 0), float(data.get("capital_reserved_quote", 0) or 0),
+                    json.dumps(data.get("raw_json", data), default=str), existing["id"],
+                ),
+            )
+            if not self._transaction_active:
+                self.conn.commit()
+            return False
+
         self.conn.execute(
             """INSERT INTO campaign_orders(
                 campaign_id,signal_id,symbol,side,purpose,order_type,order_id,order_list_id,
                 client_order_id,status,price,stop_price,quantity,risk_quote,capital_reserved_quote,raw_json
             ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
-                data.get("campaign_id",""),data.get("signal_id",""),data.get("symbol",""),data.get("side",""),
-                data.get("purpose",""),data.get("order_type",""),data.get("order_id"),data.get("order_list_id"),
-                data.get("client_order_id"),data.get("status",""),float(data.get("price",0) or 0),
-                float(data.get("stop_price",0) or 0),float(data.get("quantity",0) or 0),
-                float(data.get("risk_quote",0) or 0),float(data.get("capital_reserved_quote",0) or 0),
-                json.dumps(data.get("raw_json",data),default=str),
+                data.get("campaign_id", ""), data.get("signal_id", ""), symbol, data.get("side", ""),
+                data.get("purpose", ""), data.get("order_type", ""), order_id, data.get("order_list_id"),
+                client_id, data.get("status", ""), float(data.get("price", 0) or 0),
+                float(data.get("stop_price", 0) or 0), float(data.get("quantity", 0) or 0),
+                float(data.get("risk_quote", 0) or 0), float(data.get("capital_reserved_quote", 0) or 0),
+                json.dumps(data.get("raw_json", data), default=str),
             ),
         )
         if not self._transaction_active:
             self.conn.commit()
+        return True
 
     def save_campaign_fill(self, fill):
-        data=fill if isinstance(fill,dict) else dict(fill)
+        data = fill if isinstance(fill, dict) else dict(fill)
+        symbol = str(data.get("symbol") or "").upper()
+        exchange_trade_id = str(
+            data.get("exchange_trade_id") or data.get("tradeId") or data.get("trade_id") or ""
+        ).strip()
+        if not symbol or not exchange_trade_id:
+            raise ValueError("campaign fill requires symbol and stable Binance trade/execution ID; refusing non-idempotent fill")
+        existing = self.conn.execute(
+            "SELECT id,campaign_id,order_id,side,quantity,price FROM campaign_fills "
+            "WHERE symbol=? AND exchange_trade_id=? LIMIT 1",
+            (symbol, exchange_trade_id),
+        ).fetchone()
+        if existing:
+            expected = (
+                str(data.get("campaign_id", "")),
+                str(data.get("order_id") or ""),
+                str(data.get("side", "")).upper(),
+                float(data.get("quantity", 0) or 0),
+                float(data.get("price", 0) or 0),
+            )
+            actual = (
+                str(existing["campaign_id"] or ""), str(existing["order_id"] or ""),
+                str(existing["side"] or "").upper(), float(existing["quantity"] or 0),
+                float(existing["price"] or 0),
+            )
+            if actual != expected:
+                raise RuntimeError(f"{symbol}: repeated exchange fill ID {exchange_trade_id} conflicts with persisted fill")
+            return False
+
         self.conn.execute(
             """INSERT INTO campaign_fills(
-                campaign_id,order_id,symbol,side,quantity,price,quote_quantity,
+                campaign_id,order_id,exchange_trade_id,symbol,side,quantity,price,quote_quantity,
                 fee_quote,commission_base,commission_asset,raw_json
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
-                data.get("campaign_id",""),data.get("order_id"),data.get("symbol",""),
-                data.get("side",""),float(data.get("quantity",0) or 0),float(data.get("price",0) or 0),
-                float(data.get("quote_quantity",0) or 0),float(data.get("fee_quote",0) or 0),
-                float(data.get("commission_base",0) or 0),data.get("commission_asset",""),
-                json.dumps(data,default=str),
+                data.get("campaign_id", ""), data.get("order_id"), exchange_trade_id, symbol,
+                data.get("side", ""), float(data.get("quantity", 0) or 0),
+                float(data.get("price", 0) or 0), float(data.get("quote_quantity", 0) or 0),
+                float(data.get("fee_quote", 0) or 0), float(data.get("commission_base", 0) or 0),
+                data.get("commission_asset", ""), json.dumps(data, default=str),
             ),
         )
         if not self._transaction_active:
             self.conn.commit()
+        return True
 
     def log_campaign_event(self, campaign_id, event, *, level="INFO", signal_id=None, order_id=None, reason="", payload=None):
         self.conn.execute(
