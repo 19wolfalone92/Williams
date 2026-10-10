@@ -363,8 +363,9 @@ data class PositionView(
 )
 
 private class BackendApi(context: Context) {
+    private val appContext = context.applicationContext
     private val securePrefs = EncryptedSharedPreferences.create(
-        context,
+        appContext,
         "williams_backend_connection",
         MasterKey.Builder(context)
             .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
@@ -386,14 +387,25 @@ private class BackendApi(context: Context) {
     val mobileToken: String
         get() = securePrefs.getString("mobile_token", "standalone")?.trim() ?: "standalone"
 
+    private fun isLocalRuntimeUrl(value: String): Boolean =
+        runCatching {
+            val normalized = value.trim().trimEnd('/')
+            val uri = java.net.URI(normalized)
+            uri.scheme.equals("http", ignoreCase = true) &&
+                uri.host?.lowercase() in setOf("127.0.0.1", "localhost") &&
+                uri.port == 18080 &&
+                uri.rawUserInfo == null &&
+                (uri.rawPath.isNullOrEmpty() || uri.rawPath == "/") &&
+                uri.rawQuery == null &&
+                uri.rawFragment == null
+        }.getOrDefault(false)
+
     fun saveConnection(url: String, token: String) {
         val normalized = url.trim().trimEnd('/')
         require(normalized.isNotBlank()) { "Backend URL не задан" }
-        val localRuntime =
-            normalized.startsWith("http://127.0.0.1:18080") ||
-                normalized.startsWith("http://localhost:18080")
+        val localRuntime = isLocalRuntimeUrl(normalized)
         if (!normalized.startsWith("https://") && !localRuntime) {
-            error("Удалённый Backend URL должен использовать HTTPS.")
+            error("Удалённый Backend URL должен использовать HTTPS; local mode must use exactly http://127.0.0.1:18080 or http://localhost:18080.")
         }
         if (!localRuntime && token.trim().length < 32) {
             error("Для удалённого Backend нужен Mobile API Token (минимум 32 символа).")
@@ -413,9 +425,7 @@ private class BackendApi(context: Context) {
         path: String,
         body: String?
     ): String {
-        val localRuntime =
-            backendUrl.startsWith("http://127.0.0.1:18080") ||
-                backendUrl.startsWith("http://localhost:18080")
+        val localRuntime = isLocalRuntimeUrl(backendUrl)
         require(localRuntime || backendUrl.startsWith("https://")) {
             "Укажите HTTPS Backend URL или используйте автономный Williams Runtime."
         }
@@ -426,8 +436,16 @@ private class BackendApi(context: Context) {
         }
         val requestBuilder = Request.Builder()
             .url(backendUrl + path)
-        if (mobileToken.isNotBlank()) {
-            requestBuilder.header("Authorization", "Bearer " + mobileToken)
+        // Do not send the user-configured remote-backend token to the local
+        // runtime. Each installation uses an independent token from the
+        // Keystore-encrypted native preferences.
+        val authorizationToken = if (localRuntime) {
+            StandaloneRuntime.localApiToken(appContext)
+        } else {
+            mobileToken
+        }
+        if (authorizationToken.isNotBlank()) {
+            requestBuilder.header("Authorization", "Bearer " + authorizationToken)
         }
         val builder = requestBuilder
 
