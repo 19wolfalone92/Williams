@@ -212,3 +212,52 @@ Artifact evidence for SHA `4966e3aa164e61b0b2eac8f9da8b5c9c8cc7938d`:
 The call-graph review identified an additional local recovery-state hazard in `Trader.market_buy`: after `ExecutionBarrier` refused a request, the legacy caller unconditionally deleted `entry_client_order_id` and wrote `FLAT`. A concurrent unresolved mutation could therefore lose its recovery key even though the Barrier still blocked the exchange mutation. The code now checks the durable unresolved-intent/global latch before reserving a new CID, and re-checks the latch after a rejected Barrier result; unresolved or unreadable state preserves the key and sets `RECONCILE_REQUIRED`. Regression test `test_legacy_trader_preserves_entry_identity_while_execution_is_unresolved` passed in Campaign CI.
 
 **Final acceptance remains BLOCKED — NOT ACCEPTED.** This code SHA's CI results are not evidence for the documentation commit that follows. That resulting PR head must independently pass all three required workflows. Live Testnet accepted-order/response-loss recovery, physical Android process-death recovery, live OCO sibling-fill races, and a fully exhaustive production call-graph proof remain **NOT VERIFIED**. No Mainnet or real trading operation was used.
+
+### Incident baseline and current verification — TASK 003
+
+This section distinguishes the original failing source SHA from later validation. The initial failures below are preserved as diagnostic evidence only; they are not used as proof for later source states.
+
+**Original failing SHA:** `953d2c4e2831d1685f5531c76ac03fcedd42d00a`  
+**Initial branch state:** `main` was `04da5f9c09572e99ff310be3a1908179165e528c`; PR #48 was open, draft, and not merged.
+
+Original failed workflow runs on that exact SHA:
+- Python backend tests — run [38080355142](https://github.com/19wolfalone92/Williams/actions/runs/38080355142), job `114295816305`: release gate failed with `AssertionError: server.py: missing "VERSION = '4.24.0'"`.
+- Williams Campaign CI — run [38080355099](https://github.com/19wolfalone92/Williams/actions/runs/38080355099). Python job `114295825122` reported `5 failed, 172 passed, 4 warnings`; Android job `114295824990` failed Kotlin compilation at `TradingAuditStore.kt:609:5` with `This annotation is not repeatable.`.
+- Build Android APK — run [38080355161](https://github.com/19wolfalone92/Williams/actions/runs/38080355161), job `114295816125`: the same stale release gate expectation `VERSION = '4.24.0'` failed; the job also showed the workflow was using Gradle `8.14.5`.
+
+The five Python/Campaign test failures on the baseline SHA were:
+1. `test_trigger_then_reconcile_creates_hard_stop`: expected `OPEN`, got `RECONCILE_REQUIRED`.
+2. `test_partial_conditional_entry_is_cancelled_and_residual_protected`: expected `OPEN`, got `RECONCILE_REQUIRED`.
+3. `test_restart_adopts_pending_campaign_by_client_id`: `KeyError: 'campaign_id'`.
+4. `test_native_android_signed_order_mutations_are_fenced_before_network`: raw HTTP sender count differed from the expected inventory. This was treated as an inventory alarm, not grounds to weaken the test.
+5. `test_native_optional_rest_telemetry_is_not_execution_authority`: `assert 4214 < 3373`; the source-order assertion did not match the actual mutation-result and telemetry code positions.
+
+**Root-cause disposition and safety impact**
+- Campaign recovery: recovery had been too coarse for confirmed exchange outcomes and partial fills, so it could leave a campaign in `RECONCILE_REQUIRED` even when the conditional order and fill/protection sequence could be reconciled. Recovery now queries the order by stable `clientOrderId`, resolves only authoritative states, persists confirmed fills before protection mutations, and leaves unknown/error responses blocked. Regression coverage includes both successful recovery and genuinely unknown exchange state. The latter must remain `RECONCILE_REQUIRED`.
+- Restart adoption: the recovery response path did not consistently return campaign identity for a recovered pending entry. The regression now asserts the stable identity, authoritative lookup before adoption, one exchange order for the logical client ID, and no campaign success based on unconfirmed state. Unresolved states retain their reservation/recovery identity.
+- Android HTTP sender inventory: the three raw `execute()` sites were enumerated rather than hidden by changing the expected count: `NativeEngine.getBody(path)` is unsigned GET-only market/time reads; `NativeEngine.signedRequest(method, path, params)` is the only modeled signed mutation path and requires durable intent before network; `NativeEngine.signedRawGet(path, params)` is signed GET-only and has no write method branch. The signed mutation helper rejects unsupported order-like writes before network. Modeled writes are POST `/api/v3/order`, POST `/api/v3/orderList/oco`, POST `/api/v3/order/cancelReplace`, DELETE `/api/v3/order`, and DELETE `/api/v3/orderList`. Mass cancel and unmodeled order/algo-order writes fail closed.
+- Execution result versus telemetry: mandatory mutation result persistence/read-back is now the execution authority. A failure latches reconciliation and does not return success; REST telemetry is best-effort and cannot override the durable mutation result. This distinction has source-contract regression coverage.
+- Version/build contract: project source and Gradle consistently use canonical app version `4.25.0`; `server.py`, the UI, Gradle and `ci_release_gate.py` are checked together by a regression test. The stale `4.24.0` expectation was corrected to match the established project version rather than disabling the gate. Gradle wrapper and Android workflow are aligned at `8.14.6`. The duplicate Kotlin annotation was removed.
+
+### Exact-HEAD validation snapshot before this report update
+
+At the time this section was prepared, GitHub reported:
+- Branch `audit/williams-2.1-task-003-execution-safety` HEAD: `57eec5d08c8080ec94686ef75f984fee571109ed`.
+- PR #48: open, draft, base `main`, not merged.
+- `main` HEAD: `04da5f9c09572e99ff310be3a1908179165e528c` (unchanged).
+- All three required workflows passed on that exact source SHA:
+  - Python backend tests — run [38087582153](https://github.com/19wolfalone92/Williams/actions/runs/38087582153), job `114317202706`: **148 passed, 4 warnings**; release contract gate passed.
+  - Williams Campaign CI — run [38087582166](https://github.com/19wolfalone92/Williams/actions/runs/38087582166), Python job `114317202660`: **181 passed, 4 warnings**; Android job `114317202799`: Android unit-test task, lint and debug APK assembly succeeded.
+  - Build Android APK — run [38087582183](https://github.com/19wolfalone92/Williams/actions/runs/38087582183), job `114317202782`: release gate, lint, Android unit tests, debug/release APK assembly and metadata/signature checks succeeded. APK metadata: debug `4.25.0-debug`, versionCode `1798`; release `4.25.0`, versionCode `1798`.
+
+This is an exact-SHA snapshot for `57eec5d08c8080ec94686ef75f984fee571109ed` only. Updating this report creates a new source SHA, so all three workflows must be checked again against the resulting HEAD; the prior green results must not be reused as evidence for the report-bearing commit.
+
+**Still NOT VERIFIED / acceptance blockers**
+- Live Binance Spot Testnet test where an order is accepted but the HTTP response is deliberately lost; no real trade was run.
+- Physical Android process-kill/restart against actual Testnet order, fill, balance and protective-order state.
+- Live partial OCO fill with concurrent sibling cancellation/fill and proof of exact residual inventory protection.
+- Exhaustive repository-wide proof that every legacy/external production call site routes through the Python `ExecutionBarrier`; current tests and source inventory do not prove every external adapter.
+- Every Binance mass-cancel variation and unsupported algo-order mutation behavior.
+- Full fee-adjusted account/position/protective-order equivalence after restart against authoritative live exchange data.
+
+Overall task status remains **BLOCKED — NOT ACCEPTED**. Green CI is necessary but does not substitute for the unresolved live Testnet/device recovery and exhaustive call-graph evidence. No Binance Mainnet endpoint, credentials, or real trading operation was used.
