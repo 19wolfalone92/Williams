@@ -59,7 +59,8 @@ def test_sqlite_events_and_order_raw_json_redact_registered_secret(tmp_path):
 
 
 def test_local_http_config_error_response_redacts_synthetic_secret(monkeypatch):
-    from fastapi.testclient import TestClient
+    import asyncio
+    import json
     import server
     from safe_logging import register_sensitive_value
 
@@ -72,14 +73,49 @@ def test_local_http_config_error_response_redacts_synthetic_secret(monkeypatch):
         raise RuntimeError("exchange setup failed: api_secret=" + marker)
 
     monkeypatch.setattr(server.state, "configure", fail_configure)
-    with TestClient(server.app) as client:
-        response = client.post(
-            "/api/v1/config/binance",
-            headers={"Authorization": "Bearer " + token},
-            json={"api_key": "SYNTHETIC_KEY", "api_secret": marker, "testnet": True},
-        )
+    body = json.dumps({
+        "api_key": "SYNTHETIC_KEY",
+        "api_secret": marker,
+        "testnet": True,
+    }).encode("utf-8")
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/api/v1/config/binance",
+        "raw_path": b"/api/v1/config/binance",
+        "query_string": b"",
+        "root_path": "",
+        "headers": [
+            (b"authorization", ("Bearer " + token).encode()),
+            (b"content-type", b"application/json"),
+            (b"content-length", str(len(body)).encode()),
+        ],
+        "client": ("testclient", 12345),
+        "server": ("testserver", 80),
+    }
+    sent = []
+    received = False
 
-    assert response.status_code == 409
-    assert marker not in response.text
-    assert token not in response.text
-    assert "[REDACTED]" in response.text
+    async def receive():
+        nonlocal received
+        if not received:
+            received = True
+            return {"type": "http.request", "body": body, "more_body": False}
+        return {"type": "http.disconnect"}
+
+    async def send(message):
+        sent.append(message)
+
+    asyncio.run(server.app(scope, receive, send))
+    response_start = next(item for item in sent if item["type"] == "http.response.start")
+    response_body = b"".join(
+        item.get("body", b"") for item in sent if item["type"] == "http.response.body"
+    ).decode("utf-8")
+
+    assert response_start["status"] == 409
+    assert marker not in response_body
+    assert token not in response_body
+    assert "[REDACTED]" in response_body
