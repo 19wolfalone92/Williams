@@ -1962,7 +1962,7 @@ private class NativeEngine(
         val previousMfiProxy = previousRange / max(candles[i - 1].v, 1e-12)
         val mfiUp = mfiProxy > previousMfiProxy
         val upFractal = latestConfirmedUpFractal(candles, i)
-        val downFractal = if (i >= 4 && isDownFractal(candles, i - 2)) i - 2 else null
+        val downFractal = latestConfirmedDownFractal(candles, i)
         return JSONObject()
             .put("symbol", symbol).put("interval", frame).put("ready", true)
             .put("time", candles[i].t).put("price", candles[i].c)
@@ -6451,35 +6451,16 @@ private class NativeEngine(
                 teethS[i] > jawS[i] &&
                 candles[i].c > lipsS[i]
 
-        fun upFractal(i: Int): Boolean {
-            if (i < 2 || i + 2 >= candles.size) return false
-            return candles[i].h > candles[i - 1].h &&
-                candles[i].h > candles[i - 2].h &&
-                candles[i].h > candles[i + 1].h &&
-                candles[i].h > candles[i + 2].h
-        }
+        val highs = candles.map { it.h }
+        val lows = candles.map { it.l }
 
-        fun downFractal(i: Int): Boolean {
-            if (i < 2 || i + 2 >= candles.size) return false
-            return candles[i].l < candles[i - 1].l &&
-                candles[i].l < candles[i - 2].l &&
-                candles[i].l < candles[i + 1].l &&
-                candles[i].l < candles[i + 2].l
-        }
+        // The cutoff is the last candle the signal is allowed to know about.
+        // The returned confirmation index may be later than center+2 on ties.
+        fun latestUpFractal(throughIndex: Int): WilliamsFractalConfirmation? =
+            WilliamsFractalMath.latestUp(highs, throughIndex = throughIndex, lookbackBars = 40)
 
-        fun latestUpFractal(centerLimit: Int): Int? {
-            for (i in centerLimit downTo 2) {
-                if (upFractal(i)) return i
-            }
-            return null
-        }
-
-        fun latestDownFractal(centerLimit: Int): Int? {
-            for (i in centerLimit downTo 2) {
-                if (downFractal(i)) return i
-            }
-            return null
-        }
+        fun latestDownFractal(throughIndex: Int): WilliamsFractalConfirmation? =
+            WilliamsFractalMath.latestDown(lows, throughIndex = throughIndex, lookbackBars = 40)
 
         fun angulationScore(i: Int): Double {
             val start = max(0, i - 4)
@@ -6491,10 +6472,8 @@ private class NativeEngine(
             return max(0.0, now - then) / max(candles[i].c, 1e-9) * 100.0
         }
 
-        fun lastValidFractalLevel(at: Int): Pair<Int, Double>? {
-            val center = latestUpFractal(max(2, at - 2)) ?: return null
-            return center to candles[center].h
-        }
+        fun lastValidFractalLevel(throughIndex: Int): WilliamsFractalConfirmation? =
+            latestUpFractal(throughIndex)
 
         val current = candles.lastIndex
         val out = mutableListOf<CampaignSignalN>()
@@ -6543,8 +6522,9 @@ private class NativeEngine(
             val p = ao(candles, i - 1)
             if (a > p) streak++ else break
             if (streak == 3) {
-                val priorFractalValid = lastValidFractalLevel(i - 1)?.let { (center, level) ->
-                    teethS[center + 2].isFinite() && level > teethS[center + 2]
+                val priorFractalValid = lastValidFractalLevel(i - 1)?.let { fractal ->
+                    val confirmTeeth = teethS.getOrNull(fractal.confirmationIndex) ?: Double.NaN
+                    confirmTeeth.isFinite() && fractal.level > confirmTeeth
                 } ?: false
                 if (priorFractalValid) {
                     val trigger = candles[i].h + tick
@@ -6568,11 +6548,15 @@ private class NativeEngine(
 
         // WM3: most recent confirmed buy fractal. The signal is persistent,
         // but the trigger is armable only while it remains above current Teeth.
-        val fractalCenter = latestUpFractal(candles.lastIndex - 2)
-        if (fractalCenter != null) {
-            val trigger = candles[fractalCenter].h + tick
+        val fractal = latestUpFractal(candles.lastIndex)
+        if (fractal != null) {
+            val fractalCenter = fractal.centerIndex
+            val trigger = fractal.level + tick
             val currentTeeth = teethS[current].takeIf { it.isFinite() } ?: 0.0
-            if (candles[current].c < trigger && trigger > currentTeeth) {
+            val confirmationTeeth = teethS.getOrNull(fractal.confirmationIndex) ?: Double.NaN
+            if (confirmationTeeth.isFinite() && fractal.level > confirmationTeeth &&
+                candles[current].c < trigger && trigger > currentTeeth
+            ) {
                 out += CampaignSignalN(
                     signalId = campaignSignalId(symbol, frame, "FRACTAL", candles[fractalCenter].t),
                     type = "FRACTAL",
@@ -6582,7 +6566,7 @@ private class NativeEngine(
                     protectivePrice = candles[fractalCenter].l - tick,
                     teethAtDetection = currentTeeth,
                     invalidationPrice = candles[fractalCenter].l - tick,
-                    reason = "WM3 confirmed buy fractal; trigger must remain above Teeth"
+                    reason = "WM3 confirmed fractal; outside Teeth at confirmation and trigger remains above current Teeth"
                 )
             }
         }
@@ -7215,21 +7199,24 @@ private class NativeEngine(
         candles: List<CandleN>,
         currentIndex: Int
     ): Int? {
-        val lastConfirmedCenter =
-            currentIndex - 2
+        if (currentIndex !in candles.indices) return null
+        return WilliamsFractalMath.latestUp(
+            highs = candles.take(currentIndex + 1).map { it.h },
+            throughIndex = currentIndex,
+            lookbackBars = 40
+        )?.centerIndex
+    }
 
-        if (lastConfirmedCenter < 2) return null
-
-        val start =
-            max(2, lastConfirmedCenter - 40)
-
-        for (i in lastConfirmedCenter downTo start) {
-            if (isUpFractal(candles, i)) {
-                return i
-            }
-        }
-
-        return null
+    private fun latestConfirmedDownFractal(
+        candles: List<CandleN>,
+        currentIndex: Int
+    ): Int? {
+        if (currentIndex !in candles.indices) return null
+        return WilliamsFractalMath.latestDown(
+            lows = candles.take(currentIndex + 1).map { it.l },
+            throughIndex = currentIndex,
+            lookbackBars = 40
+        )?.centerIndex
     }
 
     private fun isUpFractal(
@@ -7266,14 +7253,17 @@ private class NativeEngine(
         if (candles.size < 10) return emptyList()
 
         val pivots = mutableListOf<PivotN>()
-        for (i in 2 until candles.size - 2) {
-            val up = isUpFractal(candles, i)
-            val down = isDownFractal(candles, i)
+        val highs = candles.map { it.h }
+        val lows = candles.map { it.l }
+        for (center in 2 until candles.lastIndex) {
+            val up = WilliamsFractalMath.confirmUp(highs, centerIndex = center)
+            val down = WilliamsFractalMath.confirmDown(lows, centerIndex = center)
+            if (up != null && down != null) continue
 
-            if (up && !down) {
-                pivots.add(PivotN("UP", candles[i].h, i + 2))
-            } else if (down && !up) {
-                pivots.add(PivotN("DOWN", candles[i].l, i + 2))
+            if (up != null) {
+                pivots.add(PivotN("UP", up.level, up.confirmationIndex))
+            } else if (down != null) {
+                pivots.add(PivotN("DOWN", down.level, down.confirmationIndex))
             }
         }
 
