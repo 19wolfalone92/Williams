@@ -8,12 +8,26 @@ on:
       - "tests/**"
       - "requirements.txt"
       - ".github/workflows/**"
+      - "VERSION"
+      - ".env.example"
+      - "README.md"
+      - "docs/RELEASE_CONTRACT.md"
+      - "app/build.gradle.kts"
+      - "app/src/main/java/com/williamsbot/MainActivity.kt"
+      - "app/src/main/java/com/williamsbot/StandaloneRuntime.kt"
   pull_request:
     paths:
       - "*.py"
       - "tests/**"
       - "requirements.txt"
       - ".github/workflows/**"
+      - "VERSION"
+      - ".env.example"
+      - "README.md"
+      - "docs/RELEASE_CONTRACT.md"
+      - "app/build.gradle.kts"
+      - "app/src/main/java/com/williamsbot/MainActivity.kt"
+      - "app/src/main/java/com/williamsbot/StandaloneRuntime.kt"
   workflow_dispatch:
 
 concurrency:
@@ -89,6 +103,7 @@ jobs:
             test_execution_architecture.py \
             test_integration_bindings.py \
             test_testnet_release_gate.py \
+            test_release_contract.py \
             2>&1 | tee pytest-output.txt
 
       - name: Upload pytest diagnostics
