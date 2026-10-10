@@ -47,6 +47,27 @@ def signal(kind=SignalType.REVERSAL, role=SignalRole.ENTRY, bar=100, trigger=101
 
 
 def service(db, client):
+    # These execution tests model a process that has completed an explicit,
+    # successful exchange reconciliation. Fresh Database instances correctly
+    # start blocked; test setup must not bypass that production invariant.
+    db.mark_recovery_ready({
+        "exchange_reachable": True,
+        "account_checked": True,
+        "open_orders_checked": True,
+        "order_history_checked": True,
+        "fills_checked": True,
+        "positions_checked": True,
+        "protection_checked": True,
+        "campaigns_checked": True,
+        "intents_checked": True,
+        "unresolved_symbols": [],
+        "pending_entries": [],
+        "unknown_orders": [],
+        "inventory_mismatches": [],
+        "unprotected_positions": [],
+        "unknown_campaigns": [],
+        "canonical_position_state": "FLAT",
+    })
     barrier = ExecutionBarrier(FakeCache(), db)
     return CampaignExecutionService(client, db, barrier)
 
@@ -122,6 +143,61 @@ def test_partial_conditional_entry_is_cancelled_and_residual_protected():
         assert order["status"] in {"PARTIALLY_FILLED", "CANCELED"}
         campaign = svc.engine.load_campaign(result["campaign_id"])
         assert campaign.position_qty > 0
+
+
+def test_cancel_race_requeries_final_filled_quantity_before_protection():
+    class FillDuringCancelExchange(MockExchange):
+        def cancel_order(self, symbol, order_id=None, orig_client_order_id=None):
+            order = self.get_order(
+                symbol, order_id=order_id, orig_client_order_id=orig_client_order_id
+            )
+            target = next(
+                row for row in self.orders
+                if str(row["orderId"]) == str(order["orderId"])
+            )
+            # Model the exchange matching the remainder immediately before
+            # cancellation takes effect. The cancel response alone is stale;
+            # the subsequent GET order must reveal the final executed quantity.
+            requested = float(target.get("origQty", 0) or 0)
+            already = float(target.get("executedQty", 0) or 0)
+            remainder = max(0.0, requested - already)
+            price = float(self.prices[symbol])
+            base = symbol.replace("USDT", "")
+            self.balances[base] += remainder
+            self.balances["USDT"] -= remainder * price
+            target["executedQty"] = str(requested)
+            target["cummulativeQuoteQty"] = str(requested * price)
+            target["status"] = "FILLED"
+            return dict(target)
+
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "campaign.sqlite3"))
+        client = FillDuringCancelExchange()
+        client.partial_fill_ratio = 0.4
+        svc = service(db, client)
+        result = svc.arm_initial_entry(
+            signal(trigger=101.0),
+            equity_quote=10_000,
+            candidate_risk_pct=0.004,
+        )
+        client.set_price("BTCUSDT", 101.5)
+
+        recovered = svc.reconcile_pending_entries()
+
+        assert recovered[0]["state"] == "OPEN"
+        order = client.get_order(
+            "BTCUSDT", orig_client_order_id=result["client_order_id"]
+        )
+        campaign = svc.engine.load_campaign(result["campaign_id"])
+        assert order["status"] == "FILLED"
+        assert float(campaign.position_qty) == float(order["executedQty"])
+        stops = [
+            row for row in client.open_orders("BTCUSDT")
+            if str(row.get("side", "")).upper() == "SELL"
+            and str(row.get("clientOrderId", "")).startswith(svc.STOP_PREFIX)
+        ]
+        assert len(stops) == 1
+        assert float(stops[0]["origQty"]) == float(order["executedQty"])
 
 
 def test_restart_adopts_pending_campaign_by_client_id():
