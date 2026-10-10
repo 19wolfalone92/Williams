@@ -7,7 +7,7 @@ from safe_logging import redact_text, redact_value
 
 
 class Database:
-    SCHEMA_VERSION = 6
+    SCHEMA_VERSION = 7
 
     def __init__(self, path=None):
         path = path or os.getenv('WILLIAMS_DB_PATH') or 'data/trader.sqlite3'
@@ -134,7 +134,13 @@ class Database:
             invalidation_level REAL,
             status TEXT NOT NULL,
             reason TEXT,
-            client_order_id TEXT
+            client_order_id TEXT,
+            mutation_kind TEXT NOT NULL DEFAULT 'ORDER',
+            target_order_id TEXT,
+            target_client_order_id TEXT,
+            target_order_list_id TEXT,
+            target_list_client_order_id TEXT,
+            replacement_client_order_id TEXT
         );
         CREATE TABLE IF NOT EXISTS execution_events(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -262,6 +268,7 @@ class Database:
             ON campaign_events(campaign_id, id);
         ''')
         self._migrate_trade_columns()
+        self._migrate_execution_intent_columns()
         self.state_set('schema_version', self.SCHEMA_VERSION)
         self.state_set('position_state', self.state_get('position_state', 'FLAT'))
         self.conn.commit()
@@ -284,6 +291,23 @@ class Database:
                 self.conn.execute(
                     f'ALTER TABLE trades ADD COLUMN {name} {sql_type}'
                 )
+
+    def _migrate_execution_intent_columns(self):
+        columns = {
+            row['name']
+            for row in self.conn.execute('PRAGMA table_info(execution_intents)').fetchall()
+        }
+        additions = {
+            'mutation_kind': "TEXT NOT NULL DEFAULT 'ORDER'",
+            'target_order_id': 'TEXT',
+            'target_client_order_id': 'TEXT',
+            'target_order_list_id': 'TEXT',
+            'target_list_client_order_id': 'TEXT',
+            'replacement_client_order_id': 'TEXT',
+        }
+        for name, sql_type in additions.items():
+            if name not in columns:
+                self.conn.execute(f'ALTER TABLE execution_intents ADD COLUMN {name} {sql_type}')
 
     def state_get(self, key, default=None):
         r = self.conn.execute(
@@ -381,8 +405,10 @@ class Database:
         self.conn.execute(
             '''INSERT OR REPLACE INTO execution_intents(
                 intent_id,symbol,side,order_type,purpose,
-                required_context_versions_json,hypothesis_id,invalidation_level,status,reason,client_order_id
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?)''',
+                required_context_versions_json,hypothesis_id,invalidation_level,status,reason,client_order_id,
+                mutation_kind,target_order_id,target_client_order_id,target_order_list_id,
+                target_list_client_order_id,replacement_client_order_id
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
             (
                 intent.intent_id,
                 intent.symbol,
@@ -395,10 +421,38 @@ class Database:
                 status,
                 redact_text(reason),
                 getattr(intent, 'client_order_id', ''),
+                getattr(intent, 'mutation_kind', 'ORDER'),
+                getattr(intent, 'target_order_id', ''),
+                getattr(intent, 'target_client_order_id', ''),
+                getattr(intent, 'target_order_list_id', ''),
+                getattr(intent, 'target_list_client_order_id', ''),
+                getattr(intent, 'replacement_client_order_id', ''),
             ),
         )
         if not self._transaction_active:
             self.conn.commit()
+
+    def resolve_execution_intent(self, intent_id, status, evidence):
+        """Atomically resolve an intent with authoritative exchange evidence."""
+        if status != 'RECONCILED' or not isinstance(evidence, dict):
+            raise ValueError('execution_intent_resolution_requires_exchange_evidence')
+        if not self._transaction_active:
+            with self.transaction():
+                return self.resolve_execution_intent(intent_id, status, evidence)
+        row = self.conn.execute(
+            'SELECT status FROM execution_intents WHERE intent_id=?',
+            (str(intent_id),),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError('execution_intent_not_found')
+        current = str(row['status']).upper()
+        if current not in {'PENDING', 'AMBIGUOUS', 'SUBMITTING', 'RECONCILE_REQUIRED', 'SUBMITTED'}:
+            raise RuntimeError('execution_intent_not_in_resolvable_state')
+        self.conn.execute(
+            "UPDATE execution_intents SET status='RECONCILED', reason=? WHERE intent_id=?",
+            ('authoritative_exchange_state_persisted', str(intent_id)),
+        )
+        self.save_execution_event(str(intent_id), 'EXCHANGE_RECONCILED', evidence)
 
     def save_execution_event(self, intent_id, event, payload=None):
         self.conn.execute(
