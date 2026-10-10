@@ -138,4 +138,11 @@ Artifacts from that build:
 - Debug APK signature verification passed with the configured persistent debug keystore.
 - Campaign CI debug APK artifact ID `11681690192`; lint report artifact ID `11680879566`; Python test report artifact ID `11681148413`.
 
-The next commit only updates this report. CI must still be rerun on that resulting HEAD; no results from `6bb3500b32e807c71aadaf66e1d34084e034c6cf` are treated as proof for a different SHA.
+The report-bearing SHA `b0917134f8df906289281e053bdf8bdf603e3e19` was then checked independently and all three required PR workflows passed on that exact SHA:
+- Python backend tests: [run 38084161593](https://github.com/19wolfalone92/Williams/actions/runs/38084161593) — `148 passed, 4 warnings`.
+- Williams Campaign CI: [run 38084161602](https://github.com/19wolfalone92/Williams/actions/runs/38084161602) — `180 passed, 4 warnings`; Android unit tests, lint and debug APK assembly passed.
+- Build Android APK: [run 38084161697](https://github.com/19wolfalone92/Williams/actions/runs/38084161697) — lint, unit tests, debug/release APK builds, metadata and debug-signature checks passed.
+
+For SHA `b0917134f8df906289281e053bdf8bdf603e3e19`, the debug APK was version `4.25.0-debug`, versionCode `1769`, SHA-256 `<see workflow artifact checksum>`; the unsigned release APK was version `4.25.0`, versionCode `1769`, SHA-256 `<see workflow artifact checksum>`. The workflow uploaded the debug and unsigned release APK artifacts. (The artifact checksums and IDs are available in the run logs.)
+
+Validation evidence is SHA-specific: the documentation-only commit that follows this record must also pass all three required workflows. Green CI does not, by itself, remove the overall `BLOCKED — NOT ACCEPTED` status while live Testnet lost-response recovery and physical-device crash recovery remain unverified.
