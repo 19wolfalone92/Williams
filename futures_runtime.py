@@ -223,7 +223,10 @@ def signal_spec_from_dict(raw: dict[str, Any]) -> SignalSpec:
         direction=direction,
         signal_type=SignalType(str(raw["signal_type"])),
         role=SignalRole(str(raw["role"])),
-        timeframe=str(raw["timeframe"]).lower(),
+        timeframe=(
+            "1M" if str(raw["timeframe"]).strip() == "1M"
+            else str(raw["timeframe"]).strip().lower()
+        ),
         signal_bar_time_ms=int(raw["signal_bar_time_ms"]),
         trigger_price=float(raw["trigger_price"]),
         protective_reference=float(raw["protective_reference"]),
