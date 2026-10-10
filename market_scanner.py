@@ -149,6 +149,13 @@ class MarketScanner:
 
     def __init__(self, client, symbols=None, interval=None):
         self.client = client
+        self.strategy_profile = os.getenv(
+            "WILLIAMS_STRATEGY_PROFILE", "TC2_THREE_WISE_MEN"
+        ).strip().upper()
+        self.wave_admission_filter = (
+            os.getenv("WILLIAMS_WAVE_ENTRY_ADMISSION_FILTER", "false").lower()
+            == "true"
+        )
 
         self.interval = _normalize_interval(interval or os.getenv("INTERVAL", "1h"))
 
@@ -540,8 +547,12 @@ class MarketScanner:
             if spread_pct > self.max_spread_pct:
                 return None
 
-            rr = self.target_pct / max(self.stop_pct, 1e-9)
-            if rr < self.min_rr:
+            tc2_core = self.strategy_profile == "TC2_THREE_WISE_MEN"
+            rr = (
+                0.0 if tc2_core
+                else self.target_pct / max(self.stop_pct, 1e-9)
+            )
+            if not tc2_core and rr < self.min_rr:
                 return None
 
             legacy_strict_signal = bool(
@@ -567,13 +578,23 @@ class MarketScanner:
             else:
                 signal_strength = 0.5
 
-            risk_pct = self.stop_pct * 100.0
+            if tc2_core and campaign_specs:
+                primary = campaign_specs[0]
+                structural_distance = abs(
+                    float(primary.trigger_price) - float(primary.protective_reference)
+                ) / max(float(primary.trigger_price), 1e-12)
+            else:
+                structural_distance = self.stop_pct
+            risk_pct = structural_distance * 100.0
             risk_score = self._clamp(
-                20.0 * (0.02 / max(self.stop_pct, 0.0001)),
+                20.0 * (0.02 / max(structural_distance, 0.0001)),
                 0.0,
                 20.0,
             )
-            rr_score = min(20.0, 20.0 * (rr / 3.0))
+            rr_score = (
+                0.0 if tc2_core
+                else min(20.0, 20.0 * (rr / 3.0))
+            )
             atr_score = max(
                 0.0,
                 10.0 * (1.0 - atr_pct / max(self.max_atr_pct, 1e-9)),
@@ -582,8 +603,17 @@ class MarketScanner:
                 0.0,
                 5.0 * (1.0 - spread_pct / max(self.max_spread_pct, 1e-9)),
             )
-            strategy_score = 30.0 * (setup_score / 100.0)
-            breakout_bonus = 15.0 if legacy_strict_signal else 0.0
+            # In TC2 core, typed Wise-Men evidence is the strategy signal.
+            # Do not demote WM2/WM3 just because a legacy same-candle Boolean
+            # score requires unrelated Alligator/AC/fractal conditions together.
+            strategy_score = (
+                30.0 if campaign_signal and tc2_core
+                else 30.0 * (setup_score / 100.0)
+            )
+            breakout_bonus = (
+                0.0 if tc2_core
+                else 15.0 if legacy_strict_signal else 0.0
+            )
 
             base_score = self._clamp(
                 strategy_score
@@ -597,7 +627,9 @@ class MarketScanner:
             )
 
             if campaign_signal:
-                reason = "Williams campaign signal detected; conditional entry candidate"
+                reason = (
+                    f"{self.strategy_profile} independent Wise-Man signal; conditional entry candidate"
+                )
             elif setup_state == "SETUP_READY":
                 reason = f"{primary_direction.lower()} setup ready; waiting for valid price trigger"
             else:
