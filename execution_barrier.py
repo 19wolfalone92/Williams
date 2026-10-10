@@ -306,6 +306,51 @@ class ExecutionBarrier:
             return False
         return True
 
+    def _query_authoritative_oco(self, exchange, symbol: str, client_id: str) -> dict:
+        order_list = exchange.order_list(symbol, list_client_order_id=client_id)
+        if not isinstance(order_list, dict):
+            raise ValueError("OCO lookup returned a non-object")
+        if str(order_list.get("symbol", "")).upper() != symbol.upper():
+            raise ValueError("OCO lookup returned a different symbol")
+        if str(order_list.get("listClientOrderId", "")) != client_id:
+            raise ValueError("OCO lookup returned a different list client ID")
+        list_id = order_list.get("orderListId")
+        if list_id in (None, "", -1, "-1"):
+            raise ValueError("OCO lookup lacks orderListId")
+        list_status = str(order_list.get("listStatusType", "")).upper()
+        list_order_status = str(order_list.get("listOrderStatus", "")).upper()
+        if list_status not in {"EXEC_STARTED", "EXECUTING", "ALL_DONE", "REJECT"}:
+            raise ValueError("OCO list status is unknown")
+        if list_order_status not in {"EXECUTING", "ALL_DONE", "REJECT"}:
+            raise ValueError("OCO list order status is unknown")
+        children = order_list.get("orderReports")
+        if not isinstance(children, list):
+            children = order_list.get("orders")
+        if not isinstance(children, list) or len(children) < 2:
+            raise ValueError("OCO lookup does not identify both child orders")
+        verified = []
+        ids = set()
+        allowed = {"NEW", "PARTIALLY_FILLED", "FILLED", "CANCELED", "REJECTED", "EXPIRED", "EXPIRED_IN_MATCH"}
+        for child in children:
+            if not isinstance(child, dict):
+                raise ValueError("OCO child descriptor is malformed")
+            child_id = child.get("orderId")
+            if child_id in (None, "", 0, "0") or str(child_id) in ids:
+                raise ValueError("OCO child order ID is missing or duplicated")
+            ids.add(str(child_id))
+            evidence = child
+            if not str(child.get("status", "")).upper():
+                evidence = exchange.get_order(symbol, order_id=child_id)
+            if (
+                not isinstance(evidence, dict)
+                or str(evidence.get("symbol", "")).upper() != symbol.upper()
+                or str(evidence.get("orderId", "")) != str(child_id)
+                or str(evidence.get("status", "")).upper() not in allowed
+            ):
+                raise ValueError("OCO child order state is not authoritative")
+            verified.append(evidence)
+        return {"order_list": order_list, "children": verified}
+
     def reconcile_unresolved_intents(self, exchange) -> dict[str, object]:
         """Query Binance before allowing recovery from durable ambiguous intents.
 
@@ -353,10 +398,8 @@ class ExecutionBarrier:
             try:
                 if not symbol or not client_id:
                     raise ValueError("intent lacks symbol or stable client identifier")
-                if order_type in {"OCO", "OCO_SELL", "ORDER_LIST"}:
-                    evidence = exchange.order_list(symbol, list_client_order_id=client_id)
-                    if not self._oco_response_authoritative(evidence):
-                        raise ValueError("OCO list/child state is not authoritative")
+                if order_type in {"OCO", "OCO_SELL", "ORDER_LIST"} or purpose == "CAMPAIGN_EXIT_CANCEL":
+                    self._query_authoritative_oco(exchange, symbol, client_id)
                 elif purpose in {"CAMPAIGN_TRAIL", "PROTECTION_REPLACE", "CANCEL_REPLACE"}:
                     # The current schema does not persist the old order identifier
                     # independently; querying only the replacement cannot prove both legs.
