@@ -378,24 +378,37 @@ def extract_long_signal_specs(
 
     fractal = _latest_confirmed_fractal(ind, side="LONG")
     if fractal is not None:
-        confirmation_i, center_i, trigger_base, protective, teeth = fractal
-        # Formation can be anywhere; trigger validity belongs to current
-        # price/Teeth.  At arm time the trigger must still be above Teeth.
+        confirmation_i, center_i, trigger_base, invalidation_level, teeth = fractal
+        # The source assigns activation to a conditional price break; keep the
+        # opposite structural extreme and protective trailing stop as separate
+        # values. The 3–5 bar stop window is an explicit bot campaign policy.
         trigger = trigger_base + tick
         ttl_bars = max(1, int(os.getenv("WILLIAMS_PENDING_FRACTAL_BARS", "8")))
+        try:
+            trail_bars = int(os.getenv("WILLIAMS_TC2_TRAILING_BARS", "3"))
+        except (TypeError, ValueError, OverflowError):
+            trail_bars = 0
+        # UNRESOLVED/noncanonical stop windows block rather than being silently
+        # converted into a different trading rule.
+        if trail_bars not in {3, 4, 5}:
+            return specs
+        recent_lows = pd.to_numeric(ind["low"].iloc[-trail_bars:], errors="coerce").to_numpy(dtype=float)
+        protective_stop = float(recent_lows.min() - tick) if len(recent_lows) == trail_bars and all(math.isfinite(float(v)) for v in recent_lows) else float("nan")
         age_bars = len(ind) - 1 - confirmation_i
         current_trigger_valid = (
             math.isfinite(current_teeth) and current_teeth > 0.0
             and math.isfinite(teeth) and teeth > 0.0
+            and math.isfinite(invalidation_level) and invalidation_level > 0.0
             and trigger_base > teeth
             and trigger > current_teeth
+            and math.isfinite(protective_stop) and 0.0 < protective_stop < current_close
         )
         if (
             current_close < trigger
             and current_trigger_valid
             and age_bars < ttl_bars
             and _trigger_unbroken(ind, center_i, side="LONG", trigger_price=trigger)
-            and _invalidation_intact(ind, center_i, side="LONG", protective_level=protective)
+            and _invalidation_intact(ind, center_i, side="LONG", protective_level=invalidation_level)
         ):
             row = ind.iloc[center_i]
             specs.append(
@@ -408,9 +421,9 @@ def extract_long_signal_specs(
                     signal_bar_time_ms=_row_time_ms(row),
                     confirmation_time_ms=_row_time_ms(ind.iloc[confirmation_i]) + _timeframe_ms(timeframe),
                     trigger_price=trigger,
-                    protective_reference=protective,
+                    protective_reference=protective_stop,
                     trigger_buffer_ticks=1,
-                    invalidation_price=float(wave_invalidation_price or protective),
+                    invalidation_price=float(invalidation_level),
                     teeth_at_detection=float(teeth),
                     alligator_bullish=bool(current.get("bullish_alligator", False)),
                     alligator_awake=bool(current.get("alligator_awake", False)),
@@ -418,7 +431,7 @@ def extract_long_signal_specs(
                     wave_exhaustion_risk=float(wave_exhaustion_risk),
                     htf_confirmed=bool(htf_confirmed),
                     context_versions=versions,
-                    reason="WM3 buy fractal; trigger only while price/trigger remains above Teeth",
+                    reason="WM3 buy fractal; Teeth valid at confirmation/current activation; separate structural invalidation and 3–5 bar protective stop",
                     source_candle_index=center_i,
                     expires_at_ms=(
                         _row_time_ms(ind.iloc[confirmation_i])
