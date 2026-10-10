@@ -15,6 +15,15 @@ if (keystorePropertiesFile.exists()) {
     FileInputStream(keystorePropertiesFile).use { keystoreProperties.load(it) }
 }
 
+val canonicalVersionFile = rootProject.file("VERSION")
+if (!canonicalVersionFile.isFile) {
+    throw GradleException("Missing canonical release version file: VERSION")
+}
+val canonicalAppVersion = canonicalVersionFile.readText(Charsets.UTF_8).trim()
+if (!Regex("""^[0-9]+\.[0-9]+\.[0-9]+$""").matches(canonicalAppVersion)) {
+    throw GradleException("VERSION must contain exactly one MAJOR.MINOR.PATCH value")
+}
+
 val ciRunNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()
 val resolvedVersionCode = maxOf(10, ciRunNumber ?: 10)
 
@@ -40,7 +49,7 @@ android {
         minSdk = 26
         targetSdk = 36
         versionCode = resolvedVersionCode
-        versionName = "4.25.0"
+        versionName = canonicalAppVersion
     }
 
     buildFeatures {
