@@ -593,26 +593,34 @@ class MultiPositionTrader:
         return max(0.0, float(stop_fraction) + (2.0 * fee_per_side) + slippage_buffer)
 
     def reserved_risk_quote(self):
+        total = 0.0
+        campaign_symbols = set()
         if self.campaign_engine_enabled:
             try:
-                return max(
+                total = max(
                     0.0,
                     float(self.campaign_execution.engine.portfolio_reserved_risk_quote()),
                 )
+                campaign_symbols = {
+                    str(row.get("symbol", "")).upper()
+                    for row in self.db.open_campaigns()
+                }
             except Exception:
-                # A campaign risk calculation failure must never open extra capacity.
+                # Unknown campaign state consumes all available risk capacity.
                 return self.max_total_risk_pct * max(self._balance(), 0.0)
-        total = 0.0
         for trade in self.open_trades():
-            entry = float(trade.get("entry_price") or 0.0)
-            qty = float(trade.get("quantity") or 0.0)
-            stop = float(trade.get("stop_price") or 0.0)
-            if entry <= 0 or qty <= 0:
+            symbol = str(trade.get("symbol", "")).upper()
+            if symbol in campaign_symbols:
                 continue
-            if stop > 0:
-                stop_fraction = max(0.0, (entry - stop) / entry)
-            else:
-                stop_fraction = float(os.getenv("STOP_LOSS_PCT", "0.02"))
+            try:
+                entry = float(trade.get("entry_price") or 0.0)
+                qty = float(trade.get("quantity") or 0.0)
+                stop = float(trade.get("stop_price") or 0.0)
+            except (TypeError, ValueError, OverflowError):
+                return self.max_total_risk_pct * max(self._balance(), 0.0)
+            if not all(math.isfinite(v) for v in (entry, qty, stop)) or entry <= 0 or qty <= 0:
+                return self.max_total_risk_pct * max(self._balance(), 0.0)
+            stop_fraction = max(0.0, (entry - stop) / entry) if stop > 0 else float(os.getenv("STOP_LOSS_PCT", "0.02"))
             total += entry * qty * self._effective_risk_fraction(stop_fraction)
         return total
 
@@ -978,9 +986,12 @@ class MultiPositionTrader:
             if str(row["value"]).strip()
         ]
 
-    def recover_pending_entries(self):
+    def recover_pending_entries(self, symbols=None):
         results = []
+        allowed_symbols = None if symbols is None else {str(x).upper() for x in symbols}
         for symbol, client_id in self._pending_entries():
+            if allowed_symbols is not None and symbol not in allowed_symbols:
+                continue
             try:
                 order = self.client.get_order(
                     symbol,
@@ -1516,11 +1527,15 @@ class MultiPositionTrader:
             "partial_exit": total_sold_qty > 0,
         }
 
-    def reconcile_open_positions(self):
-        """Reconcile all managed positions; block globally on ambiguity."""
-        pending = self.recover_pending_entries()
+    def reconcile_open_positions(self, symbols=None):
+        """Reconcile selected positions; any ambiguity still blocks the portfolio."""
+        allowed_symbols = None if symbols is None else {str(x).upper() for x in symbols}
+        pending = self.recover_pending_entries(allowed_symbols)
 
-        trades = list(self.open_trades())
+        trades = [
+            trade for trade in self.open_trades()
+            if allowed_symbols is None or str(trade.get("symbol", "")).upper() in allowed_symbols
+        ]
         results = list(pending)
 
         if not trades:
@@ -1560,16 +1575,36 @@ class MultiPositionTrader:
         return results
 
     def recover(self):
-        """Startup/full recovery. Campaign mode never routes through legacy OCO recovery."""
+        """Recover campaigns and legacy orphan exposure without double-managing campaigns."""
         if self.campaign_engine_enabled:
             pending = self.campaign_execution.reconcile_pending_entries()
             active = self.campaign_execution.reconcile_active_campaigns()
+            # Older releases could leave a real filled Spot position in the
+            # legacy trade table without a campaign row. Recover only symbols
+            # not already owned by a still-active campaign.
+            campaign_symbols = {
+                str(row.get("symbol", "")).upper()
+                for row in self.db.open_campaigns()
+            }
+            legacy_symbols = {
+                str(row.get("symbol", "")).upper()
+                for row in self.open_trades()
+                if str(row.get("symbol", "")).upper() not in campaign_symbols
+            }
+            legacy_symbols.update(
+                symbol for symbol, _ in self._pending_entries()
+                if symbol not in campaign_symbols
+            )
+            legacy_results = self.reconcile_open_positions(legacy_symbols) if legacy_symbols else []
             repaired = self._repair_stale_reconcile_states()
             unresolved = self.unresolved_symbols()
-            pending_keys = self._pending_entries()
+            pending_keys = [
+                row for row in self._pending_entries()
+                if row[0] not in campaign_symbols
+            ]
             ok = not unresolved and not pending_keys
             canonical_state = self._sync_legacy_state()
-            results = pending + active
+            results = pending + active + legacy_results
             results.extend(
                 {"symbol": symbol, "state": "FLAT", "stale_reconcile_cleared": True}
                 for symbol in repaired
