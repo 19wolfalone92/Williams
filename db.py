@@ -339,6 +339,22 @@ class Database:
             ).fetchone()
         return dict(row) if row is not None else None
 
+    def unresolved_execution_intents(self):
+        """Return intents whose exchange outcome/recovery state is not resolved."""
+        rows = self.conn.execute(
+            """SELECT i.* FROM execution_intents i
+               WHERE i.status IN ('PENDING','AMBIGUOUS','SUBMITTING','RECONCILE_REQUIRED')
+                  OR (
+                    i.status='SUBMITTED'
+                    AND NOT EXISTS (
+                      SELECT 1 FROM execution_events e
+                      WHERE e.intent_id=i.intent_id AND e.event='BINANCE_SUBMITTED'
+                    )
+                  )
+               ORDER BY i.created_at"""
+        ).fetchall()
+        return [dict(row) for row in rows]
+
     def save_execution_intent(self, intent, status, reason=''):
         self.conn.execute(
             '''INSERT OR REPLACE INTO execution_intents(
