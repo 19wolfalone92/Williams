@@ -1,4 +1,5 @@
 package com.williamsbot
+import java.util.Locale
 
 import android.content.ContentValues
 import android.content.Context
