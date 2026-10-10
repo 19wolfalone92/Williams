@@ -21,6 +21,26 @@ class FuturesContextPolicyTest {
     }
 
     @Test
+    fun h1AlligatorRegimeDoesNotRequireAoZeroLineSignForEveryWiseManSignal() {
+        val bullishH1WithNegativeAo = FuturesContextState(true, false, true, -0.5)
+        val neutralH4 = FuturesContextState(false, false, false, 0.0)
+        val neutralD1 = FuturesContextState(false, false, false, 0.0)
+
+        // WM2/WM3 carry their own AO/fractal evidence. A generic AO>0 gate would
+        // incorrectly erase a valid H1 setup whenever AO is below zero.
+        assertTrue(
+            FuturesContextPolicy.allows(
+                "LONG", bullishH1WithNegativeAo, neutralH4, neutralD1
+            )
+        )
+        assertTrue(
+            FuturesContextPolicy.allowsEarlyReversal(
+                "LONG", neutral, neutralH4, neutralD1, angulationScore = 2.0
+            )
+        )
+    }
+
+    @Test
     fun fractalTriggerMustRemainOutsideCurrentTeethAndMalformedLevelsFailClosed() {
         assertTrue(FuturesContextPolicy.fractalTriggerOutsideTeeth("LONG", 101.0, 100.0))
         assertFalse(FuturesContextPolicy.fractalTriggerOutsideTeeth("LONG", 100.0, 100.0))
