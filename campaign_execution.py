@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from dataclasses import replace
+import math
 from typing import Any
 import json
 import os
@@ -24,10 +26,17 @@ class CampaignExecutionService:
     STOP_PREFIX = "WILLV5_STOP_"
     EXIT_PREFIX = "WILLV5_EXIT_"
 
-    def __init__(self, client, db, execution_barrier: ExecutionBarrier | None = None):
+    def __init__(
+        self,
+        client,
+        db,
+        execution_barrier: ExecutionBarrier | None = None,
+        context_refresh=None,
+    ):
         self.client = client
         self.db = db
         self.barrier = execution_barrier
+        self.context_refresh = context_refresh
         self.engine = CampaignEngine(
             db,
             portfolio_risk_limit_pct=float(os.getenv("MAX_TOTAL_RISK_PCT", "0.01")),
@@ -200,6 +209,67 @@ class CampaignExecutionService:
     ) -> dict[str, Any]:
         if signal.side != "BUY":
             raise CampaignExecutionError("Current Spot campaign executor only arms LONG entries")
+        if self.barrier is None:
+            raise CampaignExecutionError(
+                "Campaign execution requires the canonical ExecutionBarrier"
+            )
+
+        # Pin the exact closed H1/H4/D1 contexts used by the final order barrier.
+        # Dynamic scanner symbols are refreshed on demand through the same MTF
+        # publisher used by bootstrap/WebSocket updates, not through duplicate
+        # ad-hoc indicator math.
+        signal_tf = str(signal.timeframe).lower()
+        early_wm1 = (
+            signal.signal_type == SignalType.REVERSAL
+            and signal_tf == "1h"
+            and not bool(signal.htf_confirmed)
+        )
+        if signal_tf == "1h" and not signal.htf_confirmed and not early_wm1:
+            raise CampaignExecutionError(
+                f"{signal.symbol}: only a proven H1 WM1 reversal may use early admission"
+            )
+
+        required_contexts = (
+            ("1h", "4h", "1d") if signal_tf == "1h" else (signal_tf,)
+        )
+        try:
+            if self.context_refresh is not None:
+                self.context_refresh(signal.symbol, required_contexts)
+            context_snapshot = self.barrier.context_cache.snapshot()
+            context_versions = context_snapshot.versions(
+                signal.symbol, list(required_contexts)
+            )
+        except Exception as exc:
+            raise CampaignExecutionError(
+                f"{signal.symbol}: current closed-candle contexts could not be refreshed: {exc}"
+            ) from exc
+
+        missing_contexts = [
+            tf for tf in required_contexts if tf not in context_versions
+        ]
+        if missing_contexts and (self.context_refresh is not None or early_wm1):
+            raise CampaignExecutionError(
+                f"{signal.symbol}: missing required context(s): {', '.join(missing_contexts)}"
+            )
+        if context_versions:
+            signal = replace(
+                signal,
+                context_versions={
+                    **dict(signal.context_versions or {}),
+                    **context_versions,
+                },
+            )
+        if early_wm1:
+            try:
+                angulation = float(signal.angulation_score)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise CampaignExecutionError(
+                    f"{signal.symbol}: WM1 angulation evidence is invalid"
+                ) from exc
+            if not math.isfinite(angulation) or angulation <= 0.0:
+                raise CampaignExecutionError(
+                    f"{signal.symbol}: WM1 requires finite positive angulation evidence"
+                )
 
         reserved = self.engine.portfolio_reserved_risk_quote()
         capacity = max(0.0, float(equity_quote) * self.engine.portfolio_risk_limit_pct)
@@ -287,6 +357,11 @@ class CampaignExecutionService:
             client_order_id=client_id,
             purpose="CAMPAIGN_ENTRY",
             permission_interval=signal.timeframe,
+            context_admission_mode=(
+                "TC2_WM1_EARLY" if early_wm1 else "STRICT_DIRECTIONAL"
+            ),
+            signal_type=signal.signal_type.value,
+            angulation_score=float(signal.angulation_score or 0.0),
             campaign_id=campaign.campaign_id,
             signal_id=signal.signal_id,
             risk_quote=risk_quote,
