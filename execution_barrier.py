@@ -3,6 +3,9 @@ from __future__ import annotations
 
 import time
 import uuid
+import os
+
+from trading_config import execution_timeframe_blocker
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
@@ -25,6 +28,11 @@ class OrderIntent:
     client_order_id: str = ""
     purpose: str = "ENTRY"
     permission_interval: str = ""
+    # Immutable signal provenance copied into the final execution intent.
+    signal_timeframe: str = ""
+    signal_bar_time_ms: int = 0
+    confirmation_time_ms: int = 0
+    expires_at_ms: int = 0
     campaign_id: str = ""
     signal_id: str = ""
     risk_quote: float = 0.0
@@ -87,6 +95,28 @@ class ExecutionBarrier:
                 pass
 
     def _validate(self, intent: OrderIntent, snapshot: MarketStateSnapshot) -> str:
+        # H1 is an owner-approved execution contract, not a Williams book rule.
+        # Enforce it at the last admission boundary for campaign entries so
+        # callers cannot bypass the scanner or TradingConfig validation.
+        if intent.purpose.upper() == "CAMPAIGN_ENTRY":
+            config_blocker = execution_timeframe_blocker(os.environ)
+            if config_blocker:
+                return config_blocker
+            signal_tf = str(intent.signal_timeframe or "").strip().lower()
+            permission_tf = str(intent.permission_interval or "").strip().lower()
+            if signal_tf != "1h" or permission_tf != "1h":
+                return (
+                    "CAMPAIGN_ENTRY requires signal_timeframe=1h and "
+                    "permission_interval=1h"
+                )
+            now_ms = int(time.time() * 1000)
+            if (
+                int(intent.signal_bar_time_ms or 0) <= 0
+                or int(intent.confirmation_time_ms or 0) <= int(intent.signal_bar_time_ms or 0)
+                or int(intent.expires_at_ms or 0) <= now_ms
+            ):
+                return "CAMPAIGN_ENTRY signal provenance is missing, invalid, or expired"
+
         if intent.created_at_ms:
             age = int(time.time() * 1000) - intent.created_at_ms
             if age > intent.max_age_ms:
