@@ -1664,6 +1664,16 @@ private class NativeEngine(
         body: String
     ): Pair<String, String> {
         if (httpStatus !in 200..299) {
+            val errorBody = runCatching { JSONObject(body) }.getOrNull()
+            val code = errorBody?.optInt("code", 0) ?: 0
+            if (spec.operation in setOf("ENTRY_ORDER", "PROTECTION_ORDER") &&
+                code in setOf(-1013, -1100, -1101, -1102, -1104, -1111, -2010)
+            ) {
+                // These Binance order-parameter/filter rejections establish that
+                // the new order was not accepted. They do not validate the
+                // strategy, but they do not leave an unknown live order either.
+                return "REJECTED" to ("authoritative Binance order rejection code " + code)
+            }
             return "AMBIGUOUS" to ("Binance HTTP " + httpStatus + "; reconcile exact identity before retry")
         }
         val response = runCatching { JSONObject(body) }.getOrNull()
@@ -1912,7 +1922,7 @@ private class NativeEngine(
                             )
                         }
 
-                        if (classified.first != "SUBMITTED") {
+                        if (classified.first in setOf("AMBIGUOUS", "RECONCILE_REQUIRED")) {
                             latchMutationReconciliation(
                                 mutation.operation + " requires authoritative reconciliation: " +
                                     classified.second
@@ -1992,17 +2002,22 @@ private class NativeEngine(
             error("Binance timestamp retry failed: " + lastBody)
         } catch (failure: Exception) {
             if (mutation != null) {
-                runCatching {
-                    auditStore.markExecutionMutationAmbiguous(
-                        mutation.intentId,
-                        "request/response path failed after SUBMITTING: " +
-                            (failure.message ?: failure.javaClass.simpleName)
+                val unresolved = runCatching {
+                    auditStore.unresolvedExecutionMutationCount(mutation.symbol)
+                }.getOrDefault(1)
+                if (unresolved > 0) {
+                    runCatching {
+                        auditStore.markExecutionMutationAmbiguous(
+                            mutation.intentId,
+                            "request/response path failed after SUBMITTING: " +
+                                (failure.message ?: failure.javaClass.simpleName)
+                        )
+                    }
+                    latchMutationReconciliation(
+                        "mutation result is unknown for " + mutation.operation +
+                            ": " + (failure.message ?: failure.javaClass.simpleName)
                     )
                 }
-                latchMutationReconciliation(
-                    "mutation result is unknown for " + mutation.operation +
-                        ": " + (failure.message ?: failure.javaClass.simpleName)
-                )
             }
             throw failure
         }
