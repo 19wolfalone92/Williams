@@ -124,6 +124,8 @@ At the HTTP transport level, performSignedRequest is the only location that cons
 | A-10 | P1 | Python release gate expected 4.24.0 while server/Android used 4.25.0. | Gate changed to 4.25.0; regression added. |
 | A-11 | P2 | Duplicate order-state import/transitions and duplicate response handling obscured FSM semantics. | Duplicate import, transition/assignment and duplicate response branch removed. |
 | A-12 | P1 | Risk-reducing protection/cancel actions and entry admission shared over-broad uncertainty blocking. | Explicit SELL/CANCEL/protection/exit intents do not use entry permission gates; new BUY/add-on stays blocked by UNKNOWN/RECONCILE_REQUIRED. This exception must remain limited to actual risk-reducing intents. |
+| A-13 | P0 | The generic Python barrier could treat a SELL with a permissive `allow_short` context as a new entry, despite this execution profile being Spot-only. | Any non-risk-reducing SELL is rejected at the barrier; explicit exit/protection SELL and cancel purposes use the separate reducing-risk contract. |
+| A-14 | P1 | Malformed context-version data could throw during validation after PENDING intent persistence without a normalized BLOCKED result. | Validation exceptions are converted to a durable BLOCKED result; if even that persistence fails, the function returns a no-submit failure and never invokes the exchange callback. |
 
 ## 5. Contracts that the code now enforces
 
@@ -139,7 +141,7 @@ At the HTTP transport level, performSignedRequest is the only location that cons
 
 ## 6. Regression coverage added or updated
 
-- test_task001_architecture_contracts.py: shared cache object identity; fresh/versioned context required; stale/missing context blocks before callback; UNKNOWN and RECONCILE_REQUIRED block new entries; risk-reducing exit remains admitted under reconciliation; missing global state and missing per-symbol state cannot be inferred as FLAT; failed pre-intent persistence prevents submit; PendingSignal is not an order/fill/position; AST check for legacy portfolio mutation call sites; Android mutation boundary/journal check; Spot/Futures route isolation; missing campaign state blocks.
+- test_task001_architecture_contracts.py: shared cache object identity; fresh/versioned context required; stale/missing context blocks before callback; UNKNOWN and RECONCILE_REQUIRED block new entries; risk-reducing exit remains admitted under reconciliation; missing global state and missing per-symbol state cannot be inferred as FLAT; failed pre-intent persistence prevents submit; malformed context versions become BLOCKED; unsupported non-risk-reducing Spot SELL blocks; PendingSignal is not an order/fill/position; AST checks for backend mutation call sites; Android mutation boundary/journal recovery check; Spot/Futures route isolation; missing campaign state blocks.
 - test_campaign_execution.py: fake context now provides a real current close timestamp and signal context versions; fixture explicitly models completed clean reconciliation.
 - test_production_architecture.py: stale-context and execution-lock tests now use a durable test DB and verifiable timestamps.
 - .github/workflows/python-ci.yml and .github/workflows/campaign-ci.yml: include the new architecture contracts test.
