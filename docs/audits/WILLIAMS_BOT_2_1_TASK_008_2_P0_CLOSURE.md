@@ -83,7 +83,7 @@ The following work was committed after the first version of this report. The rep
 - `campaign_execution.py`: order, protective order, cancellation, market exit and cancel-replace callbacks route through its `_submit()`, which calls the canonical barrier.
 - `portfolio_trader.py`: legacy market entry, manual exit, emergency exit and OCO cancellation now call `_execute_mutation()`, which calls the canonical barrier.
 - `binance_client.py`: REST mutation endpoints are order POST, cancel-replace POST, order DELETE, open-orders DELETE, OCO POST and OCO DELETE. The client checks for a matching mutation permit before a mutation request.
-- The permit is one-shot and consumed before network I/O. A transport exception cannot make it reusable.
+- The permit is one-shot and consumed before network I/O. Issuance now requires an internal barrier admission token, and the production call site is in `execution_barrier.py`. This is an in-process Python capability convention, not a sandbox against arbitrary code execution.
 
 This is source-level inventory, not yet proof that every recovery/background path is covered by behavioral tests. In particular, protective-order unknown state, cancellation/replacement ambiguity, crash recovery, and reconciliation restart scenarios remain incomplete.
 
@@ -96,3 +96,26 @@ This is source-level inventory, not yet proof that every recovery/background pat
 5. Read-only Spot Testnet verification remains NOT RUN; no credentials or network outcome is inferred from mocks.
 
 No order, cancellation, replacement, OCO mutation or Mainnet request was sent during this work.
+
+
+## 7. Final implementation addendum
+
+| SHA | Change | Evidence / status |
+|---|---|---|
+| `f34123875a2e2a2182bee361ff6121253a4da976` | Changed mutation-permit issuance to require the internal barrier admission token. | Prevents ordinary direct use of the previous public context manager API; not a security boundary against arbitrary Python code execution. |
+| `f35d19fb1fbbc7917b89f0ee9c1609cca849c47b` | ExecutionBarrier is the production caller that supplies the token. | Static source inspection shows the production issuance call is centralized here. |
+| `3b629173637e9897abb05e6c8f7259ca1a9cfe18` | Replaced direct permit tests with a behavioral test that attempts a second mutation inside the same submit callback after a simulated ambiguous first request. | Test committed; execution on CI not yet verified. |
+| `28d424640299f883e8ea2e5de7850fc6a86e1cdb` | Legacy emergency-exit path now fails closed until a separate emergency execution contract exists. | It marks the symbol `RECONCILE_REQUIRED`; it does not send an order. |
+| `a5e0697ba64994f48ed22a2dbe99b956b3251f08` | Added a test proving the generic barrier cannot silently authorize the legacy emergency-exit path. | Test committed; execution on CI not yet verified. |
+
+The ordinary legacy portfolio paths now route through the barrier. The emergency exit is deliberately blocked rather than being granted a generic permit. This preserves fail-closed safety but means emergency exit functionality is not accepted as complete.
+
+### Final outstanding blockers
+
+- Runtime freshness contracts exist, but verified live measurements are not wired into all required components; the actual preflight therefore remains not-ready/UNKNOWN.
+- The full 12-scenario recovery/reconciliation matrix is not yet complete.
+- Secret marker tests do not yet cover every requested channel end-to-end.
+- No verified Python/Campaign/static-audit/Android CI run is available for the current implementation HEAD.
+- No authorized read-only Spot Testnet preflight has been run.
+
+**Status remains BLOCKED / NOT ACCEPTED.** The code changes above do not authorize trading and do not establish READY FOR READ-ONLY TESTNET VERIFICATION.
