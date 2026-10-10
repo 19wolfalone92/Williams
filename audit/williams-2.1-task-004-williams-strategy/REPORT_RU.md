@@ -268,3 +268,17 @@ CI evidence during development:
 - These are intermediate results only. They do not establish CI success on the final report SHA. The latest code and report commit must pass all required workflows before any acceptance decision.
 
 **Final evidence still outstanding:** the final SHA CI set, Android mutation-free integration tests, persisted-preference restart permutations, consumed-signal durable idempotency, full Python↔Android end-to-end replay and future-candle mutation replay.
+
+
+### Final TASK 004.4 verification note
+
+Latest implementation revision before this note: `19b5b1c880aae7138b41fdaf1a95824e80719671`.
+
+Additional changed test files:
+- `test_production_architecture.py` — entry barrier unit tests now provide explicit H1 signal provenance and last-mile callback.
+- `recovery_oco_failure_test.py` — seeds a fake already-filled order for OCO recovery, rather than attempting a fresh BUY without a canonical signal.
+- `app/src/test/java/com/williamsbot/WilliamsStrategyGoldenVectorsTest.kt` — provenance test was moved inside the JUnit test class after Android unit-test discovery reported an `InvalidTestClassError`.
+
+Latest visible Campaign CI at this implementation revision: [run 38089129878](https://github.com/19wolfalone92/Williams/actions/runs/38089129878) — queued when checked. The Python backend workflow passed on earlier revision `cd74f1fe6e577a1fe1bec021808f8b5f88943dfa` ([run 38088931777](https://github.com/19wolfalone92/Williams/actions/runs/38088931777)); it does not cover the later synthetic-kline and structural-invalidation corrections. Prior Android unit-test failure was an `InvalidTestClassError` due to the provenance test being outside the class; the test was moved, but a successful rerun is not yet evidenced.
+
+**This note is not an acceptance sign-off.** The report commit changes HEAD again and triggers fresh CI. TASK 004.4 remains blocked until the final SHA's Python backend, Campaign CI, Android APK, Android unit/static checks all complete successfully and the remaining behavioural gaps are addressed.
