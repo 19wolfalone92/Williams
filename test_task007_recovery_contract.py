@@ -548,6 +548,25 @@ def test_ambiguous_submission_cannot_be_retried_with_same_intent_or_client_id(tm
     with pytest.raises(ExecutionPersistenceError, match="intent ID already exists"):
         barrier.execute(intent, timeout_after_possible_acceptance)
 
+    restarted_barrier = ExecutionBarrier(ContextCache(), db)
+    conflicting_exit = OrderIntent.new(
+        "BTCUSDT",
+        "SELL",
+        "MARKET",
+        required_context_versions={},
+        quantity="0.01",
+        client_order_id="WILLV5_EXIT_after-restart",
+        purpose="CAMPAIGN_EXIT",
+        campaign_id="campaign-ambiguous",
+    )
+    blocked = restarted_barrier.execute(
+        conflicting_exit,
+        lambda: calls.append("conflicting-exit") or {"status": "FILLED"},
+    )
+    assert blocked.accepted is False
+    assert blocked.reason.startswith("UNRESOLVED_SYMBOL_INTENT:")
+    assert calls == ["submitted"]
+
     retry_with_new_intent = OrderIntent.new(
         "BTCUSDT",
         "SELL",
