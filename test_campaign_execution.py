@@ -200,6 +200,39 @@ def test_cancel_race_requeries_final_filled_quantity_before_protection():
         assert float(stops[0]["origQty"]) == float(order["executedQty"])
 
 
+def test_recovery_rebuilds_missing_campaign_order_link_from_exchange():
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "campaign.sqlite3"))
+        client = MockExchange()
+        svc = service(db, client)
+        result = svc.arm_initial_entry(
+            signal(trigger=101.0),
+            equity_quote=10_000,
+            candidate_risk_pct=0.004,
+        )
+        # Simulate process death after Binance accepted the conditional order
+        # but before campaign_orders was committed.
+        db.conn.execute(
+            "DELETE FROM campaign_orders WHERE client_order_id=?",
+            (result["client_order_id"],),
+        )
+        db.conn.commit()
+
+        client.set_price("BTCUSDT", 101.5)
+        recovered = svc.reconcile_pending_entries()
+
+        assert recovered[0]["state"] == "OPEN"
+        row = db.conn.execute(
+            "SELECT campaign_id,order_id,client_order_id,status FROM campaign_orders "
+            "WHERE client_order_id=?",
+            (result["client_order_id"],),
+        ).fetchone()
+        assert row is not None
+        assert row["campaign_id"] == result["campaign_id"]
+        assert str(row["order_id"]) == str(result["order_id"])
+        assert row["status"] == "FILLED"
+
+
 def test_restart_adopts_pending_campaign_by_client_id():
     with tempfile.TemporaryDirectory() as d:
         db = Database(os.path.join(d, "campaign.sqlite3"))
