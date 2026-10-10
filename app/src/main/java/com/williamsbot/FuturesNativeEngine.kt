@@ -29,6 +29,67 @@ internal fun hasThreeSameColorAo(values: List<Double>, direction: String): Boole
 }
 
 /**
+ * True only on the third consecutive same-colour AO bar, matching the
+ * Python signal contract. Later bars in the same run must not re-emit WM2.
+ */
+internal fun isThirdSameColorAoBar(values: List<Double>, index: Int, direction: String): Boolean {
+    if (index < 3 || index >= values.size) return false
+    val side = direction.uppercase(Locale.US)
+    if (side !in setOf("LONG", "SHORT")) return false
+    val recent = values.subList(index - 3, index + 1)
+    if (!recent.all(Double::isFinite)) return false
+    val pattern = if (side == "LONG") {
+        recent[0] < recent[1] && recent[1] < recent[2] && recent[2] < recent[3]
+    } else {
+        recent[0] > recent[1] && recent[1] > recent[2] && recent[2] > recent[3]
+    }
+    if (!pattern) return false
+    // If the AO comparison before these three bars had the same colour, the
+    // current bar is the fourth-or-later bar, not the Second Wise Man trigger.
+    if (index >= 4) {
+        val before = values[index - 4]
+        val first = values[index - 3]
+        if (before.isFinite() && first.isFinite()) {
+            if (side == "LONG" && first > before) return false
+            if (side == "SHORT" && first < before) return false
+        }
+    }
+    return true
+}
+
+/** Increasing price-to-Jaw separation used by the Python WM1 detector. */
+internal fun hasIncreasingWilliamsAngulation(
+    jaw: List<Double>,
+    lows: List<Double>,
+    highs: List<Double>,
+    index: Int,
+    direction: String,
+    window: Int = 5
+): Boolean {
+    if (index < 0 || index >= jaw.size || jaw.size != lows.size || jaw.size != highs.size) return false
+    val side = direction.uppercase(Locale.US)
+    if (side !in setOf("LONG", "SHORT")) return false
+    val start = max(0, index - max(3, window) + 1)
+    if (index - start + 1 < 3) return false
+    val distances = (start..index).map { i ->
+        if (!jaw[i].isFinite() || !lows[i].isFinite() || !highs[i].isFinite()) return false
+        if (side == "LONG") max(0.0, jaw[i] - lows[i]) else max(0.0, highs[i] - jaw[i])
+    }
+    if (distances.last() - distances.first() <= 0.0) return false
+    val n = distances.size.toDouble()
+    val xMean = (n - 1.0) / 2.0
+    val yMean = distances.average()
+    var numerator = 0.0
+    var denominator = 0.0
+    for (i in distances.indices) {
+        val dx = i.toDouble() - xMean
+        numerator += dx * (distances[i] - yMean)
+        denominator += dx * dx
+    }
+    return denominator > 0.0 && numerator / denominator > 0.0
+}
+
+/**
  * Dedicated native Android USDⓈ-M Futures engine.
  *
  * It is intentionally isolated from NativeEngine's Spot positions and keys.
@@ -967,73 +1028,76 @@ internal class FuturesNativeEngine(
         val upFractal = latestFractal(bars, up = true)
         val downFractal = latestFractal(bars, up = false)
         val signalCandidates = mutableListOf<Signal>()
-        if (atr > 0.0 && validLines && awake) {
-            val configLong = bullish && aoNow > 0.0 && acNow > 0.0
-            val configShort = bearish && aoNow < 0.0 && acNow < 0.0
+        if (atr > 0.0 && validLines) {
+            // Signal formation is kept separate from directional context. The
+            // final admission gate below requires operative and parent context;
+            // detector-level Alligator/AO/AC gates must not erase a Wise-Man
+            // candidate before that common context gate can evaluate it.
+            reversalSignal(symbol, bars, "LONG", jaw, teeth, lips, atr, tickSize)
+                ?.let(signalCandidates::add)
+            reversalSignal(symbol, bars, "SHORT", jaw, teeth, lips, atr, tickSize)
+                ?.let(signalCandidates::add)
 
-            // A campaign starts with the first valid Wise-Man signal available:
-            // WM1 reversal, WM2 Super AO, or WM3 confirmed fractal. This native
-            // release does not pyramid, so any selected signal is an initial
-            // entry only when no campaign already exists for this symbol.
-            if (configLong) {
-                reversalSignal(symbol, bars, "LONG", jaw, teeth, lips, ao, ac, atr, tickSize)
-                    ?.let { signalCandidates.add(it) }
-            }
-            if (configShort) {
-                reversalSignal(symbol, bars, "SHORT", jaw, teeth, lips, ao, ac, atr, tickSize)
-                    ?.let(signalCandidates::add)
-            }
-
-            // WM3: a confirmed fractal outside Teeth is a pending stop-entry,
-            // never a MARKET chase after the trigger has already passed.
-            if (configLong && upFractal != null) {
+            // WM3: evaluate the Balance-Line relation on the fractal's actual
+            // confirmation candle, not on a later scan candle.
+            if (upFractal != null) {
                 val (center, level) = upFractal
+                val confirmationIndex = center + 2
+                val teethAtConfirmation = teeth.getOrElse(confirmationIndex) { Double.NaN }
                 val entryTrigger = level + tickSize
                 val stop = bars[center].low - tickSize
-                if (level > teeth[i] && bars[i].close < entryTrigger && stop > 0.0 && stop < entryTrigger) {
+                if (teethAtConfirmation.isFinite() && level > teethAtConfirmation &&
+                    bars[i].close < entryTrigger && stop > 0.0 && stop < entryTrigger
+                ) {
                     signalCandidates.add(
                         Signal(symbol, "LONG", "FRACTAL", bars[center].openTime, entryTrigger, stop, atr,
-                            "WM3 buy fractal outside Teeth; stop-entry trigger above fractal",
-                            confirmationTime = bars[center + 2].openTime)
+                            "WM3 buy fractal outside Teeth at confirmation; stop-entry above fractal",
+                            confirmationTime = bars[confirmationIndex].openTime)
                     )
                 }
             }
-            if (configShort && downFractal != null) {
+            if (downFractal != null) {
                 val (center, level) = downFractal
+                val confirmationIndex = center + 2
+                val teethAtConfirmation = teeth.getOrElse(confirmationIndex) { Double.NaN }
                 val entryTrigger = level - tickSize
                 val stop = bars[center].high + tickSize
-                if (level < teeth[i] && bars[i].close > entryTrigger && stop > entryTrigger) {
+                if (teethAtConfirmation.isFinite() && level < teethAtConfirmation &&
+                    bars[i].close > entryTrigger && stop > entryTrigger
+                ) {
                     signalCandidates.add(
                         Signal(symbol, "SHORT", "FRACTAL", bars[center].openTime, entryTrigger, stop, atr,
-                            "WM3 sell fractal outside Teeth; stop-entry trigger below fractal",
-                            confirmationTime = bars[center + 2].openTime)
+                            "WM3 sell fractal outside Teeth at confirmation; stop-entry below fractal",
+                            confirmationTime = bars[confirmationIndex].openTime)
                     )
                 }
             }
 
-            // WM2: three consecutive AO bars in the same direction after the
-            // corresponding outside fractal. It can be the first signal of a
-            // new campaign if no earlier valid WM1/WM3 signal is available.
-            if (superAo(ao, "LONG")) {
-                val row = bars[i]
-                val trigger = row.high + tickSize
-                val stop = row.low - tickSize
-                if (row.close < trigger && stop > 0.0 && stop < trigger) {
-                    signalCandidates.add(
-                        Signal(symbol, "LONG", "SUPER_AO", row.openTime, trigger, stop, atr,
-                            "WM2 Super AO: three rising AO bars after outside up fractal")
-                    )
+            // WM2 fires only on the third same-colour AO bar, not on every
+            // subsequent bar of the same streak. Keep recent still-actionable
+            // candidates so the common expiry/context gate can choose correctly.
+            val firstAoIndex = max(4, i - 2)
+            for (signalIndex in firstAoIndex..i) {
+                val row = bars[signalIndex]
+                if (isThirdSameColorAoBar(ao, signalIndex, "LONG")) {
+                    val trigger = row.high + tickSize
+                    val stop = row.low - tickSize
+                    if (row.close < trigger && stop > 0.0 && stop < trigger) {
+                        signalCandidates.add(
+                            Signal(symbol, "LONG", "SUPER_AO", row.openTime, trigger, stop, atr,
+                                "WM2 Super AO: third consecutive rising AO bar")
+                        )
+                    }
                 }
-            }
-            if (superAo(ao, "SHORT")) {
-                val row = bars[i]
-                val trigger = row.low - tickSize
-                val stop = row.high + tickSize
-                if (row.close > trigger && stop > trigger) {
-                    signalCandidates.add(
-                        Signal(symbol, "SHORT", "SUPER_AO", row.openTime, trigger, stop, atr,
-                            "WM2 Super AO: three falling AO bars after outside down fractal")
-                    )
+                if (isThirdSameColorAoBar(ao, signalIndex, "SHORT")) {
+                    val trigger = row.low - tickSize
+                    val stop = row.high + tickSize
+                    if (row.close > trigger && stop > trigger) {
+                        signalCandidates.add(
+                            Signal(symbol, "SHORT", "SUPER_AO", row.openTime, trigger, stop, atr,
+                                "WM2 Super AO: third consecutive falling AO bar")
+                        )
+                    }
                 }
             }
         }
@@ -1101,13 +1165,12 @@ internal class FuturesNativeEngine(
         jaw: List<Double>,
         teeth: List<Double>,
         lips: List<Double>,
-        ao: List<Double>,
-        ac: List<Double>,
         atr: Double,
         tickSize: Double
     ): Signal? {
-        // The reversal candle, Alligator location and momentum are evaluated on
-        // the same closed bar. The trigger remains a later price confirmation.
+        // WM1 identity is the divergent/reversal bar plus increasing
+        // separation from Jaw. Directional AO/AC and higher-timeframe gates
+        // belong to context admission, not to the detector itself.
         val start = max(2, bars.lastIndex - 2)
         for (i in bars.lastIndex downTo start) {
             val bar = bars[i]
@@ -1118,39 +1181,37 @@ internal class FuturesNativeEngine(
             val jawAt = jaw.getOrElse(i) { Double.NaN }
             val teethAt = teeth.getOrElse(i) { Double.NaN }
             val lipsAt = lips.getOrElse(i) { Double.NaN }
-            val aoAt = ao.getOrElse(i) { Double.NaN }
-            val aoBefore = ao.getOrElse(i - 1) { Double.NaN }
-            val acAt = ac.getOrElse(i) { Double.NaN }
-            val acBefore = ac.getOrElse(i - 1) { Double.NaN }
-            if (!listOf(jawAt, teethAt, lipsAt, aoAt, aoBefore, acAt, acBefore).all(Double::isFinite)) continue
+            if (!listOf(jawAt, teethAt, lipsAt).all(Double::isFinite)) continue
 
             val closeLocation = (bar.close - bar.low) / range
             if (direction == "LONG") {
                 val freshLow = bar.low < previous.minOf { it.low }
                 val belowMouth = bar.low < min(jawAt, min(teethAt, lipsAt))
-                val momentumImproving = aoAt >= aoBefore && acAt >= acBefore
                 val trigger = bar.high + tickSize
                 val stop = bar.low - tickSize
                 if (freshLow && belowMouth && closeLocation >= 0.50 &&
-                    momentumImproving && bars.last().close < trigger && stop > 0.0
+                    hasIncreasingWilliamsAngulation(
+                        jaw, bars.map { it.low }, bars.map { it.high }, i, "LONG"
+                    ) && stop > 0.0
                 ) {
                     return Signal(
                         symbol, "LONG", "REVERSAL", bar.openTime, trigger, stop, atr,
-                        "WM1 bullish reversal outside the Alligator; BUY STOP confirms the signal bar"
+                        "WM1 bullish reversal + increasing Jaw angulation; BUY STOP confirms signal bar"
                     )
                 }
             } else {
                 val freshHigh = bar.high > previous.maxOf { it.high }
                 val aboveMouth = bar.high > max(jawAt, max(teethAt, lipsAt))
-                val momentumImproving = aoAt <= aoBefore && acAt <= acBefore
                 val trigger = bar.low - tickSize
                 val stop = bar.high + tickSize
                 if (freshHigh && aboveMouth && closeLocation <= 0.50 &&
-                    momentumImproving && bars.last().close > trigger && stop > trigger
+                    hasIncreasingWilliamsAngulation(
+                        jaw, bars.map { it.low }, bars.map { it.high }, i, "SHORT"
+                    ) && stop > trigger
                 ) {
                     return Signal(
                         symbol, "SHORT", "REVERSAL", bar.openTime, trigger, stop, atr,
-                        "WM1 bearish reversal outside the Alligator; SELL STOP confirms the signal bar"
+                        "WM1 bearish reversal + increasing Jaw angulation; SELL STOP confirms signal bar"
                     )
                 }
             }
@@ -1159,8 +1220,9 @@ internal class FuturesNativeEngine(
     }
 
     private fun superAo(ao: List<Double>, direction: String): Boolean {
-        // WM2 is independent of a separate fractal event.
-        return hasThreeSameColorAo(ao, direction)
+        // Compatibility helper: report WM2 only if the latest AO bar is the
+        // third same-colour bar, not the fourth or later continuation bar.
+        return isThirdSameColorAoBar(ao, ao.lastIndex, direction)
     }
 
     private fun latestFractal(bars: List<Bar>, up: Boolean): Pair<Int, Double>? {
