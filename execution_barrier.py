@@ -230,6 +230,32 @@ class ExecutionBarrier:
                 return f"campaign_{campaign_state.lower()}"
         return ""
 
+    @staticmethod
+    def _oco_response_authoritative(response: dict) -> bool:
+        if not response.get("orderListId") or not response.get("listClientOrderId"):
+            return False
+        list_status = str(response.get("listStatusType", "")).upper()
+        list_order_status = str(response.get("listOrderStatus", "")).upper()
+        if list_status in {"EXEC_STARTED", "EXECUTING", "ALL_DONE"} and list_order_status in {
+            "EXECUTING", "ALL_DONE"
+        }:
+            return True
+        reports = response.get("orderReports")
+        if not isinstance(reports, list) or len(reports) < 2:
+            return False
+        allowed_child_statuses = {
+            "NEW", "PARTIALLY_FILLED", "FILLED", "PENDING_NEW",
+            "PENDING_CANCEL", "CANCELED", "EXPIRED", "REJECTED",
+        }
+        for report in reports:
+            if not isinstance(report, dict):
+                return False
+            if not report.get("orderId"):
+                return False
+            if str(report.get("status", "")).upper() not in allowed_child_statuses:
+                return False
+        return True
+
     def execute(
         self,
         intent: OrderIntent,
@@ -358,6 +384,17 @@ class ExecutionBarrier:
                     isinstance(response, dict)
                     and str(response.get("newOrderResult", "")).upper() == "SUCCESS"
                 ):
+                    # Binance cancelReplace reports the replacement result in
+                    # newOrderResult rather than a top-level order status.
+                    order_fsm.state = OrderState.OPEN
+                elif (
+                    isinstance(response, dict)
+                    and str(intent.order_type or "").upper() in {"OCO", "OCO_SELL", "ORDER_LIST"}
+                    and self._oco_response_authoritative(response)
+                ):
+                    # OCO/order-list responses have list-level and child-order
+                    # statuses; expecting a normal order.status here falsely
+                    # classifies successful protection creation as UNKNOWN.
                     order_fsm.state = OrderState.OPEN
                 else:
                     order_fsm.state = OrderState.RECONCILE_REQUIRED
