@@ -28,6 +28,12 @@ class FakeClient:
         return {"symbol": symbol, "orderId":"1001","status":"FILLED","executedQty":"0.01","cummulativeQuoteQty":"100.0"}
     def get_order(self, symbol, order_id=None, orig_client_order_id=None):
         return {"symbol": symbol, "orderId": order_id or "1001", "status": "FILLED", "executedQty": "0.01", "cummulativeQuoteQty": "100.0"}
+    def my_trades(self, symbol, order_id=None, limit=1000):
+        return [{
+            "id": "trade-1001", "orderId": order_id or "1001",
+            "price": "10000", "qty": "0.01",
+            "commission": "0", "commissionAsset": "USDT",
+        }]
     def create_oco_sell(self,*a,**kw):
         print("[FAKE] OCO -> FAILURE")
         raise RuntimeError("SIMULATED OCO FAILURE")
