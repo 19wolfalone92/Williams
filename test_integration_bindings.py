@@ -115,7 +115,17 @@ class FakeBinance:
         }
 
     def open_order_lists(self, symbol=None):
-        return []
+        if self.created_oco_qty is None or not self.created_oco_client_id:
+            return []
+        if symbol and str(symbol).upper() != "BTCUSDT":
+            return []
+        return [{
+            "symbol": "BTCUSDT",
+            "orderListId": "20",
+            "listClientOrderId": self.created_oco_client_id,
+            "listStatusType": "EXEC_STARTED",
+            "listOrderStatus": "EXECUTING",
+        }]
 
     def all_order_lists(self, symbol=None, limit=100):
         if float(self.exit_qty) > 0:
@@ -217,7 +227,20 @@ def test_terminal_partial_entry_is_materialized_and_protected(tmp_path):
     class NoOpenOrdersFakeBinance(FakeBinance):
         def open_orders(self, symbol=None):
             self.open_orders_calls += 1
-            return []
+            if self.created_oco_qty is None or not self.created_oco_client_id:
+                return []
+            qty = str(self.created_oco_qty)
+            cid = self.created_oco_client_id
+            return [
+                {"symbol": "BTCUSDT", "side": "SELL", "type": "TAKE_PROFIT_LIMIT",
+                 "orderId": "21", "orderListId": "20", "clientOrderId": cid + "_TP",
+                 "status": "NEW", "origQty": qty, "executedQty": "0",
+                 "price": "104", "stopPrice": "104"},
+                {"symbol": "BTCUSDT", "side": "SELL", "type": "STOP_LOSS_LIMIT",
+                 "orderId": "22", "orderListId": "20", "clientOrderId": cid + "_SL",
+                 "status": "NEW", "origQty": qty, "executedQty": "0",
+                 "price": "97.5", "stopPrice": "98"},
+            ]
 
     client = NoOpenOrdersFakeBinance(entry_status="CANCELED", entry_qty="0.4")
     trader = MultiPositionTrader(client, db=db, symbols=[])
