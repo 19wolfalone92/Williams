@@ -26,6 +26,7 @@ class OrderIntent:
     permission_interval: str = ""
     campaign_id: str = ""
     signal_id: str = ""
+    signal_type: str = ""
     risk_quote: float = 0.0
     capital_reserved_quote: float = 0.0
     created_at_ms: int = 0
@@ -166,10 +167,32 @@ class ExecutionBarrier:
             permission_ctx = snapshot.context(intent.symbol, permission_tf) if permission_tf else None
             if permission_ctx is None:
                 return f"missing permission context {intent.symbol} {permission_tf}"
-            if direction == "long" and not permission_ctx.allow_long:
-                return f"context {permission_tf} does not allow LONG"
-            if direction == "short" and not permission_ctx.allow_short:
-                return f"context {permission_tf} does not allow SHORT"
+            # WM1 is a structurally proven early-reversal pattern. Requiring
+            # the operative Alligator to already permit the new direction would
+            # erase the first Wise-Man entry. It still requires current versioned
+            # contexts and an explicit D1 macro check below; add-ons do not get
+            # this exception.
+            wm1_initial = (
+                purpose == "CAMPAIGN_ENTRY"
+                and str(intent.signal_type or "").strip().upper() == "REVERSAL"
+            )
+            if not wm1_initial:
+                if direction == "long" and not permission_ctx.allow_long:
+                    return f"context {permission_tf} does not allow LONG"
+                if direction == "short" and not permission_ctx.allow_short:
+                    return f"context {permission_tf} does not allow SHORT"
+            else:
+                daily_key = next(
+                    (tf for tf in intent.required_context_versions if str(tf).lower() == "1d"),
+                    None,
+                )
+                macro = snapshot.context(intent.symbol, daily_key) if daily_key else None
+                if macro is None:
+                    return "WM1 requires current D1 macro context"
+                if direction == "long" and macro.allow_short:
+                    return "D1 macro context vetoes WM1 LONG reversal"
+                if direction == "short" and macro.allow_long:
+                    return "D1 macro context vetoes WM1 SHORT reversal"
 
         # Reconciliation blocks any operation that can increase exposure, but
         # must not disable exits, cancellation, protection or recovery. Those
