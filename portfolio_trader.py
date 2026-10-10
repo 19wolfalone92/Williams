@@ -677,20 +677,19 @@ class MultiPositionTrader:
                         raise ValueError("trade ID is missing")
                     quantity = Decimal(str(row.get("qty", "")))
                     price = Decimal(str(row.get("price", "")))
+                    if not quantity.is_finite() or quantity <= 0 or not price.is_finite() or price <= 0:
+                        raise ValueError("invalid trade quantity or price")
+                    # Persist the immutable execution even if its fee is still
+                    # unknown, so recovery can enrich this same exchange trade.
+                    self.db.record_exchange_fill(symbol, row)
                     commission_value = row.get("commission")
                     commission_asset_value = row.get("commissionAsset")
                     if commission_value in (None, "") or commission_asset_value in (None, ""):
                         raise ValueError("commission amount or asset is unknown")
                     commission = Decimal(str(commission_value))
                     asset = str(commission_asset_value).upper()
-                    if (
-                        not quantity.is_finite() or quantity <= 0
-                        or not price.is_finite() or price <= 0
-                        or not commission.is_finite() or commission < 0
-                        or not asset
-                    ):
-                        raise ValueError("invalid trade quantity, price, or commission")
-                    self.db.record_exchange_fill(symbol, row)
+                    if not commission.is_finite() or commission < 0 or not asset:
+                        raise ValueError("invalid trade commission")
                     if asset in {"USDT", "USDC", "FDUSD", "BUSD"}:
                         total += commission
                     elif asset == base_asset:
@@ -703,8 +702,18 @@ class MultiPositionTrader:
                             raise ValueError(f"cannot value {asset} commission in quote asset")
                         total += commission * quote_rate
                 except (InvalidOperation, ValueError, RuntimeError) as exc:
-                    # Keep any fill evidence already persisted, but do not finalize
-                    # the trade while financial data is incomplete or conflicting.
+                    # Persist the uncertainty as a hard recovery barrier. A later
+                    # authoritative fee response may enrich the same ledger row.
+                    try:
+                        self.db.state_set("position_state", "RECONCILE_REQUIRED")
+                        self.db.state_set(f"position_state:{symbol}", "RECONCILE_REQUIRED")
+                        self.db.log_event(
+                            "ERROR", "exit_financial_reconciliation_required",
+                            str(exc), {"symbol": symbol, "order_id": order_id},
+                        )
+                    except Exception:
+                        # A failed barrier write is itself fatal; propagate below.
+                        pass
                     raise RuntimeError(
                         f"{symbol}: exit fill/commission reconciliation is unresolved: {exc}"
                     ) from exc
