@@ -152,3 +152,90 @@ def test_bulk_cancel_is_blocked_without_network_io():
     with pytest.raises(BinanceAPIError, match="Bulk cancel is disabled"):
         client.cancel_open_orders("BTCUSDT")
     assert calls == []
+
+
+
+@pytest.mark.parametrize("case,response,raises", [
+    ("both_success", {
+        "cancelResult": "SUCCESS", "newOrderResult": "SUCCESS",
+        "cancelResponse": {"orderId": 21, "status": "CANCELED"},
+        "newOrderResponse": {"orderId": 22, "status": "NEW", "executedQty": "0"},
+    }, False),
+    ("cancel_only", {
+        "cancelResult": "SUCCESS", "newOrderResult": "FAILURE",
+        "cancelResponse": {"orderId": 21, "status": "CANCELED"},
+        "newOrderResponse": {"orderId": 22, "status": "REJECTED"},
+    }, True),
+    ("replace_only", {
+        "cancelResult": "FAILURE", "newOrderResult": "SUCCESS",
+        "cancelResponse": {"orderId": 21, "status": "NEW"},
+        "newOrderResponse": {"orderId": 22, "status": "NEW", "executedQty": "0"},
+    }, True),
+    ("malformed", {
+        "cancelResult": "SUCCESS", "newOrderResult": "SUCCESS",
+        "cancelResponse": {"orderId": 21},
+        "newOrderResponse": {"status": "NEW"},
+    }, True),
+])
+def test_cancel_replace_barrier_matrix(case, response, raises, tmp_path):
+    cache = ready_context()
+    db = ready_db(tmp_path)
+    barrier = ExecutionBarrier(cache, db)
+    intent = OrderIntent.new(
+        "BTCUSDT", "SELL", "STOP_LOSS",
+        required_context_versions={}, purpose="CAMPAIGN_TRAIL",
+        client_order_id="TASK001_CR_" + case,
+    )
+    if raises:
+        with pytest.raises(RuntimeError, match="cancelReplace response"):
+            barrier.execute(intent, lambda: response)
+        row = db.conn.execute(
+            "SELECT status FROM execution_intents WHERE intent_id=?", (intent.intent_id,)
+        ).fetchone()
+        assert row["status"] == "AMBIGUOUS"
+        assert db.state_get("position_state") == "RECONCILE_REQUIRED"
+    else:
+        result = barrier.execute(intent, lambda: response)
+        assert result.accepted is True
+        row = db.conn.execute(
+            "SELECT status FROM execution_intents WHERE intent_id=?", (intent.intent_id,)
+        ).fetchone()
+        assert row["status"] == "SUBMITTED"
+
+
+def test_cancel_replace_timeout_is_ambiguous_and_never_retried(tmp_path):
+    cache = ready_context()
+    db = ready_db(tmp_path)
+    barrier = ExecutionBarrier(cache, db)
+    intent = OrderIntent.new(
+        "BTCUSDT", "SELL", "STOP_LOSS", required_context_versions={},
+        purpose="CAMPAIGN_TRAIL", client_order_id="TASK001_CR_TIMEOUT",
+    )
+    posts = []
+    def timeout_once():
+        posts.append("POST")
+        raise TimeoutError("injected cancelReplace timeout")
+    with pytest.raises(TimeoutError):
+        barrier.execute(intent, timeout_once)
+    assert posts == ["POST"]
+    row = db.conn.execute(
+        "SELECT status FROM execution_intents WHERE intent_id=?", (intent.intent_id,)
+    ).fetchone()
+    assert row["status"] == "AMBIGUOUS"
+    assert db.state_get("position_state") == "RECONCILE_REQUIRED"
+
+
+def test_production_bulk_cancel_paths_are_disabled_in_python_and_android():
+    from pathlib import Path
+
+    root = Path(__file__).parent
+    client = (root / "binance_client.py").read_text(encoding="utf-8")
+    start = client.index("    def cancel_open_orders(")
+    end = client.index("\n    def ", start + 8)
+    method = client[start:end]
+    assert "Bulk cancel is disabled" in method
+    assert "self._request(" not in method
+
+    runtime = (root / "app/src/main/java/com/williamsbot/StandaloneRuntime.kt").read_text(encoding="utf-8")
+    assert 'method == "DELETE" && path == "/api/v3/openOrders"' not in runtime
+    assert 'else -> error("Unapproved Binance mutation route:' in runtime
