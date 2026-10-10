@@ -563,21 +563,20 @@ class MarketScanner:
         candidate, closed = result
         try:
             enriched = self._apply_wave(candidate, closed)
-            if candidate.signal and self.require_htf_confirmation and not enriched.htf_confirmed:
-                return None
-            if candidate.signal and not enriched.wave_entry_allowed:
-                return None
+            # TC2 campaign eligibility is the independent Wise-Man conditional
+            # signal, not the Wave/Elliott scoring profile. Higher-TF context
+            # remains attached to the trace; it is not a hard veto until a
+            # separately specified owner policy resolves its exact meaning.
             return enriched
         except Exception as exc:
-            log.warning("Wave analysis unavailable for %s: %s", candidate.symbol, exc)
-            if candidate.signal and os.getenv("NO_TRADE_WHEN_UNCERTAIN", "true").lower() == "true":
-                return None
-            if candidate.signal and self.require_htf_confirmation:
-                if not self._htf_confirmation(candidate.symbol):
-                    return None
+            log.warning("Wave/context diagnostics unavailable for %s: %s", candidate.symbol, exc)
+            # Failure of optional Elliott-wave diagnostics must not rewrite an
+            # already-qualified H1 TC2 signal's identity. Core market/risk/
+            # execution gates remain fail-closed independently.
             return replace(
                 candidate,
                 wave_reason=f"Wave analysis unavailable: {type(exc).__name__}: {exc}",
+                campaign_ready=bool(candidate.campaign_ready),
             )
 
     def _apply_wave(self, candidate: Candidate, closed: pd.DataFrame) -> Candidate:
@@ -678,10 +677,14 @@ class MarketScanner:
                     role=SignalRole(str(raw["role"])),
                     timeframe=str(raw["timeframe"]),
                     signal_bar_time_ms=int(raw["signal_bar_time_ms"]),
+                    confirmation_time_ms=int(raw.get("confirmation_time_ms", 0) or 0),
                     trigger_price=float(raw["trigger_price"]),
                     protective_reference=float(raw["protective_reference"]),
                     trigger_buffer_ticks=int(raw.get("trigger_buffer_ticks", 1) or 1),
-                    invalidation_price=float(frame_setup.invalidation_price if frame_setup else raw.get("invalidation_price", 0.0) or 0.0),
+                    # Preserve the signal's own structural invalidation. Elliott
+                    # Wave invalidation is stored separately on Candidate and
+                    # must not overwrite the source-qualified WM1/WM2/WM3 level.
+                    invalidation_price=float(raw.get("invalidation_price", 0.0) or 0.0),
                     teeth_at_detection=float(raw.get("teeth_at_detection", 0.0) or 0.0),
                     alligator_bullish=bool(raw.get("alligator_bullish", False)),
                     alligator_awake=bool(raw.get("alligator_awake", False)),
@@ -740,7 +743,9 @@ class MarketScanner:
             wave_scenario_primary=(setup.scenario_primary if setup else ""),
             wave_scenario_alternative=(setup.scenario_alternative if setup else ""),
             wave_operative_interval=report.operative_interval,
-            campaign_ready=bool(candidate.campaign_ready and htf_confirmed),
+            # Higher-frame context is retained as evidence; no numeric hard-veto
+            # policy has been established by the cited books for this H1 profile.
+            campaign_ready=bool(candidate.campaign_ready),
             entry_signal_type=(
                 enriched_signal_specs[0].get("signal_type", "") if enriched_signal_specs else candidate.entry_signal_type
             ),
