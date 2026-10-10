@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import threading
+from decimal import Decimal
 
 import pytest
 
