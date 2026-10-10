@@ -157,6 +157,16 @@ class ExecutionBarrier:
                 return f"context {permission_tf} does not allow SHORT"
 
         if self.db is not None and hasattr(self.db, "state_get"):
+            # A local READY/FLAT position flag is not proof that financial
+            # recovery completed. New Spot BUYs increase exposure and remain
+            # blocked until the durable global gate is explicitly completed.
+            # SELL reductions, cancellation and recovery/protection flows are
+            # not rejected by this entry-only gate.
+            recovery_status = str(
+                self.db.state_get("recovery_status", "RECOVERY_REQUIRED")
+            ).upper()
+            if intent.side.upper() == "BUY" and recovery_status != "RECOVERY_COMPLETE":
+                return f"global_recovery_gate:{recovery_status}"
             state = str(self.db.state_get("position_state", "FLAT"))
             if state == "RECONCILE_REQUIRED":
                 return "RECONCILE_REQUIRED"
