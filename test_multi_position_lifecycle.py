@@ -561,6 +561,7 @@ def test_partial_manual_sell_keeps_residual_position_protected(tmp_path: Path):
         risk_pct=0.5,
     )
     db.state_set("position_state:BTCUSDT", "OPEN")
+    _mark_test_recovery_ready(db)
     trader = MultiPositionTrader(client, db=db, symbols=["BTCUSDT"], execution_barrier=_test_execution_barrier(db))
     result = trader.manual_sell("BTCUSDT")
 
