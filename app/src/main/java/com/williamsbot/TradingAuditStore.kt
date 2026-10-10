@@ -481,6 +481,31 @@ class TradingAuditStore(context: Context) :
     }
 
     @Synchronized
+    fun recentClosedFuturesTrades(limit: Int = 500): List<JSONObject> {
+        val safeLimit = limit.coerceIn(1, 1000)
+        val rows = mutableListOf<JSONObject>()
+        writableDatabase.query(
+            "trades",
+            arrayOf("net_pnl", "closed_at", "side"),
+            "side IN ('LONG','SHORT')",
+            null,
+            null,
+            null,
+            "closed_at DESC, trade_id DESC",
+            safeLimit.toString()
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                rows.add(
+                    JSONObject()
+                        .put("net_pnl", cursor.getString(0))
+                        .put("closed_at", cursor.getString(1))
+                )
+            }
+        }
+        return rows
+    }
+
+    @Synchronized
     fun estimateFeesUsdt(
         symbol: String,
         openedAt: Long,
