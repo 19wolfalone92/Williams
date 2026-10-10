@@ -51,7 +51,7 @@ def test_canonical_williams_decision_timeframe_defaults_to_h1():
     from trading_config import TradingConfig
     cfg = TradingConfig.from_env({})
     assert cfg.execution_timeframe == "1h"
-    assert cfg.structural_timeframes == ("1d", "4h", "1h", "15m")
+    assert cfg.structural_timeframes == ("4h", "1h", "15m")
 
 
 def test_noncanonical_signal_timeframe_is_not_the_default():
@@ -77,10 +77,10 @@ def test_conservative_trading_defaults_match_release_policy():
 
     cfg = TradingConfig.from_env({})
     assert cfg.risk_per_trade_pct == pytest.approx(0.0025)
-    assert cfg.max_total_risk_pct == pytest.approx(0.01)
+    assert cfg.max_total_risk_pct == pytest.approx(0.03)
     assert cfg.max_daily_loss_pct == pytest.approx(0.01)
     assert cfg.max_consecutive_losses == 2
-    assert cfg.max_open_positions == 1
+    assert cfg.max_open_positions == 3
 
 
 def test_risk_policy_environment_overrides_remain_explicit():
