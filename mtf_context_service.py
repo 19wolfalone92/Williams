@@ -181,6 +181,15 @@ class MultiTimeframeContextService:
         distance = abs(price - jaw) / atr if atr > 0 else 0.0
         bullish = bool(last.get("bullish_alligator", False))
         bearish = bool(last.get("bearish_alligator", False))
+        alligator_awake = bool(last.get("alligator_awake", False))
+        ao_value = float(last.get("ao", 0.0) or 0.0)
+        ac_value = float(last.get("ac", 0.0) or 0.0)
+        williams_core_ready = (
+            len(closed) >= 40
+            and all(math.isfinite(value) and value > 0.0 for value in (price, jaw, teeth, lips))
+            and math.isfinite(ao_value)
+            and math.isfinite(ac_value)
+        )
         wave_label = "?"
         wave_phase = "UNKNOWN"
         wave_score = 0.0
@@ -295,6 +304,10 @@ class MultiTimeframeContextService:
             operative_parent_interval=operative_parent_interval,
             hypotheses=tuple(hypotheses),
             data_bars=len(closed),
+            alligator_awake=alligator_awake,
+            ao_value=ao_value,
+            ac_value=ac_value,
+            williams_core_ready=williams_core_ready,
         )
         published = self.cache.publish(context)
         persisted_context = published.context(symbol, interval) or context
