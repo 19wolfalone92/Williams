@@ -93,7 +93,12 @@ def evaluate_freshness(
         return FreshnessResult(component, "FAIL", "component_measurement_invalid", age, evidence.source)
     if max_age_ms is None:
         return FreshnessResult(component, "UNKNOWN", "freshness_budget_unapproved", age, evidence.source)
-    budget = max(1, int(max_age_ms))
+    try:
+        budget = int(max_age_ms)
+    except (TypeError, ValueError, OverflowError):
+        return FreshnessResult(component, "UNKNOWN", "freshness_budget_invalid", age, evidence.source)
+    if budget <= 0:
+        return FreshnessResult(component, "UNKNOWN", "freshness_budget_invalid", age, evidence.source)
     if age > budget:
         return FreshnessResult(component, "FAIL", "measurement_stale", age, evidence.source)
     return FreshnessResult(component, "PASS", "fresh_measurement", age, evidence.source)
@@ -105,11 +110,27 @@ def evaluate_freshness_set(
     *,
     now_ms: int | None = None,
     max_ages_ms: Mapping[str, int] | None = None,
+    expected_generations: Mapping[str, str] | None = None,
 ) -> dict[str, FreshnessResult]:
-    """Evaluate a full component set; missing evidence remains UNKNOWN."""
+    """Evaluate required evidence, optionally binding components to caller-approved generations.
+
+    Generation equality is never inferred across unrelated producers. A caller
+    must supply the expected generation for each component whose contract
+    requires generation/session agreement; mismatches remain UNKNOWN.
+    """
     results: dict[str, FreshnessResult] = {}
     for component in required_components:
         evidence = evidence_by_component.get(component)
+        expected_generation = (expected_generations or {}).get(component)
+        if evidence is not None and expected_generation is not None:
+            if not expected_generation or evidence.generation != expected_generation:
+                results[component] = FreshnessResult(
+                    component,
+                    "UNKNOWN",
+                    "measurement_generation_mismatch",
+                    source=evidence.source,
+                )
+                continue
         results[component] = evaluate_freshness(
             component,
             evidence,
