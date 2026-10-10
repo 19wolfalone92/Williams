@@ -79,9 +79,9 @@ class FuturesCampaignExecutionService:
         db,
         *,
         execution_barrier: ExecutionBarrier,
-        max_open_positions: int = 5,
+        max_open_positions: int = 1,
         portfolio_risk_limit_pct: float = 0.01,
-        campaign_risk_limit_pct: float = 0.005,
+        campaign_risk_limit_pct: float = 0.006,
         initial_risk_fraction_of_campaign: float = 0.40,
     ) -> None:
         if execution_barrier is None:
@@ -99,10 +99,10 @@ class FuturesCampaignExecutionService:
         )
         self.max_open_positions = max(1, int(max_open_positions))
         self.portfolio_risk_limit_pct = min(0.01, max(0.0, float(portfolio_risk_limit_pct)))
-        self.campaign_risk_limit_pct = min(0.005, max(0.0, float(campaign_risk_limit_pct)))
+        self.campaign_risk_limit_pct = min(0.006, max(0.0, float(campaign_risk_limit_pct)))
         self.max_spread_pct = max(0.0, float(os.getenv("MAX_SPREAD_PCT", "0.0015")))
         self.max_atr_pct = max(0.0, float(os.getenv("MAX_ATR_PCT", "0.08")))
-        self.max_daily_loss_pct = min(0.25, max(0.0, float(os.getenv("MAX_DAILY_LOSS_PCT", "0.03"))))
+        self.max_daily_loss_pct = min(0.25, max(0.0, float(os.getenv("MAX_DAILY_LOSS_PCT", "0.01"))))
         self.fee_buffer_per_side_pct = max(0.0, float(os.getenv("FEE_BUFFER_PER_SIDE_PCT", "0.001")))
         self.slippage_buffer_pct = max(0.0, float(os.getenv("RISK_SLIPPAGE_BUFFER_PCT", "0.0015")))
         self.require_htf_confirmation = os.getenv("REQUIRE_HTF_CONFIRMATION", "true").lower() == "true"
