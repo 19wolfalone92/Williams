@@ -59,6 +59,35 @@ class FuturesLossGuardTest {
 
 
     @Test
+    fun incompleteFeeAccountingBlocksCurrentDayRiskDecision() {
+        val unknown = trade(-1.0, 9_900).put("fee_known", false)
+        val reason = FuturesLossGuard.violation(
+            listOf(unknown, trade(-2.0, 9_800)),
+            maxConsecutiveLosses = 2,
+            cooldownMinutes = 0,
+            nowMs = 10_000,
+            maxStopOutsPerUtcDay = 2
+        )
+        assertEquals("today's Futures trade has incomplete commission accounting", reason)
+    }
+
+    @Test
+    fun olderUnknownFeeDoesNotOverrideLaterKnownWinningClose() {
+        val unknownYesterday = trade(-1.0, 9_000).put("fee_known", false)
+        val knownWinToday = trade(1.0, 86_401_000)
+        assertEquals(
+            null,
+            FuturesLossGuard.violation(
+                listOf(knownWinToday, unknownYesterday),
+                maxConsecutiveLosses = 2,
+                cooldownMinutes = 0,
+                nowMs = 86_410_000,
+                maxStopOutsPerUtcDay = 2
+            )
+        )
+    }
+
+    @Test
     fun dailyStopOutLimitUsesUtcDayAndOnlyLosingStopExits() {
     val reason = FuturesLossGuard.violation(
         listOf(
