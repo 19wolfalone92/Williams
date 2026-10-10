@@ -119,6 +119,25 @@ object TradeJournal {
         write(prefs, all)
     }
 
+    /** A corrupt or incomplete closed-trade record must block risk-sensitive entries. */
+    @Synchronized
+    fun isHealthy(prefs: SharedPreferences): Boolean {
+        val raw = prefs.getString(KEY, null) ?: return true
+        return runCatching {
+            val all = JSONArray(raw)
+            for (i in 0 until all.length()) {
+                val row = all.getJSONObject(i)
+                if (row.optString("status") != "CLOSED") continue
+                val closedAt = row.optLong("closed_at", 0L)
+                val pnl = row.optDouble("pnl", Double.NaN)
+                require(closedAt > 0L && pnl.isFinite()) {
+                    "Closed trade is missing a valid close time or PnL"
+                }
+            }
+            true
+        }.getOrDefault(false)
+    }
+
     @Synchronized
     fun trades(prefs: SharedPreferences): JSONArray {
         val src = read(prefs)

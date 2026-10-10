@@ -13,6 +13,8 @@ class ExecutionGate {
     fun tryReserve(symbol: String): Boolean {
         val normalized = symbol.uppercase()
         if (normalized.isBlank()) return false
+        // A per-symbol lock could let two symbols reserve the same portfolio risk.
+        if (reservedSymbols.isNotEmpty()) return false
         return reservedSymbols.add(normalized)
     }
 

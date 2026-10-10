@@ -22,4 +22,19 @@ class ExecutionMathTest {
         assertTrue(ExecutionMath.isMultiple(0.3, 0.1))
         assertFalse(ExecutionMath.isMultiple(0.31, 0.1))
     }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun missingStepCannotPassQuantityThroughUnrounded() {
+        ExecutionMath.floorToStep(1.0, 0.0)
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun invalidDecimalTextCannotBecomeZero() {
+        ExecutionMath.decimal("not-a-number")
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun nonPositiveRoundedQuantityIsRejected() {
+        ExecutionMath.floorToStep(0.00001, 0.001)
+    }
 }
