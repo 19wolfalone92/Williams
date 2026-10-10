@@ -12,7 +12,7 @@ import uuid
 
 from binance_client import BinanceAPIError
 from campaign_engine import CampaignEngine
-from campaign_model import CampaignState, PendingOrderRecord, SignalSpec, SignalState, SignalType
+from campaign_model import CampaignState, PendingOrderRecord, SignalRole, SignalSpec, SignalState, SignalType
 from trading_config import TradingConfig
 from decision_trace import DecisionTrace
 from execution_barrier import ExecutionBarrier, OrderIntent
