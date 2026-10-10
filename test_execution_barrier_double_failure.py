@@ -163,3 +163,47 @@ def test_exception_text_is_not_persisted_for_unknown_submit_result():
     assert db.rows[intent.intent_id]["status"] == "AMBIGUOUS"
     assert "SYNTHETIC_NETWORK_SECRET_MARKER" not in repr(db.rows)
     assert "SYNTHETIC_NETWORK_SECRET_MARKER" not in repr(db.events)
+
+
+
+def test_existing_client_order_id_blocks_new_intent_before_submit():
+    db = _DB()
+    barrier = ExecutionBarrier(_Cache(), db)
+    first = _intent("WILL_TASK006_CLIENT_ID_REUSE_005")
+    calls = []
+    result = barrier.execute(
+        first,
+        lambda: calls.append(1) or {"status": "FILLED", "executedQty": "1"},
+    )
+    assert result.accepted
+    second = _intent("WILL_TASK006_CLIENT_ID_REUSE_005")
+    retry = ExecutionBarrier(_Cache(), db).execute(second, lambda: calls.append(2))
+    assert not retry.accepted
+    assert "prior_intent_exists:SUBMITTED" in retry.reason
+    assert calls == [1]
+
+
+def test_oco_order_list_response_is_authoritative_and_persisted():
+    db = _DB()
+    barrier = ExecutionBarrier(_Cache(), db)
+    intent = OrderIntent.new(
+        symbol="BTCUSDT",
+        side="SELL",
+        order_type="OCO",
+        required_context_versions={},
+        purpose="CAMPAIGN_PROTECTION",
+        client_order_id="WILL_TASK006_OCO_006",
+        quantity="0.1",
+    )
+    response = {
+        "orderListId": 12345,
+        "listClientOrderId": intent.client_order_id,
+        "orderReports": [
+            {"orderId": 11, "clientOrderId": "WILL_TASK006_OCO_006_TP", "status": "NEW"},
+            {"orderId": 12, "clientOrderId": "WILL_TASK006_OCO_006_SL", "status": "NEW"},
+        ],
+    }
+    result = barrier.execute(intent, lambda: response)
+    assert result.accepted
+    assert db.rows[intent.intent_id]["status"] == "SUBMITTED"
+    assert len(response["orderReports"]) == 2
