@@ -128,7 +128,7 @@ class FakeClient:
             "status": "FILLED",
             "executedQty": f"{qty:.6f}",
             "cummulativeQuoteQty": f"{quote:.6f}",
-            "fills": [{"price": "100.0", "qty": f"{qty:.6f}", "commission": "0", "commissionAsset": "USDT"}],
+            "fills": [{"tradeId": 1, "price": "100.0", "qty": f"{qty:.6f}", "commission": "0", "commissionAsset": "USDT"}],
         }
         self.orders[order_id] = row
         return row
