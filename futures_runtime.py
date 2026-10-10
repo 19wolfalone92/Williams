@@ -525,6 +525,15 @@ class FuturesRuntime:
                 no_trade_probability=0.0 if (allow_long or allow_short) else 1.0,
                 calibration_status="RULE_BASED_UNCALIBRATED",
                 data_bars=len(closed),
+                alligator_awake=awake,
+                ao_value=ao,
+                ac_value=float(last.get("ac", 0.0) or 0.0),
+                williams_core_ready=(
+                    len(closed) >= 40
+                    and all(math.isfinite(value) and value > 0.0 for value in (price, jaw, teeth, lips))
+                    and math.isfinite(ao)
+                    and math.isfinite(float(last.get("ac", 0.0) or 0.0))
+                ),
             )
             snapshot = self.context_cache.publish(context)
             published = snapshot.context(symbol, interval)
