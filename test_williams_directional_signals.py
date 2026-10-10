@@ -569,12 +569,12 @@ def test_wm3_long_fractal_must_be_above_teeth_before_tick_buffer():
     data.loc[7, [ "open", "high", "low", "close" ]] = [112.5, 113.0, 111.0, 112.4]
     data.loc[8, [ "open", "high", "low", "close" ]] = [112.5, 113.05, 111.5, 112.8]
     data.loc[9, [ "open", "high", "low", "close" ]] = [112.4, 112.95, 111.6, 112.7]
-    data.loc[10, [ "open", "high", "low", "close" ]] = [112.2, 112.85, 111.7, 112.5]
+    data.loc[10, [ "open", "high", "low", "close" ]] = [112.4, 112.95, 111.6, 112.7]
+    data.loc[11, [ "open", "high", "low", "close" ]] = [112.2, 112.85, 111.7, 112.5]
     data.loc[8, "fractal_up"] = True
     data.loc[10, "confirmed_up_level"] = float(data.loc[8, "high"])
     data.loc[10, "confirmed_up_center_index"] = 8
-    data.loc[10, "teeth_shifted"] = 113.1
-    data.loc[10, "close"] = 112.5
+    data.loc[11, "teeth_shifted"] = 113.1
 
     signals = extract_long_signal_specs(
         "BTCUSDT", data, timeframe="1h", tick_size=0.1
@@ -588,6 +588,7 @@ def test_wm3_short_fractal_must_be_below_teeth_before_tick_buffer():
     data.loc[8, [ "open", "high", "low", "close" ]] = [112.4, 113.0, 111.0, 112.0]
     data.loc[9, [ "open", "high", "low", "close" ]] = [111.5, 112.8, 110.95, 111.8]
     data.loc[10, [ "open", "high", "low", "close" ]] = [111.4, 112.6, 111.1, 111.5]
+    data.loc[11, [ "open", "high", "low", "close" ]] = [111.3, 112.4, 111.2, 111.5]
     data.loc[9, "fractal_down"] = True
     data.loc[11, "confirmed_down_level"] = float(data.loc[9, "low"])
     data.loc[11, "confirmed_down_center_index"] = 9
