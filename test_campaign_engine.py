@@ -33,6 +33,23 @@ def make_signal(signal_type=SignalType.REVERSAL, role=SignalRole.ENTRY, trigger=
     )
 
 
+def test_campaign_risk_cap_matches_futures_lifetime_budget():
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "risk-cap.sqlite3"))
+        try:
+            engine = CampaignEngine(db)
+            assert engine.campaign_risk_limit_pct == pytest.approx(0.006)
+            assert engine.initial_risk_pct() == pytest.approx(0.0024)
+
+            # A caller may lower the cap, but may not raise the hard ceiling.
+            lowered = CampaignEngine(db, campaign_risk_limit_pct=0.003)
+            assert lowered.campaign_risk_limit_pct == pytest.approx(0.003)
+            over_limit = CampaignEngine(db, campaign_risk_limit_pct=0.02)
+            assert over_limit.campaign_risk_limit_pct == pytest.approx(0.006)
+        finally:
+            db.conn.close()
+
+
 def test_first_available_signal_starts_campaign():
     signals = [
         make_signal(SignalType.FRACTAL, bar=30),
