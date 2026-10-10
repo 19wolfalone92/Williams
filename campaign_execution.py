@@ -199,6 +199,103 @@ class CampaignExecutionService:
             )
         return result.response
 
+    def _tc2_spot_context_admission(
+        self,
+        signal: SignalSpec,
+        snapshot,
+        *,
+        expected_versions: dict[str, int],
+    ) -> tuple[bool, bool]:
+        """Return (allowed, is_early_wm1) from the canonical H1/H4/D1 context.
+
+        H1 is the decision frame; H4 is valid context but is not a duplicate
+        directional trigger. D1 is a macro airbag. Only WM1 may be admitted
+        before H1 has turned, and only with positive angulation evidence.
+        """
+        if str(signal.timeframe).lower() != "1h" or signal.side != "BUY":
+            return False, False
+
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        durations_ms = {"1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000}
+        contexts = {}
+        versions = {
+            str(interval).lower(): int(version)
+            for interval, version in dict(expected_versions or {}).items()
+        }
+
+        for interval, duration_ms in durations_ms.items():
+            context = snapshot.context(signal.symbol, interval)
+            if context is None or interval not in versions:
+                return False, False
+            if int(context.version) != versions[interval]:
+                return False, False
+            if not bool(getattr(context, "williams_core_ready", False)):
+                return False, False
+            try:
+                close_ms = int(context.candle_close_time_ms)
+                ao = float(context.ao_value)
+                price = float(context.price)
+                atr = float(context.atr)
+                jaw = float(context.jaw)
+                teeth = float(context.teeth)
+                lips = float(context.lips)
+            except (TypeError, ValueError, OverflowError):
+                return False, False
+            age_ms = now_ms - close_ms
+            if (
+                close_ms <= 0
+                or age_ms < -60_000
+                or age_ms > max(120_000, 2 * duration_ms)
+                or not all(math.isfinite(value) for value in (ao, price, atr, jaw, teeth, lips))
+                or min(price, atr, jaw, teeth, lips) <= 0.0
+            ):
+                return False, False
+            contexts[interval] = context
+
+        h1 = contexts["1h"]
+        d1 = contexts["1d"]
+        try:
+            h1_ao = float(h1.ao_value)
+            d1_ao = float(d1.ao_value)
+            angle = float(signal.angulation_score)
+        except (TypeError, ValueError, OverflowError):
+            return False, False
+        if not math.isfinite(h1_ao) or not math.isfinite(d1_ao):
+            return False, False
+
+        h1_long = (
+            str(h1.alligator_state or "").upper() == "BULLISH"
+            and bool(h1.alligator_awake)
+            and h1_ao > 0.0
+        )
+        if h1_long:
+            strict_allowed = True
+        else:
+            strict_allowed = False
+
+        d1_opposes_long = (
+            bool(d1.allow_short)
+            or (
+                str(d1.alligator_state or "").upper() == "BEARISH"
+                and bool(d1.alligator_awake)
+                and d1_ao < 0.0
+            )
+        )
+        if d1_opposes_long:
+            return False, False
+        if strict_allowed:
+            return True, False
+
+        # The source's early First Wise Man may lead the new H1 trend. Do not
+        # grant the same exception to Super AO, fractal breakouts, or generic setups.
+        if (
+            signal.signal_type == SignalType.REVERSAL
+            and math.isfinite(angle)
+            and angle > 0.0
+        ):
+            return True, True
+        return False, False
+
     def arm_initial_entry(
         self,
         signal: SignalSpec,
