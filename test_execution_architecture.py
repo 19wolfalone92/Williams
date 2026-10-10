@@ -1,4 +1,5 @@
 from decimal import Decimal
+import time
 from pathlib import Path
 
 from execution_accumulator import accumulate_fills, accumulate_order
@@ -73,6 +74,112 @@ def test_market_context_persistence(tmp_path: Path):
     ).fetchone()
     assert row["version"] == 3
     assert '"long_probability": 0.7' in row["context_json"]
+
+
+def _publish_early_wm1_contexts(cache, *, d1_allow_long=False, d1_allow_short=False):
+    now = int(time.time() * 1000)
+    for interval, age in (("1h", 20_000), ("4h", 40_000), ("1d", 60_000)):
+        cache.publish(TFMarketContext(
+            symbol="BTCUSDT",
+            interval=interval,
+            version=0,
+            candle_open_time_ms=now - age - 60_000,
+            candle_close_time_ms=now - age,
+            price=100.0,
+            atr=1.0,
+            jaw=100.0,
+            teeth=100.0,
+            lips=100.0,
+            alligator_state="SLEEP",
+            allow_long=d1_allow_long if interval == "1d" else False,
+            allow_short=d1_allow_short if interval == "1d" else False,
+            decision="LONG" if interval == "1d" and d1_allow_long else
+                     "SHORT" if interval == "1d" and d1_allow_short else "NO_TRADE",
+            data_bars=220,
+        ))
+
+
+def _early_wm1_intent(cache, *, angle=5.0):
+    versions = cache.snapshot().versions("BTCUSDT", ["1h", "4h", "1d"])
+    return OrderIntent.new(
+        "BTCUSDT",
+        "BUY",
+        "STOP_MARKET",
+        versions,
+        client_order_id="test-wm1-early",
+        purpose="CAMPAIGN_ENTRY",
+        permission_interval="1h",
+        context_admission_mode="TC2_WM1_EARLY",
+        signal_type="REVERSAL",
+        angulation_score=angle,
+        campaign_id="test-campaign",
+        signal_id="test-signal",
+    )
+
+
+def test_execution_barrier_allows_proven_early_wm1_without_h1_h4_directional_alignment():
+    cache = ContextCache()
+    _publish_early_wm1_contexts(cache)
+    barrier = ExecutionBarrier(cache)
+
+    # H1/H4 are asleep/neutral. That is precisely why this is an early WM1 path,
+    # not an ordinary trend-confirmation entry.
+    intent = _early_wm1_intent(cache)
+    assert barrier._validate(intent, cache.snapshot()) == ""
+
+
+def test_execution_barrier_early_wm1_still_vetoes_active_opposite_d1():
+    cache = ContextCache()
+    _publish_early_wm1_contexts(cache, d1_allow_short=True)
+    barrier = ExecutionBarrier(cache)
+
+    reason = barrier._validate(_early_wm1_intent(cache), cache.snapshot())
+    assert "opposite D1" in reason
+
+
+def test_execution_barrier_early_wm1_requires_source_evidence_and_all_context_versions():
+    cache = ContextCache()
+    _publish_early_wm1_contexts(cache)
+    barrier = ExecutionBarrier(cache)
+
+    assert "positive angulation" in barrier._validate(
+        _early_wm1_intent(cache, angle=0.0), cache.snapshot()
+    )
+
+    intent = _early_wm1_intent(cache)
+    missing_d1 = OrderIntent.new(
+        "BTCUSDT",
+        "BUY",
+        "STOP_MARKET",
+        {"1h": intent.required_context_versions["1h"], "4h": intent.required_context_versions["4h"]},
+        client_order_id="test-wm1-missing-d1",
+        purpose="CAMPAIGN_ENTRY",
+        permission_interval="1h",
+        context_admission_mode="TC2_WM1_EARLY",
+        signal_type="REVERSAL",
+        angulation_score=5.0,
+        campaign_id="test-campaign",
+    )
+    assert "requires versioned 1d context" in barrier._validate(missing_d1, cache.snapshot())
+
+
+def test_execution_barrier_keeps_strict_directional_permission_for_other_entry_modes():
+    cache = ContextCache()
+    _publish_early_wm1_contexts(cache)
+    barrier = ExecutionBarrier(cache)
+    versions = cache.snapshot().versions("BTCUSDT", ["1h", "4h", "1d"])
+    intent = OrderIntent.new(
+        "BTCUSDT",
+        "BUY",
+        "STOP_MARKET",
+        versions,
+        client_order_id="test-strict-mode",
+        purpose="CAMPAIGN_ENTRY",
+        permission_interval="1h",
+        signal_type="SUPER_AO",
+        campaign_id="test-campaign",
+    )
+    assert "does not allow LONG" in barrier._validate(intent, cache.snapshot())
 
 
 def test_execution_barrier_refuses_duplicate_stable_client_id_after_unknown_retry(tmp_path):
