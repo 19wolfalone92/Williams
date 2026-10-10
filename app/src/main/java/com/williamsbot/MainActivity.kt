@@ -390,8 +390,14 @@ private class BackendApi(context: Context) {
             ?.trimEnd('/')
             ?: ""
 
+    // The loopback runtime has its own opaque per-install token; never show
+    // or reuse the former shared literal ("standalone") in the settings field.
     val mobileToken: String
-        get() = securePrefs.getString("mobile_token", "standalone")?.trim() ?: "standalone"
+        get() = if (isLocalRuntimeUrl(backendUrl)) {
+            ""
+        } else {
+            securePrefs.getString("mobile_token", "")?.trim() ?: ""
+        }
 
     private fun isLocalRuntimeUrl(value: String): Boolean =
         runCatching {
