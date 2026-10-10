@@ -1033,11 +1033,16 @@ class Database:
             raise ValueError("utc_start must be YYYY-MM-DD HH:MM:SS")
         rows = self.conn.execute(
             """
-            SELECT reason, payload_json
-            FROM campaign_events
-            WHERE event = ?
-              AND created_at >= ?
-              AND UPPER(COALESCE(reason, '')) LIKE '%STOP%'
+            SELECT e.reason, e.payload_json
+            FROM campaign_events AS e
+            LEFT JOIN campaigns AS c ON c.campaign_id = e.campaign_id
+            WHERE e.event = ?
+              AND e.created_at >= ?
+              AND UPPER(COALESCE(e.reason, '')) LIKE '%STOP%'
+              AND (
+                  c.tags_json IS NULL
+                  OR UPPER(c.tags_json) NOT LIKE '%"EXECUTION_MODE": "SPOT"%'
+              )
             """,
             ("CAMPAIGN_CLOSED", start),
         ).fetchall()
