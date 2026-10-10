@@ -376,20 +376,23 @@ class ExecutionBarrier:
             # If a post-response write fails, the pre-submit PENDING intent remains
             # durable. Poison the in-memory barrier until reconciliation/restart.
             try:
-                self._persist(intent, "SUBMITTED")
+                # Keep the intent PENDING until the response and journal are
+                # durable. CONFIRMED is written last, so a crash at any earlier
+                # point remains a startup-reconciliation obligation.
                 self.db.save_execution_event(
                     intent.intent_id, "EXCHANGE_RESPONSE",
                     response if isinstance(response, dict) else {"response": str(response)},
                 )
                 self._record(
                     "INFO", "execution_result", intent,
-                    "Exchange response persisted",
+                    "Exchange response and journal persisted",
                     {
                         "order_state": order_fsm.state.value,
                         "client_order_id": intent.client_order_id,
                         "order_id": response.get("orderId") if isinstance(response, dict) else None,
                     },
                 )
+                self._persist(intent, "CONFIRMED")
             except Exception as exc:
                 self._poisoned = True
                 try:
