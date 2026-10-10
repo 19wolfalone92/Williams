@@ -583,6 +583,24 @@ def test_exchange_fill_ledger_keeps_missing_fee_unknown_then_enriches_same_trade
     assert row["financial_state"] == "CONFIRMED"
 
 
+def test_duplicate_unknown_fee_observation_cannot_downgrade_confirmed_commission(tmp_path):
+    db = ready_db(tmp_path)
+    trade = {
+        "id": 906, "orderId": 82, "symbol": "BTCUSDT",
+        "qty": "0.2", "price": "25000.00", "quoteQty": "5000.00",
+        "commission": "0.002", "commissionAsset": "USDT",
+    }
+    db.record_exchange_fill("BTCUSDT", trade)
+    db.record_exchange_fill("BTCUSDT", {
+        "id": 906, "orderId": 82, "symbol": "BTCUSDT",
+        "qty": "0.2", "price": "25000.00", "quoteQty": "5000.00",
+    })
+    row = db.exchange_fills_for_order("BTCUSDT", 82)[0]
+    assert row["financial_state"] == "CONFIRMED"
+    assert row["commission_amount_text"] == "0.002"
+    assert row["commission_asset"] == "USDT"
+
+
 def test_exchange_fill_ledger_rejects_trade_id_with_conflicting_financial_data(tmp_path):
     db = ready_db(tmp_path)
     trade = {
