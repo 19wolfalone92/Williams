@@ -11,10 +11,13 @@ class _MutationPermitState:
 
 
 _mutation_client = ContextVar("williams_binance_mutation_client", default=None)
+_BARRIER_ADMISSION_TOKEN = object()
 
 
 @contextmanager
-def mutation_permit(client):
+def _mutation_permit(client, *, admission_token):
+    if admission_token is not _BARRIER_ADMISSION_TOKEN:
+        raise RuntimeError("Mutation permit can only be issued by ExecutionBarrier")
     state = _MutationPermitState(client=client)
     token = _mutation_client.set(state)
     try:
