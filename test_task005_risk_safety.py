@@ -16,6 +16,7 @@ from equity_breaker import EquityCircuitBreaker
 import equity_breaker as equity_breaker_module
 from mock_exchange import MockExchange
 from risk_engine import RiskEngine
+from portfolio_trader import MultiPositionTrader
 
 from test_campaign_execution import service, signal
 
@@ -470,3 +471,45 @@ def test_ambiguous_exchange_submit_is_not_blindly_retried():
     campaign = db.open_campaigns()[0]
     assert campaign["state"] == CampaignState.RECONCILE_REQUIRED.value
     assert db.campaign_risk_reserved_quote() > 0
+
+
+class _FeeLookupFailureClient:
+    def my_trades(self, symbol, order_id=None, limit=1000):
+        raise OSError("simulated trade-history outage")
+
+
+class _FeeLookupDb:
+    def __init__(self):
+        self.events = []
+
+    def log_event(self, *args, **kwargs):
+        self.events.append((args, kwargs))
+
+
+def test_portfolio_execution_unknown_fee_history_fails_closed():
+    trader = object.__new__(MultiPositionTrader)
+    trader.client = _FeeLookupFailureClient()
+    trader.db = _FeeLookupDb()
+    with pytest.raises(RuntimeError, match="reconciliation required"):
+        trader._authoritative_execution(
+            "BTCUSDT",
+            {"orderId": 7, "executedQty": "0.01", "cummulativeQuoteQty": "500"},
+        )
+    assert trader.db.events
+    assert trader.db.events[0][0][1] == "fill_commission_lookup_failed"
+
+
+def test_portfolio_execution_missing_commission_asset_is_unknown():
+    trader = object.__new__(MultiPositionTrader)
+    trader.client = object()
+    trader.db = _FeeLookupDb()
+    with pytest.raises(RuntimeError, match="fee status UNKNOWN"):
+        trader._authoritative_execution(
+            "BTCUSDT",
+            {
+                "orderId": 7,
+                "executedQty": "0.01",
+                "cummulativeQuoteQty": "500",
+                "fills": [{"price": "50000", "qty": "0.01"}],
+            },
+        )
