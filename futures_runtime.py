@@ -16,7 +16,7 @@ import time
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 import pandas as pd
 
@@ -35,11 +35,31 @@ from strategy import (
     canonical_williams_environment_blockers,
     config_from_env,
 )
-from trading_config import TradingConfig
+from trading_config import DEFAULT_SYMBOLS, TradingConfig
 from futures_campaign_execution import FuturesCampaignExecutionService, FuturesCampaignExecutionError
 
 log = logging.getLogger("williams-futures-runtime")
 CANONICAL_DECISION_TIMEFRAME = "1h"
+
+
+def _resolve_futures_symbols(
+    symbols: Iterable[str] | None,
+    *,
+    env: Mapping[str, str] | None = None,
+    defaults: Iterable[str] = DEFAULT_SYMBOLS,
+) -> tuple[str, ...]:
+    """Resolve the Futures symbol universe without hiding an explicit empty list."""
+    source = os.environ if env is None else env
+    if symbols is None:
+        configured = str(source.get("FUTURES_SYMBOLS", "")).strip()
+        raw_symbols = configured.split(",") if configured else list(defaults)
+    else:
+        raw_symbols = list(symbols)
+    return tuple(dict.fromkeys(
+        str(value).strip().upper()
+        for value in raw_symbols
+        if str(value).strip()
+    ))
 
 
 def _env_bool(key: str, default: bool) -> bool:
@@ -279,15 +299,10 @@ class FuturesRuntime:
 
         self.config = TradingConfig.from_env()
         self.interval = str(interval or os.getenv("EXECUTION_TIMEFRAME", "1h")).lower()
-        raw_symbols = list(symbols or [
-            x.strip().upper()
-            for x in os.getenv(
-                "FUTURES_SYMBOLS",
-                "BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,XRPUSDT",
-            ).split(",")
-            if x.strip()
-        ])
-        self.symbols = tuple(dict.fromkeys(str(x).strip().upper() for x in raw_symbols if str(x).strip()))
+        self.symbols = _resolve_futures_symbols(
+            symbols,
+            defaults=self.config.symbols,
+        )
         if not self.symbols:
             raise ValueError("FuturesRuntime needs at least one symbol")
         self.allow_long = _env_bool("ALLOW_LONG", True)
@@ -307,6 +322,12 @@ class FuturesRuntime:
             [str(x).lower() for x in self.config.structural_timeframes]
             + [self.interval]
         ))
+        # D1 is optional dashboard context only; it must not join the entry gate.
+        self._daily_observation_refresh_seconds = max(
+            300, int(os.getenv("D1_OBSERVATION_REFRESH_SECONDS", "900"))
+        )
+        self._daily_observation_last_refresh: dict[str, float] = {}
+        self._daily_observations: dict[str, dict[str, Any]] = {}
         self.db_path = db_path or os.getenv("FUTURES_DB_PATH", "data/williams_futures.sqlite3")
         self.db = Database(self.db_path)
         self.client = BinanceUsdmFuturesClient(
@@ -455,8 +476,117 @@ class FuturesRuntime:
         value = ranges.rolling(period).mean().iloc[-1]
         return float(value) if pd.notna(value) else 0.0
 
+
+    def _refresh_informational_daily_context(self, symbol: str) -> None:
+        """Cache D1 market structure for observation only, never for entry admission."""
+        symbol = str(symbol).upper()
+        now_mono = time.monotonic()
+        last_refresh = self._daily_observation_last_refresh.get(symbol, 0.0)
+        if (
+            symbol in self._daily_observations
+            and now_mono - last_refresh < self._daily_observation_refresh_seconds
+        ):
+            return
+        self._daily_observation_last_refresh[symbol] = now_mono
+
+        frame = fetch_klines(
+            self.client, symbol, "1d",
+            limit=max(220, self.config.wave_lookback),
+        )
+        if frame is None or frame.empty:
+            raise RuntimeError(f"{symbol}/1d: informational candles unavailable")
+        closed = frame.iloc[:-1].copy() if len(frame) > 1 else frame.iloc[0:0].copy()
+        if len(closed) < 100:
+            raise RuntimeError(f"{symbol}/1d: insufficient closed candles ({len(closed)})")
+
+        indicators = calculate_indicators(closed, canonical_live_config_from_env())
+        last = indicators.iloc[-1]
+        previous = indicators.iloc[-2] if len(indicators) > 1 else last
+        price = float(last.get("close", 0) or 0)
+        ao = float(last.get("ao", 0) or 0)
+        ac = float(last.get("ac", 0) or 0)
+        atr = self._atr(closed, self.config.atr_period)
+        bullish = bool(last.get("bullish_alligator", False))
+        bearish = bool(last.get("bearish_alligator", False))
+        awake = bool(last.get("alligator_awake", False))
+        jaw = float(last.get("jaw_shifted", last.get("jaw", 0.0)) or 0.0)
+        teeth = float(last.get("teeth_shifted", last.get("teeth", 0.0)) or 0.0)
+        lips = float(last.get("lips_shifted", last.get("lips", 0.0)) or 0.0)
+        previous_jaw = float(previous.get("jaw_shifted", previous.get("jaw", jaw)) or jaw)
+        previous_close = float(previous.get("close", price) or price)
+        price_slope = (price - previous_close) / atr if atr > 0 else 0.0
+        jaw_slope = (jaw - previous_jaw) / atr if atr > 0 else 0.0
+        sign = 1.0 if price >= jaw else -1.0
+        angulation = sign * (price_slope - jaw_slope)
+        candle_open_ms = int(pd.Timestamp(closed.index[-1]).timestamp() * 1000)
+        close_time = (
+            pd.to_datetime(closed["close_time"], utc=True).iloc[-1]
+            if "close_time" in closed.columns
+            else pd.Timestamp(
+                candle_open_ms + _interval_seconds("1d") * 1000,
+                unit="ms",
+                tz="UTC",
+            )
+        )
+        close_ms = int(pd.Timestamp(close_time).timestamp() * 1000)
+        _assert_fresh_closed_candle(symbol, "1d", close_ms)
+
+        allow_long = self.allow_long and bullish and awake and ao > 0
+        allow_short = self.allow_short and bearish and awake and ao < 0
+        state = "BULLISH" if bullish else "BEARISH" if bearish else "SLEEP"
+        daily_context = TFMarketContext(
+            symbol=symbol,
+            interval="1d",
+            version=0,
+            candle_open_time_ms=candle_open_ms,
+            candle_close_time_ms=close_ms,
+            price=price,
+            atr=atr,
+            jaw=jaw,
+            teeth=teeth,
+            lips=lips,
+            jaw_slope_atr=jaw_slope,
+            price_slope_atr=price_slope,
+            angulation=angulation,
+            jaw_distance_atr=abs(price - jaw) / atr if atr > 0 else 0.0,
+            alligator_state=state,
+            allow_long=allow_long,
+            allow_short=allow_short,
+            decision="LONG" if allow_long else "SHORT" if allow_short else "NO_TRADE",
+            long_probability=1.0 if allow_long else 0.0,
+            short_probability=1.0 if allow_short else 0.0,
+            no_trade_probability=0.0 if (allow_long or allow_short) else 1.0,
+            calibration_status="INFORMATIONAL_ONLY_RULE_BASED_UNCALIBRATED",
+            data_bars=len(closed),
+            alligator_awake=awake,
+            ao_value=ao,
+            ac_value=ac,
+            williams_core_ready=(
+                len(closed) >= 40
+                and all(math.isfinite(value) and value > 0.0 for value in (price, atr, jaw, teeth, lips))
+                and math.isfinite(ao)
+                and math.isfinite(ac)
+            ),
+        )
+        snapshot = self.context_cache.publish(daily_context)
+        published = snapshot.context(symbol, "1d")
+        if published is not None:
+            self.db.save_market_context(published)
+        self._daily_observations[symbol] = {
+            "available": True,
+            "informational_only": True,
+            "interval": "1d",
+            "last_closed_candle_close_time_ms": close_ms,
+            "price": price,
+            "alligator_state": state,
+            "alligator_awake": awake,
+            "ao": ao,
+            "ac": ac,
+            "updated_at_ms": int(time.time() * 1000),
+        }
+
     def _refresh_symbol_context(self, symbol: str) -> dict[str, pd.DataFrame]:
-        """Publish every structural TF from freshly closed Futures candles."""
+        """Publish structural TFs plus a best-effort informational D1 observation."""
         frames: dict[str, pd.DataFrame] = {}
         for interval in self.context_intervals:
             frame = fetch_klines(
@@ -540,6 +670,25 @@ class FuturesRuntime:
             if published is not None:
                 self.db.save_market_context(published)
             frames[interval] = closed
+
+        # D1 is a best-effort dashboard observation; missing/stale D1 must not
+        # suppress otherwise-valid H1/H4 signal processing.
+        try:
+            self._refresh_informational_daily_context(symbol)
+        except Exception as exc:
+            previous = self._daily_observations.get(symbol, {})
+            self._daily_observations[symbol] = {
+                "available": False,
+                "informational_only": True,
+                "interval": "1d",
+                "last_closed_candle_close_time_ms": previous.get("last_closed_candle_close_time_ms", 0),
+                "updated_at_ms": int(time.time() * 1000),
+                "reason": f"{type(exc).__name__}: {exc}",
+            }
+            log.warning(
+                "%s/1d informational context unavailable; entry gates unchanged: %s",
+                symbol, exc,
+            )
         return frames
 
     def _directional_signal(self, candidate: Candidate, direction: str, frames: dict[str, pd.DataFrame]) -> SignalSpec:
@@ -576,10 +725,9 @@ class FuturesRuntime:
         if tc2_core:
             # Intraday TC2 uses H1 for decisions and H4 as the sole higher-timeframe
             # context. D1 is deliberately not an admission gate.
-            required_intervals = list(dict.fromkeys(
-                ["1h", "4h"] + list(self.context_intervals)
-            ))
-            versions = snapshot.versions(signal.symbol, required_intervals)
+            # Only H1 signal evidence and H4 context are TC2 admission inputs.
+            # M15 monitors execution; D1 is informational and not a gate.
+            versions = snapshot.versions(signal.symbol, ["1h", "4h"])
             prepared = replace(
                 signal,
                 context_versions=versions,
@@ -700,6 +848,24 @@ class FuturesRuntime:
             raise FuturesCampaignExecutionError(
                 f"{signal.symbol}/{signal.timeframe}: add-on operative context is missing"
             )
+        tc2_core = (
+            os.getenv("WILLIAMS_STRATEGY_PROFILE", "TC2_THREE_WISE_MEN").strip().upper()
+            == "TC2_THREE_WISE_MEN"
+        )
+        if tc2_core:
+            # Validate this Wise-Man family and fresh H1/H4 context without
+            # applying the separate legacy Alligator+AO directional gate.
+            if not self.execution._tc2_core_context_allowed(signal, snapshot):
+                raise FuturesCampaignExecutionError(
+                    f"{signal.symbol}: TC2 add-on signal or H4 context is not valid"
+                )
+            return replace(
+                signal,
+                role=SignalRole.ADD_ON,
+                htf_confirmed=True,
+                context_versions=snapshot.versions(signal.symbol, ["1h", "4h"]),
+            )
+
         allowed = operative.allow_long if direction == "LONG" else operative.allow_short
         if not allowed:
             raise FuturesCampaignExecutionError(
@@ -1548,6 +1714,24 @@ class FuturesRuntime:
 
     def status(self) -> dict[str, Any]:
         with self._lock:
+            daily_contexts = {
+                symbol: dict(context)
+                for symbol, context in self._daily_observations.items()
+            }
+            daily_states = [
+                str(context.get("alligator_state", "UNAVAILABLE")).upper()
+                if context.get("available")
+                else "UNAVAILABLE"
+                for context in daily_contexts.values()
+            ]
+            daily_market_context = {
+                "informational_only": True,
+                "counts": {
+                    state: daily_states.count(state)
+                    for state in ("BULLISH", "BEARISH", "SLEEP", "UNAVAILABLE")
+                },
+                "symbols": daily_contexts,
+            }
             return {
                 "runtime": "BINANCE_USDM_FUTURES",
                 "testnet": self.testnet,
@@ -1564,6 +1748,7 @@ class FuturesRuntime:
                 "last_scan_at_ms": self._last_scan_at_ms,
                 "last_error": self._last_error,
                 "last_scan": self._last_scan_summary,
+                "daily_market_context": daily_market_context,
                 "account": dict(self._last_account),
                 "open_campaigns": [
                     {
