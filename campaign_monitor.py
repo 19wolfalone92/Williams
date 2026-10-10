@@ -72,9 +72,14 @@ class CampaignMonitor:
         try:
             from wave_engine import MultiTimeframeWaveEngine
 
+            tc2_core = (
+                os.getenv("WILLIAMS_STRATEGY_PROFILE", "TC2_THREE_WISE_MEN").strip().upper()
+                == "TC2_THREE_WISE_MEN"
+            )
             engine = MultiTimeframeWaveEngine(
                 self.client,
                 base_interval=campaign.execution_timeframe,
+                intervals=("4h", "1h") if tc2_core else None,
                 include_micro=False,
             )
             report = engine.analyse(
