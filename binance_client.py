@@ -57,7 +57,7 @@ class BinanceSpotClient:
                 or path.startswith("/api/v3/openOrders")
             )
             if is_order_mutation:
-                require_mutation_permit()
+                require_mutation_permit(self)
 
             # Proactive governor: slow down before Binance returns 429/418.
             # REQUEST_WEIGHT applies to all REST requests; ORDERS applies to
