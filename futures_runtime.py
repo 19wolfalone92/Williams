@@ -143,8 +143,10 @@ def _loss_streak_allows_entry(
             raise ValueError("loss guard requires timezone-aware time")
         current = current.astimezone(timezone.utc)
         rows = db.recent_campaign_closes(limit=max(500, max_losses + 2))
+        utc_day_start = current.replace(hour=0, minute=0, second=0, microsecond=0)
         consecutive = 0
         most_recent_loss_at = None
+        first_close = True
         for row in rows:
             payload_raw = row.get("payload_json")
             if not payload_raw:
@@ -170,10 +172,19 @@ def _loss_streak_allows_entry(
                     closed_at = closed_at.astimezone(timezone.utc)
             except ValueError:
                 return False, "finalized campaign close has invalid timestamp; new entries blocked"
+            if first_close:
+                first_close = False
+                if pnl < 0:
+                    most_recent_loss_at = closed_at
+                else:
+                    break
+            # The consecutive-loss circuit resets at the UTC day boundary.
+            # The cooldown above/below still follows the latest loss across
+            # midnight, so daily reset cannot bypass a fresh loss cooldown.
+            if closed_at < utc_day_start:
+                break
             if pnl < 0:
                 consecutive += 1
-                if most_recent_loss_at is None:
-                    most_recent_loss_at = closed_at
             else:
                 break
         if max_losses > 0 and consecutive >= max_losses:
