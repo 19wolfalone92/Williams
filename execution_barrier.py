@@ -185,8 +185,22 @@ class ExecutionBarrier:
             self.db.state_get(f"position_state:{intent.symbol.upper()}", "UNKNOWN")
             or "UNKNOWN"
         ).upper()
-        if symbol_state in {"UNKNOWN", "RECONCILE_REQUIRED"}:
+        if symbol_state in {"UNKNOWN", "RECONCILE_REQUIRED", "SYNC_REQUIRED", "EXIT_PENDING"}:
             return f"{intent.symbol}:{symbol_state}"
+
+        purpose = str(intent.purpose or "").upper()
+        if purpose in {"CAMPAIGN_ENTRY", "CAMPAIGN_ADD_ON"} and not intent.campaign_id:
+            return f"{purpose} requires campaign_id"
+        if purpose in {"CAMPAIGN_ENTRY", "CAMPAIGN_ADD_ON"} and not intent.signal_id:
+            return f"{purpose} requires signal_id"
+        if purpose == "CAMPAIGN_ENTRY" and symbol_state != "FLAT":
+            return f"initial campaign entry requires explicit FLAT state, got {symbol_state}"
+        if purpose == "CAMPAIGN_ADD_ON" and symbol_state != "OPEN":
+            return f"campaign add-on requires confirmed OPEN state, got {symbol_state}"
+        if purpose == "ENTRY" and symbol_state not in {"FLAT", "ENTRY_PENDING"}:
+            return f"legacy entry requires FLAT/ENTRY_PENDING state, got {symbol_state}"
+        if global_state in {"ENTRY_PENDING", "EXIT_PENDING"} and symbol_state != global_state:
+            return f"portfolio transition unresolved: global={global_state} symbol={symbol_state}"
 
         conn = getattr(self.db, "conn", None)
         if conn is not None:
@@ -204,7 +218,7 @@ class ExecutionBarrier:
 
         if intent.campaign_id:
             campaign_state = str(
-                self.db.state_get(f"campaign_state:{intent.campaign_id}", "CLEAN")
+                self.db.state_get(f"campaign_state:{intent.campaign_id}", "UNKNOWN")
                 or "UNKNOWN"
             ).upper()
             if campaign_state in {"UNKNOWN", "RECONCILE_REQUIRED"}:
