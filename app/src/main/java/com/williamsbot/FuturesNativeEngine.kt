@@ -59,7 +59,8 @@ internal class FuturesNativeEngine(
         val trigger: Double,
         val stop: Double,
         val atr: Double,
-        val reason: String
+        val reason: String,
+        val confirmationTime: Long = signalBarTime
     )
 
     private data class Frame(
@@ -809,19 +810,19 @@ internal class FuturesNativeEngine(
         val currentClosedBarTime = primary.bars.lastOrNull()?.openTime ?: return null
         val candidates = listOfNotNull(primary.lastSignal)
             .filter { signal ->
-                // Conditional entries are exchange-side and do not inherit the
-                // local signal expiry. Reject stale signal bars before arming.
+                // A trigger is not permission by itself: operative Alligator
+                // context and the structural parent must both support direction.
                 val fresh = isSignalFresh(signal, currentClosedBarTime, tf)
                 if (!fresh) {
                     false
                 } else if (signal.direction == "LONG") {
-                    higher.bullish && higher.ao > 0.0 && higher.ac > 0.0
+                    primary.bullish && higher.bullish && higher.ao > 0.0 && higher.ac > 0.0
                 } else {
-                    higher.bearish && higher.ao < 0.0 && higher.ac < 0.0
+                    primary.bearish && higher.bearish && higher.ao < 0.0 && higher.ac < 0.0
                 }
             }
         if (candidates.isEmpty()) return null
-        val chosen = candidates.minByOrNull { it.signalBarTime } ?: return null
+        val chosen = candidates.minByOrNull { it.confirmationTime } ?: return null
         val mark = exchange.markPrice(symbol)
         if (chosen.direction == "LONG" && !(chosen.stop < mark && mark < chosen.trigger)) return null
         if (chosen.direction == "SHORT" && !(chosen.trigger < mark && mark < chosen.stop)) return null
@@ -949,7 +950,8 @@ internal class FuturesNativeEngine(
                 if (level > teeth[i] && bars[i].close < entryTrigger && stop > 0.0 && stop < entryTrigger) {
                     signalCandidates.add(
                         Signal(symbol, "LONG", "FRACTAL", bars[center].openTime, entryTrigger, stop, atr,
-                            "WM3 buy fractal outside Teeth; stop-entry trigger above fractal")
+                            "WM3 buy fractal outside Teeth; stop-entry trigger above fractal",
+                            confirmationTime = bars[center + 2].openTime)
                     )
                 }
             }
@@ -960,7 +962,8 @@ internal class FuturesNativeEngine(
                 if (level < teeth[i] && bars[i].close > entryTrigger && stop > entryTrigger) {
                     signalCandidates.add(
                         Signal(symbol, "SHORT", "FRACTAL", bars[center].openTime, entryTrigger, stop, atr,
-                            "WM3 sell fractal outside Teeth; stop-entry trigger below fractal")
+                            "WM3 sell fractal outside Teeth; stop-entry trigger below fractal",
+                            confirmationTime = bars[center + 2].openTime)
                     )
                 }
             }
@@ -968,7 +971,7 @@ internal class FuturesNativeEngine(
             // WM2: three consecutive AO bars in the same direction after the
             // corresponding outside fractal. It can be the first signal of a
             // new campaign if no earlier valid WM1/WM3 signal is available.
-            if (configLong && superAo(ao, bars, "LONG", teeth[i], upFractal)) {
+            if (superAo(ao, bars, "LONG")) {
                 val row = bars[i]
                 val trigger = row.high + tickSize
                 val stop = row.low - tickSize
@@ -979,7 +982,7 @@ internal class FuturesNativeEngine(
                     )
                 }
             }
-            if (configShort && superAo(ao, bars, "SHORT", teeth[i], downFractal)) {
+            if (superAo(ao, bars, "SHORT")) {
                 val row = bars[i]
                 val trigger = row.low - tickSize
                 val stop = row.high + tickSize
@@ -1027,7 +1030,7 @@ internal class FuturesNativeEngine(
     private fun isSignalFresh(signal: Signal, currentClosedBarTime: Long, timeframe: String): Boolean {
         val bars = pendingBarsForSignal(signal.type)
         if (bars <= 0) return false
-        val expiresAt = signal.signalBarTime + intervalMillis(timeframe) * bars
+        val expiresAt = signal.confirmationTime + intervalMillis(timeframe) * (bars + 1)
         return currentClosedBarTime < expiresAt
     }
 
@@ -1116,23 +1119,19 @@ internal class FuturesNativeEngine(
     private fun superAo(
         ao: List<Double>,
         bars: List<Bar>,
-        direction: String,
-        teeth: Double,
-        fractal: Pair<Int, Double>?
+        direction: String
     ): Boolean {
-        if (ao.size < 4 || fractal == null) return false
+        // Three same-colour AO bars require three consecutive changes, hence
+        // four AO values. WM2 is independent of a separate fractal event.
+        if (ao.size < 4 || bars.isEmpty()) return false
         val end = ao.lastIndex
-        val recent = (end - 2..end).map { ao.getOrElse(it) { Double.NaN } }
+        val recent = (end - 3..end).map { ao.getOrElse(it) { Double.NaN } }
         if (!recent.all(Double::isFinite)) return false
-        val threeColors = if (direction == "LONG") {
-            recent[0] < recent[1] && recent[1] < recent[2]
+        return if (direction == "LONG") {
+            recent[0] < recent[1] && recent[1] < recent[2] && recent[2] < recent[3]
         } else {
-            recent[0] > recent[1] && recent[1] > recent[2]
+            recent[0] > recent[1] && recent[1] > recent[2] && recent[2] > recent[3]
         }
-        if (!threeColors) return false
-        val level = fractal.second
-        return if (direction == "LONG") level > teeth && bars.last().close > teeth
-        else level < teeth && bars.last().close < teeth
     }
 
     private fun latestFractal(bars: List<Bar>, up: Boolean): Pair<Int, Double>? {
