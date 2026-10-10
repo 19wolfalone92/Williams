@@ -655,3 +655,48 @@ def test_reusing_intent_id_across_independent_connections_is_rejected(tmp_path):
         db_b.claim_execution_intent(duplicate)
     db_a.conn.close()
     db_b.conn.close()
+
+
+def test_portfolio_execution_refuses_order_snapshot_without_authoritative_commission_history(tmp_path):
+    db = Database(str(tmp_path / "unknown_fee_portfolio.sqlite3"))
+    client = MockExchange()
+    runtime = MultiPositionTrader(client, db=db, symbols=["BTCUSDT"])
+    with pytest.raises(RuntimeError, match="not commission evidence"):
+        runtime._authoritative_execution(
+            "BTCUSDT",
+            {"symbol": "BTCUSDT", "orderId": "no-fees", "executedQty": "1", "cummulativeQuoteQty": "100"},
+        )
+    db.conn.close()
+
+
+def test_portfolio_execution_refuses_fill_with_missing_commission_asset(tmp_path):
+    db = Database(str(tmp_path / "unknown_fee_asset.sqlite3"))
+    client = MockExchange()
+    runtime = MultiPositionTrader(client, db=db, symbols=["BTCUSDT"])
+    with pytest.raises(RuntimeError, match="commission asset is unknown"):
+        runtime._authoritative_execution(
+            "BTCUSDT",
+            {
+                "symbol": "BTCUSDT", "orderId": "missing-asset",
+                "executedQty": "1", "cummulativeQuoteQty": "100",
+                "fills": [{"price": "100", "qty": "1", "commission": "0"}],
+            },
+        )
+    db.conn.close()
+
+
+def test_legacy_trader_recovery_refuses_unknown_commission(tmp_path):
+    db = Database(str(tmp_path / "unknown_fee_trader.sqlite3"))
+    runtime = object.__new__(Trader)
+    runtime.db = db
+    runtime.client = MockExchange()
+    runtime.symbol = "BTCUSDT"
+    with pytest.raises(RuntimeError, match="commission is unknown"):
+        runtime._authoritative_execution(
+            {
+                "symbol": "BTCUSDT", "orderId": "missing-commission",
+                "executedQty": "1", "cummulativeQuoteQty": "100",
+                "fills": [{"price": "100", "qty": "1", "commissionAsset": "USDT"}],
+            }
+        )
+    db.conn.close()
