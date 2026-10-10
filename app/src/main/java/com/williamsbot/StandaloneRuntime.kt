@@ -1749,6 +1749,55 @@ private class NativeEngine(
         }
     }
 
+    private fun reconcileMutationFromAuthoritativeRead(path: String, params: String, body: String) {
+        val query = parseSignedParams(params)
+        val response = runCatching { JSONObject(body) }.getOrNull()
+            ?: throw IllegalStateException("Exchange read used for reconciliation is not valid JSON")
+
+        when (path) {
+            "/api/v3/order" -> {
+                val exchangeStatus = response.optString("status").uppercase(Locale.US)
+                val clientId = query["origClientOrderId"]
+                val orderId = query["orderId"]
+                if (!clientId.isNullOrBlank()) {
+                    auditStore.reconcileExecutionMutationByClientOrderId(
+                        clientId, exchangeStatus, body
+                    )
+                }
+                if (!orderId.isNullOrBlank()) {
+                    auditStore.reconcileExecutionMutationByTargetOrderId(
+                        orderId,
+                        exchangeStatus,
+                        response.optString("executedQty").toDoubleOrNull() ?: -1.0,
+                        body
+                    )
+                }
+            }
+            "/api/v3/orderList" -> {
+                val listClientId = query["origClientOrderId"] ?: query["listClientOrderId"]
+                val listId = query["orderListId"]
+                val listStatus = response.optString("listOrderStatus").ifBlank {
+                    response.optString("listStatusType")
+                }.uppercase(Locale.US)
+                if (!listClientId.isNullOrBlank()) {
+                    auditStore.reconcileExecutionMutationByClientOrderId(
+                        listClientId, listStatus, body
+                    )
+                }
+                if (!listId.isNullOrBlank()) {
+                    auditStore.reconcileExecutionMutationByTargetOrderListId(listId, body)
+                }
+            }
+        }
+        val unresolved = auditStore.unresolvedExecutionMutationCount()
+        if (unresolved > 0) {
+            latchMutationReconciliation(
+                "authoritative order lookup completed but " + unresolved +
+                    " mutation(s) still require fill/position accounting"
+            )
+        }
+    }
+
     private fun signedAccount(): JSONObject =
         signedRequest(
             method = "GET",
@@ -1885,6 +1934,33 @@ private class NativeEngine(
                     }
 
                     if (!response.isSuccessful) {
+                        if (mutation == null &&
+                            method.equals("GET", ignoreCase = true) &&
+                            path == "/api/v3/order" &&
+                            parseSignedParams(params)["origClientOrderId"].isNullOrBlank().not()
+                        ) {
+                            val exchangeError = runCatching { JSONObject(lastBody) }.getOrNull()
+                            if (exchangeError?.optInt("code", 0) == -2013) {
+                                val absentClientId = parseSignedParams(params)["origClientOrderId"].orEmpty()
+                                runCatching {
+                                    auditStore.reconcileExecutionMutationByClientOrderId(
+                                        absentClientId,
+                                        "NOT_FOUND",
+                                        lastBody,
+                                        notFound = true
+                                    )
+                                }.onFailure { reconcileFailure ->
+                                    latchMutationReconciliation(
+                                        "could not durably record Binance -2013 absence: " +
+                                            (reconcileFailure.message ?: reconcileFailure.javaClass.simpleName)
+                                    )
+                                    throw IllegalStateException(
+                                        "Order absence could not be durably reconciled",
+                                        reconcileFailure
+                                    )
+                                }
+                            }
+                        }
                         error("Binance " + response.code + ": " + lastBody)
                     }
                     if (mutation != null) {
@@ -1892,6 +1968,21 @@ private class NativeEngine(
                         if (classified.first != "SUBMITTED") {
                             throw IllegalStateException(
                                 "Execution outcome requires reconciliation: " + classified.second
+                            )
+                        }
+                    } else if (method.equals("GET", ignoreCase = true) &&
+                        path in setOf("/api/v3/order", "/api/v3/orderList")
+                    ) {
+                        try {
+                            reconcileMutationFromAuthoritativeRead(path, params, lastBody)
+                        } catch (reconcileFailure: Exception) {
+                            latchMutationReconciliation(
+                                "mandatory exchange read-back reconciliation failed: " +
+                                    (reconcileFailure.message ?: reconcileFailure.javaClass.simpleName)
+                            )
+                            throw IllegalStateException(
+                                "Exchange state cannot be authoritatively reconciled; trading remains blocked",
+                                reconcileFailure
                             )
                         }
                     }
