@@ -250,6 +250,9 @@ def test_terminal_partial_oco_is_counted_once_and_reprotected(tmp_path):
                 stop_limit_price, list_client_order_id,
             )
             result = dict(result)
+            # Binance order-list responses carry the parent symbol; include it
+            # so this fake exposes the created list through exchange queries.
+            result["symbol"] = symbol
             result["listOrderStatus"] = "EXECUTING"
             self.created_lists.append(result)
             return result
