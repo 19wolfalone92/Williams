@@ -498,6 +498,26 @@ def test_native_android_signed_order_mutations_are_fenced_before_network():
     assert "auditStore.markExecutionMutationAmbiguous(" in signed_request
     assert "latchMutationReconciliation(" in signed_request
 
+    # Duplicate helper declarations can silently change which version is
+    # reviewed versus which version Kotlin compiles; require one canonical fence.
+    import re
+    for declaration in (
+        "ExecutionMutationSpec",
+        "parseSignedParams",
+        "stableNativeClientOrderId",
+        "executionMutationSpec",
+        "latchMutationReconciliation",
+        "validateAndPersistMutationIntent",
+        "mutationResultStatus",
+        "reconcileMutationFromAuthoritativeRead",
+        "isPotentialOrderMutation",
+    ):
+        count = len(re.findall(
+            rf"\\bprivate\\s+(?:data\\s+class|fun)\\s+{declaration}\\b",
+            runtime,
+        ))
+        assert count == 1, f"expected one canonical {declaration}, got {count}"
+
     # All supported REST mutation endpoints pass through this exact boundary.
     for endpoint in (
         "/api/v3/order",
