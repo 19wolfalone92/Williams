@@ -738,21 +738,27 @@ class Database:
                     pass
                 raise
 
-        # If the exchange authoritatively confirms no order exists, release only
-        # its own identity claims. The next attempt will reuse the same stable
-        # clientOrderId and deterministic intent_id.
-        if status == "NOT_FOUND":
-            for row in rows:
-                logical_key = (
-                    f"{str(row['symbol']).upper()}:"
-                    f"{str(row['purpose']).upper()}:"
-                    f"{str(row['signal_id'] or '').strip()}"
-                )
-                self.release_execution_identity(
-                    str(row["intent_id"]),
-                    str(row["client_order_id"] or ""),
-                    logical_key if str(row["signal_id"] or "").strip() else "",
-                )
+        # Release only claims whose next identical action is justified by
+        # authoritative absence, or when a cancel query proves its target remains
+        # active (so a same-identity cancel retry—not a new order—is permissible).
+        for row in rows:
+            operation = str(row["operation_kind"] or "PLACE").upper()
+            retry_same_cancel = (
+                status in {"NEW", "PENDING_NEW"}
+                and operation in {"CANCEL", "CANCEL_OCO"}
+            )
+            if status != "NOT_FOUND" and not retry_same_cancel:
+                continue
+            logical_key = (
+                f"{str(row['symbol']).upper()}:"
+                f"{str(row['purpose']).upper()}:"
+                f"{str(row['signal_id'] or '').strip()}"
+            )
+            self.release_execution_identity(
+                str(row["intent_id"]),
+                str(row["client_order_id"] or ""),
+                logical_key if str(row["signal_id"] or "").strip() else "",
+            )
         reread = self.find_execution_intent_by_client_order_id(cid)
         if reread is None or str(reread.get("status", "")).upper() != resolved_status:
             raise RuntimeError("reconciled execution intent read-back failed")
