@@ -586,3 +586,72 @@ def test_ambiguous_submission_cannot_be_retried_with_same_intent_or_client_id(tm
         (intent.intent_id,),
     ).fetchone()
     assert row["status"] == "AMBIGUOUS"
+
+
+
+def test_two_independent_sqlite_connections_cannot_claim_conflicting_symbol_intents(tmp_path):
+    import threading
+
+    path = str(tmp_path / "two-runtimes.sqlite3")
+    db_a = Database(path)
+    db_b = Database(path)
+    db_a.mark_recovery_ready(evidence())
+    start = threading.Barrier(3)
+    results = []
+    result_lock = threading.Lock()
+
+    def claim(db, client_id):
+        intent = OrderIntent.new(
+            "BTCUSDT", "BUY", "MARKET", {},
+            client_order_id=client_id, purpose="CAMPAIGN_ENTRY",
+        )
+        start.wait()
+        try:
+            db.claim_execution_intent(intent)
+            result = ("claimed", client_id)
+        except Exception as exc:
+            result = ("blocked", type(exc).__name__, str(exc))
+        with result_lock:
+            results.append(result)
+
+    threads = [
+        threading.Thread(target=claim, args=(db_a, "parallel-client-a")),
+        threading.Thread(target=claim, args=(db_b, "parallel-client-b")),
+    ]
+    for thread in threads:
+        thread.start()
+    start.wait()
+    for thread in threads:
+        thread.join(timeout=10)
+        assert not thread.is_alive()
+
+    assert sum(item[0] == "claimed" for item in results) == 1, results
+    assert sum(item[0] == "blocked" for item in results) == 1, results
+    rows = db_a.conn.execute(
+        "SELECT status,client_order_id FROM execution_intents WHERE symbol='BTCUSDT'"
+    ).fetchall()
+    assert len(rows) == 1
+    assert rows[0]["status"] == "PENDING"
+    db_a.conn.close()
+    db_b.conn.close()
+
+
+def test_reusing_intent_id_across_independent_connections_is_rejected(tmp_path):
+    path = str(tmp_path / "same-intent.sqlite3")
+    db_a = Database(path)
+    db_b = Database(path)
+    db_a.mark_recovery_ready(evidence())
+    intent = OrderIntent.new(
+        "ETHUSDT", "BUY", "MARKET", {},
+        client_order_id="same-intent-client-a", purpose="CAMPAIGN_ENTRY",
+    )
+    db_a.claim_execution_intent(intent)
+    duplicate = OrderIntent(
+        intent_id=intent.intent_id, symbol=intent.symbol, side=intent.side,
+        order_type=intent.order_type, required_context_versions={},
+        client_order_id="same-intent-client-b", purpose="CAMPAIGN_ENTRY",
+    )
+    with pytest.raises(RuntimeError, match="intent ID already exists"):
+        db_b.claim_execution_intent(duplicate)
+    db_a.conn.close()
+    db_b.conn.close()
