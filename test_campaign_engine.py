@@ -301,6 +301,7 @@ def test_signal_spec_accepts_matching_short_order_side_and_direction():
 def test_unknown_pending_signal_timeframe_is_rejected_not_assumed_five_minutes():
     assert _bar_ms("1h") == 3_600_000
     assert _bar_ms("1M") == 2_592_000_000
+    assert _bar_ms(" 1M ") == 2_592_000_000
     with pytest.raises(ValueError, match="Unsupported pending-signal timeframe"):
         _bar_ms("60m")
 
