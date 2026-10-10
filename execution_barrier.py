@@ -404,12 +404,38 @@ class ExecutionBarrier:
             return False, "AMBIGUOUS", "OCO response lacks authoritative leg statuses"
 
         status = ExecutionBarrier._response_status(response)
-        if operation in {"CANCEL", "CANCEL_OCO"}:
-            if status in ExecutionBarrier.KNOWN_ORDER_STATES or status in {"ALL_DONE", "EXEC_STARTED"}:
+        if operation == "CANCEL":
+            executed = 0.0
+            try:
+                executed = float(response.get("executedQty", 0) or 0)
+            except (TypeError, ValueError):
+                return False, "AMBIGUOUS", "cancel response contains invalid executedQty"
+            if status in {"CANCELED", "CANCELLED", "EXPIRED", "REJECTED"} and executed <= 0:
                 return True, "SUBMITTED", ""
-            # Binance cancel endpoints differ in envelope shape. An absent or
-            # unfamiliar status must trigger a read-only query by target ID.
-            return False, "AMBIGUOUS", "cancellation response lacks authoritative target state"
+            if status in {"FILLED", "PARTIALLY_FILLED"} or executed > 0:
+                return False, "AMBIGUOUS", "cancel/fill race: execution evidence exists; reconcile target order"
+            return False, "AMBIGUOUS", "cancellation response lacks authoritative terminal target state"
+
+        if operation == "CANCEL_OCO":
+            # A list-level ALL_DONE flag alone cannot tell whether one leg filled
+            # before cancellation. Require explicit leg states; any filled leg
+            # is a cancel/execute race and must be reconciled by order-list ID.
+            legs = response.get("orders") or response.get("orderReports") or []
+            if isinstance(legs, list) and legs:
+                leg_states = [
+                    ExecutionBarrier._response_status(row)
+                    for row in legs if isinstance(row, dict)
+                ]
+                if len(leg_states) == len(legs) and all(
+                    value in ExecutionBarrier.KNOWN_ORDER_STATES for value in leg_states
+                ):
+                    if any(value in {"FILLED", "PARTIALLY_FILLED"} for value in leg_states):
+                        return False, "AMBIGUOUS", "OCO cancel/fill race; reconcile order-list legs"
+                    if all(value in {"CANCELED", "CANCELLED", "EXPIRED", "REJECTED"} for value in leg_states):
+                        return True, "SUBMITTED", ""
+            if status in {"FILLED", "PARTIALLY_FILLED"}:
+                return False, "AMBIGUOUS", "OCO cancel/fill race; reconcile order-list legs"
+            return False, "AMBIGUOUS", "OCO cancellation lacks authoritative per-leg state"
 
         if status in ExecutionBarrier.KNOWN_ORDER_STATES:
             return True, "SUBMITTED", ""
@@ -425,6 +451,7 @@ class ExecutionBarrier:
         pre_submit_checks: Callable[[MarketStateSnapshot], None] | None = None,
     ) -> ExecutionResult:
         with self.context_cache.execution_lock:
+            operation = str(intent.operation_kind or "PLACE").upper()
             fsm = OrderStateMachine()
             fsm.transition(OrderState.ADMISSION)
             is_entry = self._is_new_exposure(intent)
@@ -498,7 +525,14 @@ class ExecutionBarrier:
                         self._release_identity_claims(intent)
                     return ExecutionResult(intent.intent_id, False, reason=reason)
 
-                fsm.transition(OrderState.SUBMITTING)
+                # Cancellation updates the already-existing target order.
+                # Its lifecycle starts at OPEN -> CANCEL_PENDING; it is not a
+                # newly-created order and must not pretend to traverse SUBMITTING.
+                if operation in {"CANCEL", "CANCEL_OCO"}:
+                    fsm = OrderStateMachine(OrderState.OPEN)
+                    fsm.transition(OrderState.CANCEL_PENDING)
+                else:
+                    fsm.transition(OrderState.SUBMITTING)
                 submit_started = True
                 self._record(
                     "INFO",
@@ -550,19 +584,36 @@ class ExecutionBarrier:
                     raise ExecutionAmbiguousError(f"ExecutionBarrier: {reason}")
 
                 status = self._response_status(response)
-                if status in {"NEW", "PENDING_NEW"}:
-                    fsm.observe_exchange_status(status, float(response.get("executedQty", 0) or 0))
-                elif status == "PARTIALLY_FILLED":
-                    fsm.observe_exchange_status(status, float(response.get("executedQty", 0) or 0))
-                elif status in {"FILLED", "CANCELED", "CANCELLED", "EXPIRED", "REJECTED"}:
+                if operation == "CANCEL_REPLACE":
+                    cancel_result = str(response.get("cancelResult", "")).upper()
+                    new_result = str(response.get("newOrderResult", "")).upper()
+                    replacement = response.get("newOrderResponse")
+                    replacement_status = self._response_status(replacement)
+                    if cancel_result == "SUCCESS" and new_result == "SUCCESS" and replacement_status in {"NEW", "PENDING_NEW"}:
+                        fsm.state = OrderState.OPEN
+                    elif cancel_result == "SUCCESS" and new_result == "SUCCESS" and replacement_status == "PARTIALLY_FILLED":
+                        fsm.state = OrderState.PARTIALLY_FILLED
+                    elif cancel_result == "SUCCESS" and new_result == "SUCCESS" and replacement_status == "FILLED":
+                        fsm.state = OrderState.FILLED
+                    else:
+                        fsm.state = OrderState.RECONCILE_REQUIRED
+                elif operation == "CANCEL_OCO":
+                    # The mutation response was accepted only with explicit
+                    # non-filled terminal states for every leg.
+                    fsm.state = OrderState.CANCELED
+                elif operation == "CANCEL":
+                    if status in {"CANCELED", "CANCELLED", "EXPIRED", "REJECTED"}:
+                        fsm.observe_exchange_status(
+                            "CANCELED" if status == "CANCELLED" else status,
+                            float(response.get("executedQty", 0) or 0),
+                        )
+                    else:
+                        fsm.state = OrderState.RECONCILE_REQUIRED
+                elif status in {"NEW", "PENDING_NEW", "PARTIALLY_FILLED", "FILLED", "CANCELED", "CANCELLED", "EXPIRED", "REJECTED"}:
                     fsm.observe_exchange_status(
                         "CANCELED" if status == "CANCELLED" else status,
                         float(response.get("executedQty", 0) or 0),
                     )
-                elif intent.operation_kind.upper() in {"CANCEL", "CANCEL_OCO", "CANCEL_REPLACE"}:
-                    # The cancel result was authoritative in the operation-specific
-                    # envelope, but still reconcile its target before concluding flat.
-                    fsm.state = OrderState.RECONCILE_REQUIRED
                 else:
                     fsm.state = OrderState.RECONCILE_REQUIRED
 
