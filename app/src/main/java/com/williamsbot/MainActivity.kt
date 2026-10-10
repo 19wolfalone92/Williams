@@ -479,6 +479,8 @@ fun WilliamsApp(context: Context) {
 
     var tab by remember { mutableIntStateOf(0) }
     var status by remember { mutableStateOf(Status()) }
+    var statusLoadedAtMs by remember { mutableStateOf(0L) }
+    var statusLoadFailed by remember { mutableStateOf(false) }
     var marketPairs by remember { mutableStateOf(emptyList<MarketPair>()) }
     var selectedPositionSymbol by remember { mutableStateOf<String?>(null) }
     var candles by remember { mutableStateOf(emptyList<Candle>()) }
@@ -504,11 +506,17 @@ fun WilliamsApp(context: Context) {
             withContext(Dispatchers.IO) {
                 val failures = mutableListOf<String>()
                 var scannerJson = JSONObject()
+                var statusRequestFailed = false
 
                 runCatching {
                     val json = JSONObject(api.get("/api/v1/status?fast=true"))
-                    withContext(Dispatchers.Main) { status = parseStatus(json) }
+                    withContext(Dispatchers.Main) {
+                        status = parseStatus(json)
+                        statusLoadedAtMs = System.currentTimeMillis()
+                        statusLoadFailed = false
+                    }
                 }.onFailure {
+                    statusRequestFailed = true
                     failures += "status: " + (it.message ?: it.javaClass.simpleName)
                 }
 
@@ -555,6 +563,7 @@ fun WilliamsApp(context: Context) {
                 }
 
                 withContext(Dispatchers.Main) {
+                    if (statusRequestFailed) statusLoadFailed = true
                     val scannerError =
                         scannerJson.optString("scanner_error").takeIf { it.isNotBlank() }
                     message = when {
@@ -603,9 +612,33 @@ fun WilliamsApp(context: Context) {
     fun command(path: String) {
         scope.launch(Dispatchers.IO) {
             try {
-                api.post(path)
+                val response = JSONObject(api.post(path))
+                val errorText = response.optString("error").takeIf { it.isNotBlank() }
+                val state = response.optString("state")
+                val reason = response.optString("reason").takeIf { it.isNotBlank() }
+                val blockers = response.optJSONArray("execution_blockers")
+                val blockerText = if (blockers == null || blockers.length() == 0) {
+                    null
+                } else {
+                    (0 until blockers.length()).joinToString(", ") { blockers.optString(it) }
+                }
+                val feedback = when {
+                    errorText != null -> "Команда не выполнена: $errorText"
+                    state == "RECONCILE_REQUIRED" ->
+                        "ТОРГОВЛЯ ЗАБЛОКИРОВАНА: RECONCILE_REQUIRED" +
+                            (reason?.let { " — $it" } ?: "")
+                    response.has("started") && !response.optBoolean("started", false) &&
+                        reason == "already_running" -> "Двигатель уже запущен"
+                    response.has("started") && !response.optBoolean("started", false) ->
+                        "Запуск отклонён: " + (reason ?: "runtime не подтвердил запуск")
+                    path.endsWith("/start") && response.has("execution_ready") &&
+                        !response.optBoolean("execution_ready", false) ->
+                        "Runtime запущен, но execution заблокирован" +
+                            (blockerText?.let { ": $it" } ?: "")
+                    else -> commandLabel(path)
+                }
                 withContext(Dispatchers.Main) {
-                    message = commandLabel(path)
+                    message = feedback
                 }
                 loadAll(false)
             } catch (e: Exception) {
@@ -879,6 +912,14 @@ fun WilliamsApp(context: Context) {
         }
     }
 
+    // Never let the last successful snapshot masquerade as current telemetry.
+    // A fresh timestamp is renewed only after the local runtime status endpoint
+    // returns successfully; failed calls leave the screen visibly stale.
+    val statusDataFresh =
+        statusLoadedAtMs > 0L &&
+            !statusLoadFailed &&
+            System.currentTimeMillis() - statusLoadedAtMs <= 45_000L
+
     val titles = listOf("Overview", "Wave Map", "Positions", "Incidents", "Diagnostics", "Config")
     val icons = listOf(
         Icons.Filled.Dashboard,
@@ -920,7 +961,7 @@ fun WilliamsApp(context: Context) {
                                 style = MaterialTheme.typography.titleMedium
                             )
                             Text(
-                                "BACKEND CONTROL • Android is dashboard only",
+                                "AUTONOMOUS PHONE RUNTIME • Testnet only",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = AppColors.textMuted
                             )
@@ -928,9 +969,10 @@ fun WilliamsApp(context: Context) {
                     }
                 },
                 actions = {
-                    StatusDot("P0", if (status.p0GatePassed) AppColors.green else AppColors.red)
-                    StatusDot("WSS", if (status.marketWsConnected && !status.userStreamSyncRequired) AppColors.green else AppColors.amber)
-                    StatusDot("BINANCE", if (status.binanceConfigured) AppColors.green else AppColors.amber)
+                    if (!statusDataFresh) StatusDot("STALE", AppColors.red)
+                    StatusDot("P0", if (statusDataFresh && status.p0GatePassed) AppColors.green else AppColors.red)
+                    StatusDot("WSS", if (statusDataFresh && status.marketWsConnected && !status.userStreamSyncRequired) AppColors.green else AppColors.amber)
+                    StatusDot("BINANCE", if (statusDataFresh && status.binanceConfigured) AppColors.green else AppColors.amber)
                     ModeChip("TESTNET", AppColors.green)
                     IconButton(onClick = { refresh(true) }) {
                         Icon(
