@@ -122,7 +122,7 @@ class Trader:
         symbols.update(str(x[0]).upper() for x in portfolio._pending_entries())
         intent_symbols = self.db.conn.execute(
             "SELECT DISTINCT symbol FROM execution_intents "
-            "WHERE UPPER(status) IN ('PENDING','SUBMITTED','AMBIGUOUS','RECONCILE_REQUIRED')"
+            "WHERE UPPER(status) IN ('PENDING','SUBMITTED','AMBIGUOUS','RECONCILE_REQUIRED','CONFIRMED')"
         ).fetchall()
         symbols.update(str(row["symbol"]).upper() for row in intent_symbols if row["symbol"])
         if not symbols:
