@@ -7158,7 +7158,11 @@ private class NativeEngine(
                 countertrendCorrectionImpulse = countertrendCorrectionImpulse
             ),
             reason = reason,
-            campaignReady = campaignEngineEnabled && finalSignal
+            // MTF/Elliott-wave labels and heuristic scores are context
+            // diagnostics, not a substitute gate for a source-qualified TC2
+            // Wise-Man event. Higher-timeframe permission remains a separate
+            // contract; do not erase a canonical H1 candidate here.
+            campaignReady = campaignEngineEnabled && baseCandidate.campaignReady
         )
     }
 
