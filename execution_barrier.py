@@ -249,6 +249,24 @@ class ExecutionBarrier:
                 self._record("WARNING", "execution_blocked", intent, preflight_reason)
                 return ExecutionResult(intent.intent_id, False, reason=preflight_reason)
 
+            client_order_id = str(intent.client_order_id or "").strip()
+            if not client_order_id:
+                self._persist(intent, "BLOCKED", "stable_client_order_id_missing")
+                return ExecutionResult(intent.intent_id, False, reason="stable_client_order_id_missing")
+            if self.db is None or not hasattr(self.db, "try_claim_state"):
+                self._persist(intent, "BLOCKED", "durable_idempotency_store_unavailable")
+                return ExecutionResult(intent.intent_id, False, reason="durable_idempotency_store_unavailable")
+            try:
+                claimed = self.db.try_claim_state(
+                    f"execution_client_order_id:{client_order_id}",
+                    intent.intent_id,
+                )
+            except Exception:
+                claimed = False
+            if not claimed:
+                self._persist(intent, "BLOCKED", "duplicate_or_previously_claimed_client_order_id")
+                return ExecutionResult(intent.intent_id, False, reason="duplicate_or_previously_claimed_client_order_id")
+
             order_fsm.transition(OrderState.SUBMITTING)
             self._record(
                 "INFO",
