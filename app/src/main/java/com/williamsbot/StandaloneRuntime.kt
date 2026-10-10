@@ -25,8 +25,13 @@ import java.nio.charset.StandardCharsets
 import java.util.Locale
 import java.util.ArrayDeque
 import java.util.Calendar
+import java.util.Base64
+import java.security.SecureRandom
 import java.util.concurrent.Callable
 import java.util.concurrent.Executors
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
@@ -38,18 +43,62 @@ import kotlin.math.ceil
 
 object StandaloneRuntime {
     @SuppressLint("StaticFieldLeak")
-    private var server: StandaloneServer? = null
+    @Volatile private var server: StandaloneServer? = null
 
+    @Synchronized
     fun start(context: Context) {
-        if (server == null) {
-            server =
-                StandaloneServer(
-                    context.applicationContext
-                )
-            server!!.start()
+        val current = server
+        if (current?.isListeningOnLoopback == true) return
+
+        // Do not retain a half-started server after a failed bind/accept-loop
+        // startup. A later launch must be able to construct a clean listener.
+        if (current != null) current.stop()
+        val candidate = StandaloneServer(context.applicationContext)
+        try {
+            candidate.start()
+            check(candidate.isListeningOnLoopback) {
+                "Local API listener did not become active on loopback"
+            }
+            server = candidate
+        } catch (failure: Throwable) {
+            candidate.stop()
+            throw failure
         }
     }
 
+    /**
+     * Per-install capability for the loopback HTTP bridge. Stored in the same
+     * Keystore-encrypted preferences used by the native engine, never logged
+     * or exposed by diagnostics.
+     */
+    @Synchronized
+    fun localApiToken(context: Context): String {
+        val secure = EncryptedSharedPreferences.create(
+            context.applicationContext,
+            "williams_native_secure",
+            MasterKey.Builder(context.applicationContext)
+                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                .build(),
+            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+        )
+        val existing = secure.getString("local_api_token", null)
+        if (!existing.isNullOrBlank()) return existing
+
+        val random = ByteArray(32)
+        SecureRandom().nextBytes(random)
+        val generated = Base64.getUrlEncoder().withoutPadding().encodeToString(random)
+        val committed = secure.edit().putString("local_api_token", generated).commit()
+        check(committed) { "Could not persist local API authorization token" }
+        val saved = secure.getString("local_api_token", null)
+        check(saved == generated) { "Local API authorization token read-back failed" }
+        return saved
+    }
+
+    fun isListeningOnLoopback(): Boolean =
+        server?.isListeningOnLoopback == true
+
+    @Synchronized
     fun autostart(context: Context) {
         start(context)
         server?.autostart()
@@ -71,14 +120,17 @@ object StandaloneRuntime {
         return server!!.status(fast = fast)
     }
 
+    @Synchronized
     fun startTrading() {
         server?.startTrading()
     }
 
+    @Synchronized
     fun stopTrading() {
         server?.stopTrading()
     }
 
+    @Synchronized
     fun stop() {
         server?.stop()
         server = null
@@ -255,42 +307,77 @@ private class StandaloneServer(private val context: Context) {
         }
     )
 
-    private var socket: ServerSocket? = null
+    @Volatile private var socket: ServerSocket? = null
+    @Volatile private var acceptThread: Thread? = null
+    private val clientExecutor = ThreadPoolExecutor(
+        2,
+        4,
+        60L,
+        TimeUnit.SECONDS,
+        LinkedBlockingQueue<Runnable>(32),
+        { runnable -> Thread(runnable, "williams-local-api-client").apply { isDaemon = true } },
+        ThreadPoolExecutor.AbortPolicy()
+    )
     private var engine: NativeEngine? = null
 
-    fun start() {
-        if (socket != null) return
+    val isListeningOnLoopback: Boolean
+        get() {
+            val active = socket ?: return false
+            return active.isBound &&
+                !active.isClosed &&
+                active.localPort == port &&
+                active.inetAddress.isLoopbackAddress &&
+                acceptThread?.isAlive == true
+        }
 
-        socket = ServerSocket(
+    @Synchronized
+    fun start() {
+        if (isListeningOnLoopback) return
+        runCatching { socket?.close() }
+        val listeningSocket = ServerSocket(
             port,
             32,
             InetAddress.getByName("127.0.0.1")
         )
+        socket = listeningSocket
 
-        Thread {
-            while (true) {
-                try {
-                    val c = socket?.accept() ?: break
-                    Thread { handle(c) }.start()
+        val listener = Thread({
+            while (!listeningSocket.isClosed) {
+                val connection = try {
+                    listeningSocket.accept()
                 } catch (_: Exception) {
                     break
                 }
+                try {
+                    connection.soTimeout = 5_000
+                    clientExecutor.execute { handle(connection) }
+                } catch (_: RejectedExecutionException) {
+                    runCatching { connection.close() }
+                } catch (_: Exception) {
+                    runCatching { connection.close() }
+                }
             }
-        }.apply {
+        }, "williams-local-api-accept").apply {
             isDaemon = true
-            start()
+        }
+        acceptThread = listener
+        listener.start()
+        check(isListeningOnLoopback) {
+            "Local API accept loop failed to start"
         }
     }
 
+    @Synchronized
     fun stop() {
-        try {
-            socket?.close()
-        } catch (_: Exception) {
-        }
+        runCatching { socket?.close() }
         socket = null
+        acceptThread?.interrupt()
+        acceptThread = null
+        clientExecutor.shutdownNow()
         engine?.stop()
     }
 
+    @Synchronized
     fun autostart() {
         if (
             prefs.getBoolean("auto_run", false)
@@ -339,22 +426,56 @@ private class StandaloneServer(private val context: Context) {
                 val target = parts[1]
 
                 var length = 0
+                var authorizationHeader: String? = null
                 while (true) {
                     val line = reader.readLine() ?: return
                     if (line.isEmpty()) break
 
                     val header = line.split(":", limit = 2)
-                    if (
-                        header.size == 2 &&
-                        header[0].equals("Content-Length", ignoreCase = true)
-                    ) {
-                        length = header[1].trim().toIntOrNull() ?: 0
+                    if (header.size == 2) {
+                        when {
+                            header[0].equals("Content-Length", ignoreCase = true) -> {
+                                length = header[1].trim().toIntOrNull()
+                                    ?: error("Invalid Content-Length")
+                                require(length in 0..1_048_576) { "Request body too large" }
+                            }
+                            header[0].equals("Authorization", ignoreCase = true) -> {
+                                authorizationHeader = header[1].trim()
+                            }
+                        }
                     }
                 }
 
+                if (!LocalApiAuthorization.isAuthorized(
+                        StandaloneRuntime.localApiToken(context),
+                        authorizationHeader
+                    )
+                ) {
+                    val bytes = JSONObject()
+                        .put("error", "unauthorized")
+                        .toString()
+                        .toByteArray(StandardCharsets.UTF_8)
+                    val output = s.getOutputStream()
+                    output.write(
+                        (
+                            "HTTP/1.1 401 Unauthorized\r\n" +
+                                "Content-Type: application/json; charset=utf-8\r\n" +
+                                "Cache-Control: no-store\r\n" +
+                                "Content-Length: " + bytes.size + "\r\n" +
+                                "Connection: close\r\n\r\n"
+                            ).toByteArray(StandardCharsets.UTF_8)
+                    )
+                    output.write(bytes)
+                    output.flush()
+                    return
+                }
+
                 val chars = CharArray(length)
-                if (length > 0) {
-                    reader.read(chars)
+                var offset = 0
+                while (offset < length) {
+                    val read = reader.read(chars, offset, length - offset)
+                    if (read < 0) error("Truncated request body")
+                    offset += read
                 }
 
                 val body = route(method, target, String(chars))
@@ -526,6 +647,7 @@ private class NativeEngine(
     private val http: OkHttpClient
 ) {
     private val baseUrl = "https://testnet.binance.vision"
+    private val userStreamEndpoint = "wss://ws-api.testnet.binance.vision/ws-api/v3"
     private val historyStore = MarketHistoryStore(context)
     private val rateGuard = BinanceRateGuard()
     private val auditStore = TradingAuditStore(context)
@@ -661,7 +783,7 @@ private class NativeEngine(
 
     private val userStream = BinanceUserDataStream(
         http = http,
-        endpoint = "wss://ws-api.testnet.binance.vision/ws-api/v3",
+        endpoint = userStreamEndpoint,
         apiKeyProvider = { key() },
         apiSecretProvider = { secret() },
         timestampProvider = { signedTimestamp() },
@@ -1061,12 +1183,19 @@ private class NativeEngine(
 
         val oldKey = key()
         val oldSecret = secret()
-        prefs.edit()
-            .putString("api_key", newKey)
-            .putString("api_secret", newSecret)
-            .apply()
-
         return try {
+            val credentialsCommitted = prefs.edit()
+                .putString("api_key", newKey)
+                .putString("api_secret", newSecret)
+                .commit()
+            require(
+                credentialsCommitted &&
+                    key() == newKey &&
+                    secret() == newSecret
+            ) {
+                "Binance credentials persistence/read-back verification failed"
+            }
+
             val account = signedAccount()
             require(account.optString("accountType", "SPOT").equals("SPOT", true)) {
                 "Configured Binance account is not Spot"
@@ -1080,11 +1209,18 @@ private class NativeEngine(
                 .put("validation", "PASS")
                 .put("read_back_verified", key() == newKey && secret() == newSecret)
         } catch (x: Exception) {
-            prefs.edit()
+            val rollbackCommitted = prefs.edit()
                 .putString("api_key", oldKey)
                 .putString("api_secret", oldSecret)
-                .apply()
+                .commit()
             restAccountReady = false
+            if (!rollbackCommitted || key() != oldKey || secret() != oldSecret) {
+                setReconcileRequired("credential rollback persistence failed")
+                throw IllegalStateException(
+                    "Credential persistence/rollback failed; execution remains blocked",
+                    x
+                )
+            }
             throw IllegalStateException(
                 "Binance credentials validation failed: " +
                     (x.message ?: x.javaClass.simpleName),
@@ -1104,13 +1240,16 @@ private class NativeEngine(
         }
 
         stop()
-        prefs.edit()
+        val cleared = prefs.edit()
             .remove("api_key")
             .remove("api_secret")
             .remove("positions_json")
             .remove("pending_entries_json")
             .putBoolean("auto_run", false)
-            .apply()
+            .commit()
+        require(cleared && key().isBlank() && secret().isBlank()) {
+            "Credential deletion persistence/read-back verification failed"
+        }
 
         candidates = JSONArray()
         primaryCandles = emptyList()
@@ -7870,9 +8009,17 @@ private class NativeEngine(
             .put("rest_market_ready", restMarketReady)
             .put("rest_account_ready", restAccountReady)
             .put("rest_last_success_ms", restLastSuccessMs)
+            .put("rest_last_success_age_ms", if (restLastSuccessMs > 0L) (System.currentTimeMillis() - restLastSuccessMs).coerceAtLeast(0L) else JSONObject.NULL)
+            .put("market_data_fresh", marketDataFresh())
+            .put("market_data_freshness_limit_ms", 30_000L)
+            .put("market_ws_last_event_age_ms", if (marketSocketLastEventMs > 0L) (System.currentTimeMillis() - marketSocketLastEventMs).coerceAtLeast(0L) else JSONObject.NULL)
+            .put("scan_age_ms", if (lastScanAt > 0L) (System.currentTimeMillis() - lastScanAt).coerceAtLeast(0L) else JSONObject.NULL)
+            .put("local_api_listening", StandaloneRuntime.isListeningOnLoopback())
+            .put("local_api_auth_required", true)
+            .put("execution_blockers", JSONArray(executionBlockers()))
             .put("rest_last_latency_ms", restLastLatencyMs)
             .put("rest_last_error", restLastError ?: JSONObject.NULL)
-            .put("rest_ticker_price", if (restLastTickerPrice > 0.0) restLastTickerPrice else JSONObject.NULL)
+            .put("rest_ticker_price", if (restLastTickerPrice > 0.0 && marketDataFresh()) restLastTickerPrice else JSONObject.NULL)
     }
 
     fun historyStatus(): JSONObject =
@@ -8119,19 +8266,38 @@ private class NativeEngine(
                     .put("detail", detail)
             )
         }
-        test("version_consistency", "runtime", BuildConfig.VERSION_NAME.isNotBlank(), "FAIL", "app_version=" + BuildConfig.VERSION_NAME)
-        test("testnet_enabled", "binance", true, "FAIL", "Standalone runtime uses Binance Spot Testnet")
-        test("local_api_loopback", "runtime", 18080 == 18080, "FAIL", "127.0.0.1:18080")
+        val versionIsWellFormed = BuildConfig.VERSION_NAME.matches(
+            Regex("""\d+\.\d+\.\d+(-[A-Za-z0-9.-]+)?""")
+        )
+        val testnetEndpointsValid =
+            baseUrl == "https://testnet.binance.vision" &&
+                userStreamEndpoint == "wss://ws-api.testnet.binance.vision/ws-api/v3" &&
+                wsStreamUrl().startsWith("wss://stream.testnet.binance.vision/")
+        val apiToken = runCatching { StandaloneRuntime.localApiToken(context) }.getOrNull()
+        test("version_consistency", "runtime", versionIsWellFormed, "FAIL", "app_version=" + BuildConfig.VERSION_NAME)
+        test("testnet_enabled", "binance", testnetEndpointsValid, "FAIL", "rest_endpoint=" + baseUrl + "; user_ws_testnet=" + userStreamEndpoint.contains("testnet.binance.vision"))
+        test("local_api_loopback", "runtime", StandaloneRuntime.isListeningOnLoopback(), "FAIL", "listener_active=" + StandaloneRuntime.isListeningOnLoopback() + "; address=127.0.0.1:18080")
+        test("local_api_auth", "security", apiToken != null && LocalApiAuthorization.isAuthorized(apiToken, "Bearer " + apiToken), "FAIL", "per_install_token_present=" + !apiToken.isNullOrBlank() + "; bearer_required=true")
         test("execution_gate", "execution", executionReady(), "FAIL", "execution_ready=" + executionReady() + "; blockers=" + executionBlockers().joinToString(","))
         test("runtime_lifecycle", "runtime", running == (worker?.isAlive == true), "FAIL", "running=" + running + "; worker_alive=" + (worker?.isAlive == true))
         test("history_lifecycle", "database", historyReady || historyState in setOf("IDLE","LOADING","WAITING_RETRY","STOPPED"), "FAIL", "state=" + historyState + "; active_tasks=" + activeHistoryTasks.size)
         test("credentials_state", "binance", key().isNotBlank() && secret().isNotBlank(), "WARN", if (key().isNotBlank() && secret().isNotBlank()) "Binance credentials configured" else "Binance credentials not configured")
-        test("rest_market_data", "binance", restMarketReady, "FAIL", if (restMarketReady) "Ticker REST OK; price=" + restLastTickerPrice + "; latency_ms=" + restLastLatencyMs else "REST market failed: " + (restLastError ?: "pending"))
+        val restAgeMs = if (restLastSuccessMs > 0L) {
+            (System.currentTimeMillis() - restLastSuccessMs).coerceAtLeast(0L)
+        } else {
+            Long.MAX_VALUE
+        }
+        test("rest_market_data", "binance", marketDataFresh(), "FAIL", if (marketDataFresh()) "Ticker REST fresh; age_ms=" + restAgeMs + "; price=" + restLastTickerPrice + "; latency_ms=" + restLastLatencyMs else "REST market stale/unavailable; age_ms=" + (if (restAgeMs == Long.MAX_VALUE) "unknown" else restAgeMs.toString()) + "; error=" + (restLastError ?: "pending"))
         test("rest_account", "binance", restAccountReady, "WARN", if (restAccountReady) "Signed account OK; USDT=" + liveUsdtBalance else "Account REST failed: " + (restLastError ?: "pending"))
         test("market_websocket", "websocket", marketSocketConnected, "WARN", if (marketSocketConnected) "Market stream connected" else "Market stream disconnected; REST fallback active")
         test("user_websocket", "websocket", userStreamConnected && !userStreamSyncRequired, "WARN", if (userStreamConnected && !userStreamSyncRequired) "User stream connected and synchronized" else "User stream degraded; REST reconciliation active")
         test("history_ready", "database", historyReady, "WARN", if (historyReady) "Market history is ready" else "history_state=" + historyState + "; error=" + (historyLastError ?: "pending"))
-        test("scanner_state", "scanner", scannerState == "READY" || (scannerState == "RUNNING" && scanning), "WARN", "state=" + scannerState + "; run_id=" + scanRunId + "; progress=" + scanProgressSymbols + "/" + scanSymbols.size + "; last_progress_ms=" + scanLastProgressAt)
+        val scanAgeMs = if (lastScanAt > 0L) {
+            (System.currentTimeMillis() - lastScanAt).coerceAtLeast(0L)
+        } else {
+            Long.MAX_VALUE
+        }
+        test("scanner_state", "scanner", (scannerState == "READY" || (scannerState == "RUNNING" && scanning)) && scanAgeMs <= 60_000L, "WARN", "state=" + scannerState + "; run_id=" + scanRunId + "; progress=" + scanProgressSymbols + "/" + scanSymbols.size + "; scan_age_ms=" + (if (scanAgeMs == Long.MAX_VALUE) "unknown" else scanAgeMs.toString()) + "; last_progress_ms=" + scanLastProgressAt)
         test("state_machine", "runtime", stateMachine.state.name.isNotBlank(), "FAIL", "fsm_state=" + stateMachine.state.name)
         test("risk_limits", "risk", maxRiskPerTradePct > 0.0 && maxRiskPerTradePct <= 0.005 && maxTotalRiskPct <= 0.01, "FAIL", "per_trade=" + maxRiskPerTradePct + "; total=" + maxTotalRiskPct)
         test("self_heal_contract", "runtime", true, "FAIL", "safe_only=true; endpoint=/api/v1/control/self-heal")
