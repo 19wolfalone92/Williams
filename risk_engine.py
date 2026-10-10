@@ -118,6 +118,7 @@ class RiskEngine:
         side: str = "LONG",
         invalidation_price: float = 0.0,
         min_notional: float = 0.0,
+        enforce_min_rr: bool = True,
     ) -> RiskAnalysis:
 
         side = str(side or "LONG").upper()
@@ -210,8 +211,14 @@ class RiskEngine:
         if not math.isfinite(rr):
             return self._blocked(symbol, side, entry, "calculated risk/reward is non-finite")
 
-        if rr < self.min_rr:
+        if enforce_min_rr and rr < self.min_rr:
             return self._blocked(symbol, side, entry, f"R:R {rr:.3f} below minimum {self.min_rr:.3f}")
+
+        # TC2 campaign exits are structural; a synthetic ATR target must not
+        # act as a mandatory admission gate or masquerade as the live take-profit.
+        # The target-derived ratio is kept only for legacy profiles that opt in.
+        if not enforce_min_rr:
+            rr = 0.0
 
         # Maximum money we are allowed to lose on this trade. Size against the
         # protective stop plus bounded fee/slippage reserve.
@@ -268,10 +275,13 @@ class RiskEngine:
             1.0,
         )
 
-        rr_score = 25.0 * self._clamp(
-            (rr - self.min_rr) / max(3.0 - self.min_rr, 0.0001),
-            0.0,
-            1.0,
+        rr_score = (
+            25.0 * self._clamp(
+                (rr - self.min_rr) / max(3.0 - self.min_rr, 0.0001),
+                0.0,
+                1.0,
+            )
+            if enforce_min_rr else 0.0
         )
 
         risk_efficiency = self._clamp(
@@ -314,9 +324,9 @@ class RiskEngine:
             side=side,
             entry_price=entry,
             stop_price=stop_price,
-            take_profit_price=take_profit_price,
+            take_profit_price=take_profit_price if enforce_min_rr else 0.0,
             stop_distance_pct=round(stop_pct * 100.0, 4),
-            take_profit_pct=round(target_pct * 100.0, 4),
+            take_profit_pct=round(target_pct * 100.0, 4) if enforce_min_rr else 0.0,
             risk_reward=round(rr, 4),
             risk_quote=round(risk_quote, 8),
             position_quote=round(position_quote, 8),
