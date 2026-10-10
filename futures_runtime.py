@@ -52,7 +52,10 @@ def _resolve_futures_symbols(
     source = os.environ if env is None else env
     if symbols is None:
         configured = str(source.get("FUTURES_SYMBOLS", "")).strip()
-        raw_symbols = configured.split(",") if configured else list(defaults)
+        if not configured or configured.upper() in {"ALL", "AUTO", "*"}:
+            raw_symbols = list(defaults)
+        else:
+            raw_symbols = configured.split(",")
     else:
         raw_symbols = list(symbols)
     return tuple(dict.fromkeys(
