@@ -104,7 +104,7 @@ class BinanceSpotClient:
                     params=p,
                     timeout=self.timeout,
                 )
-            except (requests.Timeout, requests.ConnectionError) as exc:
+            except requests.RequestException as exc:
                 last_exc = exc
                 # Only idempotent GET requests are retried after a transport
                 # failure. POST/DELETE remain UNKNOWN and require reconciliation.
@@ -114,7 +114,7 @@ class BinanceSpotClient:
                 raise BinanceAPIError(
                     f'Binance transport error: {type(exc).__name__}',
                     unknown_execution=method in {"POST", "DELETE"},
-                ) from exc
+                ) from None
 
             used = r.headers.get('X-MBX-USED-WEIGHT-1M')
             orders = r.headers.get('X-MBX-ORDER-COUNT-1M')
@@ -231,7 +231,7 @@ class BinanceSpotClient:
             raise BinanceAPIError(
                 f"Binance request failed: {type(last_exc).__name__}",
                 unknown_execution=method in {"POST", "DELETE"},
-            ) from last_exc
+            ) from None
 
         raise BinanceAPIError(
             f'Binance request failed: {method} {path}'
@@ -285,7 +285,7 @@ class BinanceSpotClient:
             return payload
         raise BinanceAPIError(
             f"Binance {endpoint} returned {type(payload).__name__}; expected object",
-            payload=payload,
+            payload={"response_type": type(payload).__name__, "response body redacted"},
         )
 
     @staticmethod
@@ -294,7 +294,7 @@ class BinanceSpotClient:
             return payload
         raise BinanceAPIError(
             f"Binance {endpoint} returned {type(payload).__name__}; expected array",
-            payload=payload,
+            payload={"response_type": type(payload).__name__, "response body redacted"},
         )
 
     def all_orders(self,symbol,limit=1000):
@@ -397,7 +397,7 @@ class BinanceSpotClient:
                     unknown_execution=True,
                     status_code=exc.status_code,
                     payload=exc.payload,
-                ) from reconcile_exc
+                ) from None
 
             status = str(existing.get("status", "")).upper()
             if status in {
@@ -408,14 +408,14 @@ class BinanceSpotClient:
             raise BinanceAPIError(
                 f"Existing Binance order is terminal after ambiguous submission: "
                 f"{status or 'UNKNOWN'}",
-                payload=existing,
-            ) from exc
+                payload={"status": status or "UNKNOWN", "response body redacted": True},
+            ) from None
 
         status = str(result.get("status", "")).upper()
         if status in {"REJECTED", "EXPIRED", "CANCELED"}:
             raise BinanceAPIError(
                 f"Binance order returned terminal failure: {status}",
-                payload=result,
+                payload={"status": status, "response body redacted": True},
             )
         return result
 
@@ -536,7 +536,7 @@ class BinanceSpotClient:
                     unknown_execution=True,
                     status_code=exc.status_code,
                     payload=exc.payload,
-                ) from reconcile_exc
+                ) from None
             if existing:
                 return existing
             raise BinanceAPIError(
