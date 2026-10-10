@@ -39,6 +39,7 @@ class OrderIntent:
     # Immutable Wise-Man trigger copied from SignalSpec. The final barrier needs
     # it to independently revalidate WM3 against the operative Teeth line.
     signal_trigger_price: float = 0.0
+    signal_expires_at_ms: int = 0
     quantity: str = ""
     quote_order_quantity: str = ""
     client_order_id: str = ""
@@ -147,10 +148,28 @@ class ExecutionBarrier:
         # exit must not be stranded merely because its intent aged while waiting
         # for the execution lock. These non-entry paths must enforce their own
         # live-position/price/ownership checks before submission.
+        now_ms = int(time.time() * 1000)
         if is_new_exposure and intent.created_at_ms:
-            age = int(time.time() * 1000) - intent.created_at_ms
+            age = now_ms - intent.created_at_ms
             if age > intent.max_age_ms:
                 return f"stale intent age={age}ms"
+
+        tc2_profile = (
+            os.getenv("WILLIAMS_STRATEGY_PROFILE", "TC2_THREE_WISE_MEN").strip().upper()
+            == "TC2_THREE_WISE_MEN"
+        )
+        if tc2_profile and purpose in {"CAMPAIGN_ENTRY", "CAMPAIGN_ADD_ON"}:
+            try:
+                signal_expires_at_ms = int(getattr(intent, "signal_expires_at_ms", 0) or 0)
+                signal_trigger_price = float(getattr(intent, "signal_trigger_price", 0.0))
+            except (TypeError, ValueError, OverflowError):
+                return "invalid TC2 signal expiry/trigger evidence"
+            if signal_expires_at_ms <= 0:
+                return "TC2 campaign mutation is missing signal expiry"
+            if now_ms >= signal_expires_at_ms:
+                return "TC2 campaign signal expired before execution"
+            if not math.isfinite(signal_trigger_price) or signal_trigger_price <= 0.0:
+                return "TC2 campaign mutation is missing a valid conditional trigger"
 
         # Missing context must block new exposure, not cancellation, protection,
         # exit, or recovery. Any context versions that are supplied are still
