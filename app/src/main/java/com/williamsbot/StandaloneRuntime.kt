@@ -8183,18 +8183,24 @@ private class NativeEngine(
         val statusJson = status()
         val positions = JSONArray()
         val sourcePositions = statusJson.optJSONArray("positions") ?: JSONArray()
+        val marketFresh = statusJson.optBoolean("market_data_fresh", false)
         var totalPositionValue = 0.0
+        var allPositionValuesKnown = marketFresh
         for (i in 0 until sourcePositions.length()) {
             val p = sourcePositions.optJSONObject(i) ?: continue
             val symbol = p.optString("symbol", "")
             val qty = p.optDouble("qty", 0.0)
             val entry = p.optDouble("entry", p.optDouble("avg_entry_price", 0.0))
-            val current = statusJson.optJSONObject("live_prices")
-                ?.optDouble(symbol, 0.0)
-                ?.takeIf { it > 0.0 }
-                ?: entry
-            val value = qty * current
-            totalPositionValue += value
+            val current = if (marketFresh) {
+                statusJson.optJSONObject("live_prices")
+                    ?.optDouble(symbol, 0.0)
+                    ?.takeIf { it > 0.0 }
+            } else {
+                null
+            }
+            val value = current?.times(qty)
+            if (value != null) totalPositionValue += value
+            else allPositionValuesKnown = false
             positions.put(
                 JSONObject()
                     .put("symbol", symbol)
@@ -8203,21 +8209,24 @@ private class NativeEngine(
                     .put("stop_loss", p.optDouble("stop", 0.0))
                     .put("take_profit", p.optDouble("take", 0.0))
                     .put("risk_pct", p.optDouble("risk_pct", 0.0))
-                    .put("current_price", current)
-                    .put("position_value_usdt", value)
+                    .put("current_price", current ?: JSONObject.NULL)
+                    .put("position_value_usdt", value ?: JSONObject.NULL)
                     .put("allocation_pct", 0.0)
-                    .put("unrealized_pnl_usdt", (current - entry) * qty)
-                    .put("unrealized_pnl_pct", if (entry > 0.0) (current - entry) / entry else 0.0)
+                    .put("unrealized_pnl_usdt", if (current != null) (current - entry) * qty else JSONObject.NULL)
+                    .put("unrealized_pnl_pct", if (current != null && entry > 0.0) (current - entry) / entry else JSONObject.NULL)
                     .put("oco_list_id", p.optString("oco_list_id", ""))
                     .put("oco_list_client_id", p.optString("oco_list_client_id", ""))
             )
         }
 
         val assets = JSONArray()
+        var accountFresh = statusJson.optBoolean("rest_account_ready", false)
         var totalEquity = statusJson.optDouble("quote_balance", 0.0)
         if (configured) {
             runCatching {
-                val balances = signedAccount().getJSONArray("balances")
+                val account = signedAccount()
+                val balances = account.getJSONArray("balances")
+                accountFresh = true
                 for (i in 0 until balances.length()) {
                     val b = balances.getJSONObject(i)
                     val free = b.optString("free").toDoubleOrNull() ?: 0.0
@@ -8239,17 +8248,22 @@ private class NativeEngine(
                             .put("allocation_pct", 0.0)
                     )
                 }
+            }.onFailure {
+                accountFresh = false
             }
         }
 
         val freeEquity = statusJson.optDouble("quote_balance", totalEquity)
+        val valuationKnown = accountFresh && allPositionValuesKnown
         return JSONObject()
             .put("configured", configured)
-            .put("total_equity_usdt", totalEquity + totalPositionValue)
-            .put("free_equity_usdt", freeEquity)
-            .put("locked_equity_usdt", 0.0)
-            .put("realized_pnl_usdt", 0.0)
-            .put("unrealized_pnl_usdt", statusJson.optDouble("pnl", 0.0))
+            .put("market_data_fresh", marketFresh)
+            .put("account_data_fresh", accountFresh)
+            .put("total_equity_usdt", if (valuationKnown) totalEquity + totalPositionValue else JSONObject.NULL)
+            .put("free_equity_usdt", if (accountFresh) freeEquity else JSONObject.NULL)
+            .put("locked_equity_usdt", JSONObject.NULL)
+            .put("realized_pnl_usdt", JSONObject.NULL)
+            .put("unrealized_pnl_usdt", if (marketFresh && !statusJson.isNull("pnl")) statusJson.optDouble("pnl") else JSONObject.NULL)
             .put("assets", assets)
             .put("positions", positions)
     }
