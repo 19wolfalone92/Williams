@@ -522,3 +522,15 @@ These are corrected on the current audit branch. The subsequent exact-head Campa
 
 **Chain impact.** Candle interval → signal identity → durable serialization → restart recovery → expiry → exchange conditional order. The fix protects the temporal identity contract but does not replace the required Demo restart test.
 
+
+
+### 50. Unsupported configured timeframe could fall back to a plausible hierarchy — corrected
+
+**Root cause.** The structural-timeframe helper could return a default hierarchy for an unsupported execution interval, leaving an invalid configuration that looked superficially usable.
+
+**Correction.** TradingConfig now validates both the execution timeframe and explicitly configured structural timeframes against supported Binance intervals. Unsupported values raise a clear configuration error; they are not silently substituted or used to build a partial context chain.
+
+**Regression coverage.** Added tests for unsupported `60m` execution and structural intervals while preserving valid `1M` monthly handling.
+
+**Chain impact.** Configuration → market-data interval → context hierarchy → signal freshness → pending expiry. Invalid timeframe configuration now prevents runtime construction instead of risking a wrong context/expiry contract.
+
