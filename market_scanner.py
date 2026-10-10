@@ -705,7 +705,7 @@ class MarketScanner:
 
         The early-reversal exception is tied to typed signal evidence and valid
         directional stop geometry. It must not let WM2/WM3 or a generic Boolean
-        setup bypass the final H1/H4/D1 context and execution checks.
+        setup bypass the final H1/H4 context and execution checks.
         """
         candidate_direction = str(candidate.direction or "").upper()
         if (
