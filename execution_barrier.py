@@ -336,10 +336,12 @@ class ExecutionBarrier:
                 pass
             for pending_row in rows:
                 try:
-                    self.db.state_set(
-                        f"position_state:{str(pending_row["symbol"]).upper()}",
-                        "RECONCILE_REQUIRED",
-                    )
+                    pending_symbol = str(pending_row["symbol"] or "").upper()
+                    if pending_symbol:
+                        self.db.state_set(
+                            f"position_state:{pending_symbol}",
+                            "RECONCILE_REQUIRED",
+                        )
                 except Exception:
                     pass
         for row in rows:
