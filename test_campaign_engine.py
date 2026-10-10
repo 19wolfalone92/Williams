@@ -37,21 +37,17 @@ def test_campaign_risk_cap_matches_futures_lifetime_budget():
     with tempfile.TemporaryDirectory() as d:
         db = Database(os.path.join(d, "risk-cap.sqlite3"))
         try:
-            # Preserve the conservative default used by non-Futures callers.
+            # The default campaign ceiling is 1%; the initial tranche is
+            # 40% of that budget (0.40% equity).
             default_engine = CampaignEngine(db)
-            assert default_engine.campaign_risk_limit_pct == pytest.approx(0.005)
-
-            # Futures explicitly configures the 0.60% lifetime budget; its
-            # default initial tranche is 40% (0.24% equity).
-            engine = CampaignEngine(db, campaign_risk_limit_pct=0.006)
-            assert engine.campaign_risk_limit_pct == pytest.approx(0.006)
-            assert engine.initial_risk_pct() == pytest.approx(0.0024)
+            assert default_engine.campaign_risk_limit_pct == pytest.approx(0.01)
+            assert default_engine.initial_risk_pct() == pytest.approx(0.004)
 
             # A caller may lower the cap, but may not raise the hard ceiling.
             lowered = CampaignEngine(db, campaign_risk_limit_pct=0.003)
             assert lowered.campaign_risk_limit_pct == pytest.approx(0.003)
             over_limit = CampaignEngine(db, campaign_risk_limit_pct=0.02)
-            assert over_limit.campaign_risk_limit_pct == pytest.approx(0.006)
+            assert over_limit.campaign_risk_limit_pct == pytest.approx(0.01)
         finally:
             db.conn.close()
 
