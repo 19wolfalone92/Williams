@@ -1,5 +1,5 @@
 import os
-import json, sqlite3
+import json, sqlite3, math
 from pathlib import Path
 from datetime import datetime, timezone
 from contextlib import contextmanager
@@ -1031,19 +1031,37 @@ class Database:
         start = str(utc_start or "").strip()
         if len(start) != 19 or start[4] != "-" or start[7] != "-" or start[10] != " ":
             raise ValueError("utc_start must be YYYY-MM-DD HH:MM:SS")
-        row = self.conn.execute(
+        rows = self.conn.execute(
             """
-            SELECT COUNT(*) AS n
+            SELECT reason, payload_json
             FROM campaign_events
             WHERE event = ?
               AND created_at >= ?
               AND UPPER(COALESCE(reason, '')) LIKE '%STOP%'
             """,
             ("CAMPAIGN_CLOSED", start),
-        ).fetchone()
-        count = int(row["n"])
-        if count < 0:
-            raise RuntimeError("database returned a negative stop-exit count")
+        ).fetchall()
+        count = 0
+        for row in rows:
+            # A profitable trailing/protective stop is not a full stop-out.
+            # Missing/malformed PnL is counted conservatively so bad telemetry
+            # cannot bypass the entry circuit breaker.
+            try:
+                payload = json.loads(row["payload_json"] or "{}")
+                pnl = payload.get(
+                    "realized_pnl_quote_net_known_fees",
+                    payload.get("realized_pnl_quote"),
+                )
+                if pnl is None:
+                    count += 1
+                    continue
+                pnl = float(pnl)
+                if not math.isfinite(pnl):
+                    count += 1
+                elif pnl < 0.0:
+                    count += 1
+            except (TypeError, ValueError, json.JSONDecodeError):
+                count += 1
         return count
 
     def campaign_risk_reserved_quote(self):
