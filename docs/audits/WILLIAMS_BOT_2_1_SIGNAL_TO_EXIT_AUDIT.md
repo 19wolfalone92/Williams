@@ -516,7 +516,7 @@ These are corrected on the current audit branch. The subsequent exact-head Campa
 
 **Root cause.** Binance uses `1m` for one-minute candles and `1M` for monthly candles. `SignalSpec.new` and the persisted-signal reconstruction path lowercased every timeframe, converting monthly `1M` into minute `1m`. That could corrupt signal identity and pending-order expiry after creation or restart.
 
-**Correction.** Signal creation and recovery now preserve the case-sensitive `1M` token while normalizing other intervals to lowercase. Unsupported intervals are separately rejected by signal extraction and expiry calculation.
+**Correction.** Signal creation, persisted-signal recovery, Futures runtime configuration/context lists, execution context-version lookup, and TradingConfig now preserve the case-sensitive `1M` token while normalizing other intervals to lowercase. Unsupported intervals are separately rejected by signal extraction and expiry calculation.
 
 **Regression coverage.** Added tests for monthly `SignalSpec` identity and persisted-signal reconstruction, including the stable signal ID.
 
