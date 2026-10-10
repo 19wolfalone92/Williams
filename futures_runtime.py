@@ -516,7 +516,7 @@ class FuturesRuntime:
                 continue
             if spec.direction != direction or int(spec.signal_bar_time_ms) <= latest_time:
                 continue
-            if spec.expires_at_ms and int(spec.expires_at_ms) < int(time.time() * 1000):
+            if spec.expires_at_ms and int(spec.expires_at_ms) <= int(time.time() * 1000):
                 continue
             parsed.append(replace(spec, role=SignalRole.ADD_ON))
         if not parsed:
