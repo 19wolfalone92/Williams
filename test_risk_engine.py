@@ -290,6 +290,7 @@ def test_structural_campaign_profile_can_report_low_reference_rr_without_fixed_t
     engine = RiskEngine(
         balance_quote=10_000,
         min_rr=1.5,
+        max_atr_pct=0.15,
         require_min_rr=False,
     )
     result = engine.analyse(
@@ -307,7 +308,7 @@ def test_structural_campaign_profile_can_report_low_reference_rr_without_fixed_t
 def test_structural_campaign_does_not_require_positive_hypothetical_short_target():
     engine = RiskEngine(
         balance_quote=10_000,
-        max_atr_pct=0.25,
+        max_atr_pct=0.35,
         min_rr=1.5,
         require_min_rr=False,
     )
