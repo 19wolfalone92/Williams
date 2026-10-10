@@ -239,7 +239,9 @@ def _latest_confirmed_fractal(
                 center_i = stored_center
         if center_i < 0 or center_i >= len(ind):
             continue
-        if not bool(ind.iloc[center_i].get(fractal_col, False)):
+        # Fractal event is stamped on its actual confirmation row, never on
+        # the historical center row as an actionable event.
+        if not bool(row.get(fractal_col, False)):
             continue
         center = ind.iloc[center_i]
         trigger_base = float(center["high"] if side == "LONG" else center["low"])
@@ -292,7 +294,7 @@ def extract_long_signal_specs(
         age_bars = len(ind) - 1 - i
         if (
             current_close < trigger
-            and age_bars <= ttl_bars
+            and age_bars < ttl_bars
             and _trigger_unbroken(ind, i, side="LONG", trigger_price=trigger)
             and _invalidation_intact(ind, i, side="LONG", protective_level=protective)
         ):
@@ -322,8 +324,8 @@ def extract_long_signal_specs(
                     source_candle_index=i,
                     expires_at_ms=(
                         _row_time_ms(row)
-                        + _timeframe_ms(timeframe) * max(
-                            1, int(os.getenv("WILLIAMS_PENDING_REVERSAL_BARS", "2"))
+                        + _timeframe_ms(timeframe) * (
+                            1 + max(1, int(os.getenv("WILLIAMS_PENDING_REVERSAL_BARS", "2")))
                         )
                     ),
                 )
@@ -337,7 +339,7 @@ def extract_long_signal_specs(
         age_bars = len(ind) - 1 - i
         if (
             current_close < trigger
-            and age_bars <= ttl_bars
+            and age_bars < ttl_bars
             and _trigger_unbroken(ind, i, side="LONG", trigger_price=trigger)
             and _invalidation_intact(ind, i, side="LONG", protective_level=protective)
         ):
@@ -365,8 +367,8 @@ def extract_long_signal_specs(
                     source_candle_index=i,
                     expires_at_ms=(
                         _row_time_ms(row)
-                        + _timeframe_ms(timeframe) * max(
-                            1, int(os.getenv("WILLIAMS_PENDING_SUPER_AO_BARS", "2"))
+                        + _timeframe_ms(timeframe) * (
+                            1 + max(1, int(os.getenv("WILLIAMS_PENDING_SUPER_AO_BARS", "2")))
                         )
                     ),
                 )
@@ -389,7 +391,7 @@ def extract_long_signal_specs(
         if (
             current_close < trigger
             and current_trigger_valid
-            and age_bars <= ttl_bars
+            and age_bars < ttl_bars
             and _trigger_unbroken(ind, center_i, side="LONG", trigger_price=trigger)
             and _invalidation_intact(ind, center_i, side="LONG", protective_level=protective)
         ):
@@ -402,6 +404,7 @@ def extract_long_signal_specs(
                     role=SignalRole.ENTRY,
                     timeframe=timeframe,
                     signal_bar_time_ms=_row_time_ms(row),
+                    confirmation_time_ms=_row_time_ms(ind.iloc[confirmation_i]) + _timeframe_ms(timeframe),
                     trigger_price=trigger,
                     protective_reference=protective,
                     trigger_buffer_ticks=1,
