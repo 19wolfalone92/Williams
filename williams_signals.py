@@ -407,7 +407,6 @@ def extract_long_signal_specs(
                     timeframe=timeframe,
                     signal_bar_time_ms=_row_time_ms(row),
                     confirmation_time_ms=_row_time_ms(ind.iloc[confirmation_i]) + _timeframe_ms(timeframe),
-                    confirmation_time_ms=_row_time_ms(ind.iloc[confirmation_i]) + _timeframe_ms(timeframe),
                     trigger_price=trigger,
                     protective_reference=protective,
                     trigger_buffer_ticks=1,
