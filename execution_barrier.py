@@ -81,8 +81,9 @@ class ExecutionBarrier:
 
     def _persist(self, intent: OrderIntent, status: str, reason: str = "") -> None:
         """Persist safety-critical intent state; never hide a durability failure."""
-        if self.db is not None and hasattr(self.db, "save_execution_intent"):
-            self.db.save_execution_intent(intent, status, reason)
+        if self.db is None or not hasattr(self.db, "save_execution_intent"):
+            raise RuntimeError("execution_intent_persistence_unavailable")
+        self.db.save_execution_intent(intent, status, reason)
 
     @staticmethod
     def _safe_error_reason(prefix: str, exc: BaseException) -> str:
@@ -91,7 +92,7 @@ class ExecutionBarrier:
 
     def _existing_intent(self, intent: OrderIntent):
         if self.db is None or not hasattr(self.db, "find_execution_intent"):
-            return None
+            raise RuntimeError("execution_intent_lookup_unavailable")
         return self.db.find_execution_intent(intent.intent_id, intent.client_order_id)
 
     def _record(self, level: str, event: str, intent: OrderIntent, message: str, raw=None) -> None:
@@ -188,14 +189,15 @@ class ExecutionBarrier:
                 self._record("ERROR", "execution_blocked", intent, reason)
                 return ExecutionResult(intent.intent_id, False, reason=reason)
 
-            if self.db is not None and hasattr(self.db, "save_execution_event"):
-                try:
-                    self.db.save_execution_event(
-                        intent.intent_id,
-                        "ADMISSION_STARTED",
-                        dict(intent.required_context_versions),
-                    )
-                except Exception as exc:
+            try:
+                if self.db is None or not hasattr(self.db, "save_execution_event"):
+                    raise RuntimeError("execution_event_persistence_unavailable")
+                self.db.save_execution_event(
+                    intent.intent_id,
+                    "ADMISSION_STARTED",
+                    dict(intent.required_context_versions),
+                )
+            except Exception as exc:
                     reason = self._safe_error_reason("admission_event_persistence_failed", exc)
                     self._record("ERROR", "execution_blocked", intent, reason)
                     try:
