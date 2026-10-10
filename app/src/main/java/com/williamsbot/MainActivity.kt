@@ -514,6 +514,7 @@ fun WilliamsApp(context: Context) {
                 var scannerJson = JSONObject()
                 var statusRequestFailed = false
                 var marketRequestFailed = false
+                var scannerRequestFailed = false
                 var scannerSnapshotFresh = false
 
                 runCatching {
@@ -560,6 +561,7 @@ fun WilliamsApp(context: Context) {
                         }
                     }
                 }.onFailure {
+                    scannerRequestFailed = true
                     failures += "scanner: " + (it.message ?: it.javaClass.simpleName)
                 }
 
@@ -582,6 +584,7 @@ fun WilliamsApp(context: Context) {
                 withContext(Dispatchers.Main) {
                     if (statusRequestFailed) statusLoadFailed = true
                     if (marketRequestFailed) marketPairs = emptyList()
+                    if (scannerRequestFailed || !scannerSnapshotFresh) candidates = emptyList()
                     val scannerError =
                         scannerJson.optString("scanner_error").takeIf { it.isNotBlank() }
                     message = when {
