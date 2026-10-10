@@ -16,6 +16,7 @@ from feature_store import FeatureStore, build_market_feature_vector
 from ai_shadow import ShadowDecisionEngine, journal_shadow_decision
 from williams_signals import extract_long_signal_specs, extract_short_signal_specs
 from shadow_execution import ShadowExecutionSimulator
+from trading_config import DEFAULT_SYMBOLS
 
 
 log = logging.getLogger("williams-scanner")
@@ -168,9 +169,13 @@ class MarketScanner:
             else self._load_symbols()
         )
 
+        scan_all_setting = os.getenv("SCAN_ALL_USDT")
+        requested_symbols = os.getenv("SCAN_SYMBOLS", "").strip().upper()
         self.scan_all_usdt = (
-            os.getenv("SCAN_ALL_USDT", "true").lower() == "true"
-        )  # dynamically discover Spot/USDT pairs
+            str(scan_all_setting).strip().lower() == "true"
+            if scan_all_setting is not None
+            else requested_symbols in {"ALL", "AUTO", "*"}
+        )  # dynamic discovery is opt-in; CORE_10 is the default universe
         self.scan_max_symbols = max(0, int(os.getenv("SCAN_MAX_SYMBOLS", "10")))
         self.exclude_leveraged_tokens = (
             os.getenv("EXCLUDE_LEVERAGED_TOKENS", "true").lower() == "true"
@@ -228,12 +233,12 @@ class MarketScanner:
     def _load_symbols(self):
         raw = os.getenv("SCAN_SYMBOLS", "").strip()
         # An explicit AUTO/ALL/* selection means dynamic Spot/USDT discovery.
-        # Otherwise an explicit list remains supported for deterministic tests.
+        # A missing value selects the project's deterministic CORE_10 universe.
         if raw.upper() in {"ALL", "AUTO", "*"}:
             return []
         if raw:
             return [str(x).upper().strip() for x in raw.split(",") if str(x).strip()]
-        return []
+        return list(DEFAULT_SYMBOLS)
     def _atr(df, period):
         prev = df["close"].shift(1)
         tr = pd.concat(
