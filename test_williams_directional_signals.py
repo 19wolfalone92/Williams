@@ -562,6 +562,12 @@ def test_tc2_live_decision_timeframe_is_h1_only():
     assert not MarketScanner._tc2_decision_timeframe_allowed("TC2_THREE_WISE_MEN", "5m")
     assert MarketScanner._tc2_decision_timeframe_allowed("LEGACY", "5m")
 
+    # The runtime hook must block before it tries to fetch exchange metadata/data.
+    scanner = MarketScanner.__new__(MarketScanner)
+    scanner.strategy_profile = "TC2_THREE_WISE_MEN"
+    scanner.interval = "15m"
+    assert scanner._analyse_base("BTCUSDT") is None
+
 
 def test_wm3_long_fractal_must_be_above_teeth_before_tick_buffer():
     data = frame()
