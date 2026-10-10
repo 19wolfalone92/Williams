@@ -2989,10 +2989,13 @@ private class NativeEngine(
         }.getOrDefault(0.0)
         if (rules.maxPosition.isFinite() && existingBase + qty > rules.maxPosition) return
 
-        val clientId =
-            "W5E_" + signal.type + "_" + signal.signalBarTimeMs + "_" +
-                System.nanoTime().toString(16).takeLast(10)
-        val campaignId = "W5C_" + System.nanoTime().toString(16)
+        val clientId = stableNativeClientOrderId(
+            "W5E_", candidate.symbol, signal.signalId, signal.type,
+            signal.signalBarTimeMs.toString(), "INITIAL_ENTRY"
+        )
+        val campaignId = stableNativeClientOrderId(
+            "W5C_", candidate.symbol, signal.signalId, "CAMPAIGN"
+        )
 
         val pending = PendingEntry(
             symbol = candidate.symbol,
@@ -6017,12 +6020,17 @@ private class NativeEngine(
                 "% for " + candidate.symbol
         }
 
-        val clientOrderId =
-            "W4B_" +
-                java.util.UUID.randomUUID()
-                    .toString()
-                    .replace("-", "")
-                    .take(28)
+        val signalIdentity = candidate.campaignSignals
+            .firstOrNull()?.signalId
+            .orEmpty()
+            .ifBlank {
+                candidate.symbol + "|" +
+                    (candidate.candles.lastOrNull()?.t ?: 0L).toString() + "|" +
+                    candidate.score.toString() + "|" + candidate.atrPct.toString()
+            }
+        val clientOrderId = stableNativeClientOrderId(
+            "W4B_", candidate.symbol, signalIdentity, "MARKET_ENTRY"
+        )
 
         if (!gated) {
             if (!stateMachine.transition(
