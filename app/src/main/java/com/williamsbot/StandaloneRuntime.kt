@@ -1907,7 +1907,12 @@ private class NativeEngine(
         }
     }
 
-    private fun buildIndicatorSnapshot(candles: List<CandleN>, symbol: String, frame: String): JSONObject {
+    private fun buildIndicatorSnapshot(inputCandles: List<CandleN>, symbol: String, frame: String): JSONObject {
+        val frameMs = frameSeconds(frame) * 1000L
+        val nowMs = System.currentTimeMillis()
+        val candles = inputCandles.filter { it.t + frameMs <= nowMs }
+        // Indicator snapshots are historical/closed-bar diagnostics, not live
+        // intra-candle signal candidates.
         if (candles.size < 40) return JSONObject().put("symbol", symbol).put("interval", frame).put("ready", false)
         val i = candles.lastIndex
         val alligator = WilliamsAlligatorMath.calculate(
@@ -3997,12 +4002,8 @@ private class NativeEngine(
 
             // Binance klines include the currently forming candle. Williams'
             // close-based decisions must be made on a completed bar.
-            val candles =
-                if (rawCandles.size >= 2) {
-                    rawCandles.dropLast(1)
-                } else {
-                    emptyList()
-                }
+            val nowMs = System.currentTimeMillis()
+            val candles = rawCandles.filter { it.t + frameSeconds("1h") * 1000L <= nowMs }
 
             if (candles.size < 40) continue
 
@@ -4031,37 +4032,11 @@ private class NativeEngine(
                 continue
             }
 
-            var consecutiveGreen = 0
-            var trailingLow = Double.POSITIVE_INFINITY
-            for (
-                i in candles.lastIndex downTo
-                    max(5, candles.lastIndex - 9)
-            ) {
-                val aoNow = ao(candles, i)
-                val aoPrev = ao(candles, i - 1)
-                val acWindowStart = max(0, i - 4)
-                val acNow =
-                    aoNow -
-                        (acWindowStart..i)
-                            .map { ao(candles, it) }
-                            .average()
-                val acPrevWindowStart = max(0, i - 5)
-                val acPrev =
-                    aoPrev -
-                        (acPrevWindowStart until i)
-                            .map { ao(candles, it) }
-                            .average()
-
-                val green =
-                    aoNow > aoPrev &&
-                        acNow > acPrev
-
-                if (!green) break
-
-                consecutiveGreen++
-                trailingLow = min(trailingLow, candles[i].l)
-                if (consecutiveGreen >= 5) break
-            }
+            // Structural campaign trailing: use the last configured 3–5
+            // CLOSED H1 bars. Do not invent a five-green AO/AC exit condition
+            // in the TC2 campaign engine.
+            val trailingLow = candles.takeLast(campaignTrailBars)
+                .minOfOrNull { it.l } ?: Double.NaN
 
             val tick =
                 runCatching {
@@ -4072,14 +4047,8 @@ private class NativeEngine(
 
             var desiredStop = stored.stop
 
-            if (consecutiveGreen >= 5 &&
-                trailingLow.isFinite()
-            ) {
-                desiredStop =
-                    max(
-                        desiredStop,
-                        trailingLow - tick
-                    )
+            if (trailingLow.isFinite()) {
+                desiredStop = max(desiredStop, trailingLow - tick)
             }
 
             // A stop can be tightened toward the current Teeth only while it
