@@ -398,3 +398,73 @@ def test_unresolved_execution_intent_prevents_stale_symbol_barrier_clear(tmp_pat
     assert trader.state("BTCUSDT") == "RECONCILE_REQUIRED"
     assert db.unresolved_execution_intents()[0]["intent_id"] == intent.intent_id
     assert exchange.mutations == 0
+
+
+def test_unknown_cancel_with_live_target_remains_blocked_and_is_not_reissued(tmp_path):
+    db = Database(str(tmp_path / "cancel-live-target.sqlite3"))
+    exchange = FakeExchange()
+    cid = "WILL_RECOVERY_CANCEL_LIVE_013"
+    intent = make_intent(
+        db, order_type="CANCEL", cid="WILL_RECOVERY_CANCEL_INTENT_013",
+        mutation_kind="CANCEL_ORDER", target_order_id="980",
+        target_client_order_id=cid,
+    )
+    exchange.orders_by_id["980"] = order(oid=980, cid=cid, status="NEW", side="SELL")
+
+    report = ExecutionRecoveryResolver(db, exchange).resolve_pending()
+
+    assert report["ok"] is False
+    assert db.unresolved_execution_intents()[0]["intent_id"] == intent.intent_id
+    assert exchange.mutations == 0
+
+
+def test_unknown_oco_cancel_with_active_list_remains_blocked(tmp_path):
+    db = Database(str(tmp_path / "oco-cancel-active.sqlite3"))
+    exchange = FakeExchange()
+    list_cid = "WILL_RECOVERY_OCO_CANCEL_ACTIVE_014"
+    intent = make_intent(
+        db, order_type="CANCEL", cid="WILL_RECOVERY_CANCEL_LIST_014",
+        mutation_kind="CANCEL_OCO", target_order_list_id="89",
+        target_list_client_order_id=list_cid,
+    )
+    legs = [
+        order(oid=981, cid=list_cid + "_TP", status="NEW", side="SELL"),
+        order(oid=982, cid=list_cid + "_SL", status="NEW", side="SELL"),
+    ]
+    for leg in legs:
+        exchange.orders_by_id[str(leg["orderId"])] = leg
+        exchange.orders_by_cid[leg["clientOrderId"]] = leg
+    exchange.lists_by_id["89"] = {
+        "symbol": "BTCUSDT", "orderListId": 89,
+        "listClientOrderId": list_cid, "listStatusType": "EXECUTING",
+        "orders": [
+            {"symbol": "BTCUSDT", "orderId": 981, "clientOrderId": list_cid + "_TP"},
+            {"symbol": "BTCUSDT", "orderId": 982, "clientOrderId": list_cid + "_SL"},
+        ],
+    }
+
+    report = ExecutionRecoveryResolver(db, exchange).resolve_pending()
+
+    assert report["ok"] is False
+    assert db.unresolved_execution_intents()[0]["intent_id"] == intent.intent_id
+    assert exchange.mutations == 0
+
+
+def test_cancel_replace_old_live_order_remains_blocked_even_if_replacement_exists(tmp_path):
+    db = Database(str(tmp_path / "cancel-replace-old-live.sqlite3"))
+    exchange = FakeExchange()
+    old_cid = "WILL_RECOVERY_OLD_STOP_015"
+    new_cid = "WILL_RECOVERY_NEW_STOP_015"
+    intent = make_intent(
+        db, order_type="STOP_LOSS", cid=new_cid, mutation_kind="CANCEL_REPLACE",
+        target_order_id="990", target_client_order_id=old_cid,
+        replacement_client_order_id=new_cid,
+    )
+    exchange.orders_by_id["990"] = order(oid=990, cid=old_cid, status="NEW", side="SELL")
+    exchange.orders_by_cid[new_cid] = order(oid=991, cid=new_cid, status="NEW", side="SELL")
+
+    report = ExecutionRecoveryResolver(db, exchange).resolve_pending()
+
+    assert report["ok"] is False
+    assert db.unresolved_execution_intents()[0]["intent_id"] == intent.intent_id
+    assert exchange.mutations == 0
