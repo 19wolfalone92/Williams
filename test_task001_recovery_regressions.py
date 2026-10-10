@@ -475,6 +475,82 @@ def test_cancel_replace_operation_journal_persists_both_legs_and_recovers_indepe
     assert db.state_get("position_state") == "RECONCILE_REQUIRED"
 
 
+def test_exchange_fill_ledger_is_idempotent_and_preserves_exact_decimal_values(tmp_path):
+    db = ready_db(tmp_path)
+    trade = {
+        "id": 901, "orderId": 77, "symbol": "BTCUSDT",
+        "qty": "0.123456789123", "price": "61234.56789123",
+        "quoteQty": "7559.876543210987", "commission": "0.00001234",
+        "commissionAsset": "BNB", "isBuyer": True, "time": 1770000000000,
+    }
+    first = db.record_exchange_fill("BTCUSDT", trade)
+    second = db.record_exchange_fill("BTCUSDT", dict(trade))
+    rows = db.exchange_fills_for_order("BTCUSDT", 77)
+    assert first["inserted"] is True
+    assert second["inserted"] is False
+    assert len(rows) == 1
+    assert rows[0]["quantity_text"] == "0.123456789123"
+    assert rows[0]["price_text"] == "61234.56789123"
+    assert rows[0]["quote_quantity_text"] == "7559.876543210987"
+    assert rows[0]["commission_amount_text"] == "0.00001234"
+    assert rows[0]["commission_asset"] == "BNB"
+    assert rows[0]["financial_state"] == "CONFIRMED"
+
+
+def test_exchange_fill_ledger_keeps_missing_fee_unknown_then_enriches_same_trade(tmp_path):
+    db = ready_db(tmp_path)
+    base = {
+        "id": 902, "orderId": 78, "symbol": "BTCUSDT",
+        "qty": "0.25", "price": "40000.00", "quoteQty": "10000.00",
+    }
+    first = db.record_exchange_fill("BTCUSDT", base)
+    assert first["financial_state"] == "UNKNOWN"
+    assert db.exchange_fills_for_order("BTCUSDT", 78)[0]["commission_amount_text"] is None
+    enriched = dict(base, commission="0.0001", commissionAsset="BTC")
+    second = db.record_exchange_fill("BTCUSDT", enriched)
+    row = db.exchange_fills_for_order("BTCUSDT", 78)[0]
+    assert second["inserted"] is False
+    assert row["commission_amount_text"] == "0.0001"
+    assert row["commission_asset"] == "BTC"
+    assert row["financial_state"] == "CONFIRMED"
+
+
+def test_exchange_fill_ledger_rejects_trade_id_with_conflicting_financial_data(tmp_path):
+    db = ready_db(tmp_path)
+    trade = {
+        "id": 903, "orderId": 79, "symbol": "BTCUSDT",
+        "qty": "0.5", "price": "100.00", "quoteQty": "50.00",
+        "commission": "0.01", "commissionAsset": "USDT",
+    }
+    db.record_exchange_fill("BTCUSDT", trade)
+    import pytest
+    with pytest.raises(RuntimeError, match="identity collision"):
+        db.record_exchange_fill("BTCUSDT", dict(trade, qty="0.6"))
+
+
+def test_fee_reconciliation_does_not_treat_missing_commission_as_zero(tmp_path):
+    db = ready_db(tmp_path)
+
+    class FakeExchange:
+        def my_trades(self, symbol, order_id=None):
+            return [{
+                "id": 904, "orderId": order_id, "symbol": symbol,
+                "qty": "0.1", "price": "100.00", "quoteQty": "10.00",
+                # Missing commission and commissionAsset are intentionally unknown.
+            }]
+        def exchange_info(self, symbol):
+            return {"symbols": [{"baseAsset": "BTC", "quoteAsset": "USDT"}]}
+
+    service = CampaignExecutionService(FakeExchange(), db, None)
+    with pytest.raises(Exception, match="commission amount or asset is unknown"):
+        service._executed_fee_quote("BTCUSDT", {"orderId": 80}, 0.1, 100.0)
+    rows = db.exchange_fills_for_order("BTCUSDT", 80)
+    assert len(rows) == 1
+    assert rows[0]["financial_state"] == "UNKNOWN"
+    assert rows[0]["commission_amount_text"] is None
+    assert rows[0]["commission_asset"] is None
+
+
 def test_cancel_replace_operation_identity_is_immutable(tmp_path):
     db = ready_db(tmp_path)
     db.create_cancel_replace_operation("op1", "intent1", "BTCUSDT", "11", "OLD", "NEW")
