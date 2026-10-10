@@ -401,9 +401,66 @@ class ExecutionBarrier:
                 if order_type in {"OCO", "OCO_SELL", "ORDER_LIST"} or purpose == "CAMPAIGN_EXIT_CANCEL":
                     self._query_authoritative_oco(exchange, symbol, client_id)
                 elif purpose in {"CAMPAIGN_TRAIL", "PROTECTION_REPLACE", "CANCEL_REPLACE"}:
-                    # The current schema does not persist the old order identifier
-                    # independently; querying only the replacement cannot prove both legs.
-                    raise ValueError("cancelReplace lacks durable old-order identity for two-leg recovery")
+                    # Resolve both legs independently from the durable operation journal.
+                    # Order-state reconciliation is not financial/protection completion:
+                    # keep the global latch and operation pending until account/campaign
+                    # reconciliation proves fills, fees, exposure and live protection.
+                    operation = (
+                        self.db.get_cancel_replace_operation(intent_id)
+                        if callable(getattr(self.db, "get_cancel_replace_operation", None))
+                        else None
+                    )
+                    if not operation:
+                        raise ValueError("legacy cancelReplace has no durable two-leg operation record")
+                    old_id = str(operation.get("old_exchange_order_id") or "")
+                    new_client_id = str(operation.get("replacement_client_order_id") or "")
+                    if not old_id or not new_client_id:
+                        raise ValueError("cancelReplace durable old/new identities are incomplete")
+                    old_order = exchange.get_order(symbol, order_id=old_id)
+                    new_order = exchange.get_order(symbol, orig_client_order_id=new_client_id)
+                    for label, evidence, expected_id, by_client in (
+                        ("old", old_order, old_id, False),
+                        ("replacement", new_order, new_client_id, True),
+                    ):
+                        if not isinstance(evidence, dict):
+                            raise ValueError(f"cancelReplace {label} lookup is not an object")
+                        if str(evidence.get("symbol", "")).upper() != symbol:
+                            raise ValueError(f"cancelReplace {label} lookup symbol mismatch")
+                        actual_id = str(
+                            evidence.get("clientOrderId", "") if by_client
+                            else evidence.get("orderId", "")
+                        )
+                        if actual_id != expected_id:
+                            raise ValueError(f"cancelReplace {label} lookup identity mismatch")
+                        if str(evidence.get("status", "")).upper() not in allowed:
+                            raise ValueError(f"cancelReplace {label} status is not authoritative")
+                    self.db.update_cancel_replace_operation(
+                        intent_id,
+                        {
+                            "cancelResult": "SUCCESS",
+                            "newOrderResult": "SUCCESS",
+                            "cancelResponse": old_order,
+                            "newOrderResponse": new_order,
+                        },
+                        cancel_state=str(old_order.get("status", "UNKNOWN")).upper(),
+                        replacement_state=str(new_order.get("status", "UNKNOWN")).upper(),
+                        reconcile_required=True,
+                        reconciliation={
+                            "source": "independent_order_lookups",
+                            "old_order": old_order,
+                            "replacement_order": new_order,
+                            "financial_reconciliation_complete": False,
+                            "protection_reconciliation_complete": False,
+                        },
+                    )
+                    conn.execute(
+                        "UPDATE execution_intents SET status='RECONCILE_REQUIRED', "
+                        "reason=? WHERE intent_id=?",
+                        ("both order legs observed; financial/exposure/protection reconciliation still required", intent_id),
+                    )
+                    conn.commit()
+                    unresolved.append(intent_id + ": order legs observed; full financial and protection reconciliation required")
+                    continue
                 elif order_type == "CANCEL":
                     raise ValueError("cancel intent lacks a durable target-order identity")
                 else:
