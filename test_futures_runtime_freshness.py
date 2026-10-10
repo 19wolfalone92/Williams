@@ -320,3 +320,66 @@ def test_trading_config_rejects_unsupported_timeframes():
             "EXECUTION_TIMEFRAME": "1h",
             "STRUCTURAL_TIMEFRAMES": "1d,60m,1h",
         })
+
+
+
+def test_persisted_signal_rejects_side_direction_conflict():
+    from futures_runtime import signal_spec_from_dict
+    raw = {
+        "signal_id": "BTCUSDT:1h:REVERSAL:SHORT:1000",
+        "symbol": "BTCUSDT",
+        "side": "BUY",
+        "direction": "SHORT",
+        "signal_type": "REVERSAL",
+        "role": "ENTRY",
+        "timeframe": "1h",
+        "signal_bar_time_ms": 1000,
+        "trigger_price": 101.0,
+        "protective_reference": 95.0,
+    }
+    with pytest.raises(ValueError, match="side/direction conflict"):
+        signal_spec_from_dict(raw)
+
+
+def test_persisted_signal_parses_explicit_false_without_python_truthiness():
+    from futures_runtime import signal_spec_from_dict
+    raw = {
+        "signal_id": "BTCUSDT:1h:REVERSAL:LONG:1000",
+        "symbol": "BTCUSDT",
+        "side": "BUY",
+        "direction": "LONG",
+        "signal_type": "REVERSAL",
+        "role": "ENTRY",
+        "timeframe": "1h",
+        "signal_bar_time_ms": 1000,
+        "trigger_price": 101.0,
+        "protective_reference": 95.0,
+        "htf_confirmed": "false",
+        "alligator_bullish": "0",
+        "alligator_bearish": "false",
+        "alligator_awake": "false",
+    }
+    signal = signal_spec_from_dict(raw)
+    assert signal.htf_confirmed is False
+    assert signal.alligator_bullish is False
+    assert signal.alligator_bearish is False
+    assert signal.alligator_awake is False
+
+
+def test_persisted_signal_rejects_ambiguous_boolean_fields():
+    from futures_runtime import signal_spec_from_dict
+    raw = {
+        "signal_id": "BTCUSDT:1h:REVERSAL:LONG:1000",
+        "symbol": "BTCUSDT",
+        "side": "BUY",
+        "direction": "LONG",
+        "signal_type": "REVERSAL",
+        "role": "ENTRY",
+        "timeframe": "1h",
+        "signal_bar_time_ms": 1000,
+        "trigger_price": 101.0,
+        "protective_reference": 95.0,
+        "htf_confirmed": "unknown",
+    }
+    with pytest.raises(ValueError, match="not an unambiguous boolean"):
+        signal_spec_from_dict(raw)
