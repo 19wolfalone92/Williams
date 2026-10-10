@@ -1041,7 +1041,10 @@ class Database:
               AND UPPER(COALESCE(e.reason, '')) LIKE '%STOP%'
               AND (
                   c.tags_json IS NULL
-                  OR UPPER(c.tags_json) NOT LIKE '%"EXECUTION_MODE"%"SPOT"%'
+                  OR (
+                      UPPER(c.tags_json) NOT LIKE '%"EXECUTION_MODE":"SPOT"%'
+                      AND UPPER(c.tags_json) NOT LIKE '%"EXECUTION_MODE": "SPOT"%'
+                  )
               )
             """,
             ("CAMPAIGN_CLOSED", start),
@@ -1086,7 +1089,10 @@ class Database:
             WHERE e.event = ?
               AND (
                   c.tags_json IS NULL
-                  OR UPPER(c.tags_json) NOT LIKE '%"EXECUTION_MODE"%"SPOT"%'
+                  OR (
+                      UPPER(c.tags_json) NOT LIKE '%"EXECUTION_MODE":"SPOT"%'
+                      AND UPPER(c.tags_json) NOT LIKE '%"EXECUTION_MODE": "SPOT"%'
+                  )
               )
             ORDER BY e.created_at DESC, e.id DESC
             LIMIT ?
