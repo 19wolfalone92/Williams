@@ -1343,7 +1343,8 @@ internal class FuturesNativeEngine(
         val rawQtyByRisk = riskBudget / (stopDistance + costReserve)
         val maxNotional = min(equity * 0.20, max(0.0, available * 0.90))
         val rawQty = min(rawQtyByRisk, maxNotional / signal.trigger)
-        val quantity = exchange.normalizeQuantity(symbol, rawQty, market = false)
+        // This quantity belongs to a STOP_MARKET conditional entry; use the market lot filter.
+        val quantity = exchange.normalizeQuantity(symbol, rawQty, market = true)
         val normalized = quantity.toDouble()
         val notional = normalized * signal.trigger
         val filters = exchange.symbolFilters(symbol)
