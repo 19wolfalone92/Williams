@@ -1330,7 +1330,11 @@ class CampaignExecutionService:
             ),
             0.0,
         )
-        qty = self._normalize_qty(symbol, free_qty)
+        # Spot balances can include user-owned/foreign base inventory. A
+        # campaign exit may sell only its managed exposure, never the entire
+        # free base-asset balance.
+        managed_qty = max(0.0, float(campaign.position_qty or 0.0))
+        qty = self._normalize_qty(symbol, min(managed_qty, free_qty))
         if qty <= 0:
             raise CampaignExecutionError(
                 f"{symbol}: no free campaign inventory after protection cancel"
