@@ -3449,6 +3449,7 @@ class FuturesCampaignExecutionService:
                 self._context_versions(signal),
                 hypothesis_id=f"WILLIAMS_ADD_ON_{signal.signal_type.value}_{direction}",
                 invalidation_level=stop,
+                signal_trigger_price=trigger,
                 quantity=quantity_text,
                 client_order_id=client_algo_id,
                 purpose="CAMPAIGN_ADD_ON",
