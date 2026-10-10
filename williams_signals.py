@@ -209,6 +209,17 @@ def _latest_reversal(
     side: str,
     max_age_bars: int = 20,
 ) -> tuple[int, float, float, float] | None:
+    # The current numeric angulation is explicitly an engineering approximation,
+    # not a source-verified Bill Williams formula. The project contract is
+    # UNRESOLVED = BLOCKED: do not authorize WM1 from that approximation in a
+    # normal runtime. Tests/research may opt in to exercise the detector; live
+    # use requires an explicit operator choice until the rule is source-verified.
+    allow_approximation = str(
+        os.getenv("WILLIAMS_ALLOW_APPROXIMATE_ANGULATION", "false")
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    if not allow_approximation:
+        return None
+
     column = "bullish_reversal_bar" if side == "LONG" else "bearish_reversal_bar"
     if column not in ind.columns:
         return None
