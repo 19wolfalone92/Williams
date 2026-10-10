@@ -3710,9 +3710,36 @@ private class NativeEngine(
             signalId = signal.signalId,
             signalType = signal.type
         )
-        synchronized(pendingEntries) {
-            pendingEntries[candidate.symbol] = pending
+        // Atomically recheck both the portfolio ceiling and this campaign's
+        // budget before reserving the add-on. Never rely only on the earlier
+        // sizing snapshot because other symbol candidates may have reserved risk.
+        val openPositionsForReservation = positionList()
+        val currentCampaign = openPositionsForReservation.firstOrNull {
+            it.symbol == candidate.symbol && it.campaignId == position.campaignId
+        } ?: return
+        val openRiskForReservation = openPositionsForReservation.sumOf {
+            it.riskPct.coerceAtLeast(0.0)
         }
+        val reservationAccepted = synchronized(pendingEntries) {
+            val pendingRisk = pendingEntries.values.sumOf {
+                it.riskReservedPct.coerceAtLeast(0.0)
+            }
+            val campaignRiskValid =
+                currentCampaign.riskPct + riskPct <= campaignRiskLimitPct + 1e-9
+            val portfolioRiskValid =
+                openRiskForReservation + pendingRisk + riskPct <= maxTotalRiskPct + 1e-9
+            if (
+                pendingEntries.containsKey(candidate.symbol) ||
+                !campaignRiskValid ||
+                !portfolioRiskValid
+            ) {
+                false
+            } else {
+                pendingEntries[candidate.symbol] = pending
+                true
+            }
+        }
+        if (!reservationAccepted) return
         savePersistedState()
 
         executionExecutor.execute {
