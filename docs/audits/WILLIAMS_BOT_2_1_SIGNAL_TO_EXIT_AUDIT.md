@@ -212,3 +212,45 @@ The Python Futures selector rejected a candidate only when `expires_at_ms < now`
 The pending-signal object previously considered only positive expiry timestamps eligible for expiry checks. A directly restored object with zero or negative expiry could therefore remain actionable indefinitely even though exchange-side conditional orders require an explicit finite lifetime.
 
 **Correction:** zero/negative expiry is now invalid/expired for actionability. The canonical factory computes a default only when no positive explicit expiry was supplied, and explicit positive timestamps remain authoritative even when already expired. Added tests for zero and negative persisted expiry.
+
+
+## Third-pass end-to-end chain audit — 2026-10-10
+
+### Chain map and current disposition
+
+| Stage | Primary path | Required invariant | Disposition |
+|---|---|---|---|
+| 1. Market data | Binance Futures klines → validated frame | Closed, ordered, finite OHLCV; timestamps and source timeframe are explicit | Python ingestion rejects malformed/duplicate/out-of-order candles; freshness checked before management |
+| 2. Williams features | `strategy.calculate_indicators` / Android `analyseFrame` | Alligator/AO/AC/fractal/reversal values derive only from available bars | Python and Android implementations are separate; golden-vector parity remains unproven |
+| 3. Signal extraction | `williams_signals` / Android `findSignal` | Explicit LONG/SHORT, source candle, structural invalidation, unbroken trigger, finite expiry | Expiry/trigger/invalidation checks added; unknown direction now fails closed in Futures portfolio selection |
+| 4. Market context | Scanner → wave/context → HTF veto | Context may veto but must not invent a Williams signal | Python scanner and Android native engine remain independent; parity is an open architecture gap |
+| 5. Portfolio/risk | `PortfolioController` → `RiskEngine` | No implicit direction; structural stop is not silently replaced; portfolio risk cap is enforced | Removed Futures' empty-direction-to-LONG fallback; explicit LONG/SHORT regression tests added |
+| 6. Entry authorization | Runtime preflight → ExecutionBarrier → durable intent | Account, position ownership, permissions, timeframe and risk are valid before mutation | Account-wide ownership and write-ahead intent checks remain in place; H1 is now the default and only allowed new-entry decision timeframe |
+| 7. Conditional entry | Stable clientAlgoId → exchange follow-up | Unknown POST/DELETE outcome is reconciled; stale triggers cannot survive expiry | Python cancellation/reconciliation is implemented; Demo lifecycle still not verified |
+| 8. Entry fill/protection | Algo child → position/userTrades → closePosition stop | Do not call a campaign protected until the exact live stop is verified | Python/Android verify exchange-side protection; native partial/racing exit aggregation remains incomplete |
+| 9. Campaign management | Closed H1 bars → structural exit/trailing | Management continues through pause/kill and never relies on an unconfirmed local position | Python management now uses H1 regardless of a misconfigured scan interval; Android retains each persisted campaign's timeframe for recovery |
+| 10. Exit mutation | Stable reduce-only clientOrderId; stop remains live | No blind retry; reconcile partial fill, residual position, stop race and order history | Python has aggregate exit reconciliation; Android remains fail-closed but does not fully aggregate multiple market exits and protective-child fills |
+| 11. Accounting/finalization | userTrades, realized PnL, fees, flat position, stop cleanup | Exactly-once accounting; no CLOSED state with missing fills/fees or residual exposure | Python accounting is strict; Android stores realized PnL in campaign records but the Futures native exit path does not currently call the general `TradingAuditStore.recordTrade` history writer. The app's unified closed-trade history can therefore omit native Futures campaigns; this is an open observability/accounting integration defect |
+| 12. Restart/release | SQLite state → exchange reconcile → read-only gate | Exchange is authority; unknown state blocks new entries; test gates cover both directions | Fail-closed recovery exists, but Demo LONG/SHORT lifecycle and the read-only release gate have not been executed in this audit |
+
+### 28. Futures direction could silently default to LONG — corrected
+
+`PortfolioController` previously replaced a missing candidate direction with LONG before invoking risk analysis. The Futures execution layer later validates signal direction, but this default could still distort candidate selection and risk decisions upstream.
+
+**Correction:** Futures candidates must explicitly declare LONG or SHORT; missing/invalid direction is rejected. Legacy Spot scanning retains its historical LONG fallback only when the client is not a USDⓈ-M Futures adapter. Regression tests cover unknown Futures direction rejection and explicit SHORT preservation.
+
+### 29. The operative signal timeframe default contradicted the canonical strategy — corrected, with a configuration guard
+
+The Python `TradingConfig`, `FuturesRuntime`, and Android native Futures engine defaulted signal generation to 5m. This allowed a micro-timeframe to create entry signals despite the project contract that H1 is the canonical decision chart, H4/D1 are context, M15 is monitoring/context, and M5 is diagnostics/replay only.
+
+**Correction:** defaults changed to H1 in Python configuration/runtime and Android preferences. Python refuses new entry selection when a non-H1 interval is configured and cancels already-armed conditional entries; existing position management still runs using closed H1 bars. Android `findSignal` refuses new Futures entries unless the configured decision timeframe is H1. Explicit non-H1 configuration remains visible as a blocker rather than silently changing strategy semantics.
+
+### 30. Native Futures closed-trade history integration remains open
+
+The native Futures exit routines reconcile fills and store realized PnL, exit IDs, fees and campaign state in the Futures campaign record, but `FuturesNativeEngine` has no call to `TradingAuditStore.recordTrade`. That writer is used by the legacy Spot runtime and currently hardcodes the trade side to BUY. Do not infer that the unified trade-history table is complete merely because a Futures campaign reaches CLOSED.
+
+**Required follow-up:** define a Futures closed-trade record contract with LONG/SHORT direction, authoritative weighted-average entry/exit prices, aggregate quantity, quote-denominated realized PnL, all known commissions, an explicit unknown-fee flag, R-multiple against the persisted admitted risk, and stable idempotency key. Persist it atomically/idempotently with campaign finalization only after the exchange is flat and all exits reconcile. Add Android tests proving LONG and SHORT records, duplicate recovery, and no record on unresolved/partial exits. This is not marked fixed in this pass.
+
+### Verification boundary
+
+The latest successful Campaign CI run on the prior exact head does not verify the code added in this third pass. Fresh CI for the new head is required. Android lint/unit-test/APK status must be checked separately. No Demo orders or real orders were sent.
