@@ -399,7 +399,8 @@ def extract_long_signal_specs(
         if trail_bars not in {3, 4, 5}:
             return specs
         recent_lows = pd.to_numeric(ind["low"].iloc[-trail_bars:], errors="coerce").to_numpy(dtype=float)
-        protective_stop = float(recent_lows.min() - tick) if len(recent_lows) == trail_bars and all(math.isfinite(float(v)) for v in recent_lows) else float("nan")
+        # Keep the raw trailing low here. The Python execution adapter applies the single exchange tick buffer when it builds the protective STOP_LOSS.
+        protective_stop = float(recent_lows.min()) if len(recent_lows) == trail_bars and all(math.isfinite(float(v)) for v in recent_lows) else float("nan")
         age_bars = len(ind) - 1 - confirmation_i
         current_trigger_valid = (
             math.isfinite(current_teeth) and current_teeth > 0.0
