@@ -569,14 +569,14 @@ class FuturesCampaignExecutionService:
         *,
         allow_early_wm1: bool = False,
     ) -> bool:
-        """Validate TC2's H1 signal context plus the D1 macro airbag.
+        """Validate H1 signal evidence and fresh H4 context for intraday TC2.
 
-        H1 is the canonical decision timeframe. H4 must be fresh context, not
-        a duplicate directional trigger. WM1 requires its reversal/angulation
-        evidence; WM2 requires its third same-colour AO bar; WM3 requires a
-        confirmed fractal trigger beyond Teeth at confirmation and at submission.
+        H1 is the canonical decision timeframe. H4 is the sole higher-timeframe
+        context, not a duplicate directional trigger. D1 is not an entry gate.
+        WM1 requires its reversal/angulation evidence; WM2 requires its third
+        same-colour AO bar; WM3 requires a confirmed fractal trigger beyond
+        Teeth at confirmation and at submission.
         A fully aligned H1 Alligator is not a universal gate for all Wise Men.
-        D1 may veto an active opposite regime as a declared system overlay.
         """
         direction = str(getattr(signal, "direction", "") or "").upper()
         timeframe = str(getattr(signal, "timeframe", "") or "").lower()
@@ -604,7 +604,7 @@ class FuturesCampaignExecutionService:
             for key, value in dict(signal.context_versions or {}).items()
         }
         now_ms = int(time.time() * 1000)
-        durations_ms = {"1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000}
+        durations_ms = {"1h": 3_600_000, "4h": 14_400_000}
         contexts = {}
 
         for interval, duration_ms in durations_ms.items():
@@ -677,29 +677,6 @@ class FuturesCampaignExecutionService:
         # universally gated by the sign of AO or an already-awake directional
         # Alligator. Its detector must prove the three same-colour AO bars.
 
-        macro = contexts["1d"]
-        macro_state = str(macro.alligator_state or "").strip().upper()
-        try:
-            macro_ao = float(macro.ao_value)
-        except (TypeError, ValueError, OverflowError):
-            return False
-        if not math.isfinite(macro_ao):
-            return False
-        macro_opposes_long = (
-            macro_state == "BEARISH"
-            and bool(macro.alligator_awake)
-            and macro_ao < 0.0
-        )
-        macro_opposes_short = (
-            macro_state == "BULLISH"
-            and bool(macro.alligator_awake)
-            and macro_ao > 0.0
-        )
-        if direction == "LONG" and macro_opposes_long:
-            return False
-        if direction == "SHORT" and macro_opposes_short:
-            return False
-
         return True
 
     def _tc2_wm1_early_context_allowed(self, signal: SignalSpec, snapshot=None) -> bool:
@@ -725,7 +702,7 @@ class FuturesCampaignExecutionService:
                 raise FuturesCampaignExecutionError(
                     f"{signal.symbol}: TC2 campaigns require H1 as the decision timeframe"
                 )
-            required_intervals = ("1h", "4h", "1d")
+            required_intervals = ("1h", "4h")
         else:
             required_intervals = (operative,)
 
@@ -858,7 +835,7 @@ class FuturesCampaignExecutionService:
                 )
             if not context_ok:
                 raise FuturesCampaignExecutionError(
-                    f"{symbol}: TC2 H1 signal context, H4 context validity, or D1 macro airbag failed"
+                    f"{symbol}: TC2 H1 signal evidence or H4 context validation failed"
                 )
         elif self.require_htf_confirmation and not bool(signal.htf_confirmed):
             raise FuturesCampaignExecutionError(
@@ -3300,7 +3277,7 @@ class FuturesCampaignExecutionService:
             snapshot = self.barrier.context_cache.snapshot()
             if not self._tc2_core_context_allowed(signal, snapshot):
                 raise FuturesCampaignExecutionError(
-                    f"{symbol}: TC2 add-on requires fresh H1 same-direction context and no active opposite D1 macro regime"
+                    f"{symbol}: TC2 add-on requires fresh H1 signal evidence and valid H4 context"
                 )
         elif self.require_htf_confirmation and not bool(signal.htf_confirmed):
             raise FuturesCampaignExecutionError(f"{symbol}: selected profile requires add-on higher-timeframe confirmation")
