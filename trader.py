@@ -120,6 +120,11 @@ class Trader:
         symbols.update(str(x["symbol"]).upper() for x in portfolio.open_trades())
         symbols.update(str(x["symbol"]).upper() for x in self.db.open_campaigns())
         symbols.update(str(x[0]).upper() for x in portfolio._pending_entries())
+        intent_symbols = self.db.conn.execute(
+            "SELECT DISTINCT symbol FROM execution_intents "
+            "WHERE UPPER(status) IN ('PENDING','SUBMITTED','AMBIGUOUS','RECONCILE_REQUIRED')"
+        ).fetchall()
+        symbols.update(str(row["symbol"]).upper() for row in intent_symbols if row["symbol"])
         if not symbols:
             raise RuntimeError("recovery gate cannot establish a checked symbol universe")
 
