@@ -9,10 +9,12 @@ data class WilliamsExitBar(
 )
 
 /**
- * Shared deterministic hard-exit predicate for native Futures.
- * It mirrors the Python campaign contract on two closed H1 bars:
- * opposite Alligator ordering, close beyond Teeth, and opposite AO.
- * AC is not an additional hard-exit gate in this policy.
+ * Optional two-bar Alligator/AO exit overlay for native Futures.
+ *
+ * It is disabled in the TC2 core profile by default because it is not a
+ * substitute for the source-profile's price-bar structural stop. It remains
+ * available only when tc2_two_bar_reversal_exit is explicitly enabled.
+ * AC is not an additional gate in this overlay.
  */
 object FuturesStructuralExitPolicy {
     fun shouldExit(direction: String, lastTwoClosedBars: List<WilliamsExitBar>): Boolean {
