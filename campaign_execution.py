@@ -224,9 +224,18 @@ class CampaignExecutionService:
             and signal_tf == "1h"
             and not bool(signal.htf_confirmed)
         )
-        if signal_tf == "1h" and not signal.htf_confirmed and not early_wm1:
+        tc2_core = (
+            os.getenv("WILLIAMS_STRATEGY_PROFILE", "TC2_THREE_WISE_MEN").strip().upper()
+            == "TC2_THREE_WISE_MEN"
+        )
+        if (
+            signal_tf == "1h"
+            and not signal.htf_confirmed
+            and not early_wm1
+            and not tc2_core
+        ):
             raise CampaignExecutionError(
-                f"{signal.symbol}: only a proven H1 WM1 reversal may use early admission"
+                f"{signal.symbol}: selected non-TC2 profile requires higher-timeframe confirmation"
             )
 
         required_contexts = (
