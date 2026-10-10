@@ -379,7 +379,7 @@ def extract_long_signal_specs(
                     role=SignalRole.ADD_ON,
                     timeframe=timeframe,
                     signal_bar_time_ms=_row_time_ms(row),
-                    confirmation_time_ms=_row_time_ms(row),
+                    confirmation_time_ms=_row_time_ms(ind.iloc[confirmation_i]),
                     trigger_price=trigger,
                     protective_reference=protective,
                     trigger_buffer_ticks=1,
@@ -407,7 +407,7 @@ def extract_long_signal_specs(
     unique: dict[tuple[str, int], SignalSpec] = {}
     for spec in specs:
         unique[(spec.signal_type.value, spec.signal_bar_time_ms)] = spec
-    return sorted(unique.values(), key=lambda x: (x.signal_bar_time_ms, x.signal_type.value))
+    return sorted(unique.values(), key=lambda x: (int(getattr(x, "confirmation_time_ms", 0) or x.signal_bar_time_ms), x.signal_type.value))
 
 
 # Mirror the long detector. Direction is explicit and is kept separate from
@@ -463,7 +463,7 @@ def extract_short_signal_specs(
                     role=SignalRole.ENTRY,
                     timeframe=timeframe,
                     signal_bar_time_ms=_row_time_ms(row),
-                    confirmation_time_ms=_row_time_ms(ind.iloc[confirmation_i]),
+                    confirmation_time_ms=_row_time_ms(row),
                     trigger_price=trigger,
                     protective_reference=protective,
                     trigger_buffer_ticks=1,
@@ -481,9 +481,9 @@ def extract_short_signal_specs(
                     source_candle_index=i,
                     expires_at_ms=(
                         _row_time_ms(row)
-                        + _timeframe_ms(timeframe) * max(
+                        + _timeframe_ms(timeframe) * (1 + max(
                             1, int(os.getenv("WILLIAMS_PENDING_REVERSAL_BARS", "2"))
-                        )
+                        ))
                     ),
                 )
             )
@@ -502,6 +502,7 @@ def extract_short_signal_specs(
                     role=SignalRole.ADD_ON,
                     timeframe=timeframe,
                     signal_bar_time_ms=_row_time_ms(row),
+                    confirmation_time_ms=_row_time_ms(row),
                     trigger_price=trigger,
                     protective_reference=protective,
                     trigger_buffer_ticks=1,
@@ -518,9 +519,9 @@ def extract_short_signal_specs(
                     source_candle_index=i,
                     expires_at_ms=(
                         _row_time_ms(row)
-                        + _timeframe_ms(timeframe) * max(
+                        + _timeframe_ms(timeframe) * (1 + max(
                             1, int(os.getenv("WILLIAMS_PENDING_SUPER_AO_BARS", "2"))
-                        )
+                        ))
                     ),
                 )
             )
@@ -542,6 +543,7 @@ def extract_short_signal_specs(
                     role=SignalRole.ADD_ON,
                     timeframe=timeframe,
                     signal_bar_time_ms=_row_time_ms(row),
+                    confirmation_time_ms=_row_time_ms(ind.iloc[confirmation_i]),
                     trigger_price=trigger,
                     protective_reference=protective,
                     trigger_buffer_ticks=1,
@@ -557,10 +559,10 @@ def extract_short_signal_specs(
                     reason="WM3 sell fractal; trigger only while price/trigger remains below Teeth",
                     source_candle_index=center_i,
                     expires_at_ms=(
-                        _row_time_ms(row)
-                        + _timeframe_ms(timeframe) * max(
+                        _row_time_ms(ind.iloc[confirmation_i])
+                        + _timeframe_ms(timeframe) * (1 + max(
                             1, int(os.getenv("WILLIAMS_PENDING_FRACTAL_BARS", "8"))
-                        )
+                        ))
                     ),
                 )
             )
