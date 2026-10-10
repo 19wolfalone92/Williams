@@ -1,11 +1,11 @@
 package com.williamsbot
 
 /**
- * Pure source-profile calculation for TC2's price-bar structural trail.
+ * Pure calculation for the selected TC2 price-bar structural-trail policy.
  *
- * This does not round to exchange ticks: it returns one tick beyond the
- * selected closed-bar extreme. The exchange adapter applies direction-aware
- * PRICE_FILTER rounding before placing a replacement protective order.
+ * This is a configured exit policy, not a claim that every Williams edition
+ * mandates the same trailing window. The exchange adapter applies direction-
+ * aware PRICE_FILTER rounding before placing a replacement protective order.
  */
 data class FuturesPriceBarTrailCandidate(
     val direction: String,
@@ -43,6 +43,9 @@ object FuturesPriceBarTrailPolicy {
         }
         require(selectedHighs.all { it.isFinite() && it > 0.0 }) {
             "TC2 trailing highs contain invalid values"
+        }
+        require(selectedLows.zip(selectedHighs).all { (low, high) -> low <= high }) {
+            "TC2 trailing contains a bar with low above high"
         }
 
         val extreme = if (side == "LONG") selectedLows.minOrNull()!! else selectedHighs.maxOrNull()!!
