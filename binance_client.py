@@ -2,17 +2,21 @@ import hashlib, hmac, time
 from decimal import Decimal, ROUND_DOWN
 from urllib.parse import urlencode
 import requests
+from safe_logging import redact_text, redact_value, register_sensitive_value
 
 class BinanceAPIError(RuntimeError):
     def __init__(self, message, *, unknown_execution=False, status_code=None, payload=None):
         super().__init__(message)
+        super().__init__(redact_text(message))
         self.unknown_execution = bool(unknown_execution)
         self.status_code = status_code
-        self.payload = payload
+        self.payload = redact_value(payload) if payload is not None else None
 
 class BinanceSpotClient:
     def __init__(self, api_key, api_secret, testnet=True, recv_window=5000, timeout=20):
         self.api_key=api_key; self.api_secret=api_secret; self.testnet=bool(testnet)
+        register_sensitive_value(api_key)
+        register_sensitive_value(api_secret)
         self.base_url='https://testnet.binance.vision' if self.testnet else 'https://api.binance.com'
         self.recv_window=int(recv_window); self.timeout=timeout
         self.session=requests.Session(); self.session.headers.update({'X-MBX-APIKEY': self.api_key})
