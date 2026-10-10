@@ -11,23 +11,16 @@ from typing import Mapping
 import time
 
 
-# Default operational budgets. Candle budgets should be overridden per decision
-# timeframe/candle-close policy; these defaults are deliberately conservative.
-DEFAULT_MAX_AGE_MS = {
-    "binance_rest": 5_000,
-    "server_time": 30_000,
-    "account": 15_000,
-    "balances": 15_000,
-    "candles": 120_000,
-    "market_websocket": 5_000,
-    "user_data_stream": 15_000,
-    "scanner_heartbeat": 10_000,
-    "market_context": 15_000,
-    "sqlite_integrity": 5_000,
-    "reconciliation": 10_000,
-    "diagnostics": 15_000,
-    "android_runtime": 10_000,
-}
+# No operational freshness budget has been approved as a project contract.
+# Callers must pass an explicitly approved max_age_ms; absence remains UNKNOWN.
+DEFAULT_MAX_AGE_MS: dict[str, int] = {}
+
+FRESHNESS_COMPONENTS = (
+    "binance_rest", "server_time", "account", "balances", "candles",
+    "market_websocket", "user_data_stream", "scanner_heartbeat",
+    "market_context", "sqlite_integrity", "reconciliation", "diagnostics",
+    "android_runtime",
+)
 
 EXPECTED_SOURCES = {
     "binance_rest": "binance_rest_response",
@@ -75,7 +68,7 @@ def evaluate_freshness(
 ) -> FreshnessResult:
     """Return PASS only for valid, source-bound, fresh, non-future evidence."""
     now = int(time.time() * 1000) if now_ms is None else int(now_ms)
-    if component not in DEFAULT_MAX_AGE_MS:
+    if component not in EXPECTED_SOURCES:
         return FreshnessResult(component, "UNKNOWN", "component_has_no_freshness_contract")
     if evidence is None:
         return FreshnessResult(component, "UNKNOWN", "measurement_missing")
@@ -98,7 +91,9 @@ def evaluate_freshness(
         return FreshnessResult(component, "UNKNOWN", "measurement_clock_skew", age, evidence.source)
     if not evidence.valid:
         return FreshnessResult(component, "FAIL", "component_measurement_invalid", age, evidence.source)
-    budget = DEFAULT_MAX_AGE_MS[component] if max_age_ms is None else max(1, int(max_age_ms))
+    if max_age_ms is None:
+        return FreshnessResult(component, "UNKNOWN", "freshness_budget_unapproved", age, evidence.source)
+    budget = max(1, int(max_age_ms))
     if age > budget:
         return FreshnessResult(component, "FAIL", "measurement_stale", age, evidence.source)
     return FreshnessResult(component, "PASS", "fresh_measurement", age, evidence.source)
