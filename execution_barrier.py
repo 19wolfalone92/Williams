@@ -36,14 +36,17 @@ class OrderIntent:
     required_context_versions: Mapping[str, int]
     hypothesis_id: str = ""
     invalidation_level: float = 0.0
+    # Immutable Wise-Man trigger copied from SignalSpec. The final barrier needs
+    # it to independently revalidate WM3 against the operative Teeth line.
+    signal_trigger_price: float = 0.0
     quantity: str = ""
     quote_order_quantity: str = ""
     client_order_id: str = ""
     purpose: str = "ENTRY"
     permission_interval: str = ""
-    # Strict direction permission is the default. TC2 WM1 may use a distinct
-    # early-reversal admission contract, still requiring fresh H1/H4/D1 context
-    # and a proven reversal/angulation signal at this final mutation boundary.
+    # Strict direction permission is the default. TC2 early WM1 is a separate
+    # admission mode requiring fresh H1/H4 context and explicitly enabled
+    # approximate angulation; D1 remains informational only.
     context_admission_mode: str = "STRICT_DIRECTIONAL"
     signal_type: str = ""
     angulation_score: float = 0.0
@@ -225,6 +228,8 @@ class ExecutionBarrier:
                     return "TC2_WM1_EARLY is allowed only for a new initial campaign entry"
                 if str(getattr(intent, "signal_type", "") or "").upper() != "REVERSAL":
                     return "TC2_WM1_EARLY requires a REVERSAL signal"
+                if os.getenv("WILLIAMS_ALLOW_APPROXIMATE_ANGULATION", "false").strip().lower() != "true":
+                    return "TC2_WM1_EARLY blocked because approximate angulation is disabled"
                 try:
                     angulation = float(getattr(intent, "angulation_score", 0.0))
                 except (TypeError, ValueError, OverflowError):
@@ -232,92 +237,71 @@ class ExecutionBarrier:
                 if not math.isfinite(angulation) or angulation <= 0.0:
                     return "TC2_WM1_EARLY requires finite positive angulation evidence"
 
-                # Preserve the actual source's early-reversal capability: H1/H4
-                # need not already agree with the new direction. Their contexts
-                # must still exist, be fresh, and be pinned by the intent versions.
-                # D1 is only a macro airbag and may veto an active opposite regime.
-                for tf in ("1h", "4h", "1d"):
+                # A countertrend WM1 may precede a fully aligned H1 Alligator.
+                # Both H1/H4 must be fresh and valid; D1 is not an entry dependency.
+                for tf in ("1h", "4h"):
                     ctx = snapshot.context(intent.symbol, tf)
                     if ctx is None or tf not in normalized_versions:
                         return f"TC2_WM1_EARLY requires versioned {tf} context"
-                    if not ctx.williams_core_ready:
+                    if not bool(getattr(ctx, "williams_core_ready", False)):
                         return f"TC2_WM1_EARLY requires valid Williams indicator evidence on {tf}"
-                macro = snapshot.context(intent.symbol, "1d")
-                macro_state = str(macro.alligator_state or "").strip().upper()
-                macro_opposes_long = (
-                    macro_state == "BEARISH"
-                    and bool(macro.alligator_awake)
-                    and math.isfinite(float(macro.ao_value))
-                    and float(macro.ao_value) < 0.0
-                )
-                macro_opposes_short = (
-                    macro_state == "BULLISH"
-                    and bool(macro.alligator_awake)
-                    and math.isfinite(float(macro.ao_value))
-                    and float(macro.ao_value) > 0.0
-                )
-                if direction == "long" and macro_opposes_long:
-                    return "TC2_WM1_EARLY blocked by active opposite D1 context"
-                if direction == "short" and macro_opposes_short:
-                    return "TC2_WM1_EARLY blocked by active opposite D1 context"
             elif admission_mode == "STRICT_DIRECTIONAL":
                 tc2_core = (
                     os.getenv("WILLIAMS_STRATEGY_PROFILE", "TC2_THREE_WISE_MEN").strip().upper()
                     == "TC2_THREE_WISE_MEN"
                 )
                 if tc2_core and permission_tf == "1h":
-                    # H4 is context only, but it must be present, fresh, and
-                    # mathematically valid. It must not become a second H1 signal.
-                    for tf in ("1h", "4h", "1d"):
+                    # H1 is the signal frame. H4 provides fresh structural context.
+                    # D1 is informational. Do not reconstruct a universal Boolean
+                    # Alligator+AO+Fractal gate at the final order boundary.
+                    for tf in ("1h", "4h"):
                         ctx = snapshot.context(intent.symbol, tf)
                         if ctx is None or tf not in normalized_versions:
                             return f"TC2 entry requires versioned {tf} context"
-                        if not bool(ctx.williams_core_ready):
+                        if not bool(getattr(ctx, "williams_core_ready", False)):
                             return f"TC2 entry requires valid Williams indicator context on {tf}"
 
-                    state = str(permission_ctx.alligator_state or "").strip().upper()
-                    try:
-                        ao_value = float(permission_ctx.ao_value)
-                        awake = bool(permission_ctx.alligator_awake)
-                    except (TypeError, ValueError, OverflowError):
-                        return f"context {permission_tf} does not allow {direction.upper()}: invalid Williams evidence"
-                    if not math.isfinite(ao_value):
-                        return f"context {permission_tf} does not allow {direction.upper()}: non-finite AO"
-                    if direction == "long" and not (
-                        state == "BULLISH" and awake
-                    ):
-                        return "context 1h does not allow LONG"
-                    if direction == "short" and not (
-                        state == "BEARISH" and awake
-                    ):
-                        return "context 1h does not allow SHORT"
-
-                    # D1 is the macro airbag. Its opposite active Alligator/AO state
-                    # may veto a new campaign, but it does not create a signal.
-                    macro = snapshot.context(intent.symbol, "1d")
-                    if macro is None or not macro.williams_core_ready:
-                        return "missing/invalid D1 Williams macro context"
-                    macro_state = str(macro.alligator_state or "").strip().upper()
-                    try:
-                        macro_ao = float(macro.ao_value)
-                    except (TypeError, ValueError, OverflowError):
-                        return "invalid D1 AO evidence"
-                    if not math.isfinite(macro_ao):
-                        return "invalid D1 AO evidence"
-                    macro_opposes_long = (
-                        macro_state == "BEARISH"
-                        and bool(macro.alligator_awake)
-                        and macro_ao < 0.0
-                    )
-                    macro_opposes_short = (
-                        macro_state == "BULLISH"
-                        and bool(macro.alligator_awake)
-                        and macro_ao > 0.0
-                    )
-                    if direction == "long" and macro_opposes_long:
-                        return "active opposite D1 macro context blocks LONG"
-                    if direction == "short" and macro_opposes_short:
-                        return "active opposite D1 macro context blocks SHORT"
+                    if purpose in {"CAMPAIGN_ENTRY", "CAMPAIGN_ADD_ON"}:
+                        signal_type = str(getattr(intent, "signal_type", "") or "").strip().upper()
+                        state = str(permission_ctx.alligator_state or "").strip().upper()
+                        awake = bool(getattr(permission_ctx, "alligator_awake", False))
+                        if signal_type == "REVERSAL":
+                            if purpose != "CAMPAIGN_ENTRY":
+                                return "WM1 REVERSAL cannot be used as a campaign add-on"
+                            if direction == "long" and not (state == "BULLISH" and awake):
+                                return "WM1 requires its own valid H1 reversal/angulation admission"
+                            if direction == "short" and not (state == "BEARISH" and awake):
+                                return "WM1 requires its own valid H1 reversal/angulation admission"
+                        elif signal_type == "SUPER_AO":
+                            # The detector is responsible for proving the third
+                            # same-colour AO bar. A fractal is not a prerequisite.
+                            pass
+                        elif signal_type == "FRACTAL":
+                            try:
+                                trigger = float(getattr(intent, "signal_trigger_price", 0.0))
+                                teeth = float(getattr(permission_ctx, "teeth", float("nan")))
+                            except (TypeError, ValueError, OverflowError):
+                                return "WM3 trigger/Teeth evidence is invalid"
+                            if (
+                                not math.isfinite(trigger) or trigger <= 0.0
+                                or not math.isfinite(teeth) or teeth <= 0.0
+                            ):
+                                return "WM3 trigger/Teeth evidence is invalid"
+                            if direction == "long" and trigger <= teeth:
+                                return "WM3 LONG trigger must remain above H1 Teeth"
+                            if direction == "short" and trigger >= teeth:
+                                return "WM3 SHORT trigger must remain below H1 Teeth"
+                        else:
+                            return f"unsupported TC2 Wise-Man signal type {signal_type or 'UNKNOWN'}"
+                    else:
+                        # Legacy generic ENTRY paths are not allowed to use an
+                        # informational D1 filter, but remain strictly directional.
+                        state = str(permission_ctx.alligator_state or "").strip().upper()
+                        awake = bool(getattr(permission_ctx, "alligator_awake", False))
+                        if direction == "long" and not (state == "BULLISH" and awake):
+                            return "context 1h does not allow LONG"
+                        if direction == "short" and not (state == "BEARISH" and awake):
+                            return "context 1h does not allow SHORT"
                 else:
                     # Explicit legacy/profile integrations remain separate from
                     # TC2 and preserve their own directional permission contract.
