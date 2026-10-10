@@ -535,3 +535,58 @@ The newly added ledger improves idempotent fill evidence and closes the specific
 - physical Android process-death and Spot Testnet remain NOT VERIFIED.
 
 No Binance Mainnet or real trading operation was used. `main` remains untouched. PR #47 must remain open Draft and must not be merged.
+
+
+## 11. TASK 001.4 — Exactly-Once Financial Effects & Position Reconciliation (2026-10-11)
+
+**Status: FAIL / NOT ACCEPTED — source audit established material gaps; no claim of exactly-once financial application.**
+
+### 11.1 Baseline and prior-SHA CI
+
+- Branch: `audit/williams-2.1-task-001-architecture`
+- Existing PR: #47, still open and Draft; base `main` remains `04da5f9c09572e99ff310be3a1908179165e528c`.
+- TASK 001.4 starting SHA: `07bf7673d9f9294124e0dc32026d2cb64e436565`.
+- The branch/PR metadata reports this same head SHA. No merge or Mainnet/real order activity was performed in this audit.
+- Python backend tests, run [38090130874](https://github.com/19wolfalone92/Williams/actions/runs/38090130874): **SUCCESS**, head SHA `07bf7673d9f9294124e0dc32026d2cb64e436565`; job `backend-test` completed successfully.
+- Williams Campaign CI, run [38090130877](https://github.com/19wolfalone92/Williams/actions/runs/38090130877): **SUCCESS**, same head SHA; both `Android build and static checks` and `Python tests` completed successfully.
+- Build Android APK, run [38090130946](https://github.com/19wolfalone92/Williams/actions/runs/38090130946): **SUCCESS**, same head SHA; `Build APKs` completed successfully.
+- These CI results establish regression/build status only. They do not prove the financial/recovery acceptance criteria below.
+
+### 11.2 Verified financial data paths and split state
+
+The source audit found that `exchange_fill_ledger` is currently an evidence ledger, not the canonical financial-effect ledger:
+
+1. `Database.record_exchange_fill()` in `db.py` inserts a unique `(symbol, exchange_trade_id)` record and stores quantity, price, quote quantity and commission as text. It rejects conflicting core trade fields and conflicting confirmed fee fields; an unknown fee can be enriched. This is useful durable evidence, but there is no durable per-fill application state tying the fill to an atomic position/Campaign update.
+2. `CampaignExecutionService._executed_fee_quote()` in `campaign_execution.py` reads exchange trades, writes the fill evidence, sums quantities and fees using `Decimal`, then returns `float(fee_quote)`. The conversion is an explicit precision boundary; its result is passed into Campaign APIs.
+3. The initial-entry and add-on paths call `engine.record_initial_fill()` / `engine.record_add_on_fill()`, then separately mutate signal state, legacy `trades` rows and Campaign persistence. These steps do not share one transaction keyed by exchange trade identity. A crash/retry between those effects can therefore leave the ledger populated while downstream state is incomplete, or repeat downstream effects.
+4. `campaign_fills` is a separate table with an auto-increment row ID and no unique exchange trade ID constraint. `Database.save_campaign_fill()` inserts a new row and stores quantity, price, quote quantity, fee and base commission in SQLite `REAL` columns via Python `float`; it is not intrinsically idempotent against `exchange_fill_ledger`.
+5. The Campaign persistence table stores `position_qty`, `average_entry_price`, realized/unrealized PnL, risk and capital fields as SQLite `REAL`; `Database.save_campaign()` explicitly converts these values to `float`. This is a separate representation from the exact-string fill ledger.
+6. The legacy/portfolio execution path is independent of the Campaign fill materialization path. `PortfolioTrader._authoritative_execution()`, `_exit_fee_quote()`, manual sell handling and trade close/update paths use float-based aggregates and legacy `trades` records. In `_exit_fee_quote()`, a missing commission currently follows a `float(row.get("commission", 0) or 0)` path, so that path does not share the Campaign helper's unknown-fee fail-closed contract.
+7. Position reconstruction helpers in `portfolio_trader.py` use exchange order history, order executed quantities and account base-asset balance as separate evidence. They do not yet establish a single persisted reconciliation result joining trade IDs, commissions, net base inventory, Campaign state and verified protection.
+8. Existing OCO recovery in `ExecutionBarrier` can reconcile list and child order identities/statuses, but the evidence does not establish that fills/fees have been applied exactly once or that remaining protection quantity matches the authoritative residual exposure.
+
+### 11.3 Current conclusion by requested gate
+
+| Gate | Finding on starting SHA | Status |
+| --- | --- | --- |
+| P0-B exactly-once financial effect | Unique fill evidence exists; atomic/idempotent financial effect + Campaign/position update does not. | **BLOCKED** |
+| P0-C Decimal/float contract | Decimal is used in part of fee aggregation, but downstream Campaign/legacy accounting persists and aggregates floats/REAL. | **BLOCKED** |
+| P0-D fee completion | Campaign entry fee path blocks on missing fee; legacy exit fee path can normalize missing commission to zero. Unknown fee is not a universal account-wide completion gate. | **BLOCKED** |
+| P0-E authoritative position reconciliation | No single durable reconciler proves agreement among order history, fill IDs, fee assets, account inventory, local exposure, Campaign and protection. | **BLOCKED** |
+| P0-F protection coverage | Order existence/recovery is not yet a proof of exact live protective quantity against reconciled exposure after partial fills/cancel-replace. | **BLOCKED** |
+| P0-G OCO lifecycle | List/child status tests exist; end-to-end OCO partial fill → fee accounting → residual position → protection → restart is not established. | **BLOCKED** |
+| P0-H crash consistency | Existing tests cover selected failure boundaries and two SQLite connections in threads, not the complete requested matrix or two independent OS processes. | **BLOCKED** |
+| P0-I global recovery gate | Per-intent and per-symbol barriers exist, but a single gate whose predicate proves every financial and protection dimension is not demonstrated by current source/tests. | **BLOCKED** |
+
+### 11.4 Required next implementation boundary
+
+The safe next step is not to mark `exchange_fill_ledger` rows as applied from a sequence of Python calls. The application must introduce a durable financial-effect identity and transaction contract, then route every relevant Campaign and legacy entry/exit/recovery path through it. The effect transaction must bind the fill identity, exact amounts, commission asset/state, campaign/position association and the resulting canonical state; retries must read the committed effect rather than replay arithmetic. A partially known commission, missing association, or mismatch must remain unresolved and hold the global entry gate.
+
+The current schema's `REAL` Campaign/legacy financial fields and non-unique `campaign_fills` rows mean this requires a coordinated data-model migration and a complete call-site inventory. Adding an isolated idempotency table without migrating callers would create a false assurance, so this pass deliberately does not claim that the financial-effect problem has been fixed.
+
+### 11.5 External validation boundary
+
+- Fake-exchange/local SQLite evidence is not a physical Android process-death/restart test.
+- A dedicated Binance Spot Testnet lifecycle matrix was **not run** in this audit.
+- No Binance Mainnet or real trade was used.
+- Final TASK 001.4 status remains **FAIL / NOT ACCEPTED** until all P0s above are implemented and verified on one exact final SHA.
