@@ -340,3 +340,52 @@ def test_all_backend_order_mutators_converge_on_an_execution_boundary():
         Visitor(path).visit(tree)
 
     assert violations == [], f"backend mutation call sites outside barrier: {violations}"
+
+
+def test_spot_barrier_rejects_non_risk_reducing_sell_exposure(tmp_path):
+    cache = _context_cache(allow_long=True, allow_short=True)
+    db = _ready_db(tmp_path)
+    ctx = cache.snapshot().context("BTCUSDT", "1h")
+    intent = OrderIntent.new(
+        "BTCUSDT",
+        "SELL",
+        "MARKET",
+        required_context_versions={"1h": ctx.version},
+        purpose="ENTRY",
+        permission_interval="1h",
+        client_order_id="TASK001_OFFLINE_UNSUPPORTED_SELL",
+    )
+    called = []
+    result = ExecutionBarrier(cache, db).execute(
+        intent, lambda: called.append(True) or {"status": "NEW"}
+    )
+    assert result.accepted is False
+    assert "not supported by Spot" in result.reason
+    assert called == []
+
+
+def test_malformed_context_version_fails_closed_without_exchange_call(tmp_path):
+    cache = _context_cache()
+    db = _ready_db(tmp_path)
+    intent = OrderIntent.new(
+        "BTCUSDT",
+        "BUY",
+        "STOP_LOSS",
+        required_context_versions={"1h": "not-an-integer"},
+        purpose="ENTRY",
+        permission_interval="1h",
+        client_order_id="TASK001_OFFLINE_BAD_CONTEXT",
+    )
+    called = []
+    result = ExecutionBarrier(cache, db).execute(
+        intent, lambda: called.append(True) or {"status": "NEW"}
+    )
+    assert result.accepted is False
+    assert "validation_error" in result.reason
+    assert called == []
+    row = db.conn.execute(
+        "SELECT status, reason FROM execution_intents WHERE intent_id=?",
+        (intent.intent_id,),
+    ).fetchone()
+    assert row["status"] == "BLOCKED"
+    assert "validation_error" in row["reason"]
