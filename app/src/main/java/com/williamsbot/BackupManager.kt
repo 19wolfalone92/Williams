@@ -56,7 +56,10 @@ object BackupManager {
         validatePassword(password)
 
         val p = prefs(context)
-        val backendUrl = p.getString("backend_url", "") ?: ""
+        // Match BackendApi's actual standalone default even when the user
+        // has never opened/saved the optional backend settings screen.
+        val backendUrl = p.getString("backend_url", "http://127.0.0.1:18080")
+            ?: "http://127.0.0.1:18080"
         val standalone = BackendUrlContract.isLocalRuntimeUrl(backendUrl)
         val payload = JSONObject()
             .put("schema", 1)
