@@ -54,23 +54,14 @@ class MultiPositionTrader:
                 if raw_symbols.upper() in {"ALL", "AUTO", "*"}
                 else [x.strip().upper() for x in raw_symbols.split(",") if x.strip()]
             )
-        self.max_open_positions = max(
-            0,
-            int(os.getenv("MAX_OPEN_POSITIONS", "5")),
-        )
+        self.max_open_positions = max(0, min(1, int(os.getenv("MAX_OPEN_POSITIONS", "1"))))
         self.max_total_risk_pct = min(
-            0.01,
-            max(
-                0.0,
-                float(os.getenv("MAX_TOTAL_RISK_PCT", "0.01")),
-            ),
+            0.006,
+            max(0.0, float(os.getenv("MAX_TOTAL_RISK_PCT", "0.006"))),
         )
         self.max_risk_per_trade_pct = min(
-            0.005,
-            max(
-                0.0,
-                float(os.getenv("MAX_RISK_PER_TRADE_PCT", os.getenv("RISK_PER_TRADE_PCT", "0.005"))),
-            ),
+            0.0025,
+            max(0.0, float(os.getenv("MAX_RISK_PER_TRADE_PCT", os.getenv("RISK_PER_TRADE_PCT", "0.0025")))),
         )
         self.dry_run = (
             os.getenv("DRY_RUN", "true").lower() == "true"
@@ -87,14 +78,14 @@ class MultiPositionTrader:
         self.l2_guard = L2SlippageGuard(
             float(os.getenv("MAX_L2_SLIPPAGE_PCT", os.getenv("MAX_SPREAD_PCT", "0.0015")))
         )
-        self.equity_breaker = EquityCircuitBreaker(float(os.getenv("MAX_DAILY_LOSS_PCT", "0.03")))
+        self.equity_breaker = EquityCircuitBreaker(min(0.01, float(os.getenv("MAX_DAILY_LOSS_PCT", "0.01"))))
         self.max_trades_per_day = max(0, int(os.getenv("MAX_TRADES_PER_DAY", "5")))
         self.max_consecutive_losses = max(0, int(os.getenv("MAX_CONSECUTIVE_LOSSES", "3")))
         self.cooldown_minutes = max(0, int(os.getenv("COOLDOWN_MINUTES", "30")))
         self.execution_barrier = execution_barrier
-        self.campaign_engine_enabled = (
-            os.getenv("CAMPAIGN_ENGINE", "true").lower() == "true"
-        )
+        # Campaign execution is the only new-entry route. The legacy direct
+        # MARKET BUY branch bypasses the shared campaign risk reservation.
+        self.campaign_engine_enabled = True
         self.campaign_execution = CampaignExecutionService(
             self.client,
             self.db,
@@ -1821,11 +1812,14 @@ class MultiPositionTrader:
         realized = float(self.db.conn.execute(
             "SELECT COALESCE(SUM(pnl),0) FROM trades WHERE exit_time IS NOT NULL AND exit_time >= date('now')"
         ).fetchone()[0] or 0.0)
-        fees = float(self.db.conn.execute(
-            "SELECT COALESCE(SUM(fees),0) FROM trades WHERE exit_time IS NOT NULL AND exit_time >= date('now')"
-        ).fetchone()[0] or 0.0)
+        # Canonical writers persist net PnL after commission; avoid charging it twice.
+        fees = 0.0
         trades_today = int(self.db.conn.execute(
             "SELECT COUNT(*) FROM trades WHERE entry_time >= date('now')"
+        ).fetchone()[0])
+        daily_losses = int(self.db.conn.execute(
+            "SELECT COUNT(*) FROM trades WHERE exit_time IS NOT NULL "
+            "AND exit_time >= date('now') AND pnl < 0"
         ).fetchone()[0])
         recent = self.db.conn.execute(
             "SELECT pnl, exit_time FROM trades WHERE exit_time IS NOT NULL ORDER BY id DESC LIMIT 20"
@@ -1833,6 +1827,8 @@ class MultiPositionTrader:
 
         if self.max_trades_per_day and trades_today >= self.max_trades_per_day:
             return False, f"MAX_TRADES_PER_DAY reached: {trades_today}"
+        if daily_losses >= 2:
+            return False, f"MAX_DAILY_STOP_OUTS reached: {daily_losses}"
         losses = 0
         for row in recent:
             if float(row["pnl"] or 0) < 0:
@@ -2096,7 +2092,7 @@ class MultiPositionTrader:
             return False
         if self.db.open_trade(symbol):
             return False
-        if self.max_open_positions > 0 and len(self.open_trades()) >= self.max_open_positions:
+        if self.max_open_positions <= 0 or len(self.open_trades()) >= self.max_open_positions:
             return False
         if self._pending_entries():
             return False

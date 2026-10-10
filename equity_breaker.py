@@ -7,7 +7,7 @@ otherwise entry is blocked until the baseline is reconciled.
 from __future__ import annotations
 
 import math
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 
 class EquityCircuitBreaker:
@@ -57,19 +57,30 @@ class EquityCircuitBreaker:
             return self._parse_positive(stored_equity, "stored daily start equity")
 
         last_observed = db.state_get("last_observed_equity")
-        if last_observed is not None:
+        last_observed_at = db.state_get("last_observed_equity_at_ms")
+        if last_observed is not None and last_observed_at is not None:
             baseline = self._parse_positive(last_observed, "last observed equity")
+            try:
+                observed_ms = int(last_observed_at)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError("last observed equity timestamp is invalid") from exc
+            if observed_ms <= 0:
+                raise ValueError("last observed equity timestamp is invalid")
+            now = datetime.now(timezone.utc)
+            midnight = datetime.combine(now.date(), datetime.min.time(), tzinfo=timezone.utc)
+            observed_at = datetime.fromtimestamp(observed_ms / 1000.0, tz=timezone.utc)
+            if observed_at < midnight - timedelta(minutes=5) or observed_at > now:
+                raise ValueError("no trustworthy equity snapshot near UTC day start")
         elif stored_day is None and stored_equity is None:
             if self._database_has_risk_history(db):
                 raise ValueError("daily baseline missing while risk history exists")
-            # First-install bootstrap only. Existing installations with trades or
-            # campaigns must not turn a restart into a new daily risk budget.
             baseline = self._parse_positive(current_equity_quote, "initial equity")
         else:
             raise ValueError("daily baseline is stale/corrupt and no prior equity snapshot exists")
 
         db.state_set("daily_risk_day", today)
         db.state_set("daily_start_equity", repr(baseline))
+        db.state_set("daily_risk_tripped", "false")
         return baseline
 
     def check(
@@ -108,6 +119,8 @@ class EquityCircuitBreaker:
 
         try:
             start_equity = self._today_start_equity(db, equity)
+            if str(db.state_get("daily_risk_tripped", "false")).lower() == "true":
+                return False, "daily loss breaker is latched for this UTC day; new entries blocked"
             loss_limit = start_equity * self.max_daily_loss_pct
             if not math.isfinite(loss_limit) or loss_limit < 0:
                 raise ValueError("daily loss limit is invalid")
@@ -121,8 +134,8 @@ class EquityCircuitBreaker:
         if net_daily_pnl <= -loss_limit or equity_loss <= -loss_limit:
             try:
                 db.state_set("daily_risk_tripped", "true")
-            except Exception:
-                pass
+            except Exception as exc:
+                return False, f"daily loss reached and breaker latch persistence failed ({type(exc).__name__})"
             return False, (
                 "daily equity loss circuit breaker tripped: "
                 f"net_pnl={net_daily_pnl:.8f}, equity_change={equity_loss:.8f}, "
@@ -131,6 +144,7 @@ class EquityCircuitBreaker:
 
         try:
             db.state_set("last_observed_equity", repr(equity))
+            db.state_set("last_observed_equity_at_ms", str(int(datetime.now(timezone.utc).timestamp() * 1000)))
         except Exception as exc:
             return False, f"equity snapshot could not be persisted; new entries blocked ({type(exc).__name__})"
         return True, "ok"

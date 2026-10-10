@@ -20,9 +20,9 @@ class PortfolioController:
     def __init__(self, client, balance_quote: float, symbols=None, interval=None):
         self.client = client
         self.interval = interval or os.getenv("INTERVAL", "1h")
-        self.max_open_positions = max(0, int(os.getenv("MAX_OPEN_POSITIONS", "5")))
-        self.max_total_risk_pct = min(0.01, max(0.0, float(os.getenv("MAX_TOTAL_RISK_PCT", "0.01"))))
-        self.max_risk_per_trade_pct = min(0.005, max(0.0, float(os.getenv("MAX_RISK_PER_TRADE_PCT", os.getenv("RISK_PER_TRADE_PCT", "0.005")))))
+        self.max_open_positions = max(0, min(1, int(os.getenv("MAX_OPEN_POSITIONS", "1"))))
+        self.max_total_risk_pct = min(0.006, max(0.0, float(os.getenv("MAX_TOTAL_RISK_PCT", "0.006"))))
+        self.max_risk_per_trade_pct = min(0.0025, max(0.0, float(os.getenv("MAX_RISK_PER_TRADE_PCT", os.getenv("RISK_PER_TRADE_PCT", "0.0025")))))
         self.min_risk_allocation_pct = min(
             self.max_risk_per_trade_pct,
             max(0.0, float(os.getenv("MIN_RISK_ALLOCATION_PCT", "0.001"))),
@@ -36,8 +36,8 @@ class PortfolioController:
         self.risk_engine = RiskEngine(
             balance_quote=float(balance_quote),
             risk_per_trade_pct=self.max_risk_per_trade_pct,
-            max_position_fraction=float(os.getenv("POSITION_FRACTION", "0.25")),
-            max_daily_loss_pct=float(os.getenv("MAX_DAILY_LOSS_PCT", "0.03")),
+            max_position_fraction=min(0.25, max(0.0, float(os.getenv("POSITION_FRACTION", "0.25")))),
+            max_daily_loss_pct=min(0.01, max(0.0, float(os.getenv("MAX_DAILY_LOSS_PCT", "0.01")))),
             min_rr=float(os.getenv("MIN_RISK_REWARD", "1.5")),
             max_atr_pct=float(os.getenv("MAX_ATR_PCT", "0.08")),
         )
@@ -87,13 +87,9 @@ class PortfolioController:
 
     def select_portfolio(self, open_risk_quote: float = 0.0, open_positions: int = 0):
         """Return candidates for new campaigns and, in campaign mode, later add-ons."""
-        campaign_mode = os.getenv("CAMPAIGN_ENGINE", "false").lower() == "true"
-        if (
-            self.max_open_positions > 0
-            and open_positions >= self.max_open_positions
-            and not campaign_mode
-        ):
+        if self.max_open_positions <= 0 or open_positions >= self.max_open_positions:
             return []
+        campaign_mode = os.getenv("CAMPAIGN_ENGINE", "false").lower() == "true"
         analysed = self._analyse_candidates(self.scanner.scan())
         if not analysed:
             return []
@@ -104,15 +100,7 @@ class PortfolioController:
         used_pct = float(open_risk_quote) / balance if balance > 0 else self.max_total_risk_pct
         remaining_pct = max(0.0, self.max_total_risk_pct - used_pct)
         selections = []
-        remaining_slots = (
-            len(analysed)
-            if campaign_mode
-            else (
-                max(0, self.max_open_positions - int(open_positions))
-                if self.max_open_positions > 0
-                else len(analysed)
-            )
-        )
+        remaining_slots = max(0, self.max_open_positions - int(open_positions))
 
         for base in analysed:
             if remaining_pct <= 0 or remaining_slots <= 0:

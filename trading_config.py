@@ -118,12 +118,12 @@ class TradingConfig:
         # Canonical risk limits are hard ceilings; environment variables may
         # only reduce the budget. MAX_OPEN_POSITIONS cannot disable the limit.
         requested_positions = _int(source, "MAX_OPEN_POSITIONS", 1)
-        max_positions = 1 if requested_positions > 0 else 0
+        max_positions = max(0, min(1, requested_positions))
         risk_key = "MAX_RISK_PER_TRADE_PCT" if "MAX_RISK_PER_TRADE_PCT" in source else "RISK_PER_TRADE_PCT"
         risk = max(0.0, min(0.0025, _float(source, risk_key, 0.0025)))
         total_risk = max(0.0, min(0.006, _float(source, "MAX_TOTAL_RISK_PCT", 0.006)))
-        if risk <= 0.0 or total_risk <= 0.0 or max_positions == 0:
-            raise ValueError("risk budget and one-campaign capacity must be positive")
+        if risk <= 0.0 or total_risk <= 0.0:
+            raise ValueError("risk budget must be positive")
         risk = min(risk, total_risk)
         daily_limit = max(0.0, min(0.01, _float(source, "MAX_DAILY_LOSS_PCT", 0.01)))
         if daily_limit <= 0.0:
