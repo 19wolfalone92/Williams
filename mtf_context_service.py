@@ -75,6 +75,75 @@ class MultiTimeframeContextService:
                 pass
         self._publish(symbol, interval, frame)
 
+    def refresh_symbol_contexts(
+        self,
+        symbol: str,
+        intervals: tuple[str, ...] | list[str] = ("1h", "4h", "1d"),
+    ) -> dict[str, int]:
+        """Synchronously refresh closed H1/H4/D1 context for a candidate symbol.
+
+        This is the on-demand path for dynamically discovered symbols that are
+        not in the long-lived WebSocket bootstrap universe. It uses the same
+        context publisher as normal bootstrap; it does not invent a separate
+        execution policy. Failure or incomplete frames are an error and callers
+        must block new exposure.
+        """
+        normalized_symbol = str(symbol or "").strip().upper()
+        if not normalized_symbol or not normalized_symbol.isalnum():
+            raise ValueError("context refresh requires a valid exchange symbol")
+
+        requested = tuple(dict.fromkeys(
+            "1M" if str(value).strip() == "1M" else str(value).strip().lower()
+            for value in intervals
+        ))
+        if not requested:
+            raise ValueError("context refresh requires at least one timeframe")
+
+        for interval in requested:
+            frame = fetch_klines(
+                self.client,
+                normalized_symbol,
+                interval,
+                limit=max(220, self.config.wave_lookback),
+            )
+            if frame is None or frame.empty:
+                raise RuntimeError(f"{normalized_symbol}/{interval}: no klines for context refresh")
+
+            now = pd.Timestamp.now(tz="UTC")
+            if "close_time" in frame.columns:
+                close_times = pd.to_datetime(frame["close_time"], utc=True, errors="coerce")
+                frame = frame.loc[close_times <= now].copy()
+            else:
+                # Without exchange close timestamps, conservatively exclude the
+                # final candle because it may still be forming.
+                frame = frame.iloc[:-1].copy()
+
+            if frame.empty or len(frame) < min(100, self.config.wave_min_bars):
+                raise RuntimeError(
+                    f"{normalized_symbol}/{interval}: insufficient closed history for context refresh"
+                )
+            if not frame.index.is_monotonic_increasing or not frame.index.is_unique:
+                raise RuntimeError(
+                    f"{normalized_symbol}/{interval}: context candles are duplicate or out of order"
+                )
+
+            frame = frame.tail(300).copy()
+            with self.lock:
+                self.frames[(normalized_symbol, interval)] = frame
+                self.last_closed_open_ms[(normalized_symbol, interval)] = int(
+                    pd.Timestamp(frame.index[-1]).timestamp() * 1000
+                )
+            self._publish(normalized_symbol, interval, frame)
+
+        snapshot = self.cache.snapshot()
+        versions = snapshot.versions(normalized_symbol, list(requested))
+        missing = [interval for interval in requested if interval not in versions]
+        if missing:
+            raise RuntimeError(
+                f"{normalized_symbol}: context publisher did not produce {', '.join(missing)}"
+            )
+        return versions
+
     @staticmethod
     def _atr(df: pd.DataFrame, period: int) -> float:
         if len(df) < period + 1:
