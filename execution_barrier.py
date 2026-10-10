@@ -196,6 +196,13 @@ class ExecutionBarrier:
                     pass
             snapshot = self.context_cache.snapshot()
             reason = self._validate(intent, snapshot)
+            if (
+                not reason
+                and str(intent.purpose or "").strip().upper()
+                in {"ENTRY", "CAMPAIGN_ENTRY", "ADD_ON", "CAMPAIGN_ADD_ON"}
+                and pre_submit_checks is None
+            ):
+                reason = "entry requires mandatory last-mile signal/market revalidation"
             if reason:
                 try:
                     order_fsm.transition(OrderState.CANCELED)
