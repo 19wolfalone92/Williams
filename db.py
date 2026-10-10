@@ -6,7 +6,7 @@ from contextlib import contextmanager
 
 
 class Database:
-    SCHEMA_VERSION = 8
+    SCHEMA_VERSION = 9
 
     def __init__(self, path=None):
         path = path or os.getenv('WILLIAMS_DB_PATH') or 'data/trader.sqlite3'
@@ -141,7 +141,8 @@ class Database:
             status TEXT NOT NULL,
             reason TEXT,
             client_order_id TEXT,
-            target_order_id TEXT
+            target_order_id TEXT,
+            target_order_list_id TEXT
         );
         CREATE TABLE IF NOT EXISTS execution_events(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -306,6 +307,8 @@ class Database:
         }
         if 'target_order_id' not in intent_columns:
             self.conn.execute('ALTER TABLE execution_intents ADD COLUMN target_order_id TEXT')
+        if 'target_order_list_id' not in intent_columns:
+            self.conn.execute('ALTER TABLE execution_intents ADD COLUMN target_order_list_id TEXT')
         columns = {
             row['name']
             for row in self.conn.execute('PRAGMA table_info(campaign_fills)').fetchall()
@@ -435,12 +438,13 @@ class Database:
             '''INSERT INTO execution_intents(
                 intent_id,symbol,side,order_type,purpose,
                 required_context_versions_json,hypothesis_id,invalidation_level,status,reason,
-                client_order_id,target_order_id
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                client_order_id,target_order_id,target_order_list_id
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(intent_id) DO UPDATE SET
                 status=excluded.status, reason=excluded.reason,
                 client_order_id=COALESCE(NULLIF(excluded.client_order_id,''), execution_intents.client_order_id),
-                target_order_id=COALESCE(NULLIF(excluded.target_order_id,''), execution_intents.target_order_id)''',
+                target_order_id=COALESCE(NULLIF(excluded.target_order_id,''), execution_intents.target_order_id),
+                target_order_list_id=COALESCE(NULLIF(excluded.target_order_list_id,''), execution_intents.target_order_list_id)''',
             (
                 intent.intent_id, intent.symbol, intent.side, intent.order_type,
                 intent.purpose,
@@ -448,6 +452,7 @@ class Database:
                 intent.hypothesis_id, float(intent.invalidation_level or 0.0),
                 status, reason, getattr(intent, 'client_order_id', ''),
                 getattr(intent, 'target_order_id', ''),
+                getattr(intent, 'target_order_list_id', ''),
             ),
         )
         if not self._transaction_active:
