@@ -318,7 +318,7 @@ def test_pre_submit_journal_failure_blocks_exchange_and_latches_recovery(tmp_pat
     )
     calls = []
 
-    with pytest.raises(ExecutionPersistenceError, match="Binance submission was not attempted"):
+    with pytest.raises(ExecutionPersistenceError, match="submission blocked and reconciliation required"):
         barrier.execute(intent, lambda: calls.append("submitted") or {"status": "FILLED"})
 
     assert calls == []
