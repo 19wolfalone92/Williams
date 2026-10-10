@@ -418,3 +418,41 @@ The native helper treated any last three rising/falling AO differences as Super 
 The native WM1 detector previously required AO and AC to improve on the signal bar and was only called after a directional AO/AC gate. Python instead identifies the divergent bar and increasing Jaw separation, then applies directional context later. Android now uses the same five-bar increasing-separation approximation for WM1 and retains candidates until the shared admission stage. WM3's outside-Teeth test now uses the actual confirmation candle. The common context gate now requires H1/H4 directional permission and uses D1 only as an active opposite-direction veto, matching the Python context contract. Native hard exits now use two closed bars with opposite Alligator ordering, close beyond Teeth and opposite AO; AC is not an extra exit gate. Added unit tests for WM1 angulation, exact WM2 timing, LONG/SHORT hard exits and H1/H4/D1 context policy.
 
 These are implementation-level parity fixes, not proof that the approximation fully captures the books' visual judgments. The next required test is the same hand-checked OHLCV golden vectors run through Python and Android, comparing signal type, source candle, confirmation time, trigger, protective reference, context verdict and exit reason.
+
+### 45. WM1 early-entry was contradicted by final directional-context gates — corrected; CI pending
+
+**Root cause.** The signal detectors could identify a valid WM1 reversal bar, but the Python Futures context selector, final `ExecutionBarrier`, and Android native scan/final-entry gate required H1 and H4 to already permit the new direction. That made the earliest reversal signal actionable only after the new trend was already directionally confirmed, undermining WM1's distinct role as the early Wise-Man signal.
+
+**Correction across the chain.**
+- Added an explicit signal-type-aware context policy for Android native Futures.
+- Added `signal_type` to the durable Python `OrderIntent` contract so the final execution barrier can distinguish a WM1 initial entry from ordinary trend-following entries.
+- For **initial WM1 REVERSAL only**, H1/H4 directional alignment is not required. Current, versioned context dependencies remain mandatory; an actively opposing D1 macro context still vetoes the entry.
+- WM2 Super AO and WM3 fractal entries retain the existing directional context gate.
+- Add-ons do not inherit the WM1 exception; they remain same-campaign, same-direction exposure increases and must pass the add-on admission contract.
+- The same exception is applied at candidate selection, final pre-submit validation, and the execution barrier; it is not merely a scanner-side change.
+
+**Regression coverage added.** Kotlin context-policy tests cover WM1 before H1/H4 alignment, the D1 macro veto, and unchanged WM2/WM3 admission. Python execution-barrier tests cover the equivalent versioned-context pass and D1 veto.
+
+**Important boundary.** This is a signal-specific implementation of the book's early-reversal role under the system's separate D1 macro safety overlay. It does not claim that the book defines the D1 veto or the numerical angulation detector; those remain explicit system/engineering rules.
+
+### 46. End-to-end chain status — current evidence map
+
+| Chain stage | Current implementation evidence | Remaining audit/release condition |
+|---|---|---|
+| Market data → closed bars | UTC timestamps, OHLCV invariants, closed-candle and freshness checks exist in Python and native Futures | Shared Python/Kotlin golden fixtures for gaps, duplicate bars, candle-boundary races and exact closed-bar selection |
+| Alligator / AO / AC / fractals | Core formulas and WM1/WM2/WM3 candidates exist; strict 2-left/2-right fractal confirmation is represented | Compare numeric outputs and source/confirmation timestamps on identical fixtures; angulation remains an approximation, not an author-defined formula |
+| Signal validity / expiry | Trigger-cross, structural invalidation and local expiry checks exist; armed exchange orders are cancelled on expiry/lockout paths | Fault-inject cancellation timeout racing with trigger/fill and prove risk is not released before terminal order/child-fill reconciliation |
+| Context admission | Signal-specific WM1 path now preserves the early reversal; WM2/WM3 retain stricter context gates | Exact-head Python/Campaign/Android CI; golden-vector parity; D1/H4 veto policy must remain visible as a safety overlay, not attributed to the books |
+| Risk / sizing | Structural stop geometry, quantity filters, cost buffers and post-normalization risk checks exist | Cross-engine fixtures must compare final normalized quantity, risk quote, stop and notional under identical filters/equity |
+| Durable intent → exchange submit | Stable client IDs, write-before-submit intent, final context/version checks and ambiguous-outcome reconciliation exist | Inject DB write failure, HTTP timeout/unknown Binance execution, duplicate callback, process kill between every state transition |
+| Entry fill → position | Exchange order/position/trade reconciliation and quantity checks exist | Demo proof for partial fill, trigger/fill during cancellation, and position snapshot lag |
+| Protection installation/replacement | Exchange-side protective stops are verified; replacement installs new protection before cancelling old protection | Demo proof that no reachable state leaves live exposure without a verified active stop; ambiguous replacement remains locked |
+| Add-on / campaign | Python campaign engine supports WM2/WM3 add-on sequencing and aggregate risk reservation | Android deliberately does not support pyramiding; do not claim full cross-engine campaign parity |
+| Trailing / exhaustion / hard exit | Structural stop monotonicity and hard exit predicates exist | Exit predicates are still engineering approximations across editions; profile the TC1/NTD/TC2 exits separately and validate on book-derived golden charts |
+| Exit order → flat state | Python has a durable ledger for protective-child/market-exit races; Android blocks false closure when multiple exits are unaggregated | Native automated aggregation of multiple market exits plus protective-child fills is incomplete; this is a release blocker |
+| PnL / fees / funding | Quote-asset commissions and trade-level fill checks are handled where authoritative | Non-quote commissions and funding are not yet fully incorporated into a complete net-PnL ledger across both engines |
+| Restart / release gate | SQLite state, kill-switch latch, account-wide orphan-order checks and read-only release gate exist | Authorized Demo LONG and SHORT lifecycle, forced restart/recovery, and read-only gate must pass on the exact release SHA |
+
+### Current pass decision
+
+The WM1 context correction is now committed on the audit branch with regression tests, but those tests and the latest combined code have **not yet been verified on a completed exact-head CI run**. No Demo lifecycle was run by this code change and no real order was sent. The native partial-exit/protective-child aggregation gap, cross-engine golden-vector parity, full fee/funding ledger, and Demo end-to-end proof remain open. **NOT READY FOR LIVE TRADING.**
