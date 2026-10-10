@@ -90,12 +90,12 @@ def test_short_super_ao_and_fractal_use_bearish_trigger_geometry():
     by_type = {s.signal_type: s for s in signals}
     assert SignalType.SUPER_AO in by_type
     assert by_type[SignalType.SUPER_AO].direction == "SHORT"
-    assert by_type[SignalType.SUPER_AO].role is SignalRole.ADD_ON
+    assert by_type[SignalType.SUPER_AO].role is SignalRole.ENTRY
     assert by_type[SignalType.SUPER_AO].trigger_price < float(data.loc[8, "low"])
     assert SignalType.FRACTAL in by_type
     fractal = by_type[SignalType.FRACTAL]
     assert fractal.direction == "SHORT"
-    assert fractal.role is SignalRole.ADD_ON
+    assert fractal.role is SignalRole.ENTRY
     assert fractal.trigger_price < float(data.loc[9, "low"])
     assert fractal.trigger_price < float(data.loc[11, "teeth_shifted"])
     assert fractal.protective_reference == float(data.loc[9, "high"])
@@ -129,7 +129,7 @@ def test_initial_signal_selector_accepts_explicit_short_direction():
     assert selected is short
 
 
-def test_long_super_ao_and_fractal_are_add_ons_not_initial_entries():
+def test_long_super_ao_and_fractal_are_independent_initial_entry_candidates():
     data = frame()
     data.loc[8, "ao_green_streak"] = 3
     data.loc[7, "long_fractal_outside"] = True
@@ -149,9 +149,12 @@ def test_long_super_ao_and_fractal_are_add_ons_not_initial_entries():
     by_type = {signal.signal_type: signal for signal in signals}
     assert SignalType.SUPER_AO in by_type
     assert SignalType.FRACTAL in by_type
-    assert by_type[SignalType.SUPER_AO].role is SignalRole.ADD_ON
-    assert by_type[SignalType.FRACTAL].role is SignalRole.ADD_ON
-    assert not [signal for signal in signals if signal.role is SignalRole.ENTRY]
+    assert by_type[SignalType.SUPER_AO].role is SignalRole.ENTRY
+    assert by_type[SignalType.FRACTAL].role is SignalRole.ENTRY
+    assert len([signal for signal in signals if signal.role is SignalRole.ENTRY]) == 2
+    selected = DigitalWilliamsCore().select_initial(signals, now_ms=10**15)
+    assert selected is None  # the synthetic frame has no live expiry timestamps
+    # When made live, either signal family can seed a flat campaign without the other.
 
 
 def test_fractal_signal_uses_configured_confirmation_delay_not_hardcoded_two_bars():
