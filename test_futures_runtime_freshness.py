@@ -60,6 +60,19 @@ def test_noncanonical_signal_timeframe_is_not_the_default():
     assert CANONICAL_DECISION_TIMEFRAME == "1h"
     assert TradingConfig.from_env({"EXECUTION_TIMEFRAME": "5m"}).execution_timeframe == "5m"
 
+@pytest.mark.parametrize("execution, expected", [
+    ("1h", ("4h", "1h", "15m")),
+    ("4h", ("4h", "1h")),
+    ("15m", ("4h", "1h", "15m")),
+    ("5m", ("4h", "1h", "15m", "5m")),
+    ("2h", ("4h", "2h", "1h")),
+])
+def test_intraday_timeframe_hierarchy_excludes_d1(execution, expected):
+    from trading_config import _tf_chain
+    chain = _tf_chain(execution, {})
+    assert chain == expected
+    assert "1d" not in chain
+
 
 def test_initial_williams_signal_without_expiry_is_not_actionable():
     from campaign_model import SignalRole, SignalSpec, SignalType
