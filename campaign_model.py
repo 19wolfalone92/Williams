@@ -127,6 +127,9 @@ class SignalSpec:
     context_versions: Mapping[str, int] = field(default_factory=dict)
     reason: str = ""
     created_at_ms: int = field(default_factory=lambda: int(time.time() * 1000))
+    # Open time of the candle on which the signal became confirmed/actionable.
+    # For a fractal this differs from signal_bar_time_ms (the center candle).
+    confirmation_time_ms: int = 0
     expires_at_ms: int = 0
     source_candle_index: int = -1
     # Direction describes intended exposure, not exchange order side.
