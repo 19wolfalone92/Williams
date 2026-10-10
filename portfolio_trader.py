@@ -1694,10 +1694,16 @@ class MultiPositionTrader:
             if list_id or list_client:
                 cancel = getattr(self.client, "cancel_oco", None)
                 if cancel is not None:
-                    if list_id:
-                        cancel(symbol, order_list_id=list_id)
-                    else:
-                        cancel(symbol, list_client_order_id=list_client)
+                    cancel_intent_id = f"{self.EMERGENCY_PREFIX}CANCEL_{uuid.uuid4().hex[:12]}"
+                    self._submit_order(
+                        symbol, "SELL", "CANCEL", "CAMPAIGN_PROTECTION_CANCEL",
+                        cancel_intent_id,
+                        lambda: cancel(
+                            symbol,
+                            order_list_id=list_id if list_id else None,
+                            list_client_order_id=list_client if not list_id else None,
+                        ),
+                    )
 
             account = self.client.account()
             free_qty = self._asset_balance(
