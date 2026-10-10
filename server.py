@@ -18,10 +18,11 @@ from feature_store import FeatureStore
 from binance_client import BinanceSpotClient
 from digital_williams_core import DigitalWilliamsCore
 from diagnostics import DiagnosticManager
-from safe_logging import redact_text, redact_value
+from safe_logging import redact_text, redact_value, register_sensitive_value
 
 load_dotenv()
 API_TOKEN = os.getenv('MOBILE_API_TOKEN', '').strip()
+register_sensitive_value(API_TOKEN)
 VERSION = '4.25.0'
 
 app = FastAPI(title='Williams Binance Bot API', version=VERSION)
