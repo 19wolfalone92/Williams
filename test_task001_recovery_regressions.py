@@ -5,6 +5,7 @@ import pytest
 
 from binance_client import BinanceAPIError, BinanceSpotClient
 from db import Database
+from campaign_execution import CampaignExecutionService
 from execution_barrier import ExecutionBarrier, OrderIntent
 from market_context import ContextCache, TFMarketContext
 
@@ -81,7 +82,8 @@ def test_exchange_accepted_but_outcome_sqlite_write_fails_is_never_reposted(tmp_
             return response
 
     exchange = FakeExchange()
-    recovery = barrier.reconcile_unresolved_intents(exchange)
+    service = CampaignExecutionService(exchange, db, barrier)
+    recovery = service.startup_recovery_report
     assert recovery["resolved"] == [row_id for row_id, in db.conn.execute(
         "SELECT intent_id FROM execution_intents WHERE client_order_id=?",
         ("TASK001_DBFAIL_ONCE",),
