@@ -2,7 +2,6 @@ package com.williamsbot
 
 import android.content.Context
 import android.util.Base64
-import androidx.core.content.edit
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import org.json.JSONObject
@@ -22,8 +21,8 @@ import kotlin.math.max
  * Android Keystore protects the backend connection on the current phone.
  * A portable backup therefore uses a user-supplied password instead of
  * exporting the Keystore-bound ciphertext.
- * Binance API credentials are NEVER included in the backup because they belong
- * exclusively to the remote Williams backend.
+ * Binance API credentials are stored in a per-install Keystore-encrypted native
+ * runtime store and are NEVER included in portable backups.
  *
  * Trade state is intentionally NOT included. After import, Binance remains
  * the source of truth and the backend must reconcile open positions/orders.
@@ -57,12 +56,18 @@ object BackupManager {
         validatePassword(password)
 
         val p = prefs(context)
+        val backendUrl = p.getString("backend_url", "") ?: ""
+        val standalone = BackendUrlContract.isLocalRuntimeUrl(backendUrl)
         val payload = JSONObject()
             .put("schema", 1)
             .put("magic", MAGIC)
             .put("app_version", BuildConfig.VERSION_NAME)
-            .put("backend_url", p.getString("backend_url", "") ?: "")
-            .put("mobile_token", p.getString("mobile_token", "") ?: "")
+            .put("backend_mode", if (standalone) "standalone" else "remote")
+            .put("backend_url", backendUrl)
+            // The loopback bearer token is independent of the remote-backend
+            // token and is regenerated locally on each installation. Never
+            // put any local bridge credential in a portable backup.
+            .put("mobile_token", if (standalone) "" else p.getString("mobile_token", "") ?: "")
             .put("created_at_ms", System.currentTimeMillis())
 
         val encrypted = encrypt(payload.toString().toByteArray(Charsets.UTF_8), password)
@@ -110,24 +115,38 @@ object BackupManager {
         require(payload.optInt("schema", -1) == 1) {
             "Неподдерживаемая версия backup"
         }
-        val backendUrl = payload.optString("backend_url").trim().trimEnd('/')
+        val backendUrl = BackendUrlContract.normalize(payload.optString("backend_url"))
+        val standalone = BackendUrlContract.isLocalRuntimeUrl(backendUrl)
         val mobileToken = payload.optString("mobile_token").trim()
-        require(backendUrl.startsWith("https://")) {
-            "Backup не содержит HTTPS Backend URL"
-        }
-        require(mobileToken.length >= 32) {
-            "Backup не содержит корректный Mobile API Token"
-        }
 
-        prefs(context).edit {
-            putString("backend_url", backendUrl)
-            putString("mobile_token", mobileToken)
+        // Older exports did not carry backend_mode; the exact validated local
+        // URL is authoritative for mode detection. Other plaintext HTTP URLs
+        // and look-alike loopback URLs are rejected.
+        require(standalone || BackendUrlContract.isSecureRemoteUrl(backendUrl)) {
+            "Backup must contain the exact local runtime URL or a valid HTTPS backend URL"
+        }
+        require(standalone || mobileToken.length >= 32) {
+            "Backup does not contain a valid remote Mobile API Token"
+        }
+        val restoredToken = if (standalone) "standalone" else mobileToken
+        val connectionPrefs = prefs(context)
+        val committed = connectionPrefs.edit()
+            .putString("backend_url", backendUrl)
+            .putString("mobile_token", restoredToken)
+            .commit()
+        val verified = committed &&
+            connectionPrefs.getString("backend_url", null) == backendUrl &&
+            connectionPrefs.getString("mobile_token", null) == restoredToken
+        require(verified) {
+            "Backend connection restore persistence/read-back verification failed"
         }
 
         return JSONObject()
             .put("restored", true)
+            .put("backend_mode", if (standalone) "standalone" else "remote")
             .put("backend_url", backendUrl)
             .put("binance_credentials_restored", false)
+            .put("local_api_token_restored", false)
     }
 
     private data class Encrypted(
