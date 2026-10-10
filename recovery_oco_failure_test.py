@@ -64,6 +64,9 @@ t.filters={"LOT_SIZE":{"minQty":"0.00001","stepSize":"0.00001"},"PRICE_FILTER":{
 t.symbol_rules=SymbolRules.from_exchange_info(t.client.exchange_info("BTCUSDT"), "BTCUSDT")
 t.foreign_base_balance=0
 t.db.state_set("position_state","FLAT")
+# The test exercises OCO failure after a valid, already-reconciled synthetic baseline.
+# This is isolated fake-exchange state only; production defaults remain fail-closed.
+t.db.state_set("recovery_status", "RECOVERY_COMPLETE")
 
 # Simulate the baseline that the real application persists
 # before opening a managed position.
