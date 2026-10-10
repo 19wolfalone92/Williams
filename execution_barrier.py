@@ -531,6 +531,39 @@ class ExecutionBarrier:
                     return True, "SUBMITTED", ""
             return False, "AMBIGUOUS", f"cancelReplace ambiguous: cancel={cancel_result or 'UNKNOWN'} new={new_result or 'UNKNOWN'}"
 
+        # OCO cancellation must be decided from per-leg reports. The list-level
+        # acknowledgement and the ID-only orders array do not prove that no
+        # leg filled while cancellation was in flight.
+        if operation == "CANCEL_OCO":
+            reports = response.get("orderReports")
+            if not isinstance(reports, list) or not reports:
+                return False, "AMBIGUOUS", "OCO cancellation lacks authoritative per-leg reports"
+            leg_states = []
+            leg_fills = []
+            for leg in reports:
+                if not isinstance(leg, dict):
+                    return False, "AMBIGUOUS", "OCO cancellation contains malformed leg report"
+                state = ExecutionBarrier._response_status(leg)
+                try:
+                    executed = float(leg.get("executedQty", 0) or 0)
+                except (TypeError, ValueError):
+                    executed = -1.0
+                if executed < 0:
+                    return False, "AMBIGUOUS", "OCO cancel leg has invalid executedQty"
+                leg_states.append(state)
+                leg_fills.append(executed)
+            if any(
+                state in {"FILLED", "PARTIALLY_FILLED"} or executed > 0
+                for state, executed in zip(leg_states, leg_fills)
+            ):
+                return False, "AMBIGUOUS", "OCO cancel/fill race; reconcile order-list legs"
+            if all(
+                state in {"CANCELED", "CANCELLED", "EXPIRED", "REJECTED"}
+                for state in leg_states
+            ):
+                return True, "SUBMITTED", ""
+            return False, "AMBIGUOUS", "OCO cancellation did not terminate every leg"
+
         # Spot OCO returns order-list fields rather than one order status.
         if response.get("orderListId") is not None and isinstance(response.get("orderReports"), list):
             reports = [row for row in response.get("orderReports", []) if isinstance(row, dict)]
@@ -553,27 +586,6 @@ class ExecutionBarrier:
             if status in {"FILLED", "PARTIALLY_FILLED"} or executed > 0:
                 return False, "AMBIGUOUS", "cancel/fill race: execution evidence exists; reconcile target order"
             return False, "AMBIGUOUS", "cancellation response lacks authoritative terminal target state"
-
-        if operation == "CANCEL_OCO":
-            # A list-level ALL_DONE flag alone cannot tell whether one leg filled
-            # before cancellation. Require explicit leg states; any filled leg
-            # is a cancel/execute race and must be reconciled by order-list ID.
-            legs = response.get("orders") or response.get("orderReports") or []
-            if isinstance(legs, list) and legs:
-                leg_states = [
-                    ExecutionBarrier._response_status(row)
-                    for row in legs if isinstance(row, dict)
-                ]
-                if len(leg_states) == len(legs) and all(
-                    value in ExecutionBarrier.KNOWN_ORDER_STATES for value in leg_states
-                ):
-                    if any(value in {"FILLED", "PARTIALLY_FILLED"} for value in leg_states):
-                        return False, "AMBIGUOUS", "OCO cancel/fill race; reconcile order-list legs"
-                    if all(value in {"CANCELED", "CANCELLED", "EXPIRED", "REJECTED"} for value in leg_states):
-                        return True, "SUBMITTED", ""
-            if status in {"FILLED", "PARTIALLY_FILLED"}:
-                return False, "AMBIGUOUS", "OCO cancel/fill race; reconcile order-list legs"
-            return False, "AMBIGUOUS", "OCO cancellation lacks authoritative per-leg state"
 
         if status in ExecutionBarrier.KNOWN_ORDER_STATES:
             return True, "SUBMITTED", ""
