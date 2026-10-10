@@ -822,3 +822,43 @@ def test_two_independent_processes_cannot_claim_conflicting_symbol_intents(tmp_p
     assert len(rows) == 1, [dict(row) for row in rows]
     assert rows[0]["status"] == "PENDING"
     parent_db.conn.close()
+
+
+def test_legacy_trader_recovery_blocks_unvalued_third_asset_commission(tmp_path):
+    db = Database(str(tmp_path / "unknown_third_asset_fee.sqlite3"))
+    runtime = object.__new__(Trader)
+    runtime.db = db
+    runtime.client = MockExchange()
+    runtime.symbol = "BTCUSDT"
+    with pytest.raises(RuntimeError, match="commission conversion unavailable for BNB"):
+        runtime._authoritative_execution(
+            {
+                "symbol": "BTCUSDT", "orderId": "third-asset-fee",
+                "executedQty": "1", "cummulativeQuoteQty": "100",
+                "fills": [{
+                    "price": "100", "qty": "1", "commission": "0.001",
+                    "commissionAsset": "BNB",
+                }],
+            }
+        )
+    db.conn.close()
+
+
+def test_portfolio_reconciliation_rejects_non_positive_third_asset_fee_conversion(tmp_path):
+    db = Database(str(tmp_path / "zero_third_asset_conversion.sqlite3"))
+    client = MockExchange()
+    client.ticker_price = lambda symbol: {"symbol": symbol, "price": "0"}
+    runtime = MultiPositionTrader(client, db=db, symbols=["BTCUSDT"])
+    with pytest.raises(RuntimeError, match="non-positive commission conversion price"):
+        runtime._authoritative_execution(
+            "BTCUSDT",
+            {
+                "symbol": "BTCUSDT", "orderId": "third-asset-fee-zero-price",
+                "executedQty": "1", "cummulativeQuoteQty": "100",
+                "fills": [{
+                    "price": "100", "qty": "1", "commission": "0.001",
+                    "commissionAsset": "BNB",
+                }],
+            },
+        )
+    db.conn.close()
