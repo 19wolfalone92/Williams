@@ -91,6 +91,32 @@ class EquityCircuitBreaker:
         unrealized_pnl_quote: float = 0.0,
         fees_quote: float = 0.0,
     ) -> tuple[bool, str]:
+        """Serialize baseline initialization, PnL check and daily latch in SQLite."""
+        transaction = getattr(db, "transaction", None)
+        if callable(transaction):
+            try:
+                with transaction():
+                    return self._check_locked(
+                        db, current_equity_quote, symbol,
+                        unrealized_pnl_quote, fees_quote,
+                    )
+            except Exception as exc:
+                return False, (
+                    "daily risk transaction/persistence unavailable; new entries blocked "
+                    f"({type(exc).__name__})"
+                )
+        return self._check_locked(
+            db, current_equity_quote, symbol, unrealized_pnl_quote, fees_quote
+        )
+
+    def _check_locked(
+        self,
+        db,
+        current_equity_quote: float,
+        symbol: str | None = None,
+        unrealized_pnl_quote: float = 0.0,
+        fees_quote: float = 0.0,
+    ) -> tuple[bool, str]:
         try:
             equity = float(current_equity_quote)
             unrealized = float(unrealized_pnl_quote)
