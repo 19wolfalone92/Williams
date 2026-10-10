@@ -184,12 +184,37 @@ class MultiTimeframeContextService:
             log.debug("operative MTF selection %s failed: %s", symbol, exc)
 
         candle_open_ms = int(pd.Timestamp(frame.index[-1]).timestamp() * 1000)
+        # Keep the actual Binance kline close time. Reusing the open time as the
+        # close time makes a perfectly fresh candle appear one full interval old
+        # and can hide stale feeds behind an incorrect timestamp contract.
+        candle_close_ms = 0
+        if "close_time" in frame.columns:
+            try:
+                raw_close = frame["close_time"].iloc[-1]
+                if pd.notna(raw_close):
+                    if isinstance(raw_close, (int, float)):
+                        candle_close_ms = int(raw_close)
+                    else:
+                        candle_close_ms = int(pd.Timestamp(raw_close).timestamp() * 1000)
+            except (TypeError, ValueError, OverflowError):
+                candle_close_ms = 0
+        if candle_close_ms <= 0:
+            interval_ms = {
+                "1m": 60_000, "3m": 180_000, "5m": 300_000,
+                "15m": 900_000, "30m": 1_800_000, "1h": 3_600_000,
+                "2h": 7_200_000, "4h": 14_400_000, "6h": 21_600_000,
+                "8h": 28_800_000, "12h": 43_200_000, "1d": 86_400_000,
+                "3d": 259_200_000, "1w": 604_800_000,
+            }.get(str(interval).lower(), 0)
+            if interval_ms:
+                # This service only publishes bars after they are closed.
+                candle_close_ms = candle_open_ms + interval_ms - 1
         context = TFMarketContext(
             symbol=symbol,
             interval=interval,
             version=0,
             candle_open_time_ms=candle_open_ms,
-            candle_close_time_ms=candle_open_ms,
+            candle_close_time_ms=candle_close_ms,
             price=price,
             atr=atr,
             jaw=jaw,
