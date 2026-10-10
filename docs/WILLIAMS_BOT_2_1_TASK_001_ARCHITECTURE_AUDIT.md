@@ -166,3 +166,89 @@ The tests must be evaluated on the final commit after CI completes; source edits
 **Final tested commit SHA:** pending final CI result.  
 **Final task status:** must be updated to PASS, PASS WITH BLOCKERS or FAIL after checks finish.  
 **Whole-bot release status:** not approved by TASK 001 alone.
+
+
+---
+
+## 9. TASK 001 follow-up — exact-SHA CI and mutation-path review
+
+**Reviewed source SHA:** `6f6839c8419795f50bf99c71f5be3175d6895dcd`  
+**PR:** [#47](https://github.com/19wolfalone92/Williams/pull/47)  
+**Main remains:** `04da5f9c09572e99ff310be3a1908179165e528c`  
+**No PR was merged; no Mainnet request/order was sent.**
+
+### 9.1 CI evidence for the reviewed SHA
+
+All of these runs identify the exact head SHA above:
+
+| Workflow | Run | Result | Concrete evidence |
+|---|---|---|---|
+| Build Android APK | [38080627301](https://github.com/19wolfalone92/Williams/actions/runs/38080627301) | **SUCCESS** | Release contract gate PASS; Android unit-test task successful; debug and unsigned release APKs built; APK metadata and debug signature verified; checksums generated. |
+| Python backend tests | [38080627318](https://github.com/19wolfalone92/Williams/actions/runs/38080627318) | **SUCCESS** | Release gate, Python compile, static safety audit and offline tests all successful. Log: 165 passed, 4 warnings. |
+| Williams Campaign CI (push) | [38080625240](https://github.com/19wolfalone92/Williams/actions/runs/38080625240) | **SUCCESS** | Python tests 176 passed, 4 warnings; Android build, lint and debug unit-test task successful; debug APK artifact uploaded. |
+| Williams Campaign CI (PR) | [38080627398](https://github.com/19wolfalone92/Williams/actions/runs/38080627398) | **SUCCESS** | Python tests 176 passed, 4 warnings; Android build, lint and debug unit-test task successful; debug APK artifact uploaded. |
+
+APK metadata recorded by the Android workflow:
+- Debug: package `com.williamsbot.debug`, versionCode `1695`, versionName `4.25.0-debug`.
+- Release: package `com.williamsbot`, versionCode `1695`, versionName `4.25.0`; artifact is explicitly **unsigned**.
+- Debug APK SHA-256: `27c1f07f6d91d5607b3105e87726d82206f58eb1c1ebd2969a680854fadfb120`.
+- Unsigned release APK SHA-256: `abd1403bfd6d6836e244eb80d6121c7e7e8b557ec7a7af7397a838539bb3c92c`.
+- Installable debug artifact ID: `11680606330`. The separate campaign debug artifact ID is `11679723954`.
+
+The previous failures were specific and corrected before these successful runs: an OCO regression omitted the required `required_context_versions` argument; Android lint rejected Gradle 8.14.5 in favor of 8.14.6. These successes establish CI/build behavior for the reviewed SHA only; they do not establish live Testnet execution or restart safety on a device.
+
+### 9.2 Mutation-path inventory
+
+This is the reviewed call-path inventory for known repository-owned Spot mutation surfaces. Dynamically assembled requests, third-party extension code and every future call site still require repository-wide re-audit before merge.
+
+| Call path / mutation | Required checks before network mutation | Durable intent before I/O | Unknown/ambiguous result | Reconciliation | Contract evidence |
+|---|---|---|---|---|---|
+| Python campaign entry: scanner/signal → `CampaignExecutionService` → `ExecutionBarrier.execute` → `BinanceSpotClient.order_safe` → POST `/api/v3/order` | Signal/context versions, freshness, direction, expiry/trigger, symbol/global/campaign state, risk and exchange filters; serialized barrier | Campaign `ENTRY_PENDING`, client order ID and execution intent persisted before submit | Timeout/connection/5xx is not blindly retried; state remains unknown/reconcile-required | `reconcile_pending_entries()` looks up persisted client/order IDs and adopts only exchange evidence | `test_task001_architecture_contracts.py`; `test_campaign_execution.py`; `test_execution_architecture.py`; `test_binance_json_shapes.py` |
+| Python protection/OCO create: campaign execution → barrier → client OCO adapter → POST `/api/v3/orderList/oco` or compatible OCO route | Must be an explicit protection intent with managed campaign/symbol context; Spot-only side/order contract; validate list response and child IDs/states | Execution intent plus campaign/order identifiers | Missing/malformed list IDs or child states cannot be treated as a fill; outcome must remain unresolved | Query order list/children and confirm authoritative status before adopting protection | `test_task001_architecture_contracts.py::test_oco_list_response_is_validated_without_confusing_it_with_a_position_fill`; Testnet OCO response vectors still needed |
+| Python cancel order: campaign/protection lifecycle → barrier → client cancel → DELETE `/api/v3/order` | Managed order identity and explicit cancel/risk-reducing purpose; no untracked blind retry | Intent persisted before cancel | Timeout or contradictory cancel result remains unknown | Query order/client ID and reconcile actual status/fills | `test_execution_architecture.py`, `test_campaign_execution.py`; explicit cancel-timeout/restart test still needed |
+| Python cancel/replace: campaign protection → barrier/client → POST `/api/v3/order/cancelReplace` | Validate old order, replacement parameters, filters and risk; preserve both leg outcomes | Intent must identify old order and replacement client ID | Non-atomic two-leg response cannot be collapsed into one success boolean | Query both old and replacement order IDs; keep blocked if either leg unresolved | Static boundary and campaign tests; explicit matrix test for old-cancel success/new-order failure and inverse is still needed |
+| Python cancel all symbol orders: client primitive → DELETE `/api/v3/openOrders` | Must not be invoked as an untracked shortcut; active path must prove managed scope and account for all affected orders | Required for every approved mutation; if no per-order durable intent, path is not approved for production use | Ambiguous bulk cancellation remains unresolved | Re-query open orders and order history per managed order before clearing barriers | Inventory identifies this dangerous primitive; a dedicated allow/deny regression test and call-site proof are still required |
+| Python cancel OCO: managed campaign protection → barrier/client → DELETE `/api/v3/orderList` | Exact managed order-list ID/client ID; explicit cancel purpose | Durable intent before call | Timeout remains unknown | Query order list and child orders; confirm actual terminal state | Mutation-boundary regression plus required explicit OCO-cancel failure/restart vector |
+| Android order/OCO/cancel-replace: runtime campaign/protection/manual exit → `signedPost`/`signedDelete` → `signedRequest` → `authorizeExchangeMutation` → SQLite mutation journal → `performSignedRequest` | Testnet host guard, route/method allowlist, side/type/IDs, entry gate and reconciliation barrier; unknown route fails closed | `TradingAuditStore.beginMutationIntent` must commit before transport | Transport or result-persistence ambiguity writes UNKNOWN/RECONCILE_REQUIRED and blocks exposure increase | `reconcileUnresolvedMutationIntents()` looks up persisted order/order-list/replace identifiers and requires authoritative response evidence | `test_task001_architecture_contracts.py` checks one POST and one DELETE primitive, guarded transport and journal/reconcile symbols; Android CI passes. Crash/restart against Testnet remains untested |
+| Android configuration/control API POST/DELETE | Local API handler and config/control validation; these are not themselves Binance order writes | Config/control persistence is separate from exchange mutation intent | Runtime state changes must not be mistaken for Binance order outcomes | Runtime recovery must query Binance before clearing execution barriers | Route inventory and Android unit/static checks; device-level control/restart test remains needed |
+
+**Boundary interpretation:** Python's exchange adapter contains Spot `/api/v3/*` mutation endpoints; Android signed REST mutations converge on the guarded `signedRequest` transport. The AST/static checks are regression guards, not a formal proof against arbitrary dynamic calls. The bulk-cancel primitive and non-atomic cancel/replace deserve explicit deny/allow tests before this task can be accepted.
+
+### 9.3 Recovery tests: proven versus missing
+
+**Covered by offline tests/code-level evidence**
+- SQLite restart persistence for `RECONCILE_REQUIRED` plus a pending execution intent: `test_task001_architecture_contracts.py`.
+- Intent persistence failure prevents the exchange callback from running: same file.
+- Campaign pending-entry recovery and client-order-ID adoption: `test_campaign_execution.py::test_restart_adopts_pending_campaign_by_client_id`.
+- Partial-fill recovery path: `test_campaign_execution.py` exercises a simulated 40% partial fill and calls `reconcile_pending_entries()`.
+- UNKNOWN/RECONCILE_REQUIRED blocks new entries while explicit risk-reducing intents use a separate gate.
+- Android mutation intent journal and unknown/reconcile code path are checked by source-level regression tests; Android CI compiles and tests the app.
+
+**Not yet proven; these tests/evidence are required**
+1. **Android process-death recovery:** instrumentation/device test that kills the process after journal commit but before response, after response but before outcome commit, and during reconciliation; restart must keep entries blocked until exchange evidence resolves the intent.
+2. **Python post-submit persistence failure:** fake exchange records a successful submit, DB outcome persistence throws; assert state becomes `RECONCILE_REQUIRED`, no retry occurs, and next start queries by clientOrderId before any new entry.
+3. **Partial fill + restart + protection:** fake exchange returns partial fill, process/service restarts, recovery queries order/trades, computes executed quantity/commission, installs or verifies protection for actual filled quantity only, and never treats requested quantity as filled.
+4. **Cancel/replace two-leg ambiguity:** table-driven cases for both legs succeeding, old cancel only, replacement only, neither, timeout and malformed response; unresolved cases must persist the barrier.
+5. **OCO lifecycle matrix:** create response accepted but child status unknown, partial execution, cancel timeout, restart before/after list lookup, and child-order fills must reconcile from exchange data.
+6. **Spot Testnet end-to-end:** no production account; verify order create/cancel/protection and deliberately interrupted recovery with a dedicated Testnet account. No such live Testnet run is claimed in this report.
+
+### 9.4 PR #43 / #44 overlap reconciliation
+
+Neither PR was merged. The overlap review is contract-based; do not cherry-pick whole PRs.
+
+- **PR #43 (risk and execution safety):** overlaps on `execution_barrier.py`, `campaign_execution.py`, `db.py`, `ci_release_gate.py`, `risk_engine.py`, `equity_breaker.py`. Preserve its numeric-input validation, exchange-filter fail-closed behavior, daily-loss breaker and reserved-risk accounting only after confirming they coexist with Task 001's mandatory durable intent, UNKNOWN semantics and single execution door. PR #43's older barrier changes must not overwrite the current Task 001 fail-closed persistence and context-version checks.
+- **PR #44 (Williams/Futures parity):** overlaps on `StandaloneRuntime.kt`, `campaign_execution.py`, `campaign_engine.py`, `campaign_model.py`, `execution_barrier.py`, `db.py`, `risk_engine.py`, `market_context.py`, `mtf_context_service.py`, `portfolio_trader.py`, `server.py`, `strategy.py` and tests. Its Futures-specific engine/policies must remain isolated. Strategy/indicator/WM1/WM2/WM3 changes and source-book parity belong to TASK 004, not duplicated here. Only shared execution-contract changes should be reconciled into this branch after per-file diff and test review.
+- PR #44's current reported head in its PR metadata is `dbe755a942276ac3b369afd47d424fff48bbb608`; its earlier Campaign CI was reported failed. That is not evidence that its current code should be merged or rejected wholesale; rerun its checks at the current head before considering any transfer.
+
+### 9.5 Acceptance decision
+
+**TASK 001 status: FAIL — NOT ACCEPTED.**
+
+The four required CI runs listed above passed for `6f6839c8419795f50bf99c71f5be3175d6895dcd`, but acceptance criteria are stricter than CI:
+- no successful Android physical-device/Testnet mutation-journal crash/restart test exists;
+- Python post-submit outcome-persistence failure and no-retry/reconcile behavior need a dedicated regression;
+- cancel/replace two-leg ambiguity and OCO lifecycle matrices are incomplete;
+- the dangerous bulk-cancel primitive still needs explicit call-site proof and regression coverage;
+- full repository mutation-path review remains a static/code review, not a complete dynamic proof.
+
+**Next acceptance gate:** add the missing deterministic failure-injection tests (especially post-submit persistence failure, cancel/replace two-leg ambiguity, bulk-cancel deny/allow, and OCO cancel/restart), rerun all CI on the resulting exact SHA, then run the bounded Spot Testnet recovery matrix. Keep PR #47 open and draft; do not merge.
