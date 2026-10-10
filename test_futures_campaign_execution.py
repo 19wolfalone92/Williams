@@ -725,6 +725,7 @@ def test_add_on_reconciliation_uses_exchange_order_and_position_state(campaign_s
             "pending_add_on_stop_price": 95.0,
             "pending_add_on_quantity": 0.1,
             "pending_add_on_risk_quote": 2.0,
+            "pending_add_on_expires_at_ms": int(time.time() * 1000) + 3_600_000,
             "pending_add_on_original_entry": 100.0,
             "pending_add_on_direction": "LONG",
         },
