@@ -240,3 +240,17 @@ def test_spot_client_and_release_contract_do_not_alias_futures_routes():
     assert "/fapi/" not in spot_client and "/dapi/" not in spot_client
     assert "TESTNET" in server and "testnet" in server.lower()
     assert "EXPECTED_VERSION = '4.25.0'" in gate
+
+
+def test_global_flat_does_not_authorize_a_symbol_with_no_state_key(tmp_path):
+    cache = _context_cache()
+    db = Database(str(tmp_path / "missing-symbol-state.sqlite3"))
+    db.state_set("position_state", "FLAT")
+    called = []
+    result = ExecutionBarrier(cache, db).execute(
+        _entry_intent(cache),
+        lambda: called.append(True) or {"status": "NEW"},
+    )
+    assert result.accepted is False
+    assert result.reason == "BTCUSDT:UNKNOWN"
+    assert called == []
