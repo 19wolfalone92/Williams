@@ -7217,28 +7217,24 @@ private class NativeEngine(
         candles: List<CandleN>,
         i: Int
     ): Boolean {
-        if (i < 2 || i + 2 >= candles.size) {
-            return false
-        }
-
-        return candles[i].h > candles[i - 1].h &&
-            candles[i].h > candles[i - 2].h &&
-            candles[i].h > candles[i + 1].h &&
-            candles[i].h > candles[i + 2].h
+        if (i !in candles.indices || i < 2) return false
+        return WilliamsFractalMath.confirmUp(
+            highs = candles.map { it.h },
+            centerIndex = i,
+            throughIndex = candles.lastIndex
+        ) != null
     }
 
     private fun isDownFractal(
         candles: List<CandleN>,
         i: Int
     ): Boolean {
-        if (i < 2 || i + 2 >= candles.size) {
-            return false
-        }
-
-        return candles[i].l < candles[i - 1].l &&
-            candles[i].l < candles[i - 2].l &&
-            candles[i].l < candles[i + 1].l &&
-            candles[i].l < candles[i + 2].l
+        if (i !in candles.indices || i < 2) return false
+        return WilliamsFractalMath.confirmDown(
+            lows = candles.map { it.l },
+            centerIndex = i,
+            throughIndex = candles.lastIndex
+        ) != null
     }
 
     private fun fractalPivots(
