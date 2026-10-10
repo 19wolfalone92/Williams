@@ -493,20 +493,34 @@ class CampaignExecutionService:
                 persist_recovered_campaign_order(order)
                 executed = float(order.get("executedQty", 0) or 0)
                 quote = float(order.get("cummulativeQuoteQty", 0) or 0)
-                if quote <= 0 and executed > 0 and hasattr(self.client, "my_trades"):
+                if quote <= 0 and executed > 0:
+                    if not hasattr(self.client, "my_trades"):
+                        raise CampaignExecutionError(
+                            f"{symbol}: executed entry has no authoritative fill-history adapter"
+                        )
                     try:
                         fills = self.client.my_trades(
                             symbol,
                             order_id=order.get("orderId"),
                             limit=1000,
-                        ) or []
-                        quote = sum(
-                            float(x.get("price", 0) or 0) *
-                            float(x.get("qty", x.get("executedQty", 0)) or 0)
-                            for x in fills
                         )
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        raise CampaignExecutionError(
+                            f"{symbol}: executed entry quote/fill history is unavailable; reconciliation required"
+                        ) from exc
+                    if not isinstance(fills, list) or not fills:
+                        raise CampaignExecutionError(
+                            f"{symbol}: executed entry has incomplete authoritative fill history"
+                        )
+                    quote = sum(
+                        float(x.get("price", 0) or 0) *
+                        float(x.get("qty", x.get("executedQty", 0)) or 0)
+                        for x in fills
+                    )
+                    if quote <= 0:
+                        raise CampaignExecutionError(
+                            f"{symbol}: executed entry has non-positive authoritative quote total"
+                        )
 
                 if status in {"NEW", "PENDING_NEW"} and executed <= 0:
                     # Still waiting for the conditional trigger.
