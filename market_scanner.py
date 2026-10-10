@@ -209,9 +209,20 @@ class MarketScanner:
         self.min_rr = self.min_risk_reward
         self.htf_interval = _normalize_interval(os.getenv("HTF_INTERVAL", "4h"))
 
+        # In TC2, Wave/Elliott analysis is advisory ranking only. Keep its
+        # default data chain to H4+H1 so D1 cannot secretly influence score and
+        # M15/M5 remain execution/diagnostic intervals. D1 is shown separately
+        # as informational context by the runtime.
+        tc2_wave_intervals = (
+            ("4h", "1h")
+            if self.strategy_profile == "TC2_THREE_WISE_MEN"
+            and not os.getenv("WAVE_TF_CHAIN", "").strip()
+            else None
+        )
         self.wave_engine = MultiTimeframeWaveEngine(
             self.client,
             base_interval=self.interval,
+            intervals=tc2_wave_intervals,
             include_micro=(
                 os.getenv("WAVE_MICRO_ENABLED", "false").lower() == "true"
             ),
