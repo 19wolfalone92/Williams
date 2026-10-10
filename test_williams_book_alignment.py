@@ -120,3 +120,12 @@ def test_live_futures_parameter_guard_rejects_noncanonical_book_constants():
     assert any("jaw_shift=7" in item for item in blockers)
     assert any("fractal_right=3" in item for item in blockers)
     assert any("super_ao_bars=4" in item for item in blockers)
+
+
+def test_live_guard_blocks_malformed_raw_indicator_override_without_parsing_crash():
+    from strategy import canonical_live_config_from_env, canonical_williams_environment_blockers
+
+    blockers = canonical_williams_environment_blockers({"JAW_SHIFT": "not-a-number"})
+    assert any("JAW_SHIFT" in item for item in blockers)
+    live_cfg = canonical_live_config_from_env({"JAW_SHIFT": "not-a-number"})
+    assert live_cfg["jaw_shift"] == 8
