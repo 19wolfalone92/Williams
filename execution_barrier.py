@@ -184,6 +184,24 @@ class ExecutionBarrier:
         global_state = str(self.db.state_get("position_state", "UNKNOWN") or "UNKNOWN").upper()
         if global_state in {"UNKNOWN", "RECONCILE_REQUIRED"}:
             return global_state
+        # A durable PENDING/AMBIGUOUS intent from a prior process may survive
+        # even when writing the portfolio state failed. Never admit a new
+        # mutation while any other unresolved intent remains.
+        conn = getattr(self.db, "conn", None)
+        if conn is not None:
+            try:
+                unresolved = conn.execute(
+                    "SELECT intent_id, status FROM execution_intents "
+                    "WHERE status IN ('PENDING', 'AMBIGUOUS', 'RECONCILE_REQUIRED') "
+                    "AND intent_id != ? LIMIT 1",
+                    (intent.intent_id,),
+                ).fetchone()
+            except Exception as exc:
+                return f"cannot inspect unresolved execution intents: {type(exc).__name__}"
+            if unresolved is not None:
+                return "RECONCILE_REQUIRED: unresolved execution intent " + str(
+                    unresolved["intent_id"] if hasattr(unresolved, "keys") else unresolved[0]
+                )
         # Per-symbol state is mandatory. A healthy global portfolio state
         # cannot establish that this particular symbol is flat.
         symbol_state = str(
@@ -287,6 +305,77 @@ class ExecutionBarrier:
         if str(replacement.get("status", "")).upper() not in {"NEW", "PARTIALLY_FILLED", "FILLED"}:
             return False
         return True
+
+    def reconcile_unresolved_intents(self, exchange) -> dict[str, object]:
+        """Query Binance before allowing recovery from durable ambiguous intents.
+
+        This never resubmits an order. A missing lookup, malformed exchange
+        evidence, OCO without two child states, or cancel intent remains unresolved.
+        Portfolio state is intentionally not reset here; a separate account/
+        campaign reconciliation must prove the actual exposure before entries.
+        """
+        conn = getattr(self.db, "conn", None)
+        if conn is None:
+            return {"resolved": [], "unresolved": ["durable store unavailable"]}
+        try:
+            rows = conn.execute(
+                "SELECT intent_id, symbol, order_type, purpose, status, client_order_id "
+                "FROM execution_intents WHERE status IN ('PENDING', 'AMBIGUOUS', 'RECONCILE_REQUIRED')"
+            ).fetchall()
+        except Exception as exc:
+            return {"resolved": [], "unresolved": [f"intent scan failed: {type(exc).__name__}"]}
+        resolved: list[str] = []
+        unresolved: list[str] = []
+        allowed = {"NEW", "PARTIALLY_FILLED", "FILLED", "CANCELED", "REJECTED", "EXPIRED", "EXPIRED_IN_MATCH"}
+        for row in rows:
+            intent_id = str(row["intent_id"])
+            symbol = str(row["symbol"] or "").upper()
+            order_type = str(row["order_type"] or "").upper()
+            purpose = str(row["purpose"] or "").upper()
+            client_id = str(row["client_order_id"] or "")
+            try:
+                if not symbol or not client_id:
+                    raise ValueError("intent lacks symbol or stable client identifier")
+                if order_type in {"OCO", "OCO_SELL", "ORDER_LIST"}:
+                    evidence = exchange.order_list(symbol, list_client_order_id=client_id)
+                    if not self._oco_response_authoritative(evidence):
+                        raise ValueError("OCO list/child state is not authoritative")
+                elif purpose in {"CAMPAIGN_TRAIL", "PROTECTION_REPLACE", "CANCEL_REPLACE"}:
+                    # The current schema does not persist the old order identifier
+                    # independently; querying only the replacement cannot prove both legs.
+                    raise ValueError("cancelReplace lacks durable old-order identity for two-leg recovery")
+                elif order_type == "CANCEL":
+                    raise ValueError("cancel intent lacks a durable target-order identity")
+                else:
+                    evidence = exchange.get_order(symbol, orig_client_order_id=client_id)
+                    status = str(evidence.get("status", "")).upper()
+                    if (
+                        not isinstance(evidence, dict)
+                        or str(evidence.get("symbol", "")).upper() != symbol
+                        or str(evidence.get("clientOrderId", "")) != client_id
+                        or int(evidence.get("orderId", 0) or 0) <= 0
+                        or status not in allowed
+                    ):
+                        raise ValueError("order lookup did not return authoritative matching order")
+                conn.execute(
+                    "UPDATE execution_intents SET status='RECONCILED', reason=? WHERE intent_id=?",
+                    ("authoritative exchange lookup completed; exposure reconciliation still required", intent_id),
+                )
+                conn.commit()
+                resolved.append(intent_id)
+            except Exception as exc:
+                unresolved.append(intent_id + ": " + str(exc))
+        if unresolved and callable(getattr(self.db, "state_set", None)):
+            try:
+                self.db.state_set("position_state", "RECONCILE_REQUIRED")
+            except Exception:
+                pass
+            for row in rows:
+                try:
+                    self.db.state_set(f"position_state:{str(row['symbol']).upper()}", "RECONCILE_REQUIRED")
+                except Exception:
+                    pass
+        return {"resolved": resolved, "unresolved": unresolved}
 
     def execute(
         self,
