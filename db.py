@@ -1130,12 +1130,30 @@ class Database:
 
     def campaign_risk_reserved_quote(self):
         # RECONCILE_REQUIRED does not release risk: the exchange may still
-        # hold the position/order even when local state is uncertain.
-        row=self.conn.execute(
-            "SELECT COALESCE(SUM(open_risk_quote),0)+COALESCE(SUM(pending_risk_quote),0) AS risk "
+        # hold the position/order even when local state is uncertain. Validate
+        # each persisted reservation before summing it; SQL SUM silently skips
+        # NULL, and negative/non-finite values could otherwise understate risk.
+        rows = self.conn.execute(
+            "SELECT campaign_id, open_risk_quote, pending_risk_quote "
             "FROM campaigns WHERE state NOT IN ('CLOSED','FLAT')"
-        ).fetchone()
-        return float(row["risk"] or 0.0)
+        ).fetchall()
+        total = 0.0
+        for row in rows:
+            for field in ("open_risk_quote", "pending_risk_quote"):
+                try:
+                    value = float(row[field])
+                except (TypeError, ValueError, OverflowError) as exc:
+                    raise ValueError(
+                        f"invalid persisted campaign risk for {row['campaign_id']}: {field}"
+                    ) from exc
+                if not math.isfinite(value) or value < 0:
+                    raise ValueError(
+                        f"invalid persisted campaign risk for {row['campaign_id']}: {field}"
+                    )
+                total += value
+                if not math.isfinite(total):
+                    raise ValueError("total persisted campaign risk is non-finite")
+        return total
 
     def campaign_capital_reserved_quote(self):
         # Unresolved campaigns retain their durable capital reservation
