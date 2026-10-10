@@ -45,6 +45,23 @@ class FakeClient:
         self.orders=[]; self.open_ocos=[]; self.next_order_id=1000; self.next_list_id=5000; self.created_oco_count=0
     def account(self):return {'balances':[{'asset':'USDT','free':str(self.quote),'locked':'0'},{'asset':'BTC','free':str(self.base_free),'locked':str(self.base_locked)}]}
     def all_orders(self,symbol,limit=1000):return list(self.orders)
+    def my_trades(self, symbol, order_id=None, limit=1000):
+        rows = []
+        for order in self.all_orders(symbol, limit=1000):
+            if order_id is not None and str(order.get("orderId")) != str(order_id):
+                continue
+            qty = float(order.get("executedQty", 0) or 0)
+            quote = float(order.get("cummulativeQuoteQty", 0) or 0)
+            if qty <= 0:
+                continue
+            price = quote / qty if quote > 0 else float(order.get("price", 0) or 0)
+            rows.append({
+                "id": f"fixture-trade-{order.get('orderId')}",
+                "orderId": order.get("orderId"),
+                "price": str(price), "qty": str(qty),
+                "commission": "0", "commissionAsset": "USDT",
+            })
+        return rows[-limit:]
     def open_order_lists(self,symbol=None):return list(self.open_ocos)
     def book_ticker(self,symbol):return {'bidPrice':str(self.price-0.02),'askPrice':str(self.price+0.02)}
     def create_oco_sell(self,symbol,quantity,take_profit_price,stop_price,stop_limit_price,list_client_order_id=None):
