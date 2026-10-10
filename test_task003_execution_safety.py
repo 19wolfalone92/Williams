@@ -513,7 +513,7 @@ def test_native_android_signed_order_mutations_are_fenced_before_network():
         "isPotentialOrderMutation",
     ):
         count = len(re.findall(
-            rf"\\bprivate\\s+(?:data\\s+class|fun)\\s+{declaration}\\b",
+            rf"\bprivate\s+(?:data\s+class|fun)\s+{declaration}\b",
             runtime,
         ))
         assert count == 1, f"expected one canonical {declaration}, got {count}"
