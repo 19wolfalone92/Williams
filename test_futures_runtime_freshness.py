@@ -308,3 +308,15 @@ def test_monthly_timeframe_is_preserved_by_runtime_and_config():
     assert _normalize_interval("1m") == "1m"
     assert _interval_seconds("1M") == 30 * 24 * 60 * 60
     assert _interval_seconds("1m") == 60
+
+
+def test_trading_config_rejects_unsupported_timeframes():
+    from trading_config import TradingConfig
+
+    with pytest.raises(ValueError, match="Unsupported EXECUTION_TIMEFRAME"):
+        TradingConfig.from_env({"EXECUTION_TIMEFRAME": "60m"})
+    with pytest.raises(ValueError, match="Unsupported STRUCTURAL_TIMEFRAMES"):
+        TradingConfig.from_env({
+            "EXECUTION_TIMEFRAME": "1h",
+            "STRUCTURAL_TIMEFRAMES": "1d,60m,1h",
+        })
