@@ -223,6 +223,11 @@ class ExecutionBarrier:
             # is never called and no exchange mutation can have occurred.
             self._persist(intent, "PENDING")
             if self.db is None or not hasattr(self.db, "save_execution_event"):
+                self._poisoned = True
+                try:
+                    self.db.mark_recovery_required("durable execution-event store is unavailable")
+                except Exception:
+                    pass
                 raise ExecutionPersistenceError("durable execution-event store is unavailable")
             try:
                 self.db.save_execution_event(
@@ -230,8 +235,15 @@ class ExecutionBarrier:
                     dict(intent.required_context_versions),
                 )
             except Exception as exc:
+                self._poisoned = True
+                reason = f"cannot persist admission event for intent {intent.intent_id}"
+                try:
+                    self._persist(intent, "BLOCKED", reason)
+                    self.db.mark_recovery_required(reason)
+                except Exception:
+                    pass
                 raise ExecutionPersistenceError(
-                    f"cannot persist admission event for intent {intent.intent_id}; submission blocked"
+                    reason + "; submission blocked and reconciliation required"
                 ) from exc
 
             snapshot = self.context_cache.snapshot()
@@ -251,19 +263,32 @@ class ExecutionBarrier:
                     return ExecutionResult(intent.intent_id, False, reason=reason)
 
             order_fsm.transition(OrderState.SUBMITTING)
-            self._record(
-                "INFO", "execution_admitted", intent,
-                "Final validation passed; submitting to Binance",
-                {
-                    "intent_id": intent.intent_id,
-                    "symbol": intent.symbol,
-                    "side": intent.side,
-                    "required_context_versions": dict(intent.required_context_versions),
-                    "hypothesis_id": intent.hypothesis_id,
-                    "purpose": intent.purpose,
-                    "client_order_id": intent.client_order_id,
-                },
-            )
+            try:
+                self._record(
+                    "INFO", "execution_admitted", intent,
+                    "Final validation passed; submitting to Binance",
+                    {
+                        "intent_id": intent.intent_id,
+                        "symbol": intent.symbol,
+                        "side": intent.side,
+                        "required_context_versions": dict(intent.required_context_versions),
+                        "hypothesis_id": intent.hypothesis_id,
+                        "purpose": intent.purpose,
+                        "client_order_id": intent.client_order_id,
+                    },
+                )
+            except Exception as exc:
+                self._poisoned = True
+                reason = f"cannot persist pre-submit execution journal for intent {intent.intent_id}"
+                try:
+                    self._persist(intent, "BLOCKED", reason)
+                    self.db.mark_recovery_required(reason)
+                except Exception:
+                    pass
+                raise ExecutionPersistenceError(
+                    reason + "; Binance submission was not attempted"
+                ) from exc
+
             try:
                 response = submit()
             except Exception as exc:
