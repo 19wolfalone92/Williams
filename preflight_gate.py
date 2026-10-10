@@ -42,6 +42,21 @@ class PreflightCheckService:
     OCO_PREFIX = "WILLV4_OCO_"
     EMERGENCY_PREFIX = "WILLV4_EMERGENCY_"
     MANUAL_PREFIX = "WILLV4_MANUAL_"
+    CAMPAIGN_PREFIXES = (
+        "WILLV5_ENTRY_",
+        "WILLV5_STOP_",
+        "WILLV5_EXIT_",
+    )
+
+    @classmethod
+    def _is_known_client_id(cls, client_id):
+        return str(client_id or "").startswith((
+            cls.ENTRY_PREFIX,
+            cls.OCO_PREFIX,
+            cls.EMERGENCY_PREFIX,
+            cls.MANUAL_PREFIX,
+            *cls.CAMPAIGN_PREFIXES,
+        ))
 
     def __init__(self, client, *, symbols=None, max_open_positions=0, max_offset_ms=None):
         self.client = client
@@ -65,7 +80,7 @@ class PreflightCheckService:
         known, unknown = [], []
         for order in orders or []:
             client_id = str(order.get("clientOrderId") or order.get("origClientOrderId") or "")
-            (known if client_id.startswith((cls.ENTRY_PREFIX, cls.OCO_PREFIX, cls.EMERGENCY_PREFIX, cls.MANUAL_PREFIX)) else unknown).append(order)
+            (known if cls._is_known_client_id(client_id) else unknown).append(order)
         for row in order_lists or []:
             client_id = str(row.get("listClientOrderId") or row.get("origClientOrderId") or "")
             (known if client_id.startswith(cls.OCO_PREFIX) else unknown).append(row)
