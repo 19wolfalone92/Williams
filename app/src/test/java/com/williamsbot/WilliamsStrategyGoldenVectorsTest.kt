@@ -137,3 +137,38 @@ class WilliamsStrategyGoldenVectorsTest {
         assertFalse(WilliamsTimeframeContract.canCreateCanonicalSignal("5m"))
     }
 }
+
+
+    @Test
+    fun entryProvenanceFailsClosedAcrossTimeframesAndInvalidTimestamps() {
+        val now = 10_000_000L
+        fun blocker(
+            timeframe: String = "1h",
+            bar: Long = now - 7_200_000L,
+            confirmation: Long = now - 3_600_000L,
+            expiry: Long = now + 60_000L,
+            symbolMatches: Boolean = true,
+            signalId: Boolean = true,
+            campaignId: Boolean = true,
+            trigger: Double = 101.0,
+            invalidation: Double = 97.0
+        ) = WilliamsTimeframeContract.entryProvenanceBlocker(
+            timeframe, bar, confirmation, expiry, now,
+            symbolMatches, signalId, campaignId, trigger, invalidation
+        )
+
+        assertNull(blocker())
+        assertEquals("ENTRY_TIMEFRAME_BLOCKED", blocker(timeframe = "5m"))
+        assertEquals("ENTRY_TIMEFRAME_BLOCKED", blocker(timeframe = "15m"))
+        assertEquals("ENTRY_TIMEFRAME_BLOCKED", blocker(timeframe = ""))
+        assertEquals("ENTRY_TIMEFRAME_BLOCKED", blocker(timeframe = "unknown"))
+        assertEquals("ENTRY_PROVENANCE_BLOCKED", blocker(expiry = now))
+        assertEquals("ENTRY_PROVENANCE_BLOCKED", blocker(confirmation = now + 1L))
+        assertEquals("ENTRY_PROVENANCE_BLOCKED", blocker(confirmation = now - 7_200_000L))
+        assertEquals("ENTRY_PROVENANCE_BLOCKED", blocker(bar = 0L))
+        assertEquals("ENTRY_PROVENANCE_BLOCKED", blocker(symbolMatches = false))
+        assertEquals("ENTRY_PROVENANCE_BLOCKED", blocker(signalId = false))
+        assertEquals("ENTRY_PROVENANCE_BLOCKED", blocker(campaignId = false))
+        assertEquals("ENTRY_PROVENANCE_BLOCKED", blocker(trigger = Double.NaN))
+        assertEquals("ENTRY_PROVENANCE_BLOCKED", blocker(invalidation = 0.0))
+    }
