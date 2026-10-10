@@ -1211,6 +1211,8 @@ private class NativeEngine(
                         ?: 0.0
                 }
             equityCircuitBreaker.reset(estimateManagedEquity())
+            riskInputsHealthy = equityCircuitBreaker.hasValidBaseline() &&
+                !equityCircuitBreaker.isTripped()
         } catch (x: Exception) {
             setReconcileRequired(
                 "startup exchange synchronization failed: " +
@@ -5597,27 +5599,16 @@ private class NativeEngine(
                 estimateManagedEquity(),
                 now
             )
-            if (snapshot.tripped) {
-                circuitBreakerTripInProgress = true
-                lastError =
-                    "AUTOMATIC CIRCUIT BREAKER: managed equity drawdown " +
-                        "%.2f%%".format(
-                            Locale.US,
-                            snapshot.drawdownPct * 100.0
-                        )
-                Thread {
-                    try {
-                        kill()
-                    } finally {
-                        circuitBreakerTripInProgress = false
-                    }
-                }.apply {
-                    isDaemon = true
-                    name = "williams-equity-circuit-breaker"
-                    start()
-                }
+            riskInputsHealthy = snapshot.baselineValid && !snapshot.tripped
+            if (!snapshot.baselineValid) {
+                lastError = "Daily equity baseline is unknown or stale; new entries blocked"
+            } else if (snapshot.tripped) {
+                // Keep exchange-side protective orders working. The daily breaker
+                // blocks new entries; it must not cancel protection on open risk.
+                lastError = "Daily equity-loss limit reached; new entries blocked"
             }
         }.onFailure {
+            riskInputsHealthy = false
             lastError =
                 "equity monitor: " +
                     (it.message ?: it.javaClass.simpleName)
@@ -7629,32 +7620,43 @@ private class NativeEngine(
 
 
     private fun dailyTradeGuard(): JSONObject {
-        val start = Calendar.getInstance().apply {
+        val start = Calendar.getInstance(TimeZone.getTimeZone("UTC")).apply {
             set(Calendar.HOUR_OF_DAY, 0)
             set(Calendar.MINUTE, 0)
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
         }.timeInMillis
+
+        val journalHealthy = TradeJournal.isHealthy(prefs)
         val rows = TradeJournal.trades(prefs)
         var count = 0
         var pnl = 0.0
+        var pnlDataValid = journalHealthy
+        var dailyLosses = 0
         var consecutiveLosses = 0
         var lastLossAt = 0L
-        for (i in 0 until rows.length()) {
-            val row = rows.getJSONObject(i)
-            val closedAt = row.optLong("closed_at", 0L)
-            if (closedAt < start || row.optString("status") != "CLOSED") continue
-            count++
-            pnl += row.optDouble("pnl", 0.0)
-        }
         val closedToday = mutableListOf<JSONObject>()
+
         for (i in 0 until rows.length()) {
-            val row = rows.getJSONObject(i)
-            val closedAt = row.optLong("closed_at", 0L)
-            if (closedAt >= start && row.optString("status") == "CLOSED") {
-                closedToday.add(row)
+            val row = rows.optJSONObject(i)
+            if (row == null) {
+                pnlDataValid = false
+                continue
             }
+            if (row.optString("status") != "CLOSED") continue
+            val closedAt = row.optLong("closed_at", 0L)
+            val rowPnl = row.optDouble("pnl", Double.NaN)
+            if (closedAt <= 0L || !rowPnl.isFinite()) {
+                pnlDataValid = false
+                continue
+            }
+            if (closedAt < start) continue
+            count++
+            pnl += rowPnl
+            closedToday.add(row)
+            if (rowPnl < 0.0) dailyLosses++
         }
+
         closedToday.sortByDescending { it.optLong("closed_at", 0L) }
         for (row in closedToday) {
             when (row.optString("outcome").uppercase(Locale.US)) {
@@ -7668,17 +7670,28 @@ private class NativeEngine(
         val cooldown = consecutiveLosses >= 2 && lastLossAt > 0L &&
             System.currentTimeMillis() - lastLossAt < 30L * 60L * 1000L
         val hardPause = consecutiveLosses >= 3
+        val stopLimitReached = dailyLosses >= 2
+        val breakerBlocked = equityCircuitBreaker.isTripped() ||
+            !equityCircuitBreaker.hasValidBaseline() || !riskInputsHealthy
+        val allow = pnlDataValid && !stopLimitReached && !cooldown && !hardPause && !breakerBlocked
+        val mode = when {
+            !pnlDataValid -> "RISK_DATA_UNKNOWN"
+            stopLimitReached -> "DAILY_STOP_LIMIT"
+            hardPause -> "PAUSED"
+            cooldown -> "COOLDOWN"
+            breakerBlocked -> "EQUITY_BREAKER_OR_UNKNOWN"
+            else -> "ACTIVE"
+        }
         return JSONObject()
             .put("trades_today", count)
-            .put("daily_pnl_usdt", pnl)
+            .put("daily_pnl_usdt", if (pnlDataValid) pnl else JSONObject.NULL)
+            .put("daily_stop_outs", dailyLosses)
+            .put("risk_data_valid", pnlDataValid)
+            .put("allow", allow)
             .put("consecutive_losses", consecutiveLosses)
-            .put("allow", !cooldown && !hardPause)
-            .put("mode", when {
-                hardPause -> "PAUSED"
-                cooldown -> "COOLDOWN"
-                else -> "ACTIVE"
-            })
+            .put("mode", mode)
     }
+
 
     private fun startRestDataProbe() {
         if (restProbeRunning) return

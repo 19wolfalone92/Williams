@@ -21,6 +21,16 @@ object ExecutionMath {
         return floorToStepDecimal(BigDecimal.valueOf(value), BigDecimal.valueOf(step)).toDouble()
     }
 
+    fun ceilToStep(value: Double, step: Double): Double {
+        require(value.isFinite() && value > 0.0 && step.isFinite() && step > 0.0) {
+            "Trigger price and tick must be finite and positive"
+        }
+        val v = BigDecimal.valueOf(value)
+        val s = BigDecimal.valueOf(step)
+        val units = v.divide(s, 0, RoundingMode.CEILING)
+        return units.multiply(s).stripTrailingZeros().toDouble()
+    }
+
     fun decimal(value: Double): BigDecimal {
         require(value.isFinite()) { "Decimal input must be finite" }
         return BigDecimal.valueOf(value)
