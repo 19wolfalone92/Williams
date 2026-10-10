@@ -180,6 +180,8 @@ class FakeBinance:
         return {
             "orderListId": "20",
             "listClientOrderId": list_client_order_id,
+            "listStatusType": "EXEC_STARTED",
+            "listOrderStatus": "EXECUTING",
             "orderReports": [
                 {
                     "symbol": symbol,
