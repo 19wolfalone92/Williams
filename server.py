@@ -163,7 +163,7 @@ class ControlState:
                         'Live Spot API key must allow reading + Spot trading and have withdrawals disabled.'
                     )
         except Exception as exc:
-            raise RuntimeError(f'Binance credential validation failed: {exc}') from exc
+            raise RuntimeError(redact_text(f'Binance credential validation failed: {exc}')) from None
 
         with self.lock:
             if self.running and (
@@ -338,7 +338,7 @@ class ControlState:
             open_trades = list(multi.open_trades())
         except Exception as exc:
             open_trades = []
-            errors.append("open_trades: " + str(exc))
+            errors.append(redact_text("open_trades: " + str(exc)))
 
         for trade in open_trades:
             symbol = str(trade.get("symbol", "")).upper()
@@ -348,7 +348,7 @@ class ControlState:
                 result = multi.manual_sell(symbol)
                 closed.append({"symbol": symbol, "result": result})
             except Exception as exc:
-                errors.append(f"{symbol}: {exc}")
+                errors.append(redact_text(f"{symbol}: {exc}"))
 
         if thread is not None and thread.is_alive() and thread is not threading.current_thread():
             thread.join(timeout=3)
@@ -481,7 +481,7 @@ def _scanner_worker():
     except Exception as exc:
         with scanner_lock:
             scanner_cache["last_error"] = (
-                f"{type(exc).__name__}: {exc}"
+                redact_text(f"{type(exc).__name__}: {exc}")
             )
 
     finally:
@@ -498,7 +498,7 @@ def _scanner_watchdog():
                 _start_scanner_background()
         except Exception as exc:
             with scanner_lock:
-                scanner_cache["last_error"] = f"watchdog: {type(exc).__name__}: {exc}"
+                scanner_cache["last_error"] = redact_text(f"watchdog: {type(exc).__name__}: {exc}")
 
 
 def _start_scanner_background(force=False):
@@ -571,7 +571,7 @@ def _heartbeat_loop():
             try:
                 state.ensure_trader().db.log_event(
                     'ERROR', 'heartbeat_error',
-                    f'{type(exc).__name__}: {exc}'
+                    redact_text(f'{type(exc).__name__}: {exc}')
                 )
             except Exception:
                 pass
@@ -773,7 +773,7 @@ def clear_binance_config():
     except Exception as exc:
         raise HTTPException(
             503,
-            'Cannot verify Spot account state before credential removal: ' + str(exc),
+            redact_text('Cannot verify Spot account state before credential removal: ' + str(exc)),
         )
     if managed_positions or exchange_orders:
         raise HTTPException(
@@ -914,14 +914,14 @@ def status():
             )
         except Exception as exc:
             state.last_error = (
-                f'position-status: {exc}'
+                redact_text(f'position-status: {exc}')
             )
 
     balance = None
     try:
         balance = t.available_quote()
     except Exception as exc:
-        state.last_error = f'status-balance: {exc}'
+        state.last_error = redact_text(f'status-balance: {exc}')
 
     total_pnl = sum(
         float(item['unrealized_pnl'] or 0.0)
@@ -1118,7 +1118,7 @@ def portfolio():
                 'oco_list_client_id': raw.get('exit_order_list_client_id'),
             })
         except Exception as exc:
-            state.last_error = f'portfolio-position: {exc}'
+            state.last_error = redact_text(f'portfolio-position: {exc}')
     unrealized_pnl_usdt = sum(float(p.get('unrealized_pnl_usdt') or 0.0) for p in positions)
     realized_pnl_usdt = 0.0
     try:
