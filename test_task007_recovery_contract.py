@@ -296,6 +296,52 @@ def test_duplicate_durable_client_order_id_is_rejected_by_sqlite(tmp_path):
         db.save_execution_intent(second, "PENDING")
 
 
+def test_legacy_portfolio_mutation_persists_intent_before_exchange_call(tmp_path):
+    db = Database(str(tmp_path / "legacy_with_barrier.sqlite3"))
+    db.mark_recovery_ready(evidence())
+    client = MockExchange()
+    barrier = ExecutionBarrier(ContextCache(), db)
+    portfolio = MultiPositionTrader(
+        client, db=db, symbols=["BTCUSDT"], execution_barrier=barrier
+    )
+    client_id = "WILLV4_ENTRY_barrier-required"
+    seen = []
+
+    def submit():
+        row = db.conn.execute(
+            "SELECT status FROM execution_intents WHERE symbol=? AND client_order_id=?",
+            ("BTCUSDT", client_id),
+        ).fetchone()
+        seen.append(row["status"] if row else "MISSING")
+        return {
+            "symbol": "BTCUSDT",
+            "orderId": "1234",
+            "clientOrderId": client_id,
+            "side": "BUY",
+            "type": "MARKET",
+            "status": "FILLED",
+            "executedQty": "0.01",
+            "cummulativeQuoteQty": "600",
+        }
+
+    response = portfolio._execute_mutation(
+        "BTCUSDT",
+        "BUY",
+        "MARKET",
+        "CAMPAIGN_ENTRY",
+        client_id,
+        submit,
+        trade_id="legacy-entry:BTCUSDT",
+    )
+    assert response["orderId"] == "1234"
+    assert seen == ["PENDING"]
+    row = db.conn.execute(
+        "SELECT status FROM execution_intents WHERE symbol=? AND client_order_id=?",
+        ("BTCUSDT", client_id),
+    ).fetchone()
+    assert row["status"] == "SUBMITTED"
+
+
 def test_legacy_portfolio_mutation_without_barrier_never_calls_exchange(tmp_path):
     db = Database(str(tmp_path / "legacy_no_barrier.sqlite3"))
     client = MockExchange()
