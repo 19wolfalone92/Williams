@@ -3,6 +3,7 @@ import threading
 import time
 
 from execution_barrier import ExecutionBarrier, OrderIntent
+from db import Database
 from market_context import ContextCache, TFMarketContext, WaveHypothesis
 from wise_men import WiseMenPhase, WiseMenStateMachine
 
@@ -41,7 +42,7 @@ def test_copy_on_write_versions_and_immutable_snapshot():
 def test_execution_barrier_rejects_stale_context():
     cache = ContextCache()
     cache.publish(context())
-    barrier = ExecutionBarrier(cache)
+    barrier = ExecutionBarrier(cache, Database(':memory:'))
     snap = cache.snapshot()
     cache.publish(context())
     intent = OrderIntent.new(
@@ -58,7 +59,7 @@ def test_execution_barrier_rejects_stale_context():
 def test_execution_barrier_serializes_publish_and_submit():
     cache = ContextCache()
     cache.publish(context())
-    barrier = ExecutionBarrier(cache)
+    barrier = ExecutionBarrier(cache, Database(':memory:'))
     version = cache.snapshot().context("BTCUSDT", "1h").version
     started = threading.Event()
     published = threading.Event()
