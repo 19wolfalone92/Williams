@@ -109,7 +109,10 @@ class MultiPositionTrader:
         )
 
     def _submit_order(self, symbol, side, order_type, purpose, client_order_id, submit,
-                      *, quantity="", quote_order_quantity="", pre_submit_checks=None):
+                      *, quantity="", quote_order_quantity="", pre_submit_checks=None,
+                      mutation_kind="ORDER", target_order_id="", target_client_order_id="",
+                      target_order_list_id="", target_list_client_order_id="",
+                      replacement_client_order_id=""):
         """Route every legacy portfolio order mutation through the canonical barrier."""
         if self.execution_barrier is None:
             raise CampaignExecutionError(
@@ -122,6 +125,12 @@ class MultiPositionTrader:
             required_context_versions={},
             purpose=str(purpose),
             client_order_id=str(client_order_id),
+            mutation_kind=str(mutation_kind or "ORDER"),
+            target_order_id=str(target_order_id or ""),
+            target_client_order_id=str(target_client_order_id or ""),
+            target_order_list_id=str(target_order_list_id or ""),
+            target_list_client_order_id=str(target_list_client_order_id or ""),
+            replacement_client_order_id=str(replacement_client_order_id or ""),
             quantity=str(quantity or ""),
             quote_order_quantity=str(quote_order_quantity or ""),
         )
@@ -1625,13 +1634,29 @@ class MultiPositionTrader:
 
     def recover(self):
         """Startup/full recovery. Campaign mode never routes through legacy OCO recovery."""
+        # Resolve durable mutation intents by exact exchange identities before
+        # any campaign/trade recovery can consider new execution. Resolver is
+        # read-only; missing evidence preserves the global fail-closed barrier.
+        from execution_recovery import ExecutionRecoveryResolver
+        execution_recovery = ExecutionRecoveryResolver(self.db, self.client).resolve_pending()
+        unresolved_intents = self.db.unresolved_execution_intents()
+        for intent in unresolved_intents:
+            symbol = str(intent.get("symbol", "")).upper()
+            if symbol:
+                try:
+                    self.set_state(symbol, "RECONCILE_REQUIRED")
+                except Exception:
+                    self.db.state_set(f"position_state:{symbol}", "RECONCILE_REQUIRED")
+        if unresolved_intents:
+            self.db.state_set("position_state", "RECONCILE_REQUIRED")
         if self.campaign_engine_enabled:
             pending = self.campaign_execution.reconcile_pending_entries()
             active = self.campaign_execution.reconcile_active_campaigns()
             repaired = self._repair_stale_reconcile_states()
             unresolved = self.unresolved_symbols()
             pending_keys = self._pending_entries()
-            ok = not unresolved and not pending_keys
+            unresolved_intents = self.db.unresolved_execution_intents()
+            ok = not unresolved and not pending_keys and not unresolved_intents
             canonical_state = self._sync_legacy_state()
             results = pending + active
             results.extend(
@@ -1647,6 +1672,8 @@ class MultiPositionTrader:
                     "open_campaigns": len(self.db.open_campaigns()),
                     "unresolved_symbols": unresolved,
                     "pending_entries": [x[0] for x in pending_keys],
+                    "unresolved_execution_intents": len(unresolved_intents),
+                    "execution_recovery": execution_recovery,
                 },
             )
             return {
@@ -1656,13 +1683,16 @@ class MultiPositionTrader:
                 "open_campaigns": len(self.db.open_campaigns()),
                 "unresolved_symbols": unresolved,
                 "state": canonical_state,
+                "execution_recovery": execution_recovery,
+                "unresolved_execution_intents": len(unresolved_intents),
             }
 
         results = self.reconcile_open_positions()
         repaired = self._repair_stale_reconcile_states()
         unresolved = self.unresolved_symbols()
         pending = self._pending_entries()
-        ok = not unresolved and not pending
+        unresolved_intents = self.db.unresolved_execution_intents()
+        ok = not unresolved and not pending and not unresolved_intents
         canonical_state = self._sync_legacy_state()
         results.extend(
             {"symbol": symbol, "state": "FLAT", "stale_reconcile_cleared": True}
@@ -1676,6 +1706,8 @@ class MultiPositionTrader:
                 "open_positions": len(self.open_trades()),
                 "unresolved_symbols": unresolved,
                 "pending_entries": [x[0] for x in self._pending_entries()],
+                "unresolved_execution_intents": len(unresolved_intents),
+                "execution_recovery": execution_recovery,
             },
         )
         return {
@@ -1683,6 +1715,8 @@ class MultiPositionTrader:
             "results": results,
             "open_positions": len(self.open_trades()),
             "unresolved_symbols": unresolved,
+            "execution_recovery": execution_recovery,
+            "unresolved_execution_intents": len(unresolved_intents),
         }
 
     # ------------------------------------------------------------------
@@ -1719,6 +1753,9 @@ class MultiPositionTrader:
                             order_list_id=list_id if list_id else None,
                             list_client_order_id=list_client if not list_id else None,
                         ),
+                        mutation_kind="CANCEL_OCO",
+                        target_order_list_id=list_id,
+                        target_list_client_order_id=list_client,
                     )
 
             account = self.client.account()
