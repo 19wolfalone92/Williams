@@ -33,7 +33,10 @@ _TF_MS = {
 
 
 def _bar_ms(timeframe: str) -> int:
-    return _TF_MS.get(str(timeframe), 300_000)
+    normalized = "1M" if str(timeframe) == "1M" else str(timeframe).strip().lower()
+    if normalized not in _TF_MS:
+        raise ValueError(f"Unsupported pending-signal timeframe: {timeframe!r}")
+    return _TF_MS[normalized]
 
 
 def default_expiry_ms(signal: SignalSpec) -> int:
