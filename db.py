@@ -1,5 +1,5 @@
 import os
-import json, sqlite3
+import json, sqlite3, math
 from pathlib import Path
 from datetime import datetime, timezone
 from contextlib import contextmanager
@@ -1139,15 +1139,29 @@ class Database:
         if not trade_id or not symbol or not exchange or not account_id:
             raise ValueError("exchange_fill_identity_required")
         identity = (exchange, account_id, symbol, str(trade_id))
+        # Missing commission is unknown, not a zero-fee execution. Require the
+        # explicit exchange field even when its value is genuinely zero.
+        commission_key = "commission" if "commission" in data else "fee_amount" if "fee_amount" in data else None
+        if commission_key is None or data.get(commission_key) is None or str(data.get(commission_key)).strip() == "":
+            raise ValueError("exchange_fill_commission_unknown")
+        commission_asset = data.get("commission_asset", data.get("commissionAsset"))
+        if commission_asset is None or not str(commission_asset).strip():
+            raise ValueError("exchange_fill_commission_asset_unknown")
+        try:
+            quantity = float(data.get("quantity", data.get("qty")))
+            price = float(data.get("price"))
+            quote_quantity = float(data.get("quote_quantity", data.get("quoteQty")))
+            commission = float(data[commission_key])
+        except (TypeError, ValueError, OverflowError):
+            raise ValueError("exchange_fill_financial_fields_invalid") from None
+        if (not all(math.isfinite(v) for v in (quantity, price, quote_quantity, commission))
+                or quantity <= 0 or price <= 0 or quote_quantity <= 0 or commission < 0):
+            raise ValueError("exchange_fill_financial_fields_invalid")
         values = (
             str(data.get("campaign_id", "")), str(data.get("order_id", data.get("orderId", ""))),
-            str(data.get("side", "")).upper(), float(data.get("quantity", data.get("qty", 0))),
-            float(data.get("price", 0)), float(data.get("quote_quantity", data.get("quoteQty", 0))),
-            float(data.get("commission", data.get("fee_amount", 0))),
-            str(data.get("commission_asset", data.get("commissionAsset", ""))).upper(),
+            str(data.get("side", "")).upper(), quantity, price, quote_quantity,
+            commission, str(commission_asset).upper().strip(),
         )
-        if values[3] <= 0 or values[4] <= 0 or values[6] < 0 or not values[7]:
-            raise ValueError("exchange_fill_financial_fields_incomplete")
         payload = json.dumps(data, default=str, sort_keys=True)
         if not self._transaction_active:
             with self.transaction():
@@ -1162,7 +1176,7 @@ class Database:
         if prior:
             expected = (
                 values[0], values[1], values[2], values[3], values[4], values[5],
-                values[7], float(data.get("commission", data.get("fee_amount", 0))),
+                values[7], float(data[commission_key]),
             )
             actual = (
                 prior["campaign_id"], prior["order_id"], prior["side"],
