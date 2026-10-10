@@ -935,6 +935,9 @@ class CampaignExecutionService:
                             campaign.tags["protection_state"] = "FULL"
                             campaign.tags.pop("unprotected_exposure_qty", None)
 
+                        campaign.tags["total_entry_net_qty"] = float(
+                            campaign.tags.get("total_entry_net_qty", old_qty) or old_qty
+                        ) + executed
                         self.engine.record_add_on_fill(
                             campaign,
                             quantity=executed,
@@ -1042,6 +1045,7 @@ class CampaignExecutionService:
                         campaign.tags["protection_state"] = "FULL"
                         campaign.tags.pop("unprotected_exposure_qty", None)
 
+                    campaign.tags["total_entry_net_qty"] = executed
                     self.engine.record_initial_fill(
                         campaign,
                         quantity=executed,
@@ -1730,33 +1734,21 @@ class CampaignExecutionService:
         *,
         reason: str,
     ) -> dict[str, Any]:
-        """Cancel only the campaign protection, then market-sell actual free inventory."""
+        """Exit only campaign inventory; account fills/fees before closing or releasing risk."""
         symbol = campaign.symbol.upper()
-        protective_id = str(
-            campaign.tags.get("protective_order_id", "") or ""
-        )
+        protective_id = str(campaign.tags.get("protective_order_id", "") or "")
         if protective_id:
             try:
-                self._execute_cancel(
-                    campaign,
-                    int(protective_id),
-                    "CAMPAIGN_PROTECTION_CANCEL",
-                )
+                self._execute_cancel(campaign, int(protective_id), "CAMPAIGN_PROTECTION_CANCEL")
             except Exception as exc:
-                # An already-filled/cancelled stop is harmless; anything else is
-                # ambiguous and must be reconciled instead of guessing.
                 try:
-                    current = self.client.get_order(
-                        symbol,
-                        order_id=int(protective_id),
-                    )
+                    current = self.client.get_order(symbol, order_id=int(protective_id))
                     status = str(current.get("status", "")).upper()
                     if status not in {"CANCELED", "EXPIRED", "FILLED", "REJECTED"}:
                         raise
                 except Exception:
                     self.engine.mark_reconcile_required(
-                        campaign,
-                        f"cannot cancel campaign protection before exit: {exc}",
+                        campaign, f"cannot cancel campaign protection before exit: {exc}"
                     )
                     raise CampaignExecutionError(str(exc)) from exc
 
@@ -1768,8 +1760,7 @@ class CampaignExecutionService:
         ]
         if unknown_sells:
             self.engine.mark_reconcile_required(
-                campaign,
-                "unrecognized open SELL order prevents campaign exit",
+                campaign, "unrecognized open SELL order prevents campaign exit"
             )
             raise CampaignExecutionError(
                 f"{symbol}: unrecognized open SELL order prevents safe campaign exit"
@@ -1777,20 +1768,22 @@ class CampaignExecutionService:
 
         account = self.client.account()
         info = self.client.exchange_info(symbol)
-        rows = info.get("symbols", [])
-        if not rows:
-            raise CampaignExecutionError(f"{symbol}: exchangeInfo unavailable")
+        rows = info.get("symbols", []) if isinstance(info, dict) else []
+        if not rows or not isinstance(account, dict) or not isinstance(account.get("balances"), list):
+            self.engine.mark_reconcile_required(campaign, "exit requires fresh account and exchangeInfo")
+            raise CampaignExecutionError(f"{symbol}: account/exchangeInfo unavailable for exit")
         asset = str(rows[0].get("baseAsset", "")).upper()
-        free_qty = next(
-            (
-                float(b.get("free", 0) or 0)
-                for b in account.get("balances", [])
-                if str(b.get("asset", "")).upper() == asset
-            ),
+        free_qty = float(next(
+            (b.get("free", 0) for b in account["balances"]
+             if str(b.get("asset", "")).upper() == asset),
             0.0,
-        )
-        qty = self._normalize_qty(symbol, free_qty)
-        if qty <= 0:
+        ))
+        campaign_qty = float(campaign.position_qty or 0.0)
+        qty = self._normalize_qty(symbol, min(free_qty, campaign_qty))
+        if not math.isfinite(qty) or qty <= 0:
+            self.engine.mark_reconcile_required(
+                campaign, f"no sellable campaign inventory: free={free_qty:.12g} campaign={campaign_qty:.12g}"
+            )
             raise CampaignExecutionError(
                 f"{symbol}: no free campaign inventory after protection cancel"
             )
@@ -1810,91 +1803,161 @@ class CampaignExecutionService:
         order = self._submit(
             intent,
             lambda: self.client.order_safe(
-                symbol,
-                "SELL",
-                "MARKET",
+                symbol, "SELL", "MARKET",
                 quantity=self.client.decimal_format(qty),
                 new_client_order_id=cid,
             ),
             lambda _snapshot: self._check_algo_capacity(symbol, 0),
         )
-        self.db.save_order(order)
-        executed = float(order.get("executedQty", 0) or 0)
-        quote = float(order.get("cummulativeQuoteQty", 0) or 0)
-        if executed <= 0 or quote <= 0:
+
+        try:
+            self.db.save_order(order)
+            gross_order_qty = float(order.get("executedQty", 0) or 0)
+            quote_order = float(order.get("cummulativeQuoteQty", 0) or 0)
+            if gross_order_qty <= 0 or quote_order <= 0:
+                raise CampaignExecutionError(
+                    f"{symbol}: campaign exit returned no authoritative fill"
+                )
+            accounting = self._account_order_fills(
+                symbol, campaign.campaign_id, order, expected_side="SELL"
+            )
+            gross_sold = accounting["gross_quantity"]
+            inventory_debit = accounting["net_quantity"]
+            quote = accounting["quote_quantity"]
+            exit_fee_quote = accounting["fee_quote"]
+            self.db.save_campaign_order(
+                PendingOrderRecord(
+                    order_id=str(order.get("orderId", "") or ""),
+                    client_order_id=cid,
+                    symbol=symbol,
+                    side="SELL",
+                    order_type="MARKET",
+                    purpose="EXIT",
+                    status=str(order.get("status", "FILLED")),
+                    quantity=gross_sold,
+                    campaign_id=campaign.campaign_id,
+                    signal_id=campaign.current_signal_id,
+                )
+            )
+        except Exception as exc:
+            self._emergency_protect_residual(
+                campaign, symbol,
+                f"exit fill accounting/persistence failed: {type(exc).__name__}: {exc}",
+            )
             raise CampaignExecutionError(
-                f"{symbol}: campaign exit returned no authoritative fill"
-            )
-        self.db.save_campaign_order(
-            PendingOrderRecord(
-                order_id=str(order.get("orderId", "") or ""),
-                client_order_id=cid,
-                symbol=symbol,
-                side="SELL",
-                order_type="MARKET",
-                purpose="EXIT",
-                status=str(order.get("status", "FILLED")),
-                quantity=executed,
-                campaign_id=campaign.campaign_id,
-                signal_id=campaign.current_signal_id,
-            )
-        )
-        exit_price = quote / executed
-        remaining = max(0.0, float(campaign.position_qty) - executed)
+                f"{symbol}: exit fill accounting unresolved; campaign remains reserved for reconciliation"
+            ) from exc
+
+        exit_price = quote / gross_sold
+        remaining = max(0.0, campaign_qty - inventory_debit)
+        campaign.tags["exit_quote_accumulated"] = float(
+            campaign.tags.get("exit_quote_accumulated", 0.0) or 0.0
+        ) + quote
+        campaign.tags["exit_fee_quote_accumulated"] = float(
+            campaign.tags.get("exit_fee_quote_accumulated", 0.0) or 0.0
+        ) + exit_fee_quote
+        campaign.tags["exit_gross_qty_accumulated"] = float(
+            campaign.tags.get("exit_gross_qty_accumulated", 0.0) or 0.0
+        ) + gross_sold
         self.db.log_campaign_event(
             campaign.campaign_id,
-            "EXIT_SUBMITTED",
+            "EXIT_FILL_ACCOUNTED",
             order_id=str(order.get("orderId", "")),
             reason=reason,
             payload={
-                "quantity": executed,
-                "exit_price": exit_price,
-                "requested_quantity": qty,
+                "gross_sold": gross_sold,
+                "inventory_debit": inventory_debit,
+                "quote_proceeds": quote,
+                "exit_fee_quote": exit_fee_quote,
+                "remaining": remaining,
             },
         )
-        if remaining <= max(
-            float(os.getenv("MIN_RECOVERY_QTY", "0.000001")),
-            float(campaign.position_qty) * float(os.getenv("BALANCE_TOLERANCE_PCT", "0.005")),
-        ):
-            campaign.position_qty = 0.0
-            campaign.open_risk_quote = 0.0
-            campaign.pending_risk_quote = 0.0
-            campaign.capital_reserved_quote = 0.0
-            campaign.exit_reason = reason
-            campaign.next_action = "WAIT"
-            campaign.transition(CampaignState.EXIT_PENDING, reason=reason)
-            campaign.transition(CampaignState.CLOSED, reason="exit fill complete")
-            self.db.save_campaign(campaign)
-            trade = self.db.open_trade(symbol)
-            if trade is not None:
-                entry = float(trade.get("entry_price") or campaign.average_entry_price or 0.0)
-                entry_fee = float(trade.get("fees") or 0.0)
-                pnl = quote - entry * float(trade.get("quantity") or campaign.position_qty) - entry_fee
-                self.db.close_trade(
-                    trade["id"],
-                    datetime.now(timezone.utc).isoformat(),
-                    exit_price,
-                    pnl,
-                    (exit_price / entry - 1.0) if entry > 0 else 0.0,
-                    reason,
-                    fees=entry_fee,
-                )
-            self.db.state_set(f"position_state:{symbol}", "FLAT")
+
+        numeric_tolerance = max(1e-12, campaign_qty * 1e-12)
+        trade = self.db.open_trade(symbol)
+        if trade is None:
+            self.engine.mark_reconcile_required(
+                campaign, "exchange exit fill has no matching durable open trade ledger"
+            )
+            self.db.state_set(f"position_state:{symbol}", "RECONCILE_REQUIRED")
+            raise CampaignExecutionError(
+                f"{symbol}: exit fill exists but the trade ledger is missing; reconciliation required"
+            )
+        if remaining <= numeric_tolerance:
+            with self.db.transaction():
+                campaign.position_qty = 0.0
+                campaign.open_risk_quote = 0.0
+                campaign.pending_risk_quote = 0.0
+                campaign.capital_reserved_quote = 0.0
+                campaign.exit_reason = reason
+                campaign.next_action = "WAIT"
+                campaign.transition(CampaignState.EXIT_PENDING, reason=reason)
+                campaign.transition(CampaignState.CLOSED, reason="exit fill complete")
+                self.db.save_campaign(campaign)
+                if trade is not None:
+                    entry = float(trade.get("entry_price") or campaign.average_entry_price or 0.0)
+                    entry_fee_and_prior_exit_fees = float(trade.get("fees") or 0.0)
+                    total_fees = entry_fee_and_prior_exit_fees + exit_fee_quote
+                    total_exit_quote = float(campaign.tags.get("exit_quote_accumulated", quote) or quote)
+                    total_entry_qty = float(
+                        campaign.tags.get("total_entry_net_qty", trade.get("quantity") or campaign_qty)
+                        or trade.get("quantity") or campaign_qty
+                    )
+                    pnl = total_exit_quote - entry * total_entry_qty - total_fees
+                    self.db.update_trade_quantity(trade["id"], total_entry_qty)
+                    self.db.close_trade(
+                        trade["id"],
+                        datetime.now(timezone.utc).isoformat(),
+                        exit_price,
+                        pnl,
+                        (exit_price / entry - 1.0) if entry > 0 else 0.0,
+                        reason,
+                        fees=total_fees,
+                    )
+                self.db.state_set(f"position_state:{symbol}", "FLAT")
             return {
                 "campaign_id": campaign.campaign_id,
                 "symbol": symbol,
                 "state": "CLOSED",
-                "quantity": executed,
+                "quantity": gross_sold,
                 "exit_price": exit_price,
+                "exit_fee_quote": exit_fee_quote,
                 "reason": reason,
             }
 
+        # Partial exit: account fees/proceeds, update the remaining inventory,
+        # recreate protection, and keep the campaign blocked for reconciliation.
         campaign.position_qty = remaining
-        self.db.save_campaign(campaign)
-        campaign.state = CampaignState.RECONCILE_REQUIRED
+        if trade is not None:
+            self.db.update_trade_quantity(trade["id"], remaining)
+            self.db.conn.execute(
+                "UPDATE trades SET fees=COALESCE(fees,0)+?, updated_at=CURRENT_TIMESTAMP "
+                "WHERE id=? AND exit_time IS NULL",
+                (exit_fee_quote, int(trade["id"])),
+            )
+            if not self.db._transaction_active:
+                self.db.conn.commit()
+        try:
+            protection = self.create_hard_stop(
+                campaign, quantity=remaining,
+                stop_price=float(campaign.current_stop_price or campaign.initial_stop_price or 0.0),
+            )
+            protected_qty = float(protection.get("quantity", 0) or 0)
+            gap = max(0.0, remaining - protected_qty)
+            campaign.tags["protective_order_id"] = str(protection.get("order_id", ""))
+            campaign.tags["protection_state"] = "PARTIAL" if gap > numeric_tolerance else "FULL"
+            campaign.tags["unprotected_exposure_qty"] = repr(gap)
+            reason_suffix = f"residual={remaining:.12g}, protected={protected_qty:.12g}, gap={gap:.12g}"
+        except Exception as exc:
+            reason_suffix = f"residual={remaining:.12g}; protection restore failed: {type(exc).__name__}: {exc}"
+            campaign.tags["protection_state"] = "UNKNOWN"
+            campaign.tags["unprotected_exposure_qty"] = repr(remaining)
+        self.engine.mark_reconcile_required(
+            campaign, f"campaign exit partially filled; {reason_suffix}"
+        )
         self.db.state_set(f"position_state:{symbol}", "RECONCILE_REQUIRED")
         raise CampaignExecutionError(
-            f"{symbol}: campaign exit partially filled; residual {remaining:.12g} requires reconciliation"
+            f"{symbol}: campaign exit partially filled; {reason_suffix}; reconciliation required"
         )
 
     def replace_structural_stop(

@@ -135,3 +135,10 @@ The DB now also rejects conflicting replays of an existing `(symbol, trade_id)` 
 ## TASK 005.1 — Execution intent durability
 
 Audit found that `ExecutionBarrier._persist` swallowed database exceptions and did not read back the durable intent before submitting. That violated the required no-order-on-persistence-failure contract. The barrier now requires a database intent store, writes the intent, reads back its status/reason/client order ID, and raises `ExecutionPersistenceError` on any write/readback mismatch. Added fault-injection tests prove the adapter submit callback is not invoked when intent persistence or readback fails. These tests are pending exact-head CI.
+
+
+## TASK 005.1 — Exit fills and partial-exit handling
+
+Exit execution now reads and persists authoritative per-trade SELL fills, values fees in quote/base/third assets using the same fill-accounting ledger, and includes accumulated exit proceeds and fees in final campaign PnL. It sells no more than the campaign's accounted quantity and current free base inventory. A partial exit no longer treats an arbitrary percentage/tiny-quantity threshold as closed: it updates the residual position, attempts to restore a stop for the residual, preserves risk reservation, and enters `RECONCILE_REQUIRED`. Missing trade history or persistence causes fail-closed reconciliation and a best-effort residual protection attempt.
+
+Regression tests cover quote-fee accounting on a full exit and a partial exit with residual protection. These changes are pending exact-head CI. This still does not by itself prove every process-crash point around exit order submission/recovery; those remain acceptance gates.

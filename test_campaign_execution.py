@@ -5,7 +5,7 @@ import pytest
 from datetime import datetime, timezone
 
 from campaign_engine import CampaignEngine
-from campaign_execution import CampaignExecutionService
+from campaign_execution import CampaignExecutionError, CampaignExecutionService
 from campaign_model import CampaignState, SignalRole, SignalSpec, SignalType
 from execution_barrier import ExecutionBarrier
 from mock_exchange import MockExchange
@@ -294,3 +294,78 @@ def test_unknown_fee_history_keeps_risk_reserved_and_attempts_protection():
         assert float(stops[0]["origQty"]) <= float(
             next(b["free"] for b in client.account()["balances"] if b["asset"] == "BTC")
         )
+
+
+def test_exit_fee_is_included_once_in_closed_trade_pnl():
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "campaign.sqlite3"))
+        client = MockExchange()
+        client.commission_rate = 0.001
+        client.commission_asset = "USDT"
+        svc = service(db, client)
+        result = svc.arm_initial_entry(
+            signal(trigger=101.0), equity_quote=10_000, candidate_risk_pct=0.004
+        )
+        client.set_price("BTCUSDT", 101.5)
+        svc.reconcile_pending_entries()
+        trade_before = db.open_trade("BTCUSDT")
+        assert trade_before is not None
+        entry_fee = float(trade_before["fees"] or 0.0)
+        entry_price = float(trade_before["entry_price"])
+        entry_qty = float(svc.engine.load_campaign(result["campaign_id"]).tags["total_entry_net_qty"])
+
+        client.commission_rate = 0.002
+        client.set_price("BTCUSDT", 110.0)
+        exit_result = svc.exit_market(
+            svc.engine.load_campaign(result["campaign_id"]), reason="TEST_EXIT"
+        )
+        assert exit_result["state"] == "CLOSED"
+        row = db.conn.execute(
+            "SELECT pnl,fees,quantity FROM trades WHERE symbol='BTCUSDT' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        assert row is not None
+        exit_order_id = db.conn.execute(
+            "SELECT order_id FROM campaign_orders WHERE campaign_id=? AND purpose='EXIT' ORDER BY id DESC LIMIT 1",
+            (result["campaign_id"],),
+        ).fetchone()["order_id"]
+        exit_fills = client.my_trades("BTCUSDT", order_id=exit_order_id)
+        exit_fee = sum(float(f["commission"]) for f in exit_fills)
+        exit_quote = sum(float(f["quoteQty"]) for f in exit_fills)
+        total_fees = entry_fee + exit_fee
+        assert float(row["fees"]) == pytest.approx(total_fees)
+        assert float(row["quantity"]) == pytest.approx(entry_qty)
+        assert float(row["pnl"]) == pytest.approx(
+            exit_quote - entry_price * entry_qty - total_fees
+        )
+        assert len(db.campaign_fills_for_order("BTCUSDT", exit_order_id)) == len(exit_fills)
+
+
+def test_partial_exit_keeps_campaign_reserved_and_restores_residual_protection():
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "campaign.sqlite3"))
+        client = MockExchange()
+        svc = service(db, client)
+        result = svc.arm_initial_entry(
+            signal(trigger=101.0), equity_quote=10_000, candidate_risk_pct=0.004
+        )
+        client.set_price("BTCUSDT", 101.5)
+        svc.reconcile_pending_entries()
+        campaign = svc.engine.load_campaign(result["campaign_id"])
+        assert campaign is not None
+        initial_qty = campaign.position_qty
+
+        client.partial_fill_ratio = 0.5
+        with pytest.raises(CampaignExecutionError, match="partially filled"):
+            svc.exit_market(campaign, reason="TEST_PARTIAL_EXIT")
+        refreshed = svc.engine.load_campaign(result["campaign_id"])
+        assert refreshed is not None
+        assert refreshed.state == CampaignState.RECONCILE_REQUIRED
+        assert 0 < refreshed.position_qty < initial_qty
+        assert db.campaign_risk_reserved_quote() > 0
+        stops = [
+            order for order in client.open_orders("BTCUSDT")
+            if order["side"] == "SELL"
+            and str(order.get("clientOrderId", "")).startswith(svc.STOP_PREFIX)
+        ]
+        assert len(stops) == 1
+        assert float(stops[0]["origQty"]) <= refreshed.position_qty
