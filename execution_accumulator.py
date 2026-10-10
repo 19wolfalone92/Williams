@@ -13,6 +13,7 @@ class ExecutionSummary:
     fee_quote: Decimal = Decimal("0")
     commission_base: Decimal = Decimal("0")
     fee_quote_equivalent: Decimal = Decimal("0")
+    unvalued_commission_assets: tuple[str, ...] = ()
 
     @property
     def filled(self) -> bool:
@@ -31,6 +32,7 @@ class ExecutionSummary:
             "commission_base": str(self.commission_base),
             "net_base_qty": str(self.net_base_qty),
             "fee_quote_equivalent": str(self.fee_quote_equivalent),
+            "unvalued_commission_assets": list(self.unvalued_commission_assets),
         }
 
 
@@ -40,6 +42,7 @@ def accumulate_fills(fills, base_asset=None) -> ExecutionSummary:
     fee_quote = Decimal("0")
     commission_base = Decimal("0")
     fee_quote_equivalent = Decimal("0")
+    unvalued_commission_assets = set()
     for fill in fills or []:
         q = Decimal(str(fill.get("qty", "0") or "0"))
         p = Decimal(str(fill.get("price", "0") or "0"))
@@ -52,9 +55,13 @@ def accumulate_fills(fills, base_asset=None) -> ExecutionSummary:
         if commission_asset in {"USDT", "USDC", "FDUSD", "BUSD"}:
             fee_quote += commission
             fee_quote_equivalent += commission
-        if base_asset and commission_asset == str(base_asset).upper():
+        elif base_asset and commission_asset == str(base_asset).upper():
             commission_base += commission
             fee_quote_equivalent += commission * p
+        elif commission > 0:
+            # Do not silently equate a third-asset fee to zero. A caller must
+            # value it from authoritative market data or keep reconciliation blocked.
+            unvalued_commission_assets.add(commission_asset or "UNKNOWN")
     avg = quote / qty if qty > 0 else Decimal("0")
     return ExecutionSummary(
         qty,
@@ -63,6 +70,7 @@ def accumulate_fills(fills, base_asset=None) -> ExecutionSummary:
         fee_quote,
         commission_base,
         fee_quote_equivalent,
+        tuple(sorted(unvalued_commission_assets)),
     )
 
 
