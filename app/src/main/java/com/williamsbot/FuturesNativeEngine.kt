@@ -641,6 +641,7 @@ internal class FuturesNativeEngine(
         side: String,
         clientId: String,
         params: JSONObject,
+        preSubmitCheck: (() -> Unit)? = null,
         call: () -> JSONObject
     ): JSONObject {
         val id = newIntentId()
@@ -655,6 +656,7 @@ internal class FuturesNativeEngine(
         )
         auditStore.updateFuturesIntent(id, "SUBMITTING")
         try {
+            preSubmitCheck?.invoke()
             val response = call()
             try {
                 auditStore.updateFuturesIntent(id, "SUBMITTED", response.toString())
@@ -1446,7 +1448,27 @@ internal class FuturesNativeEngine(
                 signal.direction,
                 side,
                 clientAlgoId,
-                params
+                params,
+                preSubmitCheck = {
+                    if (!currentContextAllows(exchange, symbol, signal.direction)) {
+                        throw FuturesApiException(
+                            "$symbol context invalidated immediately before conditional entry submission"
+                        )
+                    }
+                    val latestMark = exchange.markPrice(symbol).toDoubleOrNull()
+                        ?: throw FuturesApiException("$symbol mark price invalid at submission boundary")
+                    if (!latestMark.isFinite() ||
+                        (signal.direction == "LONG" && !(stopValue < latestMark && latestMark < triggerValue)) ||
+                        (signal.direction == "SHORT" && !(triggerValue < latestMark && latestMark < stopValue))
+                    ) {
+                        throw FuturesApiException("$symbol entry trigger/stop geometry became stale at submission boundary")
+                    }
+                    val latestExpiry = signal.confirmationTime +
+                        intervalMillis(interval()) * (pendingBarsForSignal(signal.type) + 1)
+                    if (latestExpiry <= 0L || System.currentTimeMillis() >= latestExpiry) {
+                        throw FuturesApiException("$symbol signal expired immediately before conditional entry submission")
+                    }
+                }
             ) {
                 exchange.submitConditional(
                     symbol = symbol,
