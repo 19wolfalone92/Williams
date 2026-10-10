@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from binance_client import BinanceAPIError
+
 
 _ORDER_STATES = {
     "NEW", "PARTIALLY_FILLED", "FILLED", "CANCELED", "REJECTED",
@@ -198,13 +200,58 @@ class ExecutionRecoveryResolver:
         # Unknown mutation kinds are deliberately not guessed.
         return None
 
+    def _submit_attempt_started(self, intent_id: str) -> bool:
+        rows = self.db.conn.execute(
+            "SELECT 1 FROM execution_events WHERE intent_id=? AND event='SUBMIT_ATTEMPT_STARTED' LIMIT 1",
+            (intent_id,),
+        ).fetchone()
+        return rows is not None
+
+    def _safe_pre_submit_not_found(self, intent: dict[str, Any], exc: BinanceAPIError) -> dict[str, Any] | None:
+        """Accept explicit not-found only when the durable write-ahead marker proves
+        the mutation callable was never entered. Once that marker exists, absence
+        is ambiguous and cannot clear the fail-closed latch.
+        """
+        kind = self._text(intent.get("mutation_kind") or "ORDER").upper()
+        intent_id = self._text(intent.get("intent_id"))
+        if self._submit_attempt_started(intent_id):
+            return None
+        if kind not in {"ORDER", "EMERGENCY_EXIT", "OCO_CREATE"}:
+            return None
+        code = None
+        if isinstance(exc.payload, dict):
+            code = exc.payload.get("code")
+        allowed = {-2013} if kind in {"ORDER", "EMERGENCY_EXIT"} else {-2011, -2013}
+        if code not in allowed:
+            return None
+        return {
+            "mutation_kind": kind,
+            "exchange_lookup": "EXACT_ID_NOT_FOUND",
+            "api_code": code,
+            "submit_attempt_started": False,
+            "client_order_id": self._text(intent.get("client_order_id")),
+        }
+
     def resolve_pending(self) -> dict[str, Any]:
         rows = self.db.unresolved_execution_intents()
         resolved, blocked = [], []
         for intent in rows:
             intent_id = self._text(intent.get("intent_id"))
             try:
-                evidence = self._lookup(intent)
+                try:
+                    evidence = self._lookup(intent)
+                except BinanceAPIError as exc:
+                    absence = self._safe_pre_submit_not_found(intent, exc)
+                    if absence is None:
+                        raise
+                    with self.db.transaction():
+                        self.db.resolve_execution_intent(intent_id, "RECONCILED", absence)
+                    resolved.append({
+                        "intent_id": intent_id,
+                        "status": "RECONCILED",
+                        "exchange_result": "NOT_SUBMITTED_CONFIRMED",
+                    })
+                    continue
                 if evidence is None:
                     blocked.append({
                         "intent_id": intent_id,
