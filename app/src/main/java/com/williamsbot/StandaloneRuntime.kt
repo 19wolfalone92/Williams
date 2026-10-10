@@ -386,26 +386,32 @@ private class StandaloneServer(private val context: Context) {
         }
     }
 
+    @Synchronized
     fun configureCredentials(apiKey: String, apiSecret: String): JSONObject =
         e().configure(apiKey, apiSecret)
 
+    @Synchronized
     fun clearCredentials(): JSONObject = e().clear()
 
+    @Synchronized
     fun status(fast: Boolean = false): JSONObject = e().status(fast = fast)
 
+    @Synchronized
     fun startTrading() {
         e().start()
     }
 
+    @Synchronized
     fun stopTrading() {
         e().stop()
     }
 
+    @Synchronized
     private fun e(): NativeEngine {
         if (engine == null) {
             engine = NativeEngine(context, prefs, client)
         }
-        return engine!!
+        return checkNotNull(engine)
     }
 
     private fun handle(s: Socket) {
@@ -819,6 +825,9 @@ private class NativeEngine(
     )
 
     init {
+        // Persisted pause intent survives process recreation and must be
+        // honored before the scanner/worker can admit new entries.
+        paused = prefs.getBoolean("paused", false)
         loadPersistedState()
         startRestDataProbe()
         restoreExecutionAccumulators()
@@ -1273,6 +1282,7 @@ private class NativeEngine(
             .put("cleared", true)
     }
 
+    @Synchronized
     fun start(): JSONObject {
         if (killLatched) {
             error("KILL_SWITCH_LATCHED: recover and reset kill switch before START")
@@ -1293,9 +1303,12 @@ private class NativeEngine(
         }
 
         val generation = ++runtimeGeneration
-        prefs.edit()
+        val autoRunPersisted = prefs.edit()
             .putBoolean("auto_run", true)
-            .apply()
+            .commit()
+        require(autoRunPersisted && prefs.getBoolean("auto_run", false)) {
+            "Could not durably persist autonomous runtime intent; START blocked"
+        }
 
         stateMachine.force(TradingState.INITIALIZING, "bot start")
         userStreamSyncRequired = true
@@ -1335,7 +1348,9 @@ private class NativeEngine(
         }
 
         running = true
-        paused = false
+        // Do not silently resume after a process death if the operator had
+        // explicitly paused execution before the process was recreated.
+        paused = prefs.getBoolean("paused", false)
         warmCoreHistoryAsync(generation)
         startMarketDataStream()
         userStream.start()
@@ -1408,6 +1423,7 @@ private class NativeEngine(
             .put("interval_seconds", 10)
     }
 
+    @Synchronized
     fun stop(): JSONObject {
         ++runtimeGeneration
         running = false
@@ -1417,9 +1433,10 @@ private class NativeEngine(
         marketSocketConnected = false
         userStream.stop()
         userStreamConnected = false
-        prefs.edit()
+        val stopIntentPersisted = prefs.edit()
             .putBoolean("auto_run", false)
-            .apply()
+            .putBoolean("paused", false)
+            .commit()
         worker?.interrupt()
         worker = null
         scanning = false
@@ -1431,7 +1448,35 @@ private class NativeEngine(
         activeHistoryTasks.forEach { it.cancel(true) }
         activeHistoryTasks.clear()
 
-        return JSONObject().put("stopped", true).put("state", "STOPPED")
+        val stopIntentVerified = stopIntentPersisted &&
+            !prefs.getBoolean("auto_run", true) &&
+            !prefs.getBoolean("paused", true)
+        if (!stopIntentVerified) {
+            // Current-process execution stays off even if durable stop could not
+            // be verified. Latch the kill switch and surface the persistence error.
+            killLatched = true
+            stateMachine.force(
+                TradingState.KILL_SWITCH_LATCHED,
+                "stop intent persistence could not be verified"
+            )
+            runCatching {
+                prefs.edit()
+                    .putBoolean("kill_latched", true)
+                    .putBoolean("auto_run", false)
+                    .commit()
+            }
+            lastError = "STOP_PERSISTENCE_FAILED: auto_run/paused read-back unverified"
+            return JSONObject()
+                .put("stopped", true)
+                .put("state", "KILL_SWITCH_LATCHED")
+                .put("persistence_verified", false)
+                .put("error", lastError)
+        }
+
+        return JSONObject()
+            .put("stopped", true)
+            .put("state", "STOPPED")
+            .put("persistence_verified", true)
     }
 
     @Synchronized
@@ -1537,14 +1582,119 @@ private class NativeEngine(
             .put("state", stateName())
     }
 
+    @Synchronized
     fun pause(): JSONObject {
+        require(running) { "Runtime is not running; PAUSE has no active worker to pause" }
         paused = true
-        return JSONObject().put("paused", true)
+        val committed = prefs.edit().putBoolean("paused", true).commit()
+        val verified = committed && prefs.getBoolean("paused", false)
+        if (!verified) {
+            // A pause that cannot survive process death is unsafe to report as
+            // durable. Block this process and try to persist the kill latch.
+            killLatched = true
+            stateMachine.force(
+                TradingState.KILL_SWITCH_LATCHED,
+                "pause intent persistence could not be verified"
+            )
+            runCatching {
+                prefs.edit()
+                    .putBoolean("kill_latched", true)
+                    .putBoolean("auto_run", false)
+                    .commit()
+            }
+            lastError = "PAUSE_PERSISTENCE_FAILED: pause read-back unverified"
+            return JSONObject()
+                .put("paused", true)
+                .put("persistence_verified", false)
+                .put("error", lastError)
+        }
+        return JSONObject()
+            .put("paused", true)
+            .put("persistence_verified", true)
     }
 
+    @Synchronized
     fun resume(): JSONObject {
+        require(running) {
+            "Runtime is not running; START and exchange recovery are required before RESUME"
+        }
+        require(paused) { "Runtime is not paused" }
+        require(!killLatched) { "KILL_SWITCH_LATCHED blocks RESUME" }
+        require(!reconcileRequired) { "RECONCILE_REQUIRED blocks RESUME" }
+        require(key().isNotBlank() && secret().isNotBlank()) {
+            "Binance Testnet credentials are not configured"
+        }
+
+        try {
+            recoverPendingEntries()
+            reconcilePositionsWithExchange()
+            auditManagedOpenOrders()
+            val account = signedAccount()
+            val balances = account.optJSONArray("balances")
+                ?: error("Binance account response has no balances")
+            restAccountReady = account.has("balances")
+            var foundUsdt = false
+            for (i in 0 until balances.length()) {
+                val row = balances.optJSONObject(i) ?: continue
+                if (row.optString("asset") == "USDT") {
+                    liveUsdtBalance = row.optString("free").toDoubleOrNull() ?: 0.0
+                    foundUsdt = true
+                    break
+                }
+            }
+            if (!foundUsdt) error("Binance account has no USDT balance row")
+            if (reconcileRequired) error("Exchange reconciliation left a safety blocker")
+            require(synchronized(pendingEntries) { pendingEntries.isEmpty() }) {
+                "Pending entries remain unresolved after recovery"
+            }
+        } catch (failure: Exception) {
+            setReconcileRequired(
+                "resume preflight/reconciliation failed: " +
+                    failure.javaClass.simpleName
+            )
+            throw IllegalStateException(
+                "RESUME blocked; exchange reconciliation required",
+                failure
+            )
+        }
+
+        val blockers = buildList {
+            if (!marketDataFresh()) add("rest_market_stale_or_not_ready")
+            if (!restAccountReady) add("rest_account_not_ready")
+            if (!historyReady) add("history_not_ready")
+            if (!userStreamConnected) add("user_stream_disconnected")
+            if (userStreamSyncRequired) add("user_stream_sync_required")
+            if (equityCircuitBreaker.isTripped()) add("equity_circuit_breaker")
+        }
+        require(blockers.isEmpty()) {
+            "RESUME blocked by runtime preflight: " + blockers.joinToString(",")
+        }
+
+        val restoredPositions = positionList()
+        if (restoredPositions.isEmpty()) {
+            stateMachine.force(TradingState.READY_FLAT, "resume preflight passed")
+        } else {
+            val allProtected = restoredPositions.all {
+                it.ocoListId.isNotBlank() ||
+                    it.ocoListClientId.isNotBlank() ||
+                    it.protectiveOrderId.isNotBlank()
+            }
+            require(allProtected) {
+                "RESUME blocked: an open position has no verified protection"
+            }
+            stateMachine.force(TradingState.PROTECTED, "resume protection reconciled")
+        }
+
+        val pauseCleared = prefs.edit().putBoolean("paused", false).commit()
+        require(pauseCleared && !prefs.getBoolean("paused", true)) {
+            "RESUME blocked: could not durably clear pause state"
+        }
         paused = false
-        return JSONObject().put("resumed", true)
+        return JSONObject()
+            .put("resumed", true)
+            .put("persistence_verified", true)
+            .put("execution_enabled", executionReady())
+            .put("execution_blockers", JSONArray(executionBlockers()))
     }
 
     @Synchronized
@@ -7915,7 +8065,17 @@ private class NativeEngine(
             .put("testnet", true)
             .put("running", running)
             .put("paused", paused)
-            .put("recovered", true)
+            .put(
+                "recovered",
+                !reconcileRequired &&
+                    !killLatched &&
+                    stateMachine.state !in setOf(
+                        TradingState.INITIALIZING,
+                        TradingState.SYNC_REQUIRED,
+                        TradingState.RECONCILE_REQUIRED
+                    ) &&
+                    (running || (positionList().isEmpty() && pendingEntries.isEmpty()))
+            )
             .put("state", stateName())
             .put("execution_enabled", executionReady())
             .put(
