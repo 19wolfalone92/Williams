@@ -52,6 +52,16 @@ def test_api_permissions_require_withdrawals_disabled():
     assert not PreflightCheckService.verify_api_permissions(bad)
 
 
+def test_campaign_engine_orders_are_recognized_for_recovery():
+    known, unknown = PreflightCheckService.classify_open_orders([
+        {"symbol": "BTCUSDT", "clientOrderId": "WILLV5_ENTRY_abc"},
+        {"symbol": "BTCUSDT", "clientOrderId": "WILLV5_STOP_def"},
+        {"symbol": "BTCUSDT", "clientOrderId": "WILLV5_EXIT_ghi"},
+    ])
+    assert len(known) == 3
+    assert unknown == []
+
+
 def test_unknown_orders_block():
     known, unknown = PreflightCheckService.classify_open_orders(
         [{"clientOrderId": "WILLV4_OCO_123"}],
