@@ -306,3 +306,108 @@ def test_android_oco_recovery_requires_authoritative_state_for_both_children():
     assert "Binance order-list lookup did not identify both child orders" in source
     assert "Binance OCO child order state is not authoritative" in source
     assert 'signedGet(\n                                "/api/v3/order",' in source
+
+
+@pytest.mark.parametrize("bad_child", [
+    {"orderId": 701, "status": "UNKNOWN"},
+    {"orderId": 701},
+    {"orderId": None, "status": "NEW"},
+])
+def test_oco_restart_unknown_or_malformed_child_stays_unresolved(
+    bad_child, tmp_path
+):
+    """A known list ID is insufficient: both child states must be authoritative."""
+    cache = ready_context()
+    db = ready_db(tmp_path)
+    cid = "TASK001_OCO_UNKNOWN_CHILD"
+    intent = OrderIntent.new(
+        "BTCUSDT", "SELL", "OCO", required_context_versions={},
+        purpose="PROTECTION", client_order_id=cid,
+    )
+    db.save_execution_intent(intent, "AMBIGUOUS", "simulated response loss")
+    db.state_set("position_state", "RECONCILE_REQUIRED")
+    db.state_set("position_state:BTCUSDT", "RECONCILE_REQUIRED")
+
+    class FakeExchange:
+        def __init__(self):
+            self.create_calls = 0
+            self.list_queries = 0
+            self.child_queries = []
+        def order_list(self, symbol, list_client_order_id=None):
+            self.list_queries += 1
+            return {
+                "symbol": symbol, "orderListId": 88,
+                "listClientOrderId": list_client_order_id,
+                "listStatusType": "EXECUTING", "listOrderStatus": "EXECUTING",
+                "orders": [
+                    {"orderId": 701, "clientOrderId": cid + "_A"},
+                    {"orderId": 702, "clientOrderId": cid + "_B"},
+                ],
+            }
+        def get_order(self, symbol, order_id=None, orig_client_order_id=None):
+            self.child_queries.append(order_id)
+            if str(order_id) == "701":
+                return dict(bad_child, symbol=symbol)
+            return {
+                "symbol": symbol, "orderId": order_id,
+                "clientOrderId": cid + "_B", "status": "NEW",
+                "executedQty": "0",
+            }
+        def create_oco_sell_safe(self, *args, **kwargs):
+            self.create_calls += 1
+            raise AssertionError("recovery must never create duplicate protection")
+
+    exchange = FakeExchange()
+    service = CampaignExecutionService(exchange, db, ExecutionBarrier(cache, db))
+    report = service.startup_recovery_report
+    assert report["resolved"] == []
+    assert report["unresolved"] == [intent.intent_id]
+    assert exchange.list_queries == 1
+    assert exchange.child_queries == [701, 702]
+    assert exchange.create_calls == 0
+    row = db.conn.execute(
+        "SELECT status FROM execution_intents WHERE intent_id=?", (intent.intent_id,)
+    ).fetchone()
+    assert row["status"] == "AMBIGUOUS"
+    assert db.state_get("position_state") == "RECONCILE_REQUIRED"
+    assert db.state_get("position_state:BTCUSDT") == "RECONCILE_REQUIRED"
+
+
+def test_cancel_replace_restart_refuses_to_infer_old_leg_from_replacement_only(tmp_path):
+    """Current schema intentionally blocks restart resolution without old-order identity."""
+    cache = ready_context()
+    db = ready_db(tmp_path)
+    cid = "TASK001_CANCEL_REPLACE_RESTART"
+    intent = OrderIntent.new(
+        "BTCUSDT", "SELL", "STOP_LOSS", required_context_versions={},
+        purpose="CAMPAIGN_TRAIL", client_order_id=cid,
+    )
+    db.save_execution_intent(intent, "AMBIGUOUS", "cancelReplace response lost")
+    db.state_set("position_state", "RECONCILE_REQUIRED")
+    db.state_set("position_state:BTCUSDT", "RECONCILE_REQUIRED")
+
+    class FakeExchange:
+        def __init__(self):
+            self.lookups = []
+            self.posts = 0
+        def get_order(self, symbol, orig_client_order_id=None, order_id=None):
+            self.lookups.append((symbol, orig_client_order_id, order_id))
+            return {
+                "symbol": symbol, "orderId": 901,
+                "clientOrderId": cid, "status": "NEW", "executedQty": "0",
+            }
+        def cancel_replace(self, *args, **kwargs):
+            self.posts += 1
+            raise AssertionError("restart recovery must not repeat cancelReplace")
+
+    exchange = FakeExchange()
+    service = CampaignExecutionService(exchange, db, ExecutionBarrier(cache, db))
+    assert service.startup_recovery_report["resolved"] == []
+    assert service.startup_recovery_report["unresolved"] == [intent.intent_id]
+    assert exchange.lookups == []
+    assert exchange.posts == 0
+    row = db.conn.execute(
+        "SELECT status FROM execution_intents WHERE intent_id=?", (intent.intent_id,)
+    ).fetchone()
+    assert row["status"] == "AMBIGUOUS"
+    assert db.state_get("position_state") == "RECONCILE_REQUIRED"
