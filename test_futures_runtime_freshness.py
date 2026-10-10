@@ -98,3 +98,84 @@ def test_risk_policy_environment_overrides_remain_explicit():
     assert cfg.max_daily_loss_pct == pytest.approx(0.0075)
     assert cfg.max_consecutive_losses == 4
     assert cfg.max_open_positions == 3
+
+
+class _FakeCloseDb:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def recent_campaign_closes(self, limit=50):
+        return self.rows[:limit]
+
+
+def _close(pnl, closed_at="2026-10-10 10:00:00"):
+    import json
+    return {
+        "created_at": closed_at,
+        "payload_json": json.dumps({"realized_pnl_quote_net_known_fees": pnl}),
+        "reason": "campaign close",
+    }
+
+
+def test_loss_guard_blocks_configured_consecutive_losses():
+    from datetime import datetime, timezone
+    from futures_runtime import _loss_streak_allows_entry
+
+    now = datetime(2026, 10, 10, 10, 5, tzinfo=timezone.utc)
+    ok, reason = _loss_streak_allows_entry(
+        _FakeCloseDb([_close(-2), _close(-1), _close(5)]),
+        max_consecutive_losses=2,
+        cooldown_minutes=0,
+        now=now,
+    )
+    assert not ok
+    assert "consecutive loss limit" in reason
+
+
+def test_loss_guard_clears_streak_after_a_non_loss():
+    from datetime import datetime, timezone
+    from futures_runtime import _loss_streak_allows_entry
+
+    now = datetime(2026, 10, 10, 10, 5, tzinfo=timezone.utc)
+    ok, reason = _loss_streak_allows_entry(
+        _FakeCloseDb([_close(0), _close(-2), _close(-1)]),
+        max_consecutive_losses=2,
+        cooldown_minutes=0,
+        now=now,
+    )
+    assert ok
+    assert "consecutive_losses=0" in reason
+
+
+def test_loss_guard_enforces_post_loss_cooldown():
+    from datetime import datetime, timezone
+    from futures_runtime import _loss_streak_allows_entry
+
+    now = datetime(2026, 10, 10, 10, 5, tzinfo=timezone.utc)
+    ok, reason = _loss_streak_allows_entry(
+        _FakeCloseDb([_close(-2, "2026-10-10 10:00:00")]),
+        max_consecutive_losses=3,
+        cooldown_minutes=30,
+        now=now,
+    )
+    assert not ok
+    assert "cooldown active" in reason
+
+
+@pytest.mark.parametrize("rows", [
+    [{"created_at": "2026-10-10 10:00:00", "payload_json": "{}", "reason": "close"}],
+    [{"created_at": "bad-timestamp", "payload_json": '{"realized_pnl_quote": -1}', "reason": "close"}],
+    [{"created_at": "2026-10-10 10:00:00", "payload_json": '{"realized_pnl_quote": NaN}', "reason": "close"}],
+])
+def test_loss_guard_fails_closed_on_malformed_close_ledger(rows):
+    from datetime import datetime, timezone
+    from futures_runtime import _loss_streak_allows_entry
+
+    ok, reason = _loss_streak_allows_entry(
+        _FakeCloseDb(rows),
+        max_consecutive_losses=2,
+        cooldown_minutes=30,
+        now=datetime(2026, 10, 10, 10, 5, tzinfo=timezone.utc),
+    )
+    assert not ok
+    assert "blocked" in reason
