@@ -909,13 +909,15 @@ internal class FuturesNativeEngine(
     private fun currentContextAllows(
         exchange: BinanceUsdmFuturesClient,
         symbol: String,
-        direction: String
+        direction: String,
+        signalType: String
     ): Boolean {
         val h1 = analyseFrame(exchange, symbol, "1h") ?: return false
         val h4 = analyseFrame(exchange, symbol, "4h") ?: return false
         val d1 = analyseFrame(exchange, symbol, "1d") ?: return false
-        return FuturesContextPolicy.allows(
+        return FuturesContextPolicy.allowsSignal(
             direction,
+            signalType,
             FuturesContextState(h1.bullish, h1.bearish, h1.awake, h1.ao),
             FuturesContextState(h4.bullish, h4.bearish, h4.awake, h4.ao),
             FuturesContextState(d1.bullish, d1.bearish, d1.awake, d1.ao)
@@ -941,7 +943,7 @@ internal class FuturesNativeEngine(
                 // H1/H4 must permit the direction; D1 only vetoes an active
                 // opposite context. A trigger alone never authorizes entry.
                 isSignalFresh(signal, currentClosedBarTime, tf) &&
-                    FuturesContextPolicy.allows(signal.direction, operativeState, parentState, macroState)
+                    FuturesContextPolicy.allowsSignal(signal.direction, signal.type, operativeState, parentState, macroState)
             }
         if (candidates.isEmpty()) return null
         val chosen = candidates.minByOrNull { it.confirmationTime } ?: return null
@@ -1370,7 +1372,7 @@ internal class FuturesNativeEngine(
         // Re-fetch closed H1/H4/D1 context immediately before the durable intent
         // and exchange mutation. A candle boundary between scanning and arming
         // must not leave an order authorized by stale context.
-        if (!currentContextAllows(exchange, symbol, signal.direction)) {
+        if (!currentContextAllows(exchange, symbol, signal.direction, signal.type)) {
             throw FuturesApiException("$symbol directional context changed or is unavailable at final entry validation")
         }
         val signalExpiresAt = signal.confirmationTime +
