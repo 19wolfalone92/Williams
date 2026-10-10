@@ -778,7 +778,7 @@ class FuturesRuntime:
                 else:
                     close_ms = int(pd.Timestamp(closed.index[-1]).timestamp() * 1000) + _interval_seconds(self.interval) * 1000
                 _assert_fresh_closed_candle(symbol, management_tf, close_ms)
-                indicators = calculate_indicators(closed, config_from_env())
+                indicators = calculate_indicators(closed, canonical_live_config_from_env())
                 atr = self._atr(closed, self.config.atr_period)
                 result = self.execution.manage_campaign(campaign, indicators, atr=atr)
                 results.append(result)
