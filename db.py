@@ -164,7 +164,10 @@ class Database:
             signal_type TEXT,
             operation_kind TEXT DEFAULT 'PLACE',
             related_order_id TEXT,
-            related_order_list_id TEXT
+            related_order_list_id TEXT,
+            exchange_status TEXT,
+            resolution_evidence TEXT,
+            resolved_at_ms INTEGER
         );
         CREATE TABLE IF NOT EXISTS execution_events(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -325,6 +328,9 @@ class Database:
             "operation_kind": "TEXT DEFAULT 'PLACE'",
             "related_order_id": "TEXT",
             "related_order_list_id": "TEXT",
+            "exchange_status": "TEXT",
+            "resolution_evidence": "TEXT",
+            "resolved_at_ms": "INTEGER",
         }
         for name, sql_type in additions.items():
             if name not in columns:
@@ -653,6 +659,88 @@ class Database:
                 "LIMIT 1"
             ).fetchone()
             return row is not None
+
+    def mark_execution_intent_reconciled(
+        self,
+        client_order_id,
+        observed_status,
+        *,
+        authoritative=False,
+        evidence_source="",
+    ):
+        """Resolve a write-ahead intent only from explicitly authoritative exchange evidence.
+
+        observed_status='NOT_FOUND' is reserved for an exchange query that
+        definitively searched this clientOrderId, not for a timeout or 5xx.
+        """
+        if not authoritative:
+            raise PermissionError("authoritative exchange reconciliation is required")
+        cid = str(client_order_id or "").strip()
+        status = str(observed_status or "").strip().upper()
+        evidence = str(evidence_source or "").strip()
+        if not cid or not evidence:
+            raise ValueError("client_order_id and reconciliation evidence are required")
+        accepted = {
+            "NEW", "PENDING_NEW", "PARTIALLY_FILLED", "FILLED",
+            "CANCELED", "CANCELLED", "EXPIRED", "REJECTED", "NOT_FOUND",
+        }
+        if status not in accepted:
+            raise ValueError(f"unsupported authoritative exchange status: {status}")
+        resolved_status = "ABORTED_NOT_FOUND" if status == "NOT_FOUND" else "RECONCILED"
+        with self._db_lock:
+            if self._transaction_active:
+                raise RuntimeError("reconciliation must commit in its own durable transaction")
+            try:
+                self.conn.execute("BEGIN IMMEDIATE")
+                rows = self.conn.execute(
+                    "SELECT * FROM execution_intents WHERE client_order_id=?",
+                    (cid,),
+                ).fetchall()
+                if not rows:
+                    self.conn.rollback()
+                    return False
+                now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+                for row in rows:
+                    self.conn.execute(
+                        "UPDATE execution_intents SET status=?, exchange_status=?, "
+                        "resolution_evidence=?, resolved_at_ms=? WHERE intent_id=?",
+                        (
+                            resolved_status,
+                            status,
+                            evidence,
+                            now_ms,
+                            row["intent_id"],
+                        ),
+                    )
+                self._commit_durable()
+            except Exception:
+                try:
+                    self.conn.rollback()
+                except Exception:
+                    pass
+                raise
+
+        # If the exchange authoritatively confirms no order exists, release only
+        # its own identity claims. The next attempt will reuse the same stable
+        # clientOrderId and deterministic intent_id.
+        if status == "NOT_FOUND":
+            for row in rows:
+                logical_key = (
+                    f"{str(row['symbol']).upper()}:"
+                    f"{str(row['purpose']).upper()}:"
+                    f"{str(row['signal_id'] or '').strip()}"
+                )
+                self.release_execution_identity(
+                    str(row["intent_id"]),
+                    cid,
+                    logical_key if str(row["signal_id"] or "").strip() else "",
+                )
+        reread = self.find_execution_intent_by_client_order_id(cid)
+        if reread is None or str(reread.get("status", "")).upper() != resolved_status:
+            raise RuntimeError("reconciled execution intent read-back failed")
+        if str(reread.get("exchange_status", "")).upper() != status:
+            raise RuntimeError("reconciled exchange status read-back failed")
+        return True
 
     def save_execution_event(self, intent_id, event, payload=None):
         self.conn.execute(
