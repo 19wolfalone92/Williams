@@ -502,7 +502,7 @@ internal class FuturesNativeEngine(
         return parsed.filter { it.matches(Regex("^[A-Z0-9]{2,20}USDT$")) }.take(10).ifEmpty { DEFAULT_SYMBOLS }
     }
 
-    private fun interval(): String = normalizeInterval(prefs.getString("futures_interval", "5m") ?: "5m")
+    private fun interval(): String = normalizeInterval(prefs.getString("futures_interval", "1h") ?: "1h")
 
     private fun normalizeSymbols(array: JSONArray?): List<String> {
         val raw = if (array != null && array.length() > 0) {
