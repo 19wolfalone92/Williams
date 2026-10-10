@@ -46,7 +46,7 @@ object FuturesContextPolicy {
         val side = direction.trim().uppercase()
         if (side !in setOf("LONG", "SHORT")) return false
         if (!angulationScore.isFinite() || angulationScore <= 0.0) return false
-        if (!macroD1.ao.isFinite()) return false
+        if (!operativeH1.ao.isFinite() || !parentH4.ao.isFinite() || !macroD1.ao.isFinite()) return false
 
         val opposite = if (side == "LONG") "SHORT" else "LONG"
         fun permits(state: FuturesContextState, wanted: String): Boolean =
@@ -58,9 +58,6 @@ object FuturesContextPolicy {
 
         // H1/H4 are present and fresh context, but need not have turned yet.
         // Only an active, directionally permitted opposite D1 vetoes WM1.
-        @Suppress("UNUSED_VARIABLE")
-        val requiredContextWasFetched = operativeH1.bullish || operativeH1.bearish ||
-            parentH4.bullish || parentH4.bearish || !operativeH1.ao.isNaN() && !parentH4.ao.isNaN()
         return !permits(macroD1, opposite)
     }
 
