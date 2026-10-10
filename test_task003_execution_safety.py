@@ -608,6 +608,9 @@ def test_release_version_contracts_are_consistent():
         root / "app" / "src" / "main" / "java" / "com" / "williamsbot"
         / "MainActivity.kt"
     ).read_text(encoding="utf-8")
+    wrapper = (root / "gradle" / "wrapper" / "gradle-wrapper.properties").read_text(encoding="utf-8")
+    android_ci = (root / ".github" / "workflows" / "android-apk.yml").read_text(encoding="utf-8")
+    campaign_ci = (root / ".github" / "workflows" / "campaign-ci.yml").read_text(encoding="utf-8")
     gate_match = re.search(r'EXPECTED_VERSION\s*=\s*[\'"]([^\'"]+)[\'"]', gate)
     server_match = re.search(r'^VERSION\s*=\s*[\'"]([^\'"]+)[\'"]', server, re.MULTILINE)
     gradle_match = re.search(r'versionName\s*=\s*"([^"]+)"', gradle)
@@ -617,6 +620,9 @@ def test_release_version_contracts_are_consistent():
     assert gate_match.group(1) == canonical
     assert gradle_match.group(1) == canonical
     assert f"Williams {canonical}" in activity
+    assert "gradle-8.14.6-bin.zip" in wrapper
+    assert "GRADLE_VERSION: '8.14.6'" in android_ci
+    assert 'gradle-version: "8.14.6"' in campaign_ci
 
 
 
