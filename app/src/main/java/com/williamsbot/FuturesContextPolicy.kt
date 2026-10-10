@@ -69,10 +69,48 @@ object FuturesContextPolicy {
         operativeH1: FuturesContextState,
         parentH4: FuturesContextState,
         macroD1: FuturesContextState
-    ): Boolean = if (signalType.trim().equals("REVERSAL", ignoreCase = true)) {
-        allowsEarlyReversal(direction, operativeH1, parentH4, macroD1, angulationScore)
-    } else {
-        allows(direction, operativeH1, parentH4, macroD1)
+    ): Boolean {
+        return when (signalType.trim().uppercase()) {
+            "REVERSAL" -> allowsEarlyReversal(
+                direction, operativeH1, parentH4, macroD1, angulationScore
+            )
+            "SUPER_AO", "FRACTAL" -> allowsIndependentWiseManSignal(
+                direction, operativeH1, parentH4, macroD1
+            )
+            else -> false
+        }
+    }
+
+    /**
+     * WM2 and WM3 have different book-defined evidence from WM1.
+     *
+     * WM2 is proved by its third same-colour AO histogram bar; it is not
+     * universally gated by AO's zero-line sign or a fully awakened H1 mouth.
+     * WM3 is filtered separately by the trigger's relation to Teeth at
+     * confirmation and immediately before submission. H1/H4/D1 still must be
+     * present and fresh; D1 remains the explicitly configured macro airbag.
+     *
+     * This function does not create or prove a signal; the signal-family
+     * detector and the WM3 Teeth check are separate mandatory gates.
+     */
+    fun allowsIndependentWiseManSignal(
+        direction: String,
+        operativeH1: FuturesContextState,
+        parentH4: FuturesContextState,
+        macroD1: FuturesContextState
+    ): Boolean {
+        val side = direction.trim().uppercase()
+        if (side !in setOf("LONG", "SHORT")) return false
+        if (!operativeH1.ao.isFinite() || !parentH4.ao.isFinite() || !macroD1.ao.isFinite()) {
+            return false
+        }
+        val opposite = if (side == "LONG") "SHORT" else "LONG"
+        val macroOpposes = macroD1.awake && when (opposite) {
+            "LONG" -> macroD1.bullish && macroD1.ao > 0.0
+            "SHORT" -> macroD1.bearish && macroD1.ao < 0.0
+            else -> false
+        }
+        return !macroOpposes
     }
 
     fun allows(
