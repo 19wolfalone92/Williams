@@ -1,4 +1,5 @@
 package com.williamsbot
+import androidx.core.database.sqlite.transaction
 import java.util.Locale
 
 import android.content.ContentValues
@@ -476,9 +477,8 @@ class TradingAuditStore(context: Context) :
             put("updated_at", System.currentTimeMillis())
         }
         val db = writableDatabase
-        db.beginTransaction()
-        try {
-            val updated = db.update(
+        db.transaction {
+            val updated = update(
                 "execution_intents",
                 values,
                 "intent_id=? AND status IN ('PENDING','SUBMITTING','AMBIGUOUS','RECONCILE_REQUIRED')",
@@ -487,9 +487,6 @@ class TradingAuditStore(context: Context) :
             if (updated != 1) {
                 throw IllegalStateException("exchange result has no matching unresolved execution intent")
             }
-            db.setTransactionSuccessful()
-        } finally {
-            db.endTransaction()
         }
         val row = db.rawQuery(
             "SELECT status,http_status,response_json,exchange_status FROM execution_intents WHERE intent_id=?",
