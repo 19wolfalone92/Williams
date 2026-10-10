@@ -108,13 +108,28 @@ class CampaignExecutionService:
             )
         return qty
 
-    def _normalize_price(self, symbol: str, price: float) -> float:
+    def _normalize_price(
+        self,
+        symbol: str,
+        price: float,
+        *,
+        round_up: bool = False,
+    ) -> float:
         filters = self._rules(symbol)
         pf = filters.get("PRICE_FILTER") or {}
         tick = float(pf.get("tickSize", "0") or 0)
-        if tick <= 0:
+        if not math.isfinite(tick) or tick <= 0:
             raise CampaignExecutionError(f"{symbol}: PRICE_FILTER.tickSize unavailable")
-        return self._floor(price, tick)
+        value = float(price)
+        if not math.isfinite(value) or value <= 0:
+            raise CampaignExecutionError(f"{symbol}: price to normalize must be finite and positive")
+        if round_up:
+            # LONG Spot entries are BUY STOPs: never round down onto/inside the
+            # source signal-bar extreme. The tiny epsilon handles binary-float
+            # representation of values already on a valid tick.
+            import math as _math
+            return _math.ceil(value / tick - 1e-12) * tick
+        return self._floor(value, tick)
 
     def _check_buy_position_capacity(self, symbol: str, quantity: float) -> None:
         filters = self._rules(symbol)
@@ -417,7 +432,7 @@ class CampaignExecutionService:
             raise CampaignExecutionError("No portfolio risk capacity for campaign entry")
 
         current = self._current_price(signal.symbol)
-        trigger = self._normalize_price(signal.symbol, signal.trigger_price)
+        trigger = self._normalize_price(signal.symbol, signal.trigger_price, round_up=True)
         structural_stop = float(
             signal.invalidation_price or signal.protective_reference
         )
@@ -1198,7 +1213,7 @@ class CampaignExecutionService:
             raise CampaignExecutionError("campaign risk budget exhausted")
 
         current = self._current_price(signal.symbol)
-        trigger = self._normalize_price(signal.symbol, signal.trigger_price)
+        trigger = self._normalize_price(signal.symbol, signal.trigger_price, round_up=True)
         if trigger <= current:
             raise CampaignExecutionError(
                 f"{signal.symbol}: add-on trigger already crossed; no market substitution"
