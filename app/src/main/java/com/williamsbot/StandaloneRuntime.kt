@@ -1758,51 +1758,160 @@ private class NativeEngine(
         path: String,
         params: String
     ): JSONObject {
-        var lastBody = "{}"
-        repeat(2) { attempt ->
-            val query = if (params.isBlank()) {
-                "timestamp=" + signedTimestamp() + "&recvWindow=" + BINANCE_RECV_WINDOW_MS
-            } else {
-                params + "&timestamp=" + signedTimestamp() + "&recvWindow=" + BINANCE_RECV_WINDOW_MS
-            }
-            val signature = hmac(query, secret())
-            val request = when (method) {
-                "POST" -> Request.Builder()
-                    .url(baseUrl + path)
-                    .header("X-MBX-APIKEY", key())
-                    .post((query + "&signature=" + signature).toRequestBody("application/x-www-form-urlencoded".toMediaType()))
-                    .build()
-                "DELETE" -> Request.Builder()
-                    .url(baseUrl + path + "?" + query + "&signature=" + signature)
-                    .header("X-MBX-APIKEY", key())
-                    .delete()
-                    .build()
-                else -> Request.Builder()
-                    .url(baseUrl + path + "?" + query + "&signature=" + signature)
-                    .header("X-MBX-APIKEY", key())
-                    .get()
-                    .build()
-            }
-            rateGuard.beforeRequest()
-            http.newCall(request).execute().use { response ->
-                rateGuard.observe(response.headers, response.code)
-                lastBody = response.body?.string() ?: "{}"
-                auditStore.recordRestCall(
-                    method,
-                    path,
-                    response.code,
-                    params.ifBlank { null },
-                    lastBody
-                )
-                if (response.isSuccessful) return JSONObject(lastBody)
-                if (attempt == 0 && lastBody.contains("-1021")) {
-                    runCatching { syncServerTime() }
-                    return@use
+        val mutation = executionMutationSpec(method, path, params)
+        if (mutation != null) {
+            try {
+                validateAndPersistMutationIntent(mutation)
+            } catch (failure: Exception) {
+                // No network request has started. Keep the mutation fail-closed;
+                // if a partial durable write exists, latch recovery for restart.
+                val unresolved = runCatching {
+                    auditStore.unresolvedExecutionMutationCount(mutation.symbol)
+                }.getOrDefault(1)
+                if (unresolved > 0) {
+                    latchMutationReconciliation(
+                        "write-ahead intent admission failed for " + mutation.operation +
+                            ": " + (failure.message ?: failure.javaClass.simpleName)
+                    )
                 }
-                error("Binance " + response.code + ": " + lastBody)
+                throw IllegalStateException(
+                    "Binance mutation blocked before network: mandatory intent was not durably confirmed",
+                    failure
+                )
             }
         }
-        error("Binance timestamp retry failed: " + lastBody)
+
+        var lastBody = "{}"
+        try {
+            repeat(2) { attempt ->
+                val query = if (params.isBlank()) {
+                    "timestamp=" + signedTimestamp() + "&recvWindow=" + BINANCE_RECV_WINDOW_MS
+                } else {
+                    params + "&timestamp=" + signedTimestamp() + "&recvWindow=" + BINANCE_RECV_WINDOW_MS
+                }
+                val signature = hmac(query, secret())
+                val request = when (method.uppercase(Locale.US)) {
+                    "POST" -> Request.Builder()
+                        .url(baseUrl + path)
+                        .header("X-MBX-APIKEY", key())
+                        .post((query + "&signature=" + signature).toRequestBody("application/x-www-form-urlencoded".toMediaType()))
+                        .build()
+                    "DELETE" -> Request.Builder()
+                        .url(baseUrl + path + "?" + query + "&signature=" + signature)
+                        .header("X-MBX-APIKEY", key())
+                        .delete()
+                        .build()
+                    else -> Request.Builder()
+                        .url(baseUrl + path + "?" + query + "&signature=" + signature)
+                        .header("X-MBX-APIKEY", key())
+                        .get()
+                        .build()
+                }
+                rateGuard.beforeRequest()
+                http.newCall(request).execute().use { response ->
+                    rateGuard.observe(response.headers, response.code)
+                    lastBody = response.body?.string() ?: "{}"
+
+                    // Binance's explicit timestamp rejection means this attempt
+                    // did not execute the mutation. Keep the same durable intent
+                    // and retry once with corrected time; never mint a new ID.
+                    if (attempt == 0 && lastBody.contains("-1021")) {
+                        runCatching {
+                            auditStore.recordRestCall(
+                                method, path, response.code, params.ifBlank { null }, lastBody
+                            )
+                        }
+                        runCatching { syncServerTime() }
+                        return@use
+                    }
+
+                    if (mutation != null) {
+                        val classified = if (response.isSuccessful) {
+                            mutationResultStatus(mutation, response.code, lastBody)
+                        } else {
+                            "AMBIGUOUS" to (
+                                "Binance HTTP " + response.code +
+                                    "; authoritative follow-up query required before retry"
+                            )
+                        }
+                        try {
+                            auditStore.recordExecutionMutationResult(
+                                intentId = mutation.intentId,
+                                httpStatus = response.code,
+                                finalStatus = classified.first,
+                                responseJson = lastBody,
+                                reason = classified.second
+                            )
+                        } catch (resultWriteFailure: Exception) {
+                            runCatching {
+                                auditStore.markExecutionMutationAmbiguous(
+                                    mutation.intentId,
+                                    "mandatory exchange result write/read-back failed: " +
+                                        (resultWriteFailure.message ?: resultWriteFailure.javaClass.simpleName)
+                                )
+                            }
+                            latchMutationReconciliation(
+                                "Binance may have accepted " + mutation.operation +
+                                    ", but its response could not be durably verified"
+                            )
+                            throw IllegalStateException(
+                                "Execution outcome UNKNOWN: durable Binance response storage failed; blind retry forbidden",
+                                resultWriteFailure
+                            )
+                        }
+
+                        if (classified.first != "SUBMITTED") {
+                            latchMutationReconciliation(
+                                mutation.operation + " requires authoritative reconciliation: " +
+                                    classified.second
+                            )
+                        }
+                    }
+
+                    // REST-call diagnostics are optional telemetry. A logger
+                    // outage must not override the durable mutation result or
+                    // prevent a known protective/reducing response from returning.
+                    runCatching {
+                        auditStore.recordRestCall(
+                            method,
+                            path,
+                            response.code,
+                            params.ifBlank { null },
+                            lastBody
+                        )
+                    }
+
+                    if (!response.isSuccessful) {
+                        error("Binance " + response.code + ": " + lastBody)
+                    }
+                    if (mutation != null) {
+                        val classified = mutationResultStatus(mutation, response.code, lastBody)
+                        if (classified.first != "SUBMITTED") {
+                            throw IllegalStateException(
+                                "Execution outcome requires reconciliation: " + classified.second
+                            )
+                        }
+                    }
+                    return JSONObject(lastBody)
+                }
+            }
+            error("Binance timestamp retry failed: " + lastBody)
+        } catch (failure: Exception) {
+            if (mutation != null) {
+                runCatching {
+                    auditStore.markExecutionMutationAmbiguous(
+                        mutation.intentId,
+                        "request/response path failed after SUBMITTING: " +
+                            (failure.message ?: failure.javaClass.simpleName)
+                    )
+                }
+                latchMutationReconciliation(
+                    "mutation result is unknown for " + mutation.operation +
+                        ": " + (failure.message ?: failure.javaClass.simpleName)
+                )
+            }
+            throw failure
+        }
     }
 
     private fun signedRawGet(
