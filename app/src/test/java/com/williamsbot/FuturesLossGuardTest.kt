@@ -47,7 +47,7 @@ class FuturesLossGuardTest {
 
     @Test
     fun malformedHistoryFailsClosed() {
-        val malformed = JSONObject().put("net_pnl", "NaN").put("closed_at", "9000")
+        val malformed = JSONObject().put("net_pnl", "NaN").put("closed_at", "9000").put("fee_known", true)
         val reason = FuturesLossGuard.violation(
             listOf(malformed),
             maxConsecutiveLosses = 2,
@@ -62,8 +62,8 @@ class FuturesLossGuardTest {
     fun dailyStopOutLimitUsesUtcDayAndOnlyLosingStopExits() {
     val reason = FuturesLossGuard.violation(
         listOf(
-            JSONObject().put("net_pnl", "-2").put("closed_at", "9900").put("reason", "STOP_LOSS"),
-            JSONObject().put("net_pnl", "3").put("closed_at", "9800").put("reason", "STRUCTURAL_EXIT")
+            JSONObject().put("net_pnl", "-2").put("closed_at", "9900").put("reason", "STOP_LOSS").put("fee_known", true),
+            JSONObject().put("net_pnl", "3").put("closed_at", "9800").put("reason", "STRUCTURAL_EXIT").put("fee_known", true)
         ),
         maxConsecutiveLosses = 3,
         cooldownMinutes = 0,
