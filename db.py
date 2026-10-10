@@ -32,7 +32,10 @@ class Database:
 
         self._transaction_active = True
         try:
-            self.conn.execute('BEGIN')
+            # Acquire the SQLite write reservation before reading or writing
+            # recovery/ledger state. This serializes independent processes, not
+            # merely threads sharing this Database instance.
+            self.conn.execute('BEGIN IMMEDIATE')
             yield self
             self.conn.commit()
         except Exception:
