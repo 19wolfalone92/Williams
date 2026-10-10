@@ -989,19 +989,30 @@ private class NativeEngine(
             }
         }
 
-        prefs.edit()
-            .putString("positions_json", pos.toString())
-            .putString("pending_entries_json", pending.toString())
-            .apply()
+        val positionsJson = pos.toString()
+        val pendingEntriesJson = pending.toString()
+        val committed = prefs.edit()
+            .putString("positions_json", positionsJson)
+            .putString("pending_entries_json", pendingEntriesJson)
+            .commit()
+        val verified = committed &&
+            prefs.getString("positions_json", null) == positionsJson &&
+            prefs.getString("pending_entries_json", null) == pendingEntriesJson
+        if (!verified) {
+            setReconcileRequired("durable positions/pending-entry state write failed")
+            throw IllegalStateException(
+                "Trading state persistence could not be verified; execution blocked"
+            )
+        }
     }
 
     private fun loadPersistedState() {
+        var persistedStateReadError: String? = null
+
         synchronized(positions) {
             positions.clear()
             runCatching {
-                val array = JSONArray(
-                    prefs.getString("positions_json", "[]")
-                )
+                val array = JSONArray(prefs.getString("positions_json", "[]"))
                 for (i in 0 until array.length()) {
                     val item = array.getJSONObject(i)
                     val symbol = item.optString("symbol").uppercase()
@@ -1013,14 +1024,10 @@ private class NativeEngine(
                         stop = item.optDouble("stop", 0.0),
                         take = item.optDouble("take", 0.0),
                         riskPct = item.optDouble("risk_pct", 0.0),
-                        ocoListClientId = item.optString(
-                            "oco_list_client_id"
-                        ),
+                        ocoListClientId = item.optString("oco_list_client_id"),
                         ocoListId = item.optString("oco_list_id"),
                         entryOrderId = item.optString("entry_order_id"),
-                        entryClientOrderId = item.optString(
-                            "entry_client_order_id"
-                        ),
+                        entryClientOrderId = item.optString("entry_client_order_id"),
                         openedAt = item.optLong("opened_at", 0L),
                         campaignId = item.optString("campaign_id", ""),
                         signalId = item.optString("signal_id", ""),
@@ -1031,32 +1038,24 @@ private class NativeEngine(
                         protectiveOrderId = item.optString("protective_order_id", "")
                     )
                 }
+            }.onFailure {
+                persistedStateReadError = "positions_json: " + it.javaClass.simpleName
             }
         }
 
         synchronized(pendingEntries) {
             pendingEntries.clear()
             runCatching {
-                val array = JSONArray(
-                    prefs.getString("pending_entries_json", "[]")
-                )
+                val array = JSONArray(prefs.getString("pending_entries_json", "[]"))
                 for (i in 0 until array.length()) {
                     val item = array.getJSONObject(i)
                     val symbol = item.optString("symbol").uppercase()
                     if (symbol.isBlank()) continue
                     pendingEntries[symbol] = PendingEntry(
                         symbol = symbol,
-                        clientOrderId = item.optString(
-                            "client_order_id"
-                        ),
-                        notional = item.optDouble(
-                            "notional",
-                            0.0
-                        ),
-                        stopDistance = item.optDouble(
-                            "stop_distance",
-                            0.02
-                        ),
+                        clientOrderId = item.optString("client_order_id"),
+                        notional = item.optDouble("notional", 0.0),
+                        stopDistance = item.optDouble("stop_distance", 0.02),
                         triggerPrice = item.optDouble("trigger_price", 0.0),
                         protectivePrice = item.optDouble("protective_price", 0.0),
                         riskReservedPct = item.optDouble("risk_reserved_pct", 0.0),
@@ -1066,13 +1065,40 @@ private class NativeEngine(
                         signalType = item.optString("signal_type", "REVERSAL")
                     )
                 }
+            }.onFailure {
+                val reason = "pending_entries_json: " + it.javaClass.simpleName
+                persistedStateReadError = listOfNotNull(persistedStateReadError, reason)
+                    .joinToString("; ")
             }
         }
 
-        reconcileRequired =
-            prefs.getBoolean("reconcile_required", false)
-        killLatched =
-            prefs.getBoolean("kill_latched", false)
+        reconcileRequired = prefs.getBoolean("reconcile_required", false)
+        killLatched = prefs.getBoolean("kill_latched", false)
+
+        if (persistedStateReadError != null) {
+            reconcileRequired = true
+            stateMachine.force(
+                TradingState.RECONCILE_REQUIRED,
+                "persisted runtime state could not be decoded"
+            )
+            val latchPersisted = runCatching {
+                prefs.edit()
+                    .putBoolean("reconcile_required", true)
+                    .putBoolean("auto_run", false)
+                    .commit() &&
+                    prefs.getBoolean("reconcile_required", false) &&
+                    !prefs.getBoolean("auto_run", true)
+            }.getOrDefault(false)
+            lastError = "PERSISTED_STATE_CORRUPT: " + persistedStateReadError +
+                if (latchPersisted) "" else "; durable fail-closed latch could not be verified"
+            if (!latchPersisted) {
+                killLatched = true
+                stateMachine.force(
+                    TradingState.KILL_SWITCH_LATCHED,
+                    "persisted state unreadable and safety latch persistence failed"
+                )
+            }
+        }
     }
 
     private fun setReconcileRequired(reason: String) {
@@ -1081,18 +1107,34 @@ private class NativeEngine(
             TradingState.RECONCILE_REQUIRED,
             reason
         )
-        prefs.edit()
-            .putBoolean("reconcile_required", true)
-            .apply()
-        lastError = "RECONCILE_REQUIRED: " + reason
+        val persisted = runCatching {
+            prefs.edit().putBoolean("reconcile_required", true).commit() &&
+                prefs.getBoolean("reconcile_required", false)
+        }.getOrDefault(false)
+        lastError = if (persisted) {
+            "RECONCILE_REQUIRED: " + reason
+        } else {
+            "RECONCILE_REQUIRED: " + reason +
+                "; durable reconciliation latch could not be verified"
+        }
         stop()
     }
 
     private fun clearReconcileRequired() {
+        val cleared = runCatching {
+            prefs.edit().putBoolean("reconcile_required", false).commit() &&
+                !prefs.getBoolean("reconcile_required", true)
+        }.getOrDefault(false)
+        if (!cleared) {
+            reconcileRequired = true
+            stateMachine.force(
+                TradingState.RECONCILE_REQUIRED,
+                "reconciliation latch clear could not be durably verified"
+            )
+            lastError = "RECONCILE_REQUIRED: reconciliation state persistence failed"
+            throw IllegalStateException(lastError)
+        }
         reconcileRequired = false
-        prefs.edit()
-            .putBoolean("reconcile_required", false)
-            .apply()
         if (!killLatched && pendingEntries.isEmpty() && positions.isEmpty()) {
             stateMachine.force(
                 TradingState.READY_FLAT,
@@ -1571,14 +1613,15 @@ private class NativeEngine(
         require(!reconcileRequired) {
             "Reconciliation is still required."
         }
+        val resetPersisted = prefs.edit().putBoolean("kill_latched", false).commit()
+        require(resetPersisted && !prefs.getBoolean("kill_latched", true)) {
+            "Kill switch remains latched: reset persistence/read-back failed"
+        }
         killLatched = false
         stateMachine.force(
             TradingState.READY_FLAT,
             "kill switch reset"
         )
-        prefs.edit()
-            .putBoolean("kill_latched", false)
-            .apply()
         lastError = null
         return JSONObject()
             .put("reset", true)
@@ -1710,17 +1753,16 @@ private class NativeEngine(
         }
 
         return try {
-            clearReconcileRequired()
             recoverPendingEntries()
             reconcilePositionsWithExchange()
+            auditManagedOpenOrders()
+            clearReconcileRequired()
 
             JSONObject()
                 .put("recovered", !reconcileRequired)
                 .put("state", stateName())
-                .put(
-                    "execution_enabled",
-                    !reconcileRequired
-                )
+                .put("execution_enabled", executionReady())
+                .put("execution_blockers", JSONArray(executionBlockers()))
                 .put(
                     "open_positions",
                     positionList().size
