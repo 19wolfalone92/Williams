@@ -325,3 +325,58 @@ def test_pre_submit_crash_resolves_only_after_exact_exchange_not_found(tmp_path)
     assert db.find_execution_intent(intent.intent_id, intent.client_order_id)["status"] == "RECONCILED"
     assert db.unresolved_execution_intents() == []
     assert exchange.mutations == 0
+
+
+def test_production_binance_mutation_call_sites_are_barrier_routed():
+    import ast
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent
+    production = ("trader.py", "campaign_execution.py", "portfolio_trader.py")
+    mutation_names = {
+        "order", "order_safe", "create_oco_sell", "create_oco_sell_safe",
+        "cancel_order", "cancel_open_orders", "cancel_oco", "cancel_replace",
+    }
+    findings = []
+    for relative in production:
+        source = (root / relative).read_text()
+        tree = ast.parse(source, filename=relative)
+        parent = {}
+        for node in ast.walk(tree):
+            for child in ast.iter_child_nodes(node):
+                parent[child] = node
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                continue
+            if node.func.attr not in mutation_names:
+                continue
+            if not isinstance(node.func.value, ast.Attribute):
+                continue
+            if node.func.value.attr != "client":
+                continue
+
+            ancestor = parent.get(node)
+            while ancestor is not None and not isinstance(
+                ancestor, (ast.FunctionDef, ast.AsyncFunctionDef)
+            ):
+                ancestor = parent.get(ancestor)
+            assert ancestor is not None, f"{relative}:{node.lineno} has no owning function"
+            body = ast.get_source_segment(source, ancestor) or ""
+            barrier_bound = any(
+                marker in body
+                for marker in (
+                    "self._submit(",
+                    "self._submit_order(",
+                    "self.execution_barrier.execute(",
+                )
+            )
+            findings.append((relative, node.lineno, node.func.attr, barrier_bound))
+            assert barrier_bound, (
+                f"unbarriered Binance mutation call site: "
+                f"{relative}:{node.lineno} {node.func.attr}"
+            )
+
+    # Guard against silently dropping the inventory as files are refactored.
+    assert findings, "no production mutation call sites were inventoried"
+    assert all(row[3] for row in findings), findings
