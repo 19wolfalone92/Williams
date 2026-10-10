@@ -158,3 +158,74 @@ At the time of inspection, the connector did not return useful commit-status or 
 | Safe exit/protection remains available | New Python checks are scoped to `CAMPAIGN_ENTRY`; no intended exit gate was added | CODE-CONFIRMED only |
 
 **Next mandatory step:** run all required workflows against the final SHA after this report commit, inspect individual jobs, and continue the Android execution-path audit. TASK 004.3 remains **IN PROGRESS — NOT APPROVED** until the blocked rows have behavioural evidence on both runtimes.
+
+
+## 11. TASK 004.4 — End-to-End H1 Execution Contract
+
+**Status: IN PROGRESS — NOT APPROVED.** Source revision inspected before this section: `f8c61013225d95640c870139058aadd86c098fc4`. The report commit itself will advance HEAD; CI must be checked again against that final report commit. Base `main` remains `04da5f9c09572e99ff310be3a1908179165e528c`; PR #49 remains open Draft and unmerged.
+
+### IMPLEMENTED
+
+#### Python
+
+- `execution_barrier.py :: ExecutionBarrier._validate / execute`
+  - Entry-like purposes now include `ENTRY`, `CAMPAIGN_ENTRY`, `ADD_ON`, and `CAMPAIGN_ADD_ON`.
+  - Each must use runtime H1 configuration, H1 signal timeframe and H1 permission interval, have valid epoch-millisecond source/confirmation/expiry timestamps, a confirmation no earlier than source-H1 close, a non-future confirmation, and non-empty signal/campaign IDs.
+  - Entry-like intents without a last-mile validation callback are blocked before the submit callback.
+  - Exit/protection/cancel purposes are not subjected to the entry timeframe gate.
+- `campaign_execution.py :: CampaignExecutionService.arm_initial_entry / arm_add_on`
+  - Add-on OrderIntent now carries the same signal provenance as initial entry.
+  - `_validate_h1_signal_market_state()` independently requests H1 candles immediately before entry submission; rejects unavailable/malformed history, missing or unclosed source candle, stale latest closed H1 candle, invalid source OHLC/trigger/invalidation, premature/future confirmation and later closed H1 structural invalidation.
+  - WM3 Teeth validation remains an additional strategy-specific check.
+- `mock_exchange.py`
+  - Adds deterministic synthetic klines for isolated tests; no external exchange is contacted by these tests.
+- `test_campaign_execution.py`
+  - Adds tests for entry aliases/add-ons, no callback, H1 config mismatch, non-H1 signal, expiry, missing source candle, structural invalidation, no submit callback, and preserving the campaign exit path.
+
+#### Android
+
+- `WilliamsTimeframeContract.kt`
+  - Adds deterministic fail-closed provenance validation for timeframe, source/confirmation/expiry timestamps, symbol/signal/campaign identity and trigger/invalidation values.
+- `StandaloneRuntime.kt`
+  - `CampaignSignalN` now carries explicit timeframe; WM1/WM2/WM3 candidates record the timeframe used to calculate them.
+  - `PendingEntry` persists `signalTimeframe`; old persisted entries lacking it restore with an empty value and are treated as invalid.
+  - `withCampaignMutation()` applies last-mile validation only to `CAMPAIGN_ENTRY` and `CAMPAIGN_ADD_ON`, including H1 metadata, fresh market data, a fresh closed H1 history, source candle presence, structural invalidation and trigger-not-crossed checks.
+  - Pending-entry recovery rejects unknown/non-H1 timeframe or invalid temporal provenance and routes it through cancellation/reconciliation. Cancellation, protection, trail replacement, and exit purposes do not inherit the new-entry timeframe gate.
+- `WilliamsStrategyGoldenVectorsTest.kt`
+  - Adds Android tests for H1 valid metadata and rejection of M5, M15, empty/unknown timeframe, expired/future/invalid timestamps, missing identifiers and invalid price fields.
+
+### Production-path inventory (current evidence, not an assertion that every path is closed)
+
+| Path / entry point | Timeframe or provenance check | Result / remaining gap |
+|---|---|---|
+| `market_scanner.py :: MarketScanner._analyse_base` | H1 scanner interval and `EXECUTION_TIMEFRAME` checks | IMPLEMENTED; all callers/alternate launch profiles still require full call-graph proof |
+| `market_scanner.py :: SignalSpec construction` and `williams_signals.py` | Signal timeframe and event timestamps flow into signal spec | PARTIAL; source-candle provenance is now rechecked for Python campaign entry, but every construction callsite is not yet exhaustively covered |
+| `campaign_execution.py :: arm_initial_entry` | H1 config, H1 signal, timestamps, expiry, protection; final callback checks H1 source candle/freshness/structure | IMPLEMENTED; tests pending on final SHA |
+| `campaign_execution.py :: arm_add_on` → `OrderIntent(purpose=CAMPAIGN_ADD_ON)` | Now carries H1 provenance; ExecutionBarrier gates add-on aliases too | IMPLEMENTED; universal replay and used-signal dedupe proof remain incomplete |
+| `trader.py` legacy `OrderIntent(purpose=ENTRY)` | New barrier rejects absent/non-H1 provenance and missing last-mile callback | CODE-CONFIRMED; every live caller and no-op callback misuse not behaviour-proven |
+| `portfolio_trader.py` recovery, campaign selection and legacy signal paths | Routes include recovery, SignalSpec reconstruction and `arm_initial_entry` | PARTIAL; restored-signal provenance and all branches need targeted tests |
+| `ExecutionBarrier.execute` → submit callback | Final H1/provenance gate plus mandatory callback for entry-like purpose | IMPLEMENTED; callback identity is not cryptographically bound to a validator; a caller supplying a fake no-op callback remains an architectural concern |
+| Android `submitCampaignEntry` → `withCampaignMutation("CAMPAIGN_ENTRY")` → `signedPost` | Pending signal H1/provenance, fresh H1 candle history, invalidation and trigger checks | IMPLEMENTED in code; mutation-free Android integration test is still NOT VERIFIED |
+| Android `submitCampaignAddOn` → `withCampaignMutation("CAMPAIGN_ADD_ON")` → `signedPost` | Same persisted H1 admission gate | IMPLEMENTED in code; mutation-free Android integration test is still NOT VERIFIED |
+| Android `recoverCampaignPendingEntries` | Rechecks timeframe, timestamps, expiry and structural invalidation; unknown data cancels/reconciles | PARTIAL; complete process-restart tests with mutated SharedPreferences remain NOT VERIFIED |
+| Android legacy `submitOrderIntent` / `executeBuyWithProtection` | Function begins with unconditional error that disables legacy entry route | CODE-CONFIRMED by inspection, but runtime reachability test is NOT VERIFIED |
+| Android `signedPost` / `signedDelete` / `signedCancelReplace` | Called by campaign entry/add-on, protection/trailing, cancel/recovery and exit/emergency paths | Calls were inventoried by caller. Generic signed wrappers are not globally H1-gated by design; correctness depends on each new BUY path going through the purpose-specific admission gate. Exhaustive runtime reachability is NOT VERIFIED |
+| Android protection resize, cancel, recovery and SELL exit | Separate operation purposes; not subjected to entry H1 gate | CODE-CONFIRMED intent; end-to-end safety tests still required |
+
+### TESTED / CI
+
+- New Python tests include synthetic H1 source-candle absence and structural invalidation with an assertion that `MockExchange.orders` remains empty.
+- Android JVM tests exercise the same deterministic H1 metadata contract.
+- At the time this report section was drafted, workflows on `f8c61013225d95640c870139058aadd86c098fc4` were queued/in progress. No workflow result from an earlier SHA is inherited as proof. Final-sha CI links/results must be appended after this report commit and after every required job completes.
+
+### NOT VERIFIED / BLOCKED
+
+1. **Used-signal idempotency across a completed campaign and process restart:** order client IDs and pending reservations exist, but a global durable consumed-signal ledger is not proven across every entry path.
+2. **Android mutation-free integration tests:** pure provenance vectors pass/fail deterministically, but tests that inject a bad persisted PendingEntry and assert the actual signed request/order mutation is never invoked are still missing.
+3. **Persisted preference tampering/restart:** missing timeframe is fail-closed by default, but all malformed/tampered JSON and restart/reconciliation permutations are not yet tested.
+4. **Full Python↔Android golden replay:** the two runtimes share indicator/fractal vectors and now test the Android provenance contract; they do not yet share all end-to-end decisions/reasons/action types for stale market data, source candle missing, recovery, duplicate signal and safe exit.
+5. **Look-ahead replay:** no final automated sequential replay yet proves that changing only future candles cannot alter previously confirmed decisions across all WM1/WM2/WM3 routes.
+6. **All dynamic mutation callsites:** the caller inventory is based on repository source inspection. No exhaustive runtime instrumentation trace proves every dynamically formed `signedPost`/cancel-replace route and every Python order-client mutation is reachable only through the expected gate.
+7. **CI:** pending/queued/in-progress jobs are not success. Task remains blocked until Python, Campaign CI, Android APK, lint/unit tests and golden replay complete on the exact final report SHA.
+
+**Acceptance decision:** H1 admission has been strengthened on both runtimes, but TASK 004.4 is **NOT ACCEPTED**. Do not mark the PR ready, merge it, or enable live trading on the basis of these changes alone.
