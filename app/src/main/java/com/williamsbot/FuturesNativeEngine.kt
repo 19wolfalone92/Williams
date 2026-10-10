@@ -153,8 +153,8 @@ internal class FuturesNativeEngine(
         val bearish: Boolean,
         val awake: Boolean,
         val spreadPct: Double,
-        val latestUpFractal: Pair<Int, Double>?,
-        val latestDownFractal: Pair<Int, Double>?,
+        val latestUpFractal: WilliamsFractalConfirmation?,
+        val latestDownFractal: WilliamsFractalConfirmation?,
         val signalCandidates: List<Signal>
     )
 
@@ -1059,8 +1059,9 @@ internal class FuturesNativeEngine(
             // WM3: evaluate the Balance-Line relation on the fractal's actual
             // confirmation candle, not on a later scan candle.
             if (upFractal != null) {
-                val (center, level) = upFractal
-                val confirmationIndex = center + 2
+                val center = upFractal.centerIndex
+                val confirmationIndex = upFractal.confirmationIndex
+                val level = upFractal.level
                 val teethAtConfirmation = teeth.getOrElse(confirmationIndex) { Double.NaN }
                 val entryTrigger = level + tickSize
                 val stop = bars[center].low - tickSize
@@ -1069,14 +1070,15 @@ internal class FuturesNativeEngine(
                 ) {
                     signalCandidates.add(
                         Signal(symbol, "LONG", "FRACTAL", bars[center].openTime, entryTrigger, stop, atr,
-                            "WM3 buy fractal outside Teeth at confirmation; stop-entry above fractal",
+                            "WM3 buy fractal outside Teeth at actual confirmation; stop-entry above fractal",
                             confirmationTime = bars[confirmationIndex].openTime)
                     )
                 }
             }
             if (downFractal != null) {
-                val (center, level) = downFractal
-                val confirmationIndex = center + 2
+                val center = downFractal.centerIndex
+                val confirmationIndex = downFractal.confirmationIndex
+                val level = downFractal.level
                 val teethAtConfirmation = teeth.getOrElse(confirmationIndex) { Double.NaN }
                 val entryTrigger = level - tickSize
                 val stop = bars[center].high + tickSize
@@ -1085,7 +1087,7 @@ internal class FuturesNativeEngine(
                 ) {
                     signalCandidates.add(
                         Signal(symbol, "SHORT", "FRACTAL", bars[center].openTime, entryTrigger, stop, atr,
-                            "WM3 sell fractal outside Teeth at confirmation; stop-entry below fractal",
+                            "WM3 sell fractal outside Teeth at actual confirmation; stop-entry below fractal",
                             confirmationTime = bars[confirmationIndex].openTime)
                     )
                 }
@@ -1243,21 +1245,21 @@ internal class FuturesNativeEngine(
         return isThirdSameColorAoBar(ao, ao.lastIndex, direction)
     }
 
-    private fun latestFractal(bars: List<Bar>, up: Boolean): Pair<Int, Double>? {
+    private fun latestFractal(bars: List<Bar>, up: Boolean): WilliamsFractalConfirmation? {
         if (bars.size < 5) return null
-        val earliest = max(2, bars.lastIndex - 40)
-        for (center in (bars.lastIndex - 2) downTo earliest) {
-            val row = bars[center]
-            val left = bars.subList(center - 2, center)
-            val right = bars.subList(center + 1, center + 3)
-            val valid = if (up) {
-                row.high > left.maxOf { it.high } && row.high > right.maxOf { it.high }
-            } else {
-                row.low < left.minOf { it.low } && row.low < right.minOf { it.low }
-            }
-            if (valid) return center to if (up) row.high else row.low
+        return if (up) {
+            WilliamsFractalMath.latestUp(
+                highs = bars.map { it.high },
+                throughIndex = bars.lastIndex,
+                lookbackBars = 40
+            )
+        } else {
+            WilliamsFractalMath.latestDown(
+                lows = bars.map { it.low },
+                throughIndex = bars.lastIndex,
+                lookbackBars = 40
+            )
         }
-        return null
     }
 
     private fun smma(values: List<Double>, period: Int): List<Double> {
