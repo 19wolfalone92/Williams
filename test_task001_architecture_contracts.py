@@ -403,6 +403,7 @@ def test_oco_list_response_is_validated_without_confusing_it_with_a_position_fil
         "BTCUSDT",
         "SELL",
         "OCO",
+        required_context_versions={},
         purpose="PROTECTION",
         client_order_id="TASK001_OCO_LIST",
     )
