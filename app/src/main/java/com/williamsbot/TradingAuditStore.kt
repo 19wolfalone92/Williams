@@ -320,17 +320,20 @@ class TradingAuditStore(context: Context) :
                     put("attempt_count", 1 + getAttemptCount(db, existing["intent_id"].orEmpty()))
                     put("updated_at", now)
                 }
-                db.update(
-                    "execution_intents",
-                    reset,
-                    "intent_id=?",
-                    arrayOf(existing["intent_id"].orEmpty())
-                )
-                db.setTransactionSuccessful()
                 val reusedId = existing["intent_id"].orEmpty()
                 if (reusedId != intentId) {
                     throw IllegalStateException("stable mutation intent ID changed on safe retry")
                 }
+                val updated = db.update(
+                    "execution_intents",
+                    reset,
+                    "intent_id=?",
+                    arrayOf(reusedId)
+                )
+                if (updated != 1) {
+                    throw IllegalStateException("safe retry could not update the existing intent")
+                }
+                db.setTransactionSuccessful()
             } else {
                 val values = ContentValues().apply {
                     put("intent_id", intentId)
@@ -489,12 +492,29 @@ class TradingAuditStore(context: Context) :
         notFound: Boolean = false
     ) {
         if (clientOrderId.isBlank()) return
-        val status = if (notFound) "ABORTED_NOT_FOUND" else "RECONCILED"
+        val observed = runCatching {
+            responseJson?.let { JSONObject(it) }
+        }.getOrNull()
+        val executed = observed?.optString("executedQty")?.toDoubleOrNull() ?: 0.0
+        val normalizedExchangeStatus = exchangeStatus.uppercase(Locale.US)
+        val status = when {
+            notFound -> "ABORTED_NOT_FOUND"
+            executed > 0.0 || normalizedExchangeStatus in setOf("PARTIALLY_FILLED", "FILLED") ->
+                "RECONCILE_REQUIRED"
+            normalizedExchangeStatus in setOf(
+                "NEW", "PENDING_NEW", "CANCELED", "CANCELLED", "EXPIRED", "REJECTED"
+            ) -> "RECONCILED"
+            else -> "RECONCILE_REQUIRED"
+        }
         val values = ContentValues().apply {
             put("status", status)
             put("exchange_status", exchangeStatus)
             put("response_json", responseJson)
-            put("reason", if (notFound) "authoritative Binance -2013: client order not found" else "authoritative GET by clientOrderId")
+            put("reason", when {
+                notFound -> "authoritative Binance -2013: client order not found"
+                status == "RECONCILE_REQUIRED" -> "authoritative GET found an order that requires fill/position accounting"
+                else -> "authoritative GET by clientOrderId confirmed a known zero-fill state"
+            })
             put("updated_at", System.currentTimeMillis())
         }
         writableDatabase.update(
