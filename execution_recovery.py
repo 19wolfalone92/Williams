@@ -109,6 +109,8 @@ class ExecutionRecoveryResolver:
                 row = self._get_order(symbol, order_id=order_id, client_order_id=leg_cid)
                 if row is None:
                     return None
+                row = dict(row)
+                row["orderListId"] = payload["orderListId"]
                 rows.append(row)
             return "RECONCILED", rows, {
                 "mutation_kind": kind,
@@ -160,6 +162,8 @@ class ExecutionRecoveryResolver:
                 row = self._get_order(symbol, order_id=order_id, client_order_id=leg_cid)
                 if row is None:
                     return None
+                row = dict(row)
+                row["orderListId"] = payload["orderListId"]
                 rows.append(row)
             return "RECONCILED", rows, {
                 "mutation_kind": kind,
