@@ -12,6 +12,7 @@ from campaign_execution import CampaignExecutionService, CampaignExecutionError
 from campaign_model import SignalSpec, SignalType, SignalRole
 from campaign_monitor import CampaignMonitor
 from order_identity import is_entry_id, is_exit_id, is_managed_order
+from trading_config import TradingConfig
 
 
 POSITION_STATES = {
@@ -53,6 +54,7 @@ class MultiPositionTrader:
         self.client = client
         self.db = db or Database()
         self.context_service = context_service
+        self.config = TradingConfig.from_env()
         if symbols is not None:
             self.symbols = [str(x).strip().upper() for x in symbols if str(x).strip()]
         else:
@@ -62,23 +64,11 @@ class MultiPositionTrader:
                 if raw_symbols.upper() in {"ALL", "AUTO", "*"}
                 else [x.strip().upper() for x in raw_symbols.split(",") if x.strip()]
             )
-        self.max_open_positions = max(
-            0,
-            int(os.getenv("MAX_OPEN_POSITIONS", "5")),
-        )
-        self.max_total_risk_pct = min(
-            0.01,
-            max(
-                0.0,
-                float(os.getenv("MAX_TOTAL_RISK_PCT", "0.01")),
-            ),
-        )
+        self.max_open_positions = self.config.max_open_positions
+        self.max_total_risk_pct = self.config.max_total_risk_pct
         self.max_risk_per_trade_pct = min(
             0.005,
-            max(
-                0.0,
-                float(os.getenv("MAX_RISK_PER_TRADE_PCT", os.getenv("RISK_PER_TRADE_PCT", "0.005"))),
-            ),
+            max(0.0, self.config.risk_per_trade_pct),
         )
         self.dry_run = (
             os.getenv("DRY_RUN", "true").lower() == "true"
@@ -95,10 +85,12 @@ class MultiPositionTrader:
         self.l2_guard = L2SlippageGuard(
             float(os.getenv("MAX_L2_SLIPPAGE_PCT", os.getenv("MAX_SPREAD_PCT", "0.0015")))
         )
-        self.equity_breaker = EquityCircuitBreaker(float(os.getenv("MAX_DAILY_LOSS_PCT", "0.03")))
-        self.max_trades_per_day = max(0, int(os.getenv("MAX_TRADES_PER_DAY", "5")))
-        self.max_consecutive_losses = max(0, int(os.getenv("MAX_CONSECUTIVE_LOSSES", "3")))
-        self.cooldown_minutes = max(0, int(os.getenv("COOLDOWN_MINUTES", "30")))
+        self.equity_breaker = EquityCircuitBreaker(self.config.max_daily_loss_pct)
+        # No arbitrary trade-count cap by default: signals remain strategy-led;
+        # aggregate risk, daily loss and consecutive-loss guards still apply.
+        self.max_trades_per_day = max(0, int(os.getenv("MAX_TRADES_PER_DAY", "0")))
+        self.max_consecutive_losses = self.config.max_consecutive_losses
+        self.cooldown_minutes = self.config.cooldown_minutes
         self.execution_barrier = execution_barrier
         self.campaign_engine_enabled = (
             os.getenv("CAMPAIGN_ENGINE", "true").lower() == "true"
