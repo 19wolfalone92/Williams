@@ -191,6 +191,7 @@ def test_timeout_after_possible_send_locks_new_entries(tmp_path):
     )
     assert not repeated.accepted
     assert repeat_calls == []
+    assert db.load_execution_intent(_entry_intent().intent_id)["status"] == "AMBIGUOUS"
 
     next_calls = []
     blocked = barrier.execute(
@@ -637,3 +638,4 @@ def test_process_death_after_submitting_intent_never_blindly_resends(tmp_path):
     assert not result.accepted
     assert calls == []
     assert db.has_unresolved_execution_intents()
+    assert db.load_execution_intent(intent.intent_id)["status"] == "SUBMITTING"
