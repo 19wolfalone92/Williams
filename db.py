@@ -667,6 +667,7 @@ class Database:
         *,
         authoritative=False,
         evidence_source="",
+        related_order_id=None,
     ):
         """Resolve a write-ahead intent only from explicitly authoritative exchange evidence.
 
@@ -692,10 +693,17 @@ class Database:
                 raise RuntimeError("reconciliation must commit in its own durable transaction")
             try:
                 self.conn.execute("BEGIN IMMEDIATE")
-                rows = self.conn.execute(
-                    "SELECT * FROM execution_intents WHERE client_order_id=?",
-                    (cid,),
-                ).fetchall()
+                if related_order_id is None:
+                    rows = self.conn.execute(
+                        "SELECT * FROM execution_intents WHERE client_order_id=?",
+                        (cid,),
+                    ).fetchall()
+                else:
+                    rows = self.conn.execute(
+                        "SELECT * FROM execution_intents "
+                        "WHERE client_order_id=? OR related_order_id=?",
+                        (cid, str(related_order_id)),
+                    ).fetchall()
                 if not rows:
                     self.conn.rollback()
                     return False
@@ -732,7 +740,7 @@ class Database:
                 )
                 self.release_execution_identity(
                     str(row["intent_id"]),
-                    cid,
+                    str(row["client_order_id"] or ""),
                     logical_key if str(row["signal_id"] or "").strip() else "",
                 )
         reread = self.find_execution_intent_by_client_order_id(cid)
