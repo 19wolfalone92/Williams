@@ -2947,9 +2947,16 @@ internal class FuturesNativeEngine(
                     ?: throw FuturesApiException("$symbol positionAmt is missing during management")
                 if (!amount.isFinite()) throw FuturesApiException("$symbol positionAmt is non-finite during management")
                 if (abs(amount) <= 1e-12) continue
-                val timeframe = campaign.optString("timeframe", interval())
-                val frame = analyseFrame(exchange, symbol, timeframe)
-                    ?: throw FuturesApiException("$symbol/$timeframe candles unavailable for open-position management")
+                // The TC2 core owns strategy decisions and structural exits on H1.
+                // Never trail an H1-origin campaign from a lower execution/monitoring TF.
+                val timeframe = campaign.optString("timeframe", "1h").lowercase(Locale.US)
+                if (timeframe != "1h") {
+                    throw FuturesApiException(
+                        "$symbol: TC2 campaign timeframe=$timeframe is not canonical H1; reconcile/migrate before management"
+                    )
+                }
+                val frame = analyseFrame(exchange, symbol, "1h")
+                    ?: throw FuturesApiException("$symbol/1h candles unavailable for TC2 open-position management")
                 manageStructuralExit(exchange, campaign, frame)
             } catch (x: Exception) {
                 lastError = "$symbol position management: ${x.message ?: x.javaClass.simpleName}"
@@ -3049,7 +3056,10 @@ internal class FuturesNativeEngine(
         // Install and verify the replacement before cancelling the previous
         // stop, preserving the exchange-side protection gap invariant.
         val newClientId = clientOrderId("W2FP_")
-        val side = exchange.directionToProtectiveSide(direction)
+        val side = if (direction == "LONG") "SELL" else if (direction == "SHORT") "BUY" else {
+            setCampaignState(campaign, "RECONCILE_REQUIRED", "Unknown direction in TC2 trailing protection")
+            return
+        }
         val newParams = JSONObject().put("symbol", symbol).put("side", side)
             .put("type", "STOP_MARKET").put("triggerPrice", candidate).put("closePosition", true)
             .put("clientAlgoId", newClientId).put("reason", "TC2_PRICE_BAR_TRAIL")
