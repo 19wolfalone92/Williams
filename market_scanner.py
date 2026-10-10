@@ -883,33 +883,28 @@ class MarketScanner:
 
         for candidate, enriched_candidate, exc in wave_results:
             if enriched_candidate is not None:
-                if candidate.signal and self.require_htf_confirmation and not enriched_candidate.htf_confirmed:
-                    log.info("AUTO-SCAN HTF BLOCK: %s strict signal has no bullish HTF confirmation", candidate.symbol)
-                    blocked_symbols.add(candidate.symbol)
-                    continue
-                if candidate.signal and not enriched_candidate.wave_entry_allowed:
-                    log.info("AUTO-SCAN WAVE BLOCK: %s %s", candidate.symbol, enriched_candidate.wave_block_reason)
-                    blocked_symbols.add(candidate.symbol)
-                    continue
-                enriched.append(enriched_candidate)
+                # A confirmed H1 TC2 signal is not AND-gated by this separate
+                # Elliott-wave profile or a non-source-defined HTF score. Keep
+                # those facts in the trace; risk, stale-trigger, exchange and
+                # execution barriers remain independent hard gates.
+                enriched.append(
+                    replace(
+                        enriched_candidate,
+                        campaign_ready=bool(candidate.campaign_ready),
+                    )
+                )
                 continue
 
-            log.warning("Wave analysis failed for %s: %s", candidate.symbol, exc)
-            if candidate.signal and os.getenv("NO_TRADE_WHEN_UNCERTAIN", "true").lower() == "true":
-                blocked_symbols.add(candidate.symbol)
-                continue
+            log.warning("Wave/context diagnostics unavailable for %s: %s", candidate.symbol, exc)
+            # Failure of optional Wave/HTF diagnostics must not change the
+            # identity of a source-qualified TC2 event.
             neutral = replace(
                 candidate,
-                htf_confirmed=(
-                    self._htf_confirmation(candidate.symbol)
-                    if candidate.signal and self.require_htf_confirmation
-                    else False
-                ),
-                wave_reason=f"Wave analysis unavailable: {type(exc).__name__}: {exc}",
+                htf_confirmed=False,
+                wave_entry_allowed=True,
+                wave_reason=f"Wave/context diagnostics unavailable: {type(exc).__name__}: {exc}",
+                campaign_ready=bool(candidate.campaign_ready),
             )
-            if candidate.signal and self.require_htf_confirmation and not neutral.htf_confirmed:
-                blocked_symbols.add(candidate.symbol)
-                continue
             enriched.append(neutral)
 
         enriched_by_symbol = {c.symbol: c for c in enriched}
