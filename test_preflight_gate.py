@@ -114,6 +114,7 @@ def test_testnet_preflight_keeps_unknown_runtime_proofs_blocked():
         max_open_positions=1,
     ).verify_all()
     assert report["ready"] is False
+    assert report["checks"]["environment"] == "PASS"
     assert report["checks"]["api_restrictions"] == "PASS"
     assert report["checks"]["api_trading_status"] == "PASS"
     assert report["checks"]["candles"] == "UNKNOWN"
