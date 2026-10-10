@@ -6485,12 +6485,11 @@ private class NativeEngine(
             error("OCO notional above Binance maximum")
         }
 
-        val ocoClientId =
-            "W4O_" +
-                java.util.UUID.randomUUID()
-                    .toString()
-                    .replace("-", "")
-                    .take(28)
+        val ocoClientId = stableNativeClientOrderId(
+            "W4O_", symbol, normalizedQty.toString(), entry.toString(),
+            takeLimit.toString(), stop.toString(), stopLimit.toString(),
+            "PROTECTIVE_OCO"
+        )
 
         val oco =
             signedPost(
@@ -6660,6 +6659,10 @@ private class NativeEngine(
                     .put("state", stateName())
             }
 
+            val sellClientOrderId = stableNativeClientOrderId(
+                "W4M_", symbol, stored.campaignId, stored.signalId,
+                stored.entry.toString(), qty.toString(), "MANUAL_MARKET_EXIT"
+            )
             val sell =
                 signedPost(
                     "/api/v3/order",
@@ -6669,7 +6672,8 @@ private class NativeEngine(
                         fmtQty(
                             qty,
                             rules.decimals
-                        )
+                        ) +
+                        "&newClientOrderId=" + sellClientOrderId
                 )
 
             val exitPrice =
