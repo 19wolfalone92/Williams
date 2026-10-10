@@ -113,16 +113,24 @@ internal object WilliamsFractalMath {
         if (highs.isEmpty() || throughIndex < 0 || lookbackBars < 1) return null
         val limit = minOf(throughIndex, highs.lastIndex)
         val earliest = maxOf(DEFAULT_LEFT_BARS, limit - lookbackBars + 1)
-        for (center in limit downTo earliest) {
+        var newest: WilliamsFractalConfirmation? = null
+        for (center in earliest..limit) {
             val found = confirmation(
                 highs,
                 center,
                 limit,
                 DEFAULT_LEFT_BARS,
                 DEFAULT_RIGHT_QUALIFIERS
-            )
-            if (found != null) return found
+            ) ?: continue
+            val previous = newest
+            if (
+                previous == null ||
+                found.confirmationIndex > previous.confirmationIndex ||
+                (found.confirmationIndex == previous.confirmationIndex && found.centerIndex > previous.centerIndex)
+            ) {
+                newest = found
+            }
         }
-        return null
+        return newest
     }
 }
