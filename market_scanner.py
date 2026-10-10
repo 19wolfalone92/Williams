@@ -496,10 +496,10 @@ class MarketScanner:
                     s.signal_type.value,
                 ),
             )
-            # Signal extraction keeps WM2/WM3 tagged ADD_ON for an existing
-            # campaign. If no campaign exists, the runtime may promote the first
-            # valid Wise-Man signal to the initial entry, matching the campaign
-            # contract: whichever valid Wise Man appears first starts the campaign.
+            # Each valid WM1/WM2/WM3 detector emits an independent candidate
+            # eligible to start a flat campaign. The campaign/runtime boundary,
+            # not the detector, reclassifies a fresh same-direction WM2/WM3 as
+            # ADD_ON after an open campaign has been confirmed.
             initial_entry_specs = [
                 spec for spec in campaign_specs if spec.role == SignalRole.ENTRY
             ]
