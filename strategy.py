@@ -168,31 +168,70 @@ def calculate_indicators(df, cfg):
     right = int(cfg["fractal_right"])
     if left < 1 or right < 1:
         raise ValueError("Fractal left/right confirmation windows must be positive")
-    # Preserve the configured confirmation delay in the indicator frame.
-    # Signal extraction must not silently assume the default two right bars.
+    # Preserve the configured default delay for compatibility. Actual
+    # confirmation can take longer when equal highs/lows do not count as the
+    # two required lower highs / higher lows (Trading Chaos 2, Fig. 11.1 D).
     x["fractal_right_bars"] = right
     x["fractal_up"] = False
     x["fractal_down"] = False
-    for i in range(left, len(x) - right):
-        if (
-            x["high"].iloc[i] > x["high"].iloc[i-left:i].max()
-            and x["high"].iloc[i] > x["high"].iloc[i+1:i+right+1].max()
-        ):
-            x.iloc[i, x.columns.get_loc("fractal_up")] = True
-        if (
-            x["low"].iloc[i] < x["low"].iloc[i-left:i].min()
-            and x["low"].iloc[i] < x["low"].iloc[i+1:i+right+1].min()
-        ):
-            x.iloc[i, x.columns.get_loc("fractal_down")] = True
-
     x["confirmed_up_level"] = np.nan
     x["confirmed_down_level"] = np.nan
-    for i in range(left + right, len(x)):
-        fi = i - right
-        if bool(x["fractal_up"].iloc[fi]):
-            x.iloc[i, x.columns.get_loc("confirmed_up_level")] = x["high"].iloc[fi]
-        if bool(x["fractal_down"].iloc[fi]):
-            x.iloc[i, x.columns.get_loc("confirmed_down_level")] = x["low"].iloc[fi]
+    x["confirmed_up_center_index"] = -1
+    x["confirmed_down_center_index"] = -1
+
+    highs = pd.to_numeric(x["high"], errors="coerce").to_numpy(dtype=float)
+    lows = pd.to_numeric(x["low"], errors="coerce").to_numpy(dtype=float)
+    up_flag_col = x.columns.get_loc("fractal_up")
+    down_flag_col = x.columns.get_loc("fractal_down")
+    up_level_col = x.columns.get_loc("confirmed_up_level")
+    down_level_col = x.columns.get_loc("confirmed_down_level")
+    up_center_col = x.columns.get_loc("confirmed_up_center_index")
+    down_center_col = x.columns.get_loc("confirmed_down_center_index")
+
+    # Fractals are confirmed by two qualifying bars, not always two calendar
+    # bars. Equal highs/lows are ignored rather than counted as lower/higher;
+    # a strict new extreme invalidates the candidate. Confirmation is recorded
+    # on the bar that supplies the second qualifying right-side bar.
+    for center_i in range(left, len(x)):
+        center_high = highs[center_i]
+        prior_highs = highs[center_i-left:center_i]
+        if (
+            np.isfinite(center_high)
+            and np.isfinite(prior_highs).all()
+            and center_high > prior_highs.max()
+        ):
+            lower_count = 0
+            for confirmation_i in range(center_i + 1, len(x)):
+                right_high = highs[confirmation_i]
+                if not np.isfinite(right_high) or right_high > center_high:
+                    break
+                if right_high < center_high:
+                    lower_count += 1
+                if lower_count == right:
+                    x.iloc[center_i, up_flag_col] = True
+                    x.iloc[confirmation_i, up_level_col] = center_high
+                    x.iloc[confirmation_i, up_center_col] = center_i
+                    break
+
+        center_low = lows[center_i]
+        prior_lows = lows[center_i-left:center_i]
+        if (
+            np.isfinite(center_low)
+            and np.isfinite(prior_lows).all()
+            and center_low < prior_lows.min()
+        ):
+            higher_count = 0
+            for confirmation_i in range(center_i + 1, len(x)):
+                right_low = lows[confirmation_i]
+                if not np.isfinite(right_low) or right_low < center_low:
+                    break
+                if right_low > center_low:
+                    higher_count += 1
+                if higher_count == right:
+                    x.iloc[center_i, down_flag_col] = True
+                    x.iloc[confirmation_i, down_level_col] = center_low
+                    x.iloc[confirmation_i, down_center_col] = center_i
+                    break
 
     x["last_up_level"] = x["confirmed_up_level"].ffill()
     x["last_down_level"] = x["confirmed_down_level"].ffill()
