@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import time
 import uuid
+import hashlib
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
@@ -49,14 +50,28 @@ class OrderIntent:
         required_context_versions: Mapping[str, int],
         **kwargs: Any,
     ) -> "OrderIntent":
+        params = dict(kwargs)
+        supplied_intent_id = str(params.pop("intent_id", "") or "").strip()
+        cid = str(params.get("client_order_id", "") or "").strip()
+        operation = str(params.get("operation_kind", "PLACE") or "PLACE").upper()
+        if supplied_intent_id:
+            intent_id = supplied_intent_id
+        elif cid:
+            # Same logical exchange request gets the same durable intent ID on
+            # every retry/restart. A different request with the same CID will
+            # collide on immutable fields and fail closed.
+            material = f"{str(symbol).upper()}\\x1f{operation}\\x1f{cid}"
+            intent_id = hashlib.sha256(material.encode("utf-8")).hexdigest()[:32]
+        else:
+            intent_id = uuid.uuid4().hex
         return cls(
-            intent_id=uuid.uuid4().hex,
+            intent_id=intent_id,
             symbol=str(symbol).upper(),
             side=str(side).upper(),
             order_type=str(order_type).upper(),
             required_context_versions=dict(required_context_versions),
             created_at_ms=int(time.time() * 1000),
-            **kwargs,
+            **params,
         )
 
 
