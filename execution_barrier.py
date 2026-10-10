@@ -60,6 +60,10 @@ class ExecutionResult:
     reason: str = ""
 
 
+class ExecutionPersistenceError(RuntimeError):
+    """Raised when the durable intent contract cannot be proven."""
+
+
 class ExecutionBarrier:
     """The final, serialized admission point before Binance REST.
 
@@ -73,11 +77,33 @@ class ExecutionBarrier:
         self.db = db
 
     def _persist(self, intent: OrderIntent, status: str, reason: str = "") -> None:
-        if self.db is not None and hasattr(self.db, "save_execution_intent"):
-            try:
-                self.db.save_execution_intent(intent, status, reason)
-            except Exception:
-                pass
+        """Persist and read back the intent; never admit an order on write uncertainty."""
+        if self.db is None:
+            raise ExecutionPersistenceError("durable execution intent store unavailable")
+        saver = getattr(self.db, "save_execution_intent", None)
+        connection = getattr(self.db, "conn", None)
+        if not callable(saver) or connection is None:
+            raise ExecutionPersistenceError("durable execution intent persistence/readback unavailable")
+        try:
+            saver(intent, status, reason)
+            row = connection.execute(
+                "SELECT status, reason, client_order_id FROM execution_intents WHERE intent_id=?",
+                (intent.intent_id,),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("execution intent missing after persistence")
+            if str(row["status"]) != str(status):
+                raise RuntimeError(
+                    f"execution intent status readback mismatch: expected={status!r} actual={row['status']!r}"
+                )
+            if str(row["client_order_id"] or "") != str(intent.client_order_id or ""):
+                raise RuntimeError("execution intent client_order_id readback mismatch")
+            if str(row["reason"] or "") != str(reason or ""):
+                raise RuntimeError("execution intent reason readback mismatch")
+        except Exception as exc:
+            raise ExecutionPersistenceError(
+                f"durable execution intent {intent.intent_id} persistence/readback failed; order mutation blocked"
+            ) from exc
 
     def _record(self, level: str, event: str, intent: OrderIntent, message: str, raw=None) -> None:
         if self.db is not None and hasattr(self.db, "log_event"):

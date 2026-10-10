@@ -130,3 +130,8 @@ Changes staged for this task's working branch:
 Campaign CI on that exact SHA reported 1 failing test (`test_third_asset_commission_uses_fill_minute_conversion`); the other 162 tests passed. The failure was fail-closed behavior: historical BNB/USDT conversion could not be retrieved through the mock's generic klines path, so the code did not write a trade with zero fees. The mock and adapter now expose a dedicated historical-price contract, and an additional regression test verifies that missing authoritative trade history keeps risk reserved, attempts a protective stop using exchange-available base inventory, and leaves the campaign in `RECONCILE_REQUIRED`.
 
 The DB now also rejects conflicting replays of an existing `(symbol, trade_id)` rather than silently ignoring them. These changes require fresh exact-head CI. Previous results remain tied to their own SHA.
+
+
+## TASK 005.1 — Execution intent durability
+
+Audit found that `ExecutionBarrier._persist` swallowed database exceptions and did not read back the durable intent before submitting. That violated the required no-order-on-persistence-failure contract. The barrier now requires a database intent store, writes the intent, reads back its status/reason/client order ID, and raises `ExecutionPersistenceError` on any write/readback mismatch. Added fault-injection tests prove the adapter submit callback is not invoked when intent persistence or readback fails. These tests are pending exact-head CI.
