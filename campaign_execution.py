@@ -1246,6 +1246,20 @@ class CampaignExecutionService:
     ) -> dict[str, Any]:
         """Cancel only the campaign protection, then market-sell actual free inventory."""
         symbol = campaign.symbol.upper()
+        if campaign.state == CampaignState.CLOSED:
+            return {
+                "campaign_id": campaign.campaign_id,
+                "symbol": symbol,
+                "state": "CLOSED",
+                "quantity": 0.0,
+                "reason": reason,
+            }
+        if campaign.state == CampaignState.RECONCILE_REQUIRED:
+            raise CampaignExecutionError(
+                f"{symbol}: campaign is already RECONCILE_REQUIRED; reconcile before another exit"
+            )
+        if campaign.state not in {CampaignState.EXIT_SIGNALLED, CampaignState.EXIT_PENDING}:
+            self.engine.request_exit(campaign, reason)
         protective_id = str(
             campaign.tags.get("protective_order_id", "") or ""
         )
@@ -1435,9 +1449,10 @@ class CampaignExecutionService:
             }
 
         campaign.position_qty = remaining
-        self.db.save_campaign(campaign)
-        campaign.state = CampaignState.RECONCILE_REQUIRED
-        self.db.state_set(f"position_state:{symbol}", "RECONCILE_REQUIRED")
+        self.engine.mark_reconcile_required(
+            campaign,
+            f"campaign exit partially filled; residual {remaining:.12g} requires exchange reconciliation",
+        )
         raise CampaignExecutionError(
             f"{symbol}: campaign exit partially filled; residual {remaining:.12g} requires reconciliation"
         )
