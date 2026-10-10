@@ -231,6 +231,12 @@ data class Status(
     val scannerSymbols: Int = 0,
     val scanDurationMs: Long = 0L,
     val marketWsConnected: Boolean = false,
+    val marketDataFresh: Boolean = false,
+    val restMarketReady: Boolean = false,
+    val restAccountReady: Boolean = false,
+    val restLastSuccessAgeMs: Long = Long.MAX_VALUE,
+    val scanAgeMs: Long = Long.MAX_VALUE,
+    val localApiListening: Boolean = false,
     val userWsConnected: Boolean = false,
     val userStreamSyncRequired: Boolean = true,
     val historyReady: Boolean = false,
@@ -507,6 +513,8 @@ fun WilliamsApp(context: Context) {
                 val failures = mutableListOf<String>()
                 var scannerJson = JSONObject()
                 var statusRequestFailed = false
+                var marketRequestFailed = false
+                var scannerSnapshotFresh = false
 
                 runCatching {
                     val json = JSONObject(api.get("/api/v1/status?fast=true"))
@@ -532,15 +540,24 @@ fun WilliamsApp(context: Context) {
                     }
                     withContext(Dispatchers.Main) { marketPairs = loaded }
                 }.onFailure {
+                    marketRequestFailed = true
                     failures += "market: " + (it.message ?: it.javaClass.simpleName)
                 }
 
                 runCatching {
                     scannerJson = JSONObject(api.get("/api/v1/scanner?refresh=" + scan))
+                    val scanAt = scannerJson.optLong("last_scan_at", 0L)
+                    val scanAge = if (scanAt > 0L) System.currentTimeMillis() - scanAt else Long.MAX_VALUE
+                    val scannerState = scannerJson.optString("scanner_state", "NOT_RUN")
+                    scannerSnapshotFresh = scanAge in 0L..60_000L &&
+                        scannerState in setOf("READY", "RUNNING") &&
+                        scannerJson.optString("scanner_error").isBlank()
                     withContext(Dispatchers.Main) {
-                        candidates = parseCandidates(
-                            scannerJson.optJSONArray("candidates") ?: JSONArray()
-                        )
+                        candidates = if (scannerSnapshotFresh) {
+                            parseCandidates(scannerJson.optJSONArray("candidates") ?: JSONArray())
+                        } else {
+                            emptyList()
+                        }
                     }
                 }.onFailure {
                     failures += "scanner: " + (it.message ?: it.javaClass.simpleName)
@@ -564,6 +581,7 @@ fun WilliamsApp(context: Context) {
 
                 withContext(Dispatchers.Main) {
                     if (statusRequestFailed) statusLoadFailed = true
+                    if (marketRequestFailed) marketPairs = emptyList()
                     val scannerError =
                         scannerJson.optString("scanner_error").takeIf { it.isNotBlank() }
                     message = when {
@@ -571,6 +589,8 @@ fun WilliamsApp(context: Context) {
                             "Частичная ошибка: " + failures.joinToString(" • ")
                         scannerError != null ->
                             "Сканер: " + scannerError
+                        !scannerSnapshotFresh ->
+                            "Сигналы скрыты: результаты сканера отсутствуют или устарели"
                         scan && scannerJson.optBoolean("scanning", false) ->
                             "Сканирование запущено в фоне"
                         scan ->
@@ -970,7 +990,9 @@ fun WilliamsApp(context: Context) {
                 },
                 actions = {
                     if (!statusDataFresh) StatusDot("STALE", AppColors.red)
-                    StatusDot("P0", if (statusDataFresh && status.p0GatePassed) AppColors.green else AppColors.red)
+                    StatusDot("P0", if (statusDataFresh && status.marketDataFresh && status.p0GatePassed) AppColors.green else AppColors.red)
+                    StatusDot("MARKET", if (statusDataFresh && status.marketDataFresh) AppColors.green else AppColors.red)
+                    StatusDot("LOCAL", if (statusDataFresh && status.localApiListening) AppColors.green else AppColors.red)
                     StatusDot("WSS", if (statusDataFresh && status.marketWsConnected && !status.userStreamSyncRequired) AppColors.green else AppColors.amber)
                     StatusDot("BINANCE", if (statusDataFresh && status.binanceConfigured) AppColors.green else AppColors.amber)
                     ModeChip("TESTNET", AppColors.green)
@@ -3158,6 +3180,9 @@ private fun parseStatus(json: JSONObject): Status {
             }
 
     val executionContract = json.optJSONObject("execution_state_contract")
+    val marketFresh = json.optBoolean("market_data_fresh", false)
+    val restSuccessAge = json.optLong("rest_last_success_age_ms", Long.MAX_VALUE)
+    val scanAge = json.optLong("scan_age_ms", Long.MAX_VALUE)
     return Status(
         symbol =
             json.optString(
@@ -3176,12 +3201,16 @@ private fun parseStatus(json: JSONObject): Status {
             json.optBoolean("recovered", true),
         state =
             json.optString("state", "FLAT"),
-        price =
-            json.optDouble("price")
-                .takeUnless { it.isNaN() },
-        balance =
-            json.optDouble("quote_balance")
-                .takeUnless { it.isNaN() },
+        price = if (marketFresh && !json.isNull("price")) {
+            json.optDouble("price").takeIf { it.isFinite() && it > 0.0 }
+        } else {
+            null
+        },
+        balance = if (json.optBoolean("rest_account_ready", false) && !json.isNull("quote_balance")) {
+            json.optDouble("quote_balance").takeIf { it.isFinite() && it >= 0.0 }
+        } else {
+            null
+        },
         qty =
             first?.qty ?: legacyQty,
         entry =
@@ -3196,12 +3225,16 @@ private fun parseStatus(json: JSONObject): Status {
                 .takeUnless {
                     it.isNaN() || it == 0.0
                 },
-        pnl =
-            json.optDouble("pnl")
-                .takeUnless { it.isNaN() },
-        pnlPct =
-            json.optDouble("pnl_pct")
-                .takeUnless { it.isNaN() },
+        pnl = if (marketFresh && !json.isNull("pnl")) {
+            json.optDouble("pnl").takeIf { it.isFinite() }
+        } else {
+            null
+        },
+        pnlPct = if (marketFresh && !json.isNull("pnl_pct")) {
+            json.optDouble("pnl_pct").takeIf { it.isFinite() }
+        } else {
+            null
+        },
         error =
             json.optString("last_error")
                 .takeIf { it.isNotBlank() },
@@ -3279,6 +3312,12 @@ private fun parseStatus(json: JSONObject): Status {
             ),
         marketWsConnected =
             json.optBoolean("market_ws_connected", false),
+        marketDataFresh = marketFresh,
+        restMarketReady = json.optBoolean("rest_market_ready", false),
+        restAccountReady = json.optBoolean("rest_account_ready", false),
+        restLastSuccessAgeMs = restSuccessAge,
+        scanAgeMs = scanAge,
+        localApiListening = json.optBoolean("local_api_listening", false),
         userWsConnected =
             json.optBoolean("user_ws_connected", false),
         userStreamSyncRequired =
