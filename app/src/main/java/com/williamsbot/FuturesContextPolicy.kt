@@ -89,7 +89,14 @@ object FuturesContextPolicy {
             !macroD1.ao.isFinite()
         ) return false
 
-        fun permits(state: FuturesContextState, wanted: String): Boolean =
+        fun alligatorPermits(state: FuturesContextState, wanted: String): Boolean =
+            state.awake && when (wanted) {
+                "LONG" -> state.bullish
+                "SHORT" -> state.bearish
+                else -> false
+            }
+
+        fun activeOppositeMacro(state: FuturesContextState, wanted: String): Boolean =
             state.awake && state.ao.isFinite() && when (wanted) {
                 "LONG" -> state.bullish && state.ao > 0.0
                 "SHORT" -> state.bearish && state.ao < 0.0
@@ -97,9 +104,11 @@ object FuturesContextPolicy {
             }
 
         val opposite = if (side == "LONG") "SHORT" else "LONG"
-        // H1 owns entry direction. H4 has already been fetched and must contain
-        // finite indicator context, but it must not become a second signal gate.
-        // The D1 airbag vetoes only an active opposite Alligator/AO regime.
-        return permits(operativeH1, side) && !permits(macroD1, opposite)
+        // H1 Alligator controls directional regime; signal-family rules determine
+        // which AO evidence matters. AO's zero-line sign is not a universal gate.
+        // H4 is validated context only. D1 vetoes only a clearly active opposite
+        // Alligator/AO regime and never originates a signal.
+        return alligatorPermits(operativeH1, side) &&
+            !activeOppositeMacro(macroD1, opposite)
     }
 }
