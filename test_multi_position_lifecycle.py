@@ -10,6 +10,35 @@ def _legacy_campaign_mode(monkeypatch):
 
 from db import Database
 from portfolio_trader import MultiPositionTrader
+from execution_barrier import ExecutionBarrier
+from market_context import ContextCache
+
+
+def _test_execution_barrier(db):
+    return ExecutionBarrier(ContextCache(), db)
+
+
+def _mark_test_recovery_ready(db):
+    db.mark_recovery_ready({
+        "exchange_reachable": True,
+        "account_checked": True,
+        "open_orders_checked": True,
+        "order_history_checked": True,
+        "fills_checked": True,
+        "positions_checked": True,
+        "protection_checked": True,
+        "campaigns_checked": True,
+        "intents_checked": True,
+        "unresolved_symbols": [],
+        "pending_entries": [],
+        "unknown_orders": [],
+        "inventory_mismatches": [],
+        "unprotected_positions": [],
+        "unknown_campaigns": [],
+        "canonical_position_state": "FLAT",
+    })
+
+
 
 
 class FakeClient:
@@ -287,7 +316,7 @@ def test_multiple_positions_are_independent_and_exit_is_mapped_to_one_symbol(tmp
         },
     ]
 
-    multi = MultiPositionTrader(client, db=db)
+    multi = MultiPositionTrader(client, db=db, execution_barrier=_test_execution_barrier(db))
     result = multi.reconcile_open_positions()
 
     assert any(x.get("closed") and x.get("symbol") == "BTCUSDT" for x in result)
@@ -443,7 +472,7 @@ def test_recover_keeps_reconcile_barrier_for_unresolved_exchange_position(tmp_pa
     }
     db.state_set("position_state:SOLUSDT", "RECONCILE_REQUIRED")
 
-    multi = MultiPositionTrader(client, db=db, symbols=["SOLUSDT"])
+    multi = MultiPositionTrader(client, db=db, symbols=["SOLUSDT"], execution_barrier=_test_execution_barrier(db))
     result = multi.recover()
 
     assert result["ok"] is False
@@ -524,7 +553,7 @@ def test_partial_manual_sell_keeps_residual_position_protected(tmp_path: Path):
         risk_pct=0.5,
     )
     db.state_set("position_state:BTCUSDT", "OPEN")
-    trader = MultiPositionTrader(client, db=db, symbols=["BTCUSDT"])
+    trader = MultiPositionTrader(client, db=db, symbols=["BTCUSDT"], execution_barrier=_test_execution_barrier(db))
     result = trader.manual_sell("BTCUSDT")
 
     assert result["sold"] is True
