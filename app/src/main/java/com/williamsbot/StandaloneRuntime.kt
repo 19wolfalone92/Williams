@@ -2851,7 +2851,6 @@ private class NativeEngine(
                         error("Binance MAX_POSITION would be exceeded")
                     }
                     submitAttempted = true
-                    submitAttempted = true
                     signedPost(
                         "/api/v3/order",
                         "symbol=" + candidate.symbol +
@@ -3777,6 +3776,7 @@ private class NativeEngine(
                         "Add-on trigger already crossed"
                     }
                     checkCampaignOrderCapacity(candidate.symbol, 1)
+                    submitAttempted = true
                     signedPost(
                         "/api/v3/order",
                         "symbol=" + candidate.symbol +
