@@ -239,3 +239,60 @@ def test_production_bulk_cancel_paths_are_disabled_in_python_and_android():
     runtime = (root / "app/src/main/java/com/williamsbot/StandaloneRuntime.kt").read_text(encoding="utf-8")
     assert 'method == "DELETE" && path == "/api/v3/openOrders"' not in runtime
     assert 'else -> error("Unapproved Binance mutation route:' in runtime
+
+
+
+@pytest.mark.parametrize("order_type,purpose,list_status,child_status", [
+    ("OCO", "PROTECTION", "EXECUTING", "NEW"),
+    ("CANCEL", "CAMPAIGN_EXIT_CANCEL", "ALL_DONE", "CANCELED"),
+])
+def test_oco_timeout_restart_queries_list_and_both_children(
+    order_type, purpose, list_status, child_status, tmp_path
+):
+    cache = ready_context()
+    db = ready_db(tmp_path)
+    cid = "TASK001_OCO_RECOVERY_" + purpose
+    intent = OrderIntent.new(
+        "BTCUSDT", "SELL", order_type, required_context_versions={},
+        purpose=purpose, client_order_id=cid,
+    )
+    db.save_execution_intent(intent, "AMBIGUOUS", "simulated timeout after request")
+    db.state_set("position_state", "RECONCILE_REQUIRED")
+    db.state_set("position_state:BTCUSDT", "RECONCILE_REQUIRED")
+
+    class FakeExchange:
+        def __init__(self):
+            self.list_queries = []
+            self.child_queries = []
+        def order_list(self, symbol, list_client_order_id=None):
+            self.list_queries.append((symbol, list_client_order_id))
+            return {
+                "symbol": symbol, "orderListId": 77,
+                "listClientOrderId": list_client_order_id,
+                "listStatusType": list_status,
+                "listOrderStatus": list_status,
+                "orders": [
+                    {"orderId": 701, "clientOrderId": cid + "_A"},
+                    {"orderId": 702, "clientOrderId": cid + "_B"},
+                ],
+            }
+        def get_order(self, symbol, order_id=None, orig_client_order_id=None):
+            self.child_queries.append((symbol, order_id))
+            return {
+                "symbol": symbol, "orderId": order_id,
+                "clientOrderId": cid + ("_A" if int(order_id) == 701 else "_B"),
+                "status": child_status, "executedQty": "0",
+            }
+
+    exchange = FakeExchange()
+    service = CampaignExecutionService(exchange, db, ExecutionBarrier(cache, db))
+    assert service.startup_recovery_report["resolved"] == [intent.intent_id]
+    assert service.startup_recovery_report["unresolved"] == []
+    assert exchange.list_queries == [("BTCUSDT", cid)]
+    assert exchange.child_queries == [("BTCUSDT", 701), ("BTCUSDT", 702)]
+    row = db.conn.execute(
+        "SELECT status FROM execution_intents WHERE intent_id=?", (intent.intent_id,)
+    ).fetchone()
+    assert row["status"] == "RECONCILED"
+    # Order/list lookup alone cannot clear the portfolio exposure latch.
+    assert db.state_get("position_state") == "RECONCILE_REQUIRED"
