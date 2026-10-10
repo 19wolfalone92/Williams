@@ -1,14 +1,23 @@
+import time
+
 from market_context import ContextCache, TFMarketContext
 
 
 def make_context(interval):
+    now_ms = int(time.time() * 1000)
     return TFMarketContext(
         symbol="BTCUSDT",
         interval=interval,
         version=0,
-        candle_open_time_ms=1,
-        candle_close_time_ms=2,
+        candle_open_time_ms=now_ms - 60_000,
+        candle_close_time_ms=now_ms - 30_000,
         price=100.0,
+        allow_long=True,
+        alligator_state="BULLISH",
+        alligator_awake=True,
+        ao_value=1.0,
+        ac_value=0.0,
+        williams_core_ready=True,
     )
 
 
