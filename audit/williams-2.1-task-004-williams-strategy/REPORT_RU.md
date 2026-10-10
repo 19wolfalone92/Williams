@@ -251,3 +251,20 @@ These runs target code SHA `c7d868130839eb87db3bb6da076042a86810b7cd`; they are 
 - [Build Android APK — c7d8681](https://github.com/19wolfalone92/Williams/actions/runs/38088806293)
 
 A fresh set of workflows is expected for the final report commit. Acceptance requires checking each job on that exact final SHA; queued, pending, running, cancelled, or failed jobs do not count as success.
+
+
+### TASK 004.4 revision update
+
+Implementation revision after the first report draft: `2a6fa25b2ded43a2d31ac3e0690f69d9a314342c`. This includes the correction to synthetic kline shape/UTC candle alignment, the explicit structural-invalidation comparison, and the legacy OCO recovery fixture change described below.
+
+Additional changed files:
+- `recovery_oco_failure_test.py` — OCO recovery test now seeds a synthetic pre-existing fill directly in FakeClient instead of invoking a new BUY through the legacy entry route without a signal. This preserves the recovery test's purpose while keeping the production H1 gate fail-closed.
+- `test_production_architecture.py` — barrier tests now use complete H1 signal provenance and a last-mile callback, so they test stale-context/serialization behavior after satisfying the new entry contract.
+
+CI evidence during development:
+- Python backend tests passed on `cd74f1fe6e577a1fe1bec021808f8b5f88943dfa`: [run 38088931777](https://github.com/19wolfalone92/Williams/actions/runs/38088931777).
+- Williams Campaign CI on that SHA failed in campaign tests: the synthetic mock initially returned 7-column klines, which did not match the 12-column Binance response contract; a structural invalidation assertion also exposed an insufficiently explicit timestamp comparison. Both were corrected in later commits (`86c78b42` and `2a6fa25b`).
+- An earlier backend run failed during collection because a legacy OCO recovery fixture called `Trader.market_buy()` without signal provenance. The fixture now seeds a fake prior fill without invoking production entry admission (`a7936638`).
+- These are intermediate results only. They do not establish CI success on the final report SHA. The latest code and report commit must pass all required workflows before any acceptance decision.
+
+**Final evidence still outstanding:** the final SHA CI set, Android mutation-free integration tests, persisted-preference restart permutations, consumed-signal durable idempotency, full Python↔Android end-to-end replay and future-candle mutation replay.
