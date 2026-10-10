@@ -176,7 +176,7 @@ class CampaignEngine:
             return None
         # Book model: first available valid signal starts the campaign.  We
         # therefore order primarily by signal-bar time, not by a score.
-        return min(candidates, key=lambda s: (s.signal_bar_time_ms, s.created_at_ms))
+        return min(candidates, key=lambda s: (int(getattr(s, "confirmation_time_ms", 0) or s.signal_bar_time_ms), s.created_at_ms))
 
     @staticmethod
     def should_replace_pending(old: SignalSpec, new: SignalSpec, *, min_ticks: int = 1, tick_size: float = 0.0) -> bool:
