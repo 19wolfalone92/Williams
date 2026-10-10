@@ -119,6 +119,7 @@ internal class FuturesNativeEngine(
     private val portfolioRiskFraction = 0.01
     private val maxDailyLossFraction = 0.01
     private val maxConsecutiveLosses = 2
+    private val maxStopOutsPerUtcDay = 2
     private val postLossCooldownMinutes = 30
     private val feeBufferPerSideFraction = 0.001
     private val slippageBufferFraction = 0.0015
@@ -676,7 +677,8 @@ internal class FuturesNativeEngine(
                     auditStore.recentClosedFuturesTrades(),
                     maxConsecutiveLosses,
                     postLossCooldownMinutes,
-                    System.currentTimeMillis()
+                    System.currentTimeMillis(),
+                    maxStopOutsPerUtcDay
                 )
             }.getOrElse { "closed Futures trade history unavailable; new entries blocked" }
             var lockoutCancellations = JSONArray()
@@ -728,6 +730,7 @@ internal class FuturesNativeEngine(
                     .put("reason", lossGuardReason)
                     .put("max_consecutive_losses", maxConsecutiveLosses)
                     .put("post_loss_cooldown_minutes", postLossCooldownMinutes)
+                    .put("max_stop_outs_per_utc_day", maxStopOutsPerUtcDay)
                     .put("pending_entry_cancellations", lockoutCancellations)
                     .put("new_entries", 0)
                 return
