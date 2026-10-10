@@ -224,6 +224,7 @@ def make_signal(direction):
         trigger_price=trigger,
         protective_reference=stop,
         invalidation_price=stop,
+        angulation_score=2.5,
         htf_confirmed=True,
         reason=f"test {direction}",
         expires_at_ms=int(time.time() * 1000) + 3_600_000,
