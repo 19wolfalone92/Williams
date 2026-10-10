@@ -254,6 +254,20 @@ def _latest_confirmed_fractal(
     return None
 
 
+def _dedupe_and_sort_signal_specs(specs: list[SignalSpec]) -> list[SignalSpec]:
+    """Keep one identity per source formation and order by actionable confirmation."""
+    unique: dict[tuple[str, int], SignalSpec] = {}
+    for spec in specs:
+        unique[(spec.signal_type.value, spec.signal_bar_time_ms)] = spec
+    return sorted(
+        unique.values(),
+        key=lambda item: (
+            int(getattr(item, "confirmation_time_ms", 0) or item.signal_bar_time_ms),
+            item.signal_type.value,
+        ),
+    )
+
+
 def extract_long_signal_specs(
     symbol: str,
     ind: pd.DataFrame,
@@ -402,12 +416,7 @@ def extract_long_signal_specs(
                 )
             )
 
-    # Deduplicate by signal type + signal bar.  The same signal must not
-    # create a new order on every scan.
-    unique: dict[tuple[str, int], SignalSpec] = {}
-    for spec in specs:
-        unique[(spec.signal_type.value, spec.signal_bar_time_ms)] = spec
-    return sorted(unique.values(), key=lambda x: (int(getattr(x, "confirmation_time_ms", 0) or x.signal_bar_time_ms), x.signal_type.value))
+    return _dedupe_and_sort_signal_specs(specs)
 
 
 # Mirror the long detector. Direction is explicit and is kept separate from
