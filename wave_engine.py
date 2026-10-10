@@ -418,7 +418,10 @@ class MultiTimeframeWaveEngine:
                     opposite_confirmation = opposite_map.get(center)
                     if opposite_confirmation is not None and opposite_confirmation <= confirmed:
                         continue
-                    flag = ind[flag_col].iloc[center]
+                    # `fractal_up/down` is a causal event stamped on
+                    # the confirmation row. Reading it at `center` would
+                    # either backdate confirmation or reintroduce look-ahead.
+                    flag = ind[flag_col].iloc[confirmed]
                     if pd.isna(flag) or not bool(flag):
                         continue
                     row = ind.iloc[center]
