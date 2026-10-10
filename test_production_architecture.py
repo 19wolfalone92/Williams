@@ -5,6 +5,7 @@ import time
 from execution_barrier import ExecutionBarrier, OrderIntent
 from market_context import ContextCache, TFMarketContext, WaveHypothesis
 from wise_men import WiseMenPhase, WiseMenStateMachine
+from preflight_gate import PreflightCheckService
 
 
 def context(symbol="BTCUSDT", interval="1h", allow_long=True, allow_short=False):
@@ -38,10 +39,45 @@ def test_copy_on_write_versions_and_immutable_snapshot():
     assert first.context("BTCUSDT", "1h").version == 1
 
 
+class ExecutionDB:
+    def __init__(self):
+        self.intents = {}
+        self.events = []
+        self.states = {}
+
+    def save_execution_intent(self, intent, status, reason=""):
+        self.intents[intent.intent_id] = (status, reason)
+        return True
+
+    def save_execution_event(self, intent_id, event, payload):
+        self.events.append((intent_id, event, payload))
+        return True
+
+    def state_get(self, key, default=None):
+        return self.states.get(key, default)
+
+    def state_set(self, key, value):
+        self.states[key] = value
+
+    def log_event(self, *args, **kwargs):
+        return True
+
+
+def ready_preflight():
+    return {
+        "ready": True,
+        "environment": "TESTNET",
+        "product": "SPOT",
+        "checked_at_ms": int(time.time() * 1000),
+        "checks": {name: "PASS" for name in PreflightCheckService.REQUIRED_CHECKS},
+        "requires_reconciliation": False,
+    }
+
+
 def test_execution_barrier_rejects_stale_context():
     cache = ContextCache()
     cache.publish(context())
-    barrier = ExecutionBarrier(cache)
+    barrier = ExecutionBarrier(cache, ExecutionDB(), preflight_provider=ready_preflight)
     snap = cache.snapshot()
     cache.publish(context())
     intent = OrderIntent.new(
@@ -58,7 +94,7 @@ def test_execution_barrier_rejects_stale_context():
 def test_execution_barrier_serializes_publish_and_submit():
     cache = ContextCache()
     cache.publish(context())
-    barrier = ExecutionBarrier(cache)
+    barrier = ExecutionBarrier(cache, ExecutionDB(), preflight_provider=ready_preflight)
     version = cache.snapshot().context("BTCUSDT", "1h").version
     started = threading.Event()
     published = threading.Event()
@@ -83,7 +119,7 @@ def test_execution_barrier_serializes_publish_and_submit():
         {"1h": version},
         permission_interval="1h",
     )
-    result = barrier.execute(intent, submit)
+    result = barrier.execute(intent, submit, pre_submit_checks=lambda _snapshot: None)
     t.join()
     assert result.accepted
     assert published.is_set()
