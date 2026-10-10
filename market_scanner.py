@@ -171,14 +171,14 @@ class MarketScanner:
         self.scan_all_usdt = (
             os.getenv("SCAN_ALL_USDT", "true").lower() == "true"
         )  # dynamically discover Spot/USDT pairs
-        self.scan_max_symbols = max(0, int(os.getenv("SCAN_MAX_SYMBOLS", "0")))
+        self.scan_max_symbols = max(0, int(os.getenv("SCAN_MAX_SYMBOLS", "10")))
         self.exclude_leveraged_tokens = (
             os.getenv("EXCLUDE_LEVERAGED_TOKENS", "true").lower() == "true"
         )
         self.scan_workers = max(1, int(os.getenv("SCAN_WORKERS", "4")))
         self.liquidity_preselect = max(
             0,
-            int(os.getenv("LIQUIDITY_PRESELECT", "0")),
+            int(os.getenv("LIQUIDITY_PRESELECT", "10")),
         )
         self.scan_kline_limit = max(120, int(os.getenv("SCAN_KLINE_LIMIT", "220")))
         self.wave_scan_workers = max(1, int(os.getenv("WAVE_SCAN_WORKERS", "6")))
