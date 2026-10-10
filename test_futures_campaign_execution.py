@@ -2581,3 +2581,36 @@ def test_legacy_signal_without_explicit_invalidation_uses_protective_reference(t
         assert stop == 100.0
     finally:
         db.conn.close()
+
+
+@pytest.mark.parametrize("direction", ["LONG", "SHORT"])
+def test_tc2_initial_entry_does_not_use_synthetic_atr_target_as_rr_gate(
+    tmp_path, monkeypatch, direction
+):
+    # A TC2 campaign uses its structural stop and market-generated exits.
+    # A synthetic ATR target must not veto an otherwise valid Wise Man entry.
+    monkeypatch.setenv("WILLIAMS_STRATEGY_PROFILE", "TC2_THREE_WISE_MEN")
+    monkeypatch.setenv("MIN_RISK_REWARD", "10.0")
+    db = Database(str(tmp_path / f"tc2-no-synthetic-rr-{direction}.sqlite3"))
+    try:
+        cache = ContextCache()
+        make_context(
+            cache,
+            allow_long=direction == "LONG",
+            allow_short=direction == "SHORT",
+        )
+        client = FakeFuturesClient(
+            mark_price=102.0 if direction == "LONG" else 98.0
+        )
+        service = FuturesCampaignExecutionService(
+            client, db, execution_barrier=ExecutionBarrier(cache, db)
+        )
+        service.arm_initial_entry(
+            make_signal(direction),
+            equity_quote=10000.0,
+            atr=2.0,
+            candidate_risk_fraction=0.005,
+        )
+        assert len(client.stop_entries) == 1
+    finally:
+        db.conn.close()
