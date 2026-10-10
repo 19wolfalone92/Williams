@@ -9,8 +9,8 @@ from db import Database
 
 def test_execution_accumulator_vwap():
     summary = accumulate_fills([
-        {"price": "100", "qty": "2", "commission": "0.01", "commissionAsset": "USDT"},
-        {"price": "110", "qty": "1", "commission": "0.005", "commissionAsset": "USDT"},
+        {"tradeId": "1", "price": "100", "qty": "2", "commission": "0.01", "commissionAsset": "USDT"},
+        {"tradeId": "2", "price": "110", "qty": "1", "commission": "0.005", "commissionAsset": "USDT"},
     ])
     assert summary.executed_qty == Decimal("3")
     assert summary.quote_qty == Decimal("310")
@@ -18,13 +18,19 @@ def test_execution_accumulator_vwap():
     assert summary.fee_quote == Decimal("0.015")
 
 
-def test_execution_accumulator_order_fallback():
-    summary = accumulate_order({
-        "executedQty": "2.5",
-        "cummulativeQuoteQty": "250",
-    })
-    assert summary.executed_qty == Decimal("2.5")
-    assert summary.avg_price == Decimal("100")
+def test_execution_accumulator_order_fallback_fails_closed_without_fills():
+    import pytest
+    from execution_accumulator import ExecutionDataIncomplete
+
+    with pytest.raises(
+        ExecutionDataIncomplete,
+        match="executed_order_missing_authoritative_fills",
+    ):
+        accumulate_order({
+            "executedQty": "2.5",
+            "cummulativeQuoteQty": "250",
+            "status": "FILLED",
+        })
 
 
 def test_direction_probabilities_are_independent_and_normalized():
