@@ -32,7 +32,10 @@ class FakeCache:
         return FakeSnapshot()
 
 
-def signal(kind=SignalType.REVERSAL, role=SignalRole.ENTRY, bar=100, trigger=101):
+def signal(kind=SignalType.REVERSAL, role=SignalRole.ENTRY, bar=None, trigger=101):
+    now_ms = int(time.time() * 1000)
+    if bar is None:
+        bar = (now_ms // 3_600_000) * 3_600_000 - 2 * 3_600_000
     return SignalSpec.new(
         symbol="BTCUSDT",
         side="BUY",
@@ -46,8 +49,8 @@ def signal(kind=SignalType.REVERSAL, role=SignalRole.ENTRY, bar=100, trigger=101
         context_versions={},
         htf_confirmed=True,
         created_at_ms=int(time.time() * 1000),
-        confirmation_time_ms=int(time.time() * 1000),
-        expires_at_ms=int(time.time() * 1000) + 60 * 60 * 1000,
+        confirmation_time_ms=int(bar) + 3_600_000,
+        expires_at_ms=now_ms + 60 * 60 * 1000,
     )
 
 
