@@ -1238,6 +1238,7 @@ class CampaignExecutionService:
             "CANCEL",
             required_context_versions={},
             client_order_id=f"{self.STOP_PREFIX}CANCEL_{uuid.uuid4().hex[:14]}",
+            target_order_id=str(order_id),
             purpose=purpose,
             campaign_id=campaign.campaign_id,
             signal_id=campaign.current_signal_id,
