@@ -191,6 +191,7 @@ class PreflightCheckService:
         if report.environment != "TESTNET" or getattr(self.client, "base_url", None) != "https://testnet.binance.vision":
             report.fail("environment", "Binance Spot Testnet host is not explicitly selected")
             return report.as_dict()
+        report.passed("environment", host="https://testnet.binance.vision", product="SPOT")
         if not getattr(self.client, "api_key", None) or not getattr(self.client, "api_secret", None):
             report.fail("credentials", "Binance API credentials are missing")
             return report.as_dict()
