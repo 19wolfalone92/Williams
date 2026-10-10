@@ -28,6 +28,12 @@ class PortfolioController:
             self.max_risk_per_trade_pct,
             max(0.0, float(os.getenv("MIN_RISK_ALLOCATION_PCT", "0.001"))),
         )
+        # Autonomous entry/exit is the structured Wise-Men campaign pipeline.
+        # Legacy fixed-target/R:R checks are an explicit profile overlay, not
+        # a hidden requirement of TC2 campaign signals.
+        self.campaign_engine_enabled = (
+            os.getenv("CAMPAIGN_ENGINE", "true").lower() == "true"
+        )
 
         self.scanner = MarketScanner(
             client=client,
@@ -83,6 +89,10 @@ class PortfolioController:
                         getattr(candidate, "entry_protective_reference", 0.0) or 0.0
                     ),
                     side=direction,
+                    enforce_min_rr=not getattr(
+                        self, "campaign_engine_enabled",
+                        os.getenv("CAMPAIGN_ENGINE", "true").lower() == "true",
+                    ),
                 )
                 if risk.allowed:
                     analysed.append(Selection(
@@ -112,7 +122,10 @@ class PortfolioController:
         include_existing_campaigns: bool = False,
     ):
         """Return new-campaign candidates and optionally candidates for active-campaign add-ons."""
-        campaign_mode = os.getenv("CAMPAIGN_ENGINE", "false").lower() == "true"
+        campaign_mode = getattr(
+            self, "campaign_engine_enabled",
+            os.getenv("CAMPAIGN_ENGINE", "true").lower() == "true",
+        )
         if (
             self.max_open_positions > 0
             and open_positions >= self.max_open_positions
@@ -169,6 +182,7 @@ class PortfolioController:
                 ),
                 risk_pct_override=allocation_pct,
                 side=direction,
+                enforce_min_rr=not campaign_mode,
             )
             if not r.allowed:
                 continue
