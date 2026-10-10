@@ -1,9 +1,11 @@
 import pandas as pd
 import pytest
+from types import SimpleNamespace
 
 from campaign_model import SignalRole, SignalSpec, SignalType
 from campaign_engine import CampaignEngine
 from digital_williams_core import DigitalWilliamsCore
+from portfolio_trader import MultiPositionTrader
 from strategy import calculate_indicators, config_from_env
 from williams_signals import (
     _dedupe_and_sort_signal_specs,
@@ -156,6 +158,58 @@ def test_long_super_ao_and_fractal_are_independent_initial_entry_candidates():
     selected = CampaignEngine.choose_initial_signal(signals)
     assert selected is by_type[SignalType.SUPER_AO]
     # Either signal family is independently eligible; WM2 is first by confirmation time here.
+
+
+def test_spot_signal_deserialization_preserves_confirmation_time_and_zero_index():
+    # A confirmed WM3 has an older center candle than the time at which it is
+    # actionable. Deserialize it without backdating confirmation or losing index 0.
+    fractal = SignalSpec.new(
+        symbol="BTCUSDT",
+        side="BUY",
+        direction="LONG",
+        signal_type=SignalType.FRACTAL,
+        role=SignalRole.ENTRY,
+        timeframe="1h",
+        signal_bar_time_ms=100,
+        confirmation_time_ms=300,
+        trigger_price=110.0,
+        protective_reference=95.0,
+        invalidation_price=95.0,
+        wave_invalidation_price=90.0,
+        source_candle_index=0,
+        alligator_bearish=True,
+        expires_at_ms=10**15,
+    ).to_dict()
+    reversal = SignalSpec.new(
+        symbol="BTCUSDT",
+        side="BUY",
+        direction="LONG",
+        signal_type=SignalType.REVERSAL,
+        role=SignalRole.ENTRY,
+        timeframe="1h",
+        signal_bar_time_ms=200,
+        confirmation_time_ms=201,
+        trigger_price=105.0,
+        protective_reference=98.0,
+        expires_at_ms=10**15,
+    ).to_dict()
+    selection = SimpleNamespace(
+        candidate=SimpleNamespace(campaign_signal_specs=[fractal, reversal])
+    )
+
+    selected = MultiPositionTrader._selection_signal(selection)
+    assert selected is not None
+    assert selected.signal_type is SignalType.REVERSAL
+
+    trader = object.__new__(MultiPositionTrader)
+    parsed = trader._signal_specs(selection)
+    restored_fractal = next(item for item in parsed if item.signal_type is SignalType.FRACTAL)
+    assert restored_fractal.signal_bar_time_ms == 100
+    assert restored_fractal.confirmation_time_ms == 300
+    assert restored_fractal.source_candle_index == 0
+    assert restored_fractal.invalidation_price == 95.0
+    assert restored_fractal.wave_invalidation_price == 90.0
+    assert restored_fractal.alligator_bearish is True
 
 
 def test_fractal_signal_uses_configured_confirmation_delay_not_hardcoded_two_bars():
