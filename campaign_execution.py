@@ -316,20 +316,19 @@ class CampaignExecutionService:
         # publisher used by bootstrap/WebSocket updates, not through duplicate
         # ad-hoc indicator math.
         signal_tf = str(signal.timeframe).lower()
-        early_wm1 = (
-            signal.signal_type == SignalType.REVERSAL
-            and signal_tf == "1h"
-            and not bool(signal.htf_confirmed)
-        )
         tc2_core = (
             os.getenv("WILLIAMS_STRATEGY_PROFILE", "TC2_THREE_WISE_MEN").strip().upper()
             == "TC2_THREE_WISE_MEN"
         )
+        early_wm1 = False
+        if tc2_core and signal_tf != "1h":
+            raise CampaignExecutionError(
+                f"{signal.symbol}: TC2 Three Wise Men entries require canonical H1 signals"
+            )
         if (
-            signal_tf == "1h"
+            not tc2_core
+            and signal_tf == "1h"
             and not signal.htf_confirmed
-            and not early_wm1
-            and not tc2_core
         ):
             raise CampaignExecutionError(
                 f"{signal.symbol}: selected non-TC2 profile requires higher-timeframe confirmation"
@@ -353,11 +352,22 @@ class CampaignExecutionService:
         missing_contexts = [
             tf for tf in required_contexts if tf not in context_versions
         ]
-        if missing_contexts and (self.context_refresh is not None or early_wm1):
+        if missing_contexts and (self.context_refresh is not None or tc2_core):
             raise CampaignExecutionError(
                 f"{signal.symbol}: missing required context(s): {', '.join(missing_contexts)}"
             )
-        if context_versions:
+        if tc2_core:
+            signal = replace(signal, context_versions=dict(context_versions))
+            admitted, early_wm1 = self._tc2_spot_context_admission(
+                signal,
+                context_snapshot,
+                expected_versions=context_versions,
+            )
+            if not admitted:
+                raise CampaignExecutionError(
+                    f"{signal.symbol}: TC2 H1 context, H4 data validity, D1 macro airbag, or WM1 angulation rejected the entry"
+                )
+        elif context_versions:
             signal = replace(
                 signal,
                 context_versions={
@@ -365,17 +375,6 @@ class CampaignExecutionService:
                     **context_versions,
                 },
             )
-        if early_wm1:
-            try:
-                angulation = float(signal.angulation_score)
-            except (TypeError, ValueError, OverflowError) as exc:
-                raise CampaignExecutionError(
-                    f"{signal.symbol}: WM1 angulation evidence is invalid"
-                ) from exc
-            if not math.isfinite(angulation) or angulation <= 0.0:
-                raise CampaignExecutionError(
-                    f"{signal.symbol}: WM1 requires finite positive angulation evidence"
-                )
 
         reserved = self.engine.portfolio_reserved_risk_quote()
         capacity = max(0.0, float(equity_quote) * self.engine.portfolio_risk_limit_pct)
@@ -475,6 +474,17 @@ class CampaignExecutionService:
         )
 
         def check(snapshot):
+            if tc2_core:
+                admitted_now, early_now = self._tc2_spot_context_admission(
+                    signal,
+                    snapshot,
+                    expected_versions=dict(signal.context_versions),
+                )
+                if not admitted_now or early_now != early_wm1:
+                    raise CampaignExecutionError(
+                        f"{signal.symbol}: TC2 context admission changed before order submission"
+                    )
+
             # Last-mile market condition: this is a conditional order, never a
             # substitute for a missed trigger. If price already crossed the
             # trigger, abort rather than turn it into a MARKET BUY.
