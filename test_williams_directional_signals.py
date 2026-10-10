@@ -323,5 +323,6 @@ def test_signal_order_uses_confirmation_time_not_source_bar_time():
 def test_unknown_signal_timeframe_is_rejected_not_assumed_five_minutes():
     assert _timeframe_ms("1h") == 3_600_000
     assert _timeframe_ms("1M") == 2_592_000_000
+    assert _timeframe_ms(" 1M ") == 2_592_000_000
     with pytest.raises(ValueError, match="Unsupported signal timeframe"):
         _timeframe_ms("60m")
