@@ -153,3 +153,31 @@ These changes are included in the final validation candidate; results from SHA `
 ### Final additional recovery regressions
 - Unknown OCO-create result after the durable submit-attempt marker is present stays unresolved when Binance cannot confirm the exact list; no OCO retry is called.
 - Full `MultiPositionTrader.recover()` integration with an unknown order result preserves both `position_state:BTCUSDT=RECONCILE_REQUIRED` and the unresolved SQLite intent; the recovery report remains blocked and records zero mutations.
+
+
+---
+
+## TASK 006.4 — Financial Integrity & Global Recovery Gate (in progress)
+
+**Status: BLOCKED — NOT ACCEPTED.** This section records partial implementation; it does not claim complete financial recovery.
+
+### Changes made on the task branch
+
+- `execution_accumulator.py`: fill parsing now rejects missing/invalid quantities, prices, commission amounts/assets and trade IDs rather than silently skipping them. Repeated IDs within a response are rejected. Executed order totals must match the per-trade quantity and quote totals. Non-zero third-asset commissions require an explicit positive conversion rate.
+- `portfolio_trader.py`: the authoritative execution path preserves Binance trade IDs from `myTrades`; an unavailable trade-history lookup or executed order without per-trade fills now raises and remains unresolved rather than falling back to order-level aggregates as if commissions were known.
+- `db.py`: schema version 8 adds exchange/account/trade identity, commission amount and financial state to `campaign_fills`, plus a partial unique index on `(exchange, account_id, symbol, trade_id)`. Existing rows are preserved and marked `LEGACY_UNVERIFIED`; the migration does not pick or delete a duplicate. Fill insertion is idempotent for an identical identity and fails closed on conflicting financial fields.
+- `execution_barrier.py`: new Spot BUY exposure is blocked unless persisted `recovery_status=RECOVERY_COMPLETE`. SELL-side exit/reduction intents are not rejected by this entry-only gate.
+- `portfolio_trader.py`: startup recovery persists `RECOVERY_REQUIRED` before recovery I/O and does not clear it merely because an individual intent is `RECONCILED`.
+- `test_financial_integrity.py`: added regression coverage for complete/zero/unknown/invalid commissions, duplicate/conflicting trade IDs, aggregate mismatch, DB idempotence, cross-connection concurrent insertion, and entry-vs-exit gate behavior. Added this suite to Python backend CI and Campaign CI.
+
+### Important remaining blockers
+
+1. The global gate intentionally remains `RECOVERY_REQUIRED`: the current recovery path has not yet established a single authoritative, end-to-end proof for account balances, managed position, all fills/fees and protective orders. It must not be changed to `RECOVERY_COMPLETE` until those proofs are implemented and persisted.
+2. The idempotent `campaign_fills` ledger is now available, but the production execution/campaign flow has not yet been fully wired to persist every authoritative exchange trade into this ledger before applying all financial aggregates. This prevents claiming end-to-end exactly-once PnL/position accounting.
+3. Existing legacy fill rows have no trustworthy exchange trade identity; they remain `LEGACY_UNVERIFIED` and need a diagnostic/reconciliation path before they can support entry admission.
+4. Android's native runtime still needs an audited, durable contract that consumes this Python/global recovery state (or an equivalent on-device reconciliation proof) and preserves it across process death. JVM CI is not physical-device evidence.
+5. The required full fault matrix, real two-process recovery concurrency, balance/position/protection reconciliation, Android process-death test, and controlled Spot Testnet run remain **NOT VERIFIED** until actual test results are recorded.
+
+### Validation policy
+
+All CI results must be re-fetched for one final branch SHA after code changes. No Mainnet calls, live orders, or PR merge are permitted. Keep PR #46 open as Draft and keep new-entry admission blocked until the remaining proof obligations are closed.
