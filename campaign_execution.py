@@ -1224,29 +1224,56 @@ class CampaignExecutionService:
             campaign.tags.get("protective_order_id", "") or ""
         )
         if protective_id:
+            cancel_error = None
             try:
-                self._execute_cancel(
+                cancel_response = self._execute_cancel(
                     campaign,
                     int(protective_id),
                     "CAMPAIGN_PROTECTION_CANCEL",
                 )
+                cancel_status = str(
+                    cancel_response.get("status", "") if isinstance(cancel_response, dict) else ""
+                ).upper()
             except Exception as exc:
-                # An already-filled/cancelled stop is harmless; anything else is
-                # ambiguous and must be reconciled instead of guessing.
+                cancel_error = exc
+                cancel_status = ""
+
+            # A CANCEL response is not authoritative unless its terminal state
+            # is confirmed. In particular, FILLED means the stop may already
+            # have reduced exposure; never follow it with a blind market SELL.
+            if cancel_status not in {"CANCELED", "EXPIRED", "REJECTED", "FILLED"}:
                 try:
                     current = self.client.get_order(
                         symbol,
                         order_id=int(protective_id),
                     )
-                    status = str(current.get("status", "")).upper()
-                    if status not in {"CANCELED", "EXPIRED", "FILLED", "REJECTED"}:
-                        raise
-                except Exception:
+                    cancel_status = str(current.get("status", "")).upper()
+                    self.db.save_order(current)
+                except Exception as exc:
                     self.engine.mark_reconcile_required(
                         campaign,
-                        f"cannot cancel campaign protection before exit: {exc}",
+                        f"cannot confirm protection cancellation: {cancel_error or exc}",
                     )
-                    raise CampaignExecutionError(str(exc)) from exc
+                    raise CampaignExecutionError(
+                        f"{symbol}: protection cancellation outcome is unknown"
+                    ) from (cancel_error or exc)
+
+            if cancel_status == "FILLED":
+                self.engine.mark_reconcile_required(
+                    campaign,
+                    "protective stop filled during exit cancellation; reconcile actual fills before any market exit",
+                )
+                raise CampaignExecutionError(
+                    f"{symbol}: protective stop filled during cancellation; market exit blocked pending reconciliation"
+                )
+            if cancel_status not in {"CANCELED", "EXPIRED", "REJECTED"}:
+                self.engine.mark_reconcile_required(
+                    campaign,
+                    f"protection cancellation is not confirmed terminal: {cancel_status or 'UNKNOWN'}",
+                )
+                raise CampaignExecutionError(
+                    f"{symbol}: protection cancellation is not confirmed terminal"
+                )
 
         open_orders = self.client.open_orders(symbol)
         unknown_sells = [
