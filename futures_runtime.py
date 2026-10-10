@@ -574,10 +574,10 @@ class FuturesRuntime:
             == "TC2_THREE_WISE_MEN"
         )
         if tc2_core:
-            # Pin the complete H1/H4/D1 context set. H4 supplies context rather
-            # than a second entry trigger; D1 can veto an active opposite regime.
+            # Intraday TC2 uses H1 for decisions and H4 as the sole higher-timeframe
+            # context. D1 is deliberately not an admission gate.
             required_intervals = list(dict.fromkeys(
-                ["1h", "4h", "1d"] + list(self.context_intervals)
+                ["1h", "4h"] + list(self.context_intervals)
             ))
             versions = snapshot.versions(signal.symbol, required_intervals)
             prepared = replace(
@@ -601,7 +601,7 @@ class FuturesRuntime:
                 return replace(prepared, htf_confirmed=False)
 
             raise FuturesCampaignExecutionError(
-                f"{signal.symbol}: TC2 H1 Wise-Men context or D1 macro airbag blocked {direction}"
+                f"{signal.symbol}: TC2 H1 Wise-Men context or H4 higher-timeframe context blocked {direction}"
             )
 
         # Non-TC2 profiles retain their stricter multi-timeframe admission
