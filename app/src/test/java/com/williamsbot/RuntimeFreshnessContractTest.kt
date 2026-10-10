@@ -1,6 +1,5 @@
 package com.williamsbot
 
-import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -20,7 +19,7 @@ class RuntimeFreshnessContractTest {
 
     @Test
     fun clockMovingBeforeSuccessTimestampFailsClosed() {
-        assertEquals(null, RuntimeFreshnessContract.ageMs(20_000L, 19_999L))
+        assertTrue(RuntimeFreshnessContract.ageMs(20_000L, 19_999L) == null)
         assertFalse(RuntimeFreshnessContract.isFresh(true, 20_000L, 19_999L, 30_000L))
     }
 
