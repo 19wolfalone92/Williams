@@ -12,7 +12,6 @@ class ExecutionPersistenceError(RuntimeError):
 
 from market_context import ContextCache, MarketStateSnapshot
 from order_state_machine import OrderState, OrderStateMachine
-from order_state_machine import OrderState, OrderStateMachine
 
 
 @dataclass(frozen=True)
