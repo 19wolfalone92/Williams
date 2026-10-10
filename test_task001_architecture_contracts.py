@@ -422,3 +422,41 @@ def test_oco_list_response_is_validated_without_confusing_it_with_a_position_fil
     # The barrier records a submission outcome; it does not create a local fill
     # or turn an intention/order list into a confirmed position.
     assert db.open_trade("BTCUSDT") is None
+
+
+def test_reconcile_state_and_pending_intent_survive_database_restart(tmp_path):
+    cache = _context_cache()
+    db_path = tmp_path / "restart.sqlite3"
+    db = Database(str(db_path))
+    db.state_set("position_state", "RECONCILE_REQUIRED")
+    db.state_set("position_state:BTCUSDT", "RECONCILE_REQUIRED")
+    ctx = cache.snapshot().context("BTCUSDT", "1h")
+    pending_intent = OrderIntent.new(
+        "BTCUSDT",
+        "BUY",
+        "STOP_LOSS",
+        required_context_versions={"1h": ctx.version},
+        purpose="ENTRY",
+        permission_interval="1h",
+        client_order_id="TASK001_RESTART_PENDING",
+    )
+    db.save_execution_intent(pending_intent, "PENDING", "simulated process interruption")
+    db.conn.close()
+
+    reopened = Database(str(db_path))
+    assert reopened.state_get("position_state") == "RECONCILE_REQUIRED"
+    assert reopened.state_get("position_state:BTCUSDT") == "RECONCILE_REQUIRED"
+    persisted = reopened.conn.execute(
+        "SELECT status, reason FROM execution_intents WHERE intent_id=?",
+        (pending_intent.intent_id,),
+    ).fetchone()
+    assert persisted["status"] == "PENDING"
+    assert "process interruption" in persisted["reason"]
+
+    called = []
+    result = ExecutionBarrier(cache, reopened).execute(
+        _entry_intent(cache), lambda: called.append(True) or {"status": "NEW"}
+    )
+    assert result.accepted is False
+    assert result.reason == "RECONCILE_REQUIRED"
+    assert called == []
