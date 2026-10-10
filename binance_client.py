@@ -285,7 +285,7 @@ class BinanceSpotClient:
             return payload
         raise BinanceAPIError(
             f"Binance {endpoint} returned {type(payload).__name__}; expected object",
-            payload={"response_type": type(payload).__name__, "response body redacted"},
+            payload={"response_type": type(payload).__name__, "response body redacted": True},
         )
 
     @staticmethod
@@ -294,7 +294,7 @@ class BinanceSpotClient:
             return payload
         raise BinanceAPIError(
             f"Binance {endpoint} returned {type(payload).__name__}; expected array",
-            payload={"response_type": type(payload).__name__, "response body redacted"},
+            payload={"response_type": type(payload).__name__, "response body redacted": True},
         )
 
     def all_orders(self,symbol,limit=1000):
