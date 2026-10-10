@@ -59,3 +59,14 @@ def test_noncanonical_signal_timeframe_is_not_the_default():
     from trading_config import TradingConfig
     assert CANONICAL_DECISION_TIMEFRAME == "1h"
     assert TradingConfig.from_env({"EXECUTION_TIMEFRAME": "5m"}).execution_timeframe == "5m"
+
+
+def test_initial_williams_signal_without_expiry_is_not_actionable():
+    from campaign_model import SignalRole, SignalSpec, SignalType
+    from futures_runtime import choose_initial_williams_signal
+    signal = SignalSpec.new(
+        symbol="BTCUSDT", side="BUY", signal_type=SignalType.REVERSAL,
+        role=SignalRole.ENTRY, timeframe="1h", signal_bar_time_ms=1_000,
+        trigger_price=101.0, protective_reference=95.0,
+    )
+    assert choose_initial_williams_signal([signal], "LONG", now_ms=10_000) is None
