@@ -526,6 +526,9 @@ private class NativeEngine(
     private val http: OkHttpClient
 ) {
     private val baseUrl = "https://testnet.binance.vision"
+    // BLOCKED until Android has measured freshness proofs for account, history,
+    // private-stream events, diagnostics and device/runtime parity.
+    private val mutationRuntimeFreshnessContractComplete = false
     private val historyStore = MarketHistoryStore(context)
     private val rateGuard = BinanceRateGuard()
     private val auditStore = TradingAuditStore(context)
@@ -1514,8 +1517,48 @@ private class NativeEngine(
                 throw x
             }
         }
-        error("Binance HTTP " + lastCode + ": " + lastBody)
+        error(safeApiFailure(lastCode, lastBody))
     }
+
+    private fun requireOrderMutationAdmission(method: String, path: String) {
+        val mutatingOrderPath = method in setOf("POST", "DELETE") && (
+            path.startsWith("/api/v3/order") ||
+                path.startsWith("/api/v3/orderList") ||
+                path.startsWith("/api/v3/openOrders")
+            )
+        if (!mutatingOrderPath) return
+
+        val now = System.currentTimeMillis()
+        val reconciliationFresh: Boolean? = when {
+            reconcileRequired -> false
+            lastRestReconcileMs <= 0L -> null
+            now < lastRestReconcileMs -> null
+            now - lastRestReconcileMs > 60_000L -> false
+            else -> true
+        }
+        OrderMutationGate.requireReady(
+            OrderMutationEvidence(
+                spotTestnet = baseUrl == "https://testnet.binance.vision",
+                runtimeReady = running && !paused && !killLatched,
+                marketDataFresh = marketDataFresh(),
+                // These booleans have no per-component successful-update timestamp,
+                // so they cannot be promoted to fresh evidence.
+                accountFresh = null,
+                historyFresh = null,
+                privateStreamFresh = null,
+                reconciliationFresh = reconciliationFresh,
+                allRuntimeFreshnessProofsComplete = mutationRuntimeFreshnessContractComplete
+            )
+        )
+    }
+
+    private fun safeApiCode(body: String): String =
+        runCatching { JSONObject(body).opt("code")?.toString()?.take(32) }
+            .getOrNull()
+            ?: "unknown"
+
+    private fun safeApiFailure(code: Int, body: String): String =
+        "Binance HTTP " + code + "; API code=" + safeApiCode(body) + "; response body redacted"
 
     private fun signedAccount(): JSONObject =
         signedRequest(
@@ -1529,6 +1572,7 @@ private class NativeEngine(
         path: String,
         params: String
     ): JSONObject {
+        requireOrderMutationAdmission(method, path)
         var lastBody = "{}"
         repeat(2) { attempt ->
             val query = if (params.isBlank()) {
@@ -1562,18 +1606,18 @@ private class NativeEngine(
                     method,
                     path,
                     response.code,
-                    params.ifBlank { null },
-                    lastBody
+                    null,
+                    "response body redacted"
                 )
                 if (response.isSuccessful) return JSONObject(lastBody)
                 if (attempt == 0 && lastBody.contains("-1021")) {
                     runCatching { syncServerTime() }
                     return@use
                 }
-                error("Binance " + response.code + ": " + lastBody)
+                error(safeApiFailure(response.code, lastBody))
             }
         }
-        error("Binance timestamp retry failed: " + lastBody)
+        error("Binance timestamp retry failed; response body redacted; API code=" + safeApiCode(lastBody))
     }
 
     private fun signedRawGet(
@@ -1613,8 +1657,8 @@ private class NativeEngine(
                     "GET",
                     path,
                     response.code,
-                    params.ifBlank { null },
-                    lastBody
+                    null,
+                    "response body redacted"
                 )
                 if (response.isSuccessful) return lastBody
                 if (attempt == 0 && lastBody.contains("-1021")) {
