@@ -8,6 +8,7 @@ from digital_williams_core import DigitalWilliamsCore
 from portfolio_trader import MultiPositionTrader
 from strategy import calculate_indicators, config_from_env
 from williams_signals import (
+    _angulation,
     _dedupe_and_sort_signal_specs,
     extract_long_signal_specs,
     extract_short_signal_specs,
@@ -26,6 +27,7 @@ def frame():
             "close": high - 0.7,
             "jaw_shifted": 100.0,
             "teeth_shifted": 100.0,
+            "lips_shifted": 100.0,
             "bullish_reversal_bar": False,
             "bearish_reversal_bar": False,
             "ao_green_streak": 0,
@@ -485,3 +487,45 @@ def test_wm3_requires_positive_finite_teeth_at_confirmation_and_current_bar(side
     else:
         signals = extract_short_signal_specs("BTCUSDT", ind, timeframe="5m", tick_size=0.1)
     assert not any(signal.signal_type is SignalType.FRACTAL for signal in signals)
+
+def test_wm1_angulation_requires_steeper_price_edge_and_extreme_outside_mouth():
+    data = pd.DataFrame({
+        "jaw_shifted": [104.0, 103.0, 102.0, 101.0, 100.0],
+        "teeth_shifted": [105.0, 104.0, 103.0, 102.0, 101.0],
+        "lips_shifted": [103.0, 102.0, 101.0, 100.0, 99.0],
+        "low": [106.0, 104.0, 102.0, 98.0, 90.0],
+        "high": [108.0, 106.0, 104.0, 100.0, 95.0],
+        "close": [107.0, 105.0, 103.0, 99.0, 94.0],
+    })
+    score, valid = _angulation(data, 4, side="LONG")
+    assert valid
+    assert score > 0.0
+
+    # Price is moving away from Jaw, but the last low is not beyond all
+    # three shifted Alligator lines; source-profile WM1 evidence must block.
+    not_outside = pd.DataFrame({
+        "jaw_shifted": [100.0] * 5,
+        "teeth_shifted": [101.0] * 5,
+        "lips_shifted": [97.0] * 5,
+        "low": [100.5, 100.3, 100.1, 99.8, 99.5],
+        "high": [102.0] * 5,
+        "close": [101.0, 101.0, 100.8, 100.5, 100.0],
+    })
+    score, valid = _angulation(not_outside, 4, side="LONG")
+    assert not valid
+    assert score == 0.0
+
+
+def test_wm1_angulation_is_directionally_symmetric_for_short():
+    data = pd.DataFrame({
+        "jaw_shifted": [100.0] * 5,
+        "teeth_shifted": [100.5] * 5,
+        "lips_shifted": [99.5] * 5,
+        "low": [98.0] * 5,
+        "high": [101.0, 102.0, 103.0, 104.0, 105.0],
+        "close": [99.0, 100.0, 101.0, 102.0, 103.0],
+    })
+    score, valid = _angulation(data, 4, side="SHORT")
+    assert valid
+    assert score > 0.0
+
