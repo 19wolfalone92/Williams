@@ -11,7 +11,9 @@ from execution_accumulator import ExecutionSummary, accumulate_order
 from campaign_execution import CampaignExecutionService, CampaignExecutionError
 from campaign_model import SignalSpec, SignalType, SignalRole
 from campaign_monitor import CampaignMonitor
-from order_identity import is_entry_id, is_exit_id, is_managed_order
+from order_identity import is_entry_id, is_exit_id, is_managed_order, stable_client_order_id
+from execution_barrier import ExecutionBarrier, OrderIntent
+from market_context import ContextCache
 
 
 POSITION_STATES = {
@@ -91,7 +93,12 @@ class MultiPositionTrader:
         self.max_trades_per_day = max(0, int(os.getenv("MAX_TRADES_PER_DAY", "5")))
         self.max_consecutive_losses = max(0, int(os.getenv("MAX_CONSECUTIVE_LOSSES", "3")))
         self.cooldown_minutes = max(0, int(os.getenv("COOLDOWN_MINUTES", "30")))
-        self.execution_barrier = execution_barrier
+        # Even standalone construction must not create a legacy direct-to-exchange
+        # route. The empty cache fails closed for entries, but still permits a
+        # durable, ownership-checked reduction/cancellation when safe.
+        self.execution_barrier = execution_barrier or ExecutionBarrier(
+            ContextCache(), self.db
+        )
         self.campaign_engine_enabled = (
             os.getenv("CAMPAIGN_ENGINE", "true").lower() == "true"
         )
@@ -104,6 +111,45 @@ class MultiPositionTrader:
             self.client,
             self.db,
             self.campaign_execution,
+        )
+
+    def _submit_mutation(self, intent, submit, pre_submit_checks=None):
+        """All portfolio order mutations pass through the canonical barrier."""
+        if self.execution_barrier is None:
+            raise CampaignExecutionError(
+                "ExecutionBarrier unavailable; direct Binance mutation is forbidden"
+            )
+        result = self.execution_barrier.execute(
+            intent,
+            submit,
+            pre_submit_checks=pre_submit_checks,
+        )
+        if not result.accepted:
+            raise CampaignExecutionError(
+                f"ExecutionBarrier blocked {intent.purpose}: {result.reason}"
+            )
+        return result.response
+
+    def _intent_for_legacy_mutation(
+        self, symbol, side, order_type, client_order_id, *, purpose,
+        quantity="", quote_order_quantity="", trade_id=None, signal_id="",
+        operation_kind="PLACE", related_order_id="", related_order_list_id="",
+    ):
+        campaign_id = f"LEGACY_TRADE:{trade_id}" if trade_id is not None else ""
+        return OrderIntent.new(
+            str(symbol).upper(),
+            str(side).upper(),
+            str(order_type).upper(),
+            required_context_versions={},
+            purpose=purpose,
+            campaign_id=campaign_id,
+            signal_id=signal_id,
+            client_order_id=client_order_id,
+            quantity=str(quantity or ""),
+            quote_order_quantity=str(quote_order_quantity or ""),
+            operation_kind=operation_kind,
+            related_order_id=str(related_order_id or ""),
+            related_order_list_id=str(related_order_list_id or ""),
         )
 
     # ------------------------------------------------------------------
