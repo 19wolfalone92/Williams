@@ -1257,16 +1257,20 @@ class Trader:
             try:
                 fills = self.client.my_trades(self.symbol, order_id=order_id, limit=1000) or []
             except Exception as exc:
-                self.db.log_event(
-                    'WARNING', 'execution_fill_lookup_failed',
-                    'Could not refresh authoritative fills; using order accumulator',
-                    {'orderId': order_id, 'error': f'{type(exc).__name__}: {exc}'},
-                )
-        if fills:
-            order['fills'] = fills
-            summary = accumulate_fills(fills)
-        else:
-            summary = accumulate_order(order)
+                raise RuntimeError(
+                    f'{self.symbol}: authoritative fill/commission history unavailable; reconciliation required'
+                ) from exc
+        if not fills:
+            raise RuntimeError(
+                f'{self.symbol}: order-level response is not commission evidence; reconciliation required'
+            )
+        for fill in fills:
+            if 'commission' not in fill or fill.get('commission') is None:
+                raise RuntimeError(f'{self.symbol}: fill commission is unknown; reconciliation required')
+            if 'commissionAsset' not in fill or not str(fill.get('commissionAsset') or '').strip():
+                raise RuntimeError(f'{self.symbol}: fill commission asset is unknown; reconciliation required')
+        order['fills'] = fills
+        summary = accumulate_fills(fills)
         return order, summary
 
     def market_buy(self, quote):
