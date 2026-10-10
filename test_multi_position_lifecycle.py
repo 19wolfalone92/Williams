@@ -128,6 +128,8 @@ class FakeClient:
         return {
             "orderListId": order_list_id,
             "listClientOrderId": list_client_order_id,
+            "listStatusType": "EXEC_STARTED",
+            "listOrderStatus": "EXECUTING",
             "orderReports": [
                 {
                     "symbol": symbol,
