@@ -289,6 +289,14 @@ class ExecutionBarrier:
                     and str(response.get("newOrderResult", "")).upper() == "SUCCESS"
                 ):
                     order_fsm.state = OrderState.OPEN
+                elif (
+                    intent.order_type.upper() == "OCO"
+                    and isinstance(response, dict)
+                    and response.get("orderListId") is not None
+                    and isinstance(response.get("orderReports"), list)
+                    and len(response.get("orderReports")) >= 2
+                ):
+                    order_fsm.state = OrderState.OPEN
                 else:
                     order_fsm.state = OrderState.RECONCILE_REQUIRED
                     self._persist(
