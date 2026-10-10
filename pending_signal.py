@@ -53,9 +53,15 @@ def default_expiry_ms(signal: SignalSpec) -> int:
     else:
         bars = max(1, int(os.getenv("WILLIAMS_PENDING_FRACTAL_BARS", "8")))
 
+    # An unknown timeframe has no approved duration. Return no expiry so
+    # PendingSignal.actionable() fails closed instead of silently using M5.
+    bar_ms = _bar_ms(signal.timeframe)
+    if bar_ms <= 0:
+        return 0
+
     # TTL begins after the signal becomes confirmed/actionable, not at the
     # historical center candle nor at processing time.
-    return int(signal.confirmation_time_ms + _bar_ms(signal.timeframe) * bars)
+    return int(signal.confirmation_time_ms + bar_ms * bars)
 
 
 @dataclass(frozen=True)
