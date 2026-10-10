@@ -491,6 +491,47 @@ def test_execution_service_enforces_campaign_cap_for_direct_callers(tmp_path):
         db.conn.close()
 
 
+def test_execution_service_blocks_new_futures_when_campaign_mode_is_unknown(tmp_path):
+    db = Database(str(tmp_path / "futures-unknown-campaign-mode.sqlite3"))
+    try:
+        cache = ContextCache()
+        make_context(cache, allow_long=True, allow_short=False)
+        client = FakeFuturesClient(mark_price=102.0)
+        service = FuturesCampaignExecutionService(
+            client,
+            db,
+            execution_barrier=ExecutionBarrier(cache, db),
+            max_open_positions=3,
+            portfolio_risk_limit_pct=0.01,
+            campaign_risk_limit_pct=0.006,
+        )
+        # A nonterminal legacy/corrupt campaign without an ownership marker
+        # must not be silently omitted from Futures admission accounting.
+        existing = service.engine.create_campaign(
+            make_signal("LONG"),
+            initial_risk_pct=0.002,
+        )
+        db.save_campaign(existing)
+
+        with pytest.raises(
+            FuturesCampaignExecutionError,
+            match="execution mode is missing/unknown",
+        ):
+            service.arm_initial_entry(
+                make_signal("LONG"),
+                equity_quote=10000.0,
+                atr=2.0,
+                candidate_risk_fraction=0.005,
+            )
+
+        assert client.stop_entries == []
+        assert db.conn.execute(
+            "SELECT COUNT(*) AS n FROM execution_intents WHERE purpose = 'CAMPAIGN_ENTRY'"
+        ).fetchone()["n"] == 0
+    finally:
+        db.conn.close()
+
+
 def test_campaign_capacity_admission_serializes_across_database_connections(tmp_path):
     db_path = str(tmp_path / "futures-capacity-concurrent.sqlite3")
     seed = Database(db_path)
