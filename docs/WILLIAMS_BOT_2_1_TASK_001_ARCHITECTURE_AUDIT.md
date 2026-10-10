@@ -561,7 +561,7 @@ The source audit found that `exchange_fill_ledger` is currently an evidence ledg
 3. The initial-entry and add-on paths call `engine.record_initial_fill()` / `engine.record_add_on_fill()`, then separately mutate signal state, legacy `trades` rows and Campaign persistence. These steps do not share one transaction keyed by exchange trade identity. A crash/retry between those effects can therefore leave the ledger populated while downstream state is incomplete, or repeat downstream effects.
 4. `campaign_fills` is a separate table with an auto-increment row ID and no unique exchange trade ID constraint. `Database.save_campaign_fill()` inserts a new row and stores quantity, price, quote quantity, fee and base commission in SQLite `REAL` columns via Python `float`; it is not intrinsically idempotent against `exchange_fill_ledger`.
 5. The Campaign persistence table stores `position_qty`, `average_entry_price`, realized/unrealized PnL, risk and capital fields as SQLite `REAL`; `Database.save_campaign()` explicitly converts these values to `float`. This is a separate representation from the exact-string fill ledger.
-6. The legacy/portfolio execution path is independent of the Campaign fill materialization path. `PortfolioTrader._authoritative_execution()`, `_exit_fee_quote()`, manual sell handling and trade close/update paths use float-based aggregates and legacy `trades` records. In `_exit_fee_quote()`, a missing commission currently follows a `float(row.get("commission", 0) or 0)` path, so that path does not share the Campaign helper's unknown-fee fail-closed contract.
+6. The legacy/portfolio execution path is independent of the Campaign fill materialization path. `PortfolioTrader._authoritative_execution()`, manual sell handling and trade close/update paths use float-based aggregates and legacy `trades` records. The TASK 001.4 follow-up changed `_exit_fee_quote()` to persist each identified raw trade into `exchange_fill_ledger`, retain unknown-fee evidence, reject missing/conflicting commission data, and latch global plus symbol `RECONCILE_REQUIRED`. However, `_authoritative_execution()` still constructs compatibility fill rows with default-zero commission fields when raw trade lookup fails or omits fee values; this remains a separate unresolved financial path.
 7. Position reconstruction helpers in `portfolio_trader.py` use exchange order history, order executed quantities and account base-asset balance as separate evidence. They do not yet establish a single persisted reconciliation result joining trade IDs, commissions, net base inventory, Campaign state and verified protection.
 8. Existing OCO recovery in `ExecutionBarrier` can reconcile list and child order identities/statuses, but the evidence does not establish that fills/fees have been applied exactly once or that remaining protection quantity matches the authoritative residual exposure.
 
@@ -590,3 +590,12 @@ The current schema's `REAL` Campaign/legacy financial fields and non-unique `cam
 - A dedicated Binance Spot Testnet lifecycle matrix was **not run** in this audit.
 - No Binance Mainnet or real trade was used.
 - Final TASK 001.4 status remains **FAIL / NOT ACCEPTED** until all P0s above are implemented and verified on one exact final SHA.
+
+
+### 11.6 TASK 001.4 limited code follow-up
+
+After the source audit, a narrow fail-closed correction was committed in the same branch:
+
+- `portfolio_trader.py`: `_exit_fee_quote()` now persists stable exchange trade evidence through `record_exchange_fill()` before fee validation, uses `Decimal` for the commission aggregation path, refuses missing trade history / trade ID / commission amount / commission asset, rejects conflicting ledger evidence, and sets global plus per-symbol `RECONCILE_REQUIRED` on reconciliation errors. It does not resubmit exchange mutations.
+- `test_task001_recovery_regressions.py`: added fake-exchange regressions for unknown exit commission (durable UNKNOWN row + recovery latch) and exact fractional trade values with a confirmed zero commission.
+- This correction closes one unsafe fee-default path only. It does **not** make campaign/legacy position updates atomic with the fill ledger, does not eliminate all Decimal/float conversions, and does not complete position/protection/OCO recovery.
