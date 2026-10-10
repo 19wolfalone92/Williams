@@ -215,7 +215,9 @@ class MockExchange:
                 continue
 
             requested = float(order.get("origQty", 0) or 0)
-            executed = requested * float(self.partial_fill_ratio)
+            # Exchange fills respect the symbol LOT_SIZE step; do not create
+            # impossible fractional mock exposure that no valid order can protect.
+            executed = (int((requested * float(self.partial_fill_ratio)) * 1000 + 1e-9) / 1000.0)
             if side == "BUY":
                 cost = executed * self.prices[symbol]
                 self.balances["USDT"] -= cost
