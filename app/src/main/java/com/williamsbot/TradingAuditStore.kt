@@ -14,7 +14,7 @@ import org.json.JSONObject
  * Binance told the bot, without relying on RAM or SharedPreferences.
  */
 class TradingAuditStore(context: Context) :
-    SQLiteOpenHelper(context, "williams_trading_audit.db", null, 4) {
+    SQLiteOpenHelper(context, "williams_trading_audit.db", null, 5) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("""
