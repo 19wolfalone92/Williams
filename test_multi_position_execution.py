@@ -1,9 +1,34 @@
 import pytest
 import uuid
 
+class _OfflineBarrierResult:
+    def __init__(self, response):
+        self.accepted = True
+        self.response = response
+        self.reason = ""
+
+
+class _OfflineExecutionBarrier:
+    """Unit-test-only barrier for fake exchange fixtures; never used in production."""
+    def execute(self, intent, submit, *, pre_submit_checks=None):
+        if pre_submit_checks is not None:
+            pre_submit_checks(None)
+        return _OfflineBarrierResult(submit())
+
+
 @pytest.fixture(autouse=True)
 def _legacy_campaign_mode(monkeypatch):
     monkeypatch.setenv("CAMPAIGN_ENGINE", "false")
+    # Legacy lifecycle tests use fake clients and explicitly mock the final
+    # execution barrier. Separate tests exercise the real barrier contracts.
+    original_init = MultiPositionTrader.__init__
+
+    def init_with_offline_barrier(self, *args, **kwargs):
+        if kwargs.get("execution_barrier") is None:
+            kwargs["execution_barrier"] = _OfflineExecutionBarrier()
+        return original_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(MultiPositionTrader, "__init__", init_with_offline_barrier)
 
 
 
