@@ -288,6 +288,7 @@ class ExecutionBarrier:
                     response = submit()
             except Exception as exc:
                 order_fsm.state = OrderState.AMBIGUOUS
+                self._mark_reconcile_required(intent)
                 self._persist(intent, "AMBIGUOUS", type(exc).__name__)
                 self._record(
                     "ERROR",
