@@ -583,10 +583,14 @@ class FuturesRuntime:
             prepared = replace(
                 signal,
                 context_versions=versions,
+                htf_confirmed=False,
             )
 
             if self.execution._tc2_core_context_allowed(prepared, snapshot):
-                return prepared
+                # H1 passed the TC2 direction/setup gate; H4 is context only.
+                # Mark this admitted state so the final barrier does not treat
+                # it as the special early-WM1 exception.
+                return replace(prepared, htf_confirmed=True)
 
             if (
                 signal.signal_type == SignalType.REVERSAL
