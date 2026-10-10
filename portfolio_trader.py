@@ -1693,7 +1693,25 @@ class MultiPositionTrader:
             repaired = self._repair_stale_reconcile_states()
             unresolved = self.unresolved_symbols()
             pending_keys = self._pending_entries()
-            ok = not unresolved and not pending_keys
+            unresolved_intents = self.db.unresolved_execution_intents()
+            # An exchange-known pending entry may still keep the scanner from
+            # proposing another entry, but it is not an UNKNOWN mutation. Clear
+            # the global mutation latch only after all intent/order/position
+            # reconciliations have completed without unresolved state.
+            reconciled = (
+                not unresolved
+                and not unresolved_intents
+            )
+            if reconciled and self.execution_barrier is not None:
+                try:
+                    latch_cleared = self.execution_barrier.clear_mutation_lock_after_reconciliation(
+                        reconciliation_verified=True,
+                        evidence="startup: pending entry queries, campaign positions, open orders, and unresolved intent table reconciled",
+                    )
+                    reconciled = bool(latch_cleared)
+                except Exception:
+                    reconciled = False
+            ok = reconciled and not pending_keys
             canonical_state = self._sync_legacy_state()
             results = pending + active
             results.extend(
@@ -1709,6 +1727,16 @@ class MultiPositionTrader:
                     "open_campaigns": len(self.db.open_campaigns()),
                     "unresolved_symbols": unresolved,
                     "pending_entries": [x[0] for x in pending_keys],
+                    "unresolved_execution_intents": [
+                        {
+                            "intent_id": x.get("intent_id"),
+                            "symbol": x.get("symbol"),
+                            "purpose": x.get("purpose"),
+                            "operation_kind": x.get("operation_kind"),
+                            "status": x.get("status"),
+                        }
+                        for x in unresolved_intents
+                    ],
                 },
             )
             return {
@@ -1717,6 +1745,16 @@ class MultiPositionTrader:
                 "open_positions": len(self.open_trades()),
                 "open_campaigns": len(self.db.open_campaigns()),
                 "unresolved_symbols": unresolved,
+                "unresolved_execution_intents": [
+                    {
+                        "intent_id": x.get("intent_id"),
+                        "symbol": x.get("symbol"),
+                        "purpose": x.get("purpose"),
+                        "operation_kind": x.get("operation_kind"),
+                        "status": x.get("status"),
+                    }
+                    for x in unresolved_intents
+                ],
                 "state": canonical_state,
             }
 
@@ -1724,7 +1762,19 @@ class MultiPositionTrader:
         repaired = self._repair_stale_reconcile_states()
         unresolved = self.unresolved_symbols()
         pending = self._pending_entries()
-        ok = not unresolved and not pending
+        unresolved_intents = self.db.unresolved_execution_intents()
+        reconciled = not unresolved and not unresolved_intents
+        if reconciled and self.execution_barrier is not None:
+            try:
+                reconciled = bool(
+                    self.execution_barrier.clear_mutation_lock_after_reconciliation(
+                        reconciliation_verified=True,
+                        evidence="startup: legacy positions, order history, pending entries, and unresolved intents reconciled",
+                    )
+                )
+            except Exception:
+                reconciled = False
+        ok = reconciled and not pending
         canonical_state = self._sync_legacy_state()
         results.extend(
             {"symbol": symbol, "state": "FLAT", "stale_reconcile_cleared": True}
@@ -1738,6 +1788,16 @@ class MultiPositionTrader:
                 "open_positions": len(self.open_trades()),
                 "unresolved_symbols": unresolved,
                 "pending_entries": [x[0] for x in self._pending_entries()],
+                "unresolved_execution_intents": [
+                    {
+                        "intent_id": x.get("intent_id"),
+                        "symbol": x.get("symbol"),
+                        "purpose": x.get("purpose"),
+                        "operation_kind": x.get("operation_kind"),
+                        "status": x.get("status"),
+                    }
+                    for x in unresolved_intents
+                ],
             },
         )
         return {
@@ -1745,6 +1805,16 @@ class MultiPositionTrader:
             "results": results,
             "open_positions": len(self.open_trades()),
             "unresolved_symbols": unresolved,
+            "unresolved_execution_intents": [
+                {
+                    "intent_id": x.get("intent_id"),
+                    "symbol": x.get("symbol"),
+                    "purpose": x.get("purpose"),
+                    "operation_kind": x.get("operation_kind"),
+                    "status": x.get("status"),
+                }
+                for x in unresolved_intents
+            ],
         }
 
     # ------------------------------------------------------------------
