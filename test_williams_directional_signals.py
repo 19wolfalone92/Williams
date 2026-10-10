@@ -3,7 +3,11 @@ import pandas as pd
 from campaign_model import SignalRole, SignalSpec, SignalType
 from digital_williams_core import DigitalWilliamsCore
 from strategy import calculate_indicators, config_from_env
-from williams_signals import extract_long_signal_specs, extract_short_signal_specs
+from williams_signals import (
+    _dedupe_and_sort_signal_specs,
+    extract_long_signal_specs,
+    extract_short_signal_specs,
+)
 
 
 def frame():
@@ -292,3 +296,22 @@ def test_short_reversal_has_confirmation_timestamp_and_full_pending_lifetime():
     signal = next(s for s in signals if s.signal_type is SignalType.REVERSAL)
     assert signal.confirmation_time_ms == signal.signal_bar_time_ms
     assert signal.expires_at_ms == signal.confirmation_time_ms + 3 * 300_000
+
+
+def test_signal_order_uses_confirmation_time_not_source_bar_time():
+    # A fractal source bar can be older but becomes actionable only after
+    # right-side confirmation. A reversal confirmed earlier must be selected first.
+    reversal = SignalSpec.new(
+        symbol="BTCUSDT", side="SELL", direction="SHORT",
+        signal_type=SignalType.REVERSAL, role=SignalRole.ENTRY,
+        timeframe="1h", signal_bar_time_ms=200, confirmation_time_ms=200,
+        trigger_price=99.0, protective_reference=101.0,
+    )
+    fractal = SignalSpec.new(
+        symbol="BTCUSDT", side="SELL", direction="SHORT",
+        signal_type=SignalType.FRACTAL, role=SignalRole.ADD_ON,
+        timeframe="1h", signal_bar_time_ms=100, confirmation_time_ms=300,
+        trigger_price=98.0, protective_reference=102.0,
+    )
+    ordered = _dedupe_and_sort_signal_specs([fractal, reversal])
+    assert ordered == [reversal, fractal]
