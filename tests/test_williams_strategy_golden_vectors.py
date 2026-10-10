@@ -317,3 +317,13 @@ def test_pending_signal_explicit_expiry_is_not_replaced_by_default_ttl(monkeypat
     pending = PendingSignal.from_spec(signal)
     assert pending.expires_at_ms == 123
     assert not pending.actionable(now_ms=123)
+
+
+
+@pytest.mark.parametrize("raw_ttl", ["", "not-an-integer", "0", "-3"])
+def test_pending_signal_malformed_or_nonpositive_ttl_fails_closed(monkeypatch, raw_ttl):
+    monkeypatch.setenv("WILLIAMS_PENDING_FRACTAL_BARS", raw_ttl)
+    signal = _pending_test_signal(timeframe="1h", confirmation_time_ms=3_600_000)
+    pending = PendingSignal.from_spec(signal)
+    assert pending.expires_at_ms == 0
+    assert not pending.actionable(now_ms=3_600_001)
