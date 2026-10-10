@@ -28,6 +28,12 @@ class CampaignExecutionService:
         self.client = client
         self.db = db
         self.barrier = execution_barrier
+        # Startup recovery is read-only: it queries exchange state for durable
+        # unresolved intents and never resubmits. Exposure stays blocked until
+        # the normal account/campaign reconciliation proves the resulting position.
+        self.startup_recovery_report = {"resolved": [], "unresolved": []}
+        if self.barrier is not None:
+            self.startup_recovery_report = self.barrier.reconcile_unresolved_intents(self.client)
         self.engine = CampaignEngine(
             db,
             portfolio_risk_limit_pct=float(os.getenv("MAX_TOTAL_RISK_PCT", "0.01")),
