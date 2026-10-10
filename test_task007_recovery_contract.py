@@ -382,6 +382,38 @@ def test_legacy_portfolio_mutation_without_barrier_never_calls_exchange(tmp_path
     assert calls == []
 
 
+def test_ambiguous_oco_submission_recovers_by_list_client_identity(tmp_path):
+    db, client, runtime, portfolio, report, recovery = _recovery_gate_fixture(
+        str(tmp_path / "oco_submission.sqlite3")
+    )
+    client.order_list = lambda symbol, order_list_id=None, list_client_order_id=None: {
+        "symbol": symbol,
+        "orderListId": "77",
+        "listClientOrderId": list_client_order_id or "WILLV5_OCO_ambiguous",
+        "listOrderStatus": "EXECUTING",
+        "listStatusType": "EXEC_STARTED",
+    }
+    intent = OrderIntent.new(
+        "BTCUSDT",
+        "SELL",
+        "OCO",
+        required_context_versions={},
+        client_order_id="WILLV5_OCO_ambiguous",
+        purpose="CAMPAIGN_PROTECTION",
+        campaign_id="campaign-oco",
+    )
+    db.save_execution_intent(intent, "AMBIGUOUS", "OCO response lost")
+
+    runtime._finalize_recovery_gate(report, recovery, portfolio)
+
+    stored = db.conn.execute(
+        "SELECT status FROM execution_intents WHERE intent_id=?",
+        (intent.intent_id,),
+    ).fetchone()
+    assert stored["status"] == "RECONCILED"
+    assert db.state_get("recovery_state") == "READY"
+
+
 def test_ambiguous_oco_cancel_recovers_only_from_terminal_exchange_list(tmp_path):
     db, client, runtime, portfolio, report, recovery = _recovery_gate_fixture(
         str(tmp_path / "cancel_oco.sqlite3")
