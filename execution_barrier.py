@@ -10,6 +10,21 @@ from market_context import ContextCache, MarketStateSnapshot
 from order_state_machine import OrderState, OrderStateMachine
 
 
+def _interval_ms(interval: str) -> int:
+    value = str(interval or "").strip()
+    if value == "1M":
+        return 30 * 24 * 60 * 60 * 1000
+    if not value:
+        return 0
+    unit = value[-1].lower()
+    try:
+        number = int(value[:-1])
+    except (TypeError, ValueError):
+        return 0
+    multiplier = {"m": 60_000, "h": 3_600_000, "d": 86_400_000, "w": 604_800_000}
+    return number * multiplier[unit] if number > 0 and unit in multiplier else 0
+
+
 @dataclass(frozen=True)
 class OrderIntent:
     intent_id: str
@@ -24,6 +39,12 @@ class OrderIntent:
     client_order_id: str = ""
     purpose: str = "ENTRY"
     permission_interval: str = ""
+    # Strict direction permission is the default. TC2 WM1 may use a distinct
+    # early-reversal admission contract, still requiring fresh H1/H4/D1 context
+    # and a proven reversal/angulation signal at this final mutation boundary.
+    context_admission_mode: str = "STRICT_DIRECTIONAL"
+    signal_type: str = ""
+    angulation_score: float = 0.0
     campaign_id: str = ""
     signal_id: str = ""
     risk_quote: float = 0.0
@@ -166,10 +187,61 @@ class ExecutionBarrier:
             permission_ctx = snapshot.context(intent.symbol, permission_tf) if permission_tf else None
             if permission_ctx is None:
                 return f"missing permission context {intent.symbol} {permission_tf}"
-            if direction == "long" and not permission_ctx.allow_long:
-                return f"context {permission_tf} does not allow LONG"
-            if direction == "short" and not permission_ctx.allow_short:
-                return f"context {permission_tf} does not allow SHORT"
+
+            admission_mode = str(
+                getattr(intent, "context_admission_mode", "STRICT_DIRECTIONAL") or "STRICT_DIRECTIONAL"
+            ).strip().upper()
+            if admission_mode == "TC2_WM1_EARLY":
+                if purpose != "CAMPAIGN_ENTRY":
+                    return "TC2_WM1_EARLY is allowed only for a new initial campaign entry"
+                if str(getattr(intent, "signal_type", "") or "").upper() != "REVERSAL":
+                    return "TC2_WM1_EARLY requires a REVERSAL signal"
+                try:
+                    angulation = float(getattr(intent, "angulation_score", 0.0))
+                except (TypeError, ValueError, OverflowError):
+                    return "TC2_WM1_EARLY angulation evidence is invalid"
+                if not __import__("math").isfinite(angulation) or angulation <= 0.0:
+                    return "TC2_WM1_EARLY requires finite positive angulation evidence"
+
+                # Preserve the actual source's early-reversal capability: H1/H4
+                # need not already agree with the new direction. Their contexts
+                # must still exist, be fresh, and be pinned by the intent versions.
+                # D1 is only a macro airbag and may veto an active opposite regime.
+                normalized_versions = {
+                    ("1M" if str(tf) == "1M" else str(tf).lower()): int(ver)
+                    for tf, ver in dict(intent.required_context_versions or {}).items()
+                }
+                for tf in ("1h", "4h", "1d"):
+                    ctx = snapshot.context(intent.symbol, tf)
+                    if ctx is None or tf not in normalized_versions:
+                        return f"TC2_WM1_EARLY requires versioned {tf} context"
+                    if int(ctx.version) != normalized_versions[tf]:
+                        return f"TC2_WM1_EARLY stale {tf} context"
+                    try:
+                        close_ms = int(ctx.candle_close_time_ms)
+                        age_ms = int(time.time() * 1000) - close_ms
+                    except (TypeError, ValueError, OverflowError):
+                        return f"TC2_WM1_EARLY invalid {tf} candle timestamp"
+                    duration = _interval_ms(tf)
+                    if (
+                        duration <= 0
+                        or close_ms <= 0
+                        or age_ms < -60_000
+                        or age_ms > max(120_000, 2 * duration)
+                    ):
+                        return f"TC2_WM1_EARLY stale/invalid {tf} candle"
+                macro = snapshot.context(intent.symbol, "1d")
+                if direction == "long" and macro.allow_short:
+                    return "TC2_WM1_EARLY blocked by active opposite D1 context"
+                if direction == "short" and macro.allow_long:
+                    return "TC2_WM1_EARLY blocked by active opposite D1 context"
+            elif admission_mode == "STRICT_DIRECTIONAL":
+                if direction == "long" and not permission_ctx.allow_long:
+                    return f"context {permission_tf} does not allow LONG"
+                if direction == "short" and not permission_ctx.allow_short:
+                    return f"context {permission_tf} does not allow SHORT"
+            else:
+                return f"unsupported context admission mode {admission_mode}"
 
         # Reconciliation blocks any operation that can increase exposure, but
         # must not disable exits, cancellation, protection or recovery. Those
