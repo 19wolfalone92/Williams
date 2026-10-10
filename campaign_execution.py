@@ -15,6 +15,7 @@ from campaign_model import CampaignState, PendingOrderRecord, SignalSpec, Signal
 from decision_trace import DecisionTrace
 from pending_signal import PendingSignal
 from execution_barrier import ExecutionBarrier, OrderIntent
+from trading_config import execution_timeframe_blocker
 
 
 class CampaignExecutionError(RuntimeError):
@@ -202,11 +203,21 @@ class CampaignExecutionService:
     ) -> dict[str, Any]:
         if signal.side != "BUY":
             raise CampaignExecutionError("Current Spot campaign executor only arms LONG entries")
+        config_blocker = execution_timeframe_blocker(os.environ)
+        if config_blocker:
+            raise CampaignExecutionError(config_blocker)
         if signal.timeframe.strip().lower() != "1h":
             raise CampaignExecutionError("Canonical Spot campaign entries require H1 signals")
         now_ms = int(time.time() * 1000)
-        if signal.confirmation_time_ms <= 0 or signal.expires_at_ms <= now_ms:
-            raise CampaignExecutionError("Signal confirmation/expiry is missing or expired; UNRESOLVED = BLOCKED")
+        if (
+            signal.signal_bar_time_ms <= 0
+            or signal.confirmation_time_ms <= signal.signal_bar_time_ms
+            or signal.expires_at_ms <= now_ms
+            or signal.protective_reference <= 0
+        ):
+            raise CampaignExecutionError(
+                "Signal candle/confirmation/protection is missing, invalid, or expired; UNRESOLVED = BLOCKED"
+            )
 
         reserved = self.engine.portfolio_reserved_risk_quote()
         capacity = max(0.0, float(equity_quote) * self.engine.portfolio_risk_limit_pct)
