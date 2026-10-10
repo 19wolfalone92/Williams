@@ -589,7 +589,7 @@ class ExecutionBarrier:
                     return ExecutionResult(intent.intent_id, False, reason=reason)
 
             try:
-                if intent.operation_kind.upper() == "PLACE" and str(intent.order_type).upper() != "CANCEL":
+                if operation in {"PLACE", "CANCEL", "CANCEL_OCO", "CANCEL_REPLACE"}:
                     try:
                         claimed_identity = self._claim_identities(intent)
                     except Exception as exc:
