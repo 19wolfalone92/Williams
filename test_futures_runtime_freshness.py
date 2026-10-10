@@ -57,6 +57,16 @@ def test_default_universe_is_core_ten():
     assert TradingConfig.from_env({}).symbols == DEFAULT_SYMBOLS
 
 
+def test_symbol_universe_sentinels_resolve_to_core_ten():
+    from futures_runtime import _resolve_futures_symbols
+    from trading_config import DEFAULT_SYMBOLS, TradingConfig
+
+    assert TradingConfig.from_env({"AUTO_SCAN_SYMBOLS": "ALL"}).symbols == DEFAULT_SYMBOLS
+    assert TradingConfig.from_env({"AUTO_SCAN_SYMBOLS": "AUTO"}).symbols == DEFAULT_SYMBOLS
+    assert _resolve_futures_symbols(None, env={"FUTURES_SYMBOLS": "ALL"}) == DEFAULT_SYMBOLS
+    assert _resolve_futures_symbols(None, env={"FUTURES_SYMBOLS": "AUTO"}) == DEFAULT_SYMBOLS
+
+
 def test_auto_scan_sentinel_resolves_to_core_ten_not_a_literal_symbol():
     from trading_config import DEFAULT_SYMBOLS, TradingConfig
 
