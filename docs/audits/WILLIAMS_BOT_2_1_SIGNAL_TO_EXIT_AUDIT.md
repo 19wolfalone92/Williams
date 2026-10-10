@@ -456,3 +456,13 @@ These are implementation-level parity fixes, not proof that the approximation fu
 ### Current pass decision
 
 The WM1 context correction is now committed on the audit branch with regression tests, but those tests and the latest combined code have **not yet been verified on a completed exact-head CI run**. No Demo lifecycle was run by this code change and no real order was sent. The native partial-exit/protective-child aggregation gap, cross-engine golden-vector parity, full fee/funding ledger, and Demo end-to-end proof remain open. **NOT READY FOR LIVE TRADING.**
+
+### 47. A rejected earliest candidate could hide a later valid entry — corrected in Python Futures selection
+
+**Root cause.** The runtime selected the earliest live Wise-Man candidate first, then evaluated operative/H4/D1 context and current market geometry. If that candidate was context-vetoed, had a breached stop, or its trigger was already crossed, the runtime raised an error and never evaluated a later valid WM1/WM2/WM3 candidate from the same scan. Expiry-only filtering did not cover these later admission failures.
+
+**Correction.** Candidate selection now sorts all live candidates by confirmation chronology and evaluates each candidate's trigger/stop geometry against the current Futures mark and each relevant context gate before returning one. A rejected candidate is recorded as a veto and the next candidate is considered. Missing/unavailable mark or required context remains a hard block rather than a reason to guess. Final pre-submit validation still rechecks the selected signal against current exchange state.
+
+**Regression coverage.** Added a test in which an earlier WM2 is vetoed by the operative context and a later structurally valid WM1 is selected; it also asserts that the selected signal retains `htf_confirmed=False` rather than fabricating higher-timeframe confirmation.
+
+**Scope boundary.** The final exchange-side trigger, tick-normalized price, account ownership, risk, and protection checks remain authoritative. Candidate fallback only chooses among already extracted live hypotheses; it does not invent a signal or bypass final admission.
