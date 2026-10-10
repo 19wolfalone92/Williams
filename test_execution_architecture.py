@@ -91,6 +91,10 @@ def _publish_early_wm1_contexts(cache, *, d1_allow_long=False, d1_allow_short=Fa
             teeth=100.0,
             lips=100.0,
             alligator_state="SLEEP",
+            alligator_awake=False,
+            ao_value=0.0,
+            ac_value=0.0,
+            williams_core_ready=True,
             allow_long=d1_allow_long if interval == "1d" else False,
             allow_short=d1_allow_short if interval == "1d" else False,
             decision="LONG" if interval == "1d" and d1_allow_long else
