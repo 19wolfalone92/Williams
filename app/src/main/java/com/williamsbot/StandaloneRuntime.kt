@@ -1171,6 +1171,7 @@ private class NativeEngine(
     fun configure(j: JSONObject): JSONObject =
         configure(j.optString("api_key"), j.optString("api_secret"))
 
+    @Synchronized
     fun configure(apiKey: String, apiSecret: String): JSONObject {
         val newKey = apiKey.trim()
         val newSecret = apiSecret.trim()
@@ -1245,6 +1246,7 @@ private class NativeEngine(
         }
     }
 
+    @Synchronized
     fun clear(): JSONObject {
         if (
             positions.isNotEmpty() ||
@@ -1560,6 +1562,7 @@ private class NativeEngine(
             .put("errors", JSONArray(errors))
     }
 
+    @Synchronized
     fun resetKillSwitch(): JSONObject {
         require(!running) {
             "Stop the bot before resetting the kill switch."
@@ -2761,7 +2764,7 @@ private class NativeEngine(
             reconcileRequired ||
             killLatched ||
             !historyReady ||
-            !restMarketReady
+            !marketDataFresh()
         ) {
             scannerState = when {
                 !running -> "STOPPED"
@@ -2769,7 +2772,7 @@ private class NativeEngine(
                 reconcileRequired -> "BLOCKED_RECONCILE"
                 killLatched -> "BLOCKED_KILL"
                 !historyReady -> "WAITING_FOR_HISTORY"
-                !restMarketReady -> "WAITING_FOR_REST"
+                !marketDataFresh() -> "WAITING_FOR_REST"
                 else -> "WAITING"
             }
             return
@@ -2904,6 +2907,10 @@ private class NativeEngine(
 
     private fun submitCampaignEntry(candidate: BaseAnalysis) {
         if (!campaignEngineEnabled || !candidate.campaignReady) return
+        // Recheck the full runtime gate immediately before creating durable
+        // entry intent. A scan can finish after market/account/stream state
+        // has degraded, so the scan-start gate alone is insufficient.
+        if (!executionReady()) return
         if (reconcileRequired || paused || killLatched) return
         if (positionList().any { it.symbol == candidate.symbol }) return
         if (synchronized(pendingEntries) { pendingEntries.containsKey(candidate.symbol) }) return
@@ -3123,12 +3130,24 @@ private class NativeEngine(
         savePersistedState()
     }
 
-    private fun currentCampaignPrice(symbol: String): Double =
-        livePrices[symbol]
-            ?: JSONObject(
-                getBody("/api/v3/ticker/price?symbol=" + symbol)
-            ).optString("price").toDoubleOrNull()
-            ?: 0.0
+    private fun currentCampaignPrice(symbol: String): Double {
+        // Cached prices are only trusted while the full five-symbol REST probe
+        // remains fresh. Otherwise read a fresh Testnet ticker instead of
+        // letting a previously cached value drive an entry/trailing decision.
+        if (marketDataFresh()) {
+            livePrices[symbol]?.takeIf { it.isFinite() && it > 0.0 }?.let { return it }
+        }
+        val price = JSONObject(
+            getBody("/api/v3/ticker/price?symbol=" + symbol)
+        ).optString("price").toDoubleOrNull() ?: 0.0
+        if (price.isFinite() && price > 0.0) {
+            livePrices[symbol] = price
+            if (symbol in coreSymbols) {
+                restLastSuccessMs = System.currentTimeMillis()
+            }
+        }
+        return price
+    }
 
     private fun campaignExitMarket(position: PositionState, reason: String) {
         val symbol = position.symbol
@@ -3774,6 +3793,9 @@ private class NativeEngine(
         position: PositionState
     ) {
         if (!campaignEngineEnabled || position.campaignId.isBlank()) return
+        // Campaign add-ons are new risk and need the same gate as initial
+        // entries, even when their signal came from a previously valid scan.
+        if (!executionReady()) return
 
         val latestSignalTime =
             position.signalId.substringAfterLast(':').toLongOrNull()
@@ -8074,7 +8096,10 @@ private class NativeEngine(
                         TradingState.SYNC_REQUIRED,
                         TradingState.RECONCILE_REQUIRED
                     ) &&
-                    (running || (positionList().isEmpty() && pendingEntries.isEmpty()))
+                    (running || (
+                        positionList().isEmpty() &&
+                            synchronized(pendingEntries) { pendingEntries.isEmpty() }
+                    ))
             )
             .put("state", stateName())
             .put("execution_enabled", executionReady())
