@@ -870,6 +870,21 @@ class MultiPositionTrader:
             "state": state,
         }
 
+    def _check_algo_capacity(self, symbol, additional=1):
+        filters = self._filters(symbol)
+        open_orders = self.client.open_orders(symbol)
+        max_orders = int((filters.get("MAX_NUM_ORDERS") or {}).get("maxNumOrders", 10**9))
+        max_algo = int((filters.get("MAX_NUM_ALGO_ORDERS") or {}).get("maxNumAlgoOrders", 10**9))
+        if len(open_orders) + int(additional) > max_orders:
+            raise RuntimeError(f"{symbol}: MAX_NUM_ORDERS would be exceeded")
+        algo_open = sum(
+            1 for row in open_orders
+            if str(row.get("type", "")).upper()
+            in {"STOP_LOSS", "STOP_LOSS_LIMIT", "TAKE_PROFIT", "TAKE_PROFIT_LIMIT"}
+        )
+        if algo_open + int(additional) > max_algo:
+            raise RuntimeError(f"{symbol}: MAX_NUM_ALGO_ORDERS would be exceeded")
+
     def _create_oco(
         self,
         symbol,
