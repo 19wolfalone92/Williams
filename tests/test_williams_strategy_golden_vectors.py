@@ -5,6 +5,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from campaign_engine import CampaignEngine
 from campaign_model import SignalRole, SignalSpec, SignalType
@@ -48,6 +49,20 @@ def _frame(medians, highs=None, lows=None, times=None):
         },
         index=index,
     )
+
+
+def test_smma_fails_closed_on_invalid_seed_and_does_not_silently_reseed_after_gap():
+    from strategy import smma
+
+    index = pd.RangeIndex(8)
+    invalid_seed = pd.Series([1.0, np.nan, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], index=index)
+    assert smma(invalid_seed, 3).isna().all()
+
+    gap_after_seed = pd.Series([1.0, 2.0, 3.0, 4.0, np.nan, 6.0, 7.0, 8.0], index=index)
+    result = smma(gap_after_seed, 3)
+    assert result.iloc[2] == pytest.approx(2.0)
+    assert result.iloc[3] == pytest.approx((2.0 * 2.0 + 4.0) / 3.0)
+    assert result.iloc[4:].isna().all()
 
 
 def test_python_alligator_and_ao_ac_match_shared_golden_vectors():
@@ -242,5 +257,3 @@ def test_live_williams_profile_mismatch_is_blocked_and_timeframes_are_separated(
     assert config.structural_timeframes == ("1d", "4h", "1h", "15m", "5m")
     assert TradingConfig.from_env({"EXECUTION_TIMEFRAME": "5m"}).execution_timeframe == "5m"
 
-
-import pytest
