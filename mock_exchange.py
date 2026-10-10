@@ -247,35 +247,57 @@ class MockExchange:
                        time_in_force=None, new_client_order_id=None):
         old = self.get_order(symbol, order_id=cancel_order_id)
         self.cancel_order(symbol, order_id=cancel_order_id)
+        old["status"] = "CANCELED"
+        replacement = self.order_safe(
+            symbol,
+            side,
+            type_,
+            quantity=quantity,
+            price=price,
+            stop_price=stop_price,
+            time_in_force=time_in_force,
+            new_client_order_id=new_client_order_id,
+        )
         return {
             "cancelResult": "SUCCESS",
+            "cancelResponse": old,
             "newOrderResult": "SUCCESS",
-            "newOrderResponse": self.order_safe(
-                symbol,
-                side,
-                type_,
-                quantity=quantity,
-                price=price,
-                stop_price=stop_price,
-                time_in_force=time_in_force,
-                new_client_order_id=new_client_order_id,
-            ),
+            "newOrderResponse": replacement,
         }
 
     def create_oco_sell(self, symbol, quantity, take_profit, stop_price, stop_limit, client_order_id):
         if self.timeout_next:
             self.timeout_next = False
             raise TimeoutError("mock 504 timeout")
+        list_id = str(len(self.open_oco) + 1)
         item = {
-            "orderListId": str(len(self.open_oco) + 1),
+            "orderListId": list_id,
             "symbol": symbol,
+            "listClientOrderId": client_order_id,
+            "listStatusType": "EXEC_STARTED",
+            "listOrderStatus": "EXECUTING",
             "status": "EXECUTING",
             "clientOrderId": client_order_id,
             "quantity": str(quantity),
             "takeProfit": str(take_profit),
             "stopPrice": str(stop_price),
             "stopLimitPrice": str(stop_limit),
-            "orderReports": [],
+            "orderReports": [
+                {
+                    "symbol": symbol, "side": "SELL", "type": "TAKE_PROFIT_LIMIT",
+                    "orderId": str(int(list_id) * 10 + 1),
+                    "orderListId": list_id, "clientOrderId": client_order_id + "_TP",
+                    "status": "NEW", "origQty": str(quantity), "executedQty": "0",
+                    "price": str(take_profit), "stopPrice": str(take_profit),
+                },
+                {
+                    "symbol": symbol, "side": "SELL", "type": "STOP_LOSS_LIMIT",
+                    "orderId": str(int(list_id) * 10 + 2),
+                    "orderListId": list_id, "clientOrderId": client_order_id + "_SL",
+                    "status": "NEW", "origQty": str(quantity), "executedQty": "0",
+                    "price": str(stop_limit), "stopPrice": str(stop_price),
+                },
+            ],
         }
         self.open_oco[symbol] = item
         return item
