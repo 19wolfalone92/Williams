@@ -687,7 +687,7 @@ def test_legacy_trader_preserves_entry_identity_while_execution_is_unresolved():
 
     # Guard must execute before writing a new entry_client_order_id, and the
     # barrier-rejected branch must re-check unresolved state before deleting it.
-    buy_start = trader_source.index("    def buy(")
+    buy_start = trader_source.index("    def market_buy(")
     buy_end = trader_source.find("\\n    def ", buy_start + 1)
     buy_body = trader_source[buy_start:buy_end if buy_end >= 0 else len(trader_source)]
     guard_pos = buy_body.index("if self._execution_recovery_blocked():")
