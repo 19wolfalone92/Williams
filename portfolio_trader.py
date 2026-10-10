@@ -701,6 +701,11 @@ class MultiPositionTrader:
             raise RuntimeError(f"{asset}: cannot value Binance commission in USDT") from None
 
     def _authoritative_execution(self, symbol, order):
+        """Return only a complete, exchange-backed fill/fee summary.
+
+        Order-level executedQty is not a substitute for per-trade commission
+        evidence. Any unavailable/incomplete trade history is a hard blocker.
+        """
         payload = dict(order or {})
         fills = list(payload.get("fills") or [])
         order_id = payload.get("orderId")
@@ -709,10 +714,12 @@ class MultiPositionTrader:
                 rows = self.client.my_trades(symbol, order_id=order_id, limit=1000)
                 fills = [
                     {
-                        "price": row.get("price", "0"),
-                        "qty": row.get("qty", row.get("executedQty", "0")),
-                        "commission": row.get("commission", "0"),
-                        "commissionAsset": row.get("commissionAsset", ""),
+                        "tradeId": row.get("id", row.get("tradeId")),
+                        "orderId": row.get("orderId", order_id),
+                        "price": row.get("price"),
+                        "qty": row.get("qty"),
+                        "commission": row.get("commission"),
+                        "commissionAsset": row.get("commissionAsset"),
                     }
                     for row in (rows or [])
                 ]
@@ -722,36 +729,36 @@ class MultiPositionTrader:
                 self.db.log_event(
                     "WARNING",
                     "fill_commission_lookup_failed",
-                    f"{symbol}: myTrades lookup unavailable; using order-level fill data",
-                    {"order_id": order_id, "error": redact_text(str(exc))},
+                    f"{symbol}: authoritative myTrades lookup unavailable",
+                    {"order_id": order_id, "error_type": type(exc).__name__},
                 )
-        base_asset = symbol[:-4] if symbol.endswith("USDT") else ""
-        summary = accumulate_order(payload, base_asset=base_asset)
-        extra_fee_quote = Decimal("0")
-        known_assets = {"USDT", "USDC", "FDUSD", "BUSD", base_asset}
-        for fill in payload.get("fills") or []:
-            commission = Decimal(str(fill.get("commission", "0") or "0"))
-            asset = str(fill.get("commissionAsset", "")).upper()
-            if commission <= 0 or asset in known_assets:
-                continue
-            price = float(fill.get("price", "0") or 0.0)
-            extra_fee_quote += commission * Decimal(str(
-                self._fee_quote_for_asset(asset, base_asset, trade_price=price)
-            ))
-        if extra_fee_quote <= 0:
-            return summary
-        return ExecutionSummary(
-            summary.executed_qty,
-            summary.quote_qty,
-            summary.avg_price,
-            summary.fee_quote,
-            summary.commission_base,
-            summary.fee_quote_equivalent + extra_fee_quote,
-        )
+                raise RuntimeError(f"{symbol}: authoritative fill history unavailable") from None
 
-    # ------------------------------------------------------------------
-    # Protection
-    # ------------------------------------------------------------------
+        base_asset = symbol[:-4] if symbol.endswith("USDT") else ""
+        if not fills and Decimal(str(payload.get("executedQty", "0") or "0")) > 0:
+            raise RuntimeError(f"{symbol}: executed order has no authoritative per-trade fills")
+
+        # Value third-asset commissions only with a successfully fetched conversion.
+        fee_quote_values = {}
+        for fill in fills:
+            asset = str(fill.get("commissionAsset") or "").upper()
+            if not asset or asset in {"USDT", "USDC", "FDUSD", "BUSD", base_asset}:
+                continue
+            commission = Decimal(str(fill.get("commission"))) if fill.get("commission") is not None else None
+            if commission is None or not commission.is_finite() or commission < 0:
+                raise RuntimeError(f"{symbol}: commission data incomplete")
+            if commission > 0:
+                price = float(fill.get("price", 0) or 0)
+                fee_quote_values[asset] = Decimal(str(
+                    self._fee_quote_for_asset(asset, base_asset, trade_price=price)
+                ))
+
+        summary = accumulate_order(
+            payload, base_asset=base_asset, asset_quote_values=fee_quote_values
+        )
+        if not summary.financials_complete:
+            raise RuntimeError(f"{symbol}: financial reconciliation incomplete")
+        return summary
 
     def _emergency_market_sell(self, symbol, qty, trade_id, reason):
         """Close a just-filled/unprotected Spot position if protection is already breached."""
