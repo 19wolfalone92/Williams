@@ -272,3 +272,22 @@ def test_daily_stop_out_counter_ignores_explicit_spot_campaigns():
         assert db.count_confirmed_stop_exits_since("2000-01-01 00:00:00") == 1
     finally:
         db.conn.close()
+
+
+
+def test_persisted_monthly_signal_keeps_monthly_timeframe():
+    from futures_runtime import signal_spec_from_dict
+    raw = {
+        "signal_id": "BTCUSDT:1M:REVERSAL:LONG:1800000000000",
+        "symbol": "BTCUSDT",
+        "side": "BUY",
+        "direction": "LONG",
+        "signal_type": "REVERSAL",
+        "role": "ENTRY",
+        "timeframe": "1M",
+        "signal_bar_time_ms": 1_800_000_000_000,
+        "trigger_price": 101.0,
+        "protective_reference": 95.0,
+    }
+    signal = signal_spec_from_dict(raw)
+    assert signal.timeframe == "1M"
