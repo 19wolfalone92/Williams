@@ -166,7 +166,9 @@ class ExecutionBarrier:
             order_fsm.transition(OrderState.ADMISSION)
             key = str(intent.intent_id)
             client_key = str(intent.client_order_id or "")
-            if key in self._attempted_intents or (client_key and client_key in self._attempted_client_order_ids):
+            if not client_key:
+                return ExecutionResult(intent.intent_id, False, reason="client_order_id_required")
+            if key in self._attempted_intents or client_key in self._attempted_client_order_ids:
                 return ExecutionResult(intent.intent_id, False, reason="duplicate_or_unresolved_intent_requires_reconciliation")
             try:
                 prior = self._existing_intent(intent)
@@ -187,17 +189,24 @@ class ExecutionBarrier:
                     False,
                     reason="unresolved_execution_intent_requires_reconciliation",
                 )
-            # The durable write-ahead intent is a hard precondition for any
-            # exchange mutation. If SQLite cannot commit it, do not call submit.
+            # This transaction re-checks both clientOrderId uniqueness and the
+            # global unresolved-intent gate under SQLite's write lock.
             try:
-                self._persist(intent, "PENDING")
-                # Reusing this intent after any later failure requires recovery,
-                # even when a subsequent BLOCKED/AMBIGUOUS write also fails.
+                if self.db is None or not hasattr(self.db, "claim_execution_intent"):
+                    raise RuntimeError("atomic_execution_intent_claim_unavailable")
+                claimed = self.db.claim_execution_intent(intent)
+                if not claimed:
+                    return ExecutionResult(
+                        intent.intent_id,
+                        False,
+                        reason="duplicate_or_unresolved_intent_requires_reconciliation",
+                    )
+                # Once a durable PENDING claim exists, this intent cannot be
+                # replayed in-process, even if a later status write fails.
                 self._attempted_intents.add(key)
-                if client_key:
-                    self._attempted_client_order_ids.add(client_key)
+                self._attempted_client_order_ids.add(client_key)
             except Exception as exc:
-                reason = f"intent_persistence_failed: {type(exc).__name__}"
+                reason = self._safe_error_reason("intent_persistence_failed", exc)
                 self._record("ERROR", "execution_blocked", intent, reason)
                 return ExecutionResult(intent.intent_id, False, reason=reason)
 
