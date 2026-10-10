@@ -153,6 +153,7 @@ def signal_spec_from_dict(raw: dict[str, Any]) -> SignalSpec:
         context_versions=dict(raw.get("context_versions", {}) or {}),
         reason=str(raw.get("reason", "")),
         created_at_ms=int(raw.get("created_at_ms", 0) or 0),
+        confirmation_time_ms=int(raw.get("confirmation_time_ms", 0) or 0),
         expires_at_ms=int(raw.get("expires_at_ms", 0) or 0),
         source_candle_index=(
             -1 if raw.get("source_candle_index", -1) is None
