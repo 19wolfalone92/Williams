@@ -94,6 +94,7 @@ def _tc2_barrier_intent(signal_type, *, mode="STRICT_DIRECTIONAL", trigger=101.0
         {"1h": 1, "4h": 1},
         invalidation_level=97.0,
         signal_trigger_price=trigger,
+        signal_expires_at_ms=int(time.time() * 1000) + 60_000,
         quantity="1.0",
         client_order_id=f"TC2_TEST_{signal_type}_{mode}",
         purpose="CAMPAIGN_ENTRY",
@@ -127,6 +128,33 @@ def test_final_execution_barrier_accepts_wm2_without_d1_or_aligned_alligator(mon
                 SleepingH1WithoutD1(),
             )
             assert reason == ""
+        finally:
+            db.conn.close()
+
+
+def test_final_execution_barrier_rejects_expired_tc2_signal(monkeypatch):
+    monkeypatch.setenv("WILLIAMS_STRATEGY_PROFILE", "TC2_THREE_WISE_MEN")
+    with tempfile.TemporaryDirectory() as directory:
+        db = Database(os.path.join(directory, "barrier-expired-signal.sqlite3"))
+        try:
+            barrier = ExecutionBarrier(FakeCache(), db)
+            expired = OrderIntent.new(
+                "BTCUSDT",
+                "BUY",
+                "STOP_LOSS",
+                {"1h": 1, "4h": 1},
+                invalidation_level=97.0,
+                signal_trigger_price=101.0,
+                signal_expires_at_ms=int(time.time() * 1000) - 1,
+                quantity="1.0",
+                client_order_id="TC2_EXPIRED_SIGNAL",
+                purpose="CAMPAIGN_ENTRY",
+                permission_interval="1h",
+                signal_type="SUPER_AO",
+            )
+            assert "expired before execution" in barrier._validate(
+                expired, FakeSnapshot()
+            )
         finally:
             db.conn.close()
 
