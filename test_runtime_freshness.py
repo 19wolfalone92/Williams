@@ -3,7 +3,7 @@ import time
 import pytest
 
 from runtime_freshness import (
-    DEFAULT_MAX_AGE_MS,
+    FRESHNESS_COMPONENTS,
     EXPECTED_SOURCES,
     FreshnessEvidence,
     evaluate_freshness,
@@ -21,9 +21,9 @@ def evidence(component, *, at=100_000, source=None, valid=True, generation="g1")
     )
 
 
-@pytest.mark.parametrize("component", list(DEFAULT_MAX_AGE_MS))
+@pytest.mark.parametrize("component", list(FRESHNESS_COMPONENTS))
 def test_fresh_component_measurement_passes(component):
-    result = evaluate_freshness(component, evidence(component), now_ms=100_000)
+    result = evaluate_freshness(component, evidence(component), now_ms=100_000, max_age_ms=1_000)
     assert result.status == "PASS"
     assert result.age_ms == 0
 
@@ -32,6 +32,7 @@ def test_stale_measurement_fails_closed():
     result = evaluate_freshness(
         "market_websocket", evidence("market_websocket", at=90_000),
         now_ms=100_000,
+        max_age_ms=1_000,
     )
     assert result.status == "FAIL"
     assert result.reason == "measurement_stale"
@@ -82,6 +83,7 @@ def test_missing_required_component_is_not_inferred_from_report_timestamp():
         ("account", "market_websocket", "android_runtime"),
         {"account": evidence("account", at=100_000)},
         now_ms=100_000,
+        max_ages_ms={"account": 1_000},
     )
     assert results["account"].status == "PASS"
     assert results["market_websocket"].status == "UNKNOWN"
@@ -95,3 +97,16 @@ def test_generation_is_required_to_detect_measurement_identity():
     )
     assert result.status == "UNKNOWN"
     assert result.reason == "measurement_generation_missing"
+
+
+def test_missing_approved_budget_remains_unknown_even_with_fresh_measurement():
+    result = evaluate_freshness(
+        "market_websocket", evidence("market_websocket"),
+        now_ms=100_000,
+    )
+    assert result.status == "UNKNOWN"
+    assert result.reason == "freshness_budget_unapproved"
+
+
+def test_unapproved_budget_cannot_be_inferred_from_component_defaults():
+    assert DEFAULT_MAX_AGE_MS == {}
