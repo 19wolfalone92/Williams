@@ -530,6 +530,23 @@ def test_native_android_signed_order_mutations_are_fenced_before_network():
     assert "unresolvedExecutionMutationCount()" in runtime
     assert "unresolvedExecutionMutationCount(spec.symbol)" in runtime
 
+    # signedRequest is the sole native write boundary. The other direct HTTP
+    # call is the GET-only helper; a newly added raw network sender must fail CI.
+    network_senders = [
+        line for line in runtime.splitlines()
+        if "http.newCall(" in line and ".execute()" in line
+    ]
+    assert len(network_senders) == 2, (
+        "native raw HTTP senders changed; audit every path before acceptance"
+    )
+    raw_get_start = runtime.index("private fun signedRawGet(")
+    raw_get_end = runtime.find("\n    private fun ", raw_get_start + 1)
+    if raw_get_end < 0:
+        raw_get_end = len(runtime)
+    raw_get = runtime[raw_get_start:raw_get_end]
+    assert "http.newCall(request).execute()" in raw_get
+    assert "http.newCall(request).execute()" not in signed_request
+
 
 def test_native_optional_rest_telemetry_is_not_execution_authority():
     from pathlib import Path
