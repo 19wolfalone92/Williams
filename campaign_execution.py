@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 import json
+from decimal import Decimal, ROUND_DOWN, ROUND_CEILING
 import os
 import uuid
 
@@ -60,15 +61,15 @@ class CampaignExecutionService:
     def _floor(value: float, step: float) -> float:
         import math
         try:
-            value = float(value)
-            step = float(step)
-        except (TypeError, ValueError, OverflowError) as exc:
-            raise CampaignExecutionError("quantity/price and exchange step must be numeric") from exc
-        if not math.isfinite(value) or value <= 0:
+            value_d, step_d = Decimal(str(value)), Decimal(str(step))
+        except Exception as exc:
+            raise CampaignExecutionError("quantity/price and exchange step must be decimal numbers") from exc
+        if not value_d.is_finite() or value_d <= 0:
             raise CampaignExecutionError("quantity/price must be finite and positive")
-        if not math.isfinite(step) or step <= 0:
+        if not step_d.is_finite() or step_d <= 0:
             raise CampaignExecutionError("exchange step/tick filter is missing or invalid")
-        result = math.floor(value / step + 1e-12) * step
+        result_d = (value_d / step_d).to_integral_value(rounding=ROUND_DOWN) * step_d
+        result = float(result_d)
         if not math.isfinite(result) or result <= 0:
             raise CampaignExecutionError("normalized quantity/price is invalid")
         return result
@@ -107,10 +108,24 @@ class CampaignExecutionService:
         if not all(math.isfinite(v) for v in (notional, trigger, step, minimum, maximum)) or notional <= 0 or trigger <= 0 or step <= 0 or minimum < 0 or maximum <= 0 or minimum > maximum:
             raise CampaignExecutionError(f"{symbol}: invalid entry/filter values")
         qty = self._floor(notional / trigger, step)
+        market_lot = filters.get("MARKET_LOT_SIZE")
+        if not isinstance(market_lot, dict) or not {"stepSize", "minQty", "maxQty"}.issubset(market_lot):
+            raise CampaignExecutionError(f"{symbol}: MARKET_LOT_SIZE filter unavailable for conditional market execution")
+        try:
+            market_step, market_min, market_max = (
+                float(market_lot[k]) for k in ("stepSize", "minQty", "maxQty")
+            )
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise CampaignExecutionError(f"{symbol}: MARKET_LOT_SIZE values invalid") from exc
+        if not all(math.isfinite(v) for v in (market_step, market_min, market_max)) or market_step <= 0 or market_min < 0 or market_max <= 0 or market_min > market_max:
+            raise CampaignExecutionError(f"{symbol}: MARKET_LOT_SIZE values invalid")
+        qty = self._floor(qty, market_step)
         if qty > maximum:
             qty = self._floor(maximum, step)
-        if qty < minimum or qty > maximum:
-            raise CampaignExecutionError(f"{symbol}: normalized entry quantity violates LOT_SIZE")
+        if qty > market_max:
+            qty = self._floor(market_max, market_step)
+        if qty < minimum or qty > maximum or qty < market_min or qty > market_max:
+            raise CampaignExecutionError(f"{symbol}: normalized entry quantity violates LOT_SIZE/MARKET_LOT_SIZE")
         nf = filters.get("NOTIONAL") or filters.get("MIN_NOTIONAL")
         if not isinstance(nf, dict) or "minNotional" not in nf:
             raise CampaignExecutionError(f"{symbol}: NOTIONAL/MIN_NOTIONAL filter unavailable")
@@ -142,9 +157,35 @@ class CampaignExecutionService:
             raise CampaignExecutionError(f"{symbol}: PRICE_FILTER.tickSize unavailable")
         try:
             tick = float(pf["tickSize"])
+            min_price = float(pf.get("minPrice", "0") or 0)
+            max_price = float(pf.get("maxPrice", "0") or 0)
+            price = float(price)
         except (TypeError, ValueError, OverflowError) as exc:
-            raise CampaignExecutionError(f"{symbol}: invalid PRICE_FILTER.tickSize") from exc
-        return self._floor(price, tick)
+            raise CampaignExecutionError(f"{symbol}: invalid PRICE_FILTER values") from exc
+        import math
+        if not all(math.isfinite(v) for v in (price, tick, min_price, max_price)) or price <= 0 or tick <= 0 or min_price < 0 or max_price < 0:
+            raise CampaignExecutionError(f"{symbol}: invalid PRICE_FILTER values")
+        result = self._floor(price, tick)
+        if min_price > 0 and result < min_price:
+            raise CampaignExecutionError(f"{symbol}: price below PRICE_FILTER.minPrice")
+        if max_price > 0 and result > max_price:
+            raise CampaignExecutionError(f"{symbol}: price above PRICE_FILTER.maxPrice")
+        return result
+
+    def _normalize_trigger_price(self, symbol: str, price: float, *, filters=None) -> float:
+        filters = filters if filters is not None else self._rules(symbol)
+        pf = filters.get("PRICE_FILTER")
+        if not isinstance(pf, dict):
+            raise CampaignExecutionError(f"{symbol}: PRICE_FILTER unavailable")
+        try:
+            tick, value = Decimal(str(pf["tickSize"])), Decimal(str(price))
+        except Exception as exc:
+            raise CampaignExecutionError(f"{symbol}: invalid trigger/tick decimal") from exc
+        if not tick.is_finite() or tick <= 0 or not value.is_finite() or value <= 0:
+            raise CampaignExecutionError(f"{symbol}: trigger/tick must be finite and positive")
+        result = float((value / tick).to_integral_value(rounding=ROUND_CEILING) * tick)
+        self._normalize_price(symbol, result, filters=filters)
+        return result
 
     def _check_buy_position_capacity(self, symbol: str, quantity: float) -> None:
         filters = self._rules(symbol)
@@ -193,7 +234,8 @@ class CampaignExecutionService:
     def _current_price(self, symbol: str) -> float:
         row = self.client.ticker_price(symbol)
         price = float(row.get("price", 0) or 0)
-        if price <= 0:
+        import math
+        if not math.isfinite(price) or price <= 0:
             raise CampaignExecutionError(f"{symbol}: invalid current market price")
         return price
 
@@ -258,8 +300,20 @@ class CampaignExecutionService:
         if not isinstance(filters.get("PRICE_FILTER"), dict) or not isinstance(filters.get("LOT_SIZE"), dict) or not (isinstance(filters.get("NOTIONAL"), dict) or isinstance(filters.get("MIN_NOTIONAL"), dict)):
             raise CampaignExecutionError(f"{signal.symbol}: required exchange price/lot/notional filters are missing")
         current = self._current_price(signal.symbol)
-        trigger = self._normalize_price(signal.symbol, raw_trigger, filters=filters)
+        trigger = self._normalize_trigger_price(signal.symbol, raw_trigger, filters=filters)
         stop = self._normalize_price(signal.symbol, structural_reference, filters=filters)
+        account = self.client.account()
+        if not isinstance(account, dict) or not isinstance(account.get("balances"), list):
+            raise CampaignExecutionError("fresh account balances unavailable; entry blocked")
+        try:
+            free_usdt = float(next(
+                (b.get("free") for b in account["balances"] if str(b.get("asset", "")).upper() == "USDT"),
+                None,
+            ))
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise CampaignExecutionError("free USDT balance unavailable; entry blocked") from exc
+        if not math.isfinite(free_usdt) or free_usdt <= 0:
+            raise CampaignExecutionError("free USDT balance is invalid or insufficient; entry blocked")
 
         if trigger <= current:
             raise CampaignExecutionError(
@@ -302,6 +356,7 @@ class CampaignExecutionService:
             notional = min(
                 equity_quote * capital_fraction,
                 risk_quote / effective_loss_fraction,
+                free_usdt * 0.95,
             )
             qty = self._normalized_entry_qty(signal.symbol, notional, trigger, filters=filters)
             if qty * trigger > notional + max(1e-10, notional * 1e-10):
@@ -358,6 +413,21 @@ class CampaignExecutionService:
             if now_price >= trigger:
                 raise CampaignExecutionError(
                     f"{signal.symbol}: trigger already crossed at {now_price:.12g}"
+                )
+            latest_account = self.client.account()
+            latest_balances = latest_account.get("balances") if isinstance(latest_account, dict) else None
+            if not isinstance(latest_balances, list):
+                raise CampaignExecutionError(f"{signal.symbol}: last-mile account balance unavailable")
+            try:
+                latest_free_usdt = float(next(
+                    (b.get("free") for b in latest_balances if str(b.get("asset", "")).upper() == "USDT"),
+                    None,
+                ))
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise CampaignExecutionError(f"{signal.symbol}: last-mile free USDT invalid") from exc
+            if not math.isfinite(latest_free_usdt) or latest_free_usdt + 1e-9 < qty * trigger:
+                raise CampaignExecutionError(
+                    f"{signal.symbol}: fresh free USDT is insufficient for reserved order quantity"
                 )
 
             # For the fractal signal, validity is specifically evaluated at

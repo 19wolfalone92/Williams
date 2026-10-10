@@ -5,6 +5,7 @@ trading until reconciliation is performed.
 """
 
 import os
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -43,10 +44,10 @@ class PreflightCheckService:
     EMERGENCY_PREFIX = "WILLV4_EMERGENCY_"
     MANUAL_PREFIX = "WILLV4_MANUAL_"
 
-    def __init__(self, client, *, symbols=None, max_open_positions=0, max_offset_ms=None):
+    def __init__(self, client, *, symbols=None, max_open_positions=1, max_offset_ms=None):
         self.client = client
         self.symbols = [str(x).upper() for x in (symbols or []) if str(x).strip()]
-        self.max_open_positions = int(max_open_positions)
+        self.max_open_positions = max(0, min(1, int(max_open_positions)))
         self.max_offset_ms = int(
             max_offset_ms if max_offset_ms is not None
             else os.getenv("LIVE_MAX_TIME_OFFSET_MS", "1000")
@@ -214,13 +215,29 @@ class PreflightCheckService:
         if not self._check_orders(report, allow_known_orders=allow_reconciled_orders):
             return report.as_dict()
 
-        # Position count is intentionally NOT a safety gate. The portfolio
-        # risk budget determines how many independent positions may exist.
+        try:
+            requested_total = float(os.getenv("MAX_TOTAL_RISK_PCT", "0.006"))
+            requested_trade = float(os.getenv("MAX_RISK_PER_TRADE_PCT", "0.0025"))
+        except (TypeError, ValueError, OverflowError):
+            report.fail("position_capacity", reason="risk budget configuration is non-numeric")
+            return report.as_dict()
+        if not math.isfinite(requested_total) or not math.isfinite(requested_trade):
+            report.fail("position_capacity", reason="risk budget configuration is non-finite")
+            return report.as_dict()
+        total_risk = min(0.006, requested_total)
+        per_trade = min(0.0025, requested_trade)
+        if self.max_open_positions <= 0:
+            report.fail("position_capacity", reason="new entries explicitly disabled")
+            return report.as_dict()
+        if total_risk <= 0 or per_trade <= 0:
+            report.fail("position_capacity", reason="risk budget invalid")
+            return report.as_dict()
         report.passed(
             "position_capacity",
-            mode="RISK_BUDGET",
-            max_total_risk_pct=os.getenv("MAX_TOTAL_RISK_PCT", "0.01"),
-            max_risk_per_trade_pct=os.getenv("MAX_RISK_PER_TRADE_PCT", "0.005"),
+            mode="ONE_ACTIVE_CAMPAIGN",
+            max_open_positions=self.max_open_positions,
+            max_total_risk_pct=total_risk,
+            max_risk_per_trade_pct=per_trade,
         )
         report.ready = True
         return report.as_dict()

@@ -69,7 +69,7 @@ class EquityCircuitBreaker:
             now = datetime.now(timezone.utc)
             midnight = datetime.combine(now.date(), datetime.min.time(), tzinfo=timezone.utc)
             observed_at = datetime.fromtimestamp(observed_ms / 1000.0, tz=timezone.utc)
-            if observed_at < midnight - timedelta(minutes=5) or observed_at > now:
+            if observed_at < midnight - timedelta(minutes=5) or observed_at >= midnight or observed_at > now:
                 raise ValueError("no trustworthy equity snapshot near UTC day start")
         elif stored_day is None and stored_equity is None:
             if self._database_has_risk_history(db):
@@ -119,13 +119,17 @@ class EquityCircuitBreaker:
 
         try:
             start_equity = self._today_start_equity(db, equity)
+            # Persist every valid observation even after the daily latch trips,
+            # so a trustworthy UTC-boundary sample can seed tomorrow's base.
+            db.state_set("last_observed_equity", repr(equity))
+            db.state_set("last_observed_equity_at_ms", str(int(datetime.now(timezone.utc).timestamp() * 1000)))
             if str(db.state_get("daily_risk_tripped", "false")).lower() == "true":
                 return False, "daily loss breaker is latched for this UTC day; new entries blocked"
             loss_limit = start_equity * self.max_daily_loss_pct
             if not math.isfinite(loss_limit) or loss_limit < 0:
                 raise ValueError("daily loss limit is invalid")
         except Exception as exc:
-            return False, f"daily start equity unavailable; new entries blocked ({type(exc).__name__})"
+            return False, f"daily start equity/snapshot unavailable; new entries blocked ({type(exc).__name__})"
 
         # Check both the durable PnL ledger and marked equity. Either source can
         # trip the breaker; this avoids treating missing unrealized PnL as zero
@@ -142,9 +146,4 @@ class EquityCircuitBreaker:
                 f"limit={-loss_limit:.8f}"
             )
 
-        try:
-            db.state_set("last_observed_equity", repr(equity))
-            db.state_set("last_observed_equity_at_ms", str(int(datetime.now(timezone.utc).timestamp() * 1000)))
-        except Exception as exc:
-            return False, f"equity snapshot could not be persisted; new entries blocked ({type(exc).__name__})"
         return True, "ok"
