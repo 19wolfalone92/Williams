@@ -26,6 +26,7 @@ class OrderIntent:
     quantity: str = ""
     quote_order_quantity: str = ""
     client_order_id: str = ""
+    target_order_id: str = ""
     purpose: str = "ENTRY"
     permission_interval: str = ""
     campaign_id: str = ""
