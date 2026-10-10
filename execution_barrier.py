@@ -331,10 +331,9 @@ class ExecutionBarrier:
         operation = str(intent.operation_kind or "PLACE").strip().upper()
         is_entry = self._is_new_exposure(intent)
 
-        # An unresolved mutation is a portfolio-wide entry veto, not a reason
-        # to strand a confirmed-position reduction or a targeted cancellation.
-        if is_entry and self.mutation_locked:
-            return f"MUTATION_LOCKED_RECONCILIATION_REQUIRED: {self.mutation_lock_reason}"
+        # Context/risk reasons are evaluated before reporting the global
+        # mutation latch. This remains fail-closed but gives diagnostics the
+        # actual stale/missing-context cause instead of masking it as a DB error.
 
         if is_entry and intent.created_at_ms:
             age = int(time.time() * 1000) - int(intent.created_at_ms)
@@ -412,6 +411,8 @@ class ExecutionBarrier:
                 if not macro_permission:
                     return f"D1 macro context does not permit WM1 {direction.upper()} reversal"
 
+            if self.mutation_locked:
+                return f"MUTATION_LOCKED_RECONCILIATION_REQUIRED: {self.mutation_lock_reason}"
             if self.db is None and self.require_durable_intent:
                 return "durable execution database unavailable"
             if self.db is not None:
@@ -714,7 +715,38 @@ class ExecutionBarrier:
                     raise ExecutionAmbiguousError(f"ExecutionBarrier: {reason}")
 
                 status = self._response_status(response)
-                if operation == "CANCEL_REPLACE":
+                oco_reports = (
+                    response.get("orderReports")
+                    if isinstance(response, dict) else None
+                )
+                if (
+                    operation == "PLACE"
+                    and isinstance(response, dict)
+                    and response.get("orderListId") is not None
+                    and isinstance(oco_reports, list)
+                    and oco_reports
+                ):
+                    leg_statuses = [
+                        self._response_status(leg)
+                        for leg in oco_reports if isinstance(leg, dict)
+                    ]
+                    leg_fills = []
+                    for leg in oco_reports:
+                        try:
+                            leg_fills.append(float(leg.get("executedQty", 0) or 0))
+                        except (TypeError, ValueError):
+                            leg_fills.append(-1.0)
+                    if (
+                        len(leg_statuses) == len(oco_reports)
+                        and all(x in {"NEW", "PENDING_NEW"} for x in leg_statuses)
+                        and all(x == 0.0 for x in leg_fills)
+                    ):
+                        fsm.state = OrderState.OPEN
+                    else:
+                        # Any filled or non-terminal/unknown OCO leg requires
+                        # reconciliation of orderList and leg executions.
+                        fsm.state = OrderState.RECONCILE_REQUIRED
+                elif operation == "CANCEL_REPLACE":
                     cancel_result = str(response.get("cancelResult", "")).upper()
                     new_result = str(response.get("newOrderResult", "")).upper()
                     replacement = response.get("newOrderResponse")
