@@ -117,6 +117,8 @@ class SignalSpec:
     protective_reference: float
     trigger_buffer_ticks: int = 1
     invalidation_price: float = 0.0
+    # Wave-model scenario invalidation is context metadata, not the Wise-Man pattern stop.
+    wave_invalidation_price: float = 0.0
     teeth_at_detection: float = 0.0
     alligator_bullish: bool = False
     alligator_awake: bool = False
