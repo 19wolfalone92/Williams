@@ -116,7 +116,9 @@ def calculate_indicators(df, cfg):
                 if right_high < center_high:
                     lower_count += 1
                 if lower_count == right:
-                    x.iloc[center_i, up_flag_col] = True
+                    # Event time is the confirmation row, never the
+                    # historical center row; the latter would leak future data.
+                    x.iloc[confirmation_i, up_flag_col] = True
                     x.iloc[confirmation_i, up_level_col] = center_high
                     x.iloc[confirmation_i, up_center_col] = center_i
                     break
@@ -136,7 +138,7 @@ def calculate_indicators(df, cfg):
                 if right_low > center_low:
                     higher_count += 1
                 if higher_count == right:
-                    x.iloc[center_i, down_flag_col] = True
+                    x.iloc[confirmation_i, down_flag_col] = True
                     x.iloc[confirmation_i, down_level_col] = center_low
                     x.iloc[confirmation_i, down_center_col] = center_i
                     break
