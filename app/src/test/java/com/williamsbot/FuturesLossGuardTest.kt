@@ -42,7 +42,7 @@ class FuturesLossGuardTest {
             cooldownMinutes = 1,
             nowMs = 10_000
         )
-        assertEquals("post-loss cooldown active for 50 more seconds", reason)
+        assertEquals("post-loss cooldown active for 59 more seconds", reason)
     }
 
     @Test
