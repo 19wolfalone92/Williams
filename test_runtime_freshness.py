@@ -147,3 +147,94 @@ def test_generation_binding_is_not_inferred_for_unrelated_components():
     )
     assert results["account"].status == "PASS"
     assert results["market_context"].status == "PASS"
+
+
+
+@pytest.mark.parametrize("component", ["candles", "balances", "reconciliation"])
+def test_stale_decision_critical_components_fail_closed(component):
+    result = evaluate_freshness(
+        component, evidence(component, at=90_000),
+        now_ms=100_000, max_age_ms=1_000,
+    )
+    assert result.status == "FAIL"
+    assert result.reason == "measurement_stale"
+
+
+def test_missing_scanner_heartbeat_stays_unknown():
+    result = evaluate_freshness("scanner_heartbeat", None, now_ms=100_000, max_age_ms=100)
+    assert result.status == "UNKNOWN"
+    assert result.reason == "measurement_missing"
+
+
+def test_websocket_connected_but_no_recent_event_is_stale():
+    # Evidence represents last message, not socket-open state.
+    result = evaluate_freshness(
+        "market_websocket", evidence("market_websocket", at=90_000),
+        now_ms=100_000, max_age_ms=1_000,
+    )
+    assert result.status == "FAIL"
+    assert result.reason == "measurement_stale"
+
+
+def test_failed_sqlite_integrity_probe_cannot_pass():
+    result = evaluate_freshness(
+        "sqlite_integrity", evidence("sqlite_integrity", valid=False),
+        now_ms=100_000, max_age_ms=100,
+    )
+    assert result.status == "FAIL"
+    assert result.reason == "component_measurement_invalid"
+
+
+def test_non_numeric_budget_is_unknown_not_coerced():
+    result = evaluate_freshness(
+        "balances", evidence("balances"), now_ms=100_000, max_age_ms="unknown"
+    )
+    assert result.status == "UNKNOWN"
+    assert result.reason == "freshness_budget_invalid"
+
+
+def test_monotonic_age_requires_same_session():
+    measured = FreshnessEvidence(
+        component="balances",
+        source=EXPECTED_SOURCES["balances"],
+        observed_at_ms=100_000,
+        valid=True,
+        generation="account-session-1",
+        observed_monotonic_ns=5_000_000_000,
+        monotonic_session_id="process-A",
+    )
+    missing_context = evaluate_freshness(
+        "balances", measured, now_ms=100_000, max_age_ms=1_000
+    )
+    wrong_session = evaluate_freshness(
+        "balances", measured, now_ms=100_000, max_age_ms=1_000,
+        now_monotonic_ns=5_500_000_000, monotonic_session_id="process-B",
+    )
+    fresh = evaluate_freshness(
+        "balances", measured, now_ms=100_000, max_age_ms=1_000,
+        now_monotonic_ns=5_500_000_000, monotonic_session_id="process-A",
+    )
+    assert missing_context.status == "UNKNOWN"
+    assert missing_context.reason == "monotonic_observation_context_missing"
+    assert wrong_session.status == "UNKNOWN"
+    assert wrong_session.reason == "monotonic_session_mismatch"
+    assert fresh.status == "PASS"
+    assert fresh.age_ms == 500
+
+
+def test_monotonic_time_cannot_be_negative_or_from_future():
+    measured = FreshnessEvidence(
+        component="balances",
+        source=EXPECTED_SOURCES["balances"],
+        observed_at_ms=100_000,
+        valid=True,
+        generation="account-session-1",
+        observed_monotonic_ns=6_000_000_000,
+        monotonic_session_id="process-A",
+    )
+    result = evaluate_freshness(
+        "balances", measured, now_ms=100_000, max_age_ms=1_000,
+        now_monotonic_ns=5_000_000_000, monotonic_session_id="process-A",
+    )
+    assert result.status == "UNKNOWN"
+    assert result.reason == "monotonic_timestamp_in_future"
