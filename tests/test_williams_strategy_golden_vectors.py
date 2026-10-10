@@ -327,3 +327,15 @@ def test_pending_signal_malformed_or_nonpositive_ttl_fails_closed(monkeypatch, r
     pending = PendingSignal.from_spec(signal)
     assert pending.expires_at_ms == 0
     assert not pending.actionable(now_ms=3_600_001)
+
+
+
+@pytest.mark.parametrize("timeframe", ["5m", "15m", "", "M5", "unknown"])
+def test_canonical_environment_blocks_non_h1_execution_timeframe(timeframe):
+    blockers = canonical_williams_environment_blockers({"EXECUTION_TIMEFRAME": timeframe})
+    assert any("EXECUTION_TIMEFRAME" in blocker and "H1" in blocker for blocker in blockers)
+
+
+def test_canonical_environment_allows_h1_and_default():
+    assert not canonical_williams_environment_blockers({})
+    assert not canonical_williams_environment_blockers({"EXECUTION_TIMEFRAME": "1h"})
