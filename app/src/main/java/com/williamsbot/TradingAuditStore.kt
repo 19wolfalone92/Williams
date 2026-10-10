@@ -606,7 +606,6 @@ class TradingAuditStore(context: Context) :
     }
 
     @Synchronized
-    @Synchronized
     fun reconcileExecutionMutationByTargetClientOrderId(
         targetClientOrderId: String,
         exchangeStatus: String,
