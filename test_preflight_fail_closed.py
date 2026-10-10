@@ -8,6 +8,7 @@ from preflight_gate import PreflightCheckService
 
 class FakeClient:
     testnet = True
+    base_url = "https://testnet.binance.vision"
     api_key = "test-key-placeholder"
     api_secret = "not-a-real-secret"
 
