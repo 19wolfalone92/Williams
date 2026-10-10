@@ -354,3 +354,6 @@ The Android implementation still builds WM1 reversal and WM3 fractal candidates 
 ### Revalidation required
 
 The native changes and new Kotlin unit tests were committed after the previous green Campaign CI run. The latest exact SHA must pass Python/Campaign CI and Android unit/build checks. Demo LONG/SHORT lifecycles remain outstanding.
+
+
+A second native expiry path was found during follow-through: the durable `entry_expires_at_ms` saved with the campaign still used the old source-bar timestamp even after the live signal-freshness helper had been corrected. It is now persisted from `confirmationTime` plus the configured pending bars and one confirmation-bar duration, so restart recovery and in-memory scanning use the same deadline.
