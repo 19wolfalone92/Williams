@@ -169,120 +169,13 @@ class Trader:
         )
 
     def setup(self):
-        # There is one autonomous Williams execution pipeline. Disabling the
-        # portfolio-wide scanner narrows the universe to the selected symbol;
-        # it does not reactivate the legacy Boolean signal + market-BUY/OCO
-        # strategy, which is not equivalent to the canonical Wise-Men campaign.
+        # A single autonomous Williams pipeline is used in every Spot mode.
+        # AUTO_SCAN_ENABLED selects full portfolio discovery or one symbol; it
+        # must never re-enable the legacy boolean-signal + market-BUY/OCO path.
         if not self.auto_scan_enabled:
             self.auto_scan_symbols = [self.symbol]
             self.max_open_positions = 1
         self._setup_multi_position_mode()
-        return
-
-        if not self.client.testnet and os.getenv('ALLOW_LIVE','false').lower()!='true':
-            raise RuntimeError(
-                'LIVE trading is disabled. Set TESTNET=true or explicitly ALLOW_LIVE=true.'
-            )
-        if not self.client.api_key or not self.client.api_secret:
-            raise RuntimeError('BINANCE_API_KEY and BINANCE_API_SECRET are required.')
-
-        # Load the selected symbol rules before any recovery/execution work.
-        self.client.sync_time()
-        info = self.client.exchange_info(self.symbol)
-        rows = info.get('symbols', [])
-        if not rows:
-            raise RuntimeError(f'Symbol {self.symbol} not found in Binance exchange info')
-        s = rows[0]
-        self.filters = {f['filterType']: f for f in s.get('filters', [])}
-        self.base_asset = s.get('baseAsset')
-        self.quote_asset = s.get('quoteAsset')
-        self.symbol_rules = SymbolRules.from_exchange_info(info, self.symbol)
-
-        # P0: blocking Spot safety gate.  ALLOW_LIVE is never sufficient by itself.
-        gate = PreflightCheckService(
-            self.client,
-            symbols=self.auto_scan_symbols or [self.symbol],
-            max_open_positions=self.max_open_positions,
-        )
-        report = gate.verify_all()
-
-        # Known Williams orders are not treated as foreign. Reconcile them first,
-        # then rerun the gate. Unknown orders always remain a hard block.
-        if not report['ready'] and report.get('requires_reconciliation'):
-            recovery_trader = MultiPositionTrader(
-                self.client,
-                db=self.db,
-                symbols=self.auto_scan_symbols or [self.symbol],
-                execution_barrier=self.execution_barrier,
-            )
-            recovery = recovery_trader.recover()
-            if not recovery.get('ok'):
-                raise RuntimeError(
-                    'LIVE SAFETY GATE BLOCKED: reconciliation failed: '
-                    + str(recovery)
-                )
-            report = gate.verify_all(allow_reconciled_orders=True)
-
-        self.preflight_report = report
-        if not report['ready']:
-            raise RuntimeError(
-                'LIVE SAFETY GATE BLOCKED: ' + str(report)
-            )
-
-        self.db.log_event(
-            'INFO',
-            'preflight_pass',
-            'P0 Spot safety gate passed',
-            report,
-        )
-
-        self.db.log_event(
-            'INFO',
-            'startup',
-            'Trader initialized',
-            {
-                'symbol': self.symbol,
-                'interval': self.interval,
-                'testnet': self.client.testnet,
-            },
-        )
-
-        self.ensure_foreign_base_balance_baseline()
-        self.recover_state()
-
-        # Canonical recovery owns the per-symbol lifecycle state used by
-        # server status/control. It also mirrors the canonical result into
-        # the legacy position_state consumed by the single-position entry gate.
-        self._multi_position_trader = MultiPositionTrader(
-            self.client,
-            db=self.db,
-            symbols=self.auto_scan_symbols,
-            execution_barrier=self.execution_barrier,
-        )
-        recovery = self._multi_position_trader.recover()
-
-        # Recovery is a second barrier: an inconsistent local/exchange state
-        # must never be followed by scanner activation.
-        if not recovery.get('ok'):
-            raise RuntimeError(
-                'LIVE SAFETY GATE BLOCKED: canonical reconciliation failed: '
-                + str(recovery)
-            )
-
-        if self.state() == 'RECONCILE_REQUIRED':
-            raise RuntimeError(
-                'LIVE SAFETY GATE BLOCKED: canonical state requires reconciliation'
-            )
-
-        self.recovered = True
-
-        self.notify(
-            f'Williams STARTED\n'
-            f'{self.symbol} {self.interval}\n'
-            f'TESTNET={self.client.testnet}\n'
-            f'SAFETY_GATE=PASS\n'
-            f'STATE={self.state()}'
-        )
 
     def switch_symbol(self, symbol):
         """
