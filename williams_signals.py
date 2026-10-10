@@ -279,7 +279,7 @@ def extract_long_signal_specs(
         return []
 
     tick = max(float(tick_size), 1e-12)
-        versions = dict(context_versions or {})
+    versions = dict(context_versions or {})
 
     # Prefer the earliest still-active signal: the book describes the first
     # signal as the initial entry, with later Wise Men becoming adds.
