@@ -3,6 +3,7 @@ import time
 import pytest
 
 from runtime_freshness import (
+    DEFAULT_MAX_AGE_MS,
     FRESHNESS_COMPONENTS,
     EXPECTED_SOURCES,
     FreshnessEvidence,
