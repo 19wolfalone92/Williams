@@ -340,7 +340,8 @@ class TradingAuditStore(context: Context) :
                     )
                 }
                 val priorStatus = existing["status"].orEmpty().uppercase()
-                val safeToRetry = (method == "POST" && priorStatus == "ABORTED_NOT_FOUND") ||
+                val safeToRetry =
+                    (method == "POST" && priorStatus in setOf("ABORTED_NOT_FOUND", "REJECTED")) ||
                     (method == "DELETE" && priorStatus == "RECONCILED_ACTIVE")
                 if (!safeToRetry) {
                     throw IllegalStateException(
