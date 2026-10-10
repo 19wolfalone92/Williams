@@ -1655,6 +1655,97 @@ private class NativeEngine(
         auditStore.markExecutionMutationSubmitting(spec.intentId)
     }
 
+    private fun mutationResultStatus(
+        spec: ExecutionMutationSpec,
+        httpStatus: Int,
+        body: String
+    ): Pair<String, String> {
+        if (httpStatus !in 200..299) {
+            return "AMBIGUOUS" to ("Binance HTTP " + httpStatus + "; reconcile exact identity before retry")
+        }
+        val response = runCatching { JSONObject(body) }.getOrNull()
+            ?: return "RECONCILE_REQUIRED" to "Mutation response is not valid JSON"
+        fun status(row: JSONObject?): String =
+            row?.optString("status").orEmpty().uppercase(Locale.US)
+        fun executed(row: JSONObject?): Double? {
+            if (row == null || !row.has("executedQty")) return 0.0
+            return row.optString("executedQty").toDoubleOrNull()
+        }
+
+        if (spec.operation == "CANCEL_REPLACE") {
+            val cancelResult = response.optString("cancelResult").uppercase(Locale.US)
+            val newResult = response.optString("newOrderResult").uppercase(Locale.US)
+            val cancelResponse = response.optJSONObject("cancelResponse")
+            val newResponse = response.optJSONObject("newOrderResponse")
+            if (cancelResult != "SUCCESS" ||
+                status(cancelResponse) !in setOf("CANCELED", "CANCELLED", "EXPIRED", "REJECTED") ||
+                executed(cancelResponse) != 0.0
+            ) {
+                return "RECONCILE_REQUIRED" to "cancelReplace old order not proven terminal and unfilled"
+            }
+            if (newResult == "SUCCESS" &&
+                status(newResponse) in setOf("NEW", "PENDING_NEW") &&
+                executed(newResponse) == 0.0
+            ) return "SUBMITTED" to ""
+            return "RECONCILE_REQUIRED" to "cancelReplace did not prove a safe old/new order pair"
+        }
+
+        if (spec.operation == "OCO_CREATE" || spec.operation == "CANCEL_OCO") {
+            val reports = response.optJSONArray("orderReports")
+                ?: return "RECONCILE_REQUIRED" to "OCO response lacks per-leg reports"
+            if (reports.length() == 0) return "RECONCILE_REQUIRED" to "OCO response contains no leg reports"
+            val states = mutableListOf<String>()
+            for (i in 0 until reports.length()) {
+                val leg = reports.optJSONObject(i)
+                    ?: return "RECONCILE_REQUIRED" to "OCO response contains malformed leg data"
+                val legStatus = status(leg)
+                val qty = executed(leg)
+                if (qty == null || qty < 0.0) {
+                    return "RECONCILE_REQUIRED" to "OCO leg executedQty is invalid"
+                }
+                if (legStatus in setOf("FILLED", "PARTIALLY_FILLED") || qty > 0.0) {
+                    return "RECONCILE_REQUIRED" to "OCO leg fill detected; position must be reconciled"
+                }
+                states += legStatus
+            }
+            if (spec.operation == "OCO_CREATE" && states.all { it in setOf("NEW", "PENDING_NEW") }) {
+                return "SUBMITTED" to ""
+            }
+            if (spec.operation == "CANCEL_OCO" && states.all { it in setOf("CANCELED", "CANCELLED", "EXPIRED", "REJECTED") }) {
+                return "SUBMITTED" to ""
+            }
+            return "RECONCILE_REQUIRED" to "OCO leg statuses do not prove a safe mutation outcome"
+        }
+
+        val orderStatus = status(response)
+        val executedQty = executed(response)
+        if (executedQty == null || executedQty < 0.0) {
+            return "RECONCILE_REQUIRED" to "Order response has invalid executedQty"
+        }
+        return when (spec.operation) {
+            "CANCEL_ORDER" -> if (
+                orderStatus in setOf("CANCELED", "CANCELLED", "EXPIRED", "REJECTED") &&
+                executedQty == 0.0
+            ) "SUBMITTED" to "" else
+                "RECONCILE_REQUIRED" to "Order cancellation raced with a fill or lacks a terminal state"
+            "PROTECTION_ORDER" -> if (
+                orderStatus in setOf("NEW", "PENDING_NEW") && executedQty == 0.0
+            ) "SUBMITTED" to "" else
+                "RECONCILE_REQUIRED" to "Protective order is not an untouched active order"
+            "MARKET_EXIT" -> if (orderStatus == "FILLED" && executedQty > 0.0) {
+                "SUBMITTED" to ""
+            } else {
+                "RECONCILE_REQUIRED" to "Market exit is partial, unfilled or has unknown state"
+            }
+            "ENTRY_ORDER" -> if (
+                orderStatus in setOf("NEW", "PENDING_NEW", "PARTIALLY_FILLED", "FILLED") &&
+                (orderStatus !in setOf("PARTIALLY_FILLED", "FILLED") || executedQty > 0.0)
+            ) "SUBMITTED" to "" else
+                "RECONCILE_REQUIRED" to "Entry order has no authoritative status or fill quantity"
+            else -> "RECONCILE_REQUIRED" to "Unsupported execution mutation response"
+        }
+    }
+
     private fun signedAccount(): JSONObject =
         signedRequest(
             method = "GET",
