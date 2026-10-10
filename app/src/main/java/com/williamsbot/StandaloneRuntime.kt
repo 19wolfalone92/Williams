@@ -1786,6 +1786,11 @@ private class NativeEngine(
         path: String,
         params: String
     ) {
+        // TASK 001 is Testnet-only. Even a future accidental baseUrl edit must
+        // not silently turn this runtime's centralized writer into Mainnet.
+        require(baseUrl.contains("testnet.binance.vision", ignoreCase = true)) {
+            "Mainnet trading is disabled by the WILLIAMS BOT 2.1 architecture gate"
+        }
         require(method == "POST" || method == "DELETE") {
             "Unapproved Binance mutation method: " + method
         }
