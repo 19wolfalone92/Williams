@@ -764,13 +764,46 @@ class MultiPositionTrader:
                 f"{symbol}: emergency exit quantity below Binance LOT_SIZE"
             )
 
-        client_id = f"{self.EMERGENCY_PREFIX}{uuid.uuid4().hex[:16]}"
-        sell = self.client.order_safe(
-            symbol,
-            "SELL",
-            "MARKET",
+        signal_id = (
+            f"EMERGENCY_EXIT:{symbol}:{trade_id}:{reason}:"
+            f"{self.client.decimal_format(sell_qty)}"
+        )
+        client_id = stable_client_order_id(
+            self.EMERGENCY_PREFIX, signal_id
+        )
+        intent = self._intent_for_legacy_mutation(
+            symbol, "SELL", "MARKET", client_id,
+            purpose="EMERGENCY_EXIT",
             quantity=self.client.decimal_format(sell_qty),
-            new_client_order_id=client_id,
+            trade_id=trade_id,
+            signal_id=signal_id,
+        )
+
+        def _check_emergency_exit(_snapshot):
+            owned_trade = next(
+                (
+                    row for row in self.open_trades()
+                    if int(row.get("id", -1)) == int(trade_id)
+                    and str(row.get("symbol", "")).upper() == symbol
+                ),
+                None,
+            )
+            if owned_trade is None:
+                raise RuntimeError("managed position ownership could not be confirmed")
+            current_free = self._asset_balance(symbol, account=self.client.account())
+            if current_free + 1e-12 < sell_qty:
+                raise RuntimeError("confirmed free inventory is smaller than emergency exit quantity")
+
+        sell = self._submit_mutation(
+            intent,
+            lambda: self.client.order_safe(
+                symbol,
+                "SELL",
+                "MARKET",
+                quantity=self.client.decimal_format(sell_qty),
+                new_client_order_id=client_id,
+            ),
+            pre_submit_checks=_check_emergency_exit,
         )
         self.db.save_order(sell)
 
@@ -781,8 +814,9 @@ class MultiPositionTrader:
             orig_client_order_id=client_id if order_id is None else None,
         )
         if str(confirmed.get("status", "")).upper() != "FILLED":
+            self.set_state(symbol, "RECONCILE_REQUIRED")
             raise RuntimeError(
-                f"{symbol}: emergency SELL is not fully filled"
+                f"{symbol}: emergency SELL is not fully filled; reconciliation required"
             )
 
         execution = self._authoritative_execution(symbol, confirmed)
