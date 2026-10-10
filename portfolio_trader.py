@@ -352,6 +352,16 @@ class MultiPositionTrader:
                 if self._bot_entry_remaining(symbol):
                     # A filled Williams BUY without a local trade is not safe to auto-clear.
                     continue
+                account = self.client.account()
+                base_qty = self._asset_balance(symbol, account=account)
+                filters = self._filters(symbol)
+                qty_filter = filters.get("LOT_SIZE") or filters.get("MARKET_LOT_SIZE") or {}
+                min_qty = float(qty_filter.get("minQty", 0) or 0)
+                if base_qty >= max(min_qty, 1e-12):
+                    # Holdings cannot be called FLAT merely because local trade
+                    # bookkeeping is missing; keep the symbol blocked for manual/
+                    # deeper inventory reconciliation.
+                    continue
 
                 self.set_state(symbol, "FLAT")
                 repaired.append(symbol)
