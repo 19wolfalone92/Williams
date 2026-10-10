@@ -8100,6 +8100,13 @@ private class NativeEngine(
 
             for (i in start until sourceCandles.size) {
                 val c = sourceCandles[i]
+                val candleIsClosed =
+                    c.t + frameSeconds(selectedInterval) * 1000L <= System.currentTimeMillis()
+                val upFractalEvent =
+                    if (candleIsClosed) fractalConfirmationAt(sourceCandles, i, bullish = true) else null
+                val downFractalEvent =
+                    if (candleIsClosed) fractalConfirmationAt(sourceCandles, i, bullish = false) else null
+                val aoValue = ao(sourceCandles, i)
                 output.put(
                     JSONObject()
                         .put("time", c.t)
@@ -8110,19 +8117,17 @@ private class NativeEngine(
                         .put("jaw", lines.jaw.getOrNull(i)?.takeIf { it.isFinite() } ?: JSONObject.NULL)
                         .put("teeth", lines.teeth.getOrNull(i)?.takeIf { it.isFinite() } ?: JSONObject.NULL)
                         .put("lips", lines.lips.getOrNull(i)?.takeIf { it.isFinite() } ?: JSONObject.NULL)
-                        .put(
-                            "ao",
-                            ao(sourceCandles, i)
-                        )
+                        .put("ao", aoValue.takeIf { it.isFinite() } ?: JSONObject.NULL)
+                        .put("closed_bar", candleIsClosed)
                         // The chart endpoint is diagnostic-only. It must not
                         // synthesize a tradeable entry from Alligator/AO booleans.
                         .put("long_signal", false)
                         .put("signal_role", "DIAGNOSTIC_ONLY")
                         .put("canonical_entry_path", "CampaignEngine")
-                        .put("fractal_up", fractalConfirmationAt(sourceCandles, i, bullish = true) != null)
-                        .put("fractal_down", fractalConfirmationAt(sourceCandles, i, bullish = false) != null)
-                        .put("fractal_up_center_index", fractalConfirmationAt(sourceCandles, i, bullish = true)?.centerIndex ?: JSONObject.NULL)
-                        .put("fractal_down_center_index", fractalConfirmationAt(sourceCandles, i, bullish = false)?.centerIndex ?: JSONObject.NULL)
+                        .put("fractal_up", upFractalEvent != null)
+                        .put("fractal_down", downFractalEvent != null)
+                        .put("fractal_up_center_index", upFractalEvent?.centerIndex ?: JSONObject.NULL)
+                        .put("fractal_down_center_index", downFractalEvent?.centerIndex ?: JSONObject.NULL)
                 )
             }
         }
