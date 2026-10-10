@@ -611,6 +611,33 @@ class ExecutionBarrier:
                             self._release_identity_claims(intent)
                         return ExecutionResult(intent.intent_id, False, reason=reason)
 
+                # Re-check signal age and exact context versions after caller
+                # risk/ownership checks, immediately before the write-ahead commit.
+                # The shared context execution lock prevents a context publish
+                # from slipping between this check and the exchange mutation.
+                if is_entry:
+                    age_ms = int(time.time() * 1000) - int(intent.created_at_ms or 0)
+                    if age_ms < 0 or age_ms > int(intent.max_age_ms):
+                        reason = f"entry intent expired during final checks: age={age_ms}ms"
+                    else:
+                        final_snapshot = self.context_cache.snapshot()
+                        reason = ""
+                        for tf, required in intent.required_context_versions.items():
+                            latest_context = final_snapshot.context(intent.symbol, tf)
+                            if latest_context is None or int(latest_context.version) != int(required):
+                                reason = (
+                                    f"final context version mismatch for {tf}: "
+                                    f"required={required}, current="
+                                    f"{getattr(latest_context, 'version', None)}"
+                                )
+                                break
+                    if reason:
+                        self._persist(intent, "BLOCKED", reason)
+                        self._record("WARNING", "execution_blocked", intent, reason)
+                        if claimed_identity:
+                            self._release_identity_claims(intent)
+                        return ExecutionResult(intent.intent_id, False, reason=reason)
+
                 # First durable marker proves the logical mutation was admitted.
                 # Then SUBMITTING is committed immediately before the network
                 # call. A crash from this point onward is treated as ambiguous.
