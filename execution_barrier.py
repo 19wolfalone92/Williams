@@ -255,9 +255,9 @@ class ExecutionBarrier:
                     and math.isfinite(float(macro.ao_value))
                     and float(macro.ao_value) > 0.0
                 )
-                if direction == "long" and (macro.allow_short or macro_opposes_long):
+                if direction == "long" and macro_opposes_long:
                     return "TC2_WM1_EARLY blocked by active opposite D1 context"
-                if direction == "short" and (macro.allow_long or macro_opposes_short):
+                if direction == "short" and macro_opposes_short:
                     return "TC2_WM1_EARLY blocked by active opposite D1 context"
             elif admission_mode == "STRICT_DIRECTIONAL":
                 tc2_core = (
@@ -283,11 +283,11 @@ class ExecutionBarrier:
                     if not math.isfinite(ao_value):
                         return f"context {permission_tf} does not allow {direction.upper()}: non-finite AO"
                     if direction == "long" and not (
-                        state == "BULLISH" and awake and ao_value > 0.0
+                        state == "BULLISH" and awake
                     ):
                         return "context 1h does not allow LONG"
                     if direction == "short" and not (
-                        state == "BEARISH" and awake and ao_value < 0.0
+                        state == "BEARISH" and awake
                     ):
                         return "context 1h does not allow SHORT"
 
@@ -313,9 +313,9 @@ class ExecutionBarrier:
                         and bool(macro.alligator_awake)
                         and macro_ao > 0.0
                     )
-                    if direction == "long" and (macro.allow_short or macro_opposes_long):
+                    if direction == "long" and macro_opposes_long:
                         return "active opposite D1 macro context blocks LONG"
-                    if direction == "short" and (macro.allow_long or macro_opposes_short):
+                    if direction == "short" and macro_opposes_short:
                         return "active opposite D1 macro context blocks SHORT"
                 else:
                     # Explicit legacy/profile integrations remain separate from
