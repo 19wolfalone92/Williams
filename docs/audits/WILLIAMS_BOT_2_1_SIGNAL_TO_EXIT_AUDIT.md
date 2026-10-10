@@ -282,3 +282,10 @@ The canonical `PendingSignal` treated zero/negative expiry as invalid, but the F
 Last-mile entry creation now rejects missing expiry, but an already-persisted/legacy pending entry with `entry_expires_at_ms=0` was not cancelled during reconciliation because the expiry branch treated zero as “no expiry.” The exchange-side conditional order could therefore remain live after the local signal's validity was unknowable. The Python add-on reconciliation path had the same condition; Android's native initial-entry reconciliation also skipped zero expiry.
 
 **Correction:** an active conditional entry/add-on with missing, zero or negative expiry is now treated as invalid and sent through the existing cancellation-and-authoritative-verification path. Android native initial-entry recovery applies the same fail-closed rule. Added a regression test for a pending Python entry with missing expiry. Cancellation failure still leaves the campaign locked for reconciliation; it is never treated as a successful cancel.
+
+
+### 35. The indicator/diagnostic WM2 fields still imposed the removed fractal dependency — corrected
+
+After correcting the Futures signal extractor, `strategy.calculate_indicators` still defined `long_super_ao_signal` and `short_super_ao_signal` as Super AO AND the prior bar's fractal-outside flag. That left indicator diagnostics, legacy signal counts and campaign signal extraction with contradictory WM2 semantics.
+
+**Correction:** the WM2 indicator flags now identify only the third consecutive same-colour AO bar (`ao_green_streak == super_ao_bars` / mirrored red streak), independent of fractal flags. Added monotonic LONG/SHORT regression vectors where no separate fractal-outside flag is required.
