@@ -1872,6 +1872,7 @@ class MultiPositionTrader:
                         role=SignalRole(str(raw["role"])),
                         timeframe=str(raw["timeframe"]),
                         signal_bar_time_ms=int(raw["signal_bar_time_ms"]),
+                        confirmation_time_ms=int(raw.get("confirmation_time_ms", 0) or 0),
                         trigger_price=float(raw["trigger_price"]),
                         protective_reference=float(raw["protective_reference"]),
                         trigger_buffer_ticks=int(raw.get("trigger_buffer_ticks", 1) or 1),
@@ -1910,6 +1911,7 @@ class MultiPositionTrader:
                         role=SignalRole(str(raw["role"])),
                         timeframe=str(raw["timeframe"]),
                         signal_bar_time_ms=int(raw["signal_bar_time_ms"]),
+                        confirmation_time_ms=int(raw.get("confirmation_time_ms", 0) or 0),
                         trigger_price=float(raw["trigger_price"]),
                         protective_reference=float(raw["protective_reference"]),
                         trigger_buffer_ticks=int(raw.get("trigger_buffer_ticks", 1) or 1),
@@ -1959,7 +1961,8 @@ class MultiPositionTrader:
             # countertrend risk; this is explicitly configurable.
             if campaign is not None and campaign.position_qty > 0:
                 latest_time = int(
-                    campaign.tags.get("last_signal_time_ms", 0)
+                    campaign.tags.get("last_signal_confirmation_time_ms", 0)
+                    or campaign.tags.get("last_signal_time_ms", 0)
                     or campaign.tags.get("signal_bar_time_ms", 0)
                     or 0
                 )
@@ -1969,7 +1972,7 @@ class MultiPositionTrader:
                 )
                 eligible = [
                     s for s in specs
-                    if s.signal_bar_time_ms > latest_time
+                    if (s.confirmation_time_ms or s.signal_bar_time_ms) > latest_time
                     and (
                         s.signal_type in {SignalType.SUPER_AO, SignalType.FRACTAL}
                         or (
@@ -1982,7 +1985,7 @@ class MultiPositionTrader:
                     continue
                 signal = min(
                     eligible,
-                    key=lambda s: (s.signal_bar_time_ms, s.created_at_ms),
+                    key=lambda s: (s.confirmation_time_ms or s.signal_bar_time_ms, s.created_at_ms),
                 )
                 add_signal = __import__(
                     "dataclasses"
