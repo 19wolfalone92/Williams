@@ -7,7 +7,7 @@ from contextlib import contextmanager
 
 
 class Database:
-    SCHEMA_VERSION = 6
+    SCHEMA_VERSION = 7
 
     def __init__(self, path=None):
         path = path or os.getenv('WILLIAMS_DB_PATH') or 'data/trader.sqlite3'
@@ -226,6 +226,7 @@ class Database:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             campaign_id TEXT NOT NULL,
             order_id TEXT,
+            trade_id TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             symbol TEXT NOT NULL,
             side TEXT NOT NULL,
@@ -266,9 +267,24 @@ class Database:
             ON campaign_events(campaign_id, id);
         ''')
         self._migrate_trade_columns()
+        self._migrate_campaign_fill_columns()
         self.state_set('schema_version', self.SCHEMA_VERSION)
         self.state_set('position_state', self.state_get('position_state', 'FLAT'))
         self.conn.commit()
+
+    def _migrate_campaign_fill_columns(self):
+        columns = {
+            row["name"]
+            for row in self.conn.execute("PRAGMA table_info(campaign_fills)").fetchall()
+        }
+        if "trade_id" not in columns:
+            self.conn.execute("ALTER TABLE campaign_fills ADD COLUMN trade_id TEXT")
+        # Binance trade IDs are unique within a symbol. Legacy rows without an
+        # exchange trade ID remain readable but cannot collide with new rows.
+        self.conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_campaign_fill_exchange_trade "
+            "ON campaign_fills(symbol, trade_id) WHERE trade_id IS NOT NULL"
+        )
 
     def _migrate_trade_columns(self):
         columns = {
@@ -976,22 +992,32 @@ class Database:
             self.conn.commit()
 
     def save_campaign_fill(self, fill):
-        data=fill if isinstance(fill,dict) else dict(fill)
-        self.conn.execute(
-            """INSERT INTO campaign_fills(
-                campaign_id,order_id,symbol,side,quantity,price,quote_quantity,
+        """Persist one exchange fill idempotently; return False on duplicate trade ID."""
+        data = fill if isinstance(fill, dict) else dict(fill)
+        cursor = self.conn.execute(
+            """INSERT OR IGNORE INTO campaign_fills(
+                campaign_id,order_id,trade_id,symbol,side,quantity,price,quote_quantity,
                 fee_quote,commission_base,commission_asset,raw_json
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
-                data.get("campaign_id",""),data.get("order_id"),data.get("symbol",""),
-                data.get("side",""),float(data.get("quantity",0) or 0),float(data.get("price",0) or 0),
-                float(data.get("quote_quantity",0) or 0),float(data.get("fee_quote",0) or 0),
-                float(data.get("commission_base",0) or 0),data.get("commission_asset",""),
-                json.dumps(data,default=str),
+                data.get("campaign_id", ""), data.get("order_id"), data.get("trade_id"),
+                str(data.get("symbol", "")).upper(), str(data.get("side", "")).upper(),
+                float(data.get("quantity", 0) or 0), float(data.get("price", 0) or 0),
+                float(data.get("quote_quantity", 0) or 0), float(data.get("fee_quote", 0) or 0),
+                float(data.get("commission_base", 0) or 0), data.get("commission_asset", ""),
+                json.dumps(data, default=str),
             ),
         )
         if not self._transaction_active:
             self.conn.commit()
+        return cursor.rowcount == 1
+
+    def campaign_fills_for_order(self, symbol, order_id):
+        rows = self.conn.execute(
+            "SELECT * FROM campaign_fills WHERE symbol=? AND order_id=? ORDER BY id",
+            (str(symbol).upper(), str(order_id)),
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     def log_campaign_event(self, campaign_id, event, *, level="INFO", signal_id=None, order_id=None, reason="", payload=None):
         self.conn.execute(

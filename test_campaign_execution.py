@@ -130,14 +130,17 @@ def test_partial_conditional_entry_is_cancelled_and_residual_protected():
             and str(o.get("clientOrderId", "")).startswith(svc.STOP_PREFIX)
         ]
         assert len(protected) == 1
-        # The exchange filter is a 0.001 base-asset step. Protect all sellable
-        # filled quantity, rounding down only the sub-step dust; never round up.
         filled_qty = float(order["executedQty"])
         protected_qty = float(protected[0]["origQty"])
         assert campaign.position_qty == pytest.approx(filled_qty)
-        assert protected_qty <= filled_qty
-        assert filled_qty - protected_qty < 0.001
-        assert protected_qty == pytest.approx(int(filled_qty / 0.001) * 0.001)
+        assert protected_qty <= campaign.position_qty
+        gap = campaign.position_qty - protected_qty
+        if gap > 1e-12:
+            assert campaign.state == CampaignState.RECONCILE_REQUIRED
+            assert float(campaign.tags["unprotected_exposure_qty"]) == pytest.approx(gap)
+            assert campaign.tags["protection_state"] == "PARTIAL"
+        else:
+            assert campaign.tags["protection_state"] == "FULL"
 
 
 def test_restart_adopts_pending_campaign_by_client_id():
@@ -178,3 +181,85 @@ def test_stop_replacement_never_lowers_stop():
         assert current > 0
         assert not svc.engine.propose_stop(campaign, current - 1.0, "BAD")
         assert campaign.current_stop_price == current
+
+
+def test_base_asset_commission_reduces_net_inventory_and_fill_history_is_idempotent():
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "campaign.sqlite3"))
+        client = MockExchange()
+        client.commission_rate = 0.001
+        client.commission_asset = "BTC"
+        svc = service(db, client)
+        result = svc.arm_initial_entry(
+            signal(trigger=101.0), equity_quote=10_000, candidate_risk_pct=0.004
+        )
+        client.set_price("BTCUSDT", 101.5)
+        out = svc.reconcile_pending_entries()
+        order = client.get_order("BTCUSDT", orig_client_order_id=result["client_order_id"])
+        fills = client.my_trades("BTCUSDT", order_id=order["orderId"])
+        gross = sum(float(f["qty"]) for f in fills)
+        base_fee = sum(float(f["commission"]) for f in fills if f["commissionAsset"] == "BTC")
+        quote_fee = sum(
+            float(f["commission"]) * float(f["price"])
+            for f in fills if f["commissionAsset"] == "BTC"
+        )
+        campaign = svc.engine.load_campaign(result["campaign_id"])
+        assert campaign.position_qty == pytest.approx(gross - base_fee)
+        trade = db.open_trade("BTCUSDT")
+        assert trade is not None
+        assert float(trade["fees"]) == pytest.approx(quote_fee)
+
+        count_before = len(db.campaign_fills_for_order("BTCUSDT", order["orderId"]))
+        accounting_before = svc._account_order_fills("BTCUSDT", campaign.campaign_id, order)
+        accounting_after = svc._account_order_fills("BTCUSDT", campaign.campaign_id, order)
+        count_after = len(db.campaign_fills_for_order("BTCUSDT", order["orderId"]))
+        assert count_before == count_after == len(fills)
+        assert accounting_after == accounting_before
+        assert out[0]["protective_quantity"] <= campaign.position_qty
+        if out[0]["unprotected_exposure_qty"] > 1e-12:
+            assert out[0]["state"] == CampaignState.RECONCILE_REQUIRED.value
+
+
+def test_quote_asset_commission_is_recorded_once_in_quote_units():
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "campaign.sqlite3"))
+        client = MockExchange()
+        client.commission_rate = 0.001
+        client.commission_asset = "USDT"
+        svc = service(db, client)
+        result = svc.arm_initial_entry(
+            signal(trigger=101.0), equity_quote=10_000, candidate_risk_pct=0.004
+        )
+        client.set_price("BTCUSDT", 101.5)
+        svc.reconcile_pending_entries()
+        order = client.get_order("BTCUSDT", orig_client_order_id=result["client_order_id"])
+        fills = client.my_trades("BTCUSDT", order_id=order["orderId"])
+        expected_fee = sum(float(f["commission"]) for f in fills)
+        trade = db.open_trade("BTCUSDT")
+        assert trade is not None
+        assert float(trade["fees"]) == pytest.approx(expected_fee)
+        assert len(db.campaign_fills_for_order("BTCUSDT", order["orderId"])) == len(fills)
+
+
+def test_third_asset_commission_uses_fill_minute_conversion():
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "campaign.sqlite3"))
+        client = MockExchange()
+        client.prices["BNBUSDT"] = 300.0
+        client.balances["BNB"] = 1.0
+        client.commission_rate = 0.001
+        client.commission_asset = "BNB"
+        svc = service(db, client)
+        result = svc.arm_initial_entry(
+            signal(trigger=101.0), equity_quote=10_000, candidate_risk_pct=0.004
+        )
+        client.set_price("BTCUSDT", 101.5)
+        svc.reconcile_pending_entries()
+        order = client.get_order("BTCUSDT", orig_client_order_id=result["client_order_id"])
+        fills = client.my_trades("BTCUSDT", order_id=order["orderId"])
+        expected_fee_quote = sum(
+            float(f["commission"]) * 300.0 for f in fills
+        )
+        trade = db.open_trade("BTCUSDT")
+        assert trade is not None
+        assert float(trade["fees"]) == pytest.approx(expected_fee_quote)

@@ -109,3 +109,17 @@ Fee-adjusted fill accounting, third-asset fee conversion, idempotent per-fill le
 ### Follow-up finding on SHA `952a73bc557f446cdf2272e9e370013dd366b25f`
 
 The Python backend workflow failed in the release gate at `trading_config.py` because a second legacy assertion still expected `min(0.005)`, despite the current hard cap being 0.0025. This is another stale gate assertion, not a runtime test failure. The assertion has been corrected to 0.0025 and an explicit 0.006 aggregate-cap assertion added. New exact-head CI is required.
+
+
+## TASK 005.1 fee-accounting changes (pending exact-head CI)
+
+Changes staged for this task's working branch:
+- Added schema migration for an exchange trade ID and a partial unique index on `(symbol, trade_id)`.
+- Added idempotent fill persistence and order-scoped fill reads.
+- Campaign entry reconciliation now loads authoritative `myTrades` even when the order response already has cumulative quote quantity, validates gross quantity/quote against the exchange order, converts quote-asset fees directly, base-asset fees at fill price, and third-asset fees using the close of the historical 1-minute candle containing the fill. If third-asset conversion cannot be retrieved, accounting fails closed.
+- Net Spot inventory subtracts base-asset commissions before sizing protection. If normalized protective quantity is less than net inventory, the campaign is explicitly tagged with `protection_state=PARTIAL` and `unprotected_exposure_qty`, and transitions to `RECONCILE_REQUIRED`; it is not reported fully protected.
+- Partial-entry cancellation now re-reads the order and trade history to capture fills racing with cancellation.
+- Mock exchange and regression tests cover quote/base/third-asset fees and repeated fill-history processing.
+- Release gate risk ceilings and Gradle lint issue have been corrected; older run results do not prove the newer head.
+
+**Known limitations/blockers:** the fill ledger and entry path are now under validation, but full exit-fill fee accounting, unknown-history emergency protection, crash recovery across each exchange/DB boundary, multi-process daily-baseline initialization, and Futures SHORT behavior still require explicit tests and audit. Do not treat this section as acceptance evidence until exact-head CI and those scenarios are complete.

@@ -18,6 +18,9 @@ class MockExchange:
             "ETHUSDT": {"bids": [["9.99", "100"]], "asks": [["10.01", "100"]], "lastUpdateId": 1},
         }
         self.orders: list[dict] = []
+        self.fills: list[dict] = []
+        self.commission_rate = 0.0
+        self.commission_asset = "USDT"
         self.open_oco: dict[str, dict] = {}
         self.timeout_next = False
         self.partial_fill_ratio = 1.0
@@ -99,6 +102,58 @@ class MockExchange:
             for k, v in self.balances.items()
         ]}
 
+    def _append_fill(self, order, executed, price):
+        if float(executed) <= 0:
+            order["cummulativeQuoteQty"] = "0"
+            return
+        quote_qty = float(executed) * float(price)
+        asset = str(self.commission_asset or "USDT").upper()
+        if asset == str(order["symbol"]).replace("USDT", ""):
+            commission = float(executed) * float(self.commission_rate)
+        elif asset == "USDT":
+            commission = quote_qty * float(self.commission_rate)
+        else:
+            commission = quote_qty * float(self.commission_rate) / max(
+                float(self.prices.get(f"{asset}USDT", 0) or 0), 1e-12
+            )
+        order["cummulativeQuoteQty"] = str(quote_qty)
+        is_buyer = str(order["side"]).upper() == "BUY"
+        if commission > 0:
+            if asset == "USDT":
+                self.balances["USDT"] = self.balances.get("USDT", 0.0) - commission
+            elif asset == str(order["symbol"]).replace("USDT", ""):
+                base = str(order["symbol"]).replace("USDT", "")
+                self.balances[base] = self.balances.get(base, 0.0) - commission
+            else:
+                self.balances[asset] = self.balances.get(asset, 0.0) - commission
+        self.fills.append({
+            "symbol": order["symbol"],
+            "id": len(self.fills) + 1,
+            "orderId": int(order["orderId"]),
+            "price": str(price),
+            "qty": str(executed),
+            "quoteQty": str(quote_qty),
+            "commission": str(commission),
+            "commissionAsset": asset,
+            "isBuyer": is_buyer,
+            "time": int(order.get("transactTime", time.time() * 1000)),
+        })
+
+    def my_trades(self, symbol, order_id=None, limit=1000):
+        rows = [
+            copy.deepcopy(row) for row in self.fills
+            if row["symbol"] == str(symbol).upper()
+            and (order_id is None or str(row["orderId"]) == str(order_id))
+        ]
+        return rows[-int(limit):]
+
+    def klines(self, symbol, interval, limit=200, start_time=None, end_time=None):
+        if symbol not in self.prices:
+            raise RuntimeError(f"mock historical symbol unavailable: {symbol}")
+        close = str(self.prices[symbol])
+        stamp = int(start_time or time.time() * 1000)
+        return [[stamp, close, close, close, close, "0", stamp + 59999, "0", 0, "0", "0", "0"]]
+
     def _new_order(self, symbol, side, qty, status="FILLED", client_order_id="", order_type="MARKET", stop_price=0.0):
         oid = str(len(self.orders) + 1)
         executed = (
@@ -120,6 +175,7 @@ class MockExchange:
             "time": int(time.time() * 1000),
         }
         self.orders.append(order)
+        self._append_fill(order, executed, self.prices[symbol])
         return order
 
     def market_buy(self, symbol, quote_order_qty=None, quantity=None, client_order_id=None):
@@ -226,10 +282,10 @@ class MockExchange:
                 self.balances["USDT"] += executed * self.prices[symbol]
 
             order["executedQty"] = str(executed)
-            order["cummulativeQuoteQty"] = str(executed * self.prices[symbol])
             order["transactTime"] = int(time.time() * 1000)
             order["time"] = order["transactTime"]
             order["status"] = "FILLED" if executed + 1e-12 >= requested else "PARTIALLY_FILLED"
+            self._append_fill(order, executed, self.prices[symbol])
 
     def open_order_lists(self):
         return [copy.deepcopy(x) for x in self.open_oco.values()]

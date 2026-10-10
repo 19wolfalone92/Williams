@@ -268,7 +268,13 @@ class BinanceSpotClient:
     def trades(self,symbol,limit=100): return self._request('GET','/api/v3/trades',{'symbol':symbol,'limit':limit})
     def agg_trades(self,symbol,limit=100): return self._request('GET','/api/v3/aggTrades',{'symbol':symbol,'limit':limit})
     def avg_price(self,symbol): return self._request('GET','/api/v3/avgPrice',{'symbol':symbol})
-    def klines(self,symbol,interval,limit=200): return self._request('GET','/api/v3/klines',{'symbol':symbol,'interval':interval,'limit':limit})
+    def klines(self, symbol, interval, limit=200, start_time=None, end_time=None):
+        params = {'symbol': symbol, 'interval': interval, 'limit': int(limit)}
+        if start_time is not None:
+            params['startTime'] = int(start_time)
+        if end_time is not None:
+            params['endTime'] = int(end_time)
+        return self._request('GET', '/api/v3/klines', params)
     def account(self): return self._request('GET','/api/v3/account',signed=True)
     def api_restrictions(self): return self._request('GET','/sapi/v1/account/apiRestrictions',{},signed=True)
     def api_trading_status(self): return self._request('GET','/sapi/v1/account/apiTradingStatus',{},signed=True)

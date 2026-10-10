@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import math
 from typing import Any
 import json
 from decimal import Decimal, ROUND_DOWN, ROUND_CEILING
@@ -564,6 +565,148 @@ class CampaignExecutionService:
                 return self.engine.load_campaign(str(item["campaign_id"]))
         return None
 
+
+    def _historical_fee_quote(self, asset: str, quote_asset: str, amount: float, timestamp_ms: int) -> float:
+        """Value a third-asset commission using the 1-minute candle containing the fill.
+
+        This is a documented valuation convention, not a claim of exact intraminute
+        execution value. If historical conversion is unavailable, accounting fails closed.
+        """
+        if amount == 0:
+            return 0.0
+        minute_start = int(timestamp_ms) - (int(timestamp_ms) % 60_000)
+        for pair, inverse in ((f"{asset}{quote_asset}", False), (f"{quote_asset}{asset}", True)):
+            try:
+                candles = self.client.klines(
+                    pair, "1m", limit=1,
+                    start_time=minute_start, end_time=minute_start + 60_000,
+                )
+                if not isinstance(candles, list) or not candles:
+                    continue
+                close = float(candles[0][4])
+                if not math.isfinite(close) or close <= 0:
+                    continue
+                return float(amount) / close if inverse else float(amount) * close
+            except Exception:
+                continue
+        raise CampaignExecutionError(
+            f"cannot value {asset} commission in {quote_asset} at fill time; reconciliation required"
+        )
+
+    def _account_order_fills(self, symbol: str, campaign_id: str, order: dict[str, Any]) -> dict[str, float]:
+        """Persist authoritative per-trade fills once and derive net Spot base inventory."""
+        order_id = order.get("orderId")
+        if order_id is None:
+            raise CampaignExecutionError(f"{symbol}: executed order has no authoritative orderId")
+        executed = float(order.get("executedQty", 0) or 0)
+        if not math.isfinite(executed) or executed <= 0:
+            raise CampaignExecutionError(f"{symbol}: invalid executed quantity")
+        history = getattr(self.client, "my_trades", None)
+        if not callable(history):
+            raise CampaignExecutionError(f"{symbol}: authoritative trade history unavailable")
+        try:
+            fills = history(symbol, order_id=order_id, limit=1000)
+        except Exception as exc:
+            raise CampaignExecutionError(
+                f"{symbol}: trade history unavailable for order {order_id}; reconciliation required"
+            ) from exc
+        if not isinstance(fills, list) or not fills:
+            raise CampaignExecutionError(
+                f"{symbol}: executed order {order_id} has no authoritative trade fills"
+            )
+
+        rows = self._symbols_rows(self.client.exchange_info(symbol))
+        row = rows.get(symbol.upper())
+        if not row:
+            raise CampaignExecutionError(f"{symbol}: exchangeInfo unavailable for fee accounting")
+        base_asset = str(row.get("baseAsset", "")).upper()
+        quote_asset = str(row.get("quoteAsset", "")).upper()
+        if not base_asset or not quote_asset:
+            raise CampaignExecutionError(f"{symbol}: base/quote assets unavailable for fee accounting")
+
+        with self.db.transaction():
+            for fill in fills:
+                if str(fill.get("orderId", "")) != str(order_id):
+                    continue
+                if not bool(fill.get("isBuyer", True)):
+                    raise CampaignExecutionError(f"{symbol}: non-BUY fill returned for entry order {order_id}")
+                trade_id = fill.get("id")
+                if trade_id is None or str(trade_id).strip() == "":
+                    raise CampaignExecutionError(f"{symbol}: trade history row lacks exchange trade ID")
+                try:
+                    qty = float(fill["qty"])
+                    price = float(fill["price"])
+                    quote_qty = float(fill.get("quoteQty", qty * price))
+                    commission = float(fill["commission"])
+                    timestamp_ms = int(fill["time"])
+                    fee_asset = str(fill["commissionAsset"]).upper()
+                except (KeyError, TypeError, ValueError, OverflowError) as exc:
+                    raise CampaignExecutionError(
+                        f"{symbol}: incomplete fee/fill fields for trade {trade_id}"
+                    ) from exc
+                if (
+                    not all(math.isfinite(v) for v in (qty, price, quote_qty, commission))
+                    or qty <= 0 or price <= 0 or quote_qty <= 0 or commission < 0
+                    or timestamp_ms <= 0 or not fee_asset
+                ):
+                    raise CampaignExecutionError(
+                        f"{symbol}: invalid quantity, price or commission for trade {trade_id}"
+                    )
+                commission_base = commission if fee_asset == base_asset else 0.0
+                if fee_asset == quote_asset:
+                    fee_quote = commission
+                elif fee_asset == base_asset:
+                    fee_quote = commission * price
+                elif commission == 0:
+                    fee_quote = 0.0
+                else:
+                    fee_quote = self._historical_fee_quote(
+                        fee_asset, quote_asset, commission, timestamp_ms
+                    )
+                self.db.save_campaign_fill({
+                    "campaign_id": campaign_id,
+                    "order_id": str(order_id),
+                    "trade_id": str(trade_id),
+                    "symbol": symbol.upper(),
+                    "side": "BUY" if bool(fill.get("isBuyer", True)) else "SELL",
+                    "quantity": qty,
+                    "price": price,
+                    "quote_quantity": quote_qty,
+                    "fee_quote": fee_quote,
+                    "commission_base": commission_base,
+                    "commission_asset": fee_asset,
+                    "raw_json": fill,
+                })
+
+        stored = self.db.campaign_fills_for_order(symbol, order_id)
+        if not stored:
+            raise CampaignExecutionError(f"{symbol}: no durable fill ledger after commit")
+        gross_qty = sum(float(x["quantity"]) for x in stored)
+        quote_qty = sum(float(x["quote_quantity"]) for x in stored)
+        fee_quote = sum(float(x["fee_quote"]) for x in stored)
+        commission_base = sum(float(x["commission_base"]) for x in stored)
+        tolerance = max(1e-12, executed * 1e-8)
+        if abs(gross_qty - executed) > tolerance:
+            raise CampaignExecutionError(
+                f"{symbol}: durable fills ({gross_qty:.12g}) do not reconcile to exchange executedQty ({executed:.12g})"
+            )
+        exchange_quote = float(order.get("cummulativeQuoteQty", 0) or 0)
+        if exchange_quote > 0 and abs(quote_qty - exchange_quote) > max(1e-8, exchange_quote * 1e-8):
+            raise CampaignExecutionError(
+                f"{symbol}: durable fill quote ({quote_qty:.12g}) does not reconcile to exchange quote ({exchange_quote:.12g})"
+            )
+        net_qty = gross_qty - commission_base
+        if not math.isfinite(net_qty) or net_qty <= 0:
+            raise CampaignExecutionError(f"{symbol}: net Spot inventory is non-positive after base-asset commission")
+        return {
+            "gross_quantity": gross_qty,
+            "net_quantity": net_qty,
+            "quote_quantity": quote_qty,
+            "average_entry_price": quote_qty / net_qty,
+            "fee_quote": fee_quote,
+            "commission_base": commission_base,
+        }
+
     def reconcile_pending_entries(self) -> list[dict[str, Any]]:
         """Adopt conditional BUYs after triggers, partial fills, restart or crash."""
         rows = self.db.conn.execute(
@@ -615,22 +758,18 @@ class CampaignExecutionService:
                     else campaign.current_signal_id
                 )
 
-                executed = float(order.get("executedQty", 0) or 0)
+                gross_executed = float(order.get("executedQty", 0) or 0)
+                fill_accounting = None
+                executed = gross_executed
                 quote = float(order.get("cummulativeQuoteQty", 0) or 0)
-                if quote <= 0 and executed > 0 and hasattr(self.client, "my_trades"):
-                    try:
-                        fills = self.client.my_trades(
-                            symbol,
-                            order_id=order.get("orderId"),
-                            limit=1000,
-                        ) or []
-                        quote = sum(
-                            float(x.get("price", 0) or 0) *
-                            float(x.get("qty", x.get("executedQty", 0)) or 0)
-                            for x in fills
-                        )
-                    except Exception:
-                        pass
+                fee_quote = 0.0
+                if gross_executed > 0:
+                    fill_accounting = self._account_order_fills(
+                        symbol, campaign.campaign_id, order
+                    )
+                    executed = fill_accounting["net_quantity"]
+                    quote = fill_accounting["quote_quantity"]
+                    fee_quote = fill_accounting["fee_quote"]
 
                 if status in {"NEW", "PENDING_NEW"} and executed <= 0:
                     # Still waiting for the conditional trigger.
@@ -650,10 +789,23 @@ class CampaignExecutionService:
                         )
                     try:
                         cancel(symbol, order_id=order.get("orderId"))
+                        # A fill can race with cancellation. Re-read authoritative
+                        # order state and trade history before sizing protection.
+                        order = self.client.get_order(symbol, order_id=order.get("orderId"))
+                        status = str(order.get("status", "")).upper()
+                        gross_executed = float(order.get("executedQty", 0) or 0)
+                        executed = gross_executed
+                        if gross_executed > 0:
+                            fill_accounting = self._account_order_fills(
+                                symbol, campaign.campaign_id, order
+                            )
+                            executed = fill_accounting["net_quantity"]
+                            quote = fill_accounting["quote_quantity"]
+                            fee_quote = fill_accounting["fee_quote"]
                     except Exception as exc:
                         self.engine.mark_reconcile_required(
                             campaign,
-                            f"partial conditional BUY cancel ambiguous: {exc}",
+                            f"partial conditional BUY cancel/re-read ambiguous: {exc}",
                         )
                         raise
 
@@ -684,7 +836,7 @@ class CampaignExecutionService:
                             campaign.tags.get("protective_order_id", "") or ""
                         )
                         if protective_id:
-                            self.replace_structural_stop(
+                            protection = self.replace_structural_stop(
                                 campaign,
                                 existing_order_id=int(protective_id),
                                 quantity=total_qty,
@@ -696,9 +848,17 @@ class CampaignExecutionService:
                                 quantity=total_qty,
                                 stop_price=current_stop,
                             )
-                            campaign.tags["protective_order_id"] = protection.get(
-                                "order_id", ""
-                            )
+                        campaign.tags["protective_order_id"] = protection.get(
+                            "order_id", protection.get("newOrderResponse", {}).get("orderId", "")
+                        )
+                        protected_qty = float(protection.get("quantity", 0) or 0)
+                        protection_gap = max(0.0, total_qty - protected_qty)
+                        if protection_gap > max(1e-12, total_qty * 1e-12):
+                            campaign.tags["protection_state"] = "PARTIAL"
+                            campaign.tags["unprotected_exposure_qty"] = repr(protection_gap)
+                        else:
+                            campaign.tags["protection_state"] = "FULL"
+                            campaign.tags.pop("unprotected_exposure_qty", None)
 
                         self.engine.record_add_on_fill(
                             campaign,
@@ -706,8 +866,13 @@ class CampaignExecutionService:
                             average_entry_price=avg,
                             fill_order_id=str(order.get("orderId", "")),
                             risk_quote=float(campaign.pending_risk_quote),
-                            fee_quote=0.0,
+                            fee_quote=fee_quote,
                         )
+                        if protection_gap > max(1e-12, total_qty * 1e-12):
+                            self.engine.mark_reconcile_required(
+                                campaign,
+                                f"protective quantity shortfall {protection_gap:.12g} {symbol}; exposure remains",
+                            )
                         self.db.set_campaign_signal_state(
                             signal_id,
                             SignalState.FILLED.value,
@@ -720,7 +885,7 @@ class CampaignExecutionService:
                             )
                             self.db.conn.execute(
                                 "UPDATE trades SET entry_price=?, stop_price=?, "
-                                "risk_pct=?, updated_at=CURRENT_TIMESTAMP "
+                                "risk_pct=?, fees=COALESCE(fees,0)+?, updated_at=CURRENT_TIMESTAMP "
                                 "WHERE id=? AND exit_time IS NULL",
                                 (
                                     campaign.average_entry_price,
@@ -729,6 +894,7 @@ class CampaignExecutionService:
                                         campaign.open_risk_quote /
                                         max(self._current_equity_quote(), 1e-12)
                                     ) * 100.0,
+                                    fee_quote,
                                     int(trade["id"]),
                                 ),
                             )
@@ -789,6 +955,14 @@ class CampaignExecutionService:
                     campaign.tags["protective_order_id"] = protection.get(
                         "order_id", ""
                     )
+                    protected_qty = float(protection.get("quantity", 0) or 0)
+                    protection_gap = max(0.0, executed - protected_qty)
+                    if protection_gap > max(1e-12, executed * 1e-12):
+                        campaign.tags["protection_state"] = "PARTIAL"
+                        campaign.tags["unprotected_exposure_qty"] = repr(protection_gap)
+                    else:
+                        campaign.tags["protection_state"] = "FULL"
+                        campaign.tags.pop("unprotected_exposure_qty", None)
 
                     self.engine.record_initial_fill(
                         campaign,
@@ -797,8 +971,13 @@ class CampaignExecutionService:
                         initial_stop_price=stop,
                         fill_order_id=str(order.get("orderId", "")),
                         risk_quote=float(campaign.pending_risk_quote),
-                        fee_quote=0.0,
+                        fee_quote=fee_quote,
                     )
+                    if protection_gap > max(1e-12, executed * 1e-12):
+                        self.engine.mark_reconcile_required(
+                            campaign,
+                            f"protective quantity shortfall {protection_gap:.12g} {symbol}; exposure remains",
+                        )
                     self.db.set_campaign_signal_state(
                         signal_id,
                         SignalState.FILLED.value,
@@ -826,7 +1005,7 @@ class CampaignExecutionService:
                             risk_pct=float(
                                 campaign.tags.get("initial_risk_pct", 0.0) or 0.0
                             ) * 100.0,
-                            fees=0.0,
+                            fees=fee_quote,
                         )
 
                     self.db.state_delete(f"entry_client_order_id:{symbol}")
@@ -836,8 +1015,10 @@ class CampaignExecutionService:
                     results.append({
                         "symbol": symbol,
                         "campaign_id": campaign.campaign_id,
-                        "state": "OPEN",
+                        "state": campaign.state.value,
                         "filled_quantity": executed,
+                        "protective_quantity": protected_qty,
+                        "unprotected_exposure_qty": protection_gap,
                         "partial_entry": status == "PARTIALLY_FILLED",
                     })
                     continue
@@ -1635,6 +1816,9 @@ class CampaignExecutionService:
         if not campaign.current_stop_price <= proposed_stop:
             raise CampaignExecutionError("structural stop would loosen LONG risk")
         new_stop = self._normalize_price(campaign.symbol, proposed_stop)
+        normalized_qty = self._normalize_qty(campaign.symbol, quantity)
+        if normalized_qty <= 0:
+            raise CampaignExecutionError(f"{campaign.symbol}: protective quantity rounds to zero")
         cid = f"{self.STOP_PREFIX}{uuid.uuid4().hex[:20]}"
         intent = OrderIntent.new(
             campaign.symbol,
@@ -1642,7 +1826,7 @@ class CampaignExecutionService:
             "STOP_LOSS",
             required_context_versions={},
             invalidation_level=new_stop,
-            quantity=self.client.decimal_format(quantity),
+            quantity=self.client.decimal_format(normalized_qty),
             client_order_id=cid,
             purpose="CAMPAIGN_TRAIL",
             campaign_id=campaign.campaign_id,
@@ -1655,7 +1839,7 @@ class CampaignExecutionService:
                 existing_order_id,
                 "SELL",
                 "STOP_LOSS",
-                quantity=self.client.decimal_format(quantity),
+                quantity=self.client.decimal_format(normalized_qty),
                 stop_price=self.client.decimal_format(new_stop),
                 new_client_order_id=cid,
             ),
@@ -1687,7 +1871,7 @@ class CampaignExecutionService:
                 purpose="PROTECTION",
                 status="NEW",
                 stop_price=new_stop,
-                quantity=quantity,
+                quantity=normalized_qty,
                 campaign_id=campaign.campaign_id,
                 signal_id=campaign.current_signal_id,
             )
