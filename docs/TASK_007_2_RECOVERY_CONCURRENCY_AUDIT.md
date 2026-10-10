@@ -11,11 +11,11 @@ This report is an evidence record, not a declaration of production readiness. No
 - Working branch: `audit/williams-2.1-task-007-recovery`
 - Task 007.2 starting SHA: `01d8472dbadf3d903b243d618de627bd2962aed7`
 - Baseline `main` SHA: `04da5f9c09572e99ff310be3a1908179165e528c`
-- Implementation SHA exercised by the latest Python CI at report authoring: `9fcbc5f148adadceb3c6f7ee61125fcc419faedb`
-- Compare result for implementation SHA: 120 commits ahead, 0 behind baseline.
+- Latest verified implementation/report SHA before this documentation refresh: `2312582ef7e92f5e29695db7c5e0557ac0491ad2`
+- Compare result for that SHA: 121 commits ahead, 0 behind baseline.
 - `main` was rechecked and remains at `04da5f9c09572e99ff310be3a1908179165e528c`.
 - No PR exists for this exact recovery branch. Existing PR #43 is on `fix/task-007-risk-management`, not this branch. No PR was created and no merge was performed.
-- Exact code SHA `66354eb53ee456a788a01cdd2293d8068b728b83` passed [workflow run 38090157504](https://github.com/19wolfalone92/Williams/actions/runs/38090157504): Python **199 passed, 4 warnings**; Android debug build, unit tests and lint/static checks completed successfully. This report update creates a documentation commit and a new workflow run; its resulting HEAD must be checked independently before finalizing.
+- Exact SHA `2312582ef7e92f5e29695db7c5e0557ac0491ad2` passed [workflow run 38090391571](https://github.com/19wolfalone92/Williams/actions/runs/38090391571): Python **199 passed, 4 warnings**; Android `:app:testDebugUnitTest`, `:app:lintDebug`, and `:app:assembleDebug` all completed successfully. This documentation refresh creates a new SHA and must be verified by its own run; no result is transferred from the previous SHA.
 
 ## 2. Changes made in this continuation
 
@@ -158,7 +158,7 @@ No Futures readiness claim is made.
 
 - Exact implementation SHA `66354eb53ee456a788a01cdd2293d8068b728b83`: [workflow run 38090157504](https://github.com/19wolfalone92/Williams/actions/runs/38090157504) completed successfully. Python tests: **199 passed, 4 warnings**. Android build job completed `:app:testDebugUnitTest`, `:app:lintDebug`, and `:app:assembleDebug` successfully; debug APK and lint report artifacts were uploaded.
 - Prior exact-SHA runs with Python failures were investigated and corrected; they are not treated as passes.
-- The report commit changes documentation only, but creates a new HEAD. The new run must be checked on the resulting SHA; success on an earlier SHA is not transferred.
+- Exact current HEAD at last verification: `2312582ef7e92f5e29695db7c5e0557ac0491ad2`; [workflow run 38090391571](https://github.com/19wolfalone92/Williams/actions/runs/38090391571) passed on this exact SHA (Python 199 passed, 4 warnings; Android build, unit tests and lint/static checks passed). A documentation-only refresh of this report will trigger a new run; that run must be checked separately and prior results must not be transferred.
 - Android job command in workflow: `gradle --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --stacktrace`. A job still in progress is not PASS.
 
 ## 10. Testnet gate and remaining P0 blockers
@@ -180,3 +180,15 @@ P0 blockers still open:
 **IN PROGRESS — NOT APPROVED**
 
 Target status remains **READY FOR READ-ONLY TESTNET VERIFICATION**, not live-trading readiness. Binance Mainnet use is prohibited by this task.
+
+## 12. Verification addendum — 2026-10-10
+
+- Latest pre-refresh HEAD: `2312582ef7e92f5e29695db7c5e0557ac0491ad2`.
+- `main`: `04da5f9c09572e99ff310be3a1908179165e528c`, unchanged.
+- Branch comparison: 121 commits ahead, 0 behind.
+- Exact-SHA GitHub Actions run: [38090391571](https://github.com/19wolfalone92/Williams/actions/runs/38090391571) — **SUCCESS**.
+- Python job `114325456794`: **199 passed, 4 warnings**.
+- Android job `114325456555`: **SUCCESS**; workflow runs `:app:testDebugUnitTest`, `:app:lintDebug`, and `:app:assembleDebug`.
+- Latest branch workflow query showed no in-progress run at the time of this check; the ten most recent listed runs were completed. The documentation refresh will create a new run, which must be independently inspected on its exact SHA.
+- Existing related open PRs found: #43 `fix/task-007-risk-management`, #42 `audit/williams-2.1-futures-safety`, and #44 `fix/williams-fractal-stop-provenance-20261010` (targets another branch). No PR targets `audit/williams-2.1-task-007-recovery`; none was created.
+- Testnet remains prohibited for now: independent-runtime concurrency coverage is partial; the requested full crash matrix, complete direct/indirect mutation reachability proof, comprehensive fee/balance/exposure reconciliation, and Android process-kill fault injection are not complete.
