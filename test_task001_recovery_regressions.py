@@ -475,6 +475,74 @@ def test_cancel_replace_operation_journal_persists_both_legs_and_recovers_indepe
     assert db.state_get("position_state") == "RECONCILE_REQUIRED"
 
 
+def test_populated_legacy_v6_database_migrates_without_losing_campaign_or_intent(tmp_path):
+    path = tmp_path / "legacy-v6.sqlite3"
+    db = Database(str(path))
+    db.conn.execute(
+        "INSERT INTO execution_intents(intent_id,symbol,side,order_type,purpose,"
+        "required_context_versions_json,status,client_order_id) "
+        "VALUES('legacy-intent','BTCUSDT','SELL','STOP_LOSS','CANCEL_REPLACE','{}','AMBIGUOUS','LEGACY_NEW')"
+    )
+    db.conn.execute(
+        "INSERT INTO campaigns(campaign_id,symbol,state,side,quantity,entry_price) "
+        "VALUES('legacy-campaign','BTCUSDT','RECONCILE_REQUIRED','LONG',0.25,40000)"
+    )
+    db.conn.execute("DROP TABLE IF EXISTS cancel_replace_operations")
+    db.conn.execute("DROP TABLE IF EXISTS exchange_fill_ledger")
+    db.state_set("schema_version", "6")
+    db.conn.commit()
+    db.conn.close()
+
+    migrated = Database(str(path))
+    assert migrated.state_get("schema_version") == 8
+    assert migrated.conn.execute(
+        "SELECT intent_id,status,client_order_id FROM execution_intents WHERE intent_id='legacy-intent'"
+    ).fetchone()["status"] == "AMBIGUOUS"
+    campaign = migrated.conn.execute(
+        "SELECT campaign_id,quantity FROM campaigns WHERE campaign_id='legacy-campaign'"
+    ).fetchone()
+    assert campaign["campaign_id"] == "legacy-campaign"
+    assert campaign["quantity"] == 0.25
+    assert migrated.get_cancel_replace_operation("legacy-intent") is None
+    assert migrated.conn.execute(
+        "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='exchange_fill_ledger'"
+    ).fetchone()[0] == 1
+    # Legacy ambiguous operations without the two-leg journal remain unresolved.
+    migrated.state_set("position_state", "RECONCILE_REQUIRED")
+    assert migrated.state_get("position_state") == "RECONCILE_REQUIRED"
+    migrated.close()
+
+
+def test_two_independent_sqlite_connections_record_same_exchange_fill_once(tmp_path):
+    import threading
+    path = tmp_path / "concurrent-fill.sqlite3"
+    first_db = Database(str(path))
+    second_db = Database(str(path))
+    trade = {
+        "id": 905, "orderId": 81, "symbol": "BTCUSDT",
+        "qty": "0.3", "price": "30000.00", "quoteQty": "9000.00",
+        "commission": "0.0003", "commissionAsset": "BTC",
+    }
+    barrier = threading.Barrier(2)
+    results = []
+    errors = []
+    def writer(db):
+        try:
+            barrier.wait()
+            results.append(db.record_exchange_fill("BTCUSDT", trade))
+        except Exception as exc:
+            errors.append(exc)
+    a = threading.Thread(target=writer, args=(first_db,))
+    b = threading.Thread(target=writer, args=(second_db,))
+    a.start(); b.start(); a.join(timeout=10); b.join(timeout=10)
+    assert not a.is_alive() and not b.is_alive()
+    assert errors == []
+    assert sorted(result["inserted"] for result in results) == [False, True]
+    assert len(first_db.exchange_fills_for_order("BTCUSDT", 81)) == 1
+    first_db.close()
+    second_db.close()
+
+
 def test_exchange_fill_ledger_is_idempotent_and_preserves_exact_decimal_values(tmp_path):
     db = ready_db(tmp_path)
     trade = {
