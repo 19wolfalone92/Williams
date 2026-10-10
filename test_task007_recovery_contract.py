@@ -77,6 +77,38 @@ def test_recovery_unlock_requires_all_checks_and_persists_canonical_state():
         assert db2.state_get("position_state") == "RECONCILE_REQUIRED"
 
 
+def test_v7_database_migrates_target_order_id_and_migration_is_repeatable(tmp_path):
+    path = str(tmp_path / "schema-v7.sqlite3")
+    db = Database(path)
+    db.conn.close()
+
+    legacy = sqlite3.connect(path)
+    legacy.execute("ALTER TABLE execution_intents DROP COLUMN target_order_id")
+    legacy.execute(
+        "UPDATE bot_state SET value='7' WHERE key='schema_version'"
+    )
+    legacy.commit()
+    legacy.close()
+
+    migrated = Database(path)
+    columns = {
+        row["name"]
+        for row in migrated.conn.execute("PRAGMA table_info(execution_intents)").fetchall()
+    }
+    assert "target_order_id" in columns
+    assert int(migrated.state_get("schema_version")) == Database.SCHEMA_VERSION
+    migrated.conn.close()
+
+    reopened = Database(path)
+    columns_after_repeat = {
+        row["name"]
+        for row in reopened.conn.execute("PRAGMA table_info(execution_intents)").fetchall()
+    }
+    assert "target_order_id" in columns_after_repeat
+    assert int(reopened.state_get("schema_version")) == Database.SCHEMA_VERSION
+    reopened.conn.close()
+
+
 def test_future_schema_version_is_not_downgraded():
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "state.sqlite3")
