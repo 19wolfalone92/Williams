@@ -253,12 +253,20 @@ class MultiTimeframeContextService:
             log.debug("operative MTF selection %s failed: %s", symbol, exc)
 
         candle_open_ms = int(pd.Timestamp(frame.index[-1]).timestamp() * 1000)
+        candle_close_ms = candle_open_ms
+        if "close_time" in frame.columns:
+            try:
+                close_timestamp = pd.to_datetime(frame["close_time"].iloc[-1], utc=True, errors="coerce")
+                if pd.notna(close_timestamp):
+                    candle_close_ms = int(close_timestamp.timestamp() * 1000)
+            except (TypeError, ValueError, OverflowError):
+                candle_close_ms = candle_open_ms
         context = TFMarketContext(
             symbol=symbol,
             interval=interval,
             version=0,
             candle_open_time_ms=candle_open_ms,
-            candle_close_time_ms=candle_open_ms,
+            candle_close_time_ms=candle_close_ms,
             price=price,
             atr=atr,
             jaw=jaw,
