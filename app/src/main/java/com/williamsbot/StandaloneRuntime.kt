@@ -153,7 +153,13 @@ private data class PendingEntry(
     val capitalReservedQuote: Double = 0.0,
     val campaignId: String = "",
     val signalId: String = "",
-    val signalType: String = "REVERSAL"
+    val signalType: String = "REVERSAL",
+    val signalBarTimeMs: Long = 0L,
+    val signalConfirmationTimeMs: Long = 0L,
+    val signalExpiresAtMs: Long = 0L,
+    val invalidationPrice: Double = 0.0,
+    // Open time of the latest closed H1 bar already checked against invalidation.
+    val lastSignalValidationCandleTimeMs: Long = 0L
 )
 
 private data class ExecutionResult(
@@ -853,6 +859,11 @@ private class NativeEngine(
                         .put("campaign_id", it.campaignId)
                         .put("signal_id", it.signalId)
                         .put("signal_type", it.signalType)
+                        .put("signal_bar_time_ms", it.signalBarTimeMs)
+                        .put("signal_confirmation_time_ms", it.signalConfirmationTimeMs)
+                        .put("signal_expires_at_ms", it.signalExpiresAtMs)
+                        .put("invalidation_price", it.invalidationPrice)
+                        .put("last_signal_validation_candle_time_ms", it.lastSignalValidationCandleTimeMs)
                 )
             }
         }
@@ -931,7 +942,12 @@ private class NativeEngine(
                         capitalReservedQuote = item.optDouble("capital_reserved_quote", 0.0),
                         campaignId = item.optString("campaign_id", ""),
                         signalId = item.optString("signal_id", ""),
-                        signalType = item.optString("signal_type", "REVERSAL")
+                        signalType = item.optString("signal_type", "REVERSAL"),
+                        signalBarTimeMs = item.optLong("signal_bar_time_ms", 0L),
+                        signalConfirmationTimeMs = item.optLong("signal_confirmation_time_ms", 0L),
+                        signalExpiresAtMs = item.optLong("signal_expires_at_ms", 0L),
+                        invalidationPrice = item.optDouble("invalidation_price", 0.0),
+                        lastSignalValidationCandleTimeMs = item.optLong("last_signal_validation_candle_time_ms", 0L)
                     )
                 }
             }
@@ -2629,9 +2645,11 @@ private class NativeEngine(
     }
 
     private fun campaignEntryCandidate(candidate: BaseAnalysis): CampaignSignalN? =
-        candidate.campaignSignals
-            .sortedBy { it.signalBarTimeMs }
-            .firstOrNull()
+        candidate.campaignSignals.minWithOrNull(
+            compareBy<CampaignSignalN> { it.confirmationTimeMs }
+                .thenBy { it.signalBarTimeMs }
+                .thenBy { it.type }
+        )
 
     private fun submitCampaignEntry(candidate: BaseAnalysis) {
         if (!campaignEngineEnabled || !candidate.campaignReady) return
@@ -2694,7 +2712,13 @@ private class NativeEngine(
             capitalReservedQuote = qty * trigger,
             campaignId = campaignId,
             signalId = signal.signalId,
-            signalType = signal.type
+            signalType = signal.type,
+            signalBarTimeMs = signal.signalBarTimeMs,
+            signalConfirmationTimeMs = signal.confirmationTimeMs,
+            signalExpiresAtMs = signal.expiresAtMs,
+            invalidationPrice = signal.invalidationPrice,
+            lastSignalValidationCandleTimeMs = signal.confirmationTimeMs -
+                frameSeconds(WilliamsTimeframeContract.CANONICAL_DECISION) * 1000L
         )
         synchronized(pendingEntries) {
             pendingEntries[candidate.symbol] = pending
@@ -3511,16 +3535,16 @@ private class NativeEngine(
     ) {
         if (!campaignEngineEnabled || position.campaignId.isBlank()) return
 
-        val latestSignalTime =
-            position.signalId.substringAfterLast(':').toLongOrNull()
-                ?: position.openedAt
+        // Add-ons are later confirmed events, not merely newer center bars.
         val signal = candidate.campaignSignals
             .filter {
                 it.type in setOf("SUPER_AO", "FRACTAL") &&
-                    it.signalBarTimeMs > latestSignalTime
+                    it.confirmationTimeMs > position.openedAt
             }
-            .sortedBy { it.signalBarTimeMs }
-            .firstOrNull()
+            .minWithOrNull(
+                compareBy<CampaignSignalN> { it.confirmationTimeMs }
+                    .thenBy { it.signalBarTimeMs }
+            )
             ?: return
 
         if (synchronized(pendingEntries) { pendingEntries.containsKey(candidate.symbol) }) return
@@ -3586,7 +3610,13 @@ private class NativeEngine(
             capitalReservedQuote = qty * trigger,
             campaignId = position.campaignId,
             signalId = signal.signalId,
-            signalType = signal.type
+            signalType = signal.type,
+            signalBarTimeMs = signal.signalBarTimeMs,
+            signalConfirmationTimeMs = signal.confirmationTimeMs,
+            signalExpiresAtMs = signal.expiresAtMs,
+            invalidationPrice = signal.invalidationPrice,
+            lastSignalValidationCandleTimeMs = signal.confirmationTimeMs -
+                frameSeconds(WilliamsTimeframeContract.CANONICAL_DECISION) * 1000L
         )
         synchronized(pendingEntries) {
             pendingEntries[candidate.symbol] = pending
@@ -7072,6 +7102,8 @@ private class NativeEngine(
                                 .put("type", s.type)
                                 .put("role", s.role)
                                 .put("signal_bar_time_ms", s.signalBarTimeMs)
+                                .put("confirmation_time_ms", s.confirmationTimeMs)
+                                .put("expires_at_ms", s.expiresAtMs)
                                 .put("trigger_price", s.triggerPrice)
                                 .put("protective_price", s.protectivePrice)
                                 .put("teeth_at_detection", s.teethAtDetection)
