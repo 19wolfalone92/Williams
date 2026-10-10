@@ -9,6 +9,7 @@ from equity_breaker import EquityCircuitBreaker
 from l2_slippage import L2SlippageGuard
 from execution_accumulator import ExecutionSummary, accumulate_order
 from campaign_execution import CampaignExecutionService, CampaignExecutionError
+from execution_barrier import OrderIntent, ExecutionPersistenceError
 from campaign_model import SignalSpec, SignalType, SignalRole
 from campaign_monitor import CampaignMonitor
 from order_identity import is_entry_id, is_exit_id, is_managed_order
@@ -105,6 +106,51 @@ class MultiPositionTrader:
             self.db,
             self.campaign_execution,
         )
+
+    def _execute_mutation(
+        self,
+        symbol,
+        side,
+        order_type,
+        purpose,
+        client_order_id,
+        submit,
+        *,
+        target_order_id="",
+        target_order_list_id="",
+        trade_id=None,
+        pre_submit_checks=None,
+    ):
+        """Route every legacy portfolio mutation through the canonical barrier."""
+        if self.execution_barrier is None:
+            raise ExecutionPersistenceError(
+                f"{symbol}: legacy Binance mutation blocked because ExecutionBarrier is unavailable"
+            )
+        intent = OrderIntent.new(
+            symbol,
+            side,
+            order_type,
+            required_context_versions={},
+            client_order_id=client_order_id,
+            target_order_id=str(target_order_id or ""),
+            target_order_list_id=str(target_order_list_id or ""),
+            purpose=purpose,
+            campaign_id=str(trade_id or f"legacy:{symbol}"),
+        )
+        result = self.execution_barrier.execute(
+            intent,
+            submit,
+            pre_submit_checks=pre_submit_checks,
+        )
+        if not result.accepted:
+            raise ExecutionPersistenceError(
+                f"{symbol}: ExecutionBarrier blocked {purpose}: {result.reason}"
+            )
+        if not isinstance(result.response, dict):
+            raise ExecutionPersistenceError(
+                f"{symbol}: {purpose} returned no authoritative response object"
+            )
+        return result.response
 
     # ------------------------------------------------------------------
     # Durable state
@@ -719,12 +765,20 @@ class MultiPositionTrader:
             )
 
         client_id = f"{self.EMERGENCY_PREFIX}{uuid.uuid4().hex[:16]}"
-        sell = self.client.order_safe(
+        sell = self._execute_mutation(
             symbol,
             "SELL",
             "MARKET",
-            quantity=self.client.decimal_format(sell_qty),
-            new_client_order_id=client_id,
+            "CAMPAIGN_EMERGENCY_EXIT",
+            client_id,
+            lambda: self.client.order_safe(
+                symbol,
+                "SELL",
+                "MARKET",
+                quantity=self.client.decimal_format(sell_qty),
+                new_client_order_id=client_id,
+            ),
+            trade_id=trade_id,
         )
         self.db.save_order(sell)
 
@@ -933,13 +987,22 @@ class MultiPositionTrader:
         self.set_state(symbol, "EXIT_PENDING")
 
         create_oco = getattr(self.client, "create_oco_sell_safe", None) or self.client.create_oco_sell
-        result = create_oco(
+        result = self._execute_mutation(
             symbol,
-            self.client.decimal_format(qty),
-            self.client.decimal_format(tp),
-            self.client.decimal_format(sl),
-            self.client.decimal_format(sl_limit),
+            "SELL",
+            "OCO",
+            "CAMPAIGN_PROTECTION",
             client_id,
+            lambda: create_oco(
+                symbol,
+                self.client.decimal_format(qty),
+                self.client.decimal_format(tp),
+                self.client.decimal_format(sl),
+                self.client.decimal_format(sl_limit),
+                client_id,
+            ),
+            trade_id=trade_id,
+            pre_submit_checks=lambda _snapshot: self._oco_equity_check(),
         )
 
         for leg in result.get("orderReports", []):
@@ -1667,10 +1730,35 @@ class MultiPositionTrader:
             if list_id or list_client:
                 cancel = getattr(self.client, "cancel_oco", None)
                 if cancel is not None:
-                    if list_id:
-                        cancel(symbol, order_list_id=list_id)
-                    else:
-                        cancel(symbol, list_client_order_id=list_client)
+                    cancel_client_id = f"{self.EMERGENCY_PREFIX}CANCEL_{uuid.uuid4().hex[:12]}"
+                    self._execute_mutation(
+                        symbol,
+                        "SELL",
+                        "CANCEL_OCO",
+                        "CAMPAIGN_PROTECTION_CANCEL",
+                        cancel_client_id,
+                        lambda: cancel(
+                            symbol,
+                            order_list_id=list_id if list_id else None,
+                            list_client_order_id=list_client if not list_id else None,
+                        ),
+                        target_order_list_id=list_id,
+                        trade_id=trade.get("id"),
+                    )
+                    # A successful DELETE response alone is not proof that the
+                    # matching engine has finished the list transition.
+                    confirmed_list = self.client.order_list(
+                        symbol,
+                        order_list_id=list_id if list_id else None,
+                        list_client_order_id=list_client if not list_id else None,
+                    )
+                    list_status = str(
+                        confirmed_list.get("listOrderStatus", confirmed_list.get("listStatusType", ""))
+                    ).upper()
+                    if list_status not in {"ALL_DONE", "REJECT"}:
+                        raise RuntimeError(
+                            f"{symbol}: OCO cancellation is not terminal; status={list_status or 'UNKNOWN'}"
+                        )
 
             account = self.client.account()
             free_qty = self._asset_balance(
@@ -1687,12 +1775,21 @@ class MultiPositionTrader:
                     f"{symbol}: managed quantity is no longer available"
                 )
 
-            sell = self.client.order_safe(
+            manual_client_id = f"{self.MANUAL_PREFIX}{uuid.uuid4().hex[:20]}"
+            sell = self._execute_mutation(
                 symbol,
                 "SELL",
                 "MARKET",
-                quantity=self.client.decimal_format(sell_qty),
-                new_client_order_id=f"{self.MANUAL_PREFIX}{uuid.uuid4().hex[:20]}",
+                "CAMPAIGN_EXIT_MANUAL",
+                manual_client_id,
+                lambda: self.client.order_safe(
+                    symbol,
+                    "SELL",
+                    "MARKET",
+                    quantity=self.client.decimal_format(sell_qty),
+                    new_client_order_id=manual_client_id,
+                ),
+                trade_id=trade.get("id"),
             )
             self.db.save_order(sell)
 
@@ -2226,12 +2323,23 @@ class MultiPositionTrader:
                     float(quote),
                 )
 
-                order = self.client.order_safe(
+                order = self._execute_mutation(
                     symbol,
                     "BUY",
                     "MARKET",
-                    quote_order_qty=self.client.decimal_format(quote),
-                    new_client_order_id=client_id,
+                    "CAMPAIGN_ENTRY",
+                    client_id,
+                    lambda: self.client.order_safe(
+                        symbol,
+                        "BUY",
+                        "MARKET",
+                        quote_order_qty=self.client.decimal_format(quote),
+                        new_client_order_id=client_id,
+                    ),
+                    trade_id=f"legacy-entry:{symbol}",
+                    pre_submit_checks=lambda _snapshot: self.l2_guard.check_buy_quote(
+                        self.client, symbol, float(quote)
+                    ),
                 )
                 self.db.save_order(order)
 
