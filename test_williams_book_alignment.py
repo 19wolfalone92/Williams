@@ -32,12 +32,14 @@ def test_profitunity_mfi_proxy_windows():
 
 
 def test_ao_green_streak_drives_super_ao():
-    # A monotonic rising series produces consecutive green AO bars after the
-    # 34-bar warmup; the three-bar Super AO condition must then become true.
+    # WM2 identifies the third rising AO histogram bar exactly once. Later
+    # rising bars can continue momentum but are not new WM2 events.
     prices = [100 + (i * 0.05) ** 2 for i in range(80)]
     ind = calculate_indicators(frame(prices), config_from_env())
-    assert int(ind['ao_green_streak'].iloc[-1]) >= 3
-    assert bool(ind['super_ao_long'].iloc[-1]) is True
+    third = ind.index[ind['ao_green_streak'].eq(3)]
+    assert len(third) > 0
+    assert bool(ind.loc[third[0], 'super_ao_long']) is True
+    assert not ind.loc[ind['ao_green_streak'].gt(3), 'super_ao_long'].any()
     assert bool(ind['long_ao_positive'].iloc[-1]) is True
 
 
