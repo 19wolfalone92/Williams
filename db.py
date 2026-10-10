@@ -1064,6 +1064,26 @@ class Database:
                 count += 1
         return count
 
+    def recent_campaign_closes(self, limit: int = 50) -> list[dict]:
+        """Return authoritative finalized campaign-close events, newest first.
+
+        The close event is written only after exchange position/order/fill
+        reconciliation. Consumers must still validate its PnL payload and
+        timestamp before using it for a safety decision.
+        """
+        safe_limit = max(1, min(int(limit), 500))
+        rows = self.conn.execute(
+            """
+            SELECT id, created_at, reason, payload_json
+            FROM campaign_events
+            WHERE event = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?
+            """,
+            ("CAMPAIGN_CLOSED", safe_limit),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
     def campaign_risk_reserved_quote(self):
         # RECONCILE_REQUIRED does not release risk: the exchange may still
         # hold the position/order even when local state is uncertain.
