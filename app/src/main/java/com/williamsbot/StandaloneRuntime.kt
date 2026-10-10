@@ -1547,9 +1547,9 @@ private class NativeEngine(
                             "order-list mutation journal has no queryable exchange identifier"
                         }
                         val query = if (!listId.isNullOrBlank()) {
-                            "symbol=" + symbol + "&orderListId=" + listId
+                            "orderListId=" + listId
                         } else {
-                            "symbol=" + symbol + "&origClientOrderId=" + listClientId
+                            "origClientOrderId=" + listClientId
                         }
                         val orderList = signedGet("/api/v3/orderList", query)
                         val status = orderList.optString("listStatusType").uppercase(Locale.US)
