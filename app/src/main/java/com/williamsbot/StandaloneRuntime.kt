@@ -1517,6 +1517,144 @@ private class NativeEngine(
         error("Binance HTTP " + lastCode + ": " + lastBody)
     }
 
+    private data class ExecutionMutationSpec(
+        val intentId: String,
+        val logicalKey: String,
+        val clientOrderId: String?,
+        val targetClientOrderId: String?,
+        val symbol: String,
+        val operation: String,
+        val method: String,
+        val path: String,
+        val targetOrderId: String?,
+        val targetOrderListId: String?,
+        val requestJson: String,
+        val increasesExposure: Boolean
+    )
+
+    private fun parseSignedParams(params: String): Map<String, String> =
+        params.split("&").filter { it.isNotBlank() }.associate { part ->
+            val split = part.indexOf('=')
+            val name = if (split >= 0) part.substring(0, split) else part
+            val value = if (split >= 0) part.substring(split + 1) else ""
+            URLDecoder.decode(name, StandardCharsets.UTF_8.name()) to
+                URLDecoder.decode(value, StandardCharsets.UTF_8.name())
+        }
+
+    private fun stableNativeClientOrderId(prefix: String, vararg parts: String): String {
+        val safePrefix = prefix.filter { it.isLetterOrDigit() || it == '_' || it == '-' }
+            .take(14).ifBlank { "WMS_" }
+        val material = parts.joinToString("|")
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(material.toByteArray(StandardCharsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+        return (safePrefix + digest.take(20)).take(36)
+    }
+
+    private fun executionMutationSpec(method: String, path: String, params: String): ExecutionMutationSpec? {
+        val verb = method.uppercase(Locale.US)
+        val p = parseSignedParams(params)
+        val supported =
+            (verb == "POST" && path in setOf("/api/v3/order", "/api/v3/orderList/oco", "/api/v3/order/cancelReplace")) ||
+            (verb == "DELETE" && path in setOf("/api/v3/order", "/api/v3/orderList"))
+        if (!supported) return null
+
+        val symbol = p["symbol"].orEmpty().uppercase(Locale.US)
+        require(symbol.isNotBlank()) { "Mutation blocked: missing symbol" }
+        val side = p["side"].orEmpty().uppercase(Locale.US)
+        val type = p["type"].orEmpty().uppercase(Locale.US)
+        val targetOrder = p["orderId"] ?: p["cancelOrderId"]
+        val targetList = p["orderListId"] ?: p["cancelOrderListId"]
+        val targetClient = p["origClientOrderId"] ?: p["cancelOrigClientOrderId"] ?: p["listClientOrderId"]
+        val exchangeClient = when (path) {
+            "/api/v3/order" -> if (verb == "POST") p["newClientOrderId"] else null
+            "/api/v3/orderList/oco" -> p["listClientOrderId"]
+            "/api/v3/order/cancelReplace" -> p["newClientOrderId"]
+            else -> null
+        }
+        val operation = when {
+            verb == "POST" && path == "/api/v3/order" && side == "BUY" -> "ENTRY_ORDER"
+            verb == "POST" && path == "/api/v3/order" && side == "SELL" && type == "MARKET" -> "MARKET_EXIT"
+            verb == "POST" && path == "/api/v3/order" -> "PROTECTION_ORDER"
+            verb == "POST" && path == "/api/v3/orderList/oco" -> "OCO_CREATE"
+            verb == "POST" && path == "/api/v3/order/cancelReplace" -> "CANCEL_REPLACE"
+            verb == "DELETE" && path == "/api/v3/order" -> "CANCEL_ORDER"
+            else -> "CANCEL_OCO"
+        }
+        if (verb == "POST" && exchangeClient.isNullOrBlank()) {
+            throw IllegalStateException("Mutation blocked before network: stable clientOrderId/listClientOrderId missing for $path")
+        }
+        if (verb == "DELETE" && path == "/api/v3/order" && targetOrder.isNullOrBlank() && p["origClientOrderId"].isNullOrBlank()) {
+            throw IllegalStateException("Cancel blocked before network: order identity missing")
+        }
+        if (verb == "DELETE" && path == "/api/v3/orderList" && targetList.isNullOrBlank() && p["listClientOrderId"].isNullOrBlank()) {
+            throw IllegalStateException("OCO cancel blocked before network: list identity missing")
+        }
+        if (operation == "CANCEL_REPLACE" && targetOrder.isNullOrBlank() && p["cancelOrigClientOrderId"].isNullOrBlank()) {
+            throw IllegalStateException("cancelReplace blocked before network: old order identity missing")
+        }
+
+        val stable = when (verb) {
+            "POST" -> if (operation == "CANCEL_REPLACE") "$operation|$symbol|${targetOrder ?: p["cancelOrigClientOrderId"].orEmpty()}|$exchangeClient"
+                      else "$operation|$symbol|$exchangeClient"
+            else -> "$operation|$symbol|${targetOrder.orEmpty()}|${targetList.orEmpty()}|${p["origClientOrderId"].orEmpty()}|${p["listClientOrderId"].orEmpty()}"
+        }
+        val requestJson = JSONObject(p.toSortedMap()).toString()
+        val logical = "$verb|$path|$stable"
+        return ExecutionMutationSpec(
+            intentId = stableNativeClientOrderId("WMS_INTENT_", logical),
+            logicalKey = logical,
+            clientOrderId = exchangeClient ?: stableNativeClientOrderId("WMS_MUT_", stable),
+            targetClientOrderId = targetClient,
+            symbol = symbol,
+            operation = operation,
+            method = verb,
+            path = path,
+            targetOrderId = targetOrder,
+            targetOrderListId = targetList ?: p["listClientOrderId"],
+            requestJson = requestJson,
+            increasesExposure = verb == "POST" && side == "BUY"
+        )
+    }
+
+    private fun latchMutationReconciliation(reason: String) {
+        reconcileRequired = true
+        stateMachine.force(TradingState.RECONCILE_REQUIRED, "Execution mutation unresolved: $reason")
+        val saved = runCatching {
+            prefs.edit().putBoolean("reconcile_required", true).commit()
+        }.getOrDefault(false)
+        lastError = if (saved) "RECONCILE_REQUIRED: $reason"
+            else "RECONCILE_REQUIRED: $reason; durable latch write failed"
+        paused = true
+    }
+
+    private fun validateAndPersistMutationIntent(spec: ExecutionMutationSpec) {
+        if (spec.increasesExposure) {
+            check(!killLatched) { "New entry blocked: KILL_SWITCH_LATCHED" }
+            check(!reconcileRequired) { "New entry blocked: RECONCILE_REQUIRED" }
+            check(auditStore.unresolvedExecutionMutationCount() == 0) {
+                "New entry blocked: unresolved execution mutations require reconciliation"
+            }
+        }
+        check(auditStore.unresolvedExecutionMutationCount(spec.symbol) == 0) {
+            "Mutation blocked for ${spec.symbol}: previous result remains unresolved"
+        }
+        auditStore.beginExecutionMutation(
+            intentId = spec.intentId,
+            logicalKey = spec.logicalKey,
+            clientOrderId = spec.clientOrderId,
+            targetClientOrderId = spec.targetClientOrderId,
+            symbol = spec.symbol,
+            operation = spec.operation,
+            method = spec.method,
+            path = spec.path,
+            targetOrderId = spec.targetOrderId,
+            targetOrderListId = spec.targetOrderListId,
+            requestJson = spec.requestJson
+        )
+        auditStore.markExecutionMutationSubmitting(spec.intentId)
+    }
+
     private fun signedAccount(): JSONObject =
         signedRequest(
             method = "GET",
