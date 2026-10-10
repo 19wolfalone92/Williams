@@ -47,6 +47,9 @@ def signal(kind=SignalType.REVERSAL, role=SignalRole.ENTRY, bar=100, trigger=101
 
 
 def service(db, client):
+    # These tests cover campaign order lifecycle after startup recovery; keep the
+    # global recovery precondition explicit rather than relying on READY/FLAT.
+    db.state_set("recovery_status", "RECOVERY_COMPLETE")
     barrier = ExecutionBarrier(FakeCache(), db)
     return CampaignExecutionService(client, db, barrier)
 
