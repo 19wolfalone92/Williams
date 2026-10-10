@@ -400,17 +400,7 @@ private class BackendApi(context: Context) {
         }
 
     private fun isLocalRuntimeUrl(value: String): Boolean =
-        runCatching {
-            val normalized = value.trim().trimEnd('/')
-            val uri = java.net.URI(normalized)
-            uri.scheme.equals("http", ignoreCase = true) &&
-                uri.host?.lowercase() in setOf("127.0.0.1", "localhost") &&
-                uri.port == 18080 &&
-                uri.rawUserInfo == null &&
-                (uri.rawPath.isNullOrEmpty() || uri.rawPath == "/") &&
-                uri.rawQuery == null &&
-                uri.rawFragment == null
-        }.getOrDefault(false)
+        BackendUrlContract.isLocalRuntimeUrl(value)
 
     fun saveConnection(url: String, token: String) {
         val normalized = url.trim().trimEnd('/')
