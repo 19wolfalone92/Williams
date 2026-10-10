@@ -35,6 +35,38 @@ class FuturesLossGuardTest {
     }
 
     @Test
+    fun consecutiveLossesResetAtUtcDayBoundary() {
+        val yesterday = 86_400_000L - 10_000L
+        val now = 86_400_000L + 10_000L
+        assertEquals(
+            null,
+            FuturesLossGuard.violation(
+                listOf(trade(-2.0, yesterday), trade(-1.0, yesterday - 1_000L)),
+                maxConsecutiveLosses = 2,
+                cooldownMinutes = 0,
+                nowMs = now,
+                maxStopOutsPerUtcDay = 2
+            )
+        )
+    }
+
+    @Test
+    fun latestLossCooldownPersistsAcrossUtcMidnight() {
+        val yesterdayLoss = 86_400_000L - 10_000L
+        val now = 86_400_000L + 10_000L
+        assertEquals(
+            "post-loss cooldown active for 40 more seconds",
+            FuturesLossGuard.violation(
+                listOf(trade(-2.0, yesterdayLoss)),
+                maxConsecutiveLosses = 2,
+                cooldownMinutes = 1,
+                nowMs = now,
+                maxStopOutsPerUtcDay = 2
+            )
+        )
+    }
+
+    @Test
     fun enforcesCooldownAfterLatestLoss() {
         val reason = FuturesLossGuard.violation(
             listOf(trade(-2.0, 9_000)),
