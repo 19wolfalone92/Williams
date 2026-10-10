@@ -838,11 +838,22 @@ class FuturesRuntime:
         if not stop_outs_ok:
             daily_ok = False
             daily_reason = f"{daily_reason}; {stop_outs_reason}"
-        loss_guard_ok, loss_guard_reason = _loss_streak_allows_entry(
-            self.db,
-            max_consecutive_losses=int(self.config.max_consecutive_losses),
-            cooldown_minutes=int(self.config.cooldown_minutes),
-        )
+        # Do not let an entry-only guard prevent kill/pause handling or the
+        # management/reconciliation work above. If this cycle could otherwise
+        # admit entries, missing ledger/config is a fail-closed blocker.
+        if kill_latched or self._paused or preflight_errors:
+            loss_guard_ok, loss_guard_reason = True, "entry already blocked by a higher-priority gate"
+        else:
+            db_for_loss_guard = getattr(self, "db", None)
+            config_for_loss_guard = getattr(self, "config", None)
+            if db_for_loss_guard is None:
+                loss_guard_ok, loss_guard_reason = False, "durable Futures close ledger unavailable; new entries blocked"
+            else:
+                loss_guard_ok, loss_guard_reason = _loss_streak_allows_entry(
+                    db_for_loss_guard,
+                    max_consecutive_losses=int(getattr(config_for_loss_guard, "max_consecutive_losses", 2)),
+                    cooldown_minutes=int(getattr(config_for_loss_guard, "cooldown_minutes", 30)),
+                )
         if not loss_guard_ok:
             daily_ok = False
             daily_reason = f"{daily_reason}; {loss_guard_reason}"
