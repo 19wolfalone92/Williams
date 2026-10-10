@@ -639,9 +639,20 @@ class ExecutionBarrier:
             )
             if reason:
                 self._record("WARNING", "execution_blocked", intent, reason)
-                # Persisting a BLOCKED diagnostic is useful but not allowed to
-                # turn a failed admission into an apparent execution.
-                self._persist(intent, "BLOCKED", reason)
+                # Never overwrite a previously durable ambiguous/submitting
+                # mutation with BLOCKED merely because a repeated command was
+                # attempted. That would erase the recovery obligation and could
+                # authorize a blind retry after restart.
+                existing = None
+                loader = getattr(self.db, "load_execution_intent", None) if self.db is not None else None
+                if callable(loader):
+                    try:
+                        existing = loader(intent.intent_id)
+                    except Exception:
+                        existing = None
+                existing_status = str((existing or {}).get("status", "")).upper()
+                if existing_status not in {"PENDING", "SUBMITTING", "AMBIGUOUS", "RECONCILE_REQUIRED"}:
+                    self._persist(intent, "BLOCKED", reason)
                 return ExecutionResult(intent.intent_id, False, reason=reason)
 
             if is_entry:
