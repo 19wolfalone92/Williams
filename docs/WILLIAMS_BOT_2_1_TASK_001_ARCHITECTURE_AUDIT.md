@@ -376,3 +376,80 @@ Any subsequent report commit has a new SHA and requires new exact-SHA checks. Do
 - PR #47: open Draft, not merged.
 
 **TASK 001.1 status: FAIL — NOT ACCEPTED.** The most important remaining code defect is the lack of durable independent old-order identity and per-leg outcome records for cancel/replace recovery. Do not remove the reconciliation latch or automatically retry mutations to work around this gap. Next implementation work must add a migration-safe durable operation record, write it before network I/O through the existing ExecutionBarrier, independently query old and replacement orders on recovery, and prove idempotency with SQLite fault injection and concurrent recovery tests. Then close the OCO/partial-fill/fee/protection lifecycle and rerun all mandatory workflows on one final SHA.
+
+---
+
+## 11. TASK 001.2 — Durable Cancel/Replace State & Crash-Recovery Closure (2026-10-11)
+
+**Baseline checked before edits:** 216c95dc0cb001a434f525b7ee1241690b5f522a  
+**Implementation/test commit before this report update:** 8052953fe8a1b5fbdbd2f30af33038de887232c5  
+**Base/main:** 04da5f9c09572e99ff310be3a1908179165e528c  
+**PR #47:** open Draft, not merged. **Decision: FAIL — NOT ACCEPTED.**
+
+### 11.1 Pre-change verification
+
+- PR metadata was read live before changes: head was 216c95dc0cb001a434f525b7ee1241690b5f522a, base was main at 04da5f9c09572e99ff310be3a1908179165e528c, state open, draft=true, merged=false.
+- Exact-SHA CI for the pre-change head 216c95dc0cb001a434f525b7ee1241690b5f522a completed successfully for Python backend tests, Williams Campaign CI, and Build Android APK. These are baseline-only results and do not apply to the implementation commits.
+- Code inspection confirmed the concrete loss: schema v6 execution_intents held one generic client_order_id; it did not durably link the cancel target order ID and replacement client ID or store per-leg states. Startup recovery therefore refused to reconcile either leg.
+
+### 11.2 Changes made
+
+1. **db.py** — schema version raised from 6 to 7; migration-safe CREATE TABLE IF NOT EXISTS cancel_replace_operations added with stable operation/intent IDs, symbol, old exchange order ID, old client ID where known, replacement client ID, separate cancel/replacement states, exchange IDs as learned, executed-quantity fields, contract version, timestamps, reconciliation latch and last reconciliation evidence. Added create/read/list/update methods. Creation is identity-immutable and rejects an operation-ID collision rather than overwriting it.
+2. **campaign_execution.py** — replace_structural_stop() now writes the durable two-leg operation record before calling the existing _submit()/ExecutionBarrier path. It records the returned per-leg response separately from the generic intent. If the result write fails after a response, the campaign and symbol remain reconciliation-required and the code raises instead of attempting a second mutation.
+3. **execution_barrier.py** — startup recovery loads the durable cancel/replace record and queries the old order by exchange order ID and replacement by stable client order ID independently. It validates symbol, identity and authoritative status. It records observed leg states but deliberately keeps the operation and global/symbol reconciliation latch unresolved until financial, exposure and live-protection reconciliation is separately proven. Legacy ambiguous intents without the new operation record remain fail-closed and are not mutated.
+4. **test_task001_recovery_regressions.py** — added deterministic SQLite/fake-exchange coverage for durable two-leg identity, independent restart lookups, no mutation replay, persistent reconciliation latch, and rejection of an operation-identity collision.
+
+### 11.3 Durable contract and state interpretation
+
+| Dimension | Durable field(s) | Meaning |
+|---|---|---|
+| Operation identity | operation_id, intent_id, contract_version | Stable link to generic ExecutionBarrier intent |
+| Original leg | old_exchange_order_id, old_client_order_id, cancel_state, old_executed_qty | Target and last observed cancel/order state |
+| Replacement leg | replacement_client_order_id, replacement_exchange_order_id, replacement_state, replacement_executed_qty | Stable replacement identity and last observed state |
+| Recovery | reconcile_required, last_reconciled_at, last_reconciliation_json, timestamps | Recovery evidence and explicit unresolved state |
+
+**Safety rule:** a response with two leg statuses is not an atomic exchange transaction. A restart lookup of both orders proves only observed order state. It does not prove unique fills, fee conversion, net base-asset delta, exchange balance agreement, campaign quantity, or current protective quantity. The operation therefore remains reconcile_required=1; this implementation does not clear the global latch based on order lookups alone.
+
+### 11.4 Scenario evidence at this report update
+
+| Scenario | Code/test evidence now available | Status |
+|---|---|---|
+| Migration from prior DB schema | Table created with IF NOT EXISTS; existing tables are not dropped | PARTIAL — no dedicated populated-v6 migration test confirmed yet |
+| Durable old/new identities before mutation | Added in replace_structural_stop() | IMPLEMENTED; needs exact-SHA test confirmation |
+| Both legs independently looked up after restart | Added to barrier recovery; new fake-exchange test | IMPLEMENTED; needs exact-SHA test confirmation |
+| Missing/legacy operation record | Recovery stays unresolved; no retry | FAIL-CLOSED |
+| Lost response / ambiguous mutation | Durable record remains pending; restart is read-only | PARTIAL — no full matrix for every failure point |
+| SQLite error at every critical write boundary | Response-persistence failure path explicitly blocks | PARTIAL — not every write boundary has injected-failure coverage |
+| Partial/full old-order fill, unique fills and fees | Executed quantity is recorded as evidence, but no complete end-to-end recovery/accounting chain added here | NOT VERIFIED |
+| Actual exchange balances vs local position | Not completed by this patch | NOT VERIFIED |
+| Live protection quantity and protection repair | Reconciliation latch stays set; full protection proof/repair lifecycle not added | NOT VERIFIED |
+| OCO list + child persistence/restart/partial execution | Existing list/child lookup remains; full OCO financial lifecycle not closed | NOT VERIFIED |
+| Two independent SQLite connections/processes racing recovery | Read-only exchange recovery repeats lookups safely, but no dedicated cross-process race test added | NOT VERIFIED |
+| Exit allowed while entries blocked | Existing gate behavior not re-proven by this patch's new tests | NOT VERIFIED |
+| Android physical process death | No device test run | NOT VERIFIED |
+| Bounded Binance Spot Testnet | No exchange mutation/restart test run | NOT RUN / NOT VERIFIED |
+
+### 11.5 CI for implementation commits
+
+The implementation/test commit 8052953fe8a1b5fbdbd2f30af33038de887232c5 triggered:
+- [Python backend tests — run 38088852965](https://github.com/19wolfalone92/Williams/actions/runs/38088852965)
+- [Williams Campaign CI — run 38088852944](https://github.com/19wolfalone92/Williams/actions/runs/38088852944)
+- [Build Android APK — run 38088852948](https://github.com/19wolfalone92/Williams/actions/runs/38088852948)
+
+At the time of this report edit, all three were queued; no result is claimed. The report update itself creates another SHA and must trigger/receive its own exact-SHA CI. No earlier green result is transferable to the final SHA.
+
+### 11.6 Acceptance decision and remaining blockers
+
+**TASK 001.2: FAIL — NOT ACCEPTED.**
+
+The primary durability gap has been addressed in code, but this is not full crash-recovery closure. Outstanding blockers:
+- no demonstrated complete financial reconciliation over unique fills, commissions (including unknown commission asset/amount), net base-asset change, exchange balances and campaign position;
+- no confirmed protective-order/OCO lifecycle reconciliation and repair after cancel succeeds while replacement is rejected or unknown;
+- no exhaustive SQLite fault-injection matrix across each persistence boundary;
+- no dedicated two-connection/two-process recovery race test;
+- no proven populated legacy-schema migration test;
+- exact-SHA CI for the implementation and final report SHA still pending at the time of writing;
+- physical Android process-death test NOT VERIFIED;
+- bounded Spot Testnet cancel/replace/OCO/restart test NOT RUN / NOT VERIFIED.
+
+No Binance Mainnet requests or real trading operations were used. main was not modified. PR #47 remains open Draft and must not be merged.
