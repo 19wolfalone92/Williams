@@ -13,6 +13,7 @@ from binance_client import BinanceAPIError
 from campaign_engine import CampaignEngine
 from campaign_model import CampaignState, PendingOrderRecord, SignalSpec, SignalState, SignalType
 from decision_trace import DecisionTrace
+from pending_signal import PendingSignal
 from execution_barrier import ExecutionBarrier, OrderIntent
 
 
@@ -268,6 +269,9 @@ class CampaignExecutionService:
         campaign.tags["signal_role"] = signal.role.value
         campaign.tags["decision_trace"] = DecisionTrace.from_signal(signal).to_dict()
         campaign.tags["pending_signal_expires_at_ms"] = int(signal.expires_at_ms or 0)
+        campaign.tags["pending_signal"] = PendingSignal.from_spec(
+            signal, campaign_id=campaign.campaign_id, state=SignalState.ARMED
+        ).to_dict()
         campaign.tags["initial_stop_price"] = stop
         campaign.initial_stop_price = stop
         campaign.current_stop_price = stop
@@ -492,14 +496,212 @@ class CampaignExecutionService:
                         pass
 
                 if status in {"NEW", "PENDING_NEW"} and executed <= 0:
-                    # Still waiting for the conditional trigger.
-                    results.append({
-                        "symbol": symbol,
-                        "campaign_id": campaign.campaign_id,
-                        "state": "ENTRY_PENDING",
-                        "order_status": status,
-                    })
-                    continue
+                    # Conditional entries must remain causally valid while
+                    # waiting at Binance. Expiry/cancellation is a System
+                    # Safety/Implementation rule; it is not attributed to the
+                    # books. Unknown provenance blocks and cancels fail-closed.
+                    pending_data = campaign.tags.get("pending_signal")
+                    stale_reason: str | None = None
+                    now_ms = int(time.time() * 1000)
+                    if not isinstance(pending_data, dict):
+                        stale_reason = "REVALIDATION_UNAVAILABLE"
+                    else:
+                        try:
+                            confirm_ms = int(pending_data.get("confirmation_time_ms", 0) or 0)
+                            signal_bar_ms = int(pending_data.get("signal_bar_time_ms", 0) or 0)
+                            expires_ms = int(pending_data.get("expires_at_ms", 0) or 0)
+                            trigger = float(pending_data.get("trigger_price", 0) or 0)
+                            invalidation = float(pending_data.get("invalidation_price", 0) or 0)
+                            signal_type = str(pending_data.get("signal_type", "")).upper()
+                        except (TypeError, ValueError, OverflowError):
+                            confirm_ms = signal_bar_ms = expires_ms = 0
+                            trigger = invalidation = 0.0
+                            signal_type = ""
+                        if (
+                            confirm_ms <= 0 or signal_bar_ms <= 0 or expires_ms <= 0
+                            or trigger <= 0 or invalidation <= 0
+                            or signal_type not in {"REVERSAL", "SUPER_AO", "FRACTAL"}
+                        ):
+                            stale_reason = "REVALIDATION_UNAVAILABLE"
+                        elif now_ms >= expires_ms:
+                            stale_reason = "EXPIRED"
+                        else:
+                            try:
+                                import pandas as pd
+                                from data import fetch_klines
+                                from strategy import calculate_indicators, config_from_env
+
+                                history = fetch_klines(
+                                    self.client, symbol, "1h", limit=200
+                                )
+                                if history is None or history.empty:
+                                    raise CampaignExecutionError("H1 revalidation returned no candles")
+                                history = history.copy()
+                                history.index = pd.to_datetime(history.index, utc=True, errors="coerce")
+                                history = history.loc[~history.index.isna()].sort_index()
+                                now_utc = pd.Timestamp.now(tz="UTC")
+                                closed = history.loc[
+                                    history.index + pd.Timedelta(hours=1) <= now_utc
+                                ].copy()
+                                if len(closed) < 140:
+                                    raise CampaignExecutionError(
+                                        f"Only {len(closed)} closed H1 candles for pending-signal revalidation"
+                                    )
+                                ind = calculate_indicators(closed, config_from_env())
+                                confirm_dt = pd.to_datetime(confirm_ms, unit="ms", utc=True)
+                                post_confirmation = ind.loc[ind.index >= confirm_dt]
+                                if not post_confirmation.empty:
+                                    high_values = pd.to_numeric(
+                                        post_confirmation["high"], errors="coerce"
+                                    ).to_numpy(dtype=float)
+                                    low_values = pd.to_numeric(
+                                        post_confirmation["low"], errors="coerce"
+                                    ).to_numpy(dtype=float)
+                                    import math
+                                    if (
+                                        not all(math.isfinite(float(x)) for x in high_values)
+                                        or not all(math.isfinite(float(x)) for x in low_values)
+                                    ):
+                                        raise CampaignExecutionError("Non-finite H1 revalidation candles")
+                                    if (high_values >= trigger).any():
+                                        stale_reason = "TRIGGER_ALREADY_TRADED"
+                                    elif (low_values <= invalidation).any():
+                                        stale_reason = "STRUCTURAL_INVALIDATION"
+                                    elif signal_type == "FRACTAL":
+                                        # A newly formed WM3 supersedes the old
+                                        # candidate even if its own trigger was
+                                        # never activated.
+                                        event_rows = ind.loc[
+                                            ind.get("fractal_up", False).astype(bool)
+                                        ] if "fractal_up" in ind.columns else ind.iloc[0:0]
+                                        for event_time, event in event_rows.iterrows():
+                                            try:
+                                                center_i = int(event.get("confirmed_up_center_index", -1))
+                                            except (TypeError, ValueError, OverflowError):
+                                                continue
+                                            if (
+                                                center_i in range(len(ind))
+                                                and int(ind.index[center_i].timestamp() * 1000) > signal_bar_ms
+                                            ):
+                                                stale_reason = "NEWER_FRACTAL"
+                                                break
+                            except Exception:
+                                # Do not leave a conditional order live forever
+                                # when it cannot be revalidated deterministically.
+                                stale_reason = stale_reason or "REVALIDATION_UNAVAILABLE"
+
+                    if stale_reason is not None:
+                        order_id = order.get("orderId")
+                        if order_id is None:
+                            self.engine.mark_reconcile_required(
+                                campaign,
+                                f"{symbol}: stale conditional entry has no exchange orderId ({stale_reason})",
+                            )
+                            results.append({
+                                "symbol": symbol, "campaign_id": campaign.campaign_id,
+                                "state": "RECONCILE_REQUIRED", "reason": stale_reason,
+                            })
+                            continue
+                        try:
+                            self.db.set_campaign_signal_state(
+                                signal_id, SignalState.CANCEL_REQUESTED.value
+                            )
+                            self._execute_cancel(campaign, int(order_id), f"STALE_SIGNAL_{stale_reason}")
+                            refreshed = self.client.get_order(
+                                symbol, orig_client_order_id=client_id
+                            )
+                            self.db.save_order(refreshed)
+                            order = refreshed
+                            status = str(order.get("status", "")).upper()
+                            executed = float(order.get("executedQty", 0) or 0)
+                            quote = float(order.get("cummulativeQuoteQty", 0) or 0)
+                            if quote <= 0 and executed > 0 and hasattr(self.client, "my_trades"):
+                                fills = self.client.my_trades(
+                                    symbol, order_id=order.get("orderId"), limit=1000
+                                ) or []
+                                quote = sum(
+                                    float(x.get("price", 0) or 0) *
+                                    float(x.get("qty", x.get("executedQty", 0)) or 0)
+                                    for x in fills
+                                )
+                            if status in {"NEW", "PENDING_NEW", "PARTIALLY_FILLED"}:
+                                self.engine.mark_reconcile_required(
+                                    campaign,
+                                    f"{symbol}: stale entry cancellation not terminal ({status}; {stale_reason})",
+                                )
+                                results.append({
+                                    "symbol": symbol, "campaign_id": campaign.campaign_id,
+                                    "state": "RECONCILE_REQUIRED", "reason": stale_reason,
+                                    "order_status": status,
+                                })
+                                continue
+                            if executed <= 0 and status in {"CANCELED", "EXPIRED", "REJECTED"}:
+                                target_signal_state = (
+                                    SignalState.EXPIRED.value if stale_reason == "EXPIRED"
+                                    else SignalState.INVALIDATED.value if stale_reason in {
+                                        "TRIGGER_ALREADY_TRADED", "STRUCTURAL_INVALIDATION", "NEWER_FRACTAL"
+                                    }
+                                    else SignalState.CANCELLED.value
+                                )
+                                self.db.set_campaign_signal_state(signal_id, target_signal_state)
+                                if purpose == "ADD_ON" or campaign.state == CampaignState.ADD_ON_PENDING:
+                                    try:
+                                        campaign.transition(
+                                            CampaignState.TREND_ACTIVE,
+                                            reason=f"pending add-on cancelled: {stale_reason}",
+                                        )
+                                    except ValueError:
+                                        campaign.state = CampaignState.TREND_ACTIVE
+                                else:
+                                    campaign.state = CampaignState.CLOSED
+                                    campaign.next_action = "WAIT"
+                                campaign.pending_risk_quote = 0.0
+                                campaign.capital_reserved_quote = 0.0
+                                campaign.tags["pending_signal_cancel_reason"] = stale_reason
+                                campaign.tags.pop("pending_signal", None)
+                                campaign.tags.pop("pending_add_signal_id", None)
+                                campaign.tags.pop("pending_order_id", None)
+                                self.db.state_delete(f"entry_client_order_id:{symbol}")
+                                self.db.state_set(
+                                    f"position_state:{symbol}",
+                                    "OPEN" if self.db.open_trade(symbol) else "FLAT",
+                                )
+                                self.db.save_campaign(campaign)
+                                results.append({
+                                    "symbol": symbol, "campaign_id": campaign.campaign_id,
+                                    "state": "ENTRY_CANCELLED_STALE", "reason": stale_reason,
+                                    "order_status": status,
+                                })
+                                continue
+                            if status not in {"FILLED", "PARTIALLY_FILLED"} and executed <= 0:
+                                self.engine.mark_reconcile_required(
+                                    campaign,
+                                    f"{symbol}: unexpected terminal status after stale cancellation: {status}",
+                                )
+                                results.append({
+                                    "symbol": symbol, "campaign_id": campaign.campaign_id,
+                                    "state": "RECONCILE_REQUIRED", "reason": stale_reason,
+                                    "order_status": status,
+                                })
+                                continue
+                        except Exception as exc:
+                            self.engine.mark_reconcile_required(
+                                campaign, f"{symbol}: stale entry cancel/reconcile failed: {exc}"
+                            )
+                            results.append({
+                                "symbol": symbol, "campaign_id": campaign.campaign_id,
+                                "state": "RECONCILE_REQUIRED", "reason": stale_reason,
+                                "error": str(exc),
+                            })
+                            continue
+                    else:
+                        results.append({
+                            "symbol": symbol,
+                            "campaign_id": campaign.campaign_id,
+                            "state": "ENTRY_PENDING",
+                            "order_status": status,
+                        })
+                        continue
 
                 if status == "PARTIALLY_FILLED" and order.get("orderId") is not None:
                     cancel = getattr(self.client, "cancel_order", None)
@@ -1021,6 +1223,10 @@ class CampaignExecutionService:
         campaign.tags["last_signal_time_ms"] = int(signal.signal_bar_time_ms)
         campaign.tags["last_signal_confirmation_time_ms"] = int(signal.confirmation_time_ms or signal.signal_bar_time_ms)
         campaign.tags["pending_add_signal_id"] = signal.signal_id
+        campaign.tags["pending_signal"] = PendingSignal.from_spec(
+            signal, campaign_id=campaign.campaign_id, state=SignalState.ARMED
+        ).to_dict()
+        campaign.tags["pending_signal_expires_at_ms"] = int(signal.expires_at_ms or 0)
         campaign.pending_risk_quote = requested
         campaign.capital_reserved_quote = qty * trigger
         self.engine.arm_add_on(
