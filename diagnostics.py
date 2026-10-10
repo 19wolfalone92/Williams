@@ -11,6 +11,7 @@ import time
 import traceback
 import uuid
 from typing import Any, Callable
+from safe_logging import redact_text, redact_value
 
 
 SAFE_ACTIONS = (
@@ -56,10 +57,10 @@ class DiagnosticManager:
             created_at=datetime.now(timezone.utc).isoformat(),
             component=str(component),
             error_type=type(exc).__name__,
-            message=str(exc),
-            traceback_text="".join(
+            message=redact_text(str(exc)),
+            traceback_text=redact_text("".join(
                 traceback.format_exception(type(exc), exc, exc.__traceback__)
-            ),
+            )),
             metadata={
                 "python": sys.version,
                 "platform": platform.platform(),
@@ -68,7 +69,7 @@ class DiagnosticManager:
         )
 
     def record(self, incident: Incident) -> dict[str, Any]:
-        payload = incident.to_dict()
+        payload = redact_value(incident.to_dict())
         if self.db is not None and hasattr(self.db, "log_event"):
             try:
                 self.db.log_event(
@@ -108,20 +109,10 @@ class DiagnosticManager:
 
     @staticmethod
     def redact(value: Any) -> Any:
-        if isinstance(value, dict):
-            out = {}
-            for key, item in value.items():
-                if str(key).lower() in {"api_key", "api_secret", "secret", "authorization", "token"}:
-                    out[key] = "***REDACTED***"
-                else:
-                    out[key] = DiagnosticManager.redact(item)
-            return out
-        if isinstance(value, list):
-            return [DiagnosticManager.redact(x) for x in value]
-        return value
+        return redact_value(value)
 
     def report_json(self, incident: Incident, *, extra: dict[str, Any] | None = None) -> str:
-        payload = incident.to_dict()
+        payload = redact_value(incident.to_dict())
         payload["system"] = {
             "python": sys.version,
             "platform": platform.platform(),
@@ -129,4 +120,4 @@ class DiagnosticManager:
         }
         if extra:
             payload["runtime_snapshot"] = self.redact(extra)
-        return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
+        return json.dumps(redact_value(payload), ensure_ascii=False, indent=2, sort_keys=True)
