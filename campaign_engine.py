@@ -76,6 +76,14 @@ class CampaignEngine:
                 "initial_stop_price": float(signal.protective_reference),
                 "signal_reason": signal.reason,
                 "signal_role": signal.role.value,
+                "last_signal_time_ms": int(signal.signal_bar_time_ms),
+                "last_signal_confirmation_time_ms": int(
+                    getattr(signal, "confirmation_time_ms", 0) or signal.signal_bar_time_ms
+                ),
+                "origin_signal_time_ms": int(signal.signal_bar_time_ms),
+                "origin_signal_confirmation_time_ms": int(
+                    getattr(signal, "confirmation_time_ms", 0) or signal.signal_bar_time_ms
+                ),
                 "wave_confidence": float(signal.wave_confidence),
                 "wave_exhaustion_risk": float(signal.wave_exhaustion_risk),
                 "htf_confirmed": bool(signal.htf_confirmed),
@@ -191,8 +199,14 @@ class CampaignEngine:
         new_pending = PendingSignal.from_spec(new)
         if old_pending.is_expired() and not new_pending.is_expired():
             return True
+        old_actionable_time = int(
+            getattr(old, "confirmation_time_ms", 0) or old.signal_bar_time_ms
+        )
+        new_actionable_time = int(
+            getattr(new, "confirmation_time_ms", 0) or new.signal_bar_time_ms
+        )
         return (
-            new.signal_bar_time_ms > old.signal_bar_time_ms
+            new_actionable_time > old_actionable_time
             and distance >= threshold
             and not new_pending.is_expired()
         )
