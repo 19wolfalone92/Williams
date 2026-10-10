@@ -38,6 +38,8 @@ class FakeCandidate:
     setup_state: str
     reason: str
     direction: str = ""
+    entry_protective_reference: float = 0.0
+    wave_invalidation_price: float = 0.0
 
 
 @dataclass
@@ -270,6 +272,50 @@ if __name__ == "__main__":
     main()
     test_portfolio_risk_caps_total_at_one_percent()
     test_portfolio_respects_existing_risk()
+
+
+def test_campaign_risk_uses_pattern_stop_not_wave_scenario_invalidation():
+    controller = make_controller()
+    candidate = FakeCandidate(
+        symbol="BTCUSDT",
+        score=99.0,
+        signal=True,
+        setup_score=100.0,
+        signal_strength=1.0,
+        breakout_distance_pct=0.1,
+        risk_pct=0.5,
+        risk_reward=2.0,
+        atr_pct=0.005,
+        spread_pct=0.001,
+        htf_confirmed=True,
+        setup_state="STRONG_SIGNAL",
+        reason="independent Williams setup",
+        direction="LONG",
+        entry_protective_reference=95.0,
+        wave_invalidation_price=80.0,
+    )
+
+    class RiskSpy:
+        def __init__(self):
+            self.kwargs = None
+
+        def analyse(self, **kwargs):
+            self.kwargs = kwargs
+            return FakeRisk(
+                allowed=True,
+                score=99.0,
+                risk_pct=0.5,
+                risk_reward=2.0,
+                stop_distance_pct=5.0,
+            )
+
+    spy = RiskSpy()
+    controller.risk_engine = spy
+    selected = controller._analyse_candidates([candidate])
+
+    assert len(selected) == 1
+    assert spy.kwargs["invalidation_price"] == 95.0
+    assert spy.kwargs["invalidation_price"] != candidate.wave_invalidation_price
 
 
 def test_futures_candidate_without_explicit_direction_is_blocked():
