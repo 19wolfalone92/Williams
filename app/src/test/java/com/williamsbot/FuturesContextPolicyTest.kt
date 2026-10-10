@@ -31,6 +31,59 @@ class FuturesContextPolicyTest {
     }
 
     @Test
+    fun earlyWm1MayLeadH1AndH4ButRequiresAngulationAndNoOppositeD1Veto() {
+        assertTrue(
+            FuturesContextPolicy.allowsEarlyReversal(
+                "LONG", neutral, short, neutral, angulationScore = 2.5
+            )
+        )
+        assertTrue(
+            FuturesContextPolicy.allowsEarlyReversal(
+                "SHORT", neutral, long, neutral, angulationScore = 2.5
+            )
+        )
+        assertFalse(
+            FuturesContextPolicy.allowsEarlyReversal(
+                "LONG", neutral, neutral, short, angulationScore = 2.5
+            )
+        )
+        assertFalse(
+            FuturesContextPolicy.allowsEarlyReversal(
+                "SHORT", neutral, neutral, long, angulationScore = 2.5
+            )
+        )
+        assertFalse(
+            FuturesContextPolicy.allowsEarlyReversal(
+                "LONG", neutral, neutral, neutral, angulationScore = 0.0
+            )
+        )
+        assertFalse(
+            FuturesContextPolicy.allowsEarlyReversal(
+                "LONG", neutral, neutral, neutral, angulationScore = Double.NaN
+            )
+        )
+        assertFalse(
+            FuturesContextPolicy.allowsEarlyReversal(
+                "FLAT", neutral, neutral, neutral, angulationScore = 2.5
+            )
+        )
+    }
+
+    @Test
+    fun onlyReversalSignalsUseTheEarlyWm1AdmissionMode() {
+        assertTrue(
+            FuturesContextPolicy.allowsSignal(
+                "LONG", "REVERSAL", 2.5, neutral, short, neutral
+            )
+        )
+        assertFalse(
+            FuturesContextPolicy.allowsSignal(
+                "LONG", "FRACTAL", 2.5, neutral, short, neutral
+            )
+        )
+    }
+
+    @Test
     fun shortIsMirroredAndNeutralD1DoesNotCreateAnEntry() {
         assertTrue(FuturesContextPolicy.allows("SHORT", short, short, neutral))
         assertFalse(FuturesContextPolicy.allows("SHORT", short, long, neutral))
