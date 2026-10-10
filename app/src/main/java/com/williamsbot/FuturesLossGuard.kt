@@ -54,8 +54,8 @@ object FuturesLossGuard {
             }
             val feeKnown = trade.has("fee_known") && trade.optBoolean("fee_known", false)
             if (firstClose && !feeKnown) {
-                val withinCooldown = cooldown > 0 &&
-                    nowMs - closedAt < cooldown.toLong() * 60_000L
+                val withinCooldown = cooldownMinutes > 0 &&
+                    nowMs - closedAt < cooldownMinutes.toLong() * 60_000L
                 if (withinCooldown) {
                     return "latest Futures trade has incomplete commission accounting during cooldown window"
                 }
