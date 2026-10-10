@@ -218,3 +218,66 @@ def test_execution_barrier_blocks_h1_signal_when_runtime_config_is_non_h1(monkey
     result = barrier.execute(intent, lambda: attempts.append("MUTATED"))
     assert not result.accepted
     assert attempts == []
+
+
+
+def test_execution_barrier_blocks_entry_aliases_and_addons_before_submit(monkeypatch):
+    from execution_barrier import OrderIntent
+
+    now = int(time.time() * 1000)
+    monkeypatch.setenv("EXECUTION_TIMEFRAME", "1h")
+    barrier = ExecutionBarrier(FakeCache(), None)
+    calls = []
+    for purpose in ("ENTRY", "ADD_ON", "CAMPAIGN_ADD_ON"):
+        intent = OrderIntent.new(
+            "BTCUSDT", "BUY", "STOP_LOSS", {},
+            purpose=purpose,
+            signal_timeframe="5m",
+            permission_interval="1h",
+            signal_bar_time_ms=now - 7_200_000,
+            confirmation_time_ms=now - 3_600_000,
+            expires_at_ms=now + 60_000,
+            signal_id="signal-1",
+            campaign_id="campaign-1",
+        )
+        result = barrier.execute(intent, lambda: calls.append(purpose), pre_submit_checks=lambda _s: None)
+        assert not result.accepted, (purpose, result.reason)
+    assert calls == []
+
+
+def test_execution_barrier_requires_last_mile_callback_for_new_entry(monkeypatch):
+    from execution_barrier import OrderIntent
+
+    now = int(time.time() * 1000)
+    monkeypatch.setenv("EXECUTION_TIMEFRAME", "1h")
+    barrier = ExecutionBarrier(FakeCache(), None)
+    calls = []
+    intent = OrderIntent.new(
+        "BTCUSDT", "BUY", "STOP_LOSS", {},
+        purpose="CAMPAIGN_ENTRY",
+        signal_timeframe="1h",
+        permission_interval="1h",
+        signal_bar_time_ms=now - 7_200_000,
+        confirmation_time_ms=now - 3_600_000,
+        expires_at_ms=now + 60_000,
+        signal_id="signal-1",
+        campaign_id="campaign-1",
+    )
+    result = barrier.execute(intent, lambda: calls.append("MUTATED"))
+    assert not result.accepted
+    assert "last-mile" in result.reason
+    assert calls == []
+
+
+def test_execution_barrier_does_not_apply_entry_timeframe_gate_to_campaign_exit(monkeypatch):
+    from execution_barrier import OrderIntent
+
+    monkeypatch.setenv("EXECUTION_TIMEFRAME", "5m")
+    barrier = ExecutionBarrier(FakeCache(), None)
+    intent = OrderIntent.new(
+        "BTCUSDT", "SELL", "MARKET", {},
+        purpose="CAMPAIGN_EXIT",
+        campaign_id="campaign-1",
+    )
+    result = barrier.execute(intent, lambda: {"status": "FILLED"})
+    assert result.accepted
