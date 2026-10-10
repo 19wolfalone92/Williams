@@ -338,3 +338,19 @@ Also, the native low-level boundary proves durable intent, mutation classificati
 - Live Testnet lost-response recovery, physical-device crash recovery, live OCO sibling-fill race, mass-cancel variations and fee-adjusted account/position equivalence remain **NOT VERIFIED**.
 
 The task remains **BLOCKED — NOT ACCEPTED**, regardless of green CI. No Binance Mainnet endpoint, credentials, or real trade was used.
+
+### Exact-SHA CI evidence — code SHA `f6f78cb9f57811738623409642cc5e33b7c0b79a`
+
+This snapshot was checked after the Gradle contract test correction. All three required workflows completed successfully on this same source SHA; this does not close the explicit acceptance blockers listed above.
+
+| Workflow | Run ID | Job ID(s) | Conclusion / result |
+|---|---:|---|---|
+| Python backend tests | [38089938567](https://github.com/19wolfalone92/Williams/actions/runs/38089938567) | 114324125821 | PASS — release gate passed; `148 passed, 4 warnings`. Pytest report artifact ID `11683104035`. |
+| Williams Campaign CI | [38089938538](https://github.com/19wolfalone92/Williams/actions/runs/38089938538) | 114324174670, 114324174851 | PASS — Python Campaign suite `181 passed, 4 warnings`; Android unit tests, `:app:lintDebug`, and `:app:assembleDebug` passed. Lint report artifact ID `11684033299`; debug APK artifact ID `11683553969`. |
+| Build Android APK | [38089938534](https://github.com/19wolfalone92/Williams/actions/runs/38089938534) | 114324125701 | PASS — release gate, quant source validation, Android lint, unit tests, debug/release APK builds, package metadata and persistent debug-signature checks passed. |
+
+Build metadata from the successful APK workflow: app version `4.25.0`, versionCode `1881`; debug package `com.williamsbot.debug` / `4.25.0-debug`; release package `com.williamsbot` / `4.25.0`. Artifact IDs: debug APK `11683063035`, unsigned release APK `11682919923`. Uploaded archive digests were `ea2647d8269fc1c2de166fc32863d6acf886ebae01bce714c49c655801e54bc6` and `688f233982cd1b8e4259925ac958dfe6188931807268cee8b09b00c8cd1e0bc9`, respectively; these are workflow artifact-archive digests, not claimed as the raw APK file hashes.
+
+The branch and PR were rechecked before this report update: branch HEAD was `f6f78cb9f57811738623409642cc5e33b7c0b79a`; `main` remained `04da5f9c09572e99ff310be3a1908179165e528c`; PR #48 remained open, draft, and unmerged. This documentation commit changes the branch HEAD, so the three workflows must be rerun against the resulting report-bearing SHA before claiming exact-final-SHA CI validation.
+
+The task remains **BLOCKED — NOT ACCEPTED**. Green CI does not verify live Testnet response-loss recovery, physical Android process-death recovery, exact residual inventory after live OCO sibling-fill races, all mass-cancel variants, or the exhaustive absence of external/legacy bypasses. No Binance Mainnet or real trade was used.
