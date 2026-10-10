@@ -44,14 +44,11 @@ class Trader:
             or os.getenv('DB_PATH')
             or 'data/trader.sqlite3'
         ); self.tg=Telegram(os.getenv('TELEGRAM_BOT_TOKEN',''),os.getenv('TELEGRAM_CHAT_ID',''))
-        self.execution_barrier = ExecutionBarrier(self.context_cache, self.db)
         self.l2_guard = L2SlippageGuard(self.config.max_l2_slippage_pct)
         self.equity_breaker = EquityCircuitBreaker(self.config.max_daily_loss_pct)
         self.wise_men_long = WiseMenStateMachine(self.db, self.symbol, 'LONG')
         self.wise_men_short = WiseMenStateMachine(self.db, self.symbol, 'SHORT')
         self.client=BinanceSpotClient(api_key if api_key is not None else os.getenv('BINANCE_API_KEY',''), api_secret if api_secret is not None else os.getenv('BINANCE_API_SECRET',''), testnet=(os.getenv('TESTNET','true').lower()=='true') if testnet is None else testnet)
-        self.execution_barrier.preflight_provider = self._execution_preflight
-        self.execution_barrier.exchange_client = self.client
         self.filters={}; self.base_asset=self.quote_asset=None; self.recovered=False
         self.symbol_rules = None
         self.preflight_report = None
@@ -89,13 +86,24 @@ class Trader:
 
         self.db.state_set('active_symbol', self.symbol)
 
-    def _execution_preflight(self):
-        """Fresh read-only preflight invoked inside ExecutionBarrier for every mutation."""
-        return PreflightCheckService(
+        # One concrete preflight service is permanently bound to the exact client
+        # used for mutations. Missing runtime freshness proofs remain UNKNOWN and
+        # intentionally prevent ExecutionBarrier admission.
+        self.preflight_service = PreflightCheckService(
             self.client,
-            symbols=getattr(self, "auto_scan_symbols", None) or [self.symbol],
-            max_open_positions=getattr(self, "max_open_positions", 0),
-        ).verify_all()
+            symbols=self.auto_scan_symbols or [self.symbol],
+            max_open_positions=self.max_open_positions,
+        )
+        self.execution_barrier = ExecutionBarrier(
+            self.context_cache,
+            self.db,
+            preflight_service=self.preflight_service,
+            exchange_client=self.client,
+        )
+
+    def _execution_preflight(self):
+        """Read-only diagnostic snapshot from the same client-bound service."""
+        return self.preflight_service.verify_all()
 
     def notify(self,text):
         log.info(text.replace('\n',' | '))
