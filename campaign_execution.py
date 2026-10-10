@@ -7,6 +7,7 @@ from typing import Any
 import json
 import os
 import uuid
+from decimal import Decimal, InvalidOperation
 
 from binance_client import BinanceAPIError
 from campaign_engine import CampaignEngine
@@ -426,7 +427,12 @@ class CampaignExecutionService:
     def _executed_fee_quote(
         self, symbol: str, order: dict[str, Any], executed_qty: float, average_price: float
     ) -> float:
-        """Calculate actual commissions from Binance trade records, never assume zero."""
+        """Validate Binance Spot fills, persist trade identities, and sum fees exactly.
+
+        Unknown commission amount/asset remains durable UNKNOWN and blocks the
+        caller. Exchange trade id (scoped by symbol), not intent_id, is the
+        idempotency key in SQLite.
+        """
         order_id = order.get("orderId")
         if order_id in (None, ""):
             raise CampaignExecutionError(f"{symbol}: filled order lacks orderId for commission lookup")
@@ -442,20 +448,35 @@ class CampaignExecutionService:
             raise CampaignExecutionError(f"{symbol}: exchange assets unavailable for commission conversion")
         base_asset = str(rows[0].get("baseAsset", "")).upper()
         quote_asset = str(rows[0].get("quoteAsset", "")).upper()
-        quantity_sum = 0.0
-        fee_quote = 0.0
+        quantity_sum = Decimal("0")
+        fee_quote = Decimal("0")
         for trade in trades:
             if not isinstance(trade, dict):
                 raise CampaignExecutionError(f"{symbol}: malformed trade record for order {order_id}")
             if str(trade.get("symbol", "")).upper() != symbol.upper():
                 raise CampaignExecutionError(f"{symbol}: trade lookup returned a different symbol")
-            if int(trade.get("orderId", 0) or 0) != int(order_id):
+            if str(trade.get("orderId", "")) != str(order_id):
                 raise CampaignExecutionError(f"{symbol}: trade lookup returned a different orderId")
-            qty = float(trade.get("qty", 0) or 0)
-            price = float(trade.get("price", 0) or 0)
-            commission = float(trade.get("commission", 0) or 0)
-            asset = str(trade.get("commissionAsset", "")).upper()
-            if qty <= 0 or price <= 0 or commission < 0 or not asset:
+            # Persist raw exchange evidence first. A missing fee remains UNKNOWN;
+            # it must never be normalized to a zero commission.
+            try:
+                self.db.record_exchange_fill(symbol, trade)
+            except Exception as exc:
+                raise CampaignExecutionError(f"{symbol}: cannot persist unique exchange fill evidence") from exc
+            if trade.get("id") in (None, ""):
+                raise CampaignExecutionError(f"{symbol}: exchange trade lacks stable trade id")
+            if trade.get("qty") in (None, "") or trade.get("price") in (None, ""):
+                raise CampaignExecutionError(f"{symbol}: exchange trade lacks quantity or price")
+            if trade.get("commission") in (None, "") or trade.get("commissionAsset") in (None, ""):
+                raise CampaignExecutionError(f"{symbol}: commission amount or asset is unknown")
+            try:
+                qty = Decimal(str(trade["qty"]))
+                price = Decimal(str(trade["price"]))
+                commission = Decimal(str(trade["commission"]))
+            except (InvalidOperation, ValueError) as exc:
+                raise CampaignExecutionError(f"{symbol}: invalid exact decimal in trade record") from exc
+            asset = str(trade["commissionAsset"]).upper()
+            if not qty.is_finite() or not price.is_finite() or not commission.is_finite() or qty <= 0 or price <= 0 or commission < 0 or not asset:
                 raise CampaignExecutionError(f"{symbol}: invalid quantity/price/commission trade fields")
             quantity_sum += qty
             if asset == quote_asset:
@@ -465,22 +486,27 @@ class CampaignExecutionService:
             else:
                 fee_pair = asset + quote_asset
                 try:
-                    fee_price = float(self.client.ticker_price(fee_pair).get("price", 0) or 0)
+                    price_payload = self.client.ticker_price(fee_pair)
+                    fee_price = Decimal(str(price_payload.get("price", "")))
                 except Exception as exc:
                     raise CampaignExecutionError(
                         f"{symbol}: cannot convert {asset} commission to {quote_asset}"
                     ) from exc
-                if fee_price <= 0:
+                if not fee_price.is_finite() or fee_price <= 0:
                     raise CampaignExecutionError(
                         f"{symbol}: invalid {fee_pair} commission conversion price"
                     )
                 fee_quote += commission * fee_price
-        tolerance = max(1e-8, abs(float(executed_qty)) * 1e-6)
-        if abs(quantity_sum - float(executed_qty)) > tolerance:
+        try:
+            expected_qty = Decimal(str(executed_qty))
+        except (InvalidOperation, ValueError) as exc:
+            raise CampaignExecutionError(f"{symbol}: invalid executed quantity") from exc
+        tolerance = max(Decimal("0.00000001"), abs(expected_qty) * Decimal("0.000001"))
+        if abs(quantity_sum - expected_qty) > tolerance:
             raise CampaignExecutionError(
-                f"{symbol}: trade quantities {quantity_sum:.12g} do not match executedQty {executed_qty:.12g}"
+                f"{symbol}: trade quantities {quantity_sum} do not match executedQty {expected_qty}"
             )
-        return fee_quote
+        return float(fee_quote)
 
     def reconcile_pending_entries(self) -> list[dict[str, Any]]:
         """Adopt conditional BUYs after triggers, partial fills, restart or crash."""
