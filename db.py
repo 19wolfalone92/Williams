@@ -660,6 +660,16 @@ class Database:
             ).fetchone()
             return row is not None
 
+    def has_reconcile_required_state(self):
+        """Thread-safe cross-symbol/campaign state gate used before new exposure."""
+        with self._db_lock:
+            row = self.conn.execute(
+                "SELECT key FROM bot_state WHERE UPPER(value)='RECONCILE_REQUIRED' "
+                "AND (key='position_state' OR key LIKE 'position_state:%' "
+                "OR key LIKE 'campaign_state:%') LIMIT 1"
+            ).fetchone()
+            return str(row["key"]) if row is not None else ""
+
     def mark_execution_intent_reconciled(
         self,
         client_order_id,
