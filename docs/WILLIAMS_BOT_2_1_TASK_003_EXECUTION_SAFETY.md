@@ -122,3 +122,20 @@ Build run `38083150419` reported:
 **SHA scope warning:** this record proves those workflow results for code SHA `5757463506e504b6ae3797c97561cfb108ff7fa9`, not for a later documentation-only commit. The PR's final HEAD must be checked again after this report commit; no prior-SHA result is to be reused as proof for a different SHA.
 
 Even with green offline CI, the task remains **BLOCKED — NOT ACCEPTED** until the final HEAD has all required workflows green and the final mutation call-graph/recovery review is complete. The tests do not prove live Binance Testnet lost-response recovery or physical-device crash recovery.
+
+
+### Documentation report SHA validation — `6bb3500b32e807c71aadaf66e1d34084e034c6cf`
+
+After the evidence above was written, the report-bearing SHA `6bb3500b32e807c71aadaf66e1d34084e034c6cf` was independently checked. All three required PR workflows passed on that exact SHA:
+
+- Python backend tests: [run 38083793938](https://github.com/19wolfalone92/Williams/actions/runs/38083793938) — **148 passed, 4 warnings**.
+- Williams Campaign CI: [run 38083793903](https://github.com/19wolfalone92/Williams/actions/runs/38083793903) — **180 Python tests passed, 4 warnings**; Android unit tests, lint and debug assembly passed.
+- Build Android APK: [run 38083793885](https://github.com/19wolfalone92/Williams/actions/runs/38083793885) — release gate, lint, Android unit tests, debug and unsigned release APK builds, metadata and debug signature checks all passed.
+
+Artifacts from that build:
+- Debug APK artifact ID `11681815110`; package `com.williamsbot.debug`, version `4.25.0-debug`, versionCode `1768`; SHA-256 `f1b0ac5d1affe54e39bad71c14730454250480143daebefc19e76aab376b6e00`.
+- Unsigned release APK artifact ID `11680684989`; package `com.williamsbot`, version `4.25.0`, versionCode `1768`; SHA-256 `fdeca54ec792a6dab902a500089071ef7e4a084f6c8138b02a223f94ed0ffc8c`.
+- Debug APK signature verification passed with the configured persistent debug keystore.
+- Campaign CI debug APK artifact ID `11681690192`; lint report artifact ID `11680879566`; Python test report artifact ID `11681148413`.
+
+The next commit only updates this report. CI must still be rerun on that resulting HEAD; no results from `6bb3500b32e807c71aadaf66e1d34084e034c6cf` are treated as proof for a different SHA.
