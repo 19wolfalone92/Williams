@@ -300,6 +300,12 @@ class ExecutionBarrier:
                 return "missing stable signal_id; repeated PendingSignal cannot be deduplicated"
             if not pre_submit_checks_supplied:
                 return "missing mandatory final risk/position pre-submit checks"
+            try:
+                risk_quote = float(intent.risk_quote)
+            except (TypeError, ValueError):
+                return "invalid risk_quote"
+            if not (risk_quote > 0.0):
+                return "entry blocked: explicit positive risk_quote is mandatory"
             if not intent.required_context_versions:
                 return "missing required context versions"
             for tf, required in intent.required_context_versions.items():
@@ -316,10 +322,30 @@ class ExecutionBarrier:
             if permission_ctx is None:
                 return f"missing permission context {intent.symbol} {permission_tf}"
             direction = "long" if str(intent.side).upper() == "BUY" else "short"
-            if direction == "long" and not permission_ctx.allow_long:
-                return f"context {permission_tf} does not allow LONG"
-            if direction == "short" and not permission_ctx.allow_short:
-                return f"context {permission_tf} does not allow SHORT"
+            wm1_initial_reversal = (
+                purpose == "CAMPAIGN_ENTRY"
+                and str(intent.signal_type or "").strip().upper() == "REVERSAL"
+            )
+            directional_permission = (
+                permission_ctx.allow_long if direction == "long"
+                else permission_ctx.allow_short
+            )
+            if not directional_permission and not wm1_initial_reversal:
+                return f"context {permission_tf} does not allow {direction.upper()}"
+            if wm1_initial_reversal:
+                daily_key = next(
+                    (
+                        tf for tf in intent.required_context_versions
+                        if str(tf).strip().lower() == "1d"
+                    ),
+                    None,
+                )
+                macro = snapshot.context(intent.symbol, daily_key) if daily_key else None
+                if macro is None:
+                    return "WM1 reversal admission requires a current versioned D1 macro context"
+                macro_permission = macro.allow_long if direction == "long" else macro.allow_short
+                if not macro_permission:
+                    return f"D1 macro context does not permit WM1 {direction.upper()} reversal"
 
             if self.db is None and self.require_durable_intent:
                 return "durable execution database unavailable"
