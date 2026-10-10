@@ -272,7 +272,7 @@ def extract_long_signal_specs(
     # invariant again at this public boundary so a second caller cannot build
     # a canonical signal from an unfinished H1 candle or unknown timestamp.
     last_open_ms = _row_time_ms(ind.iloc[-1])
-    if last_open_ms <= 0 or last_open_ms + _timeframe_ms("1h") > int(pd.Timestamp.utcnow().timestamp() * 1000):
+    if last_open_ms <= 0 or last_open_ms + _timeframe_ms("1h") > int(pd.Timestamp.now(tz='UTC').timestamp() * 1000):
         return []
 
     specs: list[SignalSpec] = []
