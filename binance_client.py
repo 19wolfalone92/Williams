@@ -111,7 +111,7 @@ class BinanceSpotClient:
                 raise BinanceAPIError(
                     f'Binance transport error: {type(exc).__name__}',
                     unknown_execution=method in {"POST", "DELETE"},
-                ) from exc
+                ) from None
 
             used = r.headers.get('X-MBX-USED-WEIGHT-1M')
             orders = r.headers.get('X-MBX-ORDER-COUNT-1M')
