@@ -3142,9 +3142,6 @@ private class NativeEngine(
         ).optString("price").toDoubleOrNull() ?: 0.0
         if (price.isFinite() && price > 0.0) {
             livePrices[symbol] = price
-            if (symbol in coreSymbols) {
-                restLastSuccessMs = System.currentTimeMillis()
-            }
         }
         return price
     }
