@@ -24,4 +24,22 @@ class FuturesContextPolicyTest {
         assertFalse(FuturesContextPolicy.allows("SHORT", short, short, long))
         assertFalse(FuturesContextPolicy.allows("BUY", long, long, neutral))
     }
+
+    @Test
+    fun wm1ReversalCanBeFirstSignalBeforeH1AndH4TrendAlignment() {
+        assertTrue(FuturesContextPolicy.allowsSignal("LONG", "REVERSAL", neutral, short, neutral))
+        assertTrue(FuturesContextPolicy.allowsSignal("SHORT", "REVERSAL", neutral, long, neutral))
+    }
+
+    @Test
+    fun wm1StillHonorsActiveOppositeDailyMacroVeto() {
+        assertFalse(FuturesContextPolicy.allowsSignal("LONG", "REVERSAL", neutral, short, short))
+        assertFalse(FuturesContextPolicy.allowsSignal("SHORT", "REVERSAL", neutral, long, long))
+    }
+
+    @Test
+    fun wm2AndWm3KeepDirectionalContextGate() {
+        assertFalse(FuturesContextPolicy.allowsSignal("LONG", "SUPER_AO", long, short, neutral))
+        assertTrue(FuturesContextPolicy.allowsSignal("LONG", "FRACTAL", long, long, neutral))
+    }
 }
