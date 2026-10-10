@@ -132,7 +132,10 @@ class MockExchange:
         filled = qty * float(self.partial_fill_ratio)
         self.balances["USDT"] -= filled * price
         self.balances[symbol.replace("USDT", "")] += filled
-        return self._new_order(symbol, "BUY", qty, client_order_id=client_order_id or "")
+        order = self._new_order(symbol, "BUY", qty, client_order_id=client_order_id or "")
+        order["executedQty"] = str(filled)
+        order["cummulativeQuoteQty"] = str(filled * price)
+        return order
 
     def market_sell(self, symbol, quantity, client_order_id=None):
         if self.timeout_next:
@@ -142,7 +145,10 @@ class MockExchange:
         filled = min(float(quantity) * float(self.partial_fill_ratio), self.balances.get(base, 0.0))
         self.balances[base] -= filled
         self.balances["USDT"] += filled * self.prices[symbol]
-        return self._new_order(symbol, "SELL", quantity, client_order_id=client_order_id or "")
+        order = self._new_order(symbol, "SELL", quantity, client_order_id=client_order_id or "")
+        order["executedQty"] = str(filled)
+        order["cummulativeQuoteQty"] = str(filled * self.prices[symbol])
+        return order
 
     def order_safe(self, symbol, side, type_, *, quantity=None, quote_order_qty=None,
                    price=None, stop_price=None, time_in_force=None,
