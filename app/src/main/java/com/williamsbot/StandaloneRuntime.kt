@@ -2699,7 +2699,6 @@ private class NativeEngine(
     private fun submitCampaignEntry(candidate: BaseAnalysis) {
         if (!campaignEngineEnabled || !candidate.campaignReady) return
         if (reconcileRequired || paused || killLatched) return
-        if (!WilliamsTimeframeContract.canCreateCanonicalSignal(WilliamsTimeframeContract.CANONICAL_DECISION)) return
         if (positionList().any { it.symbol == candidate.symbol }) return
         if (synchronized(pendingEntries) { pendingEntries.containsKey(candidate.symbol) }) return
         if (positionList().size >= maxOpenPositions) return
@@ -3048,8 +3047,10 @@ private class NativeEngine(
                     if (!expired) {
                         val cursor = intent.lastSignalValidationCandleTimeMs
                         if (
+                            !WilliamsTimeframeContract.canCreateCanonicalSignal(intent.signalTimeframe) ||
                             intent.signalBarTimeMs <= 0L ||
-                            intent.signalConfirmationTimeMs <= 0L ||
+                            intent.signalConfirmationTimeMs < intent.signalBarTimeMs + frameMs ||
+                            intent.signalConfirmationTimeMs > nowMs ||
                             intent.invalidationPrice <= 0.0 ||
                             cursor <= 0L
                         ) {
