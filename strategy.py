@@ -186,16 +186,13 @@ def calculate_indicators(df, cfg):
         x["low"].where(x["bearish_reversal_bar"]).ffill().shift(1)
     )
 
-    # Second Wise Man: Super AO. We use Williams' histogram color definition
-    # (green = current AO above previous AO, red = below), not merely AO > 0.
-    x["long_super_ao_signal"] = (
-        x["super_ao_long"]
-        & x["long_fractal_outside"].shift(1).eq(True)
-    )
-    x["short_super_ao_signal"] = (
-        x["super_ao_short"]
-        & x["short_fractal_outside"].shift(1).eq(True)
-    )
+    # Second Wise Man: Super AO is the third consecutive same-colour AO
+    # bar. It is an independent signal family, not a fractal-gated boolean.
+    # Keep the signal on the third bar only; later bars belong to the same
+    # continuing AO run and must not manufacture repeated WM2 signals.
+    super_ao_bars = int(cfg["super_ao_bars"])
+    x["long_super_ao_signal"] = x["ao_green_streak"].eq(super_ao_bars)
+    x["short_super_ao_signal"] = x["ao_red_streak"].eq(super_ao_bars)
 
     # Conservative execution overlay. The counter-trend Wise-Man signals from
     # the book are retained as diagnostics, but disabled for the long-only
