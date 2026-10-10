@@ -522,11 +522,29 @@ class CampaignExecutionService:
                     "WHERE client_order_id=? ORDER BY id DESC LIMIT 1",
                     (client_id,),
                 ).fetchone()
-                purpose = str(order_row["purpose"] if order_row else "ENTRY").upper()
+                if order_row is not None:
+                    purpose = str(order_row["purpose"] or "ENTRY").upper()
+                elif (
+                    campaign.state in {
+                        CampaignState.ADD_ON_PENDING,
+                        CampaignState.ADD_ON_ARMING,
+                        CampaignState.RECONCILE_REQUIRED,
+                    }
+                    and bool(campaign.tags.get("pending_add_signal_id"))
+                ):
+                    # A timeout may happen before campaign_orders is written.
+                    # The durable pending add-on tag remains the source of truth.
+                    purpose = "ADD_ON"
+                else:
+                    purpose = "ENTRY"
                 signal_id = str(
                     order_row["signal_id"]
                     if order_row
-                    else campaign.current_signal_id
+                    else (
+                        campaign.tags.get("pending_add_signal_id")
+                        if purpose == "ADD_ON"
+                        else campaign.current_signal_id
+                    )
                 )
 
                 executed = float(order.get("executedQty", 0) or 0)
