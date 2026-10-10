@@ -64,7 +64,10 @@ class DigitalWilliamsCore:
         # An expired/invalid older setup must not hide a later live setup.
         return min(
             actionable,
-            key=lambda signal: (signal.signal_bar_time_ms, signal.created_at_ms),
+            key=lambda signal: (
+                int(getattr(signal, "confirmation_time_ms", 0) or signal.signal_bar_time_ms),
+                signal.created_at_ms,
+            ),
             default=None,
         )
 
