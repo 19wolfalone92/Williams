@@ -1605,13 +1605,13 @@ private class NativeEngine(
             intentId = stableNativeClientOrderId("WMS_INTENT_", logical),
             logicalKey = logical,
             clientOrderId = exchangeClient ?: stableNativeClientOrderId("WMS_MUT_", stable),
-            targetClientOrderId = targetClient,
+            targetClientOrderId = if (verb == "DELETE" || operation == "CANCEL_REPLACE") targetClient else null,
             symbol = symbol,
             operation = operation,
             method = verb,
             path = path,
             targetOrderId = targetOrder,
-            targetOrderListId = targetList ?: p["listClientOrderId"],
+            targetOrderListId = targetList,
             requestJson = requestJson,
             increasesExposure = verb == "POST" && side == "BUY"
         )
@@ -1621,7 +1621,10 @@ private class NativeEngine(
         reconcileRequired = true
         stateMachine.force(TradingState.RECONCILE_REQUIRED, "Execution mutation unresolved: $reason")
         val saved = runCatching {
-            prefs.edit().putBoolean("reconcile_required", true).commit()
+            prefs.edit()
+                .putBoolean("reconcile_required", true)
+                .putBoolean("reconcileRequired", true)
+                .commit()
         }.getOrDefault(false)
         lastError = if (saved) "RECONCILE_REQUIRED: $reason"
             else "RECONCILE_REQUIRED: $reason; durable latch write failed"
