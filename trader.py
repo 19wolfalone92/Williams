@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 from binance_client import BinanceAPIError, BinanceSpotClient
 from data import fetch_klines
 from db import Database
-from strategy import calculate_indicators, config_from_env
+from strategy import calculate_indicators, config_from_env, canonical_williams_environment_blockers
 from telegram_bot import Telegram
 from portfolio_controller import PortfolioController
 from portfolio_trader import MultiPositionTrader
@@ -1299,6 +1299,21 @@ class Trader:
         if self.state() != 'FLAT':
             return
 
+        # Legacy Trader has only a boolean-indicator -> MARKET BUY path. It
+        # cannot preserve Williams' conditional BUY_STOP trigger or durable
+        # campaign intent, so it is intentionally fail-closed until migrated
+        # to CampaignEngine / ExecutionBarrier.
+        if str(getattr(self, "interval", "")).lower() != "1h":
+            self.db.log_event("WARN", "canonical_timeframe_block",
+                              "legacy Trader cannot create canonical signals outside H1",
+                              {"symbol": self.symbol, "interval": getattr(self, "interval", None)})
+            return
+        blockers = canonical_williams_environment_blockers()
+        if blockers:
+            self.db.log_event("ERROR", "canonical_williams_profile_blocked",
+                              "; ".join(blockers), {"symbol": self.symbol})
+            return
+
         df = fetch_klines(
             self.client,
             self.symbol,
@@ -1330,6 +1345,17 @@ class Trader:
                 last_time,
             )
             return
+
+        # Fail closed: a boolean indicator is not a persisted conditional
+        # campaign intent. Never turn it into an immediate MARKET BUY here.
+        self.db.log_event(
+            "WARN",
+            "legacy_indicator_market_entry_blocked",
+            "Use the canonical campaign SignalSpec/conditional-trigger path",
+            {"symbol": self.symbol, "candle": last_time},
+        )
+        self.db.state_set(candle_key, last_time)
+        return
 
         allowed, reason = self._risk_gate(closed)
 
