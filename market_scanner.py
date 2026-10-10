@@ -687,16 +687,17 @@ class MarketScanner:
 
     @staticmethod
     def _is_tc2_early_wm1(candidate: Candidate, *, now_ms: int | None = None) -> bool:
-        """Recognize only a currently actionable H1 WM1 candidate for early admission.
+        """Recognize a currently actionable H1 WM1 candidate for either direction.
 
-        This keeps the early-reversal exception tied to the actual structured
-        signal evidence. It does not let a failed WM2/WM3 or a generic boolean
-        setup bypass higher-timeframe context.
+        The early-reversal exception is tied to typed signal evidence and valid
+        directional stop geometry. It must not let WM2/WM3 or a generic Boolean
+        setup bypass the final H1/H4/D1 context and execution checks.
         """
+        candidate_direction = str(candidate.direction or "").upper()
         if (
             not candidate.signal
             or str(candidate.entry_signal_type).upper() != "REVERSAL"
-            or str(candidate.direction).upper() != "LONG"
+            or candidate_direction not in {"LONG", "SHORT"}
         ):
             return False
         now = int(time.time() * 1000) if now_ms is None else int(now_ms)
@@ -716,17 +717,22 @@ class MarketScanner:
                 angle = float(raw.get("angulation_score", 0.0) or 0.0)
             except (AttributeError, TypeError, ValueError, OverflowError):
                 continue
+            valid_stop_geometry = (
+                0 < stop < trigger if direction == "LONG"
+                else 0 < trigger < stop if direction == "SHORT"
+                else False
+            )
             if (
                 kind == "REVERSAL"
                 and role == SignalRole.ENTRY.value
-                and direction == "LONG"
+                and direction == candidate_direction
                 and timeframe == "1h"
                 and source_time == int(candidate.entry_signal_time_ms or 0)
                 and source_time > 0
                 and confirmation_time >= source_time
                 and expiry > max(now, confirmation_time)
                 and math.isfinite(trigger) and trigger > 0
-                and math.isfinite(stop) and 0 < stop < trigger
+                and math.isfinite(stop) and valid_stop_geometry
                 and math.isfinite(angle) and angle > 0
             ):
                 return True
