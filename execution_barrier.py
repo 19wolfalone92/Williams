@@ -247,9 +247,25 @@ class ExecutionBarrier:
             order_fsm = OrderStateMachine()
             order_fsm.transition(OrderState.ADMISSION)
 
-            # This durable write is a hard precondition. If it fails, submit()
-            # is never called and no exchange mutation can have occurred.
-            self._persist(intent, "PENDING")
+            # Atomically reserve this symbol across independent DB connections.
+            # A SELECT followed by INSERT without one SQLite transaction permits
+            # two runtime instances to submit conflicting orders concurrently.
+            try:
+                if self.db is None or not hasattr(self.db, "claim_execution_intent"):
+                    raise ExecutionPersistenceError("atomic durable intent reservation is unavailable")
+                self.db.claim_execution_intent(intent)
+            except Exception as exc:
+                self._poisoned = True
+                try:
+                    if self.db is not None and hasattr(self.db, "mark_recovery_required"):
+                        self.db.mark_recovery_required("intent reservation failed; reconciliation required")
+                except Exception:
+                    pass
+                if isinstance(exc, ExecutionPersistenceError):
+                    raise
+                raise ExecutionPersistenceError(
+                    "could not atomically reserve intent; exchange mutation blocked"
+                ) from exc
             if self.db is None or not hasattr(self.db, "save_execution_event"):
                 self._poisoned = True
                 try:
