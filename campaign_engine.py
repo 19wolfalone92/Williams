@@ -173,19 +173,44 @@ class CampaignEngine:
         return DecisionTrace.from_signal(signal, extras=extras)
 
     @staticmethod
-    def choose_initial_signal(signals: Iterable[SignalSpec]) -> SignalSpec | None:
-        candidates = [
-            s for s in signals
-            if s.role == SignalRole.ENTRY
-            and str(s.direction).upper() in {"LONG", "SHORT"}
-            and s.trigger_price > 0
-        ]
+    def choose_initial_signal(
+        signals: Iterable[SignalSpec],
+        *,
+        now_ms: int | None = None,
+    ) -> SignalSpec | None:
+        # The exchange conditional order inherits no local expiry. Refuse a
+        # missing/expired deadline at selection time, then revalidate again
+        # immediately before submit. A scanner cache must not revive a stale setup.
+        now = int(time.time() * 1000) if now_ms is None else int(now_ms)
+        candidates = []
+        for signal in signals:
+            if signal.role != SignalRole.ENTRY:
+                continue
+            if str(signal.direction).upper() not in {"LONG", "SHORT"}:
+                continue
+            try:
+                trigger = float(signal.trigger_price)
+                protective = float(signal.protective_reference)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if not math.isfinite(trigger) or trigger <= 0:
+                continue
+            if not math.isfinite(protective) or protective <= 0:
+                continue
+            if PendingSignal.from_spec(signal).actionable(now):
+                candidates.append(signal)
         if not candidates:
             return None
         # Book model: the first signal that became actionable starts the
         # campaign. For WM3, confirmation occurs after the source/center bar,
         # so rank by confirmation chronology rather than historical center time.
-        return min(candidates, key=lambda s: (int(getattr(s, "confirmation_time_ms", 0) or s.signal_bar_time_ms), s.created_at_ms))
+        return min(
+            candidates,
+            key=lambda s: (
+                int(getattr(s, "confirmation_time_ms", 0) or s.signal_bar_time_ms),
+                s.created_at_ms,
+            ),
+        )
 
     @staticmethod
     def should_replace_pending(old: SignalSpec, new: SignalSpec, *, min_ticks: int = 1, tick_size: float = 0.0) -> bool:
