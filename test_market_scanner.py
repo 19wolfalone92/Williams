@@ -17,6 +17,9 @@ def test_default_scanner_uses_core_ten_without_dynamic_discovery(monkeypatch):
     monkeypatch.setenv("SCAN_ALL_USDT", "false")
     monkeypatch.setenv("SCAN_MAX_SYMBOLS", "10")
     monkeypatch.setenv("LIQUIDITY_PRESELECT", "10")
+    monkeypatch.setenv("WILLIAMS_STRATEGY_PROFILE", "TC2_THREE_WISE_MEN")
+    monkeypatch.delenv("WAVE_TF_CHAIN", raising=False)
+    monkeypatch.setenv("WAVE_FULL_TF_ALL", "true")
 
     scanner = MarketScanner(FakeClient(), symbols=None)
 
@@ -24,6 +27,9 @@ def test_default_scanner_uses_core_ten_without_dynamic_discovery(monkeypatch):
     assert scanner.scan_all_usdt is False
     assert scanner.scan_max_symbols == 10
     assert scanner.liquidity_preselect == 10
+    # Even when generic wave analysis offers a full-timeframe mode, the TC2
+    # ranking adapter must not let D1/M15/M5 influence the selected signal.
+    assert scanner.wave_engine.intervals == ["4h", "1h"]
 
 
 def test_tc2_scan_does_not_apply_optional_wave_or_directional_htf_veto(monkeypatch):
