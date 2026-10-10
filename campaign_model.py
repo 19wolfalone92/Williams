@@ -175,8 +175,14 @@ class SignalSpec:
             raise ValueError(
                 f"SignalSpec side/direction conflict: side={normalized_side} direction={direction}"
             )
+        normalized_timeframe = (
+            "1M" if str(timeframe).strip() == "1M"
+            else str(timeframe).strip().lower()
+        )
+        if not normalized_timeframe:
+            raise ValueError("SignalSpec timeframe is required")
         signal_id = (
-            f"{str(symbol).upper()}:{str(timeframe).lower()}:"
+            f"{str(symbol).upper()}:{normalized_timeframe}:"
             f"{signal_type.value}:{direction}:{int(signal_bar_time_ms)}"
         )
         return cls(
@@ -185,7 +191,7 @@ class SignalSpec:
             side=normalized_side,
             signal_type=signal_type,
             role=role,
-            timeframe=str(timeframe).lower(),
+            timeframe=normalized_timeframe,
             signal_bar_time_ms=int(signal_bar_time_ms),
             trigger_price=float(trigger_price),
             protective_reference=float(protective_reference),
