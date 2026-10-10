@@ -596,8 +596,8 @@ def test_release_version_contracts_are_consistent():
         root / "app" / "src" / "main" / "java" / "com" / "williamsbot"
         / "MainActivity.kt"
     ).read_text(encoding="utf-8")
-    gate_match = re.search(r"EXPECTED_VERSION\s*=\s*['"]([^'"]+)['"]", gate)
-    server_match = re.search(r"^VERSION\s*=\s*['"]([^'"]+)['"]", server, re.MULTILINE)
+    gate_match = re.search(r'EXPECTED_VERSION\s*=\s*[\'"]([^\'"]+)[\'"]', gate)
+    server_match = re.search(r'^VERSION\s*=\s*[\'"]([^\'"]+)[\'"]', server, re.MULTILINE)
     gradle_match = re.search(r'versionName\s*=\s*"([^"]+)"', gradle)
     assert gate_match and server_match and gradle_match
     canonical = server_match.group(1)
