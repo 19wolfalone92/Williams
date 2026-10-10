@@ -579,3 +579,12 @@ The audit is traced across both Python and Android paths, not just the indicator
 - Funding and non-USDT fee conversion are not yet fully unified in net PnL across both engines.
 - The backtester is long-only and does not reproduce the complete live Futures campaign/order/protection lifecycle.
 - Authorized Binance Futures Demo LONG and SHORT lifecycles and the read-only release gate have not been executed from this audit environment.
+
+
+### 54. The scanner retained a second fixed-target veto upstream of Futures risk sizing — corrected
+
+**Root cause.** The prior correction in `RiskEngine` was insufficient on its own: `MarketScanner._analyse_base` independently discarded candidates whenever `TAKE_PROFIT_PCT / STOP_LOSS_PCT` fell below `MIN_RISK_REWARD`. That meant the Futures runtime could still lose a valid WM1/WM2/WM3 candidate before the structural campaign engine saw it.
+
+**Correction.** The scanner now keeps the legacy fixed-target gate for Spot, but disables it for clients explicitly identified as USDⓈ-M Futures. The configured ratio remains a diagnostic/ranking value; it is not a live Futures entry criterion when the campaign's actual exit contract is structural/trailing. Added profile-specific regression tests.
+
+**Chain impact.** OHLCV → signal extraction → candidate filter → portfolio risk → campaign entry. This closes the upstream bypass of finding 52; the full exact-head CI must pass before considering it verified.
