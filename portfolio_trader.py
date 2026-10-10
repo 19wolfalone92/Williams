@@ -1694,6 +1694,11 @@ class MultiPositionTrader:
             unresolved = self.unresolved_symbols()
             pending_keys = self._pending_entries()
             unresolved_intents = self.db.unresolved_execution_intents()
+            # Recompute the legacy/global mirror only after every per-symbol
+            # check has had a chance to clear a demonstrably stale symbol latch.
+            # This avoids treating the old global mirror itself as new evidence
+            # that an otherwise reconciled account remains ambiguous.
+            canonical_state = self._sync_legacy_state()
             # An exchange-known pending entry may still keep the scanner from
             # proposing another entry, but it is not an UNKNOWN mutation. Clear
             # the global mutation latch only after all intent/order/position
@@ -1765,6 +1770,9 @@ class MultiPositionTrader:
         unresolved = self.unresolved_symbols()
         pending = self._pending_entries()
         unresolved_intents = self.db.unresolved_execution_intents()
+        # Refresh the legacy/global mirror from authoritative per-symbol results
+        # before inspecting for any remaining RECONCILE_REQUIRED state.
+        canonical_state = self._sync_legacy_state()
         reconcile_state = self.db.has_reconcile_required_state()
         reconciled = not unresolved and not unresolved_intents and not reconcile_state
         if reconciled and self.execution_barrier is not None:
