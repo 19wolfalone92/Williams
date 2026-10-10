@@ -911,12 +911,21 @@ private class NativeEngine(
             maxAgeMs = maxAgeMs
         )
 
+    private fun marketWebSocketFresh(maxAgeMs: Long = 60_000L): Boolean =
+        RuntimeFreshnessContract.isFresh(
+            available = marketSocketConnected,
+            lastSuccessAtMs = marketSocketLastEventMs,
+            nowMs = System.currentTimeMillis(),
+            maxAgeMs = maxAgeMs
+        )
+
     private fun executionReady(): Boolean =
         running &&
             !paused &&
             !reconcileRequired &&
             !killLatched &&
             marketDataFresh() &&
+            marketWebSocketFresh() &&
             restAccountReady &&
             historyReady &&
             userStreamConnected &&
@@ -931,6 +940,8 @@ private class NativeEngine(
             if (reconcileRequired) add("reconcile_required")
             if (killLatched) add("kill_switch_latched")
             if (!marketDataFresh()) add("rest_market_stale_or_not_ready")
+            if (!marketSocketConnected) add("market_websocket_disconnected")
+            else if (!marketWebSocketFresh()) add("market_websocket_stale")
             if (!restAccountReady) add("rest_account_not_ready")
             if (!historyReady) add("history_not_ready")
             if (!userStreamConnected) add("user_stream_disconnected")
@@ -1750,6 +1761,8 @@ private class NativeEngine(
 
         val blockers = buildList {
             if (!marketDataFresh()) add("rest_market_stale_or_not_ready")
+            if (!marketSocketConnected) add("market_websocket_disconnected")
+            else if (!marketWebSocketFresh()) add("market_websocket_stale")
             if (!restAccountReady) add("rest_account_not_ready")
             if (!historyReady) add("history_not_ready")
             if (!userStreamConnected) add("user_stream_disconnected")
@@ -8064,6 +8077,7 @@ private class NativeEngine(
         val now = System.currentTimeMillis()
         val scanAgeMs = RuntimeFreshnessContract.ageMs(lastScanAt, now)
         val candidateSnapshotFresh = marketDataFresh() &&
+            marketWebSocketFresh() &&
             RuntimeFreshnessContract.isScanSnapshotFresh(
                 state = scannerState,
                 lastScanAtMs = lastScanAt,
@@ -8592,7 +8606,23 @@ private class NativeEngine(
         }
         test("rest_market_data", "binance", marketDataFresh(), "FAIL", if (marketDataFresh()) "Ticker REST fresh; age_ms=" + restAgeMs + "; price=" + restLastTickerPrice + "; latency_ms=" + restLastLatencyMs else "REST market stale/unavailable; age_ms=" + (if (restAgeMs == Long.MAX_VALUE) "unknown" else restAgeMs.toString()) + "; error=" + (restLastError ?: "pending"))
         test("rest_account", "binance", restAccountReady, "WARN", if (restAccountReady) "Signed account OK; USDT=" + liveUsdtBalance else "Account REST failed: " + (restLastError ?: "pending"))
-        test("market_websocket", "websocket", marketSocketConnected, "WARN", if (marketSocketConnected) "Market stream connected" else "Market stream disconnected; REST fallback active")
+        val marketWsAgeMs = RuntimeFreshnessContract.ageMs(
+            marketSocketLastEventMs,
+            System.currentTimeMillis()
+        )
+        test(
+            "market_websocket",
+            "websocket",
+            marketWebSocketFresh(),
+            "WARN",
+            if (marketWebSocketFresh()) {
+                "Market stream connected and fresh; age_ms=" + marketWsAgeMs
+            } else {
+                "Market stream disconnected/stale; age_ms=" +
+                    (marketWsAgeMs?.toString() ?: "unknown") +
+                    "; entries are blocked"
+            }
+        )
         test("user_websocket", "websocket", userStreamConnected && !userStreamSyncRequired, "WARN", if (userStreamConnected && !userStreamSyncRequired) "User stream connected and synchronized" else "User stream degraded; REST reconciliation active")
         test("history_ready", "database", historyReady, "WARN", if (historyReady) "Market history is ready" else "history_state=" + historyState + "; error=" + (historyLastError ?: "pending"))
         val scanAgeMs = if (lastScanAt > 0L) {
