@@ -9,6 +9,8 @@ from db import Database
 from mock_exchange import MockExchange
 from portfolio_trader import MultiPositionTrader
 from trader import Trader
+from execution_barrier import ExecutionBarrier, ExecutionPersistenceError, OrderIntent
+from market_context import ContextCache
 
 
 def evidence(**overrides):
@@ -202,3 +204,51 @@ def test_startup_gate_remains_blocked_when_exchange_has_unknown_open_order(tmp_p
     with pytest.raises(RuntimeError, match="unknown exchange orders"):
         runtime._finalize_recovery_gate(report, recovery, portfolio)
     assert db.state_get("recovery_state") == "REQUIRED"
+
+
+def test_ambiguous_submission_cannot_be_retried_with_same_intent_or_client_id(tmp_path):
+    db = Database(str(tmp_path / "ambiguous.sqlite3"))
+    db.mark_recovery_ready(evidence())
+    cache = ContextCache()
+    barrier = ExecutionBarrier(cache, db)
+    intent = OrderIntent.new(
+        "BTCUSDT",
+        "SELL",
+        "MARKET",
+        required_context_versions={},
+        quantity="0.01",
+        client_order_id="WILLV5_EXIT_stable-test-id",
+        purpose="CAMPAIGN_EXIT",
+        campaign_id="campaign-ambiguous",
+    )
+    calls = []
+
+    def timeout_after_possible_acceptance():
+        calls.append("submitted")
+        raise TimeoutError("response lost after possible exchange acceptance")
+
+    with pytest.raises(TimeoutError):
+        barrier.execute(intent, timeout_after_possible_acceptance)
+
+    with pytest.raises(ExecutionPersistenceError, match="intent ID already exists"):
+        barrier.execute(intent, timeout_after_possible_acceptance)
+
+    retry_with_new_intent = OrderIntent.new(
+        "BTCUSDT",
+        "SELL",
+        "MARKET",
+        required_context_versions={},
+        quantity="0.01",
+        client_order_id="WILLV5_EXIT_stable-test-id",
+        purpose="CAMPAIGN_EXIT",
+        campaign_id="campaign-ambiguous",
+    )
+    with pytest.raises(ExecutionPersistenceError, match="clientOrderId already belongs"):
+        barrier.execute(retry_with_new_intent, timeout_after_possible_acceptance)
+
+    assert calls == ["submitted"]
+    row = db.conn.execute(
+        "SELECT status FROM execution_intents WHERE intent_id=?",
+        (intent.intent_id,),
+    ).fetchone()
+    assert row["status"] == "AMBIGUOUS"
