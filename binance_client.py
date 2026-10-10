@@ -101,7 +101,7 @@ class BinanceSpotClient:
                     params=p,
                     timeout=self.timeout,
                 )
-            except (requests.Timeout, requests.ConnectionError) as exc:
+            except requests.RequestException as exc:
                 last_exc = exc
                 # Only idempotent GET requests are retried after a transport
                 # failure. POST/DELETE remain UNKNOWN and require reconciliation.
