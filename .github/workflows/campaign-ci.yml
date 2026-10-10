@@ -36,6 +36,7 @@ jobs:
           python -m pytest -q \
             test_backtester.py \
             test_data_validation.py \
+            test_futures_stop_out_guard.py \
             test_digital_williams_core.py \
             test_market_context.py \
             test_futures_runtime_freshness.py \
