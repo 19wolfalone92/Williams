@@ -1,5 +1,6 @@
 """Execution adapter for Williams conditional campaign entries and stops."""
 
+from safe_logging import redact_text
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -327,8 +328,8 @@ class CampaignExecutionService:
                     raise
                 except Exception as exc:
                     raise CampaignExecutionError(
-                        f"{signal.symbol}: fractal last-mile validation failed: {exc}"
-                    ) from exc
+                        f"{signal.symbol}: fractal last-mile validation failed: {redact_text(str(exc))}"
+                    ) from None
 
             self._check_buy_position_capacity(
                 signal.symbol,
@@ -381,7 +382,7 @@ class CampaignExecutionService:
         except Exception as exc:
             # A pre-submit barrier rejection is safe to clear. Any exchange
             # mutation ambiguity remains fail-closed and recoverable by CID.
-            message = str(exc)
+            message = redact_text(str(exc))
             if "ExecutionBarrier blocked" in message:
                 campaign.state = CampaignState.CLOSED
                 campaign.pending_risk_quote = 0.0
@@ -506,7 +507,7 @@ class CampaignExecutionService:
                     except Exception as exc:
                         self.engine.mark_reconcile_required(
                             campaign,
-                            f"partial conditional BUY cancel ambiguous: {exc}",
+                            f"partial conditional BUY cancel ambiguous: {redact_text(str(exc))}",
                         )
                         raise
 
@@ -751,7 +752,7 @@ class CampaignExecutionService:
                 if campaign is not None:
                     self.engine.mark_reconcile_required(
                         campaign,
-                        str(exc),
+                        redact_text(str(exc)),
                     )
                 self.db.state_set(
                     f"position_state:{symbol}",
@@ -760,7 +761,7 @@ class CampaignExecutionService:
                 results.append({
                     "symbol": symbol,
                     "state": "RECONCILE_REQUIRED",
-                    "error": str(exc),
+                    "error": redact_text(str(exc)),
                 })
         return results
 
@@ -913,11 +914,11 @@ class CampaignExecutionService:
                 if row.get("campaign_id"):
                     campaign = self.engine.load_campaign(row["campaign_id"])
                     if campaign is not None:
-                        self.engine.mark_reconcile_required(campaign, str(exc))
+                        self.engine.mark_reconcile_required(campaign, redact_text(str(exc)))
                 results.append({
                     "campaign_id": row.get("campaign_id"),
                     "state": "RECONCILE_REQUIRED",
-                    "error": str(exc),
+                    "error": redact_text(str(exc)),
                 })
         return results
 
@@ -1208,9 +1209,9 @@ class CampaignExecutionService:
                 except Exception:
                     self.engine.mark_reconcile_required(
                         campaign,
-                        f"cannot cancel campaign protection before exit: {exc}",
+                        f"cannot cancel campaign protection before exit: {redact_text(str(exc))}",
                     )
-                    raise CampaignExecutionError(str(exc)) from exc
+                    raise CampaignExecutionError(redact_text(str(exc))) from None
 
         open_orders = self.client.open_orders(symbol)
         unknown_sells = [
