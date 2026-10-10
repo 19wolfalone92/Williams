@@ -741,8 +741,13 @@ class MarketScanner:
         try:
             enriched = self._apply_wave(candidate, closed)
             early_wm1 = self._is_tc2_early_wm1(enriched)
+            # TC2 uses H1 as the decision timeframe; H4 is context, not
+            # a mandatory second trigger. Its diagnostic confirmation is kept
+            # in the candidate trace, while the final H1 Williams gate and D1
+            # macro airbag are revalidated at the execution barrier.
             if (
                 candidate.signal
+                and self.strategy_profile != "TC2_THREE_WISE_MEN"
                 and self.require_htf_confirmation
                 and not enriched.htf_confirmed
                 and not early_wm1
