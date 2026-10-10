@@ -44,12 +44,21 @@ def test_execution_barrier_rejects_stale_context():
     barrier = ExecutionBarrier(cache)
     snap = cache.snapshot()
     cache.publish(context())
+    now_ms = int(time.time() * 1000)
     intent = OrderIntent.new(
         "BTCUSDT", "BUY", "MARKET",
         required_context_versions={"1h": snap.context("BTCUSDT", "1h").version},
+        purpose="ENTRY",
+        permission_interval="1h",
+        signal_timeframe="1h",
+        signal_bar_time_ms=now_ms - 7_200_000,
+        confirmation_time_ms=now_ms - 3_600_000,
+        expires_at_ms=now_ms + 60_000,
+        signal_id="test-signal-stale-context",
+        campaign_id="test-campaign-stale-context",
     )
     calls = []
-    result = barrier.execute(intent, lambda: calls.append("sent"))
+    result = barrier.execute(intent, lambda: calls.append("sent"), pre_submit_checks=lambda _snapshot: None)
     assert not result.accepted
     assert not calls
     assert "stale context" in result.reason
@@ -76,14 +85,22 @@ def test_execution_barrier_serializes_publish_and_submit():
 
     t = threading.Thread(target=publish)
     t.start()
+    now_ms = int(time.time() * 1000)
     intent = OrderIntent.new(
         "BTCUSDT",
         "BUY",
         "MARKET",
         {"1h": version},
+        purpose="ENTRY",
         permission_interval="1h",
+        signal_timeframe="1h",
+        signal_bar_time_ms=now_ms - 7_200_000,
+        confirmation_time_ms=now_ms - 3_600_000,
+        expires_at_ms=now_ms + 60_000,
+        signal_id="test-signal-serialization",
+        campaign_id="test-campaign-serialization",
     )
-    result = barrier.execute(intent, submit)
+    result = barrier.execute(intent, submit, pre_submit_checks=lambda _snapshot: None)
     t.join()
     assert result.accepted
     assert published.is_set()
