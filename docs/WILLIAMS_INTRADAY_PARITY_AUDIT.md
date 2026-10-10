@@ -7,7 +7,8 @@
 ## Universe and market context update (2026-10-10)
 
 - Default configured fallback universe is now **CORE_10**: BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT, ADAUSDT, DOGEUSDT, LINKUSDT, AVAXUSDT, LTCUSDT.
-- The Spot scanner defaults to liquidity preselection and a maximum of 10 symbols (`LIQUIDITY_PRESELECT=10`, `SCAN_MAX_SYMBOLS=10`). Explicit environment overrides can change those values; verify the effective runtime config before a test run.
+- Python's Spot scanner now defaults to CORE_10, with liquidity preselection and a 10-symbol cap. Android's autonomous Spot scanner also uses the same ten-symbol list, independently checks per-symbol ticker/book availability, filters zero-volume and invalid-spread markets, and reports active/unavailable members in diagnostics. Futures runtime defaults to the same list, but exchange support and account permissions must still be checked on the actual endpoint.
+- Concurrent campaigns are capped at three; each campaign has a 1% risk budget, total open plus pending portfolio risk is capped at 3%, one campaign loses no more than its reserved budget, daily loss is capped at 1%, and two consecutive losses pause new entries. Python initial-entry/add-on reservations are rechecked transactionally; Android reservations are rechecked under the pending-entry lock. These contracts have new regression tests, but have not yet been validated on the exact current head.
 - **D1 is permitted as informational broad-market context**, but must not independently create an entry signal or act as a blanket directional veto. H4 remains the sole required higher-timeframe context for the current intraday admission contract; H1 remains the canonical decision timeframe. D1 is not part of the default structural decision chain.
 - This is a proposed default universe, not a guarantee that every symbol is tradable on both Spot and USDⓈ-M Futures in every environment. Validate each symbol against the relevant exchangeInfo and account permissions at startup; invalid symbols fail closed.
 
@@ -17,17 +18,19 @@
 - **H1:** canonical decision timeframe; typed Williams signals are detected here.
 - **M15:** execution/fill monitoring only; must not originate TC2 signals.
 - **M5:** diagnostics/replay only; must not originate TC2 signals.
-- **D1:** may be inspected as informational macro context, but is excluded from the intraday TC2 admission dependency and from default intraday timeframe chains.
+- **D1:** available as a best-effort informational market overview in Android/Futures status. D1 must not create or score TC2 signals or veto direction. It is excluded from default intraday decision chains and final execution dependencies; a D1 outage must not block H1/H4 analysis or protective exits.
 
 The selected H4/H1/M15/M5 arrangement is an explicit engineering mapping for this bot, not a universal timeframe prescription stated by Williams. The Alligator itself encodes nested balance-line horizons within a chart; timeframe mapping must not be represented as a verbatim book rule.
 
 ## Changes made in this audit pass
 
-1. Removed D1 from the default structural hierarchy for H1/H4/M15/M5 and other intraday chain fallbacks.
-2. Removed D1 as a required context for TC2 admission and excluded it from the TC2 signal context-version dependency.
-3. Updated the campaign-execution test context fixture to publish only H1 and H4, so tests no longer silently rely on D1.
-4. Added regression assertions for D1-free intraday timeframe hierarchies.
-5. Retained the configured risk ceilings: maximum 1% equity risk per campaign and maximum 3% aggregate portfolio open risk; default simultaneous campaign cap is 3.
+1. Expanded Python and Android default spot universe to CORE_10; Futures fallback uses TradingConfig's same list. Unsupported or unavailable instruments should be omitted by market-data checks rather than inventing data.
+2. Made D1 informational only. Android writes a per-symbol completed-candle snapshot to diagnostics; Python Futures runtime has a best-effort cache in status. D1 is removed from entry context-version dependencies and must not veto entries.
+3. Kept H1 as the TC2 decision interval and dropped the still-forming last candle before Android H1 signal analysis. D1/H4 context fetches use completed bars. M5/M15 do not create Native TC2 signals.
+4. Added typed, family-specific final entry checks: WM2 has no prior-fractal or universal directional-Alligator requirement; WM3 must remain beyond current H1 Teeth on the correct side; WM1 numeric angulation remains blocked by default because it is not yet an exact source-derived rule. Pending TC2 signals now carry a trigger and expiry into the final Python execution barrier; Android rechecks trigger/expiry immediately before order submission.
+5. Allowed WM2/WM3 to be the first presenting Wise-Man evidence when no campaign exists, without mutating the detector's original signal role.
+6. Added aggregate portfolio/campaign reservation checks for initial entries and add-ons in Python and Android. Android's daily guard includes marked open PnL and blocks entries if an open position lacks a valid mark.
+7. Added deterministic regression tests for CORE_10, H1/H4 context only, typed TC2 gate behavior, expiry, WM3 Teeth, risk reservation, and first-presenting WM2/WM3. Tests still need to be run by CI for the exact final commit.
 
 ## Confirmed parity blockers / unresolved source questions
 
@@ -60,3 +63,18 @@ The selected H4/H1/M15/M5 arrangement is an explicit engineering mapping for thi
 ## Verification status
 
 Repository content was inspected and changes were committed through GitHub. Tests were **not executed in a local checkout** during this pass. GitHub combined statuses and workflow-run results returned no entries for the latest test commit; this is **not** a green CI result. No live or Demo/Testnet execution was performed by this audit pass.
+
+## End-to-end audit notes (current working branch)
+
+### Signal and execution flow reviewed
+- **Universe/data:** approved CORE_10 -> per-symbol market-data validity/spread -> completed H1 candles -> typed WM1/WM2/WM3 evidence -> H4 data-quality/freshness context -> size from the actual structural stop -> durable pending-risk reservation -> final ExecutionBarrier / mutation wrapper -> conditional exchange order -> reconcile exchange order/fill/position -> attach hard protection -> trail/manage campaign -> structural/exhaustion exit -> reconcile and recover after restart.
+- **WM1:** bullish Divergent Bar geometry in the Native Spot detector is currently only an approximate implementation; the preference flag defaults off. Python likewise documents and blocks the approximate formula unless explicitly enabled. This is a deliberate fail-closed blocker, not proof of 100% WM1 compliance.
+- **WM2:** three same-colour AO evidence is detected independently of a fractal. It is still necessary to validate the exact book/course wording and figure-based trigger/stop behavior through golden fixtures.
+- **WM3:** actual fractal confirmation index is preserved; Native uses confirmation time rather than center time to make the signal actionable. Final Python barrier rechecks the trigger/Teeth relation; Native checks the trigger has not been crossed and the structural low has not been breached. Exact expiry windows are engineering safety overlays, not claimed book rules.
+- **Stop / exit:** Native TC2 creates protective STOP_LOSS orders and updates them from completed H1 candle structure; no fixed take-profit was added to the TC2 campaign path. Exhaustion/Teeth market exits are partly optional preferences and require source acceptance vectors and replay evidence before claiming canonical exit parity.
+- **Safety:** any ambiguous post-submit order result is reconciled by stable client identity rather than blindly resubmitted. A pre-submit validation failure should release its pending reservation; an unknown exchange outcome remains a reconciliation blocker. These paths still need exact-head tests and Demo/Testnet event-log evidence.
+
+### What this review does not establish
+- The current source does not justify a claim of 100% book equivalence. We have not produced golden numerical vectors for SMMA seeding/display displacement, AO/AC, MFI semantics, every WM1/WM2/WM3 illustration, Zero Point, all Five Magic Bullets, reverse-pyramid sizing, and each exit rule.
+- The scanned Trading Chaos Course pages/figures still require page-by-page visual verification and a source-to-code rule matrix.
+- No physical Android build/run or Binance Demo/Testnet end-to-end execution has been performed in this pass. Do not enable Mainnet/live execution based on source review alone.
