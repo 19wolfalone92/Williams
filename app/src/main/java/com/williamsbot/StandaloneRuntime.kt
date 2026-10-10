@@ -1667,7 +1667,7 @@ private class NativeEngine(
             val errorBody = runCatching { JSONObject(body) }.getOrNull()
             val code = errorBody?.optInt("code", 0) ?: 0
             if (spec.operation in setOf("ENTRY_ORDER", "PROTECTION_ORDER") &&
-                code in setOf(-1013, -1100, -1101, -1102, -1104, -1111, -2010)
+                code in setOf(-1013, -1100, -1101, -1102, -1104, -1111)
             ) {
                 // These Binance order-parameter/filter rejections establish that
                 // the new order was not accepted. They do not validate the
