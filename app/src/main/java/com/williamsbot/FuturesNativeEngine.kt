@@ -920,9 +920,11 @@ internal class FuturesNativeEngine(
                 if (!fresh) {
                     false
                 } else if (signal.direction == "LONG") {
-                    primary.bullish && higher.bullish && higher.ao > 0.0 && higher.ac > 0.0
+                    primary.bullish && primary.awake && primary.ao > 0.0 &&
+                        higher.bullish && higher.awake && higher.ao > 0.0
                 } else {
-                    primary.bearish && higher.bearish && higher.ao < 0.0 && higher.ac < 0.0
+                    primary.bearish && primary.awake && primary.ao < 0.0 &&
+                        higher.bearish && higher.awake && higher.ao < 0.0
                 }
             }
         if (candidates.isEmpty()) return null
