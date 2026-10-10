@@ -212,3 +212,60 @@ The first-page images establish that the TC2 PDF is the Russian **second edition
 
 - Before the source-image appendix update, the branch was advanced by commit `b489227576eed06eadcacafe92714c8d8d7b560e` (“docs: add visually verified Williams source locators and exact PR CI evidence”). The file read back from the named audit branch returned the new appendix blob `4dc609dec45577ed9bd61297a3ab401591210f67`, confirming the write is visible on that branch.
 - This does not supply a local Git working tree or staged-diff report. No local checkout is present in this execution runtime. After the next documentation commit, use the returned commit SHA as the exact new audit-branch tip at the time of write; the connector still lacks a branch-ref endpoint that directly returns the ref SHA.
+
+
+## I. Follow-up evidence — 2026-10-10 (remote Git, PR CI, visual source review)
+
+### I.1 Exact remote Git state
+
+- Remote ref resolution: comparing `audit/williams-2.1-forensic-20261010` to candidate commit `f2d2eb24d8c78be871567f93dcf5fc973dd3ff97` returned `status=identical`, `ahead_by=0`, `behind_by=0`. The branch therefore currently resolves to **`f2d2eb24d8c78be871567f93dcf5fc973dd3ff97`**. This is a fresh comparison, not an assumption from the previous report.
+- `main` compared to `04da5f9c09572e99ff310be3a1908179165e528c` also returned `identical`, zero ahead/behind. Baseline remains unchanged.
+- `main...audit branch`: `ahead_by=4`, `behind_by=0`; changed paths are only `docs/WILLIAMS_BOT_2_1_FORENSIC_AUDIT.md` and `docs/WILLIAMS_BOT_2_1_FORENSIC_AUDIT_APPENDIX.md`.
+- **Local Git working-tree state is unavailable.** The active container's working directory is `/`, and `git status` reports “not a git repository”; there is no local clone at the runtime root. Therefore local branch checkout, staged/unstaged changes, and untracked files cannot be attested. Remote ref comparisons do not substitute for local `git status`.
+
+### I.2 PR #49 is a separate branch and current CI is not green
+
+Fresh PR read: [PR #49](https://github.com/19wolfalone92/Williams/pull/49) is open, Draft, unmerged, base `main` at `04da5f9c09572e99ff310be3a1908179165e528c`; head branch `audit/williams-2.1-task-004-williams-strategy`, head SHA **`334967f55a10f47a798d31951d31d8278c9a15d5`**. Its merge-test commit is **`83a6581f3a0870ecae9b39c7af45a092c42e62d7`**, whose commit message explicitly says it merges PR head into the baseline. Workflow logs check out `refs/remotes/pull/49/merge`; record these results against that PR merge-test ref, not as baseline-main results.
+
+| Workflow | Run ID | Job ID | Tested PR merge ref | Outcome and evidence |
+|---|---:|---:|---|---|
+| Python backend tests | `38078748291` | `114291104126` | `83a6581f3a0870ecae9b39c7af45a092c42e62d7` | **SUCCESS**; release gate, compile, static safety audit and offline suite passed; `166 passed, 4 warnings`. |
+| Build Android APK | `38078748322` | `114291103213` | `83a6581f3a0870ecae9b39c7af45a092c42e62d7` | **FAILURE**; `29 tests completed, 1 failed`: `WilliamsStrategyGoldenVectorsTest > aoAndAcMatchSharedFormulaVectorsAndUseExactly34SlowSamples`, assertion at `WilliamsStrategyGoldenVectorsTest.kt:64`. Debug/release APK build, version verification, signing verification and artifact publication were skipped after the unit-test failure. |
+| Williams Campaign CI | `38078748306` | Python `114291334892`; Android `114291335137` | `83a6581f3a0870ecae9b39c7af45a092c42e62d7` | **FAILURE** in both jobs. Python: **5 failed, 164 passed**; each failed campaign-execution test passes a `5m` signal and now receives `Canonical Spot campaign entries require H1 signals`. Android build/unit-test job failed; debug version check/upload skipped. |
+
+These are the current observed runs associated with PR #49. No successful APK build is established for this SHA. They are not evidence of test status on `main`, nor were they run on the forensic branch. The combined-status endpoint returned an empty list for the queried commits; an empty list is **not** treated as a pass. Run/job logs above provide the non-empty CI evidence.
+
+### I.3 Primary-source visual checks and OCR cross-check — course scan
+
+Exact Library file: `Bill Williams - Trading Chaos Course.pdf`, 122 PDF pages. PDF metadata contains no edition/year; page 1 visually identifies the document as Profitunity Trading Group material, so edition/year remains **UNRESOLVED**. Contact sheets for all 122 pages were generated and visually reviewed for page-level structure; targeted high-resolution images and OCR were cross-checked manually. Full-document OCR did not complete within the runtime limit; do not describe the scan as fully OCR-transcribed.
+
+| Source locator | Visual/OCR result | Rule/evidence in own words | Code link and confidence |
+|---|---|---|---|
+| Course PDF p.61, printed p.29, heading “FRACTALS AND LEVERAGE” | Page image and targeted OCR agree. | A fractal uses at least five consecutive bars; the middle bar must have a higher high (up) or lower low (down) than the two bars on each side. | Relates to Python confirmed-fractal helpers and Android fractal math, but active consumer/timing path is not yet fully proven. High confidence for what this page says. |
+| Course PDF p.62, printed p.30, “PRISTINE FRACTAL” diagram A–D | Page image and targeted OCR agree. | The minimum 5-bar structure may create both up/down fractals; equal high/low on the fifth bar can require a 6th bar before the middle bar is strictly extreme. This is an explicit source edge case, not a universal assumption that exactly five bars always suffice. | Golden vector needed for equal extreme and confirmation time. High confidence. |
+| Course PDF p.64, printed p.32, “FRACTAL START / FRACTAL SIGNAL” | Page image and targeted OCR agree. | The course distinguishes a fractal start (followed by opposite-direction fractal) from a fractal signal (following an opposite-direction fractal); the page says start and signal are generated at the same time in the illustrated sequence. | Do not collapse start/signal roles without checking the selected strategy profile and actual code consumer. High confidence for page text. |
+| Course PDF p.91, printed p.15, “USING THE PROFITUNITY ‘TRADING PARTNER’” | Page image and targeted OCR agree. | This course section lists “Air Bag Protection” as a two-bar reversal on a significantly higher timeframe and explicitly says it is not an initiating signal, but protection from erratic movement. The same page’s “Rhythms of the Market” section describes 5/13/34 moving-average position as long/below-short/between-out. These are course-level material; do not automatically convert every line into the current bot’s entry gate. | Relevant to policy/source separation; timeframe hierarchy in the bot remains product policy unless independently tied to the selected strategy. High confidence for the page content. |
+
+### I.4 Visually verified TC2 source locators — Second Edition
+
+The title page (TC2 PDF p.1) explicitly identifies *Trading Chaos: Maximize Profits with Proven Technical Techniques*, **Second Edition**, Justine Gregory-Williams and Bill M. Williams, John Wiley & Sons; the Russian title page identifies the 2005 Moscow edition. Printed page numbers below are confirmed visually.
+
+| PDF page | Printed page | Figure / heading | Source rule and implication |
+|---:|---:|---|---|
+| 122 | 107 | Chapter 9, “Первый мудрец”; “Ангуляция”; references Figs. 9-3 and 9-4 | Describes angulation geometrically: price bars move away from the Alligator/Jaw at a steeper angle; the passage calls for drawing/considering a line along the Alligator’s Jaw and another along price movement. The visible text does not define one universal numeric regression window, distance unit, or threshold. Thus Python regression score vs Android distance-delta is a confirmed implementation divergence, but neither may be called the author-exact formula. |
+| 125 | 110 | Fig. 9.6, “График японской иены” | Visually documents a bullish reversal bar far from the Alligator and a conditional buy stop one tick above the marked reversal bar. Supports separating signal recognition from the price trigger. |
+| 136 | 121 | Fig. 10.1, “Что делает осциллятор awesome oscillator” | Describes AO as 5-bar vs 34-bar simple moving averages of bar midpoints. **Important literal-source ambiguity:** both this page and New Trading Dimensions PDF p.55 visibly print midpoint notation as `(H-L)/2`, which is inconsistent with the usual high/low midpoint expression `(H+L)/2`. Do not silently “correct” the primary source. AO input formula remains **UNRESOLVED** until this apparent print/translation error is adjudicated using independent source evidence. |
+| 137 | 122 | Fig. 10.3, “Три зеленых бара АО создают сигнал для увеличения позиции” | After an initial Wise-Man-1 reversal entry, the text says the second entry is normally added after three consecutive green AO bars; buy stop is placed just above the price bar corresponding to the third green AO bar. This is a continuation/add-on context, not proof that every WM2 must require a fractal. |
+| 155 | 140 | Chapter 12, “Что происходит, когда мудрецы собираются вместе”; Fig. 12.1 cited | The text lists the classical sequence as reversal bar, Super AO (three consecutive bars of one color), then fractal signal. Crucially, it separately asks what happens if Super AO is the first signal after reversal and answers: enter just above the price bar corresponding to the third green Super AO bar and place a protective stop near the trend-reversal base or below the signal bar. **Source conclusion: WM2/Super AO can be the first actionable signal before WM1 or WM3/fractal.** The baseline implementation’s prior-fractal prerequisite is therefore inconsistent with this selected TC2 Second Edition scenario if that gated function is confirmed as the active path. No strategy code changed. |
+
+### I.5 New Trading Dimensions — visually verified AO locator
+
+Exact Library file: `Билл_Вильямс_Новые_измерения_в_биржевой_торговле_2_книга.pdf`. PDF p.1 title page visually identifies *Новые измерения в биржевой торговле; как извлечь прибыль из хаоса: рынки акций, облигаций и фьючерсов*, by Bill Williams. PDF p.55 has printed page **55**, Chapter 5 “Удивительный осциллятор”, Fig. 5-1 “Удивительный Осциллятор (AO)” and Fig. 5-2 “Что такое ‘AO’?”. The page describes 5-bar vs 34-bar SMA of bar midpoints; the literal printed midpoint formula again reads `(H-L)/2`. This independently confirms the source-text inconsistency, not a resolved mathematical definition. Printed page 55 is confirmed visually.
+
+### I.6 Rule resolution update and remaining boundary
+
+- **OBS-003 source question is now resolved:** TC2 Second Edition explicitly permits Super AO to be the first actionable signal before either reversal-bar or fractal signal (printed p.141 in the “what if Super AO is first?” passage; the same chapter’s classical sequence is printed p.138). Implementation parity remains open until all baseline callers and the active path to order mutation are proven.
+- **OBS-004 source interpretation is narrowed:** angulation is a qualitative/geometric principle in the inspected TC2 passage; no author-exact universal numeric formula is established by these pages. Keep numeric thresholds as implementation heuristics, not source rules.
+- **Fractal edge case added:** Course PDF p.62 / printed p.30 gives an equal-extreme case requiring six bars. It needs a golden vector before declaring Python/Android parity.
+- **AO formula remains UNRESOLVED:** source scans visibly contain `(H-L)/2` notation in both books, while the expected arithmetic midpoint is ordinarily `(H+L)/2`. Do not change the bot or rewrite source wording without further independent primary-source adjudication.
+- The full all-book independent-rule register, complete Python/Android call graph to every order/cancel mutation, and executed identical golden vectors are still incomplete. No test has been run on the forensic branch in this pass; no order was submitted; no Mainnet was used; no strategy code was modified.
