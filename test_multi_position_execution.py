@@ -9,6 +9,35 @@ def _legacy_campaign_mode(monkeypatch):
 
 from portfolio_trader import MultiPositionTrader
 from db import Database
+from execution_barrier import ExecutionBarrier
+from market_context import ContextCache
+
+
+def _test_execution_barrier(db):
+    return ExecutionBarrier(ContextCache(), db)
+
+
+def _mark_test_recovery_ready(db):
+    db.mark_recovery_ready({
+        "exchange_reachable": True,
+        "account_checked": True,
+        "open_orders_checked": True,
+        "order_history_checked": True,
+        "fills_checked": True,
+        "positions_checked": True,
+        "protection_checked": True,
+        "campaigns_checked": True,
+        "intents_checked": True,
+        "unresolved_symbols": [],
+        "pending_entries": [],
+        "unknown_orders": [],
+        "inventory_mismatches": [],
+        "unprotected_positions": [],
+        "unknown_campaigns": [],
+        "canonical_position_state": "FLAT",
+    })
+
+
 
 
 class FakeClient:
@@ -180,7 +209,8 @@ def test_multi_position_execution_creates_independent_trades(tmp_path, monkeypat
 
     client = FakeClient()
     db = Database(str(tmp_path / "trades.sqlite3"))
-    trader = MultiPositionTrader(client, db=db, symbols=["BTCUSDT", "ETHUSDT"])
+    _mark_test_recovery_ready(db)
+    trader = MultiPositionTrader(client, db=db, symbols=["BTCUSDT", "ETHUSDT"], execution_barrier=_test_execution_barrier(db))
     # Exercise the production allocation path, including fee and slippage
     # buffers, so the test protects the real aggregate-risk contract.
 
