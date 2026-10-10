@@ -1945,10 +1945,13 @@ private class NativeEngine(
 
     private fun buildIndicatorSnapshot(candles: List<CandleN>, symbol: String, frame: String): JSONObject {
         if (candles.size < 40) return JSONObject().put("symbol", symbol).put("interval", frame).put("ready", false)
-        val prices = candles.map { it.c }
-        val jaw = smma(prices, 13)
-        val teeth = smma(prices, 8)
-        val lips = smma(prices, 5)
+        val alligatorLines = WilliamsAlligatorMath.calculate(
+            highs = candles.map { it.h },
+            lows = candles.map { it.l }
+        )
+        val jaw = alligatorLines.jaw
+        val teeth = alligatorLines.teeth
+        val lips = alligatorLines.lips
         val i = candles.lastIndex
         val aoNow = ao(candles, i)
         val aoPrev = ao(candles, i - 1)
@@ -3498,8 +3501,8 @@ private class NativeEngine(
                 }
 
                 if (prefs.getBoolean("campaign_exit_on_teeth", false)) {
-                    val teeth = smma(candles.map { it.c }, 8).lastOrNull() ?: 0.0
-                    if (teeth > 0.0 && candles.last().c < teeth) {
+                    val teeth = operativeAlligatorTeeth(candles)
+                    if (teeth != null && candles.last().c < teeth) {
                         campaignExitMarket(
                             positions[stored.symbol] ?: current,
                             "CLOSE_BELOW_TEETH"
@@ -4021,11 +4024,15 @@ private class NativeEngine(
 
             if (candles.size < 40) continue
 
-            val prices = candles.map { it.c }
-            val teeth =
-                smma(prices, 8).last()
-            val lastClosed =
-                candles.last()
+            val teeth = operativeAlligatorTeeth(candles)
+            if (teeth == null) {
+                setReconcileRequired(
+                    "Williams Teeth exit blocked: operative Alligator line is not valid for " +
+                        stored.symbol
+                )
+                continue
+            }
+            val lastClosed = candles.last()
 
             // Stop-close-only style: a confirmed close through the Teeth is a
             // trend-exit event. Do not manufacture an impossible stop above
@@ -5451,7 +5458,8 @@ private class NativeEngine(
         val candles = candidate.candles
         if (candles.size < 20) return (candidate.atrPct * 2.0).coerceIn(0.01, 0.08)
         val prices = candles.map { it.c }
-        val teeth = smma(prices, 8).lastOrNull() ?: prices.last()
+        val teeth = operativeAlligatorTeeth(candles)
+            ?: return (candidate.atrPct * 2.0).coerceIn(0.01, 0.08)
         var swingLow = Double.POSITIVE_INFINITY
         for (i in max(2, candles.lastIndex - 30)..candles.lastIndex - 2) {
             if (isDownFractal(candles, i)) swingLow = min(swingLow, candles[i].l)
@@ -7151,21 +7159,18 @@ private class NativeEngine(
         val lips: Double
     )
 
-    private fun smma(
-        values: List<Double>,
-        length: Int
-    ): List<Double> {
-        if (values.isEmpty()) return emptyList()
-
-        val output = MutableList(values.size) { values[0] }
-        for (i in 1 until values.size) {
-            output[i] =
-                (
-                    output[i - 1] * (length - 1) +
-                        values[i]
-                    ) / length
-        }
-        return output
+    /**
+     * Returns the operative/displayed Alligator Teeth line on the last completed
+     * candle. Never substitute an unshifted SMMA of Close for the book's
+     * median-price Teeth; unknown data remains unknown.
+     */
+    private fun operativeAlligatorTeeth(candles: List<CandleN>): Double? {
+        if (candles.isEmpty()) return null
+        val lines = WilliamsAlligatorMath.calculate(
+            highs = candles.map { it.h },
+            lows = candles.map { it.l }
+        )
+        return lines.teeth.lastOrNull()?.takeIf { it.isFinite() && it > 0.0 }
     }
 
     private fun ao(
