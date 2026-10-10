@@ -236,3 +236,61 @@ def test_failed_local_persistence_rolls_back_resolution_and_keeps_intent_blocked
     assert db.find_execution_intent(intent.intent_id, cid)["status"] == "AMBIGUOUS"
     assert db.unresolved_execution_intents()[0]["intent_id"] == intent.intent_id
     assert exchange.mutations == 0
+
+
+def test_confirmed_resolution_never_replays_the_same_intent(tmp_path):
+    import threading
+    from execution_barrier import ExecutionBarrier
+
+    class Cache:
+        execution_lock = threading.RLock()
+        def snapshot(self):
+            return object()
+
+    db = Database(str(tmp_path / "no-replay.sqlite3"))
+    exchange = FakeExchange()
+    cid = "WILL_RECOVERY_NO_REPLAY_009"
+    intent = make_intent(db, cid=cid)
+    exchange.orders_by_cid[cid] = order(oid=960, cid=cid, status="FILLED", executed="1.0")
+    assert ExecutionRecoveryResolver(db, exchange).resolve_pending()["ok"] is True
+
+    submitted = []
+    result = ExecutionBarrier(Cache(), db).execute(
+        intent, lambda: submitted.append("duplicate") or {"status": "FILLED"}
+    )
+    assert result.accepted is False
+    assert "prior_intent_exists:RECONCILED" in result.reason
+    assert submitted == []
+    assert exchange.mutations == 0
+
+
+def test_oco_cancel_requires_exact_list_and_leg_evidence(tmp_path):
+    db = Database(str(tmp_path / "oco-cancel.sqlite3"))
+    exchange = FakeExchange()
+    list_cid = "WILL_RECOVERY_OCO_CANCEL_010"
+    intent = make_intent(
+        db, order_type="CANCEL", cid="WILL_RECOVERY_CANCEL_LIST_010",
+        mutation_kind="CANCEL_OCO", target_order_list_id="88",
+        target_list_client_order_id=list_cid,
+    )
+    legs = [
+        order(oid=971, cid=list_cid + "_TP", status="CANCELED", side="SELL"),
+        order(oid=972, cid=list_cid + "_SL", status="CANCELED", side="SELL"),
+    ]
+    for leg in legs:
+        exchange.orders_by_id[str(leg["orderId"])] = leg
+        exchange.orders_by_cid[leg["clientOrderId"]] = leg
+    exchange.lists_by_id["88"] = {
+        "symbol": "BTCUSDT", "orderListId": 88,
+        "listClientOrderId": list_cid, "listStatusType": "ALL_DONE",
+        "orders": [
+            {"symbol": "BTCUSDT", "orderId": 971, "clientOrderId": list_cid + "_TP"},
+            {"symbol": "BTCUSDT", "orderId": 972, "clientOrderId": list_cid + "_SL"},
+        ],
+    }
+
+    report = ExecutionRecoveryResolver(db, exchange).resolve_pending()
+
+    assert report["ok"] is True
+    assert db.find_execution_intent(intent.intent_id, intent.client_order_id)["status"] == "RECONCILED"
+    assert exchange.mutations == 0
