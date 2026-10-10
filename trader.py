@@ -169,9 +169,15 @@ class Trader:
         )
 
     def setup(self):
-        if self.auto_scan_enabled:
-            self._setup_multi_position_mode()
-            return
+        # There is one autonomous Williams execution pipeline. Disabling the
+        # portfolio-wide scanner narrows the universe to the selected symbol;
+        # it does not reactivate the legacy Boolean signal + market-BUY/OCO
+        # strategy, which is not equivalent to the canonical Wise-Men campaign.
+        if not self.auto_scan_enabled:
+            self.auto_scan_symbols = [self.symbol]
+            self.max_open_positions = 1
+        self._setup_multi_position_mode()
+        return
 
         if not self.client.testnet and os.getenv('ALLOW_LIVE','false').lower()!='true':
             raise RuntimeError(
@@ -1261,10 +1267,13 @@ class Trader:
         self._last_auto_scan_monotonic = now
         try:
             if not hasattr(self, '_multi_position_trader'):
+                runtime_symbols = (
+                    self.auto_scan_symbols if self.auto_scan_enabled else [self.symbol]
+                )
                 self._multi_position_trader = MultiPositionTrader(
                     self.client,
                     db=self.db,
-                    symbols=self.auto_scan_symbols,
+                    symbols=runtime_symbols,
                     execution_barrier=self.execution_barrier,
                 )
                 recovery = self._multi_position_trader.recover()
@@ -1279,148 +1288,24 @@ class Trader:
             self._auto_scan_lock = False
 
     def process(self):
-        if getattr(self, 'auto_scan_enabled', False):
-            # Canonical Spot portfolio runtime. Multiple simultaneous positions
-            # are allowed only while aggregate protected risk remains <= 1%.
-            result = self._auto_scan_process()
-            if result:
-                self.db.log_event(
-                    'INFO',
-                    'multi_position_cycle',
-                    'Multi-position scan/execution completed',
-                    {'result': result},
-                )
-            return
+        """Run the canonical campaign pipeline for the selected Spot universe.
 
-        # Legacy single-symbol mode remains available by setting
-        # AUTO_SCAN_ENABLED=false.
-        self.recover_state()
-
-        if self.state() != 'FLAT':
-            return
-
-        df = fetch_klines(
-            self.client,
-            self.symbol,
-            self.interval,
-            limit=250,
-        )
-
-        if len(df) < 100:
-            return
-
-        closed = df.iloc[:-1].copy()
-
-        ind = calculate_indicators(
-            closed,
-            config_from_env(),
-        )
-
-        last = ind.iloc[-1]
-        last_time = str(ind.index[-1])
-
-        candle_key = f'last_signal_candle:{self.symbol}'
-
-        if self.db.state_get(candle_key) == last_time:
-            return
-
-        if not bool(last.get('long_signal', False)):
-            self.db.state_set(
-                candle_key,
-                last_time,
-            )
-            return
-
-        allowed, reason = self._risk_gate(closed)
-
-        if not allowed:
+        AUTO_SCAN_ENABLED selects portfolio discovery vs. one-symbol scope only.
+        Both settings use the same structured WM1/WM2/WM3 detector, context
+        admission, structural risk sizing, conditional-entry, protection and
+        reconciliation contract. The former Boolean long_signal -> market BUY
+        -> fixed OCO path remains retired from autonomous execution.
+        """
+        result = self._auto_scan_process()
+        if result:
+            scope = "portfolio" if self.auto_scan_enabled else "single_symbol"
             self.db.log_event(
-                'INFO',
-                'risk_block',
-                reason,
-                {
-                    'symbol': self.symbol,
-                    'candle': last_time,
-                },
+                "INFO",
+                "williams_campaign_cycle",
+                f"Canonical Williams campaign cycle completed ({scope})",
+                {"scope": scope, "selected_symbol": self.symbol, "result": result},
             )
-
-            self.db.state_set(
-                candle_key,
-                last_time,
-            )
-
-            return
-
-        quote = self._position_quote(
-            float(last['close'])
-        )
-
-        if self.dry_run:
-            log.warning(
-                'DRY_RUN legacy mode: would BUY %s quote=%.8f',
-                self.symbol,
-                quote,
-            )
-            return
-
-        order, qty, entry = self.market_buy(quote)
-
-        self.db.log_event(
-            'INFO',
-            'entry',
-            'LONG market entry filled',
-            order,
-        )
-
-        self.db.save_trade(
-            entry_time=utc_now(),
-            symbol=self.symbol,
-            side='LONG',
-            entry_price=entry,
-            quantity=qty,
-            entry_order_id=str(order.get('orderId')),
-            fees=0,
-        )
-
-        trade = self.db.open_trade(self.symbol)
-
-        try:
-            self.place_oco(
-                qty,
-                entry,
-                trade_id=trade['id'] if trade else None,
-            )
-
-        except Exception as e:
-            self.db.log_event(
-                'ERROR',
-                'oco_failed_after_entry',
-                str(e),
-            )
-
-            self.notify(
-                'WARNING\n'
-                'BUY filled but OCO placement failed; '
-                'trading is blocked until recovery.\n'
-                f'{e}'
-            )
-
-            raise
-
-        self._set_state('OPEN')
-
-        self.db.state_set(
-            candle_key,
-            last_time,
-        )
-
-        self.notify(
-            f'LONG ENTRY\n'
-            f'{self.symbol}\n'
-            f'qty={qty}\n'
-            f'entry≈{entry:.8f}\n'
-            f'Order={order.get("orderId")}'
-        )
+        return result
 
     def run(self):
         self.setup()
