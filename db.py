@@ -6,7 +6,7 @@ from contextlib import contextmanager
 
 
 class Database:
-    SCHEMA_VERSION = 9
+    SCHEMA_VERSION = 10
 
     def __init__(self, path=None):
         path = path or os.getenv('WILLIAMS_DB_PATH') or 'data/trader.sqlite3'
@@ -325,10 +325,26 @@ class Database:
                 "duplicate exchange fill identity in existing database; refusing automatic cleanup: "
                 f"{duplicate['symbol']}:{duplicate['exchange_trade_id']}"
             )
+        duplicate_intent = self.conn.execute(
+            "SELECT symbol, client_order_id, COUNT(*) AS n FROM execution_intents "
+            "WHERE client_order_id IS NOT NULL AND client_order_id != '' "
+            "GROUP BY symbol, client_order_id HAVING COUNT(*) > 1 LIMIT 1"
+        ).fetchone()
+        if duplicate_intent:
+            raise RuntimeError(
+                "duplicate durable client order identity in existing database; "
+                "refusing automatic cleanup: "
+                f"{duplicate_intent['symbol']}:{duplicate_intent['client_order_id']}"
+            )
         self.conn.execute(
             'CREATE UNIQUE INDEX IF NOT EXISTS uq_campaign_fills_exchange_trade '
             'ON campaign_fills(symbol, exchange_trade_id) '
             "WHERE exchange_trade_id IS NOT NULL AND exchange_trade_id != ''"
+        )
+        self.conn.execute(
+            'CREATE UNIQUE INDEX IF NOT EXISTS uq_execution_intents_client_order '
+            'ON execution_intents(symbol, client_order_id) '
+            "WHERE client_order_id IS NOT NULL AND client_order_id != ''"
         )
 
     def mark_recovery_required(self, reason: str) -> None:
