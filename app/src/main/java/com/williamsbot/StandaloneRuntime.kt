@@ -5479,7 +5479,13 @@ private class NativeEngine(
         if (!price.isNullOrBlank()) params.append("&price=").append(price)
         if (!stopPrice.isNullOrBlank()) params.append("&stopPrice=").append(stopPrice)
         if (!timeInForce.isNullOrBlank()) params.append("&timeInForce=").append(timeInForce)
-        if (!newClientOrderId.isNullOrBlank()) params.append("&newClientOrderId=").append(newClientOrderId)
+        val replacementClientId = newClientOrderId?.takeIf { it.isNotBlank() }
+            ?: stableNativeClientOrderId(
+                "W5R_", symbol, cancelOrderId.toString(), side, type,
+                quantity.orEmpty(), price.orEmpty(), stopPrice.orEmpty(),
+                timeInForce.orEmpty(), "CANCEL_REPLACE"
+            )
+        params.append("&newClientOrderId=").append(replacementClientId)
         return signedPost("/api/v3/order/cancelReplace", params.toString())
     }
 
