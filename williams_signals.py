@@ -412,7 +412,7 @@ def extract_long_signal_specs(
                     side="BUY",
                     signal_type=SignalType.FRACTAL,
                     # A confirmed WM3 may be the first actionable signal.
-                    # Active-campaign callers explicitly reclassify it as ADD_ON.
+                    # CampaignEngine reclassifies it as ADD_ON when an eligible same-direction campaign is already open.
                     role=SignalRole.ENTRY,
                     timeframe=timeframe,
                     signal_bar_time_ms=_row_time_ms(row),
@@ -583,7 +583,7 @@ def extract_short_signal_specs(
                     side="SELL",
                     signal_type=SignalType.FRACTAL,
                     # A confirmed WM3 may be the first actionable signal.
-                    # Active-campaign callers explicitly reclassify it as ADD_ON.
+                    # CampaignEngine reclassifies it as ADD_ON when an eligible same-direction campaign is already open.
                     role=SignalRole.ENTRY,
                     timeframe=timeframe,
                     signal_bar_time_ms=_row_time_ms(row),
