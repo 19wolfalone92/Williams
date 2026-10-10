@@ -530,22 +530,32 @@ def test_native_android_signed_order_mutations_are_fenced_before_network():
     assert "unresolvedExecutionMutationCount()" in runtime
     assert "unresolvedExecutionMutationCount(spec.symbol)" in runtime
 
-    # signedRequest is the sole native write boundary. The other direct HTTP
-    # call is the GET-only helper; a newly added raw network sender must fail CI.
+    # Source inventory at this SHA found exactly three OkHttp senders:
+    # 1) getBody(): unsigned GET to the configured local/backend baseUrl;
+    # 2) signedRequest(): signed Binance REST boundary, with mutation intent
+    #    persistence and mutation-path validation before execute();
+    # 3) signedRawGet(): signed Binance GET-only read helper.
+    # The GET helpers are not write-capable and do not accept mutation verbs.
     network_senders = [
         line for line in runtime.splitlines()
         if "http.newCall(" in line and ".execute()" in line
     ]
-    assert len(network_senders) == 2, (
-        "native raw HTTP senders changed; audit every path before acceptance"
+    assert len(network_senders) == 3, (
+        "native raw HTTP senders changed; inventory every path before acceptance"
     )
-    raw_get_start = runtime.index("private fun signedRawGet(")
-    raw_get_end = runtime.find("\n    private fun ", raw_get_start + 1)
-    if raw_get_end < 0:
-        raw_get_end = len(runtime)
-    raw_get = runtime[raw_get_start:raw_get_end]
+    def function_body(name):
+        start = runtime.index(f"private fun {name}(")
+        end = runtime.find("\\n    private fun ", start + 1)
+        return runtime[start:] if end < 0 else runtime[start:end]
+    backend_get = function_body("getBody")
+    raw_get = function_body("signedRawGet")
+    assert "baseUrl + path" in backend_get and ".get()" in backend_get
+    assert "signedTimestamp()" in raw_get and ".get()" in raw_get
+    assert ".post(" not in raw_get and ".delete(" not in raw_get and ".put(" not in raw_get
     assert "http.newCall(request).execute()" in raw_get
     assert "http.newCall(request).execute()" in signed_request
+    assert "validateAndPersistMutationIntent(mutation)" in signed_request
+    assert "auditStore.recordExecutionMutationResult(" in signed_request
 
 
 def test_native_optional_rest_telemetry_is_not_execution_authority():
@@ -571,3 +581,27 @@ def test_native_optional_rest_telemetry_is_not_execution_authority():
     result_write = signed_request.index("auditStore.recordExecutionMutationResult(")
     telemetry_write = signed_request.index("auditStore.recordRestCall(")
     assert result_write < telemetry_write
+
+
+
+def test_release_version_contracts_are_consistent():
+    from pathlib import Path
+    import re
+
+    root = Path(__file__).parent
+    gate = (root / "ci_release_gate.py").read_text(encoding="utf-8")
+    server = (root / "server.py").read_text(encoding="utf-8")
+    gradle = (root / "app" / "build.gradle.kts").read_text(encoding="utf-8")
+    activity = (
+        root / "app" / "src" / "main" / "java" / "com" / "williamsbot"
+        / "MainActivity.kt"
+    ).read_text(encoding="utf-8")
+    gate_match = re.search(r"EXPECTED_VERSION\s*=\s*['\\\"]([^'\\\"]+)['\\\"]", gate)
+    server_match = re.search(r"^VERSION\s*=\s*['\\\"]([^'\\\"]+)['\\\"]", server, re.MULTILINE)
+    gradle_match = re.search(r'versionName\s*=\s*"([^"]+)"', gradle)
+    assert gate_match and server_match and gradle_match
+    canonical = server_match.group(1)
+    assert canonical == "4.25.0", "unexpected canonical release version; review release contract"
+    assert gate_match.group(1) == canonical
+    assert gradle_match.group(1) == canonical
+    assert f"Williams {canonical}" in activity
