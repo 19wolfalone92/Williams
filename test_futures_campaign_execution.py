@@ -2483,3 +2483,50 @@ def test_context_vetoed_older_signal_does_not_hide_later_valid_wm1():
     assert selected.signal_type == SignalType.REVERSAL
     assert selected.htf_confirmed is False
     assert selected.context_versions == {"1h": 1, "4h": 1, "1d": 1}
+
+def test_trigger_crossed_older_candidate_does_not_hide_later_valid_candidate():
+    from types import SimpleNamespace
+    from campaign_model import SignalRole, SignalSpec, SignalType
+    from market_context import ContextCache, TFMarketContext
+
+    now = int(time.time() * 1000)
+    cache = ContextCache()
+    common = dict(
+        symbol="BTCUSDT", version=1,
+        candle_open_time_ms=now - 3_600_000,
+        candle_close_time_ms=now, price=100.0, data_bars=200,
+        allow_long=True, allow_short=False, alligator_state="BULLISH",
+    )
+    cache.publish(TFMarketContext(**common, interval="1h"))
+    cache.publish(TFMarketContext(**{**common, "version": 1, "allow_long": False, "alligator_state": "SLEEP"}, interval="4h"))
+    cache.publish(TFMarketContext(**{**common, "version": 1, "allow_long": False, "alligator_state": "SLEEP"}, interval="1d"))
+
+    crossed_wm2 = SignalSpec.new(
+        symbol="BTCUSDT", side="BUY", signal_type=SignalType.SUPER_AO,
+        role=SignalRole.ADD_ON, timeframe="1h",
+        signal_bar_time_ms=now - 10_000, confirmation_time_ms=now - 10_000,
+        trigger_price=99.0, protective_reference=98.0,
+        expires_at_ms=now + 60_000,
+    )
+    later_wm1 = SignalSpec.new(
+        symbol="BTCUSDT", side="BUY", signal_type=SignalType.REVERSAL,
+        role=SignalRole.ENTRY, timeframe="1h",
+        signal_bar_time_ms=now - 5_000, confirmation_time_ms=now - 5_000,
+        trigger_price=102.0, protective_reference=98.0,
+        expires_at_ms=now + 60_000,
+    )
+    runtime = object.__new__(FuturesRuntime)
+    runtime.context_cache = cache
+    runtime.context_intervals = ("1h", "4h", "1d")
+    runtime.require_htf_confirmation = True
+    runtime.client = SimpleNamespace(mark_price=lambda symbol: {"markPrice": "100.0"})
+
+    selected = runtime._directional_signal(
+        SimpleNamespace(
+            symbol="BTCUSDT",
+            campaign_signal_specs=[crossed_wm2.to_dict(), later_wm1.to_dict()],
+        ),
+        "LONG",
+        {},
+    )
+    assert selected.signal_type == SignalType.REVERSAL
