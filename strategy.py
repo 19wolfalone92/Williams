@@ -4,17 +4,30 @@ import pandas as pd
 
 
 def smma(series, period):
-    out = pd.Series(index=series.index, dtype=float)
+    """Wilder-style recursive SMMA with an explicit SMA seed.
+
+    Missing/non-finite seed values block the entire series. Once a gap occurs
+    after the seed, the recursive line remains unavailable; silently reseeding
+    later would create cross-runtime disagreement about the Alligator state.
+    """
+    out = pd.Series(np.nan, index=series.index, dtype=float)
     period = int(period)
     if period <= 0:
         raise ValueError("SMMA period must be positive")
     if len(series) < period:
         return out
-    out.iloc[period - 1] = series.iloc[:period].mean()
+    values = pd.to_numeric(series, errors="coerce").to_numpy(dtype=float)
+    seed = values[:period]
+    if not np.isfinite(seed).all():
+        return out
+    out.iloc[period - 1] = float(seed.mean())
     for i in range(period, len(series)):
-        out.iloc[i] = (
-            (out.iloc[i - 1] * (period - 1) + series.iloc[i]) / period
-        )
+        previous = float(out.iloc[i - 1])
+        current = float(values[i])
+        if not np.isfinite(previous) or not np.isfinite(current):
+            out.iloc[i] = np.nan
+        else:
+            out.iloc[i] = (previous * (period - 1) + current) / period
     return out
 
 
