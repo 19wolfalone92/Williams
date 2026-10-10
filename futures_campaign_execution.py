@@ -557,8 +557,8 @@ class FuturesCampaignExecutionService:
             raise FuturesCampaignExecutionError("Initial entry requires a SignalRole.ENTRY signal")
         if not math.isfinite(float(signal.trigger_price)) or float(signal.trigger_price) <= 0:
             raise FuturesCampaignExecutionError("Signal trigger price must be finite and positive")
-        if signal.expires_at_ms and int(signal.expires_at_ms) <= int(time.time() * 1000):
-            raise FuturesCampaignExecutionError("Williams signal has expired")
+        if int(signal.expires_at_ms or 0) <= int(time.time() * 1000):
+            raise FuturesCampaignExecutionError("Williams signal has expired or has no valid expiry")
         raw_stop = float(signal.invalidation_price or 0.0)
         if direction == "LONG":
             valid_stop = 0 < raw_stop < float(signal.trigger_price)
@@ -2851,8 +2851,8 @@ class FuturesCampaignExecutionService:
             raise FuturesCampaignExecutionError("Futures add-on requires SignalRole.ADD_ON")
         if signal.signal_type not in {SignalType.SUPER_AO, SignalType.FRACTAL}:
             raise FuturesCampaignExecutionError("Only Super AO or valid fractal signals may add exposure")
-        if signal.expires_at_ms and int(signal.expires_at_ms) <= int(time.time() * 1000):
-            raise FuturesCampaignExecutionError("Williams add-on signal has expired")
+        if int(signal.expires_at_ms or 0) <= int(time.time() * 1000):
+            raise FuturesCampaignExecutionError("Williams add-on signal has expired or has no valid expiry")
         equity = float(equity_quote)
         risk_fraction = float(candidate_risk_fraction)
         if not math.isfinite(equity) or equity <= 0:
