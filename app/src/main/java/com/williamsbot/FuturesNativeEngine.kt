@@ -3006,30 +3006,19 @@ internal class FuturesNativeEngine(
             throw FuturesApiException("$symbol PRICE_FILTER tickSize must be finite and positive")
         }
 
-        val structuralExtreme: Double
-        val rawCandidate: Double
-        if (direction == "LONG") {
-            val lows = window.map { it.low }
-            if (!lows.all { it.isFinite() && it > 0.0 }) {
-                throw FuturesApiException("$symbol TC2 trailing lows are malformed")
-            }
-            structuralExtreme = lows.minOrNull() ?: return
-            rawCandidate = structuralExtreme - tick
-        } else if (direction == "SHORT") {
-            val highs = window.map { it.high }
-            if (!highs.all { it.isFinite() && it > 0.0 }) {
-                throw FuturesApiException("$symbol TC2 trailing highs are malformed")
-            }
-            structuralExtreme = highs.maxOrNull() ?: return
-            rawCandidate = structuralExtreme + tick
-        } else {
-            setCampaignState(campaign, "RECONCILE_REQUIRED", "Unknown direction in TC2 trailing")
-            return
+        val proposal = try {
+            FuturesPriceBarTrailPolicy.propose(
+                direction = direction,
+                lows = window.map { it.low },
+                highs = window.map { it.high },
+                tickSize = tick,
+                trailingBars = trailBars
+            )
+        } catch (x: IllegalArgumentException) {
+            throw FuturesApiException("$symbol TC2 structural trail rejected: ${x.message}")
         }
-
-        if (!rawCandidate.isFinite() || rawCandidate <= 0.0) {
-            throw FuturesApiException("$symbol TC2 structural stop candidate is invalid")
-        }
+        val structuralExtreme = proposal.structuralExtreme
+        val rawCandidate = proposal.rawStopPrice
 
         val position = position(exchange, symbol)
         val positionAmount = position.optString("positionAmt").toDoubleOrNull()
