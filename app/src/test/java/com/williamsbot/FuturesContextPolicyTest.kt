@@ -93,15 +93,42 @@ class FuturesContextPolicyTest {
     }
 
     @Test
-    fun onlyReversalSignalsUseTheEarlyWm1AdmissionMode() {
+    fun eachWiseManUsesItsOwnBookDefinedEvidenceGate() {
+        // WM1 needs positive angulation evidence and can precede the turn.
         assertTrue(
             FuturesContextPolicy.allowsSignal(
                 "LONG", "REVERSAL", 2.5, neutral, short, neutral
             )
         )
+
+        // WM2's AO colour run and WM3's Teeth/trigger relation are validated
+        // by their own detectors; they must not inherit a universal H1 trend
+        // alignment gate merely because H1 has not yet fully turned.
+        assertTrue(
+            FuturesContextPolicy.allowsSignal(
+                "LONG", "SUPER_AO", 0.0, neutral, short, neutral
+            )
+        )
+        assertTrue(
+            FuturesContextPolicy.allowsSignal(
+                "SHORT", "FRACTAL", 0.0, neutral, long, neutral
+            )
+        )
+
+        // The selected D1 macro-airbag remains an explicit system overlay.
         assertFalse(
             FuturesContextPolicy.allowsSignal(
-                "LONG", "FRACTAL", 2.5, neutral, short, neutral
+                "LONG", "SUPER_AO", 0.0, neutral, neutral, short
+            )
+        )
+        assertFalse(
+            FuturesContextPolicy.allowsSignal(
+                "SHORT", "FRACTAL", 0.0, neutral, neutral, long
+            )
+        )
+        assertFalse(
+            FuturesContextPolicy.allowsSignal(
+                "LONG", "UNKNOWN", 0.0, neutral, neutral, neutral
             )
         )
     }
