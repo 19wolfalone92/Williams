@@ -817,6 +817,100 @@ class CampaignExecutionService:
                 })
         return results
 
+    @staticmethod
+    def _authoritative_order_not_found(exc: Exception) -> bool:
+        """Only Binance's explicit -2013 response is proof of order absence."""
+        if not isinstance(exc, BinanceAPIError):
+            return False
+        payload = getattr(exc, "payload", None)
+        return (
+            getattr(exc, "status_code", None) == 400
+            and isinstance(payload, dict)
+            and payload.get("code") == -2013
+        )
+
+    def _mark_intent_reconciled(
+        self,
+        client_id: str,
+        status: str,
+        *,
+        evidence: str,
+        related_order_id=None,
+    ) -> None:
+        resolve = getattr(self.db, "mark_execution_intent_reconciled", None)
+        if callable(resolve):
+            resolve(
+                client_id,
+                status,
+                authoritative=True,
+                evidence_source=evidence,
+                related_order_id=related_order_id,
+            )
+
+    def _resolve_definitive_not_found(
+        self,
+        symbol: str,
+        client_id: str,
+        campaign,
+    ) -> dict[str, Any]:
+        """Release an entry reservation only after Binance's definitive -2013."""
+        if campaign is None:
+            raise CampaignExecutionError(
+                f"{symbol}: Binance reports clientOrderId absent but no durable campaign owns it"
+            )
+        signal_id = str(campaign.current_signal_id or "")
+        signal_row = self.db.conn.execute(
+            "SELECT state FROM campaign_signals WHERE campaign_id=? AND signal_id=?",
+            (campaign.campaign_id, signal_id),
+        ).fetchone()
+        if signal_row is None:
+            raise CampaignExecutionError(
+                f"{symbol}: cannot release missing Binance order; durable signal provenance is absent"
+            )
+
+        is_add_on = (
+            campaign.state in {CampaignState.ADD_ON_PENDING, CampaignState.ADD_ON_ARMING}
+            or float(campaign.position_qty or 0.0) > 0.0
+            or bool(campaign.tags.get("pending_add_signal_id"))
+        )
+        campaign.tags.pop("pending_order_id", None)
+        campaign.tags.pop("pending_order_client_id", None)
+        campaign.pending_risk_quote = 0.0
+        campaign.capital_reserved_quote = 0.0
+        self.db.set_campaign_signal_state(signal_id, SignalState.INVALIDATED.value)
+        if is_add_on:
+            campaign.tags.pop("pending_add_signal_id", None)
+            try:
+                campaign.transition(
+                    CampaignState.TREND_ACTIVE,
+                    reason="authoritative Binance query confirmed add-on order absent",
+                )
+            except ValueError:
+                campaign.state = CampaignState.TREND_ACTIVE
+            position_state = "OPEN"
+        else:
+            campaign.state = CampaignState.CLOSED
+            campaign.next_action = "WAIT"
+            position_state = "OPEN" if self.db.open_trade(symbol) else "FLAT"
+
+        self.db.save_campaign(campaign)
+        self.db.state_set(f"campaign_state:{campaign.campaign_id}", campaign.state.value)
+        self.db.state_set(f"position_state:{symbol}", position_state)
+        if self.db.state_get(f"entry_client_order_id:{symbol}", "") == client_id:
+            self.db.release_state_claim(f"entry_client_order_id:{symbol}", client_id)
+        self._mark_intent_reconciled(
+            client_id,
+            "NOT_FOUND",
+            evidence="Binance GET /api/v3/order returned explicit code -2013 for origClientOrderId; pending campaign safely invalidated",
+        )
+        return {
+            "symbol": symbol,
+            "campaign_id": campaign.campaign_id,
+            "state": position_state,
+            "action": "NOT_FOUND_ABORTED",
+            "client_order_id": client_id,
+        }
+
     def _current_equity_quote(self) -> float:
         account = self.client.account()
         equity = 0.0
