@@ -357,3 +357,13 @@ The native changes and new Kotlin unit tests were committed after the previous g
 
 
 A second native expiry path was found during follow-through: the durable `entry_expires_at_ms` saved with the campaign still used the old source-bar timestamp even after the live signal-freshness helper had been corrected. It is now persisted from `confirmationTime` plus the configured pending bars and one confirmation-bar duration, so restart recovery and in-memory scanning use the same deadline.
+
+
+## Cross-runtime parity issues that remain release blockers
+
+1. **Hard-exit predicate differs:** Python Futures `manage_campaign` requires the opposite Alligator arrangement, close beyond Teeth, and opposite AO on both closed bars; Android `manageStructuralExit` checks close beyond Teeth plus opposite AO and AC, without the same Alligator-arrangement predicate. Therefore the same candle history can exit at different times.
+2. **Risk-policy defaults differ:** native Android currently has a 0.25% per-campaign risk budget, 1% portfolio cap, 3% daily loss limit, and up to 3 positions by default; Python defaults are controlled through `TradingConfig`/environment and include a different daily-loss default (1% in the Futures runtime) and potentially different position/campaign caps. These must become one versioned policy contract, not independent constants.
+3. **WM1 admission differs:** Android reversal extraction adds a momentum-improving AO/AC condition and is nested under directional Alligator/AO/AC configuration gates; Python's WM1 detector calculates reversal + angulation and leaves directional permission to downstream context gates. This can change whether the earliest Wise-Man signal starts a campaign.
+4. **Candidate fallback differs:** Python can preserve multiple signal specs through candidate selection and applies higher-timeframe permission in the runtime; native Android stores a single `Frame.lastSignal` before the parent filter. If that earliest candidate conflicts with the parent, a later valid candidate of the other direction is not reconsidered. This fails safe (misses an entry) but does not provide equivalent strategy behavior.
+
+These are intentionally recorded as **unresolved**, not disguised as harmless differences. Resolve them by defining a single executable policy and cross-runtime golden test vectors before declaring Python and Android strategy parity.
