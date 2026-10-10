@@ -12,8 +12,17 @@ from stress_suite import run_latency_slippage_stress
 load_dotenv()
 
 def _cpcv_signal_score(train, test):
-    # Leak-free, model-free validation: signal at t is scored against return t->t+1.
-    values = [float(x["next_return"]) for x in test if bool(x["signal"])]
+    # Leak-free, model-free directional score: a SHORT profits when next return is negative.
+    values = []
+    for item in test:
+        if not bool(item.get("signal", False)):
+            continue
+        direction = str(item.get("direction", "LONG")).upper()
+        next_return = float(item["next_return"])
+        if direction == "LONG":
+            values.append(next_return)
+        elif direction == "SHORT":
+            values.append(-next_return)
     return sum(values) / len(values) if values else 0.0
 
 def main():
@@ -27,7 +36,10 @@ def main():
  ap.add_argument('--slippage',type=float,default=.0005)
  ap.add_argument('--position-fraction',type=float,default=1)
  ap.add_argument('--stop',type=float,default=.02)
- ap.add_argument('--target',type=float,default=.04)
+ ap.add_argument('--target',type=float,default=.04,
+                help='Legacy fixed-target overlay; not the canonical TC2 campaign exit')
+ ap.add_argument('--allow-shorts',action='store_true',
+                help='Enable simplified SHORT replay. Requires short_signal; excludes Futures funding/liquidation modelling.')
  ap.add_argument('--cache',default='')
  ap.add_argument('--outdir',default='results')
  ap.add_argument('--skip-cpcv',action='store_true')
@@ -60,7 +72,15 @@ def main():
  if ind.empty:
   raise ValueError("Not enough validated candles to calculate Williams indicators")
 
- bt=Backtester(a.capital,a.fee,a.slippage,a.position_fraction,a.stop,a.target)
+ bt=Backtester(
+  starting_capital=a.capital,
+  fee_rate=a.fee,
+  slippage_rate=a.slippage,
+  position_fraction=a.position_fraction,
+  stop_loss_pct=a.stop,
+  take_profit_pct=a.target,
+  allow_shorts=a.allow_shorts,
+)
  eq,tr=bt.run(ind)
  m=calculate_metrics(eq,tr,a.interval,starting_capital=a.capital)
  import hashlib,json,subprocess
@@ -71,8 +91,8 @@ def main():
  except Exception:
   commit_sha=os.getenv("GITHUB_SHA","unknown")
  config_payload=json.dumps(cfg,sort_keys=True,default=str,separators=(",",":"))
- params_payload=json.dumps({"symbol":a.symbol,"interval":a.interval,"start_utc":pd.Timestamp(a.start,tz="UTC").isoformat(),"end_utc_exclusive":pd.Timestamp(a.end,tz="UTC").isoformat(),"capital":a.capital,"fee_rate":a.fee,"slippage_rate":a.slippage,"position_fraction":a.position_fraction,"stop_loss_pct":a.stop,"take_profit_pct":a.target,"intrabar_exit_policy":"stop_first","config":cfg},sort_keys=True,default=str,separators=(",",":"))
- manifest={"created_at_utc":datetime.now(timezone.utc).isoformat(),"commit_sha":commit_sha,"symbol":a.symbol.upper(),"interval":a.interval,"date_range_semantics":"[start, end), UTC","start_utc":pd.Timestamp(a.start,tz="UTC").isoformat(),"end_utc_exclusive":pd.Timestamp(a.end,tz="UTC").isoformat(),"data_endpoint":BASE_URL if not cache_hit else "cache file (original source not independently verified)","data_source_verified":not cache_hit,"closed_candles_only":True,"partial_candles_excluded":partial_count,"row_count":int(len(df)),"dataset_sha256":dataset_hash,"config_sha256":hashlib.sha256(config_payload.encode("utf-8")).hexdigest(),"parameters_sha256":hashlib.sha256(params_payload.encode("utf-8")).hexdigest(),"parameters":{"capital":a.capital,"fee_rate":a.fee,"slippage_rate":a.slippage,"position_fraction":a.position_fraction,"stop_loss_pct":a.stop,"take_profit_pct":a.target,"intrabar_exit_policy":"stop_first"}}
+ params_payload=json.dumps({"symbol":a.symbol,"interval":a.interval,"start_utc":pd.Timestamp(a.start,tz="UTC").isoformat(),"end_utc_exclusive":pd.Timestamp(a.end,tz="UTC").isoformat(),"capital":a.capital,"fee_rate":a.fee,"slippage_rate":a.slippage,"position_fraction":a.position_fraction,"stop_loss_pct":a.stop,"take_profit_pct":a.target,"allow_shorts":a.allow_shorts,"simulation_profile":"LEGACY_BOOLEAN_FIXED_TARGET_RESEARCH","intrabar_exit_policy":"stop_first","config":cfg},sort_keys=True,default=str,separators=(",",":"))
+ manifest={"created_at_utc":datetime.now(timezone.utc).isoformat(),"commit_sha":commit_sha,"symbol":a.symbol.upper(),"interval":a.interval,"date_range_semantics":"[start, end), UTC","start_utc":pd.Timestamp(a.start,tz="UTC").isoformat(),"end_utc_exclusive":pd.Timestamp(a.end,tz="UTC").isoformat(),"data_endpoint":BASE_URL if not cache_hit else "cache file (original source not independently verified)","data_source_verified":not cache_hit,"closed_candles_only":True,"partial_candles_excluded":partial_count,"simulation_profile":"LEGACY_BOOLEAN_FIXED_TARGET_RESEARCH","allow_shorts":bool(a.allow_shorts),"short_model_limitations":["funding is not modeled","liquidation and maintenance margin are not modeled","strategy inputs are legacy boolean signals, not structured TC2 SignalSpec campaigns"],"row_count":int(len(df)),"dataset_sha256":dataset_hash,"config_sha256":hashlib.sha256(config_payload.encode("utf-8")).hexdigest(),"parameters_sha256":hashlib.sha256(params_payload.encode("utf-8")).hexdigest(),"parameters":{"capital":a.capital,"fee_rate":a.fee,"slippage_rate":a.slippage,"position_fraction":a.position_fraction,"stop_loss_pct":a.stop,"take_profit_pct":a.target,"intrabar_exit_policy":"stop_first"}}
  (out/'manifest.json').write_text(json.dumps(manifest,indent=2,sort_keys=True)+"\n",encoding="utf-8")
 
 
@@ -80,7 +100,16 @@ def main():
   samples=[]
   next_close=ind.close.shift(-1)
   for i,row in ind.iloc[:-1].iterrows():
-   samples.append({"signal":bool(row.get("long_signal",False)),"next_return":float(next_close.loc[i]/row.close-1.0) if row.close else 0.0})
+   long_signal=bool(row.get("long_signal",False))
+   short_signal=bool(row.get("short_signal",False)) if a.allow_shorts else False
+   # Never invent a side when both legacy boolean signals collide on one bar.
+   unambiguous=long_signal != short_signal
+   direction="LONG" if long_signal and unambiguous else "SHORT" if short_signal and unambiguous else "NONE"
+   samples.append({
+    "signal":bool(unambiguous and (long_signal or short_signal)),
+    "direction":direction,
+    "next_return":float(next_close.loc[i]/row.close-1.0) if row.close else 0.0,
+   })
   cpcv=run_cpcv(samples,_cpcv_signal_score,n_groups=a.cpcv_groups,test_groups=a.cpcv_test_groups,purge_bars=a.cpcv_purge,embargo_bars=a.cpcv_embargo)
   m.update({
    "cpcv_folds":cpcv.folds,
