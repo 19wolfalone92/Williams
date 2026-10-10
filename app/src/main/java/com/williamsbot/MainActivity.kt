@@ -117,7 +117,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.math.max
 import kotlin.math.min
 
-// Williams 4.25.0 Digital Williams Core production cockpit
+// Williams Digital Williams Core production cockpit
 // Autonomous runtime contract: local loopback API is intentional; no VPS required.
 // CI compile-log capture enabled
 // Diagnostic contract v2: runtime self-tests are exposed through /api/v1/diagnostics.
@@ -902,7 +902,7 @@ fun WilliamsApp(context: Context) {
                                 style = MaterialTheme.typography.titleMedium
                             )
                             Text(
-                                "BACKEND CONTROL • Android is dashboard only",
+                                "APK " + BuildConfig.VERSION_NAME + " • BACKEND CONTROL",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = AppColors.textMuted
                             )
