@@ -121,3 +121,17 @@ test_best_prefers_higher_score_when_both_strict()
 test_candidate_serialization()
 
 print("MARKET SCANNER TESTS: PASS")
+
+
+def test_futures_scanner_does_not_use_fixed_target_rr_as_signal_gate():
+    client = FakeClient()
+    client.is_usdm_futures = True
+    scanner = MarketScanner(client, symbols=[])
+    assert scanner.require_min_rr_gate is False
+
+
+def test_spot_scanner_keeps_legacy_fixed_target_rr_gate():
+    client = FakeClient()
+    client.is_usdm_futures = False
+    scanner = MarketScanner(client, symbols=[])
+    assert scanner.require_min_rr_gate is True
