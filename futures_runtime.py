@@ -31,6 +31,7 @@ from market_scanner import Candidate
 from portfolio_controller import PortfolioController
 from strategy import (
     calculate_indicators,
+    canonical_live_config_from_env,
     canonical_williams_parameter_blockers,
     config_from_env,
 )
@@ -458,7 +459,7 @@ class FuturesRuntime:
             closed = frame.iloc[:-1].copy() if len(frame) > 1 else frame.iloc[0:0].copy()
             if len(closed) < 100:
                 raise RuntimeError(f"{symbol}/{interval}: insufficient closed candles ({len(closed)})")
-            indicators = calculate_indicators(closed, config_from_env())
+            indicators = calculate_indicators(closed, canonical_live_config_from_env())
             last = indicators.iloc[-1]
             previous = indicators.iloc[-2] if len(indicators) > 1 else last
             price = float(last.get("close", 0) or 0)
