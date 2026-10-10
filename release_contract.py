@@ -149,16 +149,24 @@ def _validate_config(root: Path, env: Mapping[str, str]) -> None:
         raise ReleaseContractError("Trading start mode/credential validator is missing.")
 
 def validate_gradle_wrapper_version(source: str) -> None:
-    match = re.search(r"(?m)^distributionUrl=.*gradle-([0-9]+(?:\\.[0-9]+)+)-bin\\.zip$", source)
-    if not match:
+    urls = [
+        line.split("=", 1)[1]
+        for line in source.splitlines()
+        if line.startswith("distributionUrl=")
+    ]
+    if len(urls) != 1:
+        raise ReleaseContractError("Expected one Gradle wrapper distributionUrl.")
+    url = urls[0]
+    if "gradle-" not in url or "-bin.zip" not in url:
         raise ReleaseContractError("Gradle wrapper distribution URL is missing or malformed.")
-    version = tuple(int(part) for part in match.group(1).split("."))
+    version_text = url.split("gradle-", 1)[1].split("-bin.zip", 1)[0]
+    if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)+", version_text):
+        raise ReleaseContractError("Gradle wrapper version in distribution URL is malformed.")
+    version = tuple(int(part) for part in version_text.split("."))
     if version < (8, 14, 6):
         raise ReleaseContractError(
             "Gradle wrapper must be at least 8.14.6; the current Android lint gate rejects 8.14.5."
         )
-
-
 def _validate_workflows(root: Path) -> None:
     texts = {}
     for name in WORKFLOWS:
