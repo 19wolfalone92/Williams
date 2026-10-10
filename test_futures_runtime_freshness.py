@@ -47,6 +47,16 @@ def test_initial_williams_signal_expires_at_exact_boundary():
     assert chosen.signal_bar_time_ms == 2_000
 
 
+def test_default_universe_is_core_ten():
+    from trading_config import DEFAULT_SYMBOLS, TradingConfig
+
+    assert DEFAULT_SYMBOLS == (
+        "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
+        "ADAUSDT", "DOGEUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT",
+    )
+    assert TradingConfig.from_env({}).symbols == DEFAULT_SYMBOLS
+
+
 def test_canonical_williams_decision_timeframe_defaults_to_h1():
     from trading_config import TradingConfig
     cfg = TradingConfig.from_env({})
