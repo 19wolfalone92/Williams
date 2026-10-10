@@ -12,6 +12,7 @@ from campaign_execution import CampaignExecutionService, CampaignExecutionError
 from campaign_model import SignalSpec, SignalType, SignalRole
 from campaign_monitor import CampaignMonitor
 from order_identity import is_entry_id, is_exit_id, is_managed_order
+from execution_barrier import OrderIntent
 
 
 POSITION_STATES = {
@@ -105,6 +106,34 @@ class MultiPositionTrader:
             self.db,
             self.campaign_execution,
         )
+
+    def _submit_order(self, symbol, side, order_type, purpose, client_order_id, submit,
+                      *, quantity="", quote_order_quantity="", pre_submit_checks=None):
+        """Route every legacy portfolio order mutation through the canonical barrier."""
+        if self.execution_barrier is None:
+            raise CampaignExecutionError(
+                "Portfolio order mutation blocked: canonical ExecutionBarrier is unavailable"
+            )
+        intent = OrderIntent.new(
+            str(symbol).upper(),
+            str(side).upper(),
+            str(order_type).upper(),
+            required_context_versions={},
+            purpose=str(purpose),
+            client_order_id=str(client_order_id),
+            quantity=str(quantity or ""),
+            quote_order_quantity=str(quote_order_quantity or ""),
+        )
+        result = self.execution_barrier.execute(
+            intent,
+            submit,
+            pre_submit_checks=pre_submit_checks,
+        )
+        if not result.accepted:
+            raise CampaignExecutionError(
+                f"ExecutionBarrier blocked {purpose}: {result.reason}"
+            )
+        return result.response
 
     # ------------------------------------------------------------------
     # Durable state
@@ -719,12 +748,17 @@ class MultiPositionTrader:
             )
 
         client_id = f"{self.EMERGENCY_PREFIX}{uuid.uuid4().hex[:16]}"
-        sell = self.client.order_safe(
-            symbol,
-            "SELL",
-            "MARKET",
+        sell = self._submit_order(
+            symbol, "SELL", "MARKET", "CAMPAIGN_EXIT",
+            client_id,
+            lambda: self.client.order_safe(
+                symbol,
+                "SELL",
+                "MARKET",
+                quantity=self.client.decimal_format(sell_qty),
+                new_client_order_id=client_id,
+            ),
             quantity=self.client.decimal_format(sell_qty),
-            new_client_order_id=client_id,
         )
         self.db.save_order(sell)
 
@@ -933,13 +967,18 @@ class MultiPositionTrader:
         self.set_state(symbol, "EXIT_PENDING")
 
         create_oco = getattr(self.client, "create_oco_sell_safe", None) or self.client.create_oco_sell
-        result = create_oco(
-            symbol,
-            self.client.decimal_format(qty),
-            self.client.decimal_format(tp),
-            self.client.decimal_format(sl),
-            self.client.decimal_format(sl_limit),
-            client_id,
+        result = self._submit_order(
+            symbol, "SELL", "OCO", "CAMPAIGN_PROTECTION", client_id,
+            lambda: create_oco(
+                symbol,
+                self.client.decimal_format(qty),
+                self.client.decimal_format(tp),
+                self.client.decimal_format(sl),
+                self.client.decimal_format(sl_limit),
+                client_id,
+            ),
+            quantity=self.client.decimal_format(qty),
+            pre_submit_checks=lambda _snapshot: self._check_algo_capacity(symbol, 2),
         )
 
         for leg in result.get("orderReports", []):
@@ -1675,12 +1714,17 @@ class MultiPositionTrader:
                     f"{symbol}: managed quantity is no longer available"
                 )
 
-            sell = self.client.order_safe(
-                symbol,
-                "SELL",
-                "MARKET",
+            manual_client_id = f"{self.MANUAL_PREFIX}{uuid.uuid4().hex[:20]}"
+            sell = self._submit_order(
+                symbol, "SELL", "MARKET", "CAMPAIGN_EXIT", manual_client_id,
+                lambda: self.client.order_safe(
+                    symbol,
+                    "SELL",
+                    "MARKET",
+                    quantity=self.client.decimal_format(sell_qty),
+                    new_client_order_id=manual_client_id,
+                ),
                 quantity=self.client.decimal_format(sell_qty),
-                new_client_order_id=f"{self.MANUAL_PREFIX}{uuid.uuid4().hex[:20]}",
             )
             self.db.save_order(sell)
 
@@ -2214,12 +2258,19 @@ class MultiPositionTrader:
                     float(quote),
                 )
 
-                order = self.client.order_safe(
-                    symbol,
-                    "BUY",
-                    "MARKET",
-                    quote_order_qty=self.client.decimal_format(quote),
-                    new_client_order_id=client_id,
+                order = self._submit_order(
+                    symbol, "BUY", "MARKET", "CAMPAIGN_ENTRY", client_id,
+                    lambda: self.client.order_safe(
+                        symbol,
+                        "BUY",
+                        "MARKET",
+                        quote_order_qty=self.client.decimal_format(quote),
+                        new_client_order_id=client_id,
+                    ),
+                    quote_order_quantity=self.client.decimal_format(quote),
+                    pre_submit_checks=lambda _snapshot: self.l2_guard.check_buy_quote(
+                        self.client, symbol, float(quote)
+                    ),
                 )
                 self.db.save_order(order)
 
