@@ -289,6 +289,33 @@ class MockExchange:
     def all_orders(self, symbol, limit=1000):
         return [o for o in self.orders if o["symbol"] == symbol][-limit:]
 
+    def my_trades(self, symbol, order_id=None, limit=1000):
+        """Return deterministic per-order fills for recovery and fee-accounting tests."""
+        rows = []
+        for order in self.orders:
+            if order.get("symbol") != symbol:
+                continue
+            if order_id is not None and str(order.get("orderId")) != str(order_id):
+                continue
+            qty = float(order.get("executedQty", 0) or 0)
+            if qty <= 0:
+                continue
+            quote = float(order.get("cummulativeQuoteQty", 0) or 0)
+            price = quote / qty if quote > 0 else float(self.prices[symbol])
+            quote = qty * price
+            rows.append({
+                "id": f"mock-trade-{order.get('orderId')}",
+                "orderId": order.get("orderId"),
+                "symbol": symbol,
+                "price": str(price),
+                "qty": str(qty),
+                "quoteQty": str(quote),
+                "commission": "0",
+                "commissionAsset": "USDT",
+                "isBuyer": str(order.get("side", "")).upper() == "BUY",
+            })
+        return rows[-limit:]
+
     def open_orders(self, symbol=None):
         rows = [
             copy.deepcopy(o)
