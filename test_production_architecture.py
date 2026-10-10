@@ -107,7 +107,7 @@ def test_execution_barrier_rejects_stale_context():
 def test_execution_barrier_serializes_publish_and_submit():
     cache = ContextCache()
     cache.publish(context())
-    barrier = ExecutionBarrier(cache, ExecutionDB(), preflight_provider=ready_preflight)
+    barrier = ExecutionBarrier(cache, ExecutionDB(), preflight_provider=ready_preflight, exchange_client=FakeSpotClient())
     version = cache.snapshot().context("BTCUSDT", "1h").version
     started = threading.Event()
     published = threading.Event()
