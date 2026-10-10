@@ -266,7 +266,6 @@ class CampaignExecutionService:
         h1_long = (
             str(h1.alligator_state or "").upper() == "BULLISH"
             and bool(h1.alligator_awake)
-            and h1_ao > 0.0
         )
         if h1_long:
             strict_allowed = True
@@ -274,12 +273,9 @@ class CampaignExecutionService:
             strict_allowed = False
 
         d1_opposes_long = (
-            bool(d1.allow_short)
-            or (
-                str(d1.alligator_state or "").upper() == "BEARISH"
-                and bool(d1.alligator_awake)
-                and d1_ao < 0.0
-            )
+            str(d1.alligator_state or "").upper() == "BEARISH"
+            and bool(d1.alligator_awake)
+            and d1_ao < 0.0
         )
         if d1_opposes_long:
             return False, False
