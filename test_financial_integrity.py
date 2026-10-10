@@ -31,10 +31,10 @@ def order_payload(fills):
 def test_complete_fill_with_base_commission_is_accounted_once():
     summary = accumulate_order(order_payload([fill()]), base_asset="BTC")
     assert summary.financials_complete
-    assert summary.executed_qty == 0.4
-    assert summary.quote_qty == 40
-    assert summary.commission_base == 0.001
-    assert summary.net_base_qty == 0.399
+    assert summary.executed_qty == Decimal("0.4")
+    assert summary.quote_qty == Decimal("40.0")
+    assert summary.commission_base == Decimal("0.001")
+    assert summary.net_base_qty == Decimal("0.399")
     assert summary.trade_ids == ("17",)
 
 
@@ -43,7 +43,7 @@ def test_confirmed_zero_commission_requires_explicit_asset():
         [fill(commission="0", commissionAsset="USDT")], base_asset="BTC"
     )
     assert summary.financials_complete
-    assert summary.fee_quote == 0
+    assert summary.fee_quote == Decimal("0")
 
 
 @pytest.mark.parametrize("changes,reason", [
@@ -98,7 +98,7 @@ def ledger_fill(**overrides):
 @pytest.mark.parametrize("changes,error", [
     ({"commission": None}, "exchange_fill_commission_unknown"),
     ({"commission": ""}, "exchange_fill_commission_unknown"),
-    ({"commissionAsset": ""}, "exchange_fill_commission_asset_unknown"),
+    ({"commission_asset": ""}, "exchange_fill_commission_asset_unknown"),
     ({"commission": "NaN"}, "exchange_fill_financial_fields_invalid"),
     ({"quantity": "Infinity"}, "exchange_fill_financial_fields_invalid"),
     ({"quote_quantity": "0"}, "exchange_fill_financial_fields_invalid"),
