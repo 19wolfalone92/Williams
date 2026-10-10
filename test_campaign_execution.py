@@ -15,6 +15,9 @@ class FakeContext:
         self.version = version
         self.allow_long = True
         self.allow_short = False
+        # These deterministic contexts are test fixtures, not a production
+        # context source. They model the operative signal bar and D1 macro.
+        self.candle_close_time_ms = 10_000
 
 
 class FakeSnapshot:
@@ -41,7 +44,7 @@ def signal(kind=SignalType.REVERSAL, role=SignalRole.ENTRY, bar=100, trigger=101
         signal_bar_time_ms=bar,
         trigger_price=trigger,
         protective_reference=97,
-        context_versions={},
+        context_versions={"5m": 1, "1d": 1},
         htf_confirmed=True,
     )
 
