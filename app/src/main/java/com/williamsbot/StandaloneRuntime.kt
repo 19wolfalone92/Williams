@@ -617,6 +617,8 @@ private class NativeEngine(
     private val candleCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, List<CandleN>>>()
     private val liveCandleCache = java.util.concurrent.ConcurrentHashMap<String, MutableList<CandleN>>()
     private val indicatorSnapshots = java.util.concurrent.ConcurrentHashMap<String, JSONObject>()
+    // Read-only D1 context for the cockpit. Never consumed by the TC2 entry gate.
+    private val dailyContextOverview = java.util.concurrent.ConcurrentHashMap<String, JSONObject>()
     private val livePrices = java.util.concurrent.ConcurrentHashMap<String, Double>()
     private val tradeFlow = java.util.concurrent.ConcurrentHashMap<String, ArrayDeque<TradeFlowSample>>()
     private val lastUserEventTimeByType = java.util.concurrent.ConcurrentHashMap<String, Long>()
@@ -6871,7 +6873,7 @@ private class NativeEngine(
             val closed = if (raw != null && raw.size >= 2) raw.dropLast(1) else emptyList()
             if (closed.size >= 40) {
                 val waveContext = waveInfo(closed, frame)
-                frames.add(waveContext)
+                if (frame != "1d") frames.add(waveContext)
                 if (frame == "1d") {
                     dailyContextOverview[symbol] = JSONObject()
                         .put("symbol", symbol)
@@ -7811,6 +7813,21 @@ private class NativeEngine(
             .put("last_scan_duration_ms", lastScanDurationMs)
             .put("symbols_scanned", lastSymbolsScanned)
             .put("scan_universe", scannerUniverseLabel)
+            .put("core_symbols", JSONArray(coreSymbols))
+            .put("daily_market_context", JSONObject().apply {
+                coreSymbols.forEach { symbol ->
+                    put(
+                        symbol,
+                        dailyContextOverview[symbol]
+                            ?: JSONObject()
+                                .put("symbol", symbol)
+                                .put("interval", "1d")
+                                .put("informational_only", true)
+                                .put("available", false)
+                                .put("reason", "No completed D1 snapshot yet")
+                    )
+                }
+            })
             .put("deep_wave_targets", waveTopN)
             .put("candidates", candidates)
             .put(
@@ -7974,6 +7991,8 @@ private class NativeEngine(
             .put("take_profit_pct", if (campaignEngineEnabled) 0.0 else 0.04)
             .put("risk_per_trade_pct", maxRiskPerTradePct)
             .put("max_daily_loss_pct", 0.01)
+            .put("max_consecutive_losses", 2)
+            .put("cooldown_minutes", 30)
             .put("trades_today", dailyGuard.optInt("trades_today", 0))
             .put("daily_pnl_usdt", dailyGuard.optDouble("daily_pnl_usdt", 0.0))
             .put("consecutive_losses", dailyGuard.optInt("consecutive_losses", 0))
@@ -8447,6 +8466,7 @@ private class NativeEngine(
             .put("realtime_multi_timeframe_stream", false)
             .put("market_stream_connected", marketSocketConnected)
             .put("core_symbols", coreSymbols.joinToString(","))
+            .put("daily_market_context_role", "INFORMATIONAL_ONLY_NOT_AN_ENTRY_GATE")
             .put("full_history_wave_analysis", false)
             .put("history_retention_candles", 6000)
             .put("full_history_base_timeframe", "1h")
