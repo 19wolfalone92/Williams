@@ -80,24 +80,56 @@ class CampaignExecutionService:
         return result
 
     def _normalize_qty(self, symbol: str, quantity: float) -> float:
+        """Floor to the common valid grid of LOT_SIZE and MARKET_LOT_SIZE."""
         filters = self._rules(symbol)
-        lot = filters.get("MARKET_LOT_SIZE") if "MARKET_LOT_SIZE" in filters else filters.get("LOT_SIZE")
-        if not isinstance(lot, dict) or not {"stepSize", "minQty", "maxQty"}.issubset(lot):
-            raise CampaignExecutionError(f"{symbol}: required quantity filter is missing")
-        import math
+        lot = filters.get("LOT_SIZE")
+        market_lot = filters.get("MARKET_LOT_SIZE")
+        if not isinstance(lot, dict) or not isinstance(market_lot, dict):
+            raise CampaignExecutionError(
+                f"{symbol}: LOT_SIZE and MARKET_LOT_SIZE are both required for market execution"
+            )
+        required = {"stepSize", "minQty", "maxQty"}
+        if not required.issubset(lot) or not required.issubset(market_lot):
+            raise CampaignExecutionError(f"{symbol}: required quantity filter fields are missing")
         try:
-            step, minimum, maximum = (float(lot[k]) for k in ("stepSize", "minQty", "maxQty"))
-            quantity = float(quantity)
-        except (TypeError, ValueError, OverflowError) as exc:
+            lot_step, lot_min, lot_max = (Decimal(str(lot[k])) for k in ("stepSize", "minQty", "maxQty"))
+            market_step, market_min, market_max = (
+                Decimal(str(market_lot[k])) for k in ("stepSize", "minQty", "maxQty")
+            )
+            value = Decimal(str(quantity))
+        except Exception as exc:
             raise CampaignExecutionError(f"{symbol}: quantity/filter values are invalid") from exc
-        if not all(math.isfinite(v) for v in (step, minimum, maximum, quantity)) or step <= 0 or minimum < 0 or maximum <= 0 or minimum > maximum or quantity <= 0:
+        values = (lot_step, lot_min, lot_max, market_step, market_min, market_max, value)
+        if (
+            not all(v.is_finite() for v in values)
+            or lot_step <= 0 or market_step <= 0
+            or lot_min < 0 or market_min < 0
+            or lot_max <= 0 or market_max <= 0
+            or lot_min > lot_max or market_min > market_max
+            or value <= 0
+        ):
             raise CampaignExecutionError(f"{symbol}: quantity/filter values are invalid")
-        qty = self._floor(quantity, step)
-        if qty > maximum:
-            qty = self._floor(maximum, step)
-        if qty < minimum or qty > maximum:
-            raise CampaignExecutionError(f"{symbol}: normalized quantity violates LOT_SIZE")
-        return qty
+
+        places = max(
+            0,
+            -lot_step.as_tuple().exponent,
+            -market_step.as_tuple().exponent,
+        )
+        scale = 10 ** places
+        lot_units = int(lot_step * scale)
+        market_units = int(market_step * scale)
+        common_step = Decimal(math.lcm(lot_units, market_units)) / Decimal(scale)
+        qty = (value / common_step).to_integral_value(rounding=ROUND_DOWN) * common_step
+        minimum = max(lot_min, market_min)
+        maximum = min(lot_max, market_max)
+        if (
+            qty <= 0 or qty < minimum or qty > maximum
+            or qty % lot_step != 0 or qty % market_step != 0
+        ):
+            raise CampaignExecutionError(
+                f"{symbol}: normalized quantity violates common LOT_SIZE/MARKET_LOT_SIZE grid"
+            )
+        return float(qty)
 
     def _normalized_entry_qty(self, symbol: str, notional: float, trigger: float, *, filters=None) -> float:
         filters = filters if filters is not None else self._rules(symbol)
@@ -1876,8 +1908,8 @@ class CampaignExecutionService:
         numeric_tolerance = max(1e-12, campaign_qty * 1e-12)
         trade = self.db.open_trade(symbol)
         if trade is None:
-            self.engine.mark_reconcile_required(
-                campaign, "exchange exit fill has no matching durable open trade ledger"
+            self._emergency_protect_residual(
+                campaign, symbol, "exchange exit fill has no matching durable open trade ledger"
             )
             self.db.state_set(f"position_state:{symbol}", "RECONCILE_REQUIRED")
             raise CampaignExecutionError(

@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 import multiprocessing
 from datetime import datetime as RealDatetime, timezone
 from dataclasses import replace
+from decimal import Decimal
 
 import pytest
 
@@ -330,3 +331,27 @@ def test_missing_daily_baseline_with_existing_campaign_blocks_entry():
         )
     assert client.orders == []
     assert db.state_get("daily_start_equity") is None
+
+
+def test_protective_quantity_uses_common_lot_and_market_lot_grid():
+    class DifferentLotGridsExchange(MockExchange):
+        def exchange_info(self, symbol=None):
+            info = super().exchange_info(symbol)
+            for row in info["symbols"]:
+                row["filters"] = [
+                    f for f in row["filters"]
+                    if f.get("filterType") not in {"LOT_SIZE", "MARKET_LOT_SIZE"}
+                ] + [
+                    {"filterType": "LOT_SIZE", "stepSize": "0.002", "minQty": "0.002", "maxQty": "10"},
+                    {"filterType": "MARKET_LOT_SIZE", "stepSize": "0.003", "minQty": "0.003", "maxQty": "9"},
+                ]
+            return info
+
+    client = DifferentLotGridsExchange()
+    svc = service(Database(":memory:"), client)
+    qty = svc._normalize_qty("BTCUSDT", 0.011)
+    assert qty == pytest.approx(0.006)
+    assert Decimal(str(qty)) % Decimal("0.002") == 0
+    assert Decimal(str(qty)) % Decimal("0.003") == 0
+    with pytest.raises(CampaignExecutionError, match="common LOT_SIZE/MARKET_LOT_SIZE"):
+        svc._normalize_qty("BTCUSDT", 0.005)
