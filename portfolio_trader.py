@@ -1785,7 +1785,7 @@ class MultiPositionTrader:
                     trade_id=int(trade["id"]),
                     signal_id=cancel_signal_id,
                     operation_kind="CANCEL_OCO",
-                    related_order_list_id=list_id,
+                    related_order_list_id=(list_id or list_client),
                 )
 
                 def _check_oco_owner(_snapshot):
