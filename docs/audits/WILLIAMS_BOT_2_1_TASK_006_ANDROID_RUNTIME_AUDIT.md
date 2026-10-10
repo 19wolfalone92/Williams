@@ -1,92 +1,77 @@
-# WILLIAMS BOT 2.1 — Task 006
+# WILLIAMS BOT 2.1 — TASK 006
 ## Android Autonomous Runtime & Operational Reliability Audit
 
-**Status: IN PROGRESS — NOT ACCEPTED FOR AUTONOMOUS LIVE OPERATION**
+**Status:** IMPLEMENTATION CHANGES PREPARED — CI, APK and physical-device acceptance pending  
+**Target:** Binance Spot Testnet only  
+**Main baseline:** `04da5f9c09572e99ff310be3a1908179165e528c`  
+**Working branch:** `audit/williams-2.1-task-006-android-runtime`  
+**Safety invariant:** no Mainnet endpoint was introduced and no real exchange order was submitted during this audit.
 
-**Audit branch:** `audit/williams-2.1-task-006-android-runtime`  
-**Base `main` SHA at branch creation:** `04da5f9c09572e99ff310be3a1908179165e528c`  
-**Exchange scope:** Binance Spot Testnet endpoints only; no Mainnet endpoint was enabled.  
-**Device validation:** Not performed. No physical-device control channel was available, so this report does not claim real phone, Doze, process-death, or long-duration runtime testing.
+## Scope inspected
 
-## Executive result
+The Android path was traced through `MainActivity.kt`, `StandaloneRuntime.kt` and its private `NativeEngine`, `TradingForegroundService.kt`, `ExecutionGate.kt`, `BinanceUserDataStream.kt`, `AndroidRuntimeHealth.kt`, local SQLite history/audit stores, EncryptedSharedPreferences, `AndroidManifest.xml`, Gradle configuration, Android unit tests and CI workflows. Runtime control is implemented on-device; the optional remote backend is not the required trading authority.
 
-The Android application contains a native on-device engine, local loopback API, SQLite market-history store, Spot Testnet REST and WebSocket clients, a foreground service, and execution gating. It is not merely a Compose UI. Static source inspection nevertheless does not prove that the engine remains reliable after Android kills its process, the device enters Doze, network access disappears, or the APK is upgraded.
+At baseline the foreground service and loopback API existed, but their presence alone did not establish operational reliability. In particular, the local control API did not authenticate callers, local server request handling spawned an unbounded thread per connection, a stale server singleton could survive listener startup failure, Android status widgets could keep showing a previous successful snapshot after refresh failures, and several self-diagnostic checks tested constants rather than current runtime facts. Some trading snapshots and credentials used asynchronous preference writes without read-back verification.
 
-This branch hardens several confirmed seams: local API authentication and URL policy, freshness-gated entries and candidate visibility, verified persistence of backend settings and portable-backup restore, and explicit persistence/preflight for pause, stop and resume. These fixes still require a successful exact-head CI run and physical-device validation. No new order was sent during this audit.
+## Corrections prepared on this branch
 
-## Baseline and scope inspected
+### Local control bridge and duplicate-worker protection
 
-The branch was created from `main` SHA `04da5f9c09572e99ff310be3a1908179165e528c`. The audit covered:
+- The loopback server remains bound to `127.0.0.1:18080`; it now requires a per-install random bearer token stored in the encrypted native preferences. Authorization compares bytes in constant time. The token is not included in diagnostic output and is not the remote-backend token.
+- Request handling uses a bounded worker pool, socket read timeout, and a 1 MiB request-body ceiling. Requests without a valid bearer token receive HTTP 401 before routes (including control routes) are reached.
+- Runtime server startup is synchronized and verifies the listener/accept thread before publishing the singleton. A failed startup disposes that candidate server.
+- A server teardown now disposes the native engine's REST probe and owned scan, history-backfill, indicator and execution worker pools rather than leaving daemon workers running after a runtime recreation.
+- Native engine creation is synchronized through the server instance to reduce the risk that concurrent dashboard requests create multiple engines/probes.
 
-- `MainActivity.kt`: UI startup, backend selection, request errors, credential configuration and diagnostics rendering.
-- `StandaloneRuntime.kt`: local listener, REST/WebSocket clients, scanner, history warm-up, campaign entry path, state machine, recovery, credential persistence and execution gates.
-- `TradingForegroundService.kt` and `AndroidRuntimeHealth.kt`: notification, sticky service behavior and best-effort OS restrictions/health telemetry.
-- `ExecutionGate.kt`, `TradingStateMachine.kt`, `TradingEventLoop.kt`, `BinanceUserDataStream.kt`.
-- `MarketHistoryStore.kt`, `TradingAuditStore.kt`, `BackupManager.kt`, Android manifest, Gradle and CI workflows.
-- Existing JVM unit-test sources and root `test_android_remote_only.py` checks.
+### Truthful data and execution readiness
 
-The manifest declares INTERNET, notification and foreground-service permissions; the service is non-exported and declares the `specialUse` foreground-service subtype. `MainActivity` starts it, and the service publishes a notification before dispatching slower runtime auto-start work. This is a code-level observation only; Android OS scheduling behavior has not been device-tested.
+- Freshness is explicit: REST market data must be present and at most 30 seconds old; a scan snapshot must have an allowed state, no scanner error, valid timestamp and be at most 60 seconds old. Unknown timestamps and clock reversal fail closed.
+- Stale/failed status or scanner reads no longer keep old “green” state or candidates on the main UI. Cached prices and PnL are suppressed after the market freshness gate expires. Portfolio valuation returns unknown/null when current mark or account data cannot be established rather than substituting entry price.
+- New execution readiness requires the user stream to be connected and reconciled; the gate reports separate blockers for disconnection and pending stream synchronization.
+- UI control feedback interprets runtime results, execution blockers and reconciliation states instead of unconditionally presenting every successful HTTP response as a successful trading start.
+- The diagnostic self-tests check the current listener, token contract, endpoint hosts, status/data freshness and execution blockers rather than treating the fixed port or Testnet mode constant as proof of a healthy runtime.
 
-## Changes present on the audit branch
+### Credentials, persistence, pause/restart and recovery
 
-### Local autonomy and authentication
-- The local API binds to `127.0.0.1:18080`; local mode does not require an external trading server.
-- Calls from the UI use the per-install local bearer token stored in Keystore-backed encrypted preferences, not the optional remote-backend token.
-- The local server rejects calls without valid bearer authentication and limits request size / handler concurrency.
-- `BackendUrlContract` centralizes URL validation. Plain HTTP is accepted only for the exact loopback runtime URL; a remote backend requires a structurally valid HTTPS URL. User-info, arbitrary loopback paths, look-alike hosts and query/fragment URL tricks are rejected.
-- The local bridge token is not exported in a portable backup; the native installation creates/retains its own token.
+- Binance credentials are committed synchronously and read back. Validation failure rolls back the previous values and verifies the rollback. Failure to durably delete credentials is surfaced rather than reported as a successful clear.
+- Position and pending-entry snapshots are committed and read back. If stored JSON cannot be decoded, runtime startup persists a reconciliation-required/autostart-off latch where possible and remains fail-closed.
+- The reconciliation latch is not cleared until pending orders, exchange positions and managed open orders are recovered/audited successfully. A failed durable reconciliation write is a safety incident.
+- Start, pause, resume, stop and kill paths use durable state for their safety intent. Kill-switch reset is not reflected in memory until its persisted latch is cleared and read back. Kill reports whether latch persistence was verified.
+- Android lifecycle diagnostics capture SDK/model, foreground-service visibility where available, battery/power restrictions and a permission-safe standby-bucket probe. The foreground notification now says that the service is alive and Testnet-only, not that execution is necessarily active. Autostart recovery is moved off the service main lifecycle thread.
 
-### Persistence and command truthfulness
-- Binance credentials are written through the native encrypted store, committed and read back before configuration is reported successful; failed validation rolls back and verifies the prior values.
-- Credential deletion commits and verifies removal; unresolved managed positions or pending entries prevent deletion.
-- Optional backend settings are committed and read back before the UI can report success.
-- Portable backup/restore supports standalone mode as well as HTTPS remote mode, and restore verifies preference write/read-back. Binance credentials and the per-install local API token are explicitly not restored from a portable backup.
-- `auto_run` startup intent is committed before the engine starts. Pause intent is persisted and restored after process recreation. Stop verifies that restart intent is durably cleared; if this cannot be verified, it reports the failure and attempts to latch execution off.
-- Resume is no longer a Boolean flip: it requires an active paused runtime, Testnet credentials, exchange recovery/reconciliation, no unresolved pending entries, account data, fresh market/history/user-stream state, and verified protection for restored positions.
+### Build contract and tests added
 
-### Data freshness and execution gates
-- Runtime freshness contracts fail closed for missing timestamps, unavailable sources, and backward wall-clock movement.
-- The scanner does not start on stale REST data. Scanner responses hide stale candidates and identify whether the candidate snapshot is fresh.
-- Initial entries and campaign add-ons recheck the full execution gate immediately before entering the durable order path.
-- A cached campaign price is not trusted after the REST freshness window; an ad-hoc ticker read does not falsify the five-symbol REST-batch freshness timestamp.
-- Status reports do not expose the main price or unrealized PnL as live when market telemetry is stale. Diagnostics expose REST age/error, freshness limits, WebSocket status, scan age/progress, execution blockers, local listener/auth state and device/service telemetry.
-- The generic `recovered` value is derived from reconciliation / safety state rather than hardcoded true.
+- The release contract gate expected version `4.24.0` while `server.py`, Gradle and the Android source declared `4.25.0`. The task branch aligns the gate to `4.25.0` and asserts presence of key Android safety contracts.
+- Added pure unit tests for local bearer authorization and runtime freshness boundary/error cases. Existing unit tests and Android workflow remain the authoritative compile/test gate.
 
-## Findings and acceptance matrix
+## Acceptance matrix
 
-| Acceptance area | Source-level result | Evidence still required |
+| Criterion | Current result | Evidence still required |
 |---|---|---|
-| Autonomous runtime exists on device | Native engine, SQLite, local API and Testnet clients are present | Install and operate the APK on a physical phone |
-| Optional remote backend | Local URL path and bearer separation implemented | Test with remote backend absent and with malformed/failed local listener |
-| Foreground service / notification | Manifest, notification channel, non-exported service and sticky restart path present | Test notification denial, background restrictions, Doze, swipe-away, OS process kill and device reboot on several supported Android versions |
-| Lifecycle and no duplicate engine | Synchronized server/engine startup and control paths are present | Observe worker/thread/socket counts across pause, stop, service recreation, process death and restart |
-| Network loss / stale telemetry | Freshness contract and entry/scanner gates present | Fault-injected network-loss test during warm-up, scan, open position and reconnect |
-| Credentials | Encrypted storage, commit/read-back and rollback checks present | Test save, invalid credentials, clear, process restart, APK upgrade and clean install with Testnet-only credentials |
-| SQLite history | Persistent candle and sync-state schema present | Verify counts, close-time continuity, corruption behavior and recovery on-device |
-| Strategy parity | Android and Python strategy implementation/tests exist in the repository | **BLOCKER:** the branch tree contains no identifiable shared golden-vector fixture/test suite proving equivalent Python/Android results for every requested strategy and campaign transition |
-| Unit tests and lint | JVM unit tests and CI workflows exist | Green results must belong to the exact final branch SHA |
-| Debug APK | CI has an Android debug APK build job | Build, inspect SHA-256/signature and install the artifact from the exact final SHA |
-| Real Android runtime tests | Not run | **BLOCKER:** physical-device evidence is mandatory for the requested acceptance |
+| Main is unchanged | PASS by branch workflow: edits targeted the task branch; baseline comparison is against `04da5f9c09572e99ff310be3a1908179165e528c` | Recheck branch diff/PR base SHA before merge |
+| Standalone on-device architecture | Source path present; corrections prepared | Successful CI compile and APK installation |
+| Local API access control | Implemented; unit tests added | Unit-test results from CI and Android same-device smoke test |
+| Freshness and stale-data fail-closed behavior | Implemented; pure contract tests added | Unit-test results plus offline/market-outage runtime exercise |
+| Credentials/persistence read-back | Implemented in native preference paths | Testnet credential setup, failed validation/clear, process death, upgrade and clean-install device tests |
+| Recovery and duplicate-worker cleanup | Source changes prepared | Restart/force-stop/process-kill cycles and proof that only one engine/probe/scanner is alive |
+| Android foreground/background reliability | Manifest, sticky FGS, notification and diagnostics inspected/hardened | Long-duration physical-device test with screen off, power saving, system process kill, app swiping and notification permission states |
+| Python/Android golden-vector parity for Alligator, AO/AC, fractals, confirmations, risk, structural stops, campaign transitions/recovery | **NOT VERIFIED in this task run** | Execute the canonical golden vectors on both implementations; do not alter expected values without source/spec evidence |
+| Unit tests | Tests added/updated; **not executed in this environment** | Green `:app:testDebugUnitTest` and relevant Python test workflows |
+| Static checks and APK | **PENDING** | Green release gate, Android lint, debug/release APK build and artifact inspection |
+| Physical Android acceptance | **NOT RUN** | Record device model, Android version, APK SHA, launch, background soak, network loss, restart and diagnostics |
+| Mainnet/real orders | NOT used | None; keep disabled |
 
-## Important remaining risks
+## Required Testnet/device sequence before calling this accepted
 
-1. **No device test has been run.** Service declaration/compilation is not evidence of continued execution under Android power management. The user explicitly requires device/model, Android version, APK hash, foreground/background duration, process termination, restart, network-offline, and data-recovery evidence.
-2. **No instrumentation test source was found under `app/src/androidTest`.** Existing Kotlin tests are JVM/unit-level and cannot prove actual Android service lifecycle behavior.
-3. **No shared golden-vector suite was found in the branch tree** (no identifiable vector/golden fixture paths). Python/Android equivalence for OHLC/timestamps, Alligator, AO/AC, confirmed fractals, signal expiry/cancellation, stops, risk, campaign transitions and recovery remains unproven. Do not treat matching indicator names or the presence of a core-contract endpoint as parity proof.
-4. **Testnet end-to-end order lifecycle is not part of this completed audit.** No Testnet mutation was exercised. Before any Testnet order-path validation, use a dedicated approved test plan and verify the account/environment in the live diagnostics; do not enable Mainnet.
-5. The foreground service uses Android's `specialUse` type and reports best-effort power/background telemetry. Device-vendor limits and notification permission effects remain unknown until measured.
-6. The local API still serves a small custom HTTP parser rather than a mature embedded HTTP server; malformed header/body, concurrent request, service shutdown and listener restart behavior require adversarial tests.
-7. Static source and unit tests do not establish exchange behavior after partial fills, protective-order races, fee reconciliation, or process death during an order mutation. Existing fail-closed/reconciliation mechanisms need fault-injected Testnet validation.
+1. Pass the exact branch commit through the Android and Python CI workflows: release contract, static checks, unit tests, lint and APK build.
+2. Install the built APK on a physical device and record device/OS/APK SHA. Check first launch with no credentials; save an explicitly Testnet-only key and verify read-back; reject invalid keys without losing the old values; clear credentials and verify absence after process restart.
+3. On Testnet, exercise start → history warm-up → user-stream synchronization → execution-gate blockers; pause/resume must reconcile before returning to execution-ready. No real order or Mainnet endpoint is permitted.
+4. While stopped, disable network; while running on Testnet, disconnect network/WebSockets, wait past the freshness threshold and verify stale prices/candidates disappear and execution is blocked. Restore network and verify a fresh REST snapshot, history readiness and user-stream reconciliation are all required before resuming.
+5. Test ordinary STOP, PAUSE, application process death, system process reclaim, service recreation, force-stop, device reboot, upgrade install and clean install. Verify durable intents, recovery-required behavior, no duplicate REST probes/scanners and no unprotected or ambiguously reconciled position.
+6. Run existing canonical Python/Android strategy golden vectors and compare numerical and transition outputs, including fractal confirmation timing, signal cancellation, sizing, structural stops, campaign events and recovery. A matching build is not a substitute for this check.
 
-## Release gate
+## Explicit limitations
 
-Do not describe Task 006 as complete until all of the following evidence is attached to the **same exact commit**:
+No physical Android device was available through this audit session, and the Android Gradle build/unit tests were not run here. Therefore this report does **not** claim a completed APK validation, hardware soak test, successful end-to-end trading runtime, golden-vector parity, or readiness for real trading. A build/test success is necessary but does not close the device acceptance matrix above.
 
-- Python safety tests and Android JVM tests pass.
-- Android lint passes with warnings-as-errors.
-- Debug APK build succeeds; APK SHA-256 and signing verification are recorded.
-- All cross-language golden vectors pass without deleting tests or weakening expected values without source/specification evidence.
-- Physical-device test records cover foreground operation, long background operation, service/process termination and recreation, airplane mode/network loss, credential reload/clear, SQLite persistence, stale-data blocking, no duplicate worker, and resume preflight.
-- Read-only diagnostics show actual Testnet environment, history counts/timestamps, scan counts/candidates/blockers and execution state. If order-path testing is later authorized, it must be an isolated Testnet test with no Mainnet keys or endpoints.
-
-**Final status: IN PROGRESS — NOT APPROVED for live trading. A successful APK build alone is insufficient.**
+One high-risk scenario remains to prove under controlled Spot Testnet testing: if an order is already accepted by the exchange and the user stream disconnects before its fill event is consumed, the newly tightened readiness gate blocks new execution, but acceptance still requires demonstrating reliable reconciliation/protection of that in-flight order after the stream returns. Do not enable live trading until this and all recovery/device tests pass.
