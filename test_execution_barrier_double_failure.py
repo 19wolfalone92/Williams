@@ -4,6 +4,7 @@ import threading
 import pytest
 
 from execution_barrier import ExecutionBarrier, ExecutionPersistenceError, OrderIntent
+from db import Database
 
 
 class _Snapshot:
@@ -219,3 +220,19 @@ def test_oco_order_list_response_is_authoritative_and_persisted():
     assert result.accepted
     assert db.rows[intent.intent_id]["status"] == "SUBMITTED"
     assert len(response["orderReports"]) == 2
+
+
+
+def test_sqlite_unresolved_intent_query_requires_submitted_event(tmp_path):
+    db = Database(str(tmp_path / "execution-intents.sqlite3"))
+    intent = _intent("WILL_TASK006_SQLITE_UNRESOLVED_008")
+    db.save_execution_intent(intent, "PENDING")
+    unresolved = db.unresolved_execution_intents()
+    assert [row["intent_id"] for row in unresolved] == [intent.intent_id]
+
+    db.save_execution_intent(intent, "SUBMITTED")
+    # SUBMITTED without the authoritative event remains unresolved.
+    assert [row["intent_id"] for row in db.unresolved_execution_intents()] == [intent.intent_id]
+
+    db.save_execution_event(intent.intent_id, "BINANCE_SUBMITTED", {"client_order_id": intent.client_order_id})
+    assert db.unresolved_execution_intents() == []
