@@ -90,7 +90,7 @@ class ExecutionBarrier:
         # Exiting a campaign uses a cancel-then-sell sequence. This narrowly
         # permits cancellation of the campaign's own protection; restart recovery
         # must re-establish protection if the following sell is interrupted.
-        return order_type == "CANCEL" and purpose == "CAMPAIGN_PROTECTION_CANCEL"
+        return order_type in {"CANCEL", "CANCEL_OCO"} and purpose == "CAMPAIGN_PROTECTION_CANCEL"
 
     def _persist(self, intent: OrderIntent, status: str, reason: str = "") -> None:
         if self.db is None or not hasattr(self.db, "save_execution_intent"):
