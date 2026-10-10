@@ -81,9 +81,19 @@ def test_exchange_accepted_but_outcome_sqlite_write_fails_is_never_reposted(tmp_
             return response
 
     exchange = FakeExchange()
-    recovered = exchange.get_order("BTCUSDT", orig_client_order_id="TASK001_DBFAIL_ONCE")
+    recovery = barrier.reconcile_unresolved_intents(exchange)
+    assert recovery["resolved"] == [row_id for row_id, in db.conn.execute(
+        "SELECT intent_id FROM execution_intents WHERE client_order_id=?",
+        ("TASK001_DBFAIL_ONCE",),
+    )]
+    assert recovery["unresolved"] == []
     assert exchange.lookups == [("BTCUSDT", "TASK001_DBFAIL_ONCE")]
-    assert recovered["orderId"] == 1234
+    reconciled = db.conn.execute(
+        "SELECT status FROM execution_intents WHERE client_order_id=?",
+        ("TASK001_DBFAIL_ONCE",),
+    ).fetchone()
+    assert reconciled["status"] == "RECONCILED"
+    # Reconciliation is a GET-only path; the original POST count stays exactly one.
     assert posts == ["POST"]
 
 
