@@ -16,6 +16,22 @@ import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 
+/** True only while a conditional entry's structural stop and trigger remain un-crossed. */
+internal fun isActionableWilliamsTrigger(
+    direction: String,
+    markPrice: Double,
+    triggerPrice: Double,
+    stopPrice: Double
+): Boolean {
+    if (!listOf(markPrice, triggerPrice, stopPrice).all(Double::isFinite)) return false
+    if (markPrice <= 0.0 || triggerPrice <= 0.0 || stopPrice <= 0.0) return false
+    return when (direction.trim().uppercase(Locale.US)) {
+        "LONG" -> stopPrice < markPrice && markPrice < triggerPrice
+        "SHORT" -> triggerPrice < markPrice && markPrice < stopPrice
+        else -> false
+    }
+}
+
 /** True only when the last three AO histogram bars have the requested colour. */
 internal fun hasThreeSameColorAo(values: List<Double>, direction: String): Boolean {
     if (values.size < 4) return false
@@ -938,18 +954,18 @@ internal class FuturesNativeEngine(
         val operativeState = FuturesContextState(primary.bullish, primary.bearish, primary.awake, primary.ao)
         val parentState = FuturesContextState(higher.bullish, higher.bearish, higher.awake, higher.ao)
         val macroState = FuturesContextState(macro.bullish, macro.bearish, macro.awake, macro.ao)
+        // Check each candidate's live trigger geometry before ranking. An
+        // older candidate whose trigger has already crossed must not hide a
+        // later valid signal from the same closed-bar scan.
+        val mark = exchange.markPrice(symbol)
         val candidates = primary.signalCandidates
             .filter { signal ->
-                // H1/H4 must permit the direction; D1 only vetoes an active
-                // opposite context. A trigger alone never authorizes entry.
                 isSignalFresh(signal, currentClosedBarTime, tf) &&
-                    FuturesContextPolicy.allowsSignal(signal.direction, signal.type, operativeState, parentState, macroState)
+                    FuturesContextPolicy.allowsSignal(signal.direction, signal.type, operativeState, parentState, macroState) &&
+                    isActionableWilliamsTrigger(signal.direction, mark, signal.trigger, signal.stop)
             }
         if (candidates.isEmpty()) return null
         val chosen = candidates.minByOrNull { it.confirmationTime } ?: return null
-        val mark = exchange.markPrice(symbol)
-        if (chosen.direction == "LONG" && !(chosen.stop < mark && mark < chosen.trigger)) return null
-        if (chosen.direction == "SHORT" && !(chosen.trigger < mark && mark < chosen.stop)) return null
         val (bid, ask) = exchange.bookTicker(symbol)
         val mid = (bid + ask) / 2.0
         if (mid <= 0.0 || (ask - bid) / mid > maxSpreadFraction) return null
