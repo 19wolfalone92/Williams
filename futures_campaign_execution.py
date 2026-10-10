@@ -607,7 +607,11 @@ class FuturesCampaignExecutionService:
             raise FuturesCampaignExecutionError(
                 f"{symbol}: spread {spread:.4%} exceeds {self.max_spread_pct:.4%}"
             )
-        if self.require_htf_confirmation and not bool(signal.htf_confirmed):
+        if (
+            self.require_htf_confirmation
+            and not bool(signal.htf_confirmed)
+            and signal.signal_type != SignalType.REVERSAL
+        ):
             raise FuturesCampaignExecutionError(
                 f"{symbol}: direction-specific higher-timeframe confirmation is required"
             )
@@ -764,6 +768,7 @@ class FuturesCampaignExecutionService:
                 client_order_id=client_algo_id,
                 purpose="CAMPAIGN_ENTRY",
                 permission_interval=signal.timeframe,
+                signal_type=signal.signal_type.value,
                 campaign_id=campaign.campaign_id,
                 signal_id=signal.signal_id,
                 risk_quote=actual_risk,
@@ -775,7 +780,7 @@ class FuturesCampaignExecutionService:
                 if ctx is None:
                     raise FuturesCampaignExecutionError("operative MarketContext disappeared")
                 allow = ctx.allow_long if direction == "LONG" else ctx.allow_short
-                if not allow:
+                if not allow and signal.signal_type != SignalType.REVERSAL:
                     raise FuturesCampaignExecutionError(
                         f"operative MarketContext no longer allows {direction}"
                     )
