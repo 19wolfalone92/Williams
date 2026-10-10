@@ -700,3 +700,70 @@ def test_legacy_trader_recovery_refuses_unknown_commission(tmp_path):
             }
         )
     db.conn.close()
+
+
+def test_two_independent_runtime_barriers_cannot_submit_conflicting_same_symbol_orders(tmp_path):
+    import threading
+
+    path = str(tmp_path / "two-runtime-barriers.sqlite3")
+    db_a = Database(path)
+    db_b = Database(path)
+    db_a.mark_recovery_ready(evidence())
+    barrier_a = ExecutionBarrier(ContextCache(), db_a)
+    barrier_b = ExecutionBarrier(ContextCache(), db_b)
+    started = threading.Event()
+    release_first = threading.Event()
+    external_mutations = []
+    first_result = []
+    first_error = []
+
+    intent_a = OrderIntent.new(
+        "BTCUSDT", "BUY", "MARKET", {},
+        client_order_id="runtime-a-client", purpose="CAMPAIGN_ENTRY",
+    )
+    intent_b = OrderIntent.new(
+        "BTCUSDT", "BUY", "MARKET", {},
+        client_order_id="runtime-b-client", purpose="CAMPAIGN_ENTRY",
+    )
+
+    def submit_first():
+        external_mutations.append("runtime-a")
+        started.set()
+        if not release_first.wait(timeout=10):
+            raise TimeoutError("test did not release first controlled submit")
+        return {
+            "symbol": "BTCUSDT", "orderId": "controlled-1",
+            "clientOrderId": intent_a.client_order_id, "side": "BUY",
+            "type": "MARKET", "status": "NEW", "executedQty": "0",
+        }
+
+    def run_first():
+        try:
+            first_result.append(barrier_a.execute(intent_a, submit_first))
+        except Exception as exc:
+            first_error.append(exc)
+
+    thread = threading.Thread(target=run_first)
+    thread.start()
+    assert started.wait(timeout=10), "first runtime never reached its controlled submit"
+    second_result = barrier_b.execute(
+        intent_b,
+        lambda: external_mutations.append("runtime-b") or {
+            "symbol": "BTCUSDT", "orderId": "controlled-2",
+            "clientOrderId": intent_b.client_order_id, "side": "BUY",
+            "type": "MARKET", "status": "NEW", "executedQty": "0",
+        },
+    )
+    release_first.set()
+    thread.join(timeout=10)
+    assert not thread.is_alive()
+    assert not first_error, first_error
+    assert len(first_result) == 1 and first_result[0].accepted is True
+    assert second_result.accepted is False
+    assert second_result.reason.startswith("UNRESOLVED_SYMBOL_INTENT:")
+    assert external_mutations == ["runtime-a"]
+    assert db_a.conn.execute(
+        "SELECT COUNT(*) FROM execution_intents WHERE symbol='BTCUSDT' AND status IN ('PENDING','SUBMITTED','AMBIGUOUS','RECONCILE_REQUIRED')"
+    ).fetchone()[0] >= 1
+    db_a.conn.close()
+    db_b.conn.close()
