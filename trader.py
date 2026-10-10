@@ -50,6 +50,7 @@ class Trader:
         self.wise_men_long = WiseMenStateMachine(self.db, self.symbol, 'LONG')
         self.wise_men_short = WiseMenStateMachine(self.db, self.symbol, 'SHORT')
         self.client=BinanceSpotClient(api_key if api_key is not None else os.getenv('BINANCE_API_KEY',''), api_secret if api_secret is not None else os.getenv('BINANCE_API_SECRET',''), testnet=(os.getenv('TESTNET','true').lower()=='true') if testnet is None else testnet)
+        self.execution_barrier.preflight_provider = self._execution_preflight
         self.filters={}; self.base_asset=self.quote_asset=None; self.recovered=False
         self.symbol_rules = None
         self.preflight_report = None
@@ -86,6 +87,14 @@ class Trader:
         self.active_symbol = self.symbol
 
         self.db.state_set('active_symbol', self.symbol)
+
+    def _execution_preflight(self):
+        """Fresh read-only preflight invoked inside ExecutionBarrier for every mutation."""
+        return PreflightCheckService(
+            self.client,
+            symbols=getattr(self, "auto_scan_symbols", None) or [self.symbol],
+            max_open_positions=getattr(self, "max_open_positions", 0),
+        ).verify_all()
 
     def notify(self,text):
         log.info(text.replace('\n',' | '))
