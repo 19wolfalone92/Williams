@@ -1,6 +1,6 @@
 # WILLIAMS BOT 2.1 — Williams Strategy Forensic Audit
 
-**Status: IN PROGRESS — NOT A CONFORMANCE APPROVAL**  
+**Status: IN PROGRESS — NOT ACCEPTED / NOT A CONFORMANCE APPROVAL**  
 **Audit branch:** `audit/williams-2.1-forensic-20261010`  
 **Baseline ref:** `main`  
 **Baseline commit:** `04da5f9c09572e99ff310be3a1908179165e528c`  
@@ -10,23 +10,23 @@
 ## 1. Baseline and reproducibility
 
 - Repository: `19wolfalone92/Williams`; default branch is `main`.
-- GitHub's `main` ref was directly fetched and confirmed at `04da5f9c09572e99ff310be3a1908179165e528c` (`Update README.md`, 2026-10-09T17:30:49Z).
-- Audit branch was created from that exact SHA. Audit artifact commit: `c2468ebe8eb0f8cf144ed1d4be63d7afdfa1eecb`.
-- **Local working-directory status is not observable through the connected GitHub API.** Local uncommitted files, local branches, and index/worktree state cannot truthfully be reported here. GitHub branch refs are not a substitute for local `git status`.
-- GitHub reports the `main` branch as unprotected. This is repository metadata, not a strategy finding.
-- No orders were submitted and no trading tests were run as part of this audit step. Mainnet was not used.
+- `main` SHA was rechecked through GitHub and remains `04da5f9c09572e99ff310be3a1908179165e528c`.
+- Audit branch exists: `audit/williams-2.1-forensic-20261010`. Last report commit known before the appendix: `1cc284f1350cba8faf1fd7e26fd825ac3b3af835`; this follow-up created appendix commit `2445e266a5a6f912a25042872e0bf1ff6afc8b8a`. The connector cannot return the current SHA of a branch containing slash characters through the attempted ref endpoint; exact branch HEAD after the appendix commit is therefore **UNRESOLVED** until independently confirmed.
+- **Local working-directory status is not observable through the connected GitHub API.** Local uncommitted files, local branches, and index/worktree state were not inspected.
+- No orders were submitted and no Mainnet was used. No strategy, indicator, risk or execution code was changed by this audit.
 
-## 2. Primary-source availability
+## 2. Primary-source availability and initial text inspection
 
-The user Library contains the four approved source categories:
-1. `1. Торговый Хаос - 1.pdf`
-2. `Билл_Вильямс_Новые_измерения_в_биржевой_торговле_2_книга.pdf`
-3. `Торговый Хаос 2 (3книга).pdf`
-4. `Bill Williams - Trading Chaos Course.pdf`
+The four requested Library PDFs were retrieved as raw files and processed with PDF metadata and text extraction. Full acquisition metadata, text extraction condition, PDF page counts, and provisional source locators are documented in the appendix.
 
-The Library also contains duplicate copies and additional editions/files (including `Bill Williams - Trading Chaos 2nd Ed.pdf`). Do not silently treat these as the same edition. Each rule record must identify the exact file/edition and distinguish printed page numbers from PDF page indices. The Course scan's exact publication state/date is not established by its filename alone.
+- `1. Торговый Хаос - 1.pdf`: 140 PDF pages; substantial searchable text.
+- `Билл_Вильямс_Новые_измерения_в_биржевой_торговле_2_книга.pdf`: 156 PDF pages; substantial searchable text.
+- `Торговый Хаос 2 (3книга).pdf`: 224 PDF pages; substantial searchable text; title page identifies the Second Edition.
+- `Bill Williams - Trading Chaos Course.pdf`: 122 PDF pages; almost no text layer (~130 extracted characters), indicating a scan that requires visual/OCR review. No page-specific rule is asserted from text extraction alone.
 
-## 3. Code evidence captured at baseline
+Provisional TC2 PDF locators include angulation at PDF p.122, First Wise Man discussion at PDF p.125, AO description at PDF p.136, and the “Profitunity strategy for entry into any market and exit from any market” checklist at PDF p.155. These are PDF indices, not verified printed folios. Exact printed page/figure mapping remains open.
+
+## 3. Baseline code evidence captured
 
 File blob SHAs fetched from `main`:
 - `strategy.py` — `53b56c828ed626607e30d16b47733b6ffbe81429`
@@ -45,77 +45,45 @@ File blob SHAs fetched from `main`:
 - `app/src/main/java/com/williamsbot/MarketHistoryStore.kt` — `9676af2d055e5d6636767825c5d467f0d100651d`
 - `docs/WILLIAMS_BOOK_RULES.md` — `4914fdca76fad4e054dd2ae9075877908361db99`
 
-These are baseline blobs, not the complete inventory. Every final finding must be tied to an exact commit and file blob SHA. Project documentation is an index of claims to verify, not proof of conformance.
+These are baseline blob IDs. The audit appendix records the source-to-code observations and evidence limitations. A complete final report must recheck all blobs against the exact commit analyzed.
 
-## 4. Preliminary code observations — findings not yet source-adjudicated
+## 4. Preliminary code observations — not yet final source adjudications
 
-### OBS-001 — Python and Android SMMA seed conventions differ
+- **OBS-001 — SMMA:** Python seeds its first valid point with an arithmetic mean of the initial period samples; Android initializes outputs to the first sample and recursively updates. This is a confirmed implementation difference. Numerical Alligator divergence on shared inputs has not yet been tested.
+- **OBS-002 — Alligator:** Android's `buildIndicatorSnapshot` uses close-price SMMA(13/8/5) and does not mirror the campaign path's median-price and shifted-line semantics. The snapshot is not equivalent by construction; its actual consumers and any trading-decision influence remain to be proven.
+- **OBS-003 — Super AO:** baseline Python and Android campaign paths impose a fractal-related prerequisite on the third same-colour AO bar. Whether that prerequisite is canonical for the selected TC2 edition remains UNRESOLVED pending page/figure adjudication.
+- **OBS-004 — Angulation:** Python uses a windowed regression/distance heuristic; Android uses a separate simplified distance-delta score. Formula parity is not established, and the source's qualitative geometry does not yet establish an author-exact numerical threshold.
+- **OBS-005 — Multiple decision paths:** scanner/legacy Python paths and a campaign SignalSpec path exist; Android includes campaign detection and a strict-signal fallback. The active configuration-to-order call path is not yet completely proven.
 
-- Python `strategy.py::smma` seeds index `period - 1` with the arithmetic mean of the first `period` samples, then recursively updates.
-- Android `StandaloneRuntime.kt::smma` initializes the entire output with the first input value and recursively updates from index 1.
-- **Classification:** confirmed Python/Android implementation divergence; Williams-source/platform equivalence not yet adjudicated.
-- **Potential impact:** Alligator lines and any context/trigger depending on them can diverge during warm-up and potentially beyond it. Priority provisional **P1** until shared vectors establish practical impact and selected source convention.
-- **Required proof:** identical OHLC vectors across both implementations, including minimum history and long warm-up; compare every Alligator line and downstream signal.
+Do not promote these observations to definitive book mismatches without the source and test evidence required by the matrix.
 
-### OBS-002 — Android contains multiple Alligator calculations with different input/shift semantics
+## 5. PR and CI boundary
 
-- Android campaign signal extraction computes Alligator from median price `(high + low) / 2` and applies shifts 8/5/3.
-- Android `buildIndicatorSnapshot` instead feeds close prices to SMMA(13/8/5) and exposes those values without the campaign path's displayed shifts.
-- Python `calculate_indicators` uses median price and creates shifted series for Jaw/Teeth/Lips.
-- **Classification:** confirmed divergence between Android diagnostic snapshot and campaign signal calculation; not yet evidence that the order path uses the diagnostic snapshot.
-- **Potential impact:** diagnostic/UI context may not describe the values that actually gate campaign signals. Provisional **P2**; raise if a caller is found to use this snapshot for execution decisions.
-- **Required proof:** trace every consumer of `buildIndicatorSnapshot`; create golden vectors comparing only semantically equivalent outputs.
+- PR #49, “WILLIAMS BOT 2.1 — TASK 004: source-to-code strategy audit”, is open and draft on branch `audit/williams-2.1-task-004-williams-strategy`, head `282d9c5364cae3215f5e200789efdbce77894fb8`; merge test commit `efa2424c3e995a45e46c5f92596db39f2cf6e1a4`. None of that PR's proposed corrections are part of the baseline `main` analyzed above.
+- Exact-head CI at PR #49 head: Android APK workflow **in progress**; Python backend tests **failure**; Williams Campaign CI **cancelled**.
+- Python job `114290840124`, run `38078658818`: static safety audit and production compile passed; offline pytest failed **1 test / 165 passed**. Failure: `test_williams_book_alignment.py::test_ao_green_streak_drives_super_ao`; monotonic rising test expected `super_ao_long=True` but got `False`. Thus the PR's test suite is not green. This is not a baseline test result and does not decide the source interpretation of WM2.
+- CI evidence from another branch/PR is not proof of baseline or audit-branch behavior.
 
-### OBS-003 — Super AO implementation includes a fractal/Balance-Line prerequisite in baseline Python and Android campaign paths
+## 6. Detailed appendix
 
-- Python `williams_signals.py::_latest_super_ao` accepts a third same-colour AO bar only if the preceding row passes `long_fractal_outside` / `short_fractal_outside` when those columns exist.
-- Android `StandaloneRuntime.kt` campaign signal extraction checks `priorFractalValid` before emitting WM2/SUPER_AO.
-- **Classification:** behavior confirmed in baseline code. Whether this prerequisite is a canonical rule for the selected Trading Chaos 2 edition is **UNRESOLVED** until page/figure evidence is mapped. Do not silently mark it a source mismatch based only on architecture notes or PR descriptions.
-- **Potential impact:** Super AO cannot be an independent first-presenting signal unless the fractal gate is already satisfied; this may alter campaign chronology. Provisional **P1**, pending source adjudication.
-- **Required proof:** exact edition/page/figure review, followed by tests for WM2-first chronology with and without prior fractal.
+The companion file contains the current partial rule matrix, four-source extraction audit, OBS-001–OBS-005 evidence split, initial call-path inventory, staged-vs-run test distinctions, defect/hypothesis separation, and remaining blockers:
 
-### OBS-004 — Angulation is explicitly heuristic, not a source-certified formula
+- `docs/WILLIAMS_BOT_2_1_FORENSIC_AUDIT_APPENDIX.md`
 
-- Python `williams_signals.py::_angulation` uses a finite window, distance-to-Jaw deltas, regression slope and price-normalized score.
-- The module itself labels this as an engineering approximation of a visual rule.
-- Android campaign WM1 uses a separate simplified `angulationScore` based on a four-bar distance delta.
-- **Classification:** confirmed heuristic implementations and likely cross-runtime formula divergence; source-defined exact numeric formula remains **UNRESOLVED**.
-- **Potential impact:** WM1 eligibility can differ across runtimes and histories. Provisional **P1**.
-- **Required proof:** establish whether the chosen source requires qualitative visual angulation or provides a deterministic rule; until then, label both as approximations and compare their outcomes on fixed cases.
-
-### OBS-005 — More than one decision path exists
-
-- Python contains a scanner/candidate path (`market_scanner.py`), legacy `trader.py::process`, a signal-spec extractor (`williams_signals.py`), and campaign lifecycle/execution modules.
-- Android `StandaloneRuntime.kt` contains campaign signal extraction and a separate strict-signal fallback that can classify a signal from Alligator + AO + fractal breakout when the campaign engine is disabled.
-- `digital_williams_core.py` explicitly describes itself as a composition boundary that does not replace the existing implementations.
-- **Classification:** multiple strategy/legacy paths confirmed; the active production path depends on runtime flags and callers and is not yet fully established.
-- **Potential impact:** the effective strategy may vary by configuration/platform. Provisional **P1** until all entry points and flags are mapped.
-- **Required proof:** trace server startup/configuration, runtime flags, scanner-to-trader handoff, every order mutation caller, and Android feature flags to actual order admission.
-
-## 5. Call-path inventory — first pass, not yet exhaustive
-
-Python modules observed in baseline:
-`data.py` (market-data acquisition; trace pending) → `market_scanner.py` / `trader.py` → `strategy.py::calculate_indicators` → `williams_signals.py::extract_long_signal_specs` (campaign candidates) → `campaign_model.py::SignalSpec` → `campaign_engine.py` / `pending_signal.py` → `campaign_execution.py` / `execution_barrier.py` → exchange mutation; `campaign_monitor.py` handles ongoing campaign monitoring. This is a candidate map only; caller-to-caller edges and alternate legacy paths remain to be proven.
-
-Android baseline modules observed:
-`StandaloneRuntime.kt` contains `NativeEngine`, candle/indicator snapshots, campaign signal extraction, entry/add-on submission and order/protection routines; state contracts also appear in `TradingStateMachine.kt` and market history in `MarketHistoryStore.kt`. Exact method-to-method call graph, feature-flag selection, candle-finality and execution linkage remain under audit.
-
-## 6. Open PR / branch context
-
-At the time of the initial read, open PRs included execution-safety work and a separate correction PR describing Alligator, fractal, WM2 and stop-provenance changes. These PR descriptions are not evidence that changes are on `main`; the baseline audit is against the exact `main` SHA above. For each PR considered, inspect the diff and exact head SHA independently before attributing behavior to the baseline.
+The appendix intentionally marks unresolved claims UNRESOLVED and does not claim full rule coverage or Python/Android parity.
 
 ## 7. Required continuation
 
-1. Reconfirm `main` SHA and capture the audit branch/head SHA before finalization.
-2. Capture exact open PR heads; compare relevant code diffs without treating PR descriptions as code proof.
-3. Complete file/function/call-site inventory: market data → OHLCV normalization → indicators → candidate signals → context/structure → confirmation/trigger → PendingSignal → order mutation → campaign/position FSM → protection/trailing/exit.
-4. Review each approved primary source directly, including text, figures, captions and examples. Record exact file/edition, printed page, PDF page and figure. If page-level evidence cannot be recovered, mark the rule UNRESOLVED.
-5. Compare Python/Kotlin formulas, timestamp/candle-finality rules, rounding, history warm-up, fractal confirmation and state transitions.
-6. Produce one matrix row per independent rule and one defect record per confirmed discrepancy.
-7. Define shared golden vectors only for rules with established source interpretation. Do not execute exchange orders or use Mainnet.
-8. Finish with an evidence ledger separating primary-source proof, code proof, test proof, and unresolved claims. Report unresolved behavior as UNRESOLVED/BLOCKED.
+1. Obtain an independently verifiable current audit-branch HEAD SHA and recheck `main`.
+2. Visually inspect primary-source page images and figures, including OCR of the Course scan; establish edition, printed page and figure locators.
+3. Complete caller/consumer graph in Python and Kotlin, including feature flags and all order/cancel mutation calls.
+4. Build the full one-rule-per-row matrix for all relevant source rules and adopted edition/profile.
+5. Run offline golden vectors only against fixed commits and identical inputs; no exchange orders.
+6. Record fixture hash, expected result with source locator, Python output, Android output and exact test-run SHA.
+7. Produce defect cards and priority plan only where the source rule, code behavior and test evidence are sufficient.
 
-## 8. Initial status
+## 8. Status
 
-**Overall strategy conformance: UNRESOLVED / NOT APPROVED.**  
-The initial read has identified concrete cross-runtime formula/diagnostic differences and multiple decision paths requiring full call-graph proof. It has not completed the book-by-book rule matrix, final defect adjudication, shared-vector tests, or end-to-end decision trace. No implementation correction is authorized by this artifact.
+**Overall strategy conformance: IN PROGRESS — NOT ACCEPTED / UNRESOLVED.**
+
+The primary-source files have been acquired, their text-layer condition assessed, and initial code differences documented. The complete rule registry, printed-page/figure verification, active entry-to-order/exit call graph, baseline cross-runtime golden-vector results, and full test proof are not complete. No strategy correction is authorized by this audit artifact.
