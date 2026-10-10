@@ -546,6 +546,77 @@ class CampaignExecutionService:
                     except Exception:
                         pass
 
+                if status in {"NEW", "PENDING_NEW"} and executed <= 0 and order.get("orderId") is not None:
+                    pending_cancel = self.db.conn.execute(
+                        "SELECT purpose FROM execution_intents "
+                        "WHERE operation_kind='CANCEL' AND related_order_id=? "
+                        "AND UPPER(status) IN ('PENDING','SUBMITTING','AMBIGUOUS','RECONCILE_REQUIRED') "
+                        "ORDER BY created_at_ms DESC LIMIT 1",
+                        (str(order.get("orderId")),),
+                    ).fetchone()
+                    if pending_cancel is not None:
+                        # A prior cancellation had an ambiguous response. The
+                        # current GET proves the order still exists, so one
+                        # same-identity retry is allowed; never mint a new CID.
+                        try:
+                            self._execute_cancel(
+                                campaign,
+                                int(order["orderId"]),
+                                str(pending_cancel["purpose"]),
+                                target_client_id=client_id,
+                            )
+                        except Exception:
+                            pass
+                        try:
+                            latest = self.client.get_order(
+                                symbol,
+                                order_id=order.get("orderId"),
+                            )
+                            latest_status = str(latest.get("status", "")).upper()
+                            latest_executed = float(latest.get("executedQty", 0) or 0)
+                            latest_quote = float(latest.get("cummulativeQuoteQty", 0) or 0)
+                            if latest_status not in {
+                                "NEW", "PENDING_NEW", "PARTIALLY_FILLED",
+                                "FILLED", "CANCELED", "CANCELLED", "EXPIRED", "REJECTED"
+                            } or latest_executed < 0 or (
+                                latest_executed > 0 and latest_quote <= 0
+                            ):
+                                raise CampaignExecutionError(
+                                    "re-query after cancellation did not prove authoritative order state"
+                                )
+                            order = latest
+                            status = latest_status
+                            executed = latest_executed
+                            quote = latest_quote
+                            self.db.save_order(latest)
+                        except Exception as reconcile_exc:
+                            self.engine.mark_reconcile_required(
+                                campaign,
+                                f"previous cancel remains ambiguous: {reconcile_exc}",
+                            )
+                            self.db.state_set(f"position_state:{symbol}", "RECONCILE_REQUIRED")
+                            results.append({
+                                "symbol": symbol,
+                                "campaign_id": campaign.campaign_id,
+                                "state": "RECONCILE_REQUIRED",
+                                "reason": "ambiguous cancel could not be reconciled",
+                            })
+                            continue
+                        if status in {"NEW", "PENDING_NEW", "PARTIALLY_FILLED"}:
+                            self.engine.mark_reconcile_required(
+                                campaign,
+                                "authoritative GET confirms cancel target remains active",
+                            )
+                            self.db.state_set(f"position_state:{symbol}", "RECONCILE_REQUIRED")
+                            results.append({
+                                "symbol": symbol,
+                                "campaign_id": campaign.campaign_id,
+                                "state": "RECONCILE_REQUIRED",
+                                "reason": "cancel target remains active; retry only after next authoritative recovery pass",
+                                "order_status": status,
+                            })
+                            continue
+
                 if status in {"NEW", "PENDING_NEW"} and executed <= 0:
                     # The exchange has authoritatively confirmed that this stable
                     # clientOrderId exists and remains pending. Resolve only the
