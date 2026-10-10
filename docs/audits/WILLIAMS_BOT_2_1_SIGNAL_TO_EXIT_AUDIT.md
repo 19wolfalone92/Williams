@@ -466,3 +466,11 @@ The WM1 context correction is now committed on the audit branch with regression 
 **Regression coverage.** Added a test in which an earlier WM2 is vetoed by the operative context and a later structurally valid WM1 is selected; it also asserts that the selected signal retains `htf_confirmed=False` rather than fabricating higher-timeframe confirmation.
 
 **Scope boundary.** The final exchange-side trigger, tick-normalized price, account ownership, risk, and protection checks remain authoritative. Candidate fallback only chooses among already extracted live hypotheses; it does not invent a signal or bypass final admission.
+
+### 48. Android could let an older crossed trigger hide a later valid signal — corrected
+
+**Root cause.** Native `findSignal` ranked the earliest context-approved candidate, then checked the current mark against only that chosen candidate. If the older trigger had already crossed or its structural stop had been breached, the method returned no signal without evaluating later candidates.
+
+**Correction.** Current mark/trigger/stop geometry is now a pure predicate and is applied to every fresh, context-approved candidate before chronology ranking. The native engine can skip a stale WM1/WM2/WM3 candidate and select a later still-actionable one. Final tick-normalized checks in sizing/arming remain in place.
+
+**Regression coverage.** Added Kotlin tests for LONG and SHORT trigger geometry, crossed triggers, invalid direction and non-finite inputs. These tests still require a completed Android build/unit-test run on the exact head.
