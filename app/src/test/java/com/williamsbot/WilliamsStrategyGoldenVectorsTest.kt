@@ -136,7 +136,6 @@ class WilliamsStrategyGoldenVectorsTest {
         assertFalse(WilliamsTimeframeContract.canCreateCanonicalSignal("15m"))
         assertFalse(WilliamsTimeframeContract.canCreateCanonicalSignal("5m"))
     }
-}
 
 
     @Test
@@ -172,3 +171,4 @@ class WilliamsStrategyGoldenVectorsTest {
         assertEquals("ENTRY_PROVENANCE_BLOCKED", blocker(trigger = Double.NaN))
         assertEquals("ENTRY_PROVENANCE_BLOCKED", blocker(invalidation = 0.0))
     }
+}
