@@ -152,8 +152,8 @@ def test_global_recovery_gate_blocks_buy_but_does_not_block_sell(tmp_path):
 
     db = Database(str(tmp_path / "global-gate.sqlite3"))
     gate = ExecutionBarrier(ContextCache(), db)
-    buy = OrderIntent.new("BTCUSDT", "BUY", "MARKET", {}, purpose="ENTRY")
-    sell = OrderIntent.new("BTCUSDT", "SELL", "MARKET", {}, purpose="EMERGENCY_EXIT")
+    buy = OrderIntent.new("BTCUSDT", "BUY", "MARKET", {}, purpose="CAMPAIGN_ENTRY")
+    sell = OrderIntent.new("BTCUSDT", "SELL", "MARKET", {}, purpose="CAMPAIGN_EMERGENCY_EXIT")
     # Assert the persisted gate contract directly without reaching exchange submit.
     assert db.state_get("recovery_status") == "RECOVERY_REQUIRED"
     assert gate._validate(buy, object()) == "global_recovery_gate:RECOVERY_REQUIRED"
