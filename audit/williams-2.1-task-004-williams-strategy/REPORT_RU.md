@@ -117,3 +117,44 @@ At the time of inspection, the connector did not return useful commit-status or 
 6. Полный WM1/WM2/WM3 replay, cross-runtime behavioural parity, source-page audit и безопасный жизненный цикл исполнения остаются отдельными P0/P1/P2 блокерами.
 
 **Текущий статус задачи: IN PROGRESS — NOT APPROVED.** Указанные изменения — реализация fail-closed защиты H1, но не доказательство полного отсутствия M5/M15 влияния на все execution paths. Успешный CI не заменяет call-graph, replay и первоисточниковый аудит.
+
+
+## 10. TASK 004.3 — Execution Barrier H1 admission contract
+
+**Status: IN PROGRESS — NOT APPROVED.** This section records the current implementation delta and the remaining proof obligations. It does not claim universal H1-only execution across Python and Android.
+
+### IMPLEMENTED (code inspection at this report revision)
+
+- `execution_barrier.py :: OrderIntent` now carries immutable entry-signal provenance fields: `signal_timeframe`, `signal_bar_time_ms`, `confirmation_time_ms`, and `expires_at_ms`.
+- `ExecutionBarrier._validate()` applies an additional gate only to `purpose == CAMPAIGN_ENTRY`: runtime `EXECUTION_TIMEFRAME` must be H1, both signal timeframe and permission interval must be H1, signal-bar time must be positive, confirmation must follow the signal-bar time, and expiry must be in the future.
+- `CampaignExecutionService.arm_initial_entry()` applies the runtime config/timeframe/timestamp/expiry/protective-reference checks before persisting a campaign, then copies provenance into `OrderIntent`. This is an early rejection plus a separate last-mile barrier check.
+- `test_campaign_execution.py` adds fake-exchange tests asserting no submit callback is called for M5/M15/empty signal timeframes, expired entries, and H1 signals under M5 runtime config.
+
+### TESTED
+
+- Earlier Python backend run on SHA `195630b40a519f6066a8be1c87820b4e1fb0c46d` completed successfully, but it predates the TASK 004.3 barrier changes and therefore does **not** validate these latest edits.
+- The new tests have been committed but still require a completed CI run on the final SHA. Do not treat an in-flight run as proof.
+
+### NOT VERIFIED / BLOCKED
+
+1. **Source candle and structural revalidation at the last-mile boundary:** the barrier currently validates time-frame provenance and time fields, but it does not independently fetch and prove the source candle, confirmation candle, and later structural invalidation state for every WM1/WM2/WM3 entry. The existing scanner/extractor checks are not sufficient proof against direct-call or stale-SQLite bypass.
+2. **All signal creation paths:** exhaustive repository-wide inventory of `SignalSpec`, `PendingSignal`, campaign creation, order intents, and exchange mutation callsites is still incomplete.
+3. **Android actual mutation boundary:** `WilliamsTimeframeContract` fixes the campaign timeframe to H1 and the legacy `submitOrderIntent()` path begins with an unconditional error, but the full persisted-pending-entry/recovery path and every `signedPost`/cancel-replace entry mutation have not yet been proven to revalidate timeframe, expiry, source candle, and structural invalidation at the last admission point. `ExecutionGate` itself is only a symbol reservation gate, not a timeframe contract.
+4. **Restart/persisted state:** Android pending entries and preferences require explicit tests that mutate stored state, restart the runtime, and prove invalid M5/M15/unknown or stale signals cannot reach the order mutation callback. This is not yet behaviour-confirmed.
+5. **Cross-runtime parity/replay:** shared vectors for indicator arithmetic and fractal timing exist, but end-to-end Python/Android admission parity and future-candle mutation replay have not been completed for all fields requested in TASK 004.3.
+6. **WM1/WM2/WM3 source audit:** qualitative WM1 angulation remains unresolved and blocked for automated use unless the explicitly marked research override is enabled. Other source-vs-code questions in sections above remain open where marked RESEARCH REQUIRED.
+
+### Acceptance matrix (current evidence)
+
+| Scenario | Current evidence | Status |
+|---|---|---|
+| H1 signal + H1 config | Barrier permits it to continue to independent checks if timestamps/expiry are valid | PARTIAL — final execution tests pending |
+| M5/M15/empty/unknown signal timeframe | Python barrier rejects campaign entry before submit callback | IMPLEMENTED — CI pending |
+| H1 signal + M5/M15/unknown runtime config | Python barrier rejects campaign entry before submit callback | IMPLEMENTED — CI pending |
+| M5/M15 data for monitoring/diagnostics | Separate from canonical signal contract | NOT VERIFIED end-to-end |
+| H1 data fetch failure without lower-TF fallback | Existing code claims fail-closed H1 campaign fetch; full all-path proof pending | PARTIAL |
+| Old SQLite/persisted signal revalidated after restart | Expiry metadata exists, but universal last-mile structural/timeframe proof missing | BLOCKED |
+| Direct signal injection bypassing scanner | Python campaign barrier blocks invalid timeframe, but source-candle/structural validation remains incomplete; Android universal boundary not proven | BLOCKED |
+| Safe exit/protection remains available | New Python checks are scoped to `CAMPAIGN_ENTRY`; no intended exit gate was added | CODE-CONFIRMED only |
+
+**Next mandatory step:** run all required workflows against the final SHA after this report commit, inspect individual jobs, and continue the Android execution-path audit. TASK 004.3 remains **IN PROGRESS — NOT APPROVED** until the blocked rows have behavioural evidence on both runtimes.
