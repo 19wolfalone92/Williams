@@ -309,6 +309,7 @@ private class StandaloneServer(private val context: Context) {
 
     @Volatile private var socket: ServerSocket? = null
     @Volatile private var acceptThread: Thread? = null
+    @Volatile private var stopped = false
     private val clientExecutor = ThreadPoolExecutor(
         2,
         4,
@@ -332,6 +333,7 @@ private class StandaloneServer(private val context: Context) {
 
     @Synchronized
     fun start() {
+        check(!stopped) { "Standalone server instance has been stopped" }
         if (isListeningOnLoopback) return
         runCatching { socket?.close() }
         val listeningSocket = ServerSocket(
@@ -369,12 +371,18 @@ private class StandaloneServer(private val context: Context) {
 
     @Synchronized
     fun stop() {
+        if (stopped) return
+        stopped = true
         runCatching { socket?.close() }
         socket = null
         acceptThread?.interrupt()
         acceptThread = null
         clientExecutor.shutdownNow()
-        engine?.stop()
+        // Dispose every engine-owned thread/queue as well as its trading loop.
+        // Without this, recreating the local server can leave multiple REST
+        // probes and scan/indicator workers alive in the same Android process.
+        runCatching { engine?.shutdown() }
+        engine = null
     }
 
     @Synchronized
@@ -408,6 +416,7 @@ private class StandaloneServer(private val context: Context) {
 
     @Synchronized
     private fun e(): NativeEngine {
+        check(!stopped) { "Standalone runtime server is stopped" }
         if (engine == null) {
             engine = NativeEngine(context, prefs, client)
         }
@@ -772,6 +781,7 @@ private class NativeEngine(
     @Volatile private var restLastTickerPrice = 0.0
     @Volatile private var restProbeRunning = false
     private var restProbeThread: Thread? = null
+    @Volatile private var disposed = false
     @Volatile private var lastRestReconcileMs = 0L
     @Volatile private var runtimeGeneration = 0L
     @Volatile private var lastSelfHealMs = 0L
@@ -1465,6 +1475,24 @@ private class NativeEngine(
             .put("execution_ready", executionReady())
             .put("execution_blockers", JSONArray(executionBlockers()))
             .put("interval_seconds", 10)
+    }
+
+    @Synchronized
+    fun shutdown() {
+        if (disposed) return
+        disposed = true
+        // stop() first invalidates the generation and closes both exchange
+        // streams; then tear down device-local daemon workers.
+        runCatching { stop() }
+        restProbeRunning = false
+        restProbeThread?.interrupt()
+        restProbeThread = null
+        activeHistoryTasks.forEach { it.cancel(true) }
+        activeHistoryTasks.clear()
+        executionExecutor.shutdownNow()
+        scanExecutor.shutdownNow()
+        historyBackfillExecutor.shutdownNow()
+        indicatorExecutor.shutdownNow()
     }
 
     @Synchronized
