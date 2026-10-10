@@ -70,3 +70,31 @@ def test_initial_williams_signal_without_expiry_is_not_actionable():
         trigger_price=101.0, protective_reference=95.0,
     )
     assert choose_initial_williams_signal([signal], "LONG", now_ms=10_000) is None
+
+
+def test_conservative_trading_defaults_match_release_policy():
+    from trading_config import TradingConfig
+
+    cfg = TradingConfig.from_env({})
+    assert cfg.risk_per_trade_pct == pytest.approx(0.0025)
+    assert cfg.max_total_risk_pct == pytest.approx(0.01)
+    assert cfg.max_daily_loss_pct == pytest.approx(0.01)
+    assert cfg.max_consecutive_losses == 2
+    assert cfg.max_open_positions == 1
+
+
+def test_risk_policy_environment_overrides_remain_explicit():
+    from trading_config import TradingConfig
+
+    cfg = TradingConfig.from_env({
+        "RISK_PER_TRADE_PCT": "0.002",
+        "MAX_TOTAL_RISK_PCT": "0.008",
+        "MAX_DAILY_LOSS_PCT": "0.0075",
+        "MAX_CONSECUTIVE_LOSSES": "4",
+        "MAX_OPEN_POSITIONS": "3",
+    })
+    assert cfg.risk_per_trade_pct == pytest.approx(0.002)
+    assert cfg.max_total_risk_pct == pytest.approx(0.008)
+    assert cfg.max_daily_loss_pct == pytest.approx(0.0075)
+    assert cfg.max_consecutive_losses == 4
+    assert cfg.max_open_positions == 3
