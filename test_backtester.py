@@ -69,9 +69,78 @@ def test_metrics_use_initial_capital_and_handle_no_trades_and_zero_losses():
     assert metrics["expectancy_pct"] == pytest.approx(1.0)
 
 
-def test_short_backtest_flag_is_not_silently_ignored():
-    with pytest.raises(NotImplementedError):
-        Backtester(allow_shorts=True)
+def test_short_signal_enters_at_next_open_and_covers_target_with_fees():
+    data = candles([
+        (100, 101, 99, 100, False),
+        (100, 101, 99, 100, False),
+        (90, 92, 85, 88, False),
+    ])
+    data["short_signal"] = [True, False, False]
+    bt = Backtester(
+        starting_capital=1000,
+        fee_rate=0.01,
+        slippage_rate=0,
+        position_fraction=0.5,
+        stop_loss_pct=0.05,
+        take_profit_pct=0.05,
+        allow_shorts=True,
+    )
+    equity, trades = bt.run(data)
+    assert len(trades) == 1
+    trade = trades.iloc[0]
+    assert trade.side == "SHORT"
+    assert trade.entry_time == data.index[1]
+    assert trade.entry_price == 100
+    assert trade.exit_time == data.index[2]
+    assert trade.exit_price == pytest.approx(95)
+    assert trade.reason == "TARGET"
+    assert trade.pnl > 0
+    assert trade.fees > 0
+    assert equity.iloc[-1, 0] == pytest.approx(1000 + trade.pnl)
+
+
+def test_short_gap_through_stop_is_adverse_and_stop_first_by_default():
+    data = candles([
+        (100, 101, 99, 100, False),
+        (100, 101, 99, 100, False),
+        (110, 112, 90, 110, False),
+    ])
+    data["short_signal"] = [True, False, False]
+    bt = Backtester(
+        starting_capital=1000,
+        fee_rate=0,
+        slippage_rate=0,
+        position_fraction=1,
+        stop_loss_pct=0.05,
+        take_profit_pct=0.05,
+        allow_shorts=True,
+        intrabar_exit_policy="stop_first",
+    )
+    equity, trades = bt.run(data)
+    assert len(trades) == 1
+    assert trades.iloc[0].side == "SHORT"
+    assert trades.iloc[0].reason == "STOP"
+    assert trades.iloc[0].exit_price == 110
+    assert trades.iloc[0].pnl == pytest.approx(-100)
+    assert equity.iloc[-1, 0] == pytest.approx(900)
+
+
+def test_short_replay_requires_explicit_short_signal_and_rejects_ambiguous_double_signal():
+    with pytest.raises(ValueError, match="short_signal"):
+        Backtester(allow_shorts=True).run(candles([(100, 101, 99, 100, False)]))
+
+    data = candles([
+        (100, 101, 99, 100, False),
+        (100, 101, 99, 100, False),
+    ])
+    data["short_signal"] = [True, False]
+    data.loc[data.index[0], "long_signal"] = True
+    _, trades = Backtester(
+        allow_shorts=True,
+        stop_loss_pct=0.2,
+        take_profit_pct=0.2,
+    ).run(data)
+    assert trades.empty
 
 
 def test_invalid_ohlc_and_parameters_fail_closed():
