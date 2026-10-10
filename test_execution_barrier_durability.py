@@ -21,6 +21,9 @@ class _Cache:
 
 
 class _FailingIntentDB:
+    def find_execution_intent(self, intent_id, client_order_id=""):
+        return None
+
     def save_execution_intent(self, intent, status, reason=""):
         raise OSError("synthetic sqlite commit failure")
 
@@ -30,6 +33,9 @@ class _FailingIntentDB:
 
 
 class _FailingAdmissionEventDB:
+    def find_execution_intent(self, intent_id, client_order_id=""):
+        return None
+
     def __init__(self):
         self.intents = []
 
