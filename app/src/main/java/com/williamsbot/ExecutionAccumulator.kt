@@ -183,7 +183,7 @@ class ExecutionAccumulator {
 
     @Synchronized
     fun clear(orderId: String) {
-        orders.keys.filter { it.endsWith(":$orderId") }.toList().forEach(orders::remove)
+        orders.keys.filter { it.endsWith(":$orderId") }.toList().forEach { orders.remove(it) }
     }
 
     private fun decimal(value: String): BigDecimal =
