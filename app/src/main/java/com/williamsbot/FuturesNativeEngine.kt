@@ -799,6 +799,10 @@ internal class FuturesNativeEngine(
 
     private fun findSignal(exchange: BinanceUsdmFuturesClient, symbol: String): Signal? {
         val tf = interval()
+        if (tf != "1h") {
+            lastError = "New Futures entries require canonical H1 decisions; configured interval=$tf (M15 context/monitoring only, M5 diagnostics/replay only)"
+            return null
+        }
         val primary = analyseFrame(exchange, symbol, tf) ?: return null
         val higherTf = parentInterval(tf)
         val higher = analyseFrame(exchange, symbol, higherTf) ?: return null
