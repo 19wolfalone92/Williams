@@ -157,8 +157,15 @@ def _validate_workflows(root: Path) -> None:
         active = "\n".join(line for line in path.read_text(encoding="utf-8").splitlines() if not line.lstrip().startswith("#"))
         if not re.search(r"(?m)^\s*run:\s*python3\s+ci_release_gate\.py\s*$", active):
             raise ReleaseContractError(f"Workflow is missing an executable release-gate step: {name}")
-        if re.search(r"(?i)(?:echo|printf)\s+[^\n]*(?:BINANCE_API_SECRET|WILLIAMS_TESTNET_API_SECRET)", active):
-            raise ReleaseContractError(f"Workflow may print an exchange secret: {name}")
+        # Reject shell/GitHub secret expansion into output, but allow fixed error messages
+        # that merely name a missing secret without revealing its value.
+        secret_expansion = re.compile(
+            r"(?i)(?:echo|printf)\s+[^\n]*"
+            r"(?:\$\{?\s*(?:BINANCE_API_SECRET|WILLIAMS_TESTNET_API_SECRET|WILLIAMS_TESTNET_API_KEY)\s*\}?"
+            r"|\$\{\{\s*secrets\.(?:WILLIAMS_TESTNET_API_SECRET|WILLIAMS_TESTNET_API_KEY)\s*\}\})"
+        )
+        if secret_expansion.search(active):
+            raise ReleaseContractError(f"Workflow may expose an exchange secret value: {name}")
         texts[name] = active
     testnet = texts[".github/workflows/testnet-readonly.yml"]
     if not re.search(r"""(?m)^\s*TESTNET:\s*["']true["']\s*$""", testnet):
