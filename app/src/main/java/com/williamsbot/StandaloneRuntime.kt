@@ -5007,12 +5007,27 @@ private class NativeEngine(
                         )
                     }
 
+                    val accounting = authoritativeSpotFill(
+                        intent.symbol, order, "BUY", qty, quote
+                    )
+                    val availableBase = runCatching {
+                        campaignBaseBalance(intent.symbol, signedAccount())
+                    }.getOrDefault(0.0)
+                    val proposedQty = if (accounting.feeKnown) accounting.netQty else accounting.grossQty
+                    val positionQty = min(proposedQty, availableBase)
+                    val positionQuote = accounting.quoteQty.takeIf { it > 0.0 } ?: quote
+                    if (!positionQty.isFinite() || positionQty <= 0.0 || positionQuote <= 0.0) {
+                        setReconcileRequired(
+                            intent.symbol + ": filled BUY has no safely protectable net base quantity"
+                        )
+                        return
+                    }
                     val lists =
                         signedGet(
                             "/api/v3/openOrderList",
                             ""
                         )
-                    val entryPrice = quote / qty
+                    val entryPrice = positionQuote / positionQty
 
                     val existingBotOco =
                         (lists.optJSONArray("orderList")
@@ -5033,7 +5048,7 @@ private class NativeEngine(
                         if (existingBotOco != null) {
                             adoptExistingProtection(
                                 symbol = intent.symbol,
-                                qty = qty,
+                                qty = positionQty,
                                 entry = entryPrice,
                                 stopDistance = intent.stopDistance,
                                 oco = existingBotOco
@@ -5052,7 +5067,7 @@ private class NativeEngine(
                             }
                             createProtection(
                                 symbol = intent.symbol,
-                                qty = qty,
+                                qty = positionQty,
                                 entry = entryPrice,
                                 stopDistance = intent.stopDistance
                             )
@@ -5062,7 +5077,7 @@ private class NativeEngine(
                         positions[intent.symbol] =
                             PositionState(
                                 symbol = intent.symbol,
-                                qty = protection.qty,
+                                qty = positionQty,
                                 entry = entryPrice,
                                 stop = protection.stop,
                                 take = protection.take,
@@ -5089,6 +5104,17 @@ private class NativeEngine(
                         )
                     }
                     savePersistedState()
+                    val quantityTolerance = max(1e-12, positionQty * 1e-12)
+                    if (
+                        !accounting.feeKnown ||
+                        abs(protection.qty - positionQty) > quantityTolerance
+                    ) {
+                        setReconcileRequired(
+                            intent.symbol + ": entry fee accounting unknown or protective quantity gap=" +
+                                abs(positionQty - protection.qty)
+                        )
+                        return
+                    }
                 }
 
                 "CANCELED", "EXPIRED", "REJECTED" -> {
