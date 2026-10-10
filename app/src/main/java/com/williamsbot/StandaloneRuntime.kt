@@ -2788,9 +2788,37 @@ private class NativeEngine(
             signalId = signal.signalId,
             signalType = signal.type
         )
-        synchronized(pendingEntries) {
-            pendingEntries[candidate.symbol] = pending
+        // Reserve portfolio risk and campaign capacity atomically across
+        // concurrent symbol tasks. Recheck after sizing; the earlier remaining-
+        // risk read is advisory and must not authorize overspending.
+        val openPositionsForReservation = positionList()
+        val openRiskForReservation = openPositionsForReservation.sumOf {
+            it.riskPct.coerceAtLeast(0.0)
         }
+        val reservationAccepted = synchronized(pendingEntries) {
+            val pendingRisk = pendingEntries.values.sumOf {
+                it.riskReservedPct.coerceAtLeast(0.0)
+            }
+            val activeSymbols = (
+                openPositionsForReservation.map { it.symbol } + pendingEntries.keys
+            ).toSet()
+            val portfolioWithinLimit =
+                openRiskForReservation + pendingRisk + riskPct <= maxTotalRiskPct + 1e-9
+            val capacityAvailable =
+                candidate.symbol in activeSymbols || activeSymbols.size < maxOpenPositions
+            if (
+                pendingEntries.containsKey(candidate.symbol) ||
+                !portfolioWithinLimit ||
+                !capacityAvailable
+            ) {
+                false
+            } else {
+                pendingEntries[candidate.symbol] = pending
+                true
+            }
+        }
+        if (!reservationAccepted) return
+
         stateMachine.force(
             TradingState.ENTRY_PENDING,
             "Williams campaign conditional entry armed"
