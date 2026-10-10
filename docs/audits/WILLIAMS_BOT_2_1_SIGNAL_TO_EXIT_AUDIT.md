@@ -245,11 +245,11 @@ The Python `TradingConfig`, `FuturesRuntime`, and Android native Futures engine 
 
 **Correction:** defaults changed to H1 in Python configuration/runtime and Android preferences. Python refuses new entry selection when a non-H1 interval is configured and cancels already-armed conditional entries; existing position management still runs using closed H1 bars. Android `findSignal` refuses new Futures entries unless the configured decision timeframe is H1. Explicit non-H1 configuration remains visible as a blocker rather than silently changing strategy semantics.
 
-### 30. Native Futures closed-trade history integration remains open
+### 30. Native Futures closed-trade history integration — implementation present; verification gap remains
 
-The native Futures exit routines reconcile fills and store realized PnL, exit IDs, fees and campaign state in the Futures campaign record, but `FuturesNativeEngine` has no call to `TradingAuditStore.recordTrade`. That writer is used by the legacy Spot runtime and currently hardcodes the trade side to BUY. Do not infer that the unified trade-history table is complete merely because a Futures campaign reaches CLOSED.
+The current branch now calls `recordClosedFuturesTrade()` from the native market-exit and protective-exit finalization paths. It writes LONG/SHORT direction, prices, quantity, PnL, fees/fee-known status, R-multiple and a stable `FUTURES:<campaign_id>` trade ID through `TradingAuditStore.recordTrade`, which uses a primary key and conflict replacement for idempotency.
 
-**Required follow-up:** define a Futures closed-trade record contract with LONG/SHORT direction, authoritative weighted-average entry/exit prices, aggregate quantity, quote-denominated realized PnL, all known commissions, an explicit unknown-fee flag, R-multiple against the persisted admitted risk, and stable idempotency key. Persist it atomically/idempotently with campaign finalization only after the exchange is flat and all exits reconcile. Add Android tests proving LONG and SHORT records, duplicate recovery, and no record on unresolved/partial exits. This is not marked fixed in this pass.
+A follow-up defect was corrected in this pass: R-multiple previously defaulted to zero if persisted admitted risk was non-finite or non-positive. Finalization now fails closed unless admitted risk is finite and positive. **Still required:** Android tests must prove history writes for both directions, duplicate recovery, and no trade-history row for unresolved/partial/racing exits. Static presence of the writer is not proof of those lifecycle invariants.
 
 ### Verification boundary
 
@@ -305,7 +305,7 @@ The shared config and Futures runtime previously defaulted to 0.50% per-entry ri
 - **Entry to protective stop:** strict exchange-side verification exists in Python; native Android has unresolved aggregation gaps for partial/racing exits.
 - **Position management to exit:** Python uses H1 closed bars, structural reversal and monotonic trailing. This is the current implemented policy, not proof of complete book/course exit-rule parity.
 - **Exit to accounting:** Python requires authoritative fill and fee reconciliation. Native unified closed-trade history integration remains open.
-- **Risk lockouts:** 1% daily-equity guard is the default after this pass. Two-confirmed-stop-outs/day, configured consecutive-loss lockout and cooldown are still not implemented in the Futures scan gate.
+- **Risk lockouts:** Python Futures has a durable UTC-day confirmed stop-out counter. This pass also wired native Android loss-streak/cooldown and UTC-day losing-stop-out checks against persisted closed Futures trades. These paths now need exact-head CI and Demo/restart verification; the two independent implementations are not yet proven equivalent.
 - **Verification:** Python tests passed on the pre-config-change head; Android build/unit tests were still running when checked. New risk-default tests and all workflows must pass on the final exact SHA.
 
 **Release status remains NOT READY FOR LIVE TRADING.** No real exchange orders were sent.
@@ -362,8 +362,31 @@ A second native expiry path was found during follow-through: the durable `entry_
 ## Cross-runtime parity issues that remain release blockers
 
 1. **Hard-exit predicate differs:** Python Futures `manage_campaign` requires the opposite Alligator arrangement, close beyond Teeth, and opposite AO on both closed bars; Android `manageStructuralExit` checks close beyond Teeth plus opposite AO and AC, without the same Alligator-arrangement predicate. Therefore the same candle history can exit at different times.
-2. **Risk-policy defaults differ:** native Android currently has a 0.25% per-campaign risk budget, 1% portfolio cap, 3% daily loss limit, and up to 3 positions by default; Python defaults are controlled through `TradingConfig`/environment and include a different daily-loss default (1% in the Futures runtime) and potentially different position/campaign caps. These must become one versioned policy contract, not independent constants.
+2. **Risk-policy contract:** Python Futures and native Android now use 0.25% initial per-campaign risk, 1% portfolio cap, 1% daily-equity loss, one active campaign, two consecutive-loss lockout, 30-minute post-loss cooldown, and two losing stop-outs per UTC day as defaults/hard initial limits. The implementations remain separate, so cross-runtime parity tests and a versioned shared policy contract are still required; legacy Spot policy is separate.
 3. **WM1 admission differs:** Android reversal extraction adds a momentum-improving AO/AC condition and is nested under directional Alligator/AO/AC configuration gates; Python's WM1 detector calculates reversal + angulation and leaves directional permission to downstream context gates. This can change whether the earliest Wise-Man signal starts a campaign.
 4. **Candidate fallback differs:** Python can preserve multiple signal specs through candidate selection and applies higher-timeframe permission in the runtime; native Android stores a single `Frame.lastSignal` before the parent filter. If that earliest candidate conflicts with the parent, a later valid candidate of the other direction is not reconsidered. This fails safe (misses an entry) but does not provide equivalent strategy behavior.
 
 These are intentionally recorded as **unresolved**, not disguised as harmless differences. Resolve them by defining a single executable policy and cross-runtime golden test vectors before declaring Python and Android strategy parity.
+
+
+## Fourth-pass corrections — 2026-10-10
+
+### 38. Consecutive-loss and cooldown settings existed but were not enforced in Python Futures — corrected
+
+The runtime exposed `max_consecutive_losses` and `cooldown_minutes` in shared configuration, but only the daily-equity and stop-out guards were consulted before new exposure. Added a durable close-event query and a fail-closed guard that reads finalized campaign close records, validates timestamps/PnL, blocks at the configured consecutive-loss threshold, and enforces cooldown after the latest loss. The query excludes explicitly tagged Spot campaigns so legacy Spot outcomes cannot silently reset or distort Futures loss state; unknown campaign ownership is treated as invalid history.
+
+### 39. Native Android Futures had divergent risk defaults and incomplete loss lockouts — corrected in code; CI pending
+
+Native Futures previously allowed up to three campaigns by default and used a 3% daily loss threshold while Python Futures defaulted to one campaign and 1%. Native Futures now hard-caps this initial release profile at one active campaign, uses a 1% daily-equity limit, and consults persisted LONG/SHORT closed-trade history for the two-loss streak, 30-minute post-loss cooldown and two losing stop-outs per UTC day. Loss history lookup failures or malformed rows fail closed. Added deterministic unit tests for the native guard. This does not establish parity until the final Android workflow and lifecycle tests pass.
+
+### 40. Native closed-trade accounting could silently emit an invalid R-multiple — corrected
+
+`recordClosedFuturesTrade()` previously substituted `0.0` when admitted campaign risk was absent, non-finite or non-positive. That could make an incomplete record look finalized. It now requires a finite, positive persisted risk budget before writing the closed-trade history row.
+
+### Current status after fourth pass
+
+- The changes above are on the audit branch only. The new head must pass Python tests, Campaign CI and Android lint/unit-test/APK workflows.
+- Python/Android WM1 admission, hard-exit predicates and candidate fallback still differ. These are strategy-parity blockers; they have not been silently “fixed” by choosing an unverified interpretation of the books.
+- Android aggregation of multiple market exits racing with protective-child fills remains fail-closed but incomplete.
+- Authorized Demo LONG/SHORT entry → protection → trailing/exit → accounting → restart-recovery and read-only release-gate runs remain outstanding.
+- **NOT READY FOR LIVE TRADING.** No real orders were sent.
