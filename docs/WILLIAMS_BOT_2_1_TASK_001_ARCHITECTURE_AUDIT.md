@@ -453,3 +453,85 @@ The primary durability gap has been addressed in code, but this is not full cras
 - bounded Spot Testnet cancel/replace/OCO/restart test NOT RUN / NOT VERIFIED.
 
 No Binance Mainnet requests or real trading operations were used. main was not modified. PR #47 remains open Draft and must not be merged.
+
+
+---
+
+## 12. TASK 001.3 — Financial Integrity / Protection Recovery / Crash Consistency (2026-10-11)
+
+**Starting SHA:** `6bc32bf21cb437b60c2878781000800c6979cd6b`  
+**Code SHA before this report update:** `ee559838c9897d4efa68af079cdbe8c6e4ac9a63`  
+**Base SHA:** `04da5f9c09572e99ff310be3a1908179165e528c`  
+**PR #47:** open Draft, not merged. **Decision: FAIL — NOT ACCEPTED.**
+
+### 12.1 P0-A — prior SHA CI verified
+
+All three requested runs are completed and refer exactly to starting SHA `6bc32bf21cb437b60c2878781000800c6979cd6b`:
+
+| Workflow | Run | Conclusion | Jobs |
+|---|---:|---|---|
+| Python backend tests | [38088901337](https://github.com/19wolfalone92/Williams/actions/runs/38088901337) | SUCCESS | backend-test: success |
+| Williams Campaign CI | [38088901377](https://github.com/19wolfalone92/Williams/actions/runs/38088901377) | SUCCESS | Android build and static checks: success; Python tests: success |
+| Build Android APK | [38088901391](https://github.com/19wolfalone92/Williams/actions/runs/38088901391) | SUCCESS | Build APKs: success |
+
+No failing job was reported in those runs. These successes establish the starting revision's CI status only; they do not prove the new changes or financial/protection requirements.
+
+### 12.2 Concrete code findings before TASK 001.3 edits
+
+- `campaign_fills` has no exchange trade ID and no uniqueness constraint; its quantity, price and fee columns are SQLite REAL. It cannot independently guarantee exactly-once exchange-fill accounting.
+- `_executed_fee_quote()` previously converted quantity, price and commission to float and used `trade.get("commission", 0)`; a missing commission field could be treated as zero.
+- `/api/v3/myTrades` is the available Spot trade-record source in this client. The code path must require the response's stable per-symbol trade `id`, order ID, quantity/price, and explicit commission amount and asset before declaring fee reconciliation complete.
+- Current cancel/replace recovery observes two orders but intentionally leaves the global/symbol reconciliation latch unresolved. There is still no unified end-to-end reconciler proving unique fills, fee completeness, net base-asset delta, available balances, Campaign quantity and actual protective coverage.
+- The previous three CI runs succeeded; no failure from P0-A required a fix.
+
+### 12.3 Changes in TASK 001.3
+
+1. **`db.py` — schema v8:** added `exchange_fill_ledger`, keyed by `(symbol, exchange_trade_id)`, storing exact decimal text for quantity, price, quote quantity and commission, plus commission asset, raw evidence and explicit `CONFIRMED` / `UNKNOWN` financial state. Re-delivery is idempotent; immutable execution-field conflicts are rejected. An initially unknown fee can be enriched when the same trade is re-read with explicit fee evidence, but confirmed fee fields cannot silently change.
+2. **`campaign_execution.py` — fee lookup:** `_executed_fee_quote()` persists each Spot trade's exchange identity before aggregation, uses Decimal arithmetic for quantity/price/commission aggregation and rejects missing trade IDs, missing fee amount, missing fee asset, malformed numbers or quantity mismatch. It no longer defaults absent commission to zero. The legacy return contract remains float because existing Campaign APIs consume float; the exact exchange evidence is retained separately in the ledger.
+3. **`test_task001_recovery_regressions.py` — new regression coverage:** exact decimal persistence and deduplication; missing-fee UNKNOWN state and enrichment; conflicting trade-ID rejection; missing commission blocks fee reconciliation; populated legacy-shaped SQLite migration; and two independent SQLite connections racing to record the same exchange trade.
+
+### 12.4 Evidence and limits
+
+| Area | Current evidence | Status |
+|---|---|---|
+| P0-A starting SHA CI | All three named runs SUCCESS on exact starting SHA | PASS |
+| Exchange trade identity | Ledger primary key uses (symbol, exchange trade ID) | IMPLEMENTED; CI pending for current changes |
+| Duplicate fill delivery | SQLite uniqueness + independent-connection regression added | TEST ADDED; execution pending |
+| Unknown fee amount/asset | Stored as UNKNOWN and fee path raises | IMPLEMENTED; CI pending |
+| Exact numeric storage | Decimal strings in new evidence ledger; Decimal aggregation in fee path | PARTIAL — existing Campaign/trade tables and downstream API still use REAL/float |
+| Position/available-balance reconciliation | No complete unified contract added | NOT VERIFIED |
+| Fee conversion to quote for non-base/non-quote assets | Uses current ticker price in existing contract, not a proven historical conversion source | NOT VERIFIED for accounting valuation |
+| Protection status, side, quantity and actual coverage | Existing order lookup is not enough; no complete repair/coverage reconciler added | NOT VERIFIED |
+| OCO full lifecycle and partial-fill protection | Not closed by this patch | NOT VERIFIED |
+| Fault injection across all 12 required boundaries | Only existing targeted SQLite failure test plus new ledger tests; not exhaustive | NOT VERIFIED |
+| Populated v6→v8 migration | Populated legacy-shaped test added, but CI execution pending and no production DB supplied | PENDING / NOT VERIFIED |
+| Two independent processes recovering same operation | New concurrent fill-ledger test uses two DB connections in threads, not two separate OS processes or two recovery services | NOT VERIFIED |
+| Entry block vs safe exit permission matrix | Not closed by this patch | NOT VERIFIED |
+| Android process-death test | Not run | NOT VERIFIED |
+| Spot Testnet lifecycle test | Not run | NOT RUN / NOT VERIFIED |
+
+### 12.5 CI for implementation
+
+At the time of writing, the latest implementation SHA `ee559838c9897d4efa68af079cdbe8c6e4ac9a63` had these runs in progress:
+- [Python backend tests — 38090072263](https://github.com/19wolfalone92/Williams/actions/runs/38090072263)
+- [Williams Campaign CI — 38090072261](https://github.com/19wolfalone92/Williams/actions/runs/38090072261)
+- [Build Android APK — 38090072254](https://github.com/19wolfalone92/Williams/actions/runs/38090072254)
+
+The report update itself will produce a later SHA; all required workflows must be checked again against that final SHA. No result from a prior SHA is transferable.
+
+### 12.6 Decision
+
+**TASK 001.3: FAIL — NOT ACCEPTED.**
+
+The newly added ledger improves idempotent fill evidence and closes the specific missing-commission-to-zero defect in the fee lookup path. It does **not** establish the requested complete cycle. The remaining P0 blockers are:
+- unify exchange-fill ledger entries with Campaign/position accounting in one idempotent transaction or equivalent durable state machine;
+- reconcile exchange account balances and net base-asset exposure against fills and local Campaign without automatic masking;
+- independently validate actual protective order/OCO parameters and coverage, then define controlled repair via ExecutionBarrier;
+- close the complete OCO partial-fill/cancel/restart lifecycle;
+- exhaustively inject SQLite/process failures at every required boundary;
+- test populated real v6 schema migration and two independent OS processes racing recovery;
+- prove the separate entry-block / safe-exit permission contract;
+- run and inspect all required CI on the final report SHA;
+- physical Android process-death and Spot Testnet remain NOT VERIFIED.
+
+No Binance Mainnet or real trading operation was used. `main` remains untouched. PR #47 must remain open Draft and must not be merged.
