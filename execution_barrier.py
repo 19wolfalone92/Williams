@@ -250,6 +250,20 @@ class ExecutionBarrier:
                 if direction == "short" and (macro.allow_long or macro_opposes_short):
                     return "TC2_WM1_EARLY blocked by active opposite D1 context"
             elif admission_mode == "STRICT_DIRECTIONAL":
+                tc2_core = (
+                    os.getenv("WILLIAMS_STRATEGY_PROFILE", "TC2_THREE_WISE_MEN").strip().upper()
+                    == "TC2_THREE_WISE_MEN"
+                )
+                if tc2_core and permission_tf == "1h":
+                    # H4 is context only, but it must be present, fresh, and
+                    # mathematically valid. It must not become a second H1 signal.
+                    for tf in ("1h", "4h", "1d"):
+                        ctx = snapshot.context(intent.symbol, tf)
+                        if ctx is None or tf not in normalized_versions:
+                            return f"TC2 entry requires versioned {tf} context"
+                        if not bool(ctx.williams_core_ready):
+                            return f"TC2 entry requires valid Williams indicator context on {tf}"
+
                 if not permission_ctx.williams_core_ready:
                     return (
                         f"context {permission_tf} does not allow {direction.upper()}: "
