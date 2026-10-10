@@ -2851,7 +2851,7 @@ class FuturesCampaignExecutionService:
             raise FuturesCampaignExecutionError("Futures add-on requires SignalRole.ADD_ON")
         if signal.signal_type not in {SignalType.SUPER_AO, SignalType.FRACTAL}:
             raise FuturesCampaignExecutionError("Only Super AO or valid fractal signals may add exposure")
-        if signal.expires_at_ms and int(signal.expires_at_ms) < int(time.time() * 1000):
+        if signal.expires_at_ms and int(signal.expires_at_ms) <= int(time.time() * 1000):
             raise FuturesCampaignExecutionError("Williams add-on signal has expired")
         equity = float(equity_quote)
         risk_fraction = float(candidate_risk_fraction)
