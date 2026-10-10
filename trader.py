@@ -1089,8 +1089,9 @@ class Trader:
                 pre_submit_checks=_pre_submit,
             )
             if not result.accepted:
-                self.db.state_delete('entry_client_order_id')
-                self._set_state('FLAT')
+                # Preserve the durable clientOrderId. A blocked/duplicate result
+                # must never erase an intent that may already exist at Binance.
+                self._set_state('RECONCILE_REQUIRED')
                 raise RuntimeError(f'BUY blocked by P0 ExecutionBarrier: {result.reason}')
             order = result.response
             self.db.save_order(order)
