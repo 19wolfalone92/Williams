@@ -11,13 +11,36 @@ from typing import Mapping, Sequence
 
 
 DEFAULT_SYMBOLS = ("BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT")
-# Canonical decisions are H1; D1/H4 are context, M15 is execution monitoring, M5 is diagnostic/replay only.
 DEFAULT_STRUCTURAL_TFS = ("1d", "4h", "1h", "15m", "5m")
 
 
 def _bool(env: Mapping[str, str], key: str, default: bool) -> bool:
     value = str(env.get(key, str(default))).strip().lower()
     return value in {"1", "true", "yes", "on"}
+
+
+def execution_start_blocker(
+    env: Mapping[str, str],
+    *,
+    api_key: str | None,
+    api_secret: str | None,
+    configured_testnet: bool,
+) -> str | None:
+    """Fail closed unless exchange mode and credentials are explicit and coherent."""
+    mode = str(env.get("TESTNET", "")).strip().lower()
+    if mode not in {"true", "false"}:
+        return "TESTNET must be explicitly configured as true or false before trading can start."
+    selected_testnet = mode == "true"
+    if selected_testnet != bool(configured_testnet):
+        return "Configured Binance environment does not match the explicit TESTNET setting."
+    if not str(api_key or "").strip() or not str(api_secret or "").strip():
+        return "Binance API key and secret are required before trading can start."
+    if not selected_testnet:
+        if str(env.get("ALLOW_LIVE", "false")).strip().lower() != "true":
+            return "Mainnet is blocked unless ALLOW_LIVE=true is explicitly configured."
+        if str(env.get("DRY_RUN", "true")).strip().lower() != "false":
+            return "Mainnet is blocked unless DRY_RUN=false is explicitly configured."
+    return None
 
 
 def _float(env: Mapping[str, str], key: str, default: float) -> float:
