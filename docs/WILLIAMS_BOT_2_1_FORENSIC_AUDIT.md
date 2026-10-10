@@ -134,3 +134,13 @@ The `main` workflow lookup returned no runs for the baseline SHA; an empty API r
 6. No baseline Python/Android shared golden vectors have been run in this audit. PR #49's staged tests are not a substitute and the current PR CI is not fully green.
 7. No source-to-code proof has yet established look-ahead absence across all active routes.
 8. No claim is made that all four books have been fully audited. The audit cannot be accepted until the rule registry, active call graph, causal-time tests, reproducible defect cards, and exact-SHA cross-runtime vectors are complete.
+
+
+## Fresh follow-up checkpoint — 2026-10-10
+
+- Remote audit branch HEAD independently re-confirmed as `f2d2eb24d8c78be871567f93dcf5fc973dd3ff97`: comparison of the branch ref to that commit returned `identical` (0 ahead/behind). Remote `main` independently compares identical to `04da5f9c09572e99ff310be3a1908179165e528c`. Audit branch is four commits ahead of main, with changes confined to the two audit documents.
+- Local `git status` cannot be established because the available runtime is not a local Git clone. Do not interpret remote ref verification as evidence about local staged/unstaged files.
+- PR #49 has advanced: current head is `334967f55a10f47a798d31951d31d8278c9a15d5`, merge-test SHA `83a6581f3a0870ecae9b39c7af45a092c42e62d7`; it remains open/draft/unmerged. CI for the PR merge ref: Python backend 166 passed; Android unit test 1 failure (29 tests; AO/AC golden vector at `WilliamsStrategyGoldenVectorsTest.kt:64`, APK build skipped); campaign CI 5 failures/164 passed on Python, Android build/unit tests failed. None of these are main or forensic-branch results.
+- Visual source review now verifies course scan locators (PDF pp.61–64, printed pp.29–32; PDF p.91, printed p.15) and selected TC2 Second Edition pages/figures. The source proves that Super AO may be the first actionable signal before WM1 or WM3/fractal (TC2 PDF p.155, printed p.140, Chapter 12; Fig. 12.1 cited). Angulation is qualitative/geometric in the inspected text; no author-exact universal numeric formula was found in those pages.
+- New primary-source ambiguity: TC2 PDF p.136 / printed p.121, Fig. 10.1 and New Trading Dimensions PDF p.55 / printed p.55, Figs. 5-1/5-2 visibly print the midpoint expression `(H-L)/2`. This conflicts with the conventional high/low midpoint `(H+L)/2`; the audit leaves the AO input formula UNRESOLVED pending independent source adjudication rather than silently correcting it.
+- Status remains **IN PROGRESS — NOT ACCEPTED**. No strategy/runtime code changed; no PR merged; no orders submitted; no Mainnet used. See the appendix for run/job IDs, per-page source notes, OCR limits, and rule-level consequences.
