@@ -1,5 +1,5 @@
 name: Python backend tests
-# Task 006 recovery acceptance v2: validate terminal-state cancellation recovery on the final audit head.
+# Task 006 recovery acceptance v3: run the complete recovery regression suite on the final audit head.
 
 on:
   push:

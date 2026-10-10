@@ -1,5 +1,5 @@
 name: Williams Campaign CI
-# Task 006 recovery acceptance v2: re-run campaign and Android checks after recovery-state tightening.
+# Task 006 recovery acceptance v3: re-run campaign and Android checks for all final recovery regressions.
 
 on:
   push:

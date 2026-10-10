@@ -1,5 +1,5 @@
 name: Build Android APK
-# Task 006 recovery acceptance v2: build and verify APKs for the final recovery candidate.
+# Task 006 recovery acceptance v3: build and verify APKs for the final recovery regression candidate.
 
 on:
   push:

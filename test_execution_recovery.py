@@ -468,3 +468,34 @@ def test_cancel_replace_old_live_order_remains_blocked_even_if_replacement_exist
     assert report["ok"] is False
     assert db.unresolved_execution_intents()[0]["intent_id"] == intent.intent_id
     assert exchange.mutations == 0
+
+
+def test_unknown_oco_create_after_submit_attempt_stays_blocked(tmp_path):
+    db = Database(str(tmp_path / "oco-create-unknown.sqlite3"))
+    exchange = FakeExchange()
+    cid = "WILL_RECOVERY_OCO_UNKNOWN_016"
+    intent = make_intent(db, order_type="OCO", cid=cid)
+
+    report = ExecutionRecoveryResolver(db, exchange).resolve_pending()
+
+    assert report["ok"] is False
+    assert db.unresolved_execution_intents()[0]["intent_id"] == intent.intent_id
+    assert exchange.mutations == 0
+
+
+def test_full_portfolio_recover_keeps_global_and_symbol_barriers_on_unknown_order(tmp_path, monkeypatch):
+    from portfolio_trader import MultiPositionTrader
+
+    monkeypatch.setenv("CAMPAIGN_ENGINE", "false")
+    db = Database(str(tmp_path / "full-recover-blocked.sqlite3"))
+    exchange = FakeExchange()
+    intent = make_intent(db, cid="WILL_RECOVERY_FULL_RESTART_017")
+
+    report = MultiPositionTrader(exchange, db=db, symbols=[]).recover()
+
+    assert report["ok"] is False
+    assert report["execution_recovery"]["mutations_sent"] == 0
+    assert "BTCUSDT" in report["unresolved_symbols"]
+    assert db.state_get("position_state:BTCUSDT") == "RECONCILE_REQUIRED"
+    assert db.unresolved_execution_intents()[0]["intent_id"] == intent.intent_id
+    assert exchange.mutations == 0

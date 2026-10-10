@@ -85,7 +85,7 @@ One high-risk scenario remains to prove under controlled Spot Testnet testing: i
 ### Scope and safety
 This follow-up continues only on `audit/williams-2.1-task-006-android-runtime` and PR #46. It does not modify `main`, merge the PR, enable Mainnet, or send exchange mutations. Recovery tests use a local SQLite database and a fake exchange only.
 
-The recovery implementation source immediately before this audit/CI-trigger commit is `0d25d7337225563c83a58dca756f3e5382c9435b`. The audit/CI-trigger commit adds this report and comments to workflow files to force all required checks to run again on one exact candidate SHA. **Do not use the earlier CI results below as acceptance evidence for the final candidate SHA; use only workflow runs whose `head_sha` exactly equals the PR's final head.**
+The production recovery implementation source is `0d25d7337225563c83a58dca756f3e5382c9435b`; this final validation commit adds two more offline regressions (unknown OCO-create result and full portfolio-recovery fail-closed behavior) plus audit/workflow metadata. The audit/CI-trigger commit adds this report and comments to workflow files to force all required checks to run again on one exact candidate SHA. **Do not use the earlier CI results below as acceptance evidence for the final candidate SHA; use only workflow runs whose `head_sha` exactly equals the PR's final head.**
 
 ### Recovery resolver implementation
 - Added `execution_recovery.py`, a read-only resolver. It never invokes order mutations.
@@ -148,3 +148,8 @@ The resolver was tightened after review of cancellation semantics:
 - Added regressions for each live/ambiguous case. They assert the intent stays unresolved and no mutation method is called.
 These changes are included in the final validation candidate; results from SHA `50465d88a5cbc6c83e4a01d824c36e905be41fec` are not acceptance evidence for this updated code.
 
+
+
+### Final additional recovery regressions
+- Unknown OCO-create result after the durable submit-attempt marker is present stays unresolved when Binance cannot confirm the exact list; no OCO retry is called.
+- Full `MultiPositionTrader.recover()` integration with an unknown order result preserves both `position_state:BTCUSDT=RECONCILE_REQUIRED` and the unresolved SQLite intent; the recovery report remains blocked and records zero mutations.
