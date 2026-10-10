@@ -969,10 +969,6 @@ class FuturesCampaignExecutionService:
 
         client_algo_id = "W2FE_" + uuid.uuid4().hex[:24]
         claim_key = f"futures_entry_pending:{symbol}"
-        if not self.db.try_claim_state(claim_key, client_algo_id):
-            raise FuturesCampaignExecutionError(
-                f"{symbol}: another Futures entry intent is already reserved"
-            )
 
         campaign = None
         try:
@@ -983,6 +979,10 @@ class FuturesCampaignExecutionService:
             try:
                 with self.db.transaction(immediate=True):
                     self._assert_position_capacity()
+                    if not self.db.try_claim_state(claim_key, client_algo_id):
+                        raise FuturesCampaignExecutionError(
+                            f"{symbol}: another Futures entry intent is already reserved"
+                        )
                     campaign = self.engine.create_campaign(
                         signal,
                         initial_risk_pct=requested_fraction,
@@ -1019,12 +1019,10 @@ class FuturesCampaignExecutionService:
                         CampaignState.ENTRY_PENDING.value,
                     )
             except Exception:
-                # No exchange mutation occurs before this transaction commits,
-                # so failures here can release the symbol admission claim safely.
-                try:
-                    self.db.state_delete(claim_key)
-                except Exception:
-                    pass
+                # The symbol claim and campaign writes belong to the same
+                # transaction. Rollback therefore removes any claim acquired
+                # by this attempt without risking deletion of another caller's
+                # durable claim.
                 campaign = None
                 raise
 
