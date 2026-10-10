@@ -28,8 +28,25 @@ class OrderIntent:
     quantity: str = ""
     quote_order_quantity: str = ""
     client_order_id: str = ""
+    # Exact exchange mutation identity, needed for read-only crash recovery.
+    mutation_kind: str = "ORDER"
+    target_order_id: str = ""
+    target_client_order_id: str = ""
+    target_order_list_id: str = ""
+    target_list_client_order_id: str = ""
+    replacement_client_order_id: str = ""
     purpose: str = "ENTRY"
     permission_interval: str = ""
+
+    def __post_init__(self) -> None:
+        kind = str(self.mutation_kind or "ORDER").upper()
+        if kind == "ORDER":
+            order_type = str(self.order_type or "").upper()
+            if order_type == "OCO":
+                kind = "OCO_CREATE"
+            elif order_type == "CANCEL":
+                kind = "CANCEL_ORDER"
+        object.__setattr__(self, "mutation_kind", kind)
     campaign_id: str = ""
     signal_id: str = ""
     risk_quote: float = 0.0
@@ -257,6 +274,30 @@ class ExecutionBarrier:
                     return ExecutionResult(intent.intent_id, False, reason=reason)
 
             order_fsm.transition(OrderState.SUBMITTING)
+            # This durable write-ahead marker separates intents that never
+            # reached the mutation call from intents whose exchange outcome may
+            # be ambiguous after a crash. Failure here MUST prevent submission.
+            try:
+                if self.db is None or not hasattr(self.db, "save_execution_event"):
+                    raise RuntimeError("execution_event_persistence_unavailable")
+                self.db.save_execution_event(
+                    intent.intent_id,
+                    "SUBMIT_ATTEMPT_STARTED",
+                    {
+                        "mutation_kind": intent.mutation_kind,
+                        "symbol": intent.symbol,
+                        "client_order_id": intent.client_order_id,
+                        "target_order_id": intent.target_order_id,
+                        "target_client_order_id": intent.target_client_order_id,
+                        "target_order_list_id": intent.target_order_list_id,
+                        "target_list_client_order_id": intent.target_list_client_order_id,
+                        "replacement_client_order_id": intent.replacement_client_order_id,
+                    },
+                )
+            except Exception as exc:
+                reason = self._safe_error_reason("submit_attempt_event_persistence_failed", exc)
+                self._record("CRITICAL", "execution_blocked", intent, reason)
+                return ExecutionResult(intent.intent_id, False, reason=reason)
             self._record(
                 "INFO",
                 "execution_admitted",
