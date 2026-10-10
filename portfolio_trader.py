@@ -3,6 +3,7 @@ import uuid
 from decimal import Decimal
 from datetime import datetime, timezone
 
+from safe_logging import redact_text
 from portfolio_controller import PortfolioController
 from db import Database
 from equity_breaker import EquityCircuitBreaker
@@ -284,7 +285,7 @@ class MultiPositionTrader:
                 self.db.log_event(
                     "ERROR",
                     "stale_reconcile_check_failed",
-                    str(exc),
+                    redact_text(str(exc)),
                     {"symbol": symbol},
                 )
 
@@ -676,7 +677,7 @@ class MultiPositionTrader:
             btc = float(self.client.ticker_price("BTCUSDT")["price"])
             return cross * btc
         except Exception as exc:
-            raise RuntimeError(f"{asset}: cannot value Binance commission in USDT") from exc
+            raise RuntimeError(f"{asset}: cannot value Binance commission in USDT") from None
 
     def _authoritative_execution(self, symbol, order):
         payload = dict(order or {})
@@ -701,7 +702,7 @@ class MultiPositionTrader:
                     "WARNING",
                     "fill_commission_lookup_failed",
                     f"{symbol}: myTrades lookup unavailable; using order-level fill data",
-                    {"order_id": order_id, "error": str(exc)},
+                    {"order_id": order_id, "error": redact_text(str(exc))},
                 )
         base_asset = symbol[:-4] if symbol.endswith("USDT") else ""
         summary = accumulate_order(payload, base_asset=base_asset)
@@ -1124,7 +1125,7 @@ class MultiPositionTrader:
                 self.db.log_event(
                     "ERROR",
                     "multi_position_pending_entry_error",
-                    str(exc),
+                    redact_text(str(exc)),
                     {
                         "symbol": symbol,
                         "clientOrderId": client_id,
@@ -1134,7 +1135,7 @@ class MultiPositionTrader:
                     {
                         "symbol": symbol,
                         "state": "RECONCILE_REQUIRED",
-                        "error": str(exc),
+                        "error": redact_text(str(exc)),
                     }
                 )
         return results
@@ -1590,7 +1591,7 @@ class MultiPositionTrader:
                 self.db.log_event(
                     "ERROR",
                     "multi_position_reconcile_required",
-                    str(exc),
+                    redact_text(str(exc)),
                     {
                         "symbol": symbol,
                         "trade_id": trade["id"],
@@ -1601,7 +1602,7 @@ class MultiPositionTrader:
                         "trade_id": trade["id"],
                         "symbol": symbol,
                         "state": "RECONCILE_REQUIRED",
-                        "error": str(exc),
+                        "error": redact_text(str(exc)),
                     }
                 )
 
@@ -1805,8 +1806,8 @@ class MultiPositionTrader:
                 self.set_state(symbol, "RECONCILE_REQUIRED")
                 raise RuntimeError(
                     f"{symbol}: manual SELL partially filled; residual "
-                    f"{residual_qty:.12g} requires reconciliation: {exc}"
-                ) from exc
+                    f"{residual_qty:.12g} requires reconciliation: {redact_text(str(exc))}"
+                ) from None
 
             self.db.log_event(
                 "WARNING",
@@ -1835,7 +1836,7 @@ class MultiPositionTrader:
             self.db.log_event(
                 "ERROR",
                 "manual_position_sell_error",
-                str(exc),
+                redact_text(str(exc)),
                 {
                     "symbol": symbol,
                     "trade_id": trade["id"],
@@ -1846,7 +1847,7 @@ class MultiPositionTrader:
                 "symbol": symbol,
                 "trade_id": trade["id"],
                 "state": "RECONCILE_REQUIRED",
-                "error": str(exc),
+                "error": redact_text(str(exc)),
             }
 
     # ------------------------------------------------------------------
@@ -2060,7 +2061,7 @@ class MultiPositionTrader:
                     self.db.log_event(
                         "WARNING",
                         "campaign_add_on_not_armed",
-                        str(exc),
+                        redact_text(str(exc)),
                         {"symbol": symbol, "signal_id": signal.signal_id},
                     )
                     results.append(
@@ -2068,7 +2069,7 @@ class MultiPositionTrader:
                             "symbol": symbol,
                             "campaign": True,
                             "action": "WAIT_ADD_ON",
-                            "error": str(exc),
+                            "error": redact_text(str(exc)),
                         }
                     )
                 continue
@@ -2104,7 +2105,7 @@ class MultiPositionTrader:
                 self.db.log_event(
                     "WARNING",
                     "campaign_entry_not_armed",
-                    str(exc),
+                    redact_text(str(exc)),
                     {"symbol": symbol, "signal_id": signal.signal_id},
                 )
                 results.append(
@@ -2112,14 +2113,14 @@ class MultiPositionTrader:
                         "symbol": symbol,
                         "campaign": True,
                         "action": "WAIT",
-                        "error": str(exc),
+                        "error": redact_text(str(exc)),
                     }
                 )
             except Exception as exc:
                 self.db.log_event(
                     "ERROR",
                     "campaign_entry_error",
-                    str(exc),
+                    redact_text(str(exc)),
                     {"symbol": symbol, "signal_id": signal.signal_id},
                 )
                 self.set_state(symbol, "RECONCILE_REQUIRED")
@@ -2128,7 +2129,7 @@ class MultiPositionTrader:
                         "symbol": symbol,
                         "campaign": True,
                         "action": "RECONCILE_REQUIRED",
-                        "error": str(exc),
+                        "error": redact_text(str(exc)),
                     }
                 )
         return results
@@ -2377,7 +2378,7 @@ class MultiPositionTrader:
                 self.db.log_event(
                     "ERROR",
                     "multi_position_entry_error",
-                    str(exc),
+                    redact_text(str(exc)),
                     {
                         "symbol": symbol,
                         "clientOrderId": client_id,
@@ -2386,7 +2387,7 @@ class MultiPositionTrader:
                 results.append(
                     {
                         "symbol": symbol,
-                        "error": str(exc),
+                        "error": redact_text(str(exc)),
                         "reconcile_required": True,
                     }
                 )
