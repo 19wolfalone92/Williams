@@ -304,12 +304,45 @@ class CampaignExecutionService:
         candidate_risk_pct: float,
         capital_fraction: float = 0.25,
     ) -> dict[str, Any]:
-        if signal.side != "BUY":
-            raise CampaignExecutionError("Current Spot campaign executor only arms LONG entries")
+        if signal.side != "BUY" or str(signal.direction).upper() != "LONG":
+            raise CampaignExecutionError("Spot campaign entry must be an explicit LONG/BUY signal")
+        if signal.role != SignalRole.ENTRY:
+            raise CampaignExecutionError("Initial Spot entry requires SignalRole.ENTRY")
         if self.barrier is None:
             raise CampaignExecutionError(
                 "Campaign execution requires the canonical ExecutionBarrier"
             )
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        try:
+            signal_time = int(signal.signal_bar_time_ms)
+            confirmation_time = int(
+                getattr(signal, "confirmation_time_ms", 0) or signal.signal_bar_time_ms
+            )
+            expiry_time = int(signal.expires_at_ms)
+            raw_trigger = float(signal.trigger_price)
+            raw_stop = float(signal.invalidation_price or signal.protective_reference)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise CampaignExecutionError("Spot signal timing/trigger/structural stop is invalid") from exc
+        if (
+            signal_time <= 0
+            or confirmation_time < signal_time
+            or expiry_time <= max(now_ms, confirmation_time)
+        ):
+            raise CampaignExecutionError("Spot Williams signal is expired or has invalid confirmation chronology")
+        if (
+            not math.isfinite(raw_trigger)
+            or raw_trigger <= 0.0
+            or not math.isfinite(raw_stop)
+            or not 0.0 < raw_stop < raw_trigger
+        ):
+            raise CampaignExecutionError("Spot Williams trigger/structural stop geometry is invalid")
+        if signal.signal_type == SignalType.REVERSAL:
+            try:
+                angle = float(signal.angulation_score)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise CampaignExecutionError("Spot WM1 angulation evidence is invalid") from exc
+            if not math.isfinite(angle) or angle <= 0.0:
+                raise CampaignExecutionError("Spot WM1 requires finite positive angulation evidence")
 
         # Pin the exact closed H1/H4/D1 contexts used by the final order barrier.
         # Dynamic scanner symbols are refreshed on demand through the same MTF
@@ -389,9 +422,12 @@ class CampaignExecutionService:
 
         current = self._current_price(signal.symbol)
         trigger = self._normalize_price(signal.symbol, signal.trigger_price)
+        structural_stop = float(
+            signal.invalidation_price or signal.protective_reference
+        )
         stop = self._normalize_price(
             signal.symbol,
-            float(signal.protective_reference) - max(
+            structural_stop - max(
                 float(self._rules(signal.symbol).get("PRICE_FILTER", {}).get("tickSize", "0") or 0),
                 1e-12,
             ),
