@@ -235,6 +235,97 @@ def test_cancel_fill_race_requires_reconciliation_and_never_retries(tmp_path):
     assert db.state_get(ExecutionBarrier.MUTATION_LOCK_KEY, "")
 
 
+def test_oco_cancel_fill_race_is_ambiguous_even_when_order_ids_array_has_no_status(tmp_path):
+    db = Database(str(tmp_path / "state.sqlite3"))
+    barrier = ExecutionBarrier(_cache(), db)
+    cid = stable_client_order_id("WILLV5_OCO_CANCEL_", "BTCUSDT", "list-7")
+    intent = OrderIntent.new(
+        "BTCUSDT",
+        "SELL",
+        "CANCEL",
+        {},
+        purpose="CANCEL",
+        client_order_id=cid,
+        campaign_id="campaign-1",
+        signal_id="oco-cancel:list-7",
+        operation_kind="CANCEL_OCO",
+        related_order_list_id="7",
+    )
+    calls = []
+
+    def cancel_with_fill_race():
+        calls.append("cancel")
+        return {
+            "symbol": "BTCUSDT",
+            "orderListId": 7,
+            "listStatusType": "ALL_DONE",
+            "orders": [
+                {"orderId": 71, "clientOrderId": "WILLV5_TP"},
+                {"orderId": 72, "clientOrderId": "WILLV5_SL"},
+            ],
+            "orderReports": [
+                {"orderId": 71, "status": "CANCELED", "executedQty": "0"},
+                {"orderId": 72, "status": "FILLED", "executedQty": "0.2"},
+            ],
+        }
+
+    with pytest.raises(ExecutionAmbiguousError):
+        barrier.execute(
+            intent,
+            cancel_with_fill_race,
+            pre_submit_checks=lambda _snapshot: None,
+        )
+    assert calls == ["cancel"]
+    row = db.load_execution_intent(intent.intent_id)
+    assert row["status"] == "AMBIGUOUS"
+    assert db.state_get(ExecutionBarrier.MUTATION_LOCK_KEY, "")
+
+
+def test_cancel_replace_partial_old_fill_is_ambiguous(tmp_path):
+    db = Database(str(tmp_path / "state.sqlite3"))
+    barrier = ExecutionBarrier(_cache(), db)
+    cid = stable_client_order_id("WILLV5_TRAIL_REPLACE_", "campaign-1", "old-77", "stop-98")
+    intent = OrderIntent.new(
+        "BTCUSDT",
+        "SELL",
+        "STOP_LOSS",
+        {},
+        purpose="CAMPAIGN_TRAIL",
+        client_order_id=cid,
+        campaign_id="campaign-1",
+        signal_id="signal-1",
+        operation_kind="CANCEL_REPLACE",
+        related_order_id="77",
+        quantity="1",
+    )
+    calls = []
+    response = {
+        "cancelResult": "SUCCESS",
+        "cancelResponse": {
+            "orderId": 77,
+            "status": "CANCELED",
+            "executedQty": "0.2",
+        },
+        "newOrderResult": "SUCCESS",
+        "newOrderResponse": {
+            "orderId": 78,
+            "status": "NEW",
+            "executedQty": "0",
+        },
+    }
+    with pytest.raises(ExecutionAmbiguousError):
+        barrier.execute(
+            intent,
+            lambda: calls.append("cancelReplace") or response,
+            pre_submit_checks=lambda _snapshot: None,
+        )
+    assert calls == ["cancelReplace"]
+    row = db.load_execution_intent(intent.intent_id)
+    assert row["status"] == "AMBIGUOUS"
+    assert row["exchange_executed_qty"] == "" or row["exchange_executed_qty"] == "None"
+    assert db.state_get(ExecutionBarrier.MUTATION_LOCK_KEY, "")
+
+
 def test_stale_context_version_blocks_new_entry(tmp_path):
     db = Database(str(tmp_path / "state.sqlite3"))
     cache = _cache()
