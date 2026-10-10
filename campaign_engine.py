@@ -35,17 +35,19 @@ class CampaignEngine:
         self,
         db,
         *,
-        portfolio_risk_limit_pct: float = 0.01,
-        campaign_risk_limit_pct: float = 0.005,
+        portfolio_risk_limit_pct: float = 0.03,
+        campaign_risk_limit_pct: float = 0.01,
         initial_risk_fraction_of_campaign: float = 0.40,
     ) -> None:
         self.db = db
-        self.portfolio_risk_limit_pct = max(0.0, min(0.01, float(portfolio_risk_limit_pct)))
+        self.portfolio_risk_limit_pct = max(0.0, min(0.03, float(portfolio_risk_limit_pct)))
         # Keep the hard ceiling aligned with the Futures executor's lifetime
         # campaign budget while preserving the more conservative standalone
         # default used by other callers (including Spot). The Futures runtime
-        # explicitly passes 0.006; its 40% initial tranche is 0.24% equity.
-        self.campaign_risk_limit_pct = max(0.0, min(0.006, float(campaign_risk_limit_pct)))
+        # Policy ceiling: no single campaign may reserve more than 1% equity;
+        # the independent portfolio ceiling is 3%. At the default 40% initial
+        # tranche, initial risk is 0.40% equity and remaining budget is gated.
+        self.campaign_risk_limit_pct = max(0.0, min(0.01, float(campaign_risk_limit_pct)))
         self.initial_risk_fraction = max(
             0.05,
             min(1.0, float(initial_risk_fraction_of_campaign)),
