@@ -211,6 +211,9 @@ class FuturesRuntime:
         self.max_daily_loss_pct = min(
             0.25, max(0.0, float(os.getenv("MAX_DAILY_LOSS_PCT", "0.01")))
         )
+        self.max_stop_outs_per_utc_day = min(
+            100, max(1, int(os.getenv("MAX_STOP_OUTS_PER_UTC_DAY", "2")))
+        )
         self.poll_seconds = max(10, int(os.getenv("FUTURES_SCAN_SECONDS", "30")))
         self.context_intervals = tuple(dict.fromkeys(
             [str(x).lower() for x in self.config.structural_timeframes]
@@ -328,6 +331,25 @@ class FuturesRuntime:
                 f"{self.max_daily_loss_pct:.2%}; only protection/recovery/exits remain enabled"
             )
         return True, "within daily loss limit"
+
+    def _stop_outs_allow_entry(self, *, now: datetime | None = None) -> tuple[bool, str]:
+        """Durable UTC-day stop-out circuit breaker; uncertainty blocks entries."""
+        current = now or datetime.now(timezone.utc)
+        if current.tzinfo is None:
+            return False, "stop-out guard requires a timezone-aware UTC timestamp"
+        current = current.astimezone(timezone.utc)
+        day_start = current.replace(hour=0, minute=0, second=0, microsecond=0)
+        start_text = day_start.strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            count = int(self.db.count_confirmed_stop_exits_since(start_text))
+        except Exception as exc:
+            return False, f"confirmed stop-out count unavailable; new entries blocked ({type(exc).__name__}: {exc})"
+        if count >= self.max_stop_outs_per_utc_day:
+            return False, (
+                f"UTC daily stop-out limit reached: {count} >= "
+                f"{self.max_stop_outs_per_utc_day}; only protection/recovery/exits remain enabled"
+            )
+        return True, f"confirmed stop-outs today: {count}/{self.max_stop_outs_per_utc_day}"
 
     @staticmethod
     def _atr(df: pd.DataFrame, period: int = 14) -> float:
@@ -741,6 +763,10 @@ class FuturesRuntime:
             cancel_reason = "KILL_SWITCH" if kill_latched else "PAUSE"
             management.extend(self._cancel_pending_entries(reason=cancel_reason))
         daily_ok, daily_reason = self._daily_loss_allows_entry(equity)
+        stop_outs_ok, stop_outs_reason = self._stop_outs_allow_entry()
+        if not stop_outs_ok:
+            daily_ok = False
+            daily_reason = f"{daily_reason}; {stop_outs_reason}"
         if preflight_errors:
             daily_ok = False
             daily_reason = "; ".join(preflight_errors) + "; new entries blocked"
