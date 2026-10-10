@@ -12,6 +12,10 @@ from typing import Mapping, Sequence
 
 DEFAULT_SYMBOLS = ("BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT")
 DEFAULT_STRUCTURAL_TFS = ("1d", "4h", "1h", "15m")
+SUPPORTED_TIMEFRAMES = frozenset({
+    "1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h",
+    "6h", "8h", "12h", "1d", "3d", "1w", "1M",
+})
 
 
 def _bool(env: Mapping[str, str], key: str, default: bool) -> bool:
@@ -55,6 +59,9 @@ def _tf_chain(execution: str, env: Mapping[str, str]) -> tuple[str, ...]:
             _normalize_tf(x) for x in explicit.split(",") if x.strip()
         ))
         if values:
+            unsupported = sorted(set(values) - SUPPORTED_TIMEFRAMES)
+            if unsupported:
+                raise ValueError(f"Unsupported STRUCTURAL_TIMEFRAMES: {unsupported}")
             return values
 
     chains = {
@@ -127,6 +134,8 @@ class TradingConfig:
         total_risk = max(0.0, min(0.01, _float(source, "MAX_TOTAL_RISK_PCT", 0.01)))
 
         execution_timeframe = _normalize_tf(source.get("EXECUTION_TIMEFRAME", "1h"))
+        if execution_timeframe not in SUPPORTED_TIMEFRAMES:
+            raise ValueError(f"Unsupported EXECUTION_TIMEFRAME: {execution_timeframe!r}")
 
         return cls(
             symbols=symbols,
