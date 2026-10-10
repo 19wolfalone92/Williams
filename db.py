@@ -355,6 +355,28 @@ class Database:
         ).fetchall()
         return [dict(row) for row in rows]
 
+    def claim_execution_intent(self, intent) -> bool:
+        """Atomically reserve one intent/client ID and serialize cross-process admissions."""
+        if self._transaction_active:
+            raise RuntimeError("execution_intent_claim_requires_outermost_transaction")
+        self.conn.execute("BEGIN IMMEDIATE")
+        self._transaction_active = True
+        try:
+            if self.find_execution_intent(intent.intent_id, intent.client_order_id):
+                self.conn.rollback()
+                return False
+            if self.unresolved_execution_intents():
+                self.conn.rollback()
+                return False
+            self.save_execution_intent(intent, "PENDING")
+            self.conn.commit()
+            return True
+        except Exception:
+            self.conn.rollback()
+            raise
+        finally:
+            self._transaction_active = False
+
     def save_execution_intent(self, intent, status, reason=''):
         self.conn.execute(
             '''INSERT OR REPLACE INTO execution_intents(
