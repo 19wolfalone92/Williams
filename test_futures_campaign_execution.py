@@ -448,6 +448,46 @@ def test_signal_side_direction_conflict_is_rejected_before_order(tmp_path):
     with pytest.raises(FuturesCampaignExecutionError, match="side/direction conflict"):
         signal_direction(conflicting)
 
+def test_execution_service_enforces_campaign_cap_for_direct_callers(tmp_path):
+    db = Database(str(tmp_path / "futures-position-cap.sqlite3"))
+    try:
+        cache = ContextCache()
+        make_context(cache, allow_long=True, allow_short=False)
+        client = FakeFuturesClient(mark_price=102.0)
+        service = FuturesCampaignExecutionService(
+            client,
+            db,
+            execution_barrier=ExecutionBarrier(cache, db),
+            max_open_positions=1,
+            portfolio_risk_limit_pct=0.01,
+            campaign_risk_limit_pct=0.005,
+        )
+        existing = service.engine.create_campaign(
+            make_signal("LONG"),
+            initial_risk_pct=0.002,
+        )
+        existing.tags["execution_mode"] = "FUTURES"
+        db.save_campaign(existing)
+
+        with pytest.raises(
+            FuturesCampaignExecutionError,
+            match="Maximum open Futures campaign count reached",
+        ):
+            service.arm_initial_entry(
+                make_signal("LONG"),
+                equity_quote=10000.0,
+                atr=2.0,
+                candidate_risk_fraction=0.005,
+            )
+
+        assert client.stop_entries == []
+        assert db.conn.execute(
+            "SELECT COUNT(*) AS n FROM execution_intents WHERE purpose = 'CAMPAIGN_ENTRY'"
+        ).fetchone()["n"] == 0
+    finally:
+        db.conn.close()
+
+
 def test_futures_entry_is_blocked_when_available_margin_is_insufficient(tmp_path):
     db = Database(str(tmp_path / "futures-margin.sqlite3"))
     try:
