@@ -1164,6 +1164,7 @@ private class NativeEngine(
         scanProgressSymbols = 0
 
         try {
+            reconcileDurableMutationLedger()
             recoverPendingEntries()
             reconcilePositionsWithExchange()
             auditManagedOpenOrders()
@@ -1413,6 +1414,7 @@ private class NativeEngine(
         }
 
         return try {
+            reconcileDurableMutationLedger()
             clearReconcileRequired()
             recoverPendingEntries()
             reconcilePositionsWithExchange()
@@ -5092,6 +5094,123 @@ private class NativeEngine(
         path: String,
         params: String
     ): JSONObject = durableMutation("POST", path, params)
+    /**
+     * Resolve write-ahead mutation records using read-only exchange queries.
+     * A missing order/list is not evidence that the mutation never happened:
+     * history may lag or be incomplete, so unresolved records keep execution blocked.
+     */
+    private fun reconcileDurableMutationLedger() {
+        val snapshot = synchronized(mutationIntentLock) {
+            JSONObject(prefs.getString(mutationIntentPrefsKey, "{}") ?: "{}")
+        }
+        val unresolved = mutableListOf<Pair<String, JSONObject>>()
+        val keys = snapshot.keys()
+        while (keys.hasNext()) {
+            val key = keys.next()
+            val row = snapshot.optJSONObject(key) ?: continue
+            val status = row.optString("status", "").uppercase(Locale.US)
+            if (status in setOf("PENDING", "UNKNOWN")) unresolved += key to row
+        }
+
+        for ((key, row) in unresolved) {
+            val symbol = row.optString("symbol", "")
+            val path = row.optString("path", "")
+            val method = row.optString("method", "").uppercase(Locale.US)
+            val clientId = row.optString("client_order_id", "")
+            val targetOrderId = row.optString("target_order_id", "")
+            val targetListId = row.optString("target_order_list_id", "")
+
+            try {
+                when {
+                    path == "/api/v3/order/cancelReplace" -> {
+                        require(clientId.isNotBlank() && targetOrderId.isNotBlank()) {
+                            "cancel-replace identity incomplete"
+                        }
+                        val oldOrder = signedGet(
+                            "/api/v3/order",
+                            "symbol=" + symbol + "&orderId=" + targetOrderId
+                        )
+                        val oldStatus = oldOrder.optString("status", "").uppercase(Locale.US)
+                        require(oldStatus in setOf("CANCELED", "EXPIRED", "REJECTED", "FILLED")) {
+                            "cancel-replace old order is not terminal: " + (oldStatus.ifBlank { "UNKNOWN" })
+                        }
+                        val newOrder = signedGet(
+                            "/api/v3/order",
+                            "symbol=" + symbol + "&origClientOrderId=" + clientId
+                        )
+                        require(newOrder.optString("orderId", "").isNotBlank()) {
+                            "cancel-replace replacement order is not confirmed"
+                        }
+                        updateMutationIntent(key, "RECONCILED", response = newOrder)
+                    }
+                    path == "/api/v3/orderList/oco" -> {
+                        require(clientId.isNotBlank()) { "OCO list client identity missing" }
+                        val list = signedGet(
+                            "/api/v3/orderList",
+                            "symbol=" + symbol + "&origClientOrderId=" + clientId
+                        )
+                        require(list.optString("orderListId", "").isNotBlank()) {
+                            "OCO list not found by durable client identity"
+                        }
+                        updateMutationIntent(key, "RECONCILED", response = list)
+                    }
+                    method == "DELETE" && path == "/api/v3/orderList" -> {
+                        require(targetListId.isNotBlank()) { "OCO cancel target identity missing" }
+                        val listQuery = if (targetListId.toLongOrNull() != null) {
+                            "symbol=" + symbol + "&orderListId=" + targetListId
+                        } else {
+                            "symbol=" + symbol + "&origClientOrderId=" + targetListId
+                        }
+                        val list = signedGet("/api/v3/orderList", listQuery)
+                        val status = list.optString(
+                            "listOrderStatus",
+                            list.optString("listStatusType", "")
+                        ).uppercase(Locale.US)
+                        require(status in setOf("ALL_DONE", "REJECT")) {
+                            "OCO cancellation is not confirmed terminal: " + (status.ifBlank { "UNKNOWN" })
+                        }
+                        updateMutationIntent(key, "RECONCILED", response = list)
+                    }
+                    method == "DELETE" && path == "/api/v3/order" -> {
+                        require(targetOrderId.isNotBlank()) { "cancel target identity missing" }
+                        val orderQuery = if (targetOrderId.toLongOrNull() != null) {
+                            "symbol=" + symbol + "&orderId=" + targetOrderId
+                        } else {
+                            "symbol=" + symbol + "&origClientOrderId=" + targetOrderId
+                        }
+                        val order = signedGet("/api/v3/order", orderQuery)
+                        val status = order.optString("status", "").uppercase(Locale.US)
+                        require(status in setOf("CANCELED", "EXPIRED", "REJECTED", "FILLED")) {
+                            "cancel target is not terminal: " + (status.ifBlank { "UNKNOWN" })
+                        }
+                        updateMutationIntent(key, "RECONCILED", response = order)
+                    }
+                    method == "POST" && path == "/api/v3/order" -> {
+                        require(clientId.isNotBlank()) { "order client identity missing" }
+                        val order = signedGet(
+                            "/api/v3/order",
+                            "symbol=" + symbol + "&origClientOrderId=" + clientId
+                        )
+                        require(order.optString("orderId", "").isNotBlank()) {
+                            "order not found by durable client identity"
+                        }
+                        updateMutationIntent(key, "RECONCILED", response = order)
+                    }
+                    else -> error("unsupported unresolved mutation type: " + method + " " + path)
+                }
+            } catch (x: Exception) {
+                setReconcileRequired(
+                    "Durable mutation reconciliation unresolved for " + key + ": " +
+                        (x.message ?: x.javaClass.simpleName)
+                )
+                throw IllegalStateException(
+                    "RECONCILE_REQUIRED: mutation state cannot be proven for " + key,
+                    x
+                )
+            }
+        }
+    }
+
     private fun mutationParam(params: String, name: String): String =
         params.split("&")
             .firstOrNull { it.substringBefore("=") == name }
