@@ -235,14 +235,42 @@ class Trader:
             )
 
         unresolved_intents = self.db.conn.execute(
-            "SELECT intent_id,symbol,client_order_id,status,order_type,target_order_id "
+            "SELECT intent_id,symbol,client_order_id,status,order_type,target_order_id,target_order_list_id "
             "FROM execution_intents "
             "WHERE UPPER(status) IN ('PENDING','SUBMITTED','AMBIGUOUS','RECONCILE_REQUIRED')"
         ).fetchall()
         for intent in unresolved_intents:
             symbol = str(intent["symbol"] or "").upper()
             client_id = str(intent["client_order_id"] or "")
-            if str(intent["order_type"] or "").upper() == "CANCEL":
+            intent_type = str(intent["order_type"] or "").upper()
+            if intent_type == "CANCEL_OCO":
+                target_list_id = str(intent["target_order_list_id"] or "")
+                if not target_list_id:
+                    raise RuntimeError(
+                        f"recovery gate cannot resolve OCO cancel intent {intent['intent_id']}: target list ID missing"
+                    )
+                try:
+                    target_list = self.client.order_list(
+                        symbol, order_list_id=int(target_list_id)
+                    )
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"recovery gate cannot resolve OCO cancel intent {intent['intent_id']}: "
+                        f"exchange list state unavailable"
+                    ) from exc
+                list_status = str(
+                    target_list.get("listOrderStatus", target_list.get("listStatusType", ""))
+                ).upper()
+                if list_status not in {"ALL_DONE", "REJECT"}:
+                    raise RuntimeError(
+                        f"recovery gate cannot resolve OCO cancel intent {intent['intent_id']}: "
+                        f"target_order_list_id={target_list_id} status={list_status or 'UNKNOWN'}"
+                    )
+                reason = (
+                    "target OCO list reached terminal state during startup reconciliation: "
+                    + list_status
+                )
+            elif intent_type == "CANCEL":
                 target_id = str(intent["target_order_id"] or "")
                 target = history_by_key.get((symbol, target_id)) if target_id else None
                 target_status = str(target.get("status", "")).upper() if target else ""
