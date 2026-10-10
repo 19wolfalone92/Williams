@@ -1336,11 +1336,10 @@ internal class FuturesNativeEngine(
         }
         val stopDistance = abs(signal.trigger - signal.stop)
         if (stopDistance <= 0.0) throw FuturesApiException("$symbol structural stop distance is invalid")
-        val targetDistance = signal.atr * 4.0
-        val rr = targetDistance / stopDistance
-        if (!rr.isFinite() || rr < minRiskReward) {
-            throw FuturesApiException("$symbol structural setup has R:R ${"%.2f".format(Locale.US, rr)} below ${minRiskReward}")
-        }
+        // This Futures campaign exits by Williams structural invalidation,
+        // trailing and exhaustion logic. An ATR*4 hypothetical target is not
+        // an order in this execution profile and must not veto a valid setup.
+        // Keep stop distance and explicit fee/slippage reserves as the sizing basis.
         val costReserve = signal.trigger * (2.0 * feeBufferPerSideFraction + slippageBufferFraction)
         val rawQtyByRisk = riskBudget / (stopDistance + costReserve)
         val maxNotional = min(equity * 0.20, max(0.0, available * 0.90))
