@@ -546,3 +546,36 @@ These are corrected on the current audit branch. The subsequent exact-head Campa
 
 **Chain impact.** SQLite/persisted event → recovered SignalSpec → context admission → direction mapping → order intent. This is a fail-closed recovery fix; restart and exchange reconciliation still need Demo E2E proof.
 
+
+
+### 52. Futures campaign admission used a hypothetical fixed-target R:R as a hard veto — corrected
+
+**Root cause.** The Futures campaign entry path called the shared `RiskEngine`, which required a minimum reward/risk ratio against a hypothetical ATR take-profit. The active Futures campaign does not place that target: it manages the trade through the Williams structural stop, trailing and structural exit. The mismatch could reject a valid book-aligned trend campaign because of a target that would never be submitted. In addition, an explicitly empty side string was normalized to LONG by the generic risk API.
+
+**Correction.** `RiskEngine` now has an explicit `require_min_rr` policy. Legacy Spot keeps its configured hard R:R gate. Futures portfolio selection and Futures campaign sizing disable that fixed-target veto while retaining the reference R:R as a diagnostic/ranking field; structural invalidation, finite sizing, portfolio/campaign caps, margin, exchange filters and actual-fill-versus-reserved-risk checks remain mandatory. An explicit empty/invalid side no longer defaults to LONG (the API's omitted argument still retains its documented legacy default).
+
+**Regression coverage.** Added tests for empty-side rejection and a structural campaign profile that is allowed despite a low hypothetical target R:R.
+
+**Chain impact.** Williams signal → candidate selection → risk sizing → conditional entry. This removes a non-book fixed-target veto from the structural Futures profile; it does not prove profitability or replace Demo testing.
+
+### 53. Second-pass end-to-end chain audit — current open gaps
+
+The audit is traced across both Python and Android paths, not just the indicator functions:
+
+1. **Market data:** validate monotonic, unique UTC candles; exclude unfinished bars; preserve timeframe identity.
+2. **Indicator state:** Alligator/AO/AC/fractal calculations; Python and Kotlin implementations still need shared golden vectors for exact equality.
+3. **Signal formation:** WM1 reversal/angulation approximation, WM2 exact third same-colour AO bar, WM3 right-bar confirmation and Balance-Line relationship.
+4. **Context admission:** H1 operative decision, H4 parent context and D1 macro veto; context freshness and trigger geometry are rechecked at the last mutation boundary.
+5. **Risk and campaign:** structural stop distance, cost reserve, portfolio/campaign reservations, exchange quantity normalization and actual-fill risk check.
+6. **Order lifecycle:** stable client IDs, durable intent before POST, ambiguous response reconciliation, partial fills and conditional-entry cancellation.
+7. **Protection:** exchange-side stop identity/trigger/side verification; never treat a local database state as proof that exchange protection exists.
+8. **Management and exit:** closed-bar structural reversal, monotonic trailing, reduce-only exits, protective/market exit races and authoritative fills.
+9. **Accounting/recovery:** userTrades, fees by asset, realized PnL, flat-position proof, orphan-order sweep and restart recovery.
+
+**Still not solved and must not be hidden by a green unit-test run:**
+- Python/Kotlin signal and exit parity has not been proven with the same book-derived golden OHLC vectors.
+- Angulation is an explicitly labelled engineering approximation of a visual book concept, not a literal author-defined numerical formula.
+- Android does not yet automatically aggregate every protective-child/market-exit race and multiple partial exit into one authoritative ledger; it must remain fail-closed until reconciled.
+- Funding and non-USDT fee conversion are not yet fully unified in net PnL across both engines.
+- The backtester is long-only and does not reproduce the complete live Futures campaign/order/protection lifecycle.
+- Authorized Binance Futures Demo LONG and SHORT lifecycles and the read-only release gate have not been executed from this audit environment.
