@@ -1550,7 +1550,6 @@ class CampaignExecutionService:
                 quantity=quantity,
                 campaign_id=campaign.campaign_id,
                 signal_id=campaign.current_signal_id,
-                raw_json=new_order,
             )
         )
         result["newOrderResponse"] = new_order
