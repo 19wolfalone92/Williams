@@ -2826,11 +2826,20 @@ private class NativeEngine(
         savePersistedState()
 
         executionExecutor.execute {
+            var submitAttempted = false
             try {
                 val order = withCampaignMutation(
                     candidate.symbol,
                     "CAMPAIGN_ENTRY"
                 ) {
+                    val finalNowMs = System.currentTimeMillis() + serverTimeOffsetMs
+                    require(
+                        signal.expiresAtMs > finalNowMs &&
+                            signal.confirmationTimeMs > 0L &&
+                            signal.confirmationTimeMs <= finalNowMs + 60_000L
+                    ) {
+                        "TC2 signal expired or has invalid confirmation chronology"
+                    }
                     require(currentCampaignPrice(candidate.symbol) < trigger) {
                         "Campaign trigger already crossed; no market substitution"
                     }
@@ -2841,6 +2850,8 @@ private class NativeEngine(
                     ) {
                         error("Binance MAX_POSITION would be exceeded")
                     }
+                    submitAttempted = true
+                    submitAttempted = true
                     signedPost(
                         "/api/v3/order",
                         "symbol=" + candidate.symbol +
@@ -2854,6 +2865,11 @@ private class NativeEngine(
                 savePersistedState()
                 recoverCampaignPendingEntries()
             } catch (x: Throwable) {
+                if (!submitAttempted) {
+                    clearCampaignPending(candidate.symbol)
+                    lastError = x.message ?: x.javaClass.simpleName
+                    return@execute
+                }
                 val observed = runCatching {
                     signedGet(
                         "/api/v3/order",
@@ -3743,11 +3759,20 @@ private class NativeEngine(
         savePersistedState()
 
         executionExecutor.execute {
+            var submitAttempted = false
             try {
                 withCampaignMutation(
                     candidate.symbol,
                     "CAMPAIGN_ADD_ON"
                 ) {
+                    val finalNowMs = System.currentTimeMillis() + serverTimeOffsetMs
+                    require(
+                        signal.expiresAtMs > finalNowMs &&
+                            signal.confirmationTimeMs > 0L &&
+                            signal.confirmationTimeMs <= finalNowMs + 60_000L
+                    ) {
+                        "TC2 add-on signal expired or has invalid confirmation chronology"
+                    }
                     require(currentCampaignPrice(candidate.symbol) < trigger) {
                         "Add-on trigger already crossed"
                     }
@@ -3764,6 +3789,11 @@ private class NativeEngine(
                 savePersistedState()
                 recoverCampaignPendingEntries()
             } catch (x: Throwable) {
+                if (!submitAttempted) {
+                    clearCampaignPending(candidate.symbol)
+                    lastError = x.message ?: x.javaClass.simpleName
+                    return@execute
+                }
                 val observed = runCatching {
                     signedGet(
                         "/api/v3/order",
