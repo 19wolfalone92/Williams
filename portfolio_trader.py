@@ -1742,7 +1742,7 @@ class MultiPositionTrader:
                             order_list_id=list_id if list_id else None,
                             list_client_order_id=list_client if not list_id else None,
                         ),
-                        target_order_list_id=list_id,
+                        target_order_list_id=list_id or list_client,
                         trade_id=trade.get("id"),
                     )
                     # A successful DELETE response alone is not proof that the
