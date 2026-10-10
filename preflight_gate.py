@@ -78,8 +78,32 @@ class PreflightCheckService:
         return known, unknown
 
     def _check_time(self, report):
-        server = self.client.sync_time()
-        offset = int(getattr(self.client, "time_offset_ms", 0))
+        try:
+            server = self.client.sync_time()
+            if not isinstance(server, dict) or "serverTime" not in server:
+                report.fail("server_time", "server time response is invalid")
+                return False
+            server_time_ms = int(server["serverTime"])
+            if server_time_ms <= 0:
+                report.fail("server_time", "server time value is invalid")
+                return False
+            offset = int(getattr(self.client, "time_offset_ms", 0))
+        except Exception as exc:
+            report.fail(
+                "server_time",
+                "time synchronization failed",
+                error=self._safe_reason(exc),
+            )
+            return False
+        if self.max_offset_ms is None:
+            report.details["server_time"] = {
+                "reason": "clock_offset_budget_unapproved",
+                "offset_ms": offset,
+            }
+            return False
+        if self.max_offset_ms < 0:
+            report.fail("server_time", "clock offset budget is invalid")
+            return False
         if abs(offset) > self.max_offset_ms:
             report.fail(
                 "server_time",
@@ -90,7 +114,7 @@ class PreflightCheckService:
             return False
         report.passed(
             "server_time",
-            server_time_ms=int(server["serverTime"]),
+            server_time_ms=server_time_ms,
             offset_ms=offset,
             max_offset_ms=self.max_offset_ms,
         )
