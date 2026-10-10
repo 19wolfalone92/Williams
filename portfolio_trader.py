@@ -555,7 +555,7 @@ class MultiPositionTrader:
 
     def _exit_fee_quote(self, symbol, exit_orders):
         if not hasattr(self.client, "my_trades"):
-            return 0.0
+            raise RuntimeError(f"{symbol}: trade-history adapter unavailable; fee reconciliation required")
         total = 0.0
         seen = set()
         base_asset = symbol[:-4] if symbol.endswith("USDT") else ""
@@ -566,12 +566,20 @@ class MultiPositionTrader:
             seen.add(order_id)
             try:
                 rows = self.client.my_trades(symbol, order_id=order_id, limit=1000)
-            except Exception:
-                continue
-            for row in rows or []:
-                commission = float(row.get("commission", 0) or 0)
-                asset = str(row.get("commissionAsset", "")).upper()
-                if commission <= 0:
+            except Exception as exc:
+                raise RuntimeError(f"{symbol}: exit commission history unavailable for order {order_id}") from exc
+            if not rows:
+                raise RuntimeError(f"{symbol}: empty exit commission history for order {order_id}")
+            for row in rows:
+                if "commission" not in row or row.get("commission") is None:
+                    raise RuntimeError(f"{symbol}: exit commission amount unknown for order {order_id}")
+                asset = str(row.get("commissionAsset") or "").upper()
+                if not asset:
+                    raise RuntimeError(f"{symbol}: exit commission asset unknown for order {order_id}")
+                commission = float(row["commission"])
+                if commission < 0:
+                    raise RuntimeError(f"{symbol}: invalid negative commission for order {order_id}")
+                if commission == 0:
                     continue
                 price = float(row.get("price", 0) or 0)
                 total += commission * self._fee_quote_for_asset(
@@ -702,24 +710,22 @@ class MultiPositionTrader:
         if not fills and order_id is not None and hasattr(self.client, "my_trades"):
             try:
                 rows = self.client.my_trades(symbol, order_id=order_id, limit=1000)
-                fills = [
-                    {
-                        "price": row.get("price", "0"),
-                        "qty": row.get("qty", row.get("executedQty", "0")),
-                        "commission": row.get("commission", "0"),
-                        "commissionAsset": row.get("commissionAsset", ""),
-                    }
-                    for row in (rows or [])
-                ]
-                if fills:
-                    payload["fills"] = fills
             except Exception as exc:
-                self.db.log_event(
-                    "WARNING",
-                    "fill_commission_lookup_failed",
-                    f"{symbol}: myTrades lookup unavailable; using order-level fill data",
-                    {"order_id": order_id, "error": str(exc)},
-                )
+                raise RuntimeError(
+                    f"{symbol}: authoritative fill/commission history unavailable; reconciliation required"
+                ) from exc
+            fills = [dict(row) for row in (rows or [])]
+            if fills:
+                payload["fills"] = fills
+        if not fills:
+            raise RuntimeError(
+                f"{symbol}: order-level response is not commission evidence; reconciliation required"
+            )
+        for fill in fills:
+            if "commission" not in fill or fill.get("commission") is None:
+                raise RuntimeError(f"{symbol}: fill commission is unknown; reconciliation required")
+            if "commissionAsset" not in fill or not str(fill.get("commissionAsset") or "").strip():
+                raise RuntimeError(f"{symbol}: fill commission asset is unknown; reconciliation required")
         base_asset = symbol[:-4] if symbol.endswith("USDT") else ""
         summary = accumulate_order(payload, base_asset=base_asset)
         extra_fee_quote = Decimal("0")
