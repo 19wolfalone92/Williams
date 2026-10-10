@@ -1,4 +1,5 @@
 name: Build Android APK
+# Task audit release gate: workflow-file changes intentionally validate this exact commit SHA.
 
 on:
   push:
