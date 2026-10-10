@@ -480,9 +480,16 @@ class TradingAuditStore(context: Context) :
         writableDatabase.update(
             "execution_intents",
             values,
-            "intent_id=? AND status IN ('PENDING','SUBMITTING')",
+            "intent_id=? AND status IN ('PENDING','SUBMITTING','SUBMITTED','REJECTED','RECONCILE_REQUIRED')",
             arrayOf(intentId)
         )
+        val persisted = writableDatabase.rawQuery(
+            "SELECT status FROM execution_intents WHERE intent_id=?",
+            arrayOf(intentId)
+        ).use { cursor -> cursor.moveToFirst() && cursor.getString(0) == "AMBIGUOUS" }
+        if (!persisted) {
+            throw IllegalStateException("execution mutation could not be durably marked AMBIGUOUS")
+        }
     }
 
     @Synchronized
