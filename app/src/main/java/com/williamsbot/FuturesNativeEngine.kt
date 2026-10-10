@@ -948,13 +948,16 @@ internal class FuturesNativeEngine(
         symbol: String,
         direction: String,
         signalType: String? = null,
-        triggerPrice: Double? = null
+        triggerPrice: Double? = null,
+        angulationScore: Double? = null
     ): Boolean {
         val h1 = analyseFrame(exchange, symbol, "1h") ?: return false
         val h4 = analyseFrame(exchange, symbol, "4h") ?: return false
         val d1 = analyseFrame(exchange, symbol, "1d") ?: return false
-        val contextAllowed = FuturesContextPolicy.allows(
+        val contextAllowed = FuturesContextPolicy.allowsSignal(
             direction,
+            signalType.orEmpty(),
+            angulationScore ?: Double.NaN,
             FuturesContextState(h1.bullish, h1.bearish, h1.awake, h1.ao),
             FuturesContextState(h4.bullish, h4.bearish, h4.awake, h4.ao),
             FuturesContextState(d1.bullish, d1.bearish, d1.awake, d1.ao)
@@ -983,10 +986,17 @@ internal class FuturesNativeEngine(
         val macroState = FuturesContextState(macro.bullish, macro.bearish, macro.awake, macro.ao)
         val candidates = primary.signalCandidates
             .filter { signal ->
-                // H1/H4 must permit the direction; D1 only vetoes an active
-                // opposite context. A trigger alone never authorizes entry.
+                // WM1 uses the narrowly bounded early-reversal policy; WM2/WM3
+                // retain strict H1/H4 direction permission and D1 macro veto.
                 isSignalFresh(signal, currentClosedBarTime, tf) &&
-                    FuturesContextPolicy.allows(signal.direction, operativeState, parentState, macroState)
+                    FuturesContextPolicy.allowsSignal(
+                        signal.direction,
+                        signal.type,
+                        signal.angulationScore,
+                        operativeState,
+                        parentState,
+                        macroState
+                    )
             }
         if (candidates.isEmpty()) return null
         val chosen = candidates.minByOrNull { it.confirmationTime } ?: return null
@@ -1241,6 +1251,9 @@ internal class FuturesNativeEngine(
         // separation from Jaw. Directional AO/AC and higher-timeframe gates
         // belong to context admission, not to the detector itself.
         val start = max(2, bars.lastIndex - 2)
+        val lows = bars.map { it.low }
+        val highs = bars.map { it.high }
+        val closes = bars.map { it.close }
         for (i in bars.lastIndex downTo start) {
             val bar = bars[i]
             val previous = bars.subList(i - 2, i)
@@ -1258,14 +1271,15 @@ internal class FuturesNativeEngine(
                 val belowMouth = bar.low < min(jawAt, min(teethAt, lipsAt))
                 val trigger = bar.high + tickSize
                 val stop = bar.low - tickSize
+                val angulationScore = williamsAngulationScore(jaw, lows, highs, closes, i, "LONG")
                 if (freshLow && belowMouth && closeLocation >= 0.50 &&
-                    hasIncreasingWilliamsAngulation(
-                        jaw, bars.map { it.low }, bars.map { it.high }, i, "LONG"
-                    ) && stop > 0.0
+                    angulationScore != null && stop > 0.0
                 ) {
                     return Signal(
                         symbol, "LONG", "REVERSAL", bar.openTime, trigger, stop, atr,
-                        "WM1 bullish reversal + increasing Jaw angulation; BUY STOP confirms signal bar"
+                        "WM1 bullish reversal + increasing Jaw angulation; BUY STOP confirms signal bar",
+                        confirmationTime = bar.openTime,
+                        angulationScore = angulationScore
                     )
                 }
             } else {
@@ -1273,14 +1287,15 @@ internal class FuturesNativeEngine(
                 val aboveMouth = bar.high > max(jawAt, max(teethAt, lipsAt))
                 val trigger = bar.low - tickSize
                 val stop = bar.high + tickSize
+                val angulationScore = williamsAngulationScore(jaw, lows, highs, closes, i, "SHORT")
                 if (freshHigh && aboveMouth && closeLocation <= 0.50 &&
-                    hasIncreasingWilliamsAngulation(
-                        jaw, bars.map { it.low }, bars.map { it.high }, i, "SHORT"
-                    ) && stop > trigger
+                    angulationScore != null && stop > trigger
                 ) {
                     return Signal(
                         symbol, "SHORT", "REVERSAL", bar.openTime, trigger, stop, atr,
-                        "WM1 bearish reversal + increasing Jaw angulation; SELL STOP confirms signal bar"
+                        "WM1 bearish reversal + increasing Jaw angulation; SELL STOP confirms signal bar",
+                        confirmationTime = bar.openTime,
+                        angulationScore = angulationScore
                     )
                 }
             }
@@ -1421,7 +1436,9 @@ internal class FuturesNativeEngine(
         // Re-fetch closed H1/H4/D1 context immediately before the durable intent
         // and exchange mutation. A candle boundary between scanning and arming
         // must not leave an order authorized by stale context.
-        if (!currentContextAllows(exchange, symbol, signal.direction, signal.type, triggerValue)) {
+        if (!currentContextAllows(
+                exchange, symbol, signal.direction, signal.type, triggerValue, signal.angulationScore
+            )) {
             throw FuturesApiException("$symbol directional context changed or is unavailable at final entry validation")
         }
         val signalExpiresAt = signal.confirmationTime +
@@ -1455,6 +1472,7 @@ internal class FuturesNativeEngine(
             .put("direction", signal.direction)
             .put("state", "ENTRY_PENDING")
             .put("signal_type", signal.type)
+            .put("angulation_score", signal.angulationScore)
             .put("signal_time_ms", signal.signalBarTime)
             .put("signal_confirmation_time_ms", signal.confirmationTime)
             .put("timeframe", interval())
@@ -1501,7 +1519,9 @@ internal class FuturesNativeEngine(
                 clientAlgoId,
                 params,
                 preSubmitCheck = {
-                    if (!currentContextAllows(exchange, symbol, signal.direction, signal.type, triggerValue)) {
+                    if (!currentContextAllows(
+                            exchange, symbol, signal.direction, signal.type, triggerValue, signal.angulationScore
+                        )) {
                         throw FuturesApiException(
                             "$symbol context invalidated immediately before conditional entry submission"
                         )
@@ -1778,7 +1798,8 @@ internal class FuturesNativeEngine(
                             symbol,
                             direction,
                             campaign.optString("signal_type"),
-                            campaign.optDouble("entry_trigger", 0.0)
+                            campaign.optDouble("entry_trigger", 0.0),
+                            campaign.optDouble("angulation_score", 0.0)
                         )
                     }.getOrDefault(false)
                     if (!contextStillAllows) {
