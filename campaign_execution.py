@@ -1432,6 +1432,8 @@ class CampaignExecutionService:
                 fee_asset = str(fill.get("commissionAsset") or "").upper()
                 if (
                     trade_id is None or fill_qty <= 0 or fill_price <= 0
+                    or "commission" not in fill or fill.get("commission") is None
+                    or "commissionAsset" not in fill or not fee_asset
                     or commission < 0
                     or (fill_order_id is not None and str(fill_order_id) != order_id)
                 ):
