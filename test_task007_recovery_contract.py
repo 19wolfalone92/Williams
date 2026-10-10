@@ -357,6 +357,7 @@ def test_exchange_success_with_failed_result_persistence_poison_blocks_next_muta
 
     with pytest.raises(ExecutionPersistenceError, match="not durably recorded"):
         barrier.execute(first, accepted_by_exchange)
+    assert db.state_get("recovery_state") == "REQUIRED"
 
     second = OrderIntent.new(
         "BTCUSDT", "BUY", "MARKET", {},
@@ -542,6 +543,7 @@ def test_ambiguous_submission_cannot_be_retried_with_same_intent_or_client_id(tm
 
     with pytest.raises(TimeoutError):
         barrier.execute(intent, timeout_after_possible_acceptance)
+    assert db.state_get("recovery_state") == "REQUIRED"
 
     with pytest.raises(ExecutionPersistenceError, match="intent ID already exists"):
         barrier.execute(intent, timeout_after_possible_acceptance)
