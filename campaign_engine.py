@@ -8,7 +8,7 @@ an exchange order and verifying the resulting state.
 
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import math
 from typing import Any, Iterable
 import json
@@ -279,8 +279,21 @@ class CampaignEngine:
             }.get(str(campaign.side).upper(), "")
         if not signal_direction or signal_direction != campaign_direction:
             raise ValueError("add-on direction does not match campaign")
+
+        # The signal detectors keep WM2/WM3 candidates eligible to start a flat
+        # campaign, so they emit role=ENTRY. Once this coordinator has confirmed
+        # that a same-direction campaign is already open, those same signal types
+        # are additions to that campaign, not independent new campaigns.
+        # Reclassify at this authoritative boundary; never reclassify WM1 or an
+        # opposite-direction signal as an add-on.
+        if (
+            signal.role == SignalRole.ENTRY
+            and signal.signal_type in {SignalType.SUPER_AO, SignalType.FRACTAL}
+        ):
+            signal = replace(signal, role=SignalRole.ADD_ON)
+
         if signal.role != SignalRole.ADD_ON:
-            raise ValueError("later Wise-Men signals must be explicitly classified as ADD_ON")
+            raise ValueError("later Wise-Men signals must be classified as ADD_ON by the campaign coordinator")
         if signal.signal_type not in {SignalType.SUPER_AO, SignalType.FRACTAL}:
             raise ValueError("only second/third Wise-Men signals may add to an existing campaign")
         if campaign.additions >= 2:
