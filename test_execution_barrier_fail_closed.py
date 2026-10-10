@@ -530,3 +530,28 @@ def test_instance_method_substitution_cannot_forge_ready_report():
     assert not result.accepted
     assert result.reason == "preflight_not_ready"
     assert calls == []
+
+
+def test_emergency_exit_does_not_use_generic_permit_without_dedicated_contract():
+    from portfolio_trader import MultiPositionTrader
+
+    class DB:
+        states = {}
+        def state_set(self, key, value):
+            self.states[key] = value
+
+    class NeverCallBarrier:
+        def execute(self, *args, **kwargs):
+            raise AssertionError("generic barrier must not silently authorize emergency path")
+
+    trader = MultiPositionTrader.__new__(MultiPositionTrader)
+    trader.db = DB()
+    trader.execution_barrier = NeverCallBarrier()
+    calls = []
+    with pytest.raises(RuntimeError, match="dedicated emergency execution contract"):
+        trader._execute_mutation(
+            "BTCUSDT", "SELL", "MARKET", "CID_EMERGENCY",
+            lambda: calls.append("submit"), "EMERGENCY_EXIT",
+        )
+    assert calls == []
+    assert trader.db.states["position_state:BTCUSDT"] == "RECONCILE_REQUIRED"
