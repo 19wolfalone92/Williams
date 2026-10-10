@@ -411,3 +411,6 @@ def test_cancel_replace_restart_refuses_to_infer_old_leg_from_replacement_only(t
     ).fetchone()
     assert row["status"] == "AMBIGUOUS"
     assert db.state_get("position_state") == "RECONCILE_REQUIRED"
+
+
+# Release-gate note: fake-exchange recovery tests are not physical-device or Spot Testnet evidence.
