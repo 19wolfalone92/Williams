@@ -486,7 +486,7 @@ class TradingAuditStore(context: Context) :
         val rows = mutableListOf<JSONObject>()
         writableDatabase.query(
             "trades",
-            arrayOf("net_pnl", "closed_at", "side"),
+            arrayOf("net_pnl", "closed_at", "side", "reason"),
             "side IN ('LONG','SHORT')",
             null,
             null,
@@ -499,6 +499,7 @@ class TradingAuditStore(context: Context) :
                     JSONObject()
                         .put("net_pnl", cursor.getString(0))
                         .put("closed_at", cursor.getString(1))
+                        .put("reason", cursor.getString(3) ?: "")
                 )
             }
         }
