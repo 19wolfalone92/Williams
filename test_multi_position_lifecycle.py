@@ -633,6 +633,13 @@ def test_partial_emergency_sell_never_closes_trade_as_flat(tmp_path: Path):
                 "cummulativeQuoteQty": "60",
             }
 
+        def my_trades(self, symbol, order_id=None, limit=1000):
+            return [{
+                "id": "emergency-trade-1", "orderId": "emergency-1",
+                "symbol": symbol, "price": "100", "qty": "0.6",
+                "commission": "0", "commissionAsset": "USDT",
+            }]
+
     db = Database(str(tmp_path / "emergency-partial.sqlite3"))
     client = EmergencyPartialClient()
     trade_id = add_trade(
