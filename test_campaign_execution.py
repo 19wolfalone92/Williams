@@ -167,3 +167,54 @@ def test_stop_replacement_never_lowers_stop():
         assert current > 0
         assert not svc.engine.propose_stop(campaign, current - 1.0, "BAD")
         assert campaign.current_stop_price == current
+
+
+
+def test_execution_barrier_blocks_non_h1_campaign_entry_without_order_mutation(monkeypatch):
+    from execution_barrier import OrderIntent
+
+    now = int(time.time() * 1000)
+    monkeypatch.setenv("EXECUTION_TIMEFRAME", "1h")
+    barrier = ExecutionBarrier(FakeCache(), None)
+    attempts = []
+
+    cases = [
+        {"signal_timeframe": "5m", "permission_interval": "1h", "expires_at_ms": now + 60_000},
+        {"signal_timeframe": "15m", "permission_interval": "15m", "expires_at_ms": now + 60_000},
+        {"signal_timeframe": "", "permission_interval": "1h", "expires_at_ms": now + 60_000},
+        {"signal_timeframe": "1h", "permission_interval": "1h", "expires_at_ms": now},
+    ]
+    for fields in cases:
+        intent = OrderIntent.new(
+            "BTCUSDT", "BUY", "STOP_LOSS", {},
+            purpose="CAMPAIGN_ENTRY",
+            signal_timeframe=fields["signal_timeframe"],
+            permission_interval=fields["permission_interval"],
+            signal_bar_time_ms=now - 3_600_000,
+            confirmation_time_ms=now - 1,
+            expires_at_ms=fields["expires_at_ms"],
+        )
+        result = barrier.execute(intent, lambda: attempts.append("MUTATED"))
+        assert not result.accepted
+    assert attempts == []
+
+
+def test_execution_barrier_blocks_h1_signal_when_runtime_config_is_non_h1(monkeypatch):
+    from execution_barrier import OrderIntent
+
+    now = int(time.time() * 1000)
+    monkeypatch.setenv("EXECUTION_TIMEFRAME", "5m")
+    barrier = ExecutionBarrier(FakeCache(), None)
+    attempts = []
+    intent = OrderIntent.new(
+        "BTCUSDT", "BUY", "STOP_LOSS", {},
+        purpose="CAMPAIGN_ENTRY",
+        signal_timeframe="1h",
+        permission_interval="1h",
+        signal_bar_time_ms=now - 3_600_000,
+        confirmation_time_ms=now - 1,
+        expires_at_ms=now + 60_000,
+    )
+    result = barrier.execute(intent, lambda: attempts.append("MUTATED"))
+    assert not result.accepted
+    assert attempts == []
