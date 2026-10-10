@@ -1,5 +1,6 @@
 import os
 import json, sqlite3, math
+import threading
 from pathlib import Path
 from datetime import datetime, timezone
 from contextlib import contextmanager
@@ -17,25 +18,34 @@ class Database:
         self.conn.execute('PRAGMA journal_mode=WAL')
         self.conn.execute('PRAGMA synchronous=NORMAL')
         self._transaction_active = False
+        self._transaction_lock = threading.RLock()
         self.init()
 
     @contextmanager
-    def transaction(self):
-        """Atomic transaction for multi-step DB operations."""
-        if self._transaction_active:
-            yield self
-            return
+    def transaction(self, *, immediate=False):
+        """Atomic transaction for multi-step DB operations.
 
-        self._transaction_active = True
-        try:
-            self.conn.execute('BEGIN')
-            yield self
-            self.conn.commit()
-        except Exception:
-            self.conn.rollback()
-            raise
-        finally:
-            self._transaction_active = False
+        immediate=True obtains SQLite's write reservation before admission
+        checks. This is required when a read/check/write sequence must serialize
+        across processes, such as enforcing the global Futures campaign cap.
+        The re-entrant lock also prevents two threads sharing this Database
+        instance from treating one another's transaction as a nested transaction.
+        """
+        with self._transaction_lock:
+            if self._transaction_active:
+                yield self
+                return
+
+            self._transaction_active = True
+            try:
+                self.conn.execute('BEGIN IMMEDIATE' if immediate else 'BEGIN')
+                yield self
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
+                raise
+            finally:
+                self._transaction_active = False
 
     def init(self):
         self.conn.executescript('''
