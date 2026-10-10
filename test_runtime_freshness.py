@@ -111,3 +111,39 @@ def test_missing_approved_budget_remains_unknown_even_with_fresh_measurement():
 
 def test_unapproved_budget_cannot_be_inferred_from_component_defaults():
     assert DEFAULT_MAX_AGE_MS == {}
+
+
+
+def test_non_positive_freshness_budget_remains_unknown():
+    for budget in (0, -1):
+        result = evaluate_freshness(
+            "balances", evidence("balances"), now_ms=100_000, max_age_ms=budget
+        )
+        assert result.status == "UNKNOWN"
+        assert result.reason == "freshness_budget_invalid"
+
+
+def test_generation_mismatch_blocks_component():
+    result = evaluate_freshness_set(
+        ("market_context",),
+        {"market_context": evidence("market_context", generation="context-7")},
+        now_ms=100_000,
+        max_ages_ms={"market_context": 100},
+        expected_generations={"market_context": "context-8"},
+    )["market_context"]
+    assert result.status == "UNKNOWN"
+    assert result.reason == "measurement_generation_mismatch"
+
+
+def test_generation_binding_is_not_inferred_for_unrelated_components():
+    results = evaluate_freshness_set(
+        ("account", "market_context"),
+        {
+            "account": evidence("account", generation="account-session-1"),
+            "market_context": evidence("market_context", generation="context-7"),
+        },
+        now_ms=100_000,
+        max_ages_ms={"account": 100, "market_context": 100},
+    )
+    assert results["account"].status == "PASS"
+    assert results["market_context"].status == "PASS"
