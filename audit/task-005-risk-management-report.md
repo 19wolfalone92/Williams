@@ -92,3 +92,15 @@ The repository CI workflow `Williams Campaign CI` runs Python tests/static compi
 4. **Exchange filter compatibility:** combined LOT_SIZE/MARKET_LOT_SIZE steps that cannot be jointly satisfied are rejected. Real-symbol Binance Spot Testnet metadata must be checked end-to-end on all enabled pairs.
 5. **Android lifecycle test coverage:** SharedPreferences persistence and restart logic are updated, but an Android process-kill/relaunch test around UTC rollover, partially-filled market-triggered conditional orders and failed `commit()` must be executed on the final APK.
 6. **End-to-end financial source of truth:** confirm every enabled route computes account equity (free + managed assets), commissions (including non-quote commission assets), actual partial fill quantity and residual protection from Binance data. Until that is proven for exact release artifacts, the bot is not accepted for real trading.
+
+
+## TASK 005.1 — 2026-10-10 CI follow-up
+
+Exact-head checks on `2125caa9646ad6dec59daba5208bdc4985f67ab4` completed with failures:
+- Python pytest step: PASS, but the Python backend workflow failed in `ci_release_gate.py` because it still required the obsolete five-position default.
+- Android unit-test task completed; combined Android job failed in lint because `AndroidGradlePluginVersion` reported Gradle 8.14.6 available while the wrapper remained 8.14.5.
+- APK workflow also failed at the same stale release-contract gate.
+
+Corrective changes now align the release gate and example environment with the actual fail-closed contract: max one active campaign, entry risk <=0.25%, aggregate risk <=0.60%, daily loss <=1.00%. Gradle wrapper and CI setup are moved to 8.14.6 to address the explicit lint diagnostic. These changes require fresh exact-head CI; no prior run is evidence for the new SHA.
+
+Fee-adjusted fill accounting, third-asset fee conversion, idempotent per-fill ledgering, SQLite fault injection, and comprehensive UTC-boundary restart tests are still under audit. Status remains IN PROGRESS — NOT APPROVED.
