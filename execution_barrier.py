@@ -135,6 +135,11 @@ class ExecutionBarrier:
                 return "risk-reducing intent must be SELL or CANCEL"
             return ""
 
+        # Binance Spot cannot open a short. Any SELL that is not explicitly
+        # classified as protection/exit is an unsupported exposure mutation.
+        if side != "BUY":
+            return "non-risk-reducing SELL exposure is not supported by Spot"
+
         if not intent.required_context_versions:
             return "missing required_context_versions"
 
@@ -251,14 +256,44 @@ class ExecutionBarrier:
                     # Secondary event telemetry is best-effort; the intent row is mandatory.
                     pass
             snapshot = self.context_cache.snapshot()
-            reason = self._validate(intent, snapshot)
+            try:
+                reason = self._validate(intent, snapshot)
+            except Exception as exc:
+                # Malformed context versions, timestamps or state stores are
+                # validation failures, not permission to continue to submit().
+                reason = f"validation_error:{type(exc).__name__}:{exc}"
+                self._record("ERROR", "execution_validation_error", intent, reason)
+                try:
+                    self._persist(intent, "BLOCKED", reason)
+                except Exception as persist_exc:
+                    return ExecutionResult(
+                        intent.intent_id,
+                        False,
+                        reason=(
+                            "validation and BLOCKED-state persistence failed; "
+                            "no exchange request sent: "
+                            f"{type(persist_exc).__name__}: {persist_exc}"
+                        ),
+                    )
+                return ExecutionResult(intent.intent_id, False, reason=reason)
             if reason:
                 try:
                     order_fsm.transition(OrderState.CANCELED)
                 except ValueError:
                     order_fsm.state = OrderState.RECONCILE_REQUIRED
                 self._record("WARNING", "execution_blocked", intent, reason)
-                self._persist(intent, "BLOCKED", reason)
+                try:
+                    self._persist(intent, "BLOCKED", reason)
+                except Exception as exc:
+                    return ExecutionResult(
+                        intent.intent_id,
+                        False,
+                        reason=(
+                            "admission blocked but BLOCKED-state persistence failed; "
+                            "no exchange request sent: "
+                            f"{type(exc).__name__}: {exc}"
+                        ),
+                    )
                 return ExecutionResult(intent.intent_id, False, reason=reason)
 
             if pre_submit_checks is not None:
