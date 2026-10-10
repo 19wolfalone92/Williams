@@ -33,7 +33,8 @@ _TF_MS = {
 
 
 def _bar_ms(timeframe: str) -> int:
-    return _TF_MS.get(str(timeframe), 300_000)
+    # Unknown timeframes must fail closed; never silently assign the M5 TTL.
+    return _TF_MS.get(str(timeframe), 0)
 
 
 def default_expiry_ms(signal: SignalSpec) -> int:
