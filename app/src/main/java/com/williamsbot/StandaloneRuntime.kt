@@ -1183,9 +1183,12 @@ private class NativeEngine(
             // A process may die after an exchange request was sent but before
             // its outcome row was committed. Resolve only after the full REST
             // recovery/audit sequence above succeeds.
-            auditStore.resolveUnresolvedMutationIntents(
-                "startup exchange reconciliation completed"
-            )
+            if (!reconcileUnresolvedMutationIntents()) {
+                error(
+                    "RECONCILE_REQUIRED: one or more exchange mutations could not be " +
+                        "verified by exact Binance order/order-list lookup"
+                )
+            }
         } catch (x: Exception) {
             setReconcileRequired(
                 "startup exchange synchronization failed: " +
@@ -1424,9 +1427,12 @@ private class NativeEngine(
             recoverPendingEntries()
             reconcilePositionsWithExchange()
             auditManagedOpenOrders()
-            auditStore.resolveUnresolvedMutationIntents(
-                "manual exchange reconciliation completed"
-            )
+            if (!reconcileUnresolvedMutationIntents()) {
+                error(
+                    "RECONCILE_REQUIRED: unresolved exchange mutation journal entries " +
+                        "remain after exact Binance lookups"
+                )
+            }
 
             JSONObject()
                 .put("recovered", !reconcileRequired)
@@ -1456,6 +1462,169 @@ private class NativeEngine(
                     x.message ?: x.javaClass.simpleName
                 )
         }
+    }
+
+    /**
+     * Resolve persisted ambiguous writes by querying the exact exchange order or
+     * order-list identifiers. Missing/unknown exchange evidence never clears the
+     * journal and never authorizes a new BUY.
+     */
+    private fun reconcileUnresolvedMutationIntents(): Boolean {
+        val pending = try {
+            auditStore.unresolvedMutationIntents()
+        } catch (failure: Throwable) {
+            lastError = "Cannot read mutation journal: " +
+                (failure.message ?: failure.javaClass.simpleName)
+            return false
+        }
+        if (pending.isEmpty()) return true
+
+        val orderStatuses = setOf(
+            "NEW", "PARTIALLY_FILLED", "FILLED", "CANCELED",
+            "REJECTED", "EXPIRED", "EXPIRED_IN_MATCH"
+        )
+        val listStatuses = setOf(
+            "EXEC_STARTED", "EXECUTING", "ALL_DONE", "REJECT"
+        )
+        var allResolved = true
+
+        for (row in pending) {
+            val intentId = row.optString("intent_id")
+            val method = row.optString("method").uppercase(Locale.US)
+            val path = row.optString("path")
+            val symbol = row.optString("symbol").uppercase(Locale.US)
+            try {
+                require(intentId.isNotBlank() && symbol.isNotBlank()) {
+                    "mutation journal row lacks intent ID or symbol"
+                }
+                val request = JSONObject(row.optString("request_json"))
+                val rawParams = request.optString("params")
+                val fields = rawParams.split("&").mapNotNull { item ->
+                    val splitAt = item.indexOf('=')
+                    if (splitAt <= 0) null
+                    else item.substring(0, splitAt) to item.substring(splitAt + 1)
+                }.toMap()
+
+                val evidence: JSONObject = when (path) {
+                    "/api/v3/order" -> {
+                        val originalClientId = fields["newClientOrderId"]
+                            ?: fields["origClientOrderId"]
+                        val orderId = fields["orderId"]
+                        require(!originalClientId.isNullOrBlank() || !orderId.isNullOrBlank()) {
+                            "order mutation journal has no queryable exchange identifier"
+                        }
+                        val query = if (!originalClientId.isNullOrBlank()) {
+                            "symbol=" + symbol + "&origClientOrderId=" + originalClientId
+                        } else {
+                            "symbol=" + symbol + "&orderId=" + orderId
+                        }
+                        val order = signedGet("/api/v3/order", query)
+                        val status = order.optString("status").uppercase(Locale.US)
+                        require(
+                            order.optString("symbol").equals(symbol, ignoreCase = true) &&
+                                order.optLong("orderId", 0L) > 0L &&
+                                status in orderStatuses
+                        ) {
+                            "Binance order lookup did not return authoritative order state"
+                        }
+                        if (!originalClientId.isNullOrBlank()) {
+                            require(order.optString("clientOrderId") == originalClientId) {
+                                "Binance order lookup returned a different clientOrderId"
+                            }
+                        }
+                        JSONObject()
+                            .put("lookup", "order")
+                            .put("method", method)
+                            .put("path", path)
+                            .put("query_order", order)
+                    }
+
+                    "/api/v3/orderList/oco", "/api/v3/orderList" -> {
+                        val listId = fields["orderListId"]
+                        val listClientId = fields["listClientOrderId"]
+                            ?: fields["origClientOrderId"]
+                        require(!listId.isNullOrBlank() || !listClientId.isNullOrBlank()) {
+                            "order-list mutation journal has no queryable exchange identifier"
+                        }
+                        val query = if (!listId.isNullOrBlank()) {
+                            "symbol=" + symbol + "&orderListId=" + listId
+                        } else {
+                            "symbol=" + symbol + "&origClientOrderId=" + listClientId
+                        }
+                        val orderList = signedGet("/api/v3/orderList", query)
+                        val status = orderList.optString("listStatusType").uppercase(Locale.US)
+                        val orderStatus = orderList.optString("listOrderStatus").uppercase(Locale.US)
+                        require(
+                            orderList.optString("symbol").equals(symbol, ignoreCase = true) &&
+                                orderList.optLong("orderListId", -1L) >= 0L &&
+                                (status in listStatuses || orderStatus in listStatuses)
+                        ) {
+                            "Binance order-list lookup did not return authoritative state"
+                        }
+                        if (!listClientId.isNullOrBlank()) {
+                            require(orderList.optString("listClientOrderId") == listClientId) {
+                                "Binance order-list lookup returned a different listClientOrderId"
+                            }
+                        }
+                        JSONObject()
+                            .put("lookup", "orderList")
+                            .put("method", method)
+                            .put("path", path)
+                            .put("query_order_list", orderList)
+                    }
+
+                    "/api/v3/order/cancelReplace" -> {
+                        val cancelOrderId = fields["cancelOrderId"]
+                        val newClientId = fields["newClientOrderId"]
+                        require(!cancelOrderId.isNullOrBlank() && !newClientId.isNullOrBlank()) {
+                            "cancelReplace journal lacks old and new order identifiers"
+                        }
+                        val oldOrder = signedGet(
+                            "/api/v3/order",
+                            "symbol=" + symbol + "&orderId=" + cancelOrderId
+                        )
+                        val newOrder = signedGet(
+                            "/api/v3/order",
+                            "symbol=" + symbol + "&origClientOrderId=" + newClientId
+                        )
+                        val oldStatus = oldOrder.optString("status").uppercase(Locale.US)
+                        val newStatus = newOrder.optString("status").uppercase(Locale.US)
+                        require(
+                            oldOrder.optString("symbol").equals(symbol, ignoreCase = true) &&
+                                oldOrder.optLong("orderId", 0L) > 0L &&
+                                oldStatus in orderStatuses &&
+                                newOrder.optString("symbol").equals(symbol, ignoreCase = true) &&
+                                newOrder.optLong("orderId", 0L) > 0L &&
+                                newOrder.optString("clientOrderId") == newClientId &&
+                                newStatus in orderStatuses
+                        ) {
+                            "Binance has not proved both sides of cancelReplace"
+                        }
+                        JSONObject()
+                            .put("lookup", "cancelReplace")
+                            .put("method", method)
+                            .put("path", path)
+                            .put("old_order", oldOrder)
+                            .put("new_order", newOrder)
+                    }
+
+                    else -> error("No safe recovery lookup for mutation route " + method + " " + path)
+                }
+
+                auditStore.confirmMutationIntent(intentId, evidence)
+            } catch (failure: Throwable) {
+                allResolved = false
+                lastError = "Mutation remains unresolved (" + intentId + "): " +
+                    (failure.message ?: failure.javaClass.simpleName)
+            }
+        }
+
+        val stillPending = try {
+            auditStore.hasUnresolvedMutationIntents()
+        } catch (failure: Throwable) {
+            true
+        }
+        return allResolved && !stillPending
     }
 
     private fun signedTimestamp(): Long {
