@@ -129,12 +129,20 @@ class ExecutionBarrier:
         # Must never deadlock risk-reducing actions behind an unknown position or
         # stale market permission. Entry/add-on intents remain fail-closed.
         if risk_reducing:
+            if str(intent.order_type or "").upper() == "CANCEL":
+                return ""
+            if side != "SELL":
+                return "risk-reducing intent must be SELL or CANCEL"
             return ""
 
         if not intent.required_context_versions:
             return "missing required_context_versions"
 
-        for tf, required in intent.required_context_versions.items():
+        normalized_versions = {
+            str(tf).lower(): int(version)
+            for tf, version in intent.required_context_versions.items()
+        }
+        for tf, required in normalized_versions.items():
             normalized_tf = str(tf).lower()
             ctx = snapshot.context(intent.symbol, normalized_tf)
             if ctx is None:
@@ -155,10 +163,10 @@ class ExecutionBarrier:
             return f"missing permission context {intent.symbol} {permission_tf}"
         if not self._context_fresh(permission_ctx, permission_tf, now_ms):
             return f"stale_or_unverifiable permission context {intent.symbol} {permission_tf}"
-        if permission_tf in {str(x).lower() for x in intent.required_context_versions}:
-            required = next(v for k, v in intent.required_context_versions.items() if str(k).lower() == permission_tf)
-            if int(getattr(permission_ctx, "version", -1)) != int(required):
-                return "permission context version mismatch"
+        if permission_tf not in normalized_versions:
+            return "permission_interval missing from required_context_versions"
+        if int(getattr(permission_ctx, "version", -1)) != normalized_versions[permission_tf]:
+            return "permission context version mismatch"
 
         direction = "long" if side == "BUY" else "short"
         if direction == "long" and not bool(getattr(permission_ctx, "allow_long", False)):
