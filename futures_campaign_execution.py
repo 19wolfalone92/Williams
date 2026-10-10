@@ -15,6 +15,8 @@ from dataclasses import replace
 from typing import Any
 
 from campaign_engine import CampaignEngine
+from tc2_campaign_rules import tc2_price_bar_trailing_candidate
+
 from campaign_model import (
     CampaignEventType,
     CampaignState,
@@ -46,56 +48,6 @@ OPEN_CAMPAIGN_STATES = {
     CampaignState.RECONCILE_REQUIRED,
 }
 
-
-def tc2_price_bar_trailing_candidate(
-    direction: str,
-    lows: list[float],
-    highs: list[float],
-    tick_size: float,
-    trailing_bars: int = 3,
-) -> dict[str, float | int | str]:
-    """Calculate a price-bar structural candidate; callers must supply closed bars.
-
-    This is a selected TC2 exit-policy implementation, not a claim that every
-    Williams edition prescribes the same trailing window. Exchange tick rounding
-    is separate and is applied by the Futures adapter before submission.
-    """
-    side = str(direction or "").strip().upper()
-    if side not in {"LONG", "SHORT"}:
-        raise ValueError("TC2 trailing direction must be LONG or SHORT")
-    if trailing_bars not in {3, 5}:
-        raise ValueError("TC2 trailing_bars must be 3 or 5")
-    try:
-        tick = float(tick_size)
-    except (TypeError, ValueError, OverflowError) as exc:
-        raise ValueError("TC2 tick size must be numeric") from exc
-    if not math.isfinite(tick) or tick <= 0.0:
-        raise ValueError("TC2 tick size must be finite and positive")
-    if len(lows) != len(highs) or len(lows) < trailing_bars:
-        raise ValueError("TC2 trailing requires equal-length high/low lists with enough closed bars")
-
-    try:
-        selected_lows = [float(value) for value in lows[-trailing_bars:]]
-        selected_highs = [float(value) for value in highs[-trailing_bars:]]
-    except (TypeError, ValueError, OverflowError) as exc:
-        raise ValueError("TC2 trailing contains non-numeric OHLC values") from exc
-    if not all(math.isfinite(value) and value > 0.0 for value in selected_lows):
-        raise ValueError("TC2 trailing lows contain invalid values")
-    if not all(math.isfinite(value) and value > 0.0 for value in selected_highs):
-        raise ValueError("TC2 trailing highs contain invalid values")
-    if any(low > high for low, high in zip(selected_lows, selected_highs)):
-        raise ValueError("TC2 trailing contains a bar with low above high")
-
-    extreme = min(selected_lows) if side == "LONG" else max(selected_highs)
-    raw_stop = extreme - tick if side == "LONG" else extreme + tick
-    if not math.isfinite(raw_stop) or raw_stop <= 0.0:
-        raise ValueError("TC2 raw structural stop is invalid")
-    return {
-        "direction": side,
-        "trailing_bars": trailing_bars,
-        "structural_extreme": extreme,
-        "raw_stop_price": raw_stop,
-    }
 
 def signal_direction(signal: SignalSpec) -> str:
     direction = str(getattr(signal, "direction", "") or "").upper()
