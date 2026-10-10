@@ -11,6 +11,7 @@ import math
 import os
 import time
 import uuid
+from dataclasses import replace
 from typing import Any
 
 from campaign_engine import CampaignEngine
@@ -658,18 +659,49 @@ class FuturesCampaignExecutionService:
 
     def _context_versions(self, signal: SignalSpec) -> dict[str, int]:
         snapshot = self.barrier.context_cache.snapshot()
-        versions = {str(k).lower(): int(v) for k, v in dict(signal.context_versions or {}).items()}
+        versions = {
+            str(key).lower(): int(value)
+            for key, value in dict(signal.context_versions or {}).items()
+        }
+        tc2_core = (
+            os.getenv("WILLIAMS_STRATEGY_PROFILE", "TC2_THREE_WISE_MEN").strip().upper()
+            == "TC2_THREE_WISE_MEN"
+        )
         operative = str(signal.timeframe).lower()
-        ctx = snapshot.context(signal.symbol, operative)
-        if ctx is None:
-            raise FuturesCampaignExecutionError(
-                f"{signal.symbol}: no current MarketContext for {operative}"
-            )
-        versions.setdefault(operative, int(ctx.version))
+        if tc2_core:
+            if operative != "1h":
+                raise FuturesCampaignExecutionError(
+                    f"{signal.symbol}: TC2 campaigns require H1 as the decision timeframe"
+                )
+            required_intervals = ("1h", "4h", "1d")
+        else:
+            required_intervals = (operative,)
+
+        for interval in required_intervals:
+            ctx = snapshot.context(signal.symbol, interval)
+            if ctx is None:
+                raise FuturesCampaignExecutionError(
+                    f"{signal.symbol}: no current MarketContext for {interval}"
+                )
+            current_version = int(ctx.version)
+            if interval in versions and versions[interval] != current_version:
+                # Preserve the signal's original dependency so stale scans cannot
+                # be silently re-authorized against newer market context.
+                raise FuturesCampaignExecutionError(
+                    f"{signal.symbol}: signal context {interval} is stale "
+                    f"(signal={versions[interval]}, current={current_version})"
+                )
+            versions.setdefault(interval, current_version)
+
         for interval, version in list(versions.items()):
-            if snapshot.context(signal.symbol, interval) is None:
+            ctx = snapshot.context(signal.symbol, interval)
+            if ctx is None:
                 raise FuturesCampaignExecutionError(
                     f"{signal.symbol}: signal depends on absent MarketContext {interval}"
+                )
+            if int(ctx.version) != int(version):
+                raise FuturesCampaignExecutionError(
+                    f"{signal.symbol}: signal context {interval} version mismatch"
                 )
         return versions
 
@@ -804,6 +836,12 @@ class FuturesCampaignExecutionService:
         if direction == "SHORT" and not stop > trigger:
             raise FuturesCampaignExecutionError("Rounded SHORT stop must remain above entry")
 
+        tc2_core = (
+            os.getenv("WILLIAMS_STRATEGY_PROFILE", "TC2_THREE_WISE_MEN").strip().upper()
+            == "TC2_THREE_WISE_MEN"
+        )
+        if tc2_core:
+            signal = replace(signal, context_versions=self._context_versions(signal))
         self._entry_preflight(signal, direction, trigger, stop)
         capacity_quote = equity * self.portfolio_risk_limit_pct
         portfolio_reserved = self.engine.portfolio_reserved_risk_quote()
