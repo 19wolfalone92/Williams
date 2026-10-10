@@ -113,10 +113,12 @@ internal class FuturesNativeEngine(
 
     private val maxLeverage = 1
     private val maxPositions: Int
-        get() = prefs.getInt("futures_max_positions", 3).coerceIn(1, 5)
+        get() = prefs.getInt("futures_max_positions", 1).coerceIn(1, 5)
     private val perCampaignRiskFraction = 0.0025
     private val portfolioRiskFraction = 0.01
-    private val maxDailyLossFraction = 0.03
+    private val maxDailyLossFraction = 0.01
+    private val maxConsecutiveLosses = 2
+    private val postLossCooldownMinutes = 30
     private val feeBufferPerSideFraction = 0.001
     private val slippageBufferFraction = 0.0015
     private val maxSpreadFraction = 0.0015
@@ -668,9 +670,24 @@ internal class FuturesNativeEngine(
             }
             val baselinePersisted = updateDailyBaseline(equity)
             val dailyLoss = if (baselinePersisted) dailyLossFraction(equity) else 1.0
+            val lossGuardReason = runCatching {
+                FuturesLossGuard.violation(
+                    auditStore.recentClosedFuturesTrades(),
+                    maxConsecutiveLosses,
+                    postLossCooldownMinutes,
+                    System.currentTimeMillis()
+                )
+            }.getOrElse { "closed Futures trade history unavailable; new entries blocked" }
             var lockoutCancellations = JSONArray()
-            if (!killLatched && !paused && (reconcileRequired || dailyLoss >= maxDailyLossFraction)) {
-                val reason = if (reconcileRequired) "RECONCILE_REQUIRED" else "DAILY_RISK_LOCKOUT"
+            if (!killLatched && !paused && (
+                    reconcileRequired || dailyLoss >= maxDailyLossFraction || lossGuardReason != null
+                )
+            ) {
+                val reason = when {
+                    reconcileRequired -> "RECONCILE_REQUIRED"
+                    dailyLoss >= maxDailyLossFraction -> "DAILY_RISK_LOCKOUT"
+                    else -> "LOSS_STREAK_LOCKOUT"
+                }
                 lockoutCancellations = cancelPendingEntries(exchange, reason)
             }
             if (killLatched) {
@@ -700,6 +717,16 @@ internal class FuturesNativeEngine(
                     .put("state", "DAILY_RISK_LOCKOUT")
                     .put("daily_loss_fraction", dailyLoss)
                     .put("limit_fraction", maxDailyLossFraction)
+                    .put("pending_entry_cancellations", lockoutCancellations)
+                    .put("new_entries", 0)
+                return
+            }
+            if (lossGuardReason != null) {
+                lastScanSummary = JSONObject()
+                    .put("state", "LOSS_STREAK_LOCKOUT")
+                    .put("reason", lossGuardReason)
+                    .put("max_consecutive_losses", maxConsecutiveLosses)
+                    .put("post_loss_cooldown_minutes", postLossCooldownMinutes)
                     .put("pending_entry_cancellations", lockoutCancellations)
                     .put("new_entries", 0)
                 return
