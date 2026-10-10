@@ -695,6 +695,12 @@ class CampaignExecutionService:
                         self.db.state_set(f"position_state:{symbol}", "OPEN")
                         campaign.tags.pop("pending_order_id", None)
                         self.db.save_campaign(campaign)
+                        self._mark_intent_reconciled(
+                            client_id,
+                            status,
+                            evidence="Binance order status and executed quantity reconciled against durable add-on campaign state",
+                            related_order_id=order.get("orderId"),
+                        )
                         results.append({
                             "symbol": symbol,
                             "campaign_id": campaign.campaign_id,
@@ -790,12 +796,18 @@ class CampaignExecutionService:
                     self.db.state_set(f"position_state:{symbol}", "OPEN")
                     campaign.tags.pop("pending_order_id", None)
                     self.db.save_campaign(campaign)
+                    self._mark_intent_reconciled(
+                        client_id,
+                        status,
+                        evidence="Binance order status and executed quantity reconciled against durable initial campaign/position state",
+                        related_order_id=order.get("orderId"),
+                    )
                     results.append({
                         "symbol": symbol,
                         "campaign_id": campaign.campaign_id,
                         "state": "OPEN",
                         "filled_quantity": executed,
-                        "partial_entry": status == "PARTIALLY_FILLED",
+                        "partial_entry": status != "FILLED",
                     })
                     continue
 
@@ -829,6 +841,12 @@ class CampaignExecutionService:
                         "OPEN" if self.db.open_trade(symbol) else "FLAT",
                     )
                     self.db.save_campaign(campaign)
+                    self._mark_intent_reconciled(
+                        client_id,
+                        status,
+                        evidence="Binance terminal order state confirmed; no unaccounted fills remain",
+                        related_order_id=order.get("orderId"),
+                    )
                     results.append({
                         "symbol": symbol,
                         "campaign_id": campaign.campaign_id,
