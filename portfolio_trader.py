@@ -1654,6 +1654,11 @@ class MultiPositionTrader:
 
     def recover(self):
         """Startup/full recovery. Campaign mode never routes through legacy OCO recovery."""
+        # Persist the entry barrier before any recovery I/O. Intent-level
+        # RECONCILED is not global recovery completion; this implementation
+        # deliberately does not clear the gate until financial/position/
+        # protection evidence is complete.
+        self.db.state_set("recovery_status", "RECOVERY_REQUIRED")
         # Resolve durable mutation intents by exact exchange identities before
         # any campaign/trade recovery can consider new execution. Resolver is
         # read-only; missing evidence preserves the global fail-closed barrier.
