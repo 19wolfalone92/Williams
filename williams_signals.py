@@ -572,7 +572,7 @@ def extract_short_signal_specs(
     unique: dict[tuple[str, int], SignalSpec] = {}
     for spec in specs:
         unique[(spec.signal_type.value, spec.signal_bar_time_ms)] = spec
-    return sorted(unique.values(), key=lambda x: (x.signal_bar_time_ms, x.signal_type.value))
+    return sorted(unique.values(), key=lambda x: (int(getattr(x, "confirmation_time_ms", 0) or x.signal_bar_time_ms), x.signal_type.value))
 
 
 # Mirror the long detector. Direction is explicit and is kept separate from
