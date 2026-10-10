@@ -2401,3 +2401,16 @@ def test_add_on_signal_without_expiry_is_rejected(tmp_path, direction):
         assert len(client.stop_entries) == 1
     finally:
         db.conn.close()
+
+
+def test_pending_entry_with_missing_expiry_is_cancelled_during_reconciliation(tmp_path):
+    db, client, service, campaign = _armed_entry_for_cancel(tmp_path, cancel_confirms=True)
+    try:
+        campaign.tags["entry_expires_at_ms"] = 0
+        db.save_campaign(campaign)
+        result = service.reconcile_symbol("BTCUSDT")
+        assert result["action"] == "ENTRY_CANCELLED"
+        assert result["state"] == "CLOSED"
+        assert client.algo_status == "CANCELED"
+    finally:
+        db.conn.close()
