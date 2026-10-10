@@ -15,7 +15,7 @@ class Database:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute('PRAGMA busy_timeout=20000')
         self.conn.execute('PRAGMA journal_mode=WAL')
-        self.conn.execute('PRAGMA synchronous=NORMAL')
+        self.conn.execute('PRAGMA synchronous=FULL')
         self._transaction_active = False
         self.init()
 
@@ -305,9 +305,20 @@ class Database:
         }
         if 'exchange_trade_id' not in columns:
             self.conn.execute('ALTER TABLE campaign_fills ADD COLUMN exchange_trade_id TEXT')
+        duplicate = self.conn.execute(
+            "SELECT symbol, exchange_trade_id, COUNT(*) AS n FROM campaign_fills "
+            "WHERE exchange_trade_id IS NOT NULL AND exchange_trade_id != '' "
+            "GROUP BY symbol, exchange_trade_id HAVING COUNT(*) > 1 LIMIT 1"
+        ).fetchone()
+        if duplicate:
+            raise RuntimeError(
+                "duplicate exchange fill identity in existing database; refusing automatic cleanup: "
+                f"{duplicate['symbol']}:{duplicate['exchange_trade_id']}"
+            )
         self.conn.execute(
-            'CREATE INDEX IF NOT EXISTS idx_campaign_fills_exchange_trade '
-            'ON campaign_fills(symbol, exchange_trade_id)'
+            'CREATE UNIQUE INDEX IF NOT EXISTS uq_campaign_fills_exchange_trade '
+            'ON campaign_fills(symbol, exchange_trade_id) '
+            "WHERE exchange_trade_id IS NOT NULL AND exchange_trade_id != ''"
         )
 
     def mark_recovery_required(self, reason: str) -> None:
@@ -329,6 +340,12 @@ class Database:
             'unresolved_symbols', 'pending_entries', 'unknown_orders',
             'inventory_mismatches', 'unprotected_positions', 'unknown_campaigns',
         )
+        canonical_state = str(evidence.get('canonical_position_state', '')).upper()
+        if canonical_state not in {'FLAT', 'OPEN', 'ENTRY_PENDING', 'EXIT_PENDING'}:
+            raise RuntimeError(
+                'recovery evidence must contain an exchange-reconciled canonical_position_state; '
+                'empty local storage is not evidence of FLAT'
+            )
         if not isinstance(evidence, dict):
             raise TypeError('recovery evidence must be a dictionary')
         failed = [key for key in required_checks if evidence.get(key) is not True]
@@ -343,6 +360,7 @@ class Database:
             self.state_set('recovery_evidence', json.dumps(evidence, default=str, sort_keys=True))
             self.state_set('recovery_reason', '')
             self.state_set('recovery_state', 'READY')
+            self.state_set('position_state', canonical_state)
             self.state_set('recovery_updated_at', datetime.now(timezone.utc).isoformat())
 
     def _migrate_trade_columns(self):
