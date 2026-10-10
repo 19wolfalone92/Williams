@@ -302,6 +302,52 @@ def _latest_confirmed_fractal(
     return None
 
 
+
+def _tc2_initial_fractal_stop(
+    ind: pd.DataFrame,
+    *,
+    side: str,
+    tick_size: float,
+) -> float | None:
+    """Select TC2's 3/5-closed-price-bar protective reference for WM3-first entries."""
+    side_key = str(side).upper()
+    if side_key not in {"LONG", "SHORT"}:
+        return None
+    try:
+        trailing_bars = int(os.getenv("WILLIAMS_TC2_TRAILING_BARS", "3"))
+        tick = float(tick_size)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if trailing_bars not in {3, 5} or not math.isfinite(tick) or tick <= 0.0:
+        return None
+    if ind is None or len(ind) < trailing_bars:
+        return None
+    rows = ind.tail(trailing_bars)
+    if not {"low", "high", "close"}.issubset(rows.columns):
+        return None
+    try:
+        lows = pd.to_numeric(rows["low"], errors="coerce").to_numpy(dtype=float)
+        highs = pd.to_numeric(rows["high"], errors="coerce").to_numpy(dtype=float)
+        closes = pd.to_numeric(rows["close"], errors="coerce").to_numpy(dtype=float)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if (
+        not all(math.isfinite(float(value)) and float(value) > 0.0 for value in lows)
+        or not all(math.isfinite(float(value)) and float(value) > 0.0 for value in highs)
+        or not all(math.isfinite(float(value)) and float(value) > 0.0 for value in closes)
+        or any(
+            float(low) > float(high)
+            or float(close) < float(low)
+            or float(close) > float(high)
+            for low, high, close in zip(lows, highs, closes)
+        )
+    ):
+        return None
+    extreme = float(min(lows) if side_key == "LONG" else max(highs))
+    stop = extreme - tick if side_key == "LONG" else extreme + tick
+    return stop if math.isfinite(stop) and stop > 0.0 else None
+
+
 def _dedupe_and_sort_signal_specs(specs: list[SignalSpec]) -> list[SignalSpec]:
     """Keep one identity per source formation and order by actionable confirmation."""
     unique: dict[tuple[str, int], SignalSpec] = {}
@@ -431,16 +477,23 @@ def extract_long_signal_specs(
 
     fractal = _latest_confirmed_fractal(ind, side="LONG")
     if fractal is not None:
-        confirmation_i, center_i, trigger_base, protective, teeth = fractal
+        confirmation_i, center_i, trigger_base, fractal_extreme, teeth = fractal
         # Formation can be anywhere; trigger validity belongs to current
         # price/Teeth. At arm time a SHORT trigger must remain below Teeth.
         trigger = trigger_base + tick
+        protective = _tc2_initial_fractal_stop(ind, side="LONG", tick_size=tick)
         current_trigger_valid = (
             math.isfinite(current_teeth) and current_teeth > 0.0
             and math.isfinite(teeth) and teeth > 0.0
             and trigger > current_teeth
         )
-        if _trigger_unbroken(ind, center_i, side="LONG", trigger_price=trigger) and current_trigger_valid and _invalidation_intact(ind, center_i, side="LONG", protective_level=protective):
+        if (
+            protective is not None
+            and _trigger_unbroken(ind, center_i, side="LONG", trigger_price=trigger)
+            and current_trigger_valid
+            and _invalidation_intact(ind, center_i, side="LONG", protective_level=fractal_extreme)
+            and protective < current_close
+        ):
             row = ind.iloc[center_i]
             specs.append(
                 SignalSpec.new(
@@ -602,16 +655,23 @@ def extract_short_signal_specs(
 
     fractal = _latest_confirmed_fractal(ind, side="SHORT")
     if fractal is not None:
-        confirmation_i, center_i, trigger_base, protective, teeth = fractal
+        confirmation_i, center_i, trigger_base, fractal_extreme, teeth = fractal
         # Formation can be anywhere; trigger validity belongs to current
         # price/Teeth.  At arm time the trigger must still be above Teeth.
         trigger = trigger_base - tick
+        protective = _tc2_initial_fractal_stop(ind, side="SHORT", tick_size=tick)
         current_trigger_valid = (
             math.isfinite(current_teeth) and current_teeth > 0.0
             and math.isfinite(teeth) and teeth > 0.0
             and trigger < current_teeth
         )
-        if _trigger_unbroken(ind, center_i, side="SHORT", trigger_price=trigger) and current_trigger_valid and _invalidation_intact(ind, center_i, side="SHORT", protective_level=protective):
+        if (
+            protective is not None
+            and _trigger_unbroken(ind, center_i, side="SHORT", trigger_price=trigger)
+            and current_trigger_valid
+            and _invalidation_intact(ind, center_i, side="SHORT", protective_level=fractal_extreme)
+            and protective > current_close
+        ):
             row = ind.iloc[center_i]
             specs.append(
                 SignalSpec.new(
