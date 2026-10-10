@@ -6,7 +6,7 @@ from contextlib import contextmanager
 
 
 class Database:
-    SCHEMA_VERSION = 6
+    SCHEMA_VERSION = 7
 
     def __init__(self, path=None):
         path = path or os.getenv('WILLIAMS_DB_PATH') or 'data/trader.sqlite3'
@@ -142,6 +142,27 @@ class Database:
             event TEXT NOT NULL,
             payload_json TEXT
         );
+        CREATE TABLE IF NOT EXISTS cancel_replace_operations(
+            operation_id TEXT PRIMARY KEY,
+            intent_id TEXT NOT NULL UNIQUE,
+            contract_version INTEGER NOT NULL DEFAULT 1,
+            symbol TEXT NOT NULL,
+            old_exchange_order_id TEXT,
+            old_client_order_id TEXT,
+            replacement_exchange_order_id TEXT,
+            replacement_client_order_id TEXT NOT NULL,
+            cancel_state TEXT NOT NULL DEFAULT 'PENDING',
+            replacement_state TEXT NOT NULL DEFAULT 'PENDING',
+            old_executed_qty TEXT,
+            replacement_executed_qty TEXT,
+            reconcile_required INTEGER NOT NULL DEFAULT 1,
+            last_reconciled_at TEXT,
+            last_reconciliation_json TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_cancel_replace_recovery
+            ON cancel_replace_operations(reconcile_required, updated_at);
         CREATE TABLE IF NOT EXISTS campaigns(
             campaign_id TEXT PRIMARY KEY,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -345,6 +366,98 @@ class Database:
         )
         if not self._transaction_active:
             self.conn.commit()
+
+    def create_cancel_replace_operation(
+        self, operation_id, intent_id, symbol, old_order_id,
+        old_client_order_id, replacement_client_order_id,
+    ):
+        """Durably journal both cancel/replace identities before any network mutation."""
+        values = (
+            str(operation_id), str(intent_id), str(symbol).upper(),
+            str(old_order_id) if old_order_id is not None else None,
+            str(old_client_order_id) if old_client_order_id else None,
+            str(replacement_client_order_id),
+        )
+        self.conn.execute(
+            """INSERT OR IGNORE INTO cancel_replace_operations(
+                operation_id,intent_id,symbol,old_exchange_order_id,
+                old_client_order_id,replacement_client_order_id
+            ) VALUES(?,?,?,?,?,?)""",
+            values,
+        )
+        row = self.conn.execute(
+            "SELECT operation_id,intent_id,symbol,old_exchange_order_id,"
+            "old_client_order_id,replacement_client_order_id "
+            "FROM cancel_replace_operations WHERE operation_id=?",
+            (str(operation_id),),
+        ).fetchone()
+        expected = values
+        actual = tuple(row[k] for k in (
+            "operation_id", "intent_id", "symbol", "old_exchange_order_id",
+            "old_client_order_id", "replacement_client_order_id",
+        )) if row else None
+        if actual != expected:
+            raise RuntimeError("cancel/replace operation identity collision")
+        if not self._transaction_active:
+            self.conn.commit()
+        return dict(row)
+
+    def update_cancel_replace_operation(self, operation_id, response=None, *,
+                                        cancel_state=None, replacement_state=None,
+                                        reconcile_required=True, reconciliation=None):
+        """Persist per-leg evidence independently; never marks financial recovery complete."""
+        payload = response if isinstance(response, dict) else {}
+        cancel = payload.get("cancelResponse") or {}
+        replacement = payload.get("newOrderResponse") or {}
+        cancel_result = str(payload.get("cancelResult", "") or "").upper()
+        replacement_result = str(payload.get("newOrderResult", "") or "").upper()
+        if cancel_state is None:
+            cancel_state = cancel_result if cancel_result else "UNKNOWN"
+        if replacement_state is None:
+            replacement_state = replacement_result if replacement_result else "UNKNOWN"
+        now = datetime.now(timezone.utc).isoformat()
+        self.conn.execute(
+            """UPDATE cancel_replace_operations SET
+                cancel_state=?,
+                replacement_state=?,
+                old_executed_qty=COALESCE(?,old_executed_qty),
+                replacement_executed_qty=COALESCE(?,replacement_executed_qty),
+                old_exchange_order_id=COALESCE(?,old_exchange_order_id),
+                replacement_exchange_order_id=COALESCE(?,replacement_exchange_order_id),
+                reconcile_required=?,
+                last_reconciled_at=CASE WHEN ? IS NOT NULL THEN ? ELSE last_reconciled_at END,
+                last_reconciliation_json=COALESCE(?,last_reconciliation_json),
+                updated_at=?
+               WHERE operation_id=?""",
+            (
+                str(cancel_state), str(replacement_state),
+                str(cancel.get("executedQty")) if cancel.get("executedQty") is not None else None,
+                str(replacement.get("executedQty")) if replacement.get("executedQty") is not None else None,
+                str(cancel.get("orderId")) if cancel.get("orderId") is not None else None,
+                str(replacement.get("orderId")) if replacement.get("orderId") is not None else None,
+                1 if reconcile_required else 0,
+                json.dumps(reconciliation, default=str, sort_keys=True) if reconciliation is not None else None,
+                now,
+                json.dumps(reconciliation, default=str, sort_keys=True) if reconciliation is not None else None,
+                now, str(operation_id),
+            ),
+        )
+        if not self._transaction_active:
+            self.conn.commit()
+
+    def get_cancel_replace_operation(self, operation_id):
+        row = self.conn.execute(
+            "SELECT * FROM cancel_replace_operations WHERE operation_id=?",
+            (str(operation_id),),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def pending_cancel_replace_operations(self):
+        rows = self.conn.execute(
+            "SELECT * FROM cancel_replace_operations WHERE reconcile_required=1 "
+            "ORDER BY created_at, operation_id"
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     def save_execution_event(self, intent_id, event, payload=None):
         self.conn.execute(
