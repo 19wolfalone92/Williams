@@ -12,6 +12,35 @@ def _legacy_campaign_mode(monkeypatch):
 
 from db import Database
 from portfolio_trader import MultiPositionTrader
+from execution_barrier import ExecutionBarrier
+from market_context import ContextCache
+
+
+def _test_execution_barrier(db):
+    return ExecutionBarrier(ContextCache(), db)
+
+
+def _mark_test_recovery_ready(db):
+    db.mark_recovery_ready({
+        "exchange_reachable": True,
+        "account_checked": True,
+        "open_orders_checked": True,
+        "order_history_checked": True,
+        "fills_checked": True,
+        "positions_checked": True,
+        "protection_checked": True,
+        "campaigns_checked": True,
+        "intents_checked": True,
+        "unresolved_symbols": [],
+        "pending_entries": [],
+        "unknown_orders": [],
+        "inventory_mismatches": [],
+        "unprotected_positions": [],
+        "unknown_campaigns": [],
+        "canonical_position_state": "FLAT",
+    })
+
+
 from telegram_bot import Telegram
 from ws_hub import WebSocketHub
 
@@ -218,7 +247,7 @@ def test_terminal_partial_entry_is_materialized_and_protected(tmp_path):
             return []
 
     client = NoOpenOrdersFakeBinance(entry_status="CANCELED", entry_qty="0.4")
-    trader = MultiPositionTrader(client, db=db, symbols=[])
+    trader = MultiPositionTrader(client, db=db, symbols=[], execution_barrier=_test_execution_barrier(db))
 
     db.state_set("entry_client_order_id:BTCUSDT", "WILLV4_ENTRY_TEST")
     db.state_set("position_state:BTCUSDT", "ENTRY_PENDING")
@@ -286,7 +315,7 @@ def test_terminal_partial_oco_is_counted_once_and_reprotected(tmp_path):
         entry_qty="1.0",
         exit_qty="0.3",
     )
-    trader = MultiPositionTrader(client, db=db, symbols=[])
+    trader = MultiPositionTrader(client, db=db, symbols=[], execution_barrier=_test_execution_barrier(db))
 
     trade_id = db.save_trade(
         entry_time="1970-01-01T00:00:01+00:00",
