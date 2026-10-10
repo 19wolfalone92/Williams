@@ -18,6 +18,19 @@ class FuturesContextPolicyTest {
     }
 
     @Test
+    fun fractalTriggerMustRemainOutsideCurrentTeethAndMalformedLevelsFailClosed() {
+        assertTrue(FuturesContextPolicy.fractalTriggerOutsideTeeth("LONG", 101.0, 100.0))
+        assertFalse(FuturesContextPolicy.fractalTriggerOutsideTeeth("LONG", 100.0, 100.0))
+        assertFalse(FuturesContextPolicy.fractalTriggerOutsideTeeth("LONG", 99.0, 100.0))
+        assertTrue(FuturesContextPolicy.fractalTriggerOutsideTeeth("SHORT", 99.0, 100.0))
+        assertFalse(FuturesContextPolicy.fractalTriggerOutsideTeeth("SHORT", 100.0, 100.0))
+        assertFalse(FuturesContextPolicy.fractalTriggerOutsideTeeth("SHORT", 101.0, 100.0))
+        assertFalse(FuturesContextPolicy.fractalTriggerOutsideTeeth("LONG", Double.NaN, 100.0))
+        assertFalse(FuturesContextPolicy.fractalTriggerOutsideTeeth("LONG", 101.0, Double.NaN))
+        assertFalse(FuturesContextPolicy.fractalTriggerOutsideTeeth("FLAT", 101.0, 100.0))
+    }
+
+    @Test
     fun shortIsMirroredAndNeutralD1DoesNotCreateAnEntry() {
         assertTrue(FuturesContextPolicy.allows("SHORT", short, short, neutral))
         assertFalse(FuturesContextPolicy.allows("SHORT", short, long, neutral))
