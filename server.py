@@ -755,7 +755,7 @@ def configure(payload: CredentialPayload):
             payload.testnet,
         )
     except RuntimeError as e:
-        raise HTTPException(409, str(e))
+        raise HTTPException(409, redact_text(str(e)))
     return {
         'configured': True,
         'testnet': payload.testnet,
@@ -1334,7 +1334,7 @@ def manual_sell(symbol: str):
     multi = state.ensure_multi()
     result = multi.manual_sell(symbol)
     if not result.get('sold') and result.get('state') == 'RECONCILE_REQUIRED':
-        raise HTTPException(409, result.get('error', 'Position requires reconciliation'))
+        raise HTTPException(409, redact_text(result.get('error', 'Position requires reconciliation')))
     return result
 
 
