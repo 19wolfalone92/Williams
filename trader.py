@@ -155,6 +155,7 @@ class Trader:
                 if not isinstance(fills, list) or not fills:
                     raise RuntimeError(f"{symbol}: managed executed order has incomplete trade history")
                 total_qty = 0.0
+                total_quote = 0.0
                 for fill in fills:
                     trade_id = fill.get("id", fill.get("tradeId", fill.get("trade_id")))
                     qty = float(fill.get("qty", 0) or 0)
@@ -170,6 +171,7 @@ class Trader:
                             f"{symbol}: fee asset {fee_asset} cannot be valued safely during recovery"
                         )
                     total_qty += qty
+                    total_quote += qty * price
                     campaign_order = self.db.conn.execute(
                         "SELECT campaign_id FROM campaign_orders WHERE symbol=? "
                         "AND (order_id=? OR client_order_id=?) ORDER BY id DESC LIMIT 1",
@@ -194,6 +196,12 @@ class Trader:
                 if abs(total_qty - executed) > tolerance:
                     raise RuntimeError(
                         f"{symbol}: trade history quantity {total_qty} disagrees with order executedQty {executed}"
+                    )
+                order_quote = float(order.get("cummulativeQuoteQty", 0) or 0)
+                quote_tolerance = max(1e-6, order_quote * 1e-6)
+                if order_quote > 0 and abs(total_quote - order_quote) > quote_tolerance:
+                    raise RuntimeError(
+                        f"{symbol}: trade history quote {total_quote} disagrees with order cumulative quote {order_quote}"
                     )
 
         # A protection is accepted only if the live exchange snapshot contains
