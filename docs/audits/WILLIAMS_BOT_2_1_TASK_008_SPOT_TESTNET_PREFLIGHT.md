@@ -11,6 +11,8 @@
 
 > No API key/secret values were read, requested, copied, logged, or put in this report. No Binance order mutation was sent. No Mainnet request was made. A successful read-only account preflight cannot be claimed without executing it in the authorized local Testnet runtime.
 
+An additional public, anonymous read-only probe of the Testnet `/api/v3/ping`, `/api/v3/time`, `/api/v3/exchangeInfo`, and `/api/v3/klines` endpoints was attempted from this execution environment. All four failed at DNS resolution (`Temporary failure in name resolution`) before receiving an HTTP response. This is an execution-environment network limitation, not evidence that Binance Testnet itself is down; endpoint availability remains unverified.
+
 ## 1. Executive result
 
 The repository has the beginnings of a Spot Testnet-only manual read-only gate, and its REST and WebSocket endpoint strings are consistent with the current Binance Spot Testnet docs. The code also uses the post-listenKey user-stream protocol: `userDataStream.subscribe.signature` on the Spot WebSocket API, rather than REST `/api/v3/userDataStream` listenKey creation/keepalive calls.
