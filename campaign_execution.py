@@ -484,10 +484,23 @@ class CampaignExecutionService:
             client_id = str(row["value"])
             campaign = None
             try:
-                order = self.client.get_order(
-                    symbol,
-                    orig_client_order_id=client_id,
-                )
+                try:
+                    order = self.client.get_order(
+                        symbol,
+                        orig_client_order_id=client_id,
+                    )
+                except Exception as lookup_exc:
+                    if self._authoritative_order_not_found(lookup_exc):
+                        campaign = self._find_campaign_by_pending_client_id(client_id)
+                        results.append(
+                            self._resolve_definitive_not_found(
+                                symbol, client_id, campaign
+                            )
+                        )
+                        continue
+                    # Timeout, 5xx, auth or rate limit is NOT proof that the
+                    # exchange has no order. Keep the reservation unresolved.
+                    raise
                 self.db.save_order(order)
                 status = str(order.get("status", "")).upper()
                 campaign = self._find_campaign_by_pending_client_id(client_id)
@@ -534,7 +547,14 @@ class CampaignExecutionService:
                         pass
 
                 if status in {"NEW", "PENDING_NEW"} and executed <= 0:
-                    # Still waiting for the conditional trigger.
+                    # The exchange has authoritatively confirmed that this stable
+                    # clientOrderId exists and remains pending. Resolve only the
+                    # submission ambiguity; keep the pending campaign reservation.
+                    self._mark_intent_reconciled(
+                        client_id,
+                        status,
+                        evidence="Binance GET /api/v3/order confirmed the conditional order remains open",
+                    )
                     results.append({
                         "symbol": symbol,
                         "campaign_id": campaign.campaign_id,
@@ -556,12 +576,43 @@ class CampaignExecutionService:
                             "CAMPAIGN_ENTRY_CANCEL",
                             target_client_id=client_id,
                         )
-                    except Exception as exc:
-                        self.engine.mark_reconcile_required(
-                            campaign,
-                            f"partial conditional BUY cancel ambiguous: {exc}",
-                        )
-                        raise
+                    except Exception as cancel_exc:
+                        # Never infer the cancel result from the DELETE response.
+                        # Read back the same exchange order and continue only if
+                        # Binance gives a known state with a valid executedQty.
+                        try:
+                            latest = self.client.get_order(
+                                symbol,
+                                order_id=order.get("orderId"),
+                            )
+                            latest_status = str(latest.get("status", "")).upper()
+                            latest_executed = float(latest.get("executedQty", 0) or 0)
+                            latest_quote = float(latest.get("cummulativeQuoteQty", 0) or 0)
+                            terminal = latest_status in {
+                                "FILLED", "CANCELED", "CANCELLED", "EXPIRED", "REJECTED"
+                            }
+                            if (
+                                not terminal
+                                or latest_executed < 0
+                                or (latest_executed > 0 and latest_quote <= 0)
+                            ):
+                                raise CampaignExecutionError(
+                                    "cancel/fill state is not yet authoritative"
+                                )
+                            order = latest
+                            status = latest_status
+                            executed = latest_executed
+                            quote = latest_quote
+                            self.db.save_order(latest)
+                        except Exception as reconcile_exc:
+                            self.engine.mark_reconcile_required(
+                                campaign,
+                                f"partial conditional BUY cancel/fill conflict unresolved: "
+                                f"cancel={cancel_exc}; reconcile={reconcile_exc}",
+                            )
+                            raise CampaignExecutionError(
+                                "conditional order cancellation remains ambiguous; no new entry or duplicate cancel until exchange reconciliation"
+                            ) from reconcile_exc
 
                 if executed > 0:
                     if quote <= 0:
