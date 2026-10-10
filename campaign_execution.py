@@ -1,7 +1,8 @@
 """Execution adapter for Williams conditional campaign entries and stops."""
 
-from safe_logging import redact_text
 from __future__ import annotations
+
+from safe_logging import redact_text
 
 from datetime import datetime, timezone
 from typing import Any
