@@ -11,6 +11,7 @@ from typing import Mapping, Sequence
 
 
 DEFAULT_SYMBOLS = ("BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT")
+# Canonical decisions are H1; D1/H4 are context, M15 is execution monitoring, M5 is diagnostic/replay only.
 DEFAULT_STRUCTURAL_TFS = ("1d", "4h", "1h", "15m")
 
 
@@ -74,7 +75,7 @@ def _tf_chain(execution: str, env: Mapping[str, str]) -> tuple[str, ...]:
 class TradingConfig:
     symbols: tuple[str, ...] = DEFAULT_SYMBOLS
     structural_timeframes: tuple[str, ...] = DEFAULT_STRUCTURAL_TFS
-    execution_timeframe: str = "5m"
+    execution_timeframe: str = "1h"
 
     allow_long: bool = True
     allow_short: bool = False
@@ -120,7 +121,7 @@ class TradingConfig:
         risk = max(0.0, min(0.005, _float(source, risk_key, 0.005)))
         total_risk = max(0.0, min(0.01, _float(source, "MAX_TOTAL_RISK_PCT", 0.01)))
 
-        execution_timeframe = str(source.get("EXECUTION_TIMEFRAME", "5m")).lower()
+        execution_timeframe = str(source.get("EXECUTION_TIMEFRAME", "1h")).lower()
 
         return cls(
             symbols=symbols,
