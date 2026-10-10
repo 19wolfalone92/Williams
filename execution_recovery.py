@@ -47,10 +47,13 @@ class ExecutionRecoveryResolver:
     def _get_order(self, symbol: str, *, order_id: str = "", client_order_id: str = ""):
         if not order_id and not client_order_id:
             return None
+        # Binance accepts orderId OR origClientOrderId. Prefer the numeric
+        # exchange order ID when known, then independently validate both IDs.
+        lookup_cid = client_order_id if not order_id else ""
         row = self.client.get_order(
             symbol,
             order_id=order_id if order_id else None,
-            orig_client_order_id=client_order_id if client_order_id else None,
+            orig_client_order_id=lookup_cid if lookup_cid else None,
         )
         if self._known_order(row, symbol, client_order_id, order_id):
             return row
@@ -136,7 +139,7 @@ class ExecutionRecoveryResolver:
             payload = self.client.order_list(
                 symbol,
                 order_list_id=target_list_id or None,
-                list_client_order_id=target_list_cid or None,
+                list_client_order_id=target_list_cid if not target_list_id else None,
             )
             if not isinstance(payload, dict):
                 return None
