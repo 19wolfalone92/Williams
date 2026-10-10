@@ -283,3 +283,26 @@ def test_concurrent_calls_for_same_intent_submit_at_most_once():
     assert sum(1 for result in results if result.accepted) == 1
     assert sum(1 for result in results if not result.accepted) == 1
     assert calls == ["submit"]
+
+
+
+def test_sqlite_atomic_claim_serializes_separate_connections(tmp_path):
+    path = str(tmp_path / "cross-connection-claim.sqlite3")
+    db_a = Database(path)
+    db_b = Database(path)
+    intents = [
+        _intent("WILL_TASK006_CROSS_CONNECTION_A_012"),
+        _intent("WILL_TASK006_CROSS_CONNECTION_B_013"),
+    ]
+    start = threading.Barrier(2)
+
+    def claim(pair):
+        db, intent = pair
+        start.wait(timeout=2)
+        return db.claim_execution_intent(intent)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(claim, [(db_a, intents[0]), (db_b, intents[1])]))
+
+    assert sum(bool(value) for value in results) == 1
+    assert len(db_a.unresolved_execution_intents()) == 1
