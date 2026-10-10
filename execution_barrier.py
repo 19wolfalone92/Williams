@@ -150,6 +150,10 @@ class ExecutionBarrier:
             str(intent.client_order_id or ""),
             str(intent.campaign_id or ""),
             str(intent.signal_id or ""),
+            str(intent.signal_type or "").upper(),
+            str(intent.operation_kind or "PLACE").upper(),
+            str(intent.related_order_id or ""),
+            str(intent.related_order_list_id or ""),
         )
 
     def _persist(self, intent: OrderIntent, status: str, reason: str = "") -> bool:
@@ -175,6 +179,10 @@ class ExecutionBarrier:
                 str(row.get("client_order_id") or ""),
                 str(row.get("campaign_id") or ""),
                 str(row.get("signal_id") or ""),
+                str(row.get("signal_type") or "").upper(),
+                str(row.get("operation_kind") or "PLACE").upper(),
+                str(row.get("related_order_id") or ""),
+                str(row.get("related_order_list_id") or ""),
             )
             return (
                 actual == expected
