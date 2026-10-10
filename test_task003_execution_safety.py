@@ -181,6 +181,17 @@ def test_timeout_after_possible_send_locks_new_entries(tmp_path):
     assert db.has_unresolved_execution_intents()
     assert db.state_get(ExecutionBarrier.MUTATION_LOCK_KEY, "")
 
+    # A repeated user command with the same logical identity is not a retry
+    # authorization while the original exchange outcome remains ambiguous.
+    repeat_calls = []
+    repeated = barrier.execute(
+        _entry_intent(),
+        lambda: repeat_calls.append("blind-retry") or _filled(),
+        pre_submit_checks=lambda _snapshot: None,
+    )
+    assert not repeated.accepted
+    assert repeat_calls == []
+
     next_calls = []
     blocked = barrier.execute(
         _entry_intent(signal_id="BTCUSDT:1h:ENTRY:2001"),
@@ -605,3 +616,24 @@ def test_release_version_contracts_are_consistent():
     assert gate_match.group(1) == canonical
     assert gradle_match.group(1) == canonical
     assert f"Williams {canonical}" in activity
+
+
+
+def test_process_death_after_submitting_intent_never_blindly_resends(tmp_path):
+    db = Database(str(tmp_path / "state.sqlite3"))
+    intent = _entry_intent()
+    # Simulate process death after SUBMITTING is committed but before the
+    # network callback runs. A fresh barrier must treat this as unresolved.
+    assert db.save_execution_intent(
+        intent, "SUBMITTING", "simulated process death before socket send"
+    )
+    restarted_barrier = ExecutionBarrier(_cache(), db)
+    calls = []
+    result = restarted_barrier.execute(
+        intent,
+        lambda: calls.append("sent") or _filled(),
+        pre_submit_checks=lambda _snapshot: None,
+    )
+    assert not result.accepted
+    assert calls == []
+    assert db.has_unresolved_execution_intents()
