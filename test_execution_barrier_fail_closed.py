@@ -81,10 +81,15 @@ def _intent(client_id="CID_STABLE_001"):
     )
 
 
+class FakeSpotClient:
+    testnet = True
+    base_url = "https://testnet.binance.vision"
+
+
 def _barrier(db, provider=_ready_preflight):
     cache = ContextCache()
     cache.publish(_context())
-    return ExecutionBarrier(cache, db, preflight_provider=provider)
+    return ExecutionBarrier(cache, db, preflight_provider=provider, exchange_client=FakeSpotClient())
 
 
 def _pre_submit(_snapshot):
@@ -180,7 +185,7 @@ def test_direct_binance_order_mutation_is_denied_outside_barrier():
 
     session = NoNetworkSession()
     client.session = session
-    with pytest.raises(RuntimeError, match="ExecutionBarrier permit required"):
+    with pytest.raises(RuntimeError, match="matching ExecutionBarrier permit required"):
         client.order("BTCUSDT", "BUY", "MARKET", quantity="0.001", new_client_order_id="CID_DIRECT")
     assert not session.called
 
