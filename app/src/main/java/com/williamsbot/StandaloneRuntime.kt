@@ -619,6 +619,8 @@ private class NativeEngine(
     private val indicatorSnapshots = java.util.concurrent.ConcurrentHashMap<String, JSONObject>()
     // Read-only D1 context for the cockpit. Never consumed by the TC2 entry gate.
     private val dailyContextOverview = java.util.concurrent.ConcurrentHashMap<String, JSONObject>()
+    @Volatile private var universeMarketCache: Triple<List<String>, Map<String, Double>, Map<String, Double>>? = null
+    @Volatile private var universeMarketCacheAtMs = 0L
     private val livePrices = java.util.concurrent.ConcurrentHashMap<String, Double>()
     private val tradeFlow = java.util.concurrent.ConcurrentHashMap<String, ArrayDeque<TradeFlowSample>>()
     private val lastUserEventTimeByType = java.util.concurrent.ConcurrentHashMap<String, Long>()
@@ -2479,40 +2481,75 @@ private class NativeEngine(
     }
 
     private fun loadUniverse(): Triple<List<String>, Map<String, Double>, Map<String, Double>> {
-        val encodedSymbols = URLEncoder.encode(
-            JSONArray(coreSymbols).toString(),
-            StandardCharsets.UTF_8.name()
-        )
+        val now = System.currentTimeMillis()
+        val cached = universeMarketCache
+        if (cached != null && now - universeMarketCacheAtMs < 60_000L) {
+            return cached
+        }
 
-        val volumeRows = JSONArray(
-            getBody("/api/v3/ticker/24hr?symbols=" + encodedSymbols)
-        )
+        // Query candidates independently. One unavailable Testnet market must
+        // not break REST readiness or poison every pair's spread with zero.
+        val futures = coreSymbols.map { symbol ->
+            scanExecutor.submit(
+                Callable {
+                    runCatching {
+                        val ticker = JSONObject(
+                            getBody("/api/v3/ticker/24hr?symbol=" + symbol)
+                        )
+                        val book = JSONObject(
+                            getBody("/api/v3/ticker/bookTicker?symbol=" + symbol)
+                        )
+                        val quoteVolume = ticker.optString("quoteVolume")
+                            .toDoubleOrNull() ?: 0.0
+                        val bid = book.optString("bidPrice").toDoubleOrNull() ?: 0.0
+                        val ask = book.optString("askPrice").toDoubleOrNull() ?: 0.0
+                        val price = ticker.optString("lastPrice").toDoubleOrNull() ?: 0.0
+                        if (
+                            quoteVolume < 0.0 ||
+                            price <= 0.0 ||
+                            bid <= 0.0 ||
+                            ask < bid
+                        ) {
+                            null
+                        } else {
+                            val spread = (ask - bid) / ((ask + bid) / 2.0)
+                            if (!spread.isFinite() || spread < 0.0) null
+                            else Triple(symbol, quoteVolume, spread)
+                        }
+                    }.getOrNull()
+                }
+            )
+        }
+
+        val available = mutableListOf<String>()
         val volumes = HashMap<String, Double>()
-        for (i in 0 until volumeRows.length()) {
-            val item = volumeRows.optJSONObject(i) ?: continue
-            val symbol = item.optString("symbol").uppercase(Locale.US)
-            if (symbol in coreSymbols) {
-                volumes[symbol] =
-                    item.optString("quoteVolume").toDoubleOrNull() ?: 0.0
-            }
-        }
-
-        val bookRows = JSONArray(
-            getBody("/api/v3/ticker/bookTicker?symbols=" + encodedSymbols)
-        )
         val spreads = HashMap<String, Double>()
-        for (i in 0 until bookRows.length()) {
-            val item = bookRows.optJSONObject(i) ?: continue
-            val symbol = item.optString("symbol").uppercase(Locale.US)
-            if (symbol !in coreSymbols) continue
-            val bid = item.optString("bidPrice").toDoubleOrNull() ?: 0.0
-            val ask = item.optString("askPrice").toDoubleOrNull() ?: 0.0
-            if (bid > 0.0 && ask >= bid) {
-                spreads[symbol] = (ask - bid) / bid
+        futures.forEach { future ->
+            val item = runCatching { future.get(12L, TimeUnit.SECONDS) }.getOrNull()
+            if (item != null) {
+                available += item.first
+                volumes[item.first] = item.second
+                spreads[item.first] = item.third
             }
         }
 
-        return Triple(coreSymbols.toList(), volumes, spreads)
+        if (available.isEmpty()) {
+            // Preserve a recent successful snapshot for transient per-symbol
+            // endpoint failures, but never manufacture zero-spread candidates.
+            val previous = universeMarketCache
+            if (previous != null && now - universeMarketCacheAtMs < 180_000L) {
+                return previous
+            }
+        }
+
+        val snapshot = Triple(
+            available.toList(),
+            volumes.toMap(),
+            spreads.toMap()
+        )
+        universeMarketCache = snapshot
+        universeMarketCacheAtMs = now
+        return snapshot
     }
 
     private fun markScanProgress() {
@@ -7753,29 +7790,21 @@ private class NativeEngine(
             while (restProbeRunning) {
                 val started = System.currentTimeMillis()
                 try {
-                    val encodedSymbols = URLEncoder.encode(
-                        JSONArray(coreSymbols).toString(),
-                        StandardCharsets.UTF_8.name()
-                    )
-                    val rows = JSONArray(
-                        getBody("/api/v3/ticker/price?symbols=" + encodedSymbols)
-                    )
-                    var found = 0
-                    for (i in 0 until rows.length()) {
-                        val row = rows.optJSONObject(i) ?: continue
-                        val symbol = row.optString("symbol").uppercase(Locale.US)
-                        val price = row.optString("price").toDoubleOrNull() ?: 0.0
-                        if (symbol in coreSymbols && price > 0.0) {
-                            livePrices[symbol] = price
-                            if (symbol == primarySymbol) restLastTickerPrice = price
-                            found++
-                        }
+                    // REST readiness is an endpoint health check, not a demand
+                    // that every configured symbol be listed on Testnet. Pair
+                    // availability/spread is checked separately by loadUniverse().
+                    val price = JSONObject(
+                        getBody("/api/v3/ticker/price?symbol=" + primarySymbol)
+                    ).optString("price").toDoubleOrNull() ?: 0.0
+                    if (price > 0.0) {
+                        livePrices[primarySymbol] = price
+                        restLastTickerPrice = price
                     }
-                    restMarketReady = found == coreSymbols.size
+                    restMarketReady = price > 0.0
                     restLastSuccessMs = System.currentTimeMillis()
                     restLastLatencyMs = System.currentTimeMillis() - started
                     if (!restMarketReady) {
-                        restLastError = "ticker returned " + found + "/" + coreSymbols.size + " symbols"
+                        restLastError = "ticker endpoint returned no valid " + primarySymbol + " price"
                     }
 
                     if (key().isNotBlank() && secret().isNotBlank() &&
