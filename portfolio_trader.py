@@ -114,6 +114,11 @@ class MultiPositionTrader:
         operations are not signal-entry admissions. This helper is not an
         emergency bypass: missing preflight/reconciliation evidence blocks them.
         """
+        if str(purpose).upper() == "EMERGENCY_EXIT":
+            self.set_state(symbol, "RECONCILE_REQUIRED")
+            raise RuntimeError(
+                "Emergency exit blocked: dedicated emergency execution contract is not implemented"
+            )
         if self.execution_barrier is None:
             raise RuntimeError("Portfolio mutation blocked: canonical ExecutionBarrier unavailable")
         intent = OrderIntent.new(
