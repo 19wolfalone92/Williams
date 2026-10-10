@@ -446,6 +446,16 @@ class Trader:
             state,
         )
 
+    def _execution_recovery_blocked(self):
+        """Fail closed if durable execution state is unavailable or unresolved."""
+        try:
+            return bool(self.execution_barrier.mutation_locked) or bool(
+                self.db.has_unresolved_execution_intents()
+            )
+        except Exception:
+            # A failed state read cannot authorize replacing a pending identity.
+            return True
+
     def normalize_qty(self, qty):
         if self.symbol_rules is None:
             raise RuntimeError('Symbol rules are not loaded')
@@ -1057,6 +1067,14 @@ class Trader:
             capital_reserved_quote=float(quote_d),
         )
 
+        # Do not overwrite a prior pending identity while an earlier order
+        # result is unresolved. Recovery must query the exchange first.
+        if self._execution_recovery_blocked():
+            self._set_state('RECONCILE_REQUIRED')
+            raise RuntimeError(
+                'BUY blocked: unresolved execution state requires authoritative reconciliation'
+            )
+
         # Durable reservation is written BEFORE the Binance POST. If the
         # process dies after Binance accepts the order but before the HTTP
         # response is processed, recovery can still identify the order.
@@ -1093,7 +1111,18 @@ class Trader:
                 pre_submit_checks=_pre_submit,
             )
             if not result.accepted:
-                self.db.state_delete('entry_client_order_id')
+                # The admission decision may have observed a concurrently-created
+                # unresolved mutation. Never clear a recovery key on that path.
+                if self._execution_recovery_blocked():
+                    self._set_state('RECONCILE_REQUIRED')
+                    raise RuntimeError(
+                        'BUY blocked: unresolved execution state retained for reconciliation; '
+                        + result.reason
+                    )
+                if self.db.state_get('entry_client_order_id') == cid:
+                    self.db.state_delete('entry_client_order_id')
+                if self.db.state_get(f'entry_client_order_id:{self.symbol}') == cid:
+                    self.db.state_delete(f'entry_client_order_id:{self.symbol}')
                 self._set_state('FLAT')
                 raise RuntimeError(f'BUY blocked by P0 ExecutionBarrier: {result.reason}')
             order = result.response
