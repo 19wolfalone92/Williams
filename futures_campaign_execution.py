@@ -976,38 +976,57 @@ class FuturesCampaignExecutionService:
 
         campaign = None
         try:
-            campaign = self.engine.create_campaign(
-                signal,
-                initial_risk_pct=requested_fraction,
-            )
-            campaign.pending_risk_quote = actual_risk
-            campaign.capital_reserved_quote = notional
-            campaign.initial_stop_price = stop
-            campaign.current_stop_price = stop
-            campaign.tags.update({
-                "execution_mode": "FUTURES",
-                "direction": direction,
-                "entry_client_algo_id": client_algo_id,
-                "entry_trigger_price": trigger,
-                "entry_quantity": quantity,
-                "entry_fill_reconciliation_pending": True,
-                "initial_stop_price": stop,
-                "last_signal_time_ms": int(signal.signal_bar_time_ms),
-                "last_signal_confirmation_time_ms": int(
-                    getattr(signal, "confirmation_time_ms", 0) or signal.signal_bar_time_ms
-                ),
-                "entry_expires_at_ms": int(signal.expires_at_ms or 0),
-                "position_side_mode": "ONE_WAY",
-                "leverage": 1,
-                "isolated_margin": True,
-                # The campaign cap is the lifetime budget across the
-                # initial tranche and later Wise-Men add-ons; the initial
-                # tranche receives only its configured fraction of this cap.
-                "risk_budget_quote": equity * self.campaign_risk_limit_pct,
-            })
-            self.db.save_campaign(campaign)
-            self.engine.arm_entry(campaign, signal)
-            self.db.state_set(f"campaign_state:{campaign.campaign_id}", CampaignState.ENTRY_PENDING.value)
+            # Re-check capacity while holding SQLite's write reservation and
+            # persist the campaign in the same transaction. A prior read-only
+            # count is useful for fast rejection but is not concurrency-safe:
+            # two independent callers could otherwise both admit the last slot.
+            try:
+                with self.db.transaction(immediate=True):
+                    self._assert_position_capacity()
+                    campaign = self.engine.create_campaign(
+                        signal,
+                        initial_risk_pct=requested_fraction,
+                    )
+                    campaign.pending_risk_quote = actual_risk
+                    campaign.capital_reserved_quote = notional
+                    campaign.initial_stop_price = stop
+                    campaign.current_stop_price = stop
+                    campaign.tags.update({
+                        "execution_mode": "FUTURES",
+                        "direction": direction,
+                        "entry_client_algo_id": client_algo_id,
+                        "entry_trigger_price": trigger,
+                        "entry_quantity": quantity,
+                        "entry_fill_reconciliation_pending": True,
+                        "initial_stop_price": stop,
+                        "last_signal_time_ms": int(signal.signal_bar_time_ms),
+                        "last_signal_confirmation_time_ms": int(
+                            getattr(signal, "confirmation_time_ms", 0) or signal.signal_bar_time_ms
+                        ),
+                        "entry_expires_at_ms": int(signal.expires_at_ms or 0),
+                        "position_side_mode": "ONE_WAY",
+                        "leverage": 1,
+                        "isolated_margin": True,
+                        # The campaign cap is the lifetime budget across the
+                        # initial tranche and later Wise-Men add-ons; the initial
+                        # tranche receives only its configured fraction of this cap.
+                        "risk_budget_quote": equity * self.campaign_risk_limit_pct,
+                    })
+                    self.db.save_campaign(campaign)
+                    self.engine.arm_entry(campaign, signal)
+                    self.db.state_set(
+                        f"campaign_state:{campaign.campaign_id}",
+                        CampaignState.ENTRY_PENDING.value,
+                    )
+            except Exception:
+                # No exchange mutation occurs before this transaction commits,
+                # so failures here can release the symbol admission claim safely.
+                try:
+                    self.db.state_delete(claim_key)
+                except Exception:
+                    pass
+                campaign = None
+                raise
 
             versions = self._context_versions(signal)
             order_side = "BUY" if direction == "LONG" else "SELL"
