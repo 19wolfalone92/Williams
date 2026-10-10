@@ -1,6 +1,7 @@
 """Task 005 fail-closed regression tests; all execution tests use MockExchange only."""
 from concurrent.futures import ThreadPoolExecutor
 import multiprocessing
+from datetime import datetime as RealDatetime, timezone
 from dataclasses import replace
 
 import pytest
@@ -10,6 +11,7 @@ from campaign_engine import CampaignEngine
 from campaign_model import CampaignState
 from db import Database
 from equity_breaker import EquityCircuitBreaker
+import equity_breaker as equity_breaker_module
 from mock_exchange import MockExchange
 from risk_engine import RiskEngine
 
@@ -219,6 +221,8 @@ def test_separate_processes_cannot_reserve_same_portfolio_budget(tmp_path):
     try:
         assert verify.active_campaign_count() == 1
         assert verify.state_get("risk_entry_reservation") is not None or verify.campaign_risk_reserved_quote() > 0
+        assert float(verify.state_get("daily_start_equity")) == pytest.approx(10_000.0)
+        assert verify.state_get("daily_risk_day")
     finally:
         verify.conn.close()
 
@@ -266,3 +270,63 @@ def test_campaign_fill_requires_authoritative_trade_id_and_valid_fee_fields():
             db.save_campaign_fill(_sample_campaign_fill(fee_quote=float("nan")))
     finally:
         db.conn.close()
+
+
+def test_utc_boundary_uses_recent_pre_midnight_equity_snapshot(monkeypatch):
+    db = Database(":memory:")
+    fixed_now = RealDatetime(2026, 10, 10, 0, 0, 10, tzinfo=timezone.utc)
+    fixed_ms = int(fixed_now.timestamp() * 1000)
+
+    class FrozenDateTime(RealDatetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls.fromtimestamp(fixed_ms / 1000.0, tz=tz)
+
+    monkeypatch.setattr(equity_breaker_module, "datetime", FrozenDateTime)
+    observed = int(RealDatetime(2026, 10, 9, 23, 59, 0, tzinfo=timezone.utc).timestamp() * 1000)
+    db.state_set("daily_risk_day", "2026-10-09")
+    db.state_set("daily_start_equity", "10000")
+    db.state_set("last_observed_equity", "10000")
+    db.state_set("last_observed_equity_at_ms", str(observed))
+
+    allowed, reason = EquityCircuitBreaker().check(db, 9_950.0)
+    assert allowed, reason
+    assert db.state_get("daily_risk_day") == "2026-10-10"
+    assert float(db.state_get("daily_start_equity")) == pytest.approx(10_000.0)
+
+
+def test_utc_boundary_after_long_outage_blocks_without_trusted_snapshot(monkeypatch):
+    db = Database(":memory:")
+    fixed_now = RealDatetime(2026, 10, 10, 0, 10, 0, tzinfo=timezone.utc)
+    fixed_ms = int(fixed_now.timestamp() * 1000)
+
+    class FrozenDateTime(RealDatetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls.fromtimestamp(fixed_ms / 1000.0, tz=tz)
+
+    monkeypatch.setattr(equity_breaker_module, "datetime", FrozenDateTime)
+    observed = int(RealDatetime(2026, 10, 9, 23, 0, 0, tzinfo=timezone.utc).timestamp() * 1000)
+    db.state_set("daily_risk_day", "2026-10-09")
+    db.state_set("daily_start_equity", "10000")
+    db.state_set("last_observed_equity", "10000")
+    db.state_set("last_observed_equity_at_ms", str(observed))
+
+    allowed, reason = EquityCircuitBreaker().check(db, 10_000.0)
+    assert not allowed
+    assert "new entries blocked" in reason
+    assert db.state_get("daily_risk_day") == "2026-10-09"
+
+
+def test_missing_daily_baseline_with_existing_campaign_blocks_entry():
+    db = Database(":memory:")
+    campaign = CampaignEngine(db).create_campaign(signal(), initial_risk_pct=0.0024)
+    db.save_campaign(campaign)
+    client = MockExchange()
+    svc = service(db, client)
+    with pytest.raises(CampaignExecutionError, match="daily risk gate blocked"):
+        svc.arm_initial_entry(
+            signal(symbol="ETHUSDT"), equity_quote=10_000.0, candidate_risk_pct=0.0024
+        )
+    assert client.orders == []
+    assert db.state_get("daily_start_equity") is None
