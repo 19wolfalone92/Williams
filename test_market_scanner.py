@@ -26,6 +26,53 @@ def test_default_scanner_uses_core_ten_without_dynamic_discovery(monkeypatch):
     assert scanner.liquidity_preselect == 10
 
 
+def test_tc2_scan_does_not_apply_optional_wave_or_directional_htf_veto(monkeypatch):
+    import os
+    from dataclasses import replace
+
+    monkeypatch.setenv("WILLIAMS_STRATEGY_PROFILE", "TC2_THREE_WISE_MEN")
+    monkeypatch.setenv("REQUIRE_HTF_CONFIRMATION", "true")
+    monkeypatch.setenv("WILLIAMS_WAVE_ENTRY_ADMISSION_FILTER", "false")
+    monkeypatch.setenv("SCAN_ALL_USDT", "false")
+
+    scanner = MarketScanner(FakeClient(), symbols=["BTCUSDT"])
+    candidate = Candidate(
+        symbol="BTCUSDT",
+        score=80.0,
+        signal=True,
+        setup_score=80.0,
+        signal_strength=1.0,
+        breakout_distance_pct=0.1,
+        risk_pct=0.5,
+        risk_reward=0.0,
+        atr_pct=0.01,
+        spread_pct=0.0001,
+        htf_confirmed=False,
+        setup_state="STRONG_SIGNAL",
+        campaign_ready=True,
+        direction="LONG",
+        entry_signal_type="SUPER_AO",
+    )
+    frame = pd.DataFrame({"close": [100.0]})
+    scanner._resolve_symbols = lambda: ["BTCUSDT"]
+    scanner._refresh_spreads = lambda symbols: None
+    scanner._analyse_base = lambda symbol, metadata=None: (candidate, frame.copy())
+    scanner._apply_wave = lambda item, closed: replace(
+        item,
+        htf_confirmed=False,
+        wave_entry_allowed=False,
+        wave_block_reason="OPTIONAL_WAVE_VETO",
+    )
+
+    rows = scanner.scan()
+
+    assert len(rows) == 1
+    assert rows[0].symbol == "BTCUSDT"
+    assert rows[0].signal is True
+    assert rows[0].htf_confirmed is False
+    assert rows[0].wave_block_reason == "OPTIONAL_WAVE_VETO"
+
+
 def test_best_prefers_strict_signal():
     scanner = MarketScanner(
         FakeClient(),
