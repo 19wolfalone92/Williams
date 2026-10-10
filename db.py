@@ -6,6 +6,9 @@ from contextlib import contextmanager
 from safe_logging import redact_text, redact_value
 
 
+_FILL_CONFLICT = object()
+
+
 class Database:
     SCHEMA_VERSION = 8
 
@@ -1129,7 +1132,7 @@ class Database:
         if not self._transaction_active:
             self.conn.commit()
 
-    def save_campaign_fill(self, fill):
+    def save_campaign_fill(self, fill, _defer_conflict=False):
         """Idempotently persist one exchange fill; conflicting duplicates fail closed."""
         data = redact_value(fill if isinstance(fill, dict) else dict(fill))
         trade_id = data.get("trade_id", data.get("tradeId"))
@@ -1164,8 +1167,14 @@ class Database:
         )
         payload = json.dumps(data, default=str, sort_keys=True)
         if not self._transaction_active:
+            # Commit the durable recovery block/event before surfacing a
+            # conflicting trade ID to the caller. Raising inside the SQLite
+            # transaction would roll back the very block meant to protect it.
             with self.transaction():
-                return self.save_campaign_fill(data)
+                result = self.save_campaign_fill(data, _defer_conflict=True)
+            if result is _FILL_CONFLICT:
+                raise RuntimeError("conflicting_duplicate_trade_id")
+            return result
         prior = self.conn.execute(
             """SELECT campaign_id,order_id,side,quantity,price,quote_quantity,
                       commission_asset,commission_amount,raw_json
@@ -1191,6 +1200,8 @@ class Database:
                     {"exchange": exchange, "account_id": account_id,
                      "symbol": symbol, "trade_id": str(trade_id)},
                 )
+                if _defer_conflict:
+                    return _FILL_CONFLICT
                 raise RuntimeError("conflicting_duplicate_trade_id")
             return False
         self.conn.execute(
