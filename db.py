@@ -289,6 +289,7 @@ class Database:
             "exchange": "TEXT NOT NULL DEFAULT 'BINANCE'",
             "account_id": "TEXT NOT NULL DEFAULT 'default'",
             "trade_id": "TEXT",
+            "commission_amount": "REAL",
             "financial_state": "TEXT NOT NULL DEFAULT 'LEGACY_UNVERIFIED'",
         }
         for name, declaration in additions.items():
@@ -1153,7 +1154,7 @@ class Database:
                 return self.save_campaign_fill(data)
         prior = self.conn.execute(
             """SELECT campaign_id,order_id,side,quantity,price,quote_quantity,
-                      commission_asset,raw_json
+                      commission_asset,commission_amount,raw_json
                FROM campaign_fills
                WHERE exchange=? AND account_id=? AND symbol=? AND trade_id=?""",
             identity,
@@ -1161,12 +1162,12 @@ class Database:
         if prior:
             expected = (
                 values[0], values[1], values[2], values[3], values[4], values[5],
-                values[7],
+                values[7], float(data.get("commission", data.get("fee_amount", 0))),
             )
             actual = (
                 prior["campaign_id"], prior["order_id"], prior["side"],
                 prior["quantity"], prior["price"], prior["quote_quantity"],
-                prior["commission_asset"],
+                prior["commission_asset"], prior["commission_amount"],
             )
             if actual != expected:
                 self.state_set("recovery_status", "RECOVERY_REQUIRED")
@@ -1182,13 +1183,13 @@ class Database:
             """INSERT INTO campaign_fills(
                 campaign_id,order_id,symbol,side,quantity,price,quote_quantity,
                 fee_quote,commission_base,commission_asset,raw_json,
-                exchange,account_id,trade_id,financial_state
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                exchange,account_id,trade_id,commission_amount,financial_state
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 values[0], values[1], symbol, values[2], values[3], values[4], values[5],
                 float(data.get("fee_quote", 0) or 0),
                 float(data.get("commission_base", 0) or 0), values[7], payload,
-                exchange, account_id, str(trade_id), "COMPLETE",
+                exchange, account_id, str(trade_id), values[6], "COMPLETE",
             ),
         )
         return True
