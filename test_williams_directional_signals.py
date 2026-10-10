@@ -50,7 +50,8 @@ def test_short_reversal_uses_low_minus_tick_and_high_as_invalidation():
     data.loc[11, ["open", "high", "low", "close"]] = [111.8, 112.4, 111.4, 112.0]
 
     signals = extract_short_signal_specs(
-        "BTCUSDT", data, timeframe="5m", tick_size=0.1
+        "BTCUSDT", data, timeframe="5m", tick_size=0.1,
+        wave_invalidation_price=115.0,
     )
     reversal = [s for s in signals if s.signal_type is SignalType.REVERSAL]
     assert reversal
@@ -59,6 +60,8 @@ def test_short_reversal_uses_low_minus_tick_and_high_as_invalidation():
     assert signal.side == "SELL"
     assert abs(signal.trigger_price - (float(data.loc[8, "low"]) - 0.1)) < 1e-9
     assert signal.protective_reference == float(data.loc[8, "high"])
+    assert signal.invalidation_price == signal.protective_reference
+    assert signal.wave_invalidation_price == 115.0
     assert signal.alligator_bearish is True
     assert signal.signal_id.endswith(f":SHORT:{signal.signal_bar_time_ms}")
 
@@ -315,3 +318,67 @@ def test_signal_order_uses_confirmation_time_not_source_bar_time():
     )
     ordered = _dedupe_and_sort_signal_specs([fractal, reversal])
     assert ordered == [reversal, fractal]
+
+
+def test_equal_high_fractal_waits_for_second_strictly_lower_high():
+    # Trading Chaos 2, Figure 11.1 D: the equal high does not count as one
+    # of the two required lower highs, so confirmation needs six bars here.
+    from strategy import calculate_indicators, config_from_env
+
+    data = pd.DataFrame([
+        {"open": 6.0, "high": 7.0, "low": 5.0, "close": 6.0, "volume": 10.0},
+        {"open": 7.0, "high": 8.0, "low": 5.5, "close": 7.0, "volume": 10.0},
+        {"open": 9.0, "high": 10.0, "low": 6.0, "close": 9.0, "volume": 10.0},
+        {"open": 8.0, "high": 9.0, "low": 6.2, "close": 8.0, "volume": 10.0},
+        {"open": 9.0, "high": 10.0, "low": 6.5, "close": 9.0, "volume": 10.0},
+        {"open": 7.0, "high": 8.0, "low": 6.7, "close": 7.5, "volume": 10.0},
+    ])
+    indicators = calculate_indicators(data, config_from_env({"FRACTAL_LEFT": "2", "FRACTAL_RIGHT": "2"}))
+    assert bool(indicators["fractal_up"].iloc[2])
+    assert pd.isna(indicators["confirmed_up_level"].iloc[4])
+    assert indicators["confirmed_up_level"].iloc[5] == 10.0
+    assert indicators["confirmed_up_center_index"].iloc[5] == 2
+
+    indicators["teeth_shifted"] = 9.0
+    indicators["bullish_reversal_bar"] = False
+    indicators["bearish_reversal_bar"] = False
+    indicators["ao_green_streak"] = 0
+    indicators["ao_red_streak"] = 0
+    signals = extract_long_signal_specs("BTCUSDT", indicators, timeframe="5m", tick_size=0.1)
+    fractals = [signal for signal in signals if signal.signal_type is SignalType.FRACTAL]
+    assert len(fractals) == 1
+    assert fractals[0].signal_bar_time_ms == 2
+    assert fractals[0].confirmation_time_ms == 5
+    assert fractals[0].protective_reference == 6.0
+
+
+def test_wave_scenario_invalidation_is_separate_from_pattern_stop():
+    from types import SimpleNamespace
+    from market_scanner import _separate_signal_stop_levels
+
+    pattern_stop, wave_stop = _separate_signal_stop_levels(
+        {"invalidation_price": 98.0, "protective_reference": 98.0, "wave_invalidation_price": 90.0},
+        SimpleNamespace(invalidation_price=92.0),
+    )
+    assert pattern_stop == 98.0
+    assert wave_stop == 92.0
+
+
+def test_signal_serialization_preserves_wave_invalidation_separately():
+    from futures_runtime import signal_spec_from_dict
+
+    signal = SignalSpec.new(
+        symbol="BTCUSDT",
+        side="BUY",
+        signal_type=SignalType.REVERSAL,
+        role=SignalRole.ENTRY,
+        timeframe="1h",
+        signal_bar_time_ms=123,
+        trigger_price=105.0,
+        protective_reference=100.0,
+        invalidation_price=100.0,
+        wave_invalidation_price=97.0,
+    )
+    restored = signal_spec_from_dict(signal.to_dict())
+    assert restored.invalidation_price == 100.0
+    assert restored.wave_invalidation_price == 97.0
