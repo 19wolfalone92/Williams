@@ -326,15 +326,20 @@ class CampaignExecutionService:
                     f"{signal.symbol}: execution context predates the source signal bar"
                 )
 
+            equity_now = float(self._current_equity_quote())
+            if equity_now <= 0:
+                raise CampaignExecutionError(
+                    "fresh exchange equity is unavailable before initial entry submission"
+                )
             reserved_now = float(self.engine.portfolio_reserved_risk_quote())
-            portfolio_capacity_now = float(equity_quote) * float(
+            portfolio_capacity_now = equity_now * float(
                 self.engine.portfolio_risk_limit_pct
             )
             if reserved_now > portfolio_capacity_now + max(1e-9, portfolio_capacity_now * 1e-9):
                 raise CampaignExecutionError(
                     "portfolio risk reservation changed before initial entry submission"
                 )
-            campaign_capacity_now = float(equity_quote) * float(
+            campaign_capacity_now = equity_now * float(
                 self.engine.campaign_risk_limit_pct
             )
             if float(campaign.pending_risk_quote or 0.0) > campaign_capacity_now + 1e-9:
@@ -1267,13 +1272,18 @@ class CampaignExecutionService:
             "INVALIDATED", "EXPIRED", "CANCELLED", "REPLACED", "FILLED"
         }:
             raise CampaignExecutionError(f"{symbol}: add-on signal is terminal")
+        equity_now = float(self._current_equity_quote())
+        if equity_now <= 0:
+            raise CampaignExecutionError(
+                f"{symbol}: fresh exchange equity is unavailable before add-on submission"
+            )
         reserved_now = float(self.engine.portfolio_reserved_risk_quote())
-        portfolio_capacity_now = float(equity_quote) * float(
+        portfolio_capacity_now = equity_now * float(
             self.engine.portfolio_risk_limit_pct
         )
         if reserved_now > portfolio_capacity_now + max(1e-9, portfolio_capacity_now * 1e-9):
             raise CampaignExecutionError("portfolio risk budget changed before add-on submission")
-        campaign_capacity_now = float(equity_quote) * float(self.engine.campaign_risk_limit_pct)
+        campaign_capacity_now = equity_now * float(self.engine.campaign_risk_limit_pct)
         if (
             float(campaign.open_risk_quote or 0.0)
             + float(campaign.pending_risk_quote or 0.0)
