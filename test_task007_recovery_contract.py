@@ -206,6 +206,45 @@ def test_startup_gate_remains_blocked_when_exchange_has_unknown_open_order(tmp_p
     assert db.state_get("recovery_state") == "REQUIRED"
 
 
+def test_ambiguous_cancel_recovers_against_persisted_target_order_id(tmp_path):
+    db, client, runtime, portfolio, report, recovery = _recovery_gate_fixture(
+        str(tmp_path / "cancel_target.sqlite3")
+    )
+    target = {
+        "symbol": "BTCUSDT",
+        "orderId": "77",
+        "clientOrderId": "WILLV5_STOP_target",
+        "side": "SELL",
+        "type": "STOP_LOSS",
+        "status": "CANCELED",
+        "origQty": "0.01",
+        "executedQty": "0",
+        "cummulativeQuoteQty": "0",
+    }
+    client.orders.append(target)
+    intent = OrderIntent.new(
+        "BTCUSDT",
+        "SELL",
+        "CANCEL",
+        required_context_versions={},
+        client_order_id="WILLV5_STOP_CANCEL_attempt",
+        target_order_id="77",
+        purpose="CAMPAIGN_PROTECTION_CANCEL",
+        campaign_id="campaign-cancel",
+    )
+    db.save_execution_intent(intent, "AMBIGUOUS", "cancel response lost")
+
+    runtime._finalize_recovery_gate(report, recovery, portfolio)
+
+    stored = db.conn.execute(
+        "SELECT status,target_order_id FROM execution_intents WHERE intent_id=?",
+        (intent.intent_id,),
+    ).fetchone()
+    assert stored["status"] == "RECONCILED"
+    assert stored["target_order_id"] == "77"
+    assert db.state_get("recovery_state") == "READY"
+
+
 def test_ambiguous_submission_cannot_be_retried_with_same_intent_or_client_id(tmp_path):
     db = Database(str(tmp_path / "ambiguous.sqlite3"))
     db.mark_recovery_ready(evidence())
