@@ -4,6 +4,8 @@ import time
 
 from execution_barrier import ExecutionBarrier, OrderIntent
 from market_context import ContextCache, TFMarketContext, WaveHypothesis
+from db import Database
+from order_identity import stable_client_order_id
 from wise_men import WiseMenPhase, WiseMenStateMachine
 
 
@@ -41,15 +43,25 @@ def test_copy_on_write_versions_and_immutable_snapshot():
 def test_execution_barrier_rejects_stale_context():
     cache = ContextCache()
     cache.publish(context())
-    barrier = ExecutionBarrier(cache)
+    barrier = ExecutionBarrier(cache, Database(":memory:"))
     snap = cache.snapshot()
     cache.publish(context())
+    signal_id = "BTCUSDT:1h:stale-context-test"
     intent = OrderIntent.new(
         "BTCUSDT", "BUY", "MARKET",
         required_context_versions={"1h": snap.context("BTCUSDT", "1h").version},
+        purpose="ENTRY",
+        permission_interval="1h",
+        signal_id=signal_id,
+        client_order_id=stable_client_order_id("WILL_TEST_", signal_id),
+        risk_quote=1.0,
     )
     calls = []
-    result = barrier.execute(intent, lambda: calls.append("sent"))
+    result = barrier.execute(
+        intent,
+        lambda: calls.append("sent"),
+        pre_submit_checks=lambda _snapshot: None,
+    )
     assert not result.accepted
     assert not calls
     assert "stale context" in result.reason
@@ -58,16 +70,17 @@ def test_execution_barrier_rejects_stale_context():
 def test_execution_barrier_serializes_publish_and_submit():
     cache = ContextCache()
     cache.publish(context())
-    barrier = ExecutionBarrier(cache)
+    barrier = ExecutionBarrier(cache, Database(":memory:"))
     version = cache.snapshot().context("BTCUSDT", "1h").version
     started = threading.Event()
     published = threading.Event()
+    signal_id = "BTCUSDT:1h:serialize-test"
 
     def submit():
         started.set()
         time.sleep(0.05)
         assert cache.snapshot().context("BTCUSDT", "1h").version == version
-        return {"status": "FILLED"}
+        return {"status": "FILLED", "executedQty": "1"}
 
     def publish():
         started.wait(1)
@@ -81,9 +94,17 @@ def test_execution_barrier_serializes_publish_and_submit():
         "BUY",
         "MARKET",
         {"1h": version},
+        purpose="ENTRY",
         permission_interval="1h",
+        signal_id=signal_id,
+        client_order_id=stable_client_order_id("WILL_TEST_", signal_id),
+        risk_quote=1.0,
     )
-    result = barrier.execute(intent, submit)
+    result = barrier.execute(
+        intent,
+        submit,
+        pre_submit_checks=lambda _snapshot: None,
+    )
     t.join()
     assert result.accepted
     assert published.is_set()
