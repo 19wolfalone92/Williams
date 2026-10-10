@@ -34,6 +34,7 @@ from trading_config import TradingConfig
 from futures_campaign_execution import FuturesCampaignExecutionService, FuturesCampaignExecutionError
 
 log = logging.getLogger("williams-futures-runtime")
+CANONICAL_DECISION_TIMEFRAME = "1h"
 
 
 def _env_bool(key: str, default: bool) -> bool:
@@ -642,10 +643,13 @@ class FuturesRuntime:
                     # or protective-exit history; do not invent a close here.
                     continue
 
+                # Campaign management follows the canonical H1 decision chart,
+                # even if an operator accidentally changes the scan interval.
+                management_tf = CANONICAL_DECISION_TIMEFRAME
                 frame = fetch_klines(
                     self.client,
                     symbol,
-                    self.interval,
+                    management_tf,
                     limit=max(160, self.config.wave_lookback),
                 )
                 if frame is None or frame.empty:
@@ -660,7 +664,7 @@ class FuturesRuntime:
                     close_ms = int(last_close.timestamp() * 1000)
                 else:
                     close_ms = int(pd.Timestamp(closed.index[-1]).timestamp() * 1000) + _interval_seconds(self.interval) * 1000
-                _assert_fresh_closed_candle(symbol, self.interval, close_ms)
+                _assert_fresh_closed_candle(symbol, management_tf, close_ms)
                 indicators = calculate_indicators(closed, config_from_env())
                 atr = self._atr(closed, self.config.atr_period)
                 result = self.execution.manage_campaign(campaign, indicators, atr=atr)
@@ -815,6 +819,25 @@ class FuturesRuntime:
             self._last_scan_summary = {
                 "state": "DAILY_RISK_LOCKOUT",
                 "reason": daily_reason,
+                "reconciliation": reconciliations,
+                "management": management,
+                "pending_order_cancellations": cancellations,
+                "new_entries": 0,
+            }
+            return self._last_scan_summary
+
+        if self.interval != CANONICAL_DECISION_TIMEFRAME:
+            # M15/M5 are not allowed to create signals or arm exchange-side
+            # conditional orders. Cancel any existing armed entries because
+            # their originating signal timeframe is no longer canonical.
+            cancellations = self._cancel_pending_entries(reason="NON_CANONICAL_SIGNAL_TIMEFRAME")
+            management.extend(cancellations)
+            self._last_scan_summary = {
+                "state": "SIGNAL_TIMEFRAME_BLOCKED",
+                "reason": (
+                    f"new entries require canonical H1 decisions; configured interval={self.interval}. "
+                    "M15 is context/execution monitoring only; M5 is diagnostics/replay only."
+                ),
                 "reconciliation": reconciliations,
                 "management": management,
                 "pending_order_cancellations": cancellations,
