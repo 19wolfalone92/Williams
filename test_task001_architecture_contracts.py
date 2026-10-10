@@ -254,3 +254,26 @@ def test_global_flat_does_not_authorize_a_symbol_with_no_state_key(tmp_path):
     assert result.accepted is False
     assert result.reason == "BTCUSDT:UNKNOWN"
     assert called == []
+
+
+def test_campaign_entry_needs_persisted_campaign_state(tmp_path):
+    cache = _context_cache()
+    db = _ready_db(tmp_path)
+    barrier = ExecutionBarrier(cache, db)
+    ctx = cache.snapshot().context("BTCUSDT", "1h")
+    intent = OrderIntent.new(
+        "BTCUSDT",
+        "BUY",
+        "STOP_LOSS",
+        required_context_versions={"1h": ctx.version},
+        purpose="CAMPAIGN_ENTRY",
+        permission_interval="1h",
+        campaign_id="missing-campaign-state",
+        signal_id="BTCUSDT:1h:REVERSAL:123",
+        client_order_id="TASK001_OFFLINE_CAMPAIGN",
+    )
+    called = []
+    result = barrier.execute(intent, lambda: called.append(True) or {"status": "NEW"})
+    assert result.accepted is False
+    assert result.reason == "campaign_unknown"
+    assert called == []
