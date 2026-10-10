@@ -297,3 +297,82 @@ Still not proven:
 6. Complete dynamic proof of every possible production mutation route. Bulk `DELETE /api/v3/openOrders` remains disabled in Python and unapproved in Android production transport.
 
 No Mainnet requests or orders were used. Do not merge PR #47.
+
+
+---
+
+## 10. TASK 001.1 — Cancel/Replace, OCO & Crash-Recovery Closure (2026-10-11)
+
+**Review baseline SHA:** `e96f5a0f47b1aea0460140041adbd04c8c45f6a0`  
+**PR:** [#47](https://github.com/19wolfalone92/Williams/pull/47) — remains open Draft, not merged.  
+**Base/main SHA:** `04da5f9c09572e99ff310be3a1908179165e528c`  
+**Review result:** **FAIL — NOT ACCEPTED.** This review did not claim closure or change the production recovery contract.
+
+### 10.1 Pre-change verification
+
+- PR metadata confirms head `e96f5a0f47b1aea0460140041adbd04c8c45f6a0`, base `main` at `04da5f9c09572e99ff310be3a1908179165e528c`, state open, draft=true, merged=false.
+- Reviewed current branch source for `campaign_execution.py`, `execution_barrier.py`, `db.py`, `binance_client.py`, and `test_task001_recovery_regressions.py`.
+- The existing SQLite `execution_intents` schema stores the generic `client_order_id`, but does not independently store a cancel/replace operation ID, old target order ID, replacement client ID as a distinct field, or per-leg result states.
+- `CampaignExecutionService.replace_structural_stop` passes `existing_order_id` to the adapter and creates a replacement client ID, but the durable generic intent does not retain the old order identity. It accepts `NOT_FOUND` in its post-call branch even though the barrier's authoritative cancel/replace response validator requires both result values to be `SUCCESS`; this path requires reconciliation and must not be interpreted as proof that both legs succeeded.
+- `ExecutionBarrier.reconcile_unresolved_intents` intentionally leaves cancel/replace and standalone cancel intents unresolved because it cannot independently query both legs from the current durable schema. This is fail-closed, but not closure.
+- OCO recovery validates list identity/status and queries children. That alone does not prove financial and position reconciliation or that the remaining protective quantity matches current exposure.
+
+### 10.2 Existing deterministic regression coverage
+
+The branch's `test_task001_recovery_regressions.py` includes:
+- injected SQLite failure after a fake exchange accepted a POST, with assertions against a blind second POST and with reconciliation required;
+- cancel/replace response authority checks and a response matrix;
+- cancel/replace timeout remains ambiguous;
+- OCO recovery checks list/child states and malformed/unknown child evidence;
+- restart recovery refuses to infer the old cancel/replace leg from replacement-only identity.
+
+These are offline fake-exchange tests. This report does **not** claim that every requested SQLite fault point, two-process race, or complete OCO/partial-fill/fee/restart lifecycle has been covered.
+
+### 10.3 Required matrix — current evidence, not an acceptance claim
+
+| Scenario | Expected safe result | Evidence on reviewed SHA | Status |
+|---|---|---|---|
+| Cancel succeeds + replacement succeeds | Persist both leg identities/results; reconcile both | Response authority tests exist; durable old-leg identity is missing | BLOCKED |
+| Cancel succeeds + replacement rejected | Preserve old canceled/new rejected; reconcile exposure/protection | Matrix logic is covered at response-validation level | PARTIAL |
+| Cancel fails + replacement succeeds | Keep unresolved; query both legs | Matrix logic is covered at response-validation level | PARTIAL |
+| Old order filled during cancel | Preserve fills and resulting exposure; do not infer canceled | No complete two-leg/fill-reconciliation proof | NOT VERIFIED |
+| Old order partially filled | Reconcile executions/fees/remaining exposure and protection | Existing partial-fill tests do not prove the combined crash lifecycle | NOT VERIFIED |
+| Timeout or lost response after exchange acceptance | No blind mutation retry; query exchange by durable identifiers | Timeout/ambiguous regression exists | PARTIAL |
+| Malformed response | Keep UNKNOWN/RECONCILE_REQUIRED | Authority validation tests exist | PARTIAL |
+| Process death between operations or after response before DB write | Recover each leg independently | Old leg identity is not durable | BLOCKED |
+| Repeat recovery after saved result | Idempotent facts/events and no duplicate mutation | Some idempotency assertions exist; concurrent two-process proof absent | NOT VERIFIED |
+| OCO list and both children found | Validate list + both children + fills + fees + exposure/protection | List/child state lookup exists | PARTIAL |
+| OCO child missing/unknown ID or status | Remain unresolved; never recreate protection blindly | Parameterized regression exists | PARTIAL |
+| OCO partial fill / sibling auto-cancel / restart | Reconcile executions, fees, actual remaining exposure and protection | No complete end-to-end test | NOT VERIFIED |
+| SQLite failures at every persistence boundary | Durable unresolved state or fail closed; no blind retry | One post-submit outcome-write failure is covered | PARTIAL |
+| Two concurrent recovery instances | One idempotent reconciliation; no duplicate event/mutation | No dedicated two-connection/two-process regression verified | NOT VERIFIED |
+
+### 10.4 Financial and position reconciliation contracts
+
+The existing source uses the campaign fill/commission paths and durable execution records; no separate reconciliation subsystem was introduced here. The current evidence is insufficient to certify the requested independent dimensions:
+- order state;
+- financial state (all trade IDs, executed quantities, prices, quote amounts, commission amount and commission asset);
+- position state (exchange balances and net base-asset delta);
+- protection state (live OCO/list children and quantity matching actual remaining exposure);
+- recovery complete only after all required dimensions agree.
+
+Missing commission data must remain unknown, not be converted into zero. A reconciled single intent is not authority to clear the global or symbol reconciliation latch. The full integration assertion across these dimensions remains a required test.
+
+### 10.5 Exact-SHA CI evidence available at review time
+
+For SHA `e96f5a0f47b1aea0460140041adbd04c8c45f6a0`:
+- [Python backend tests — run 38088280886](https://github.com/19wolfalone92/Williams/actions/runs/38088280886): **SUCCESS**, all job steps passed including release gate, compile, full static safety audit and offline tests.
+- [Williams Campaign CI — run 38088280869](https://github.com/19wolfalone92/Williams/actions/runs/38088280869): **SUCCESS**, Python tests and Android build/static-check jobs passed.
+- [Build Android APK — run 38088280868](https://github.com/19wolfalone92/Williams/actions/runs/38088280868): **IN PROGRESS** at the latest job inspection. Required Android lint and unit-test steps and debug APK build had passed, but release APK, final artifact verification and upload steps had not yet completed. This is not a successful completed workflow.
+
+Any subsequent report commit has a new SHA and requires new exact-SHA checks. Do not transfer these results to a later commit.
+
+### 10.6 External test status and acceptance
+
+- Physical Android process-death/restart: **NOT VERIFIED**.
+- Dedicated-credential Spot Testnet cancel/replace + OCO + partial-fill + restart matrix: **NOT RUN / NOT VERIFIED**.
+- Mainnet and real order use: **NOT USED**.
+- `main`: unchanged.
+- PR #47: open Draft, not merged.
+
+**TASK 001.1 status: FAIL — NOT ACCEPTED.** The most important remaining code defect is the lack of durable independent old-order identity and per-leg outcome records for cancel/replace recovery. Do not remove the reconciliation latch or automatically retry mutations to work around this gap. Next implementation work must add a migration-safe durable operation record, write it before network I/O through the existing ExecutionBarrier, independently query old and replacement orders on recovery, and prove idempotency with SQLite fault injection and concurrent recovery tests. Then close the OCO/partial-fill/fee/protection lifecycle and rerun all mandatory workflows on one final SHA.
