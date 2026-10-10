@@ -1,5 +1,6 @@
 """Task 005 fail-closed regression tests; all execution tests use MockExchange only."""
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 import multiprocessing
 from datetime import datetime as RealDatetime, timezone
 from dataclasses import replace
@@ -355,3 +356,117 @@ def test_protective_quantity_uses_common_lot_and_market_lot_grid():
     assert Decimal(str(qty)) % Decimal("0.003") == 0
     with pytest.raises(CampaignExecutionError, match="common LOT_SIZE/MARKET_LOT_SIZE"):
         svc._normalize_qty("BTCUSDT", 0.005)
+
+
+def test_transaction_begin_failure_never_reaches_exchange(monkeypatch):
+    db = Database(":memory:")
+    client = MockExchange()
+    svc = service(db, client)
+
+    @contextmanager
+    def fail_begin():
+        raise OSError("SQLite BEGIN failed")
+        yield db
+
+    monkeypatch.setattr(db, "transaction", fail_begin)
+    with pytest.raises(OSError, match="BEGIN failed"):
+        svc.arm_initial_entry(
+            signal(), equity_quote=10_000.0, candidate_risk_pct=0.0024
+        )
+    assert client.orders == []
+
+
+def test_reservation_insert_failure_rolls_back_and_never_reaches_exchange(monkeypatch):
+    db = Database(":memory:")
+    client = MockExchange()
+    svc = service(db, client)
+
+    def fail_claim(*args, **kwargs):
+        raise OSError("reservation insert failed")
+
+    monkeypatch.setattr(db, "try_claim_state", fail_claim)
+    with pytest.raises(OSError, match="reservation insert failed"):
+        svc.arm_initial_entry(
+            signal(), equity_quote=10_000.0, candidate_risk_pct=0.0024
+        )
+    assert client.orders == []
+    assert db.active_campaign_count() == 0
+
+
+def test_transaction_commit_failure_never_reaches_exchange(monkeypatch):
+    db = Database(":memory:")
+    client = MockExchange()
+    svc = service(db, client)
+    original_transaction = db.transaction
+
+    @contextmanager
+    def fail_outer_commit():
+        if db._transaction_active:
+            with original_transaction():
+                yield db
+            return
+        with original_transaction():
+            yield db
+            raise OSError("SQLite commit failed")
+
+    monkeypatch.setattr(db, "transaction", fail_outer_commit)
+    with pytest.raises(OSError, match="commit failed"):
+        svc.arm_initial_entry(
+            signal(), equity_quote=10_000.0, candidate_risk_pct=0.0024
+        )
+    assert client.orders == []
+    assert db.active_campaign_count() == 0
+
+
+def test_reservation_readback_failure_keeps_campaign_blocked_without_order(monkeypatch):
+    db = Database(":memory:")
+    client = MockExchange()
+    svc = service(db, client)
+    original_state_get = db.state_get
+    calls = {"reservation": 0}
+
+    def fail_after_commit(key, default=None):
+        if key == "risk_entry_reservation":
+            calls["reservation"] += 1
+            if calls["reservation"] >= 2:
+                raise OSError("reservation readback failed")
+        return original_state_get(key, default)
+
+    monkeypatch.setattr(db, "state_get", fail_after_commit)
+    with pytest.raises(CampaignExecutionError, match="reservation not verified"):
+        svc.arm_initial_entry(
+            signal(), equity_quote=10_000.0, candidate_risk_pct=0.0024
+        )
+    monkeypatch.setattr(db, "state_get", original_state_get)
+    assert client.orders == []
+    assert db.active_campaign_count() == 1
+    campaign = db.open_campaigns()[0]
+    assert campaign["state"] == CampaignState.RECONCILE_REQUIRED.value
+    assert original_state_get("risk_entry_reservation") is not None
+    assert db.campaign_risk_reserved_quote() > 0
+
+
+def test_ambiguous_exchange_submit_is_not_blindly_retried():
+    class AcceptedThenTimeoutExchange(MockExchange):
+        def __init__(self):
+            super().__init__()
+            self.submit_calls = 0
+
+        def order_safe(self, *args, **kwargs):
+            self.submit_calls += 1
+            super().order_safe(*args, **kwargs)
+            raise TimeoutError("response lost after exchange accepted request")
+
+    db = Database(":memory:")
+    client = AcceptedThenTimeoutExchange()
+    svc = service(db, client)
+    with pytest.raises(Exception):
+        svc.arm_initial_entry(
+            signal(), equity_quote=10_000.0, candidate_risk_pct=0.0024
+        )
+    assert client.submit_calls == 1
+    assert len(client.orders) == 1
+    assert db.active_campaign_count() == 1
+    campaign = db.open_campaigns()[0]
+    assert campaign["state"] == CampaignState.RECONCILE_REQUIRED.value
+    assert db.campaign_risk_reserved_quote() > 0

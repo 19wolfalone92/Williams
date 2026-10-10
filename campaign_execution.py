@@ -453,6 +453,24 @@ class CampaignExecutionService:
             raise CampaignExecutionError(
                 f"daily risk gate blocked new entry: {daily_block_reason}"
             )
+        try:
+            reservation_readback = self.db.state_get("risk_entry_reservation")
+            durable_campaign = self.engine.load_campaign(campaign.campaign_id)
+            if reservation_readback != client_id:
+                raise RuntimeError("risk reservation readback mismatch")
+            if (
+                durable_campaign is None
+                or durable_campaign.state != CampaignState.ENTRY_PENDING
+                or float(durable_campaign.pending_risk_quote or 0.0) <= 0
+            ):
+                raise RuntimeError("durable ENTRY_PENDING campaign/reserved risk missing")
+        except Exception as exc:
+            self.engine.mark_reconcile_required(
+                campaign, f"durable entry reservation readback failed: {type(exc).__name__}: {exc}"
+            )
+            raise CampaignExecutionError(
+                f"{signal.symbol}: durable risk reservation not verified; order not sent"
+            ) from exc
 
         intent = OrderIntent.new(
             signal.symbol,
@@ -1593,6 +1611,24 @@ class CampaignExecutionService:
             raise CampaignExecutionError(
                 f"daily risk gate blocked add-on: {daily_block_reason}"
             )
+        try:
+            reservation_readback = self.db.state_get("risk_entry_reservation")
+            durable_campaign = self.engine.load_campaign(campaign.campaign_id)
+            if reservation_readback != client_id:
+                raise RuntimeError("risk reservation readback mismatch")
+            if (
+                durable_campaign is None
+                or durable_campaign.state != CampaignState.ADD_ON_PENDING
+                or float(durable_campaign.pending_risk_quote or 0.0) <= 0
+            ):
+                raise RuntimeError("durable ADD_ON_PENDING campaign/reserved risk missing")
+        except Exception as exc:
+            self.engine.mark_reconcile_required(
+                campaign, f"durable add-on reservation readback failed: {type(exc).__name__}: {exc}"
+            )
+            raise CampaignExecutionError(
+                f"{campaign.symbol}: durable add-on reservation not verified; order not sent"
+            ) from exc
 
         intent = OrderIntent.new(
             signal.symbol,
