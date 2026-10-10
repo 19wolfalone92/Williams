@@ -418,10 +418,26 @@ class ExecutionBarrier:
                 state_get = getattr(self.db, "state_get", None)
                 if not callable(state_get):
                     return "durable execution state API unavailable"
-                global_state = str(state_get("position_state", "FLAT"))
+                global_state = str(state_get("position_state", "FLAT")).upper()
                 if global_state == "RECONCILE_REQUIRED":
                     return "RECONCILE_REQUIRED"
-                symbol_state = str(state_get(f"position_state:{intent.symbol}", "FLAT"))
+                kill_switch = str(state_get("kill_switch_latched", "false")).strip().lower()
+                if kill_switch not in {"", "0", "false", "off", "none"}:
+                    return "kill switch is latched"
+                try:
+                    conn = getattr(self.db, "conn", None)
+                    if conn is None:
+                        return "global reconciliation-state lookup unavailable"
+                    unresolved_state = conn.execute(
+                        "SELECT key FROM bot_state WHERE UPPER(value)='RECONCILE_REQUIRED' "
+                        "AND (key='position_state' OR key LIKE 'position_state:%' "
+                        "OR key LIKE 'campaign_state:%') LIMIT 1"
+                    ).fetchone()
+                    if unresolved_state is not None:
+                        return f"global RECONCILE_REQUIRED state: {unresolved_state['key']}"
+                except Exception as exc:
+                    return f"global reconciliation-state lookup failed: {type(exc).__name__}: {exc}"
+                symbol_state = str(state_get(f"position_state:{intent.symbol}", "FLAT")).upper()
                 if symbol_state == "RECONCILE_REQUIRED":
                     return f"{intent.symbol}: RECONCILE_REQUIRED"
                 if intent.campaign_id:
