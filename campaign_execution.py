@@ -200,6 +200,11 @@ class CampaignExecutionService:
     ) -> dict[str, Any]:
         if signal.side != "BUY":
             raise CampaignExecutionError("Current Spot campaign executor only arms LONG entries")
+        if signal.timeframe.strip().lower() != "1h":
+            raise CampaignExecutionError("Canonical Spot campaign entries require H1 signals")
+        now_ms = int(time.time() * 1000)
+        if signal.confirmation_time_ms <= 0 or signal.expires_at_ms <= now_ms:
+            raise CampaignExecutionError("Signal confirmation/expiry is missing or expired; UNRESOLVED = BLOCKED")
 
         reserved = self.engine.portfolio_reserved_risk_quote()
         capacity = max(0.0, float(equity_quote) * self.engine.portfolio_risk_limit_pct)
@@ -947,10 +952,23 @@ class CampaignExecutionService:
         campaign = self._active_campaign_for_symbol(signal.symbol)
         if campaign is None or campaign.position_qty <= 0:
             raise CampaignExecutionError(f"{signal.symbol}: no active campaign for add-on")
-        if signal.signal_bar_time_ms <= 0:
-            raise CampaignExecutionError("add-on signal time is invalid")
-        if signal.signal_bar_time_ms <= int(campaign.tags.get("last_signal_time_ms", 0) or 0):
-            raise CampaignExecutionError("signal is not newer than current campaign signal")
+        if signal.side != "BUY" or signal.side != campaign.side:
+            raise CampaignExecutionError("Spot add-ons may only increase the managed LONG inventory")
+        if signal.timeframe.strip().lower() != "1h":
+            raise CampaignExecutionError("Canonical campaign add-ons require H1 signals")
+        now_ms = int(time.time() * 1000)
+        if signal.signal_bar_time_ms <= 0 or signal.confirmation_time_ms <= 0:
+            raise CampaignExecutionError("add-on event/confirmation time is invalid")
+        if signal.expires_at_ms <= now_ms:
+            raise CampaignExecutionError("Add-on signal expired; UNRESOLVED = BLOCKED")
+        latest_event = int(
+            campaign.tags.get("last_signal_confirmation_time_ms", 0)
+            or campaign.tags.get("last_signal_time_ms", 0)
+            or 0
+        )
+        signal_event = int(signal.confirmation_time_ms or signal.signal_bar_time_ms)
+        if signal_event <= latest_event:
+            raise CampaignExecutionError("signal confirmation is not newer than current campaign signal")
 
         reserved = float(campaign.open_risk_quote or 0) + float(campaign.pending_risk_quote or 0)
         campaign_capacity = float(equity_quote) * self.engine.campaign_risk_limit_pct
@@ -1000,6 +1018,7 @@ class CampaignExecutionService:
             raise CampaignExecutionError("signal is already active or filled for this campaign")
         self.db.save_campaign_signal(signal, campaign.campaign_id, state=SignalState.DETECTED.value)
         campaign.tags["last_signal_time_ms"] = int(signal.signal_bar_time_ms)
+        campaign.tags["last_signal_confirmation_time_ms"] = int(signal.confirmation_time_ms or signal.signal_bar_time_ms)
         campaign.tags["pending_add_signal_id"] = signal.signal_id
         campaign.pending_risk_quote = requested
         campaign.capital_reserved_quote = qty * trigger
