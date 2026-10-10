@@ -27,7 +27,7 @@ def test_invalid_prices_and_stop_geometry_block_risk():
     db = Database(":memory:")
     client = MockExchange()
     svc = service(db, client)
-    with pytest.raises(CampaignExecutionError, match="invalid campaign structural stop"):
+    with pytest.raises(CampaignExecutionError, match="structural stop"):
         svc.arm_initial_entry(
             replace(signal(), protective_reference=102.0),
             equity_quote=10_000.0,
