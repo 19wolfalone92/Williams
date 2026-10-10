@@ -5,6 +5,30 @@ import time
 from execution_barrier import ExecutionBarrier, OrderIntent
 from market_context import ContextCache, TFMarketContext, WaveHypothesis
 from wise_men import WiseMenPhase, WiseMenStateMachine
+from db import Database
+
+
+def ready_database():
+    db = Database(":memory:")
+    db.mark_recovery_ready({
+        "exchange_reachable": True,
+        "account_checked": True,
+        "open_orders_checked": True,
+        "order_history_checked": True,
+        "fills_checked": True,
+        "positions_checked": True,
+        "protection_checked": True,
+        "campaigns_checked": True,
+        "intents_checked": True,
+        "unresolved_symbols": [],
+        "pending_entries": [],
+        "unknown_orders": [],
+        "inventory_mismatches": [],
+        "unprotected_positions": [],
+        "unknown_campaigns": [],
+        "canonical_position_state": "FLAT",
+    })
+    return db
 
 
 def context(symbol="BTCUSDT", interval="1h", allow_long=True, allow_short=False):
@@ -41,7 +65,7 @@ def test_copy_on_write_versions_and_immutable_snapshot():
 def test_execution_barrier_rejects_stale_context():
     cache = ContextCache()
     cache.publish(context())
-    barrier = ExecutionBarrier(cache)
+    barrier = ExecutionBarrier(cache, ready_database())
     snap = cache.snapshot()
     cache.publish(context())
     intent = OrderIntent.new(
