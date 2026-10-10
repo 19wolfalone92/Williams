@@ -101,3 +101,24 @@ Not established by offline tests alone:
 - Absence of every alternate order mutation path across all production call sites. Static inventories and tests are evidence, not a substitute for the final call-graph review.
 
 No Mainnet endpoint, credentials, or real trading operation was used.
+
+
+### Exact-SHA validation record — code SHA `5757463506e504b6ae3797c97561cfb108ff7fa9`
+
+All three required PR workflows completed successfully on this same source SHA:
+
+| Workflow | Run | Result / evidence |
+|---|---|---|
+| Python backend tests | [38083150396](https://github.com/19wolfalone92/Williams/actions/runs/38083150396) | PASS — `148 passed, 4 warnings`. |
+| Williams Campaign CI | [38083150402](https://github.com/19wolfalone92/Williams/actions/runs/38083150402) | PASS — Python `180 passed, 4 warnings`; Android unit tests, lint and debug APK assembly passed. |
+| Build Android APK | [38083150419](https://github.com/19wolfalone92/Williams/actions/runs/38083150419) | PASS — release contract gate, Android lint, unit tests, debug/release APK assembly, APK metadata checks and persistent debug signature verification passed. |
+
+Build run `38083150419` reported:
+- Debug APK: `versionName=4.25.0-debug`, `versionCode=1767`; SHA-256 `45e92c440a90eac653c310793230ab07521979e5277ba3096c99db0d90fe0897`.
+- Unsigned release APK: `versionName=4.25.0`, `versionCode=1767`; SHA-256 `8b03527c0ec08c66532d0d00686d196d82ee2b3b05b84cdc7caf7ff051b59edc`.
+- The debug APK signature matched the configured persistent debug keystore and `apksigner verify` succeeded.
+- Debug artifact ID: `11680644565`. Release artifact was also uploaded by the workflow.
+
+**SHA scope warning:** this record proves those workflow results for code SHA `5757463506e504b6ae3797c97561cfb108ff7fa9`, not for a later documentation-only commit. The PR's final HEAD must be checked again after this report commit; no prior-SHA result is to be reused as proof for a different SHA.
+
+Even with green offline CI, the task remains **BLOCKED — NOT ACCEPTED** until the final HEAD has all required workflows green and the final mutation call-graph/recovery review is complete. The tests do not prove live Binance Testnet lost-response recovery or physical-device crash recovery.
