@@ -1,6 +1,7 @@
 import os
 import tempfile
 import time
+import pytest
 from datetime import datetime, timezone
 
 from campaign_engine import CampaignEngine
@@ -33,6 +34,17 @@ class FakeCache:
         return FakeSnapshot()
 
 
+@pytest.fixture(autouse=True)
+def _test_only_preflight_override(monkeypatch):
+    original = PreflightCheckService.verify_all
+
+    def controlled(service, *args, **kwargs):
+        provider = getattr(service, "_test_preflight_provider", None)
+        return provider() if provider is not None else original(service, *args, **kwargs)
+
+    monkeypatch.setattr(PreflightCheckService, "verify_all", controlled)
+
+
 def signal(kind=SignalType.REVERSAL, role=SignalRole.ENTRY, bar=100, trigger=101):
     return SignalSpec.new(
         symbol="BTCUSDT",
@@ -63,9 +75,11 @@ def service(db, client):
     # This service fixture uses MockExchange only; it never opens a network connection.
     client.testnet = True
     client.base_url = "https://testnet.binance.vision"
+    preflight = PreflightCheckService(client, symbols=["BTCUSDT"])
+    preflight._test_preflight_provider = ready_preflight
     barrier = ExecutionBarrier(
         FakeCache(), db,
-        preflight_provider=ready_preflight,
+        preflight_service=preflight,
         exchange_client=client,
     )
     return CampaignExecutionService(client, db, barrier)
