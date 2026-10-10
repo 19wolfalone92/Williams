@@ -602,6 +602,7 @@ class FuturesCampaignExecutionService:
         versions = {
             str(key).lower(): int(value)
             for key, value in dict(signal.context_versions or {}).items()
+            if str(key).lower() in {"1h", "4h"}
         }
         now_ms = int(time.time() * 1000)
         durations_ms = {"1h": 3_600_000, "4h": 14_400_000}
@@ -698,6 +699,8 @@ class FuturesCampaignExecutionService:
         )
         operative = str(signal.timeframe).lower()
         if tc2_core:
+            # D1 is intentionally excluded from the TC2 admission dependency set.
+            versions.pop("1d", None)
             if operative != "1h":
                 raise FuturesCampaignExecutionError(
                     f"{signal.symbol}: TC2 campaigns require H1 as the decision timeframe"
@@ -1065,7 +1068,7 @@ class FuturesCampaignExecutionService:
                 elif signal.signal_type == SignalType.REVERSAL:
                     if not self._tc2_wm1_early_context_allowed(signal, snapshot):
                         raise FuturesCampaignExecutionError(
-                            "WM1 early context/angulation/D1 macro admission no longer valid"
+                            "WM1 early context/angulation/H4 context admission no longer valid"
                         )
                 else:
                     allow = ctx.allow_long if direction == "LONG" else ctx.allow_short
