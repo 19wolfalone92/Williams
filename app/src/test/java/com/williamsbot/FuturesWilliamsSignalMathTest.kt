@@ -49,7 +49,6 @@ class FuturesWilliamsSignalMathTest {
         assertFalse(hasIncreasingWilliamsAngulation(jaw, risingLows.reversed(), risingHighs, 4, "LONG"))
         assertFalse(hasIncreasingWilliamsAngulation(jaw, risingLows, risingHighs, 4, "BUY"))
     }
-}
 
     @Test
     fun staleOlderTriggerCanBeSkippedInFavorOfLaterActionableSignal() {
@@ -65,3 +64,4 @@ class FuturesWilliamsSignalMathTest {
         assertFalse(isActionableWilliamsTrigger("SHORT", 100.0, 98.0, 99.0))
         assertFalse(isActionableWilliamsTrigger("UNKNOWN", 100.0, 102.0, 98.0))
     }
+}
