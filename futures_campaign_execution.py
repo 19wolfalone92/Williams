@@ -83,8 +83,8 @@ class FuturesCampaignExecutionService:
         *,
         execution_barrier: ExecutionBarrier,
         max_open_positions: int = 1,
-        portfolio_risk_limit_pct: float = 0.01,
-        campaign_risk_limit_pct: float = 0.006,
+        portfolio_risk_limit_pct: float = 0.03,
+        campaign_risk_limit_pct: float = 0.01,
         initial_risk_fraction_of_campaign: float = 0.40,
     ) -> None:
         if execution_barrier is None:
@@ -101,8 +101,8 @@ class FuturesCampaignExecutionService:
             initial_risk_fraction_of_campaign=initial_risk_fraction_of_campaign,
         )
         self.max_open_positions = max(1, int(max_open_positions))
-        self.portfolio_risk_limit_pct = min(0.01, max(0.0, float(portfolio_risk_limit_pct)))
-        self.campaign_risk_limit_pct = min(0.006, max(0.0, float(campaign_risk_limit_pct)))
+        self.portfolio_risk_limit_pct = min(0.03, max(0.0, float(portfolio_risk_limit_pct)))
+        self.campaign_risk_limit_pct = min(0.01, max(0.0, float(campaign_risk_limit_pct)))
         self.max_spread_pct = max(0.0, float(os.getenv("MAX_SPREAD_PCT", "0.0015")))
         self.max_atr_pct = max(0.0, float(os.getenv("MAX_ATR_PCT", "0.08")))
         self.max_daily_loss_pct = min(0.25, max(0.0, float(os.getenv("MAX_DAILY_LOSS_PCT", "0.01"))))
