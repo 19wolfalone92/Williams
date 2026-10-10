@@ -62,7 +62,8 @@ def test_short_reversal_uses_low_minus_tick_and_high_as_invalidation():
 def test_short_super_ao_and_fractal_use_bearish_trigger_geometry():
     data = frame()
     data.loc[8, "ao_red_streak"] = 3
-    data.loc[7, "short_fractal_outside"] = True
+    data.loc[7, "short_fractal_outside"] = False
+    # WM2 must remain independently detectable without a separate Balance-Line/fractal gate.
     # The WM3 center is just below the preceding low but remains above the
     # WM2 stop-entry trigger, so neither trigger was crossed before arming.
     data.loc[7, ["open", "high", "low", "close"]] = [111.8, 112.4, 111.3, 111.7]
