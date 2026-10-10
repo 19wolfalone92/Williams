@@ -62,7 +62,8 @@ def test_unknown_orders_block():
 
 
 class FakeClient:
-    testnet = False
+    testnet = True
+    base_url = "https://testnet.binance.vision"
     api_key = "k"
     api_secret = "s"
     time_offset_ms = 50
@@ -106,18 +107,21 @@ class FakeClient:
         return []
 
 
-def test_live_preflight_passes_clean_account():
+def test_testnet_preflight_keeps_unknown_runtime_proofs_blocked():
     report = PreflightCheckService(
         FakeClient(),
         symbols=["BTCUSDT"],
         max_open_positions=1,
     ).verify_all()
-    assert report["ready"] is True
+    assert report["ready"] is False
     assert report["checks"]["api_restrictions"] == "PASS"
     assert report["checks"]["api_trading_status"] == "PASS"
+    assert report["checks"]["candles"] == "UNKNOWN"
+    assert report["product"] == "SPOT"
+    assert isinstance(report["checked_at_ms"], int)
 
 
-def test_live_preflight_blocks_withdrawals():
+def test_testnet_preflight_blocks_withdrawals():
     client = FakeClient()
     client.api_restrictions = lambda: {
         "enableReading": True,
@@ -129,7 +133,7 @@ def test_live_preflight_blocks_withdrawals():
     assert report["checks"]["api_restrictions"] == "FAIL"
 
 
-def test_live_preflight_blocks_foreign_order():
+def test_testnet_preflight_blocks_foreign_order():
     client = FakeClient()
     client.open_orders = lambda: [{"clientOrderId": "FOREIGN"}]
     report = PreflightCheckService(client, symbols=["BTCUSDT"]).verify_all()
