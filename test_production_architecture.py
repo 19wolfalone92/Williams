@@ -44,6 +44,7 @@ class ExecutionDB:
         self.intents = {}
         self.events = []
         self.states = {}
+        self.claims = set()
 
     def save_execution_intent(self, intent, status, reason=""):
         self.intents[intent.intent_id] = (status, reason)
@@ -51,6 +52,12 @@ class ExecutionDB:
 
     def save_execution_event(self, intent_id, event, payload):
         self.events.append((intent_id, event, payload))
+        return True
+
+    def try_claim_state(self, key, value):
+        if key in self.claims:
+            return False
+        self.claims.add(key)
         return True
 
     def state_get(self, key, default=None):
@@ -83,6 +90,7 @@ def test_execution_barrier_rejects_stale_context():
     intent = OrderIntent.new(
         "BTCUSDT", "BUY", "MARKET",
         required_context_versions={"1h": snap.context("BTCUSDT", "1h").version},
+        client_order_id="TEST_ENTRY_STALE",
     )
     calls = []
     result = barrier.execute(intent, lambda: calls.append("sent"))
@@ -118,6 +126,7 @@ def test_execution_barrier_serializes_publish_and_submit():
         "MARKET",
         {"1h": version},
         permission_interval="1h",
+        client_order_id="TEST_ENTRY_SERIAL",
     )
     result = barrier.execute(intent, submit, pre_submit_checks=lambda _snapshot: None)
     t.join()
