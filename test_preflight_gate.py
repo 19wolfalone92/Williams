@@ -140,3 +140,33 @@ def test_testnet_preflight_blocks_foreign_order():
     report = PreflightCheckService(client, symbols=["BTCUSDT"]).verify_all()
     assert report["ready"] is False
     assert report["checks"]["open_orders"] == "FAIL"
+
+
+
+def test_preflight_does_not_invent_clock_offset_budget(monkeypatch):
+    monkeypatch.delenv("LIVE_MAX_TIME_OFFSET_MS", raising=False)
+    report = PreflightCheckService(FakeClient(), symbols=["BTCUSDT"]).verify_all()
+    assert report["checks"]["server_time"] == "UNKNOWN"
+    assert report["details"]["server_time"]["reason"] == "clock_offset_budget_unapproved"
+    assert report["ready"] is False
+
+
+def test_explicit_clock_offset_budget_is_required_for_server_time_pass(monkeypatch):
+    monkeypatch.delenv("LIVE_MAX_TIME_OFFSET_MS", raising=False)
+    report = PreflightCheckService(
+        FakeClient(), symbols=["BTCUSDT"], max_offset_ms=100
+    ).verify_all()
+    assert report["checks"]["server_time"] == "PASS"
+    assert report["ready"] is False  # Other unimplemented runtime proofs still block.
+
+
+def test_known_orders_cannot_be_marked_reconciled_by_boolean_override():
+    client = FakeClient()
+    client.open_orders = lambda: [{"clientOrderId": "WILLV4_ENTRY_123"}]
+    report = PreflightCheckService(client, symbols=["BTCUSDT"]).verify_all(
+        allow_reconciled_orders=True
+    )
+    assert report["checks"]["open_orders"] == "FAIL"
+    assert report["details"]["open_orders"]["caller_override_ignored"] is True
+    assert report["requires_reconciliation"] is True
+    assert report["ready"] is False
