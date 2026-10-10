@@ -102,6 +102,11 @@ internal fun williamsAngulationScore(
         return if (denominator > 0.0) numerator / denominator else 0.0
     }
 
+    val bullishDistance = (start..index).map { i -> max(0.0, jaw[i] - lows[i]) }
+    val bearishDistance = (start..index).map { i -> max(0.0, highs[i] - jaw[i]) }
+    val bullishDelta = bullishDistance.last() - bullishDistance.first()
+    val bearishDelta = bearishDistance.last() - bearishDistance.first()
+
     val jawSlope = localSlope(jaw)
     val lowSlope = localSlope(lows)
     val highSlope = localSlope(highs)
