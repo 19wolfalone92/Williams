@@ -1698,9 +1698,11 @@ class MultiPositionTrader:
             # proposing another entry, but it is not an UNKNOWN mutation. Clear
             # the global mutation latch only after all intent/order/position
             # reconciliations have completed without unresolved state.
+            reconcile_state = self.db.has_reconcile_required_state()
             reconciled = (
                 not unresolved
                 and not unresolved_intents
+                and not reconcile_state
             )
             if reconciled and self.execution_barrier is not None:
                 try:
@@ -1763,7 +1765,8 @@ class MultiPositionTrader:
         unresolved = self.unresolved_symbols()
         pending = self._pending_entries()
         unresolved_intents = self.db.unresolved_execution_intents()
-        reconciled = not unresolved and not unresolved_intents
+        reconcile_state = self.db.has_reconcile_required_state()
+        reconciled = not unresolved and not unresolved_intents and not reconcile_state
         if reconciled and self.execution_barrier is not None:
             try:
                 reconciled = bool(
