@@ -41,12 +41,18 @@ def _csv(env: Mapping[str, str], key: str, default: Sequence[str]) -> tuple[str,
     return values or tuple(default)
 
 
+def _normalize_tf(value: str) -> str:
+    raw = str(value or "").strip()
+    return "1M" if raw == "1M" else raw.lower()
+
+
 def _tf_chain(execution: str, env: Mapping[str, str]) -> tuple[str, ...]:
     """Return a normalized structural hierarchy appropriate to any execution TF."""
+    execution = _normalize_tf(execution)
     explicit = str(env.get("STRUCTURAL_TIMEFRAMES", "")).strip()
     if explicit:
         values = tuple(dict.fromkeys(
-            x.strip().lower() for x in explicit.split(",") if x.strip()
+            _normalize_tf(x) for x in explicit.split(",") if x.strip()
         ))
         if values:
             return values
@@ -67,7 +73,7 @@ def _tf_chain(execution: str, env: Mapping[str, str]) -> tuple[str, ...]:
         "1w": ("1M", "1w", "1d"),
         "1M": ("1M", "1w", "1d"),
     }
-    return chains.get(str(execution).lower(), ("1d", "4h", "1h", str(execution).lower()))
+    return chains.get(execution, ("1d", "4h", "1h", execution))
 
 
 @dataclass(frozen=True)
@@ -120,7 +126,7 @@ class TradingConfig:
         risk = max(0.0, min(0.005, _float(source, risk_key, 0.0025)))
         total_risk = max(0.0, min(0.01, _float(source, "MAX_TOTAL_RISK_PCT", 0.01)))
 
-        execution_timeframe = str(source.get("EXECUTION_TIMEFRAME", "1h")).lower()
+        execution_timeframe = _normalize_tf(source.get("EXECUTION_TIMEFRAME", "1h"))
 
         return cls(
             symbols=symbols,
