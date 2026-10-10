@@ -271,3 +271,25 @@ def test_invalid_explicit_structural_stop_fails_closed_instead_of_atr_fallback()
         assert result.allowed is False
         assert result.position_quote == 0.0
         assert expected in result.reason
+
+
+def test_risk_engine_enforces_hard_one_percent_entry_ceiling():
+    import pytest
+
+    with pytest.raises(ValueError, match=r"\[0, 0\.01\]"):
+        RiskEngine(balance_quote=10_000, risk_per_trade_pct=0.0101)
+
+    engine = RiskEngine(balance_quote=10_000, risk_per_trade_pct=0.01)
+    result = engine.analyse(
+        symbol="BTCUSDT",
+        entry_price=100_000,
+        atr=500,
+        signal_strength=1.0,
+        htf_confirmed=True,
+        spread_pct=0.0002,
+        risk_pct_override=0.0101,
+    )
+    assert result.allowed is False
+    assert "hard 1% per-trade cap" in result.reason
+    assert result.position_quote == 0.0
+
