@@ -122,6 +122,48 @@ def test_structural_stop_prefers_closest_valid_higher_stop():
     assert source == "3_5_BAR_STRUCTURE"
 
 
+@pytest.mark.parametrize(
+    ("pending_risk", "risk_budget", "fill_risk", "error"),
+    [
+        (1.0, 2.0, 1.1, "exceeds durable reservation"),
+        (2.0, 1.0, 1.1, "exceeds campaign risk budget"),
+    ],
+)
+def test_futures_initial_fill_must_fit_durable_risk_budget(
+    tmp_path, pending_risk, risk_budget, fill_risk, error
+):
+    db = Database(str(tmp_path / f"initial-fill-risk-{pending_risk}-{risk_budget}.sqlite3"))
+    try:
+        engine = CampaignEngine(db, campaign_risk_limit_pct=0.006)
+        signal = make_signal()
+        campaign = engine.create_campaign(signal, initial_risk_pct=0.0024)
+        campaign.tags.update({
+            "execution_mode": "FUTURES",
+            "risk_budget_quote": risk_budget,
+        })
+        campaign.pending_risk_quote = pending_risk
+        db.save_campaign(campaign)
+        engine.arm_entry(campaign, signal)
+        campaign = engine.mark_triggered(campaign, signal.signal_id, "entry-risk-test")
+
+        with pytest.raises(ValueError, match=error):
+            engine.record_initial_fill(
+                campaign,
+                quantity=0.01,
+                average_entry_price=101.0,
+                initial_stop_price=97.0,
+                fill_order_id="entry-risk-test",
+                risk_quote=fill_risk,
+            )
+
+        # Failed admission must not locally book any exchange exposure.
+        assert campaign.state == CampaignState.ENTRY_TRIGGERED
+        assert campaign.position_qty == 0.0
+        assert campaign.pending_risk_quote == pending_risk
+    finally:
+        db.conn.close()
+
+
 def test_stop_proposal_persists_and_blocks_loosen():
     with tempfile.TemporaryDirectory() as d:
         db = Database(os.path.join(d, "w.sqlite3"))
