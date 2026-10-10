@@ -298,6 +298,50 @@ def test_ambiguous_cancel_recovers_against_persisted_target_order_id(tmp_path):
     assert db.state_get("recovery_state") == "READY"
 
 
+def test_exchange_success_with_failed_result_persistence_poison_blocks_next_mutation(tmp_path):
+    db = Database(str(tmp_path / "response_persist_failure.sqlite3"))
+    db.mark_recovery_ready(evidence())
+    original_save = db.save_execution_intent
+
+    def fail_submitted(intent, status, reason=""):
+        if status == "SUBMITTED":
+            raise OSError("simulated SQLite result write failure")
+        return original_save(intent, status, reason)
+
+    db.save_execution_intent = fail_submitted
+    barrier = ExecutionBarrier(ContextCache(), db)
+    first = OrderIntent.new(
+        "BTCUSDT", "BUY", "MARKET", {},
+        client_order_id="WILLV5_ENTRY_response-write-fail",
+        purpose="CAMPAIGN_ENTRY",
+        campaign_id="campaign-persist-failure",
+    )
+    calls = []
+
+    def accepted_by_exchange():
+        calls.append("first")
+        return {
+            "symbol": "BTCUSDT", "orderId": "501",
+            "clientOrderId": first.client_order_id,
+            "side": "BUY", "type": "MARKET", "status": "FILLED",
+            "executedQty": "0.01", "cummulativeQuoteQty": "600",
+        }
+
+    with pytest.raises(ExecutionPersistenceError, match="not durably recorded"):
+        barrier.execute(first, accepted_by_exchange)
+
+    second = OrderIntent.new(
+        "BTCUSDT", "BUY", "MARKET", {},
+        client_order_id="WILLV5_ENTRY_after-poison",
+        purpose="CAMPAIGN_ENTRY",
+        campaign_id="campaign-persist-failure",
+    )
+    result = barrier.execute(second, lambda: calls.append("second") or {"status": "FILLED"})
+    assert result.accepted is False
+    assert "poisoned" in result.reason
+    assert calls == ["first"]
+
+
 def test_duplicate_durable_client_order_id_is_rejected_by_sqlite(tmp_path):
     db = Database(str(tmp_path / "unique_client_order.sqlite3"))
     first = OrderIntent.new(
