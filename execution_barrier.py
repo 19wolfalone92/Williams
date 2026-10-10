@@ -241,6 +241,11 @@ class ExecutionBarrier:
         pre_submit_checks: Callable[[MarketStateSnapshot], None] | None = None,
     ) -> ExecutionResult:
         with self.context_cache.execution_lock:
+            if self._poisoned:
+                return ExecutionResult(
+                    intent.intent_id, False,
+                    reason="execution_barrier_poisoned_reconciliation_required",
+                )
             # Identity reuse is never a retry mechanism. Even a risk-reducing
             # order can be duplicated if the previous response was ambiguous.
             self._assert_fresh_intent_identity(intent)
@@ -263,6 +268,14 @@ class ExecutionBarrier:
                     pass
                 if isinstance(exc, ExecutionPersistenceError):
                     raise
+                message = str(exc)
+                if "unresolved same-symbol intent blocks mutation:" in message:
+                    # This is a normal fail-closed admission denial, not a reason
+                    # to send a second order or hide the unresolved exchange state.
+                    return ExecutionResult(
+                        intent.intent_id, False,
+                        reason="UNRESOLVED_SYMBOL_INTENT:" + message.split("unresolved same-symbol intent blocks mutation:", 1)[1].strip(),
+                    )
                 raise ExecutionPersistenceError(
                     "could not atomically reserve intent; exchange mutation blocked"
                 ) from exc
