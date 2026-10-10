@@ -1073,7 +1073,8 @@ internal class FuturesNativeEngine(
                 val teethAtConfirmation = teeth.getOrElse(confirmationIndex) { Double.NaN }
                 val entryTrigger = level + tickSize
                 val stop = bars[center].low - tickSize
-                if (teethAtConfirmation.isFinite() && level > teethAtConfirmation &&
+                if (teethAtConfirmation.isFinite() && teethAtConfirmation > 0.0 &&
+                    level > teethAtConfirmation && teeth[i].isFinite() && teeth[i] > 0.0 &&
                     entryTrigger > teeth[i] && bars[i].close < entryTrigger &&
                     stop > 0.0 && stop < entryTrigger
                 ) {
@@ -1091,7 +1092,8 @@ internal class FuturesNativeEngine(
                 val teethAtConfirmation = teeth.getOrElse(confirmationIndex) { Double.NaN }
                 val entryTrigger = level - tickSize
                 val stop = bars[center].high + tickSize
-                if (teethAtConfirmation.isFinite() && level < teethAtConfirmation &&
+                if (teethAtConfirmation.isFinite() && teethAtConfirmation > 0.0 &&
+                    level < teethAtConfirmation && teeth[i].isFinite() && teeth[i] > 0.0 &&
                     entryTrigger < teeth[i] && bars[i].close > entryTrigger &&
                     stop > entryTrigger
                 ) {

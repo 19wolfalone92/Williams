@@ -382,3 +382,46 @@ def test_signal_serialization_preserves_wave_invalidation_separately():
     restored = signal_spec_from_dict(signal.to_dict())
     assert restored.invalidation_price == 100.0
     assert restored.wave_invalidation_price == 97.0
+
+
+@pytest.mark.parametrize("side", ["LONG", "SHORT"])
+@pytest.mark.parametrize("zero_index", [5, 6])
+def test_wm3_requires_positive_finite_teeth_at_confirmation_and_current_bar(side, zero_index):
+    from strategy import calculate_indicators, config_from_env
+
+    if side == "LONG":
+        rows = [
+            {"open": 6.0, "high": 7.0, "low": 5.0, "close": 6.0, "volume": 10.0},
+            {"open": 7.0, "high": 8.0, "low": 5.5, "close": 7.0, "volume": 10.0},
+            {"open": 9.0, "high": 10.0, "low": 6.0, "close": 9.0, "volume": 10.0},
+            {"open": 8.0, "high": 9.0, "low": 6.2, "close": 8.0, "volume": 10.0},
+            {"open": 9.0, "high": 10.0, "low": 6.5, "close": 9.0, "volume": 10.0},
+            {"open": 7.0, "high": 8.0, "low": 6.7, "close": 7.5, "volume": 10.0},
+            {"open": 7.0, "high": 8.0, "low": 6.8, "close": 7.5, "volume": 10.0},
+        ]
+    else:
+        rows = [
+            {"open": 9.0, "high": 10.0, "low": 8.0, "close": 9.0, "volume": 10.0},
+            {"open": 8.5, "high": 9.5, "low": 7.0, "close": 8.5, "volume": 10.0},
+            {"open": 6.5, "high": 9.0, "low": 6.0, "close": 6.5, "volume": 10.0},
+            {"open": 7.5, "high": 8.7, "low": 7.0, "close": 7.5, "volume": 10.0},
+            {"open": 6.5, "high": 8.8, "low": 6.0, "close": 6.5, "volume": 10.0},
+            {"open": 8.3, "high": 8.6, "low": 8.0, "close": 8.3, "volume": 10.0},
+            {"open": 8.0, "high": 8.5, "low": 7.5, "close": 8.0, "volume": 10.0},
+        ]
+    ind = calculate_indicators(
+        pd.DataFrame(rows),
+        config_from_env({"FRACTAL_LEFT": "2", "FRACTAL_RIGHT": "2"})
+    )
+    ind["teeth_shifted"] = 9.0
+    ind.loc[ind.index[zero_index], "teeth_shifted"] = 0.0
+    ind["bullish_reversal_bar"] = False
+    ind["bearish_reversal_bar"] = False
+    ind["ao_green_streak"] = 0
+    ind["ao_red_streak"] = 0
+
+    if side == "LONG":
+        signals = extract_long_signal_specs("BTCUSDT", ind, timeframe="5m", tick_size=0.1)
+    else:
+        signals = extract_short_signal_specs("BTCUSDT", ind, timeframe="5m", tick_size=0.1)
+    assert not any(signal.signal_type is SignalType.FRACTAL for signal in signals)

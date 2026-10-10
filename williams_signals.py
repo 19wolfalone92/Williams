@@ -396,7 +396,11 @@ def extract_long_signal_specs(
         # Formation can be anywhere; trigger validity belongs to current
         # price/Teeth. At arm time a SHORT trigger must remain below Teeth.
         trigger = trigger_base + tick
-        current_trigger_valid = trigger > max(current_teeth, 0.0)
+        current_trigger_valid = (
+            math.isfinite(current_teeth) and current_teeth > 0.0
+            and math.isfinite(teeth) and teeth > 0.0
+            and trigger > current_teeth
+        )
         if _trigger_unbroken(ind, center_i, side="LONG", trigger_price=trigger) and current_trigger_valid and _invalidation_intact(ind, center_i, side="LONG", protective_level=protective):
             row = ind.iloc[center_i]
             specs.append(
@@ -558,7 +562,11 @@ def extract_short_signal_specs(
         # Formation can be anywhere; trigger validity belongs to current
         # price/Teeth.  At arm time the trigger must still be above Teeth.
         trigger = trigger_base - tick
-        current_trigger_valid = current_teeth > 0.0 and trigger < current_teeth
+        current_trigger_valid = (
+            math.isfinite(current_teeth) and current_teeth > 0.0
+            and math.isfinite(teeth) and teeth > 0.0
+            and trigger < current_teeth
+        )
         if _trigger_unbroken(ind, center_i, side="SHORT", trigger_price=trigger) and current_trigger_valid and _invalidation_intact(ind, center_i, side="SHORT", protective_level=protective):
             row = ind.iloc[center_i]
             specs.append(

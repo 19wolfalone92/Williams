@@ -6547,7 +6547,9 @@ private class NativeEngine(
             val trigger = fractal.level + tick
             val currentTeeth = teethS[current].takeIf { it.isFinite() } ?: 0.0
             val confirmationTeeth = teethS.getOrNull(fractal.confirmationIndex) ?: Double.NaN
-            if (confirmationTeeth.isFinite() && fractal.level > confirmationTeeth &&
+            if (confirmationTeeth.isFinite() && confirmationTeeth > 0.0 &&
+                fractal.level > confirmationTeeth &&
+                currentTeeth.isFinite() && currentTeeth > 0.0 &&
                 candles[current].c < trigger && trigger > currentTeeth &&
                 isLongSignalStillActionable(fractalCenter, current, highs, lows, trigger)
             ) {
