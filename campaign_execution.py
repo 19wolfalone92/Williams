@@ -192,6 +192,72 @@ class CampaignExecutionService:
             )
         return result.response
 
+    def _validate_campaign_position(
+        self,
+        campaign,
+        requested_quantity: float,
+        *,
+        exclude_order_id=None,
+        require_no_other_stop=False,
+    ):
+        """Final ownership/state check for position-reducing/protection mutations."""
+        latest = self.engine.load_campaign(campaign.campaign_id)
+        if latest is None or str(latest.symbol).upper() != str(campaign.symbol).upper():
+            raise CampaignExecutionError(
+                f"{campaign.symbol}: durable campaign ownership is unavailable at final submission"
+            )
+        latest_state = getattr(latest.state, "value", latest.state)
+        if str(latest_state).upper() in {
+            CampaignState.CLOSED.value,
+            CampaignState.FLAT.value,
+            CampaignState.RECONCILE_REQUIRED.value,
+        }:
+            raise CampaignExecutionError(
+                f"{campaign.symbol}: campaign state {latest_state} forbids this mutation"
+            )
+        confirmed_qty = float(latest.position_qty or 0.0)
+        requested_qty = float(requested_quantity or 0.0)
+        tolerance = max(
+            float(os.getenv("MIN_RECOVERY_QTY", "0.000001")),
+            confirmed_qty * float(os.getenv("BALANCE_TOLERANCE_PCT", "0.005")),
+        )
+        if confirmed_qty <= 0.0 or requested_qty <= 0.0:
+            raise CampaignExecutionError(
+                f"{campaign.symbol}: no confirmed campaign position for requested mutation"
+            )
+        if requested_qty > confirmed_qty + tolerance:
+            raise CampaignExecutionError(
+                f"{campaign.symbol}: requested quantity {requested_qty} exceeds confirmed campaign quantity {confirmed_qty}"
+            )
+
+        if require_no_other_stop:
+            # An unknown/foreign live SELL stop must not be treated as absent.
+            # The open-order query is authoritative and failure blocks creation.
+            open_orders = self.client.open_orders(campaign.symbol)
+            for order in open_orders:
+                if not isinstance(order, dict):
+                    raise CampaignExecutionError(
+                        f"{campaign.symbol}: malformed order in final protection check"
+                    )
+                if str(order.get("side", "")).upper() != "SELL":
+                    continue
+                if str(order.get("type", "")).upper() not in {
+                    "STOP_LOSS", "STOP_LOSS_LIMIT", "STOP"
+                }:
+                    continue
+                if str(order.get("status", "")).upper() not in {
+                    "NEW", "PENDING_NEW", "PARTIALLY_FILLED"
+                }:
+                    continue
+                order_id = str(order.get("orderId", "") or "")
+                if exclude_order_id is not None and order_id == str(exclude_order_id):
+                    continue
+                raise CampaignExecutionError(
+                    f"{campaign.symbol}: existing active SELL stop {order_id or '<unknown-id>'} "
+                    "must be reconciled before another protection mutation"
+                )
+        return latest
+
     def arm_initial_entry(
         self,
         signal: SignalSpec,
@@ -1843,7 +1909,14 @@ class CampaignExecutionService:
                 stop_price=self.client.decimal_format(stop),
                 new_client_order_id=cid,
             ),
-            lambda _snapshot: self._check_algo_capacity(campaign.symbol, 1),
+            lambda _snapshot: (
+                self._validate_campaign_position(
+                    campaign,
+                    qty,
+                    require_no_other_stop=True,
+                ),
+                self._check_algo_capacity(campaign.symbol, 1),
+            ),
         )
         self.db.save_campaign_order(
             PendingOrderRecord(
@@ -2050,7 +2123,10 @@ class CampaignExecutionService:
                 quantity=self.client.decimal_format(qty),
                 new_client_order_id=cid,
             ),
-            lambda _snapshot: self._check_algo_capacity(symbol, 0),
+            lambda _snapshot: (
+                self._validate_campaign_position(campaign, qty),
+                self._check_algo_capacity(symbol, 0),
+            ),
         )
         self.db.save_order(order)
         executed = float(order.get("executedQty", 0) or 0)
@@ -2172,7 +2248,15 @@ class CampaignExecutionService:
                 stop_price=self.client.decimal_format(new_stop),
                 new_client_order_id=cid,
             ),
-            lambda _snapshot: self._check_algo_capacity(campaign.symbol, 0),
+            lambda _snapshot: (
+                self._validate_campaign_position(
+                    campaign,
+                    quantity,
+                    exclude_order_id=existing_order_id,
+                    require_no_other_stop=True,
+                ),
+                self._check_algo_capacity(campaign.symbol, 0),
+            ),
         )
 
         cancel_result = str(result.get("cancelResult", "")).upper()
