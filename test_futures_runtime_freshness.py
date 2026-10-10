@@ -213,3 +213,29 @@ def test_database_returns_only_finalized_campaign_close_events():
         assert rows[0]["payload_json"] == '{"realized_pnl_quote_net_known_fees": -2.0}'
     finally:
         db.conn.close()
+
+
+def test_daily_stop_out_counter_ignores_explicit_spot_campaigns():
+    from db import Database
+
+    db = Database(":memory:")
+    try:
+        db.conn.executemany(
+            "INSERT INTO campaigns(campaign_id,symbol,side,execution_timeframe,state,tags_json) VALUES(?,?,?,?,?,?)",
+            [
+                ("futures-stop", "BTCUSDT", "LONG", "1h", "CLOSED", '{"execution_mode":"FUTURES"}'),
+                ("spot-stop", "ETHUSDT", "LONG", "1h", "CLOSED", '{"execution_mode":"SPOT"}'),
+            ],
+        )
+        db.conn.commit()
+        db.log_campaign_event(
+            "futures-stop", "CAMPAIGN_CLOSED", reason="STOP_LOSS",
+            payload={"realized_pnl_quote_net_known_fees": -2.0},
+        )
+        db.log_campaign_event(
+            "spot-stop", "CAMPAIGN_CLOSED", reason="STOP_LOSS",
+            payload={"realized_pnl_quote_net_known_fees": -3.0},
+        )
+        assert db.count_confirmed_stop_exits_since("2000-01-01 00:00:00") == 1
+    finally:
+        db.conn.close()
