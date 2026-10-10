@@ -1216,7 +1216,7 @@ class Trader:
             operative_context = snap.context(self.symbol, self.interval)
             exit_signal_id = (
                 f'{self.symbol}:{self.interval.lower()}:EXIT:'
-                f'{int(operative_context.candle_close_time_ms) if operative_context else 0}:'
+                f'{int(getattr(operative_context, "candle_close_time_ms", 0) or 0) if operative_context else 0}:'
                 f'{trade_id if trade_id is not None else "UNTRACKED"}:'
                 f'{self.client.decimal_format(actual_qty)}:'
                 f'{self.client.decimal_format(sl_d)}:{self.client.decimal_format(tp_d)}'
