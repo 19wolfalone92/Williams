@@ -382,7 +382,10 @@ class CampaignExecutionService:
             # A pre-submit barrier rejection is safe to clear. Any exchange
             # mutation ambiguity remains fail-closed and recoverable by CID.
             message = str(exc)
-            if "ExecutionBarrier blocked" in message:
+            if (
+                "ExecutionBarrier blocked" in message
+                and "duplicate_or_previously_claimed_client_order_id" not in message
+            ):
                 campaign.state = CampaignState.CLOSED
                 campaign.pending_risk_quote = 0.0
                 campaign.capital_reserved_quote = 0.0
