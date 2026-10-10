@@ -639,3 +639,61 @@ def test_process_death_after_submitting_intent_never_blindly_resends(tmp_path):
     assert calls == []
     assert db.has_unresolved_execution_intents()
     assert db.load_execution_intent(intent.intent_id)["status"] == "SUBMITTING"
+
+def test_legacy_trader_preserves_entry_identity_while_execution_is_unresolved():
+    from pathlib import Path
+    from trader import Trader
+
+    trader_source = (
+        Path(__file__).parent / "trader.py"
+    ).read_text(encoding="utf-8")
+    helper = trader_source[
+        trader_source.index("    def _execution_recovery_blocked("):
+        trader_source.index("    def normalize_qty(", trader_source.index("    def _execution_recovery_blocked("))
+    ]
+    assert "self.execution_barrier.mutation_locked" in helper
+    assert "self.db.has_unresolved_execution_intents()" in helper
+    assert "except Exception:" in helper
+    assert "return True" in helper
+
+    # Exercise the guard with minimal collaborators: an unresolved execution
+    # record or a failed state read must never authorize replacing its CID.
+    class FakeDB:
+        def __init__(self, unresolved):
+            self.unresolved = unresolved
+
+        def has_unresolved_execution_intents(self):
+            if isinstance(self.unresolved, Exception):
+                raise self.unresolved
+            return self.unresolved
+
+    class FakeBarrier:
+        def __init__(self, locked):
+            self.mutation_locked = locked
+
+    instance = Trader.__new__(Trader)
+    instance.db = FakeDB(True)
+    instance.execution_barrier = FakeBarrier(False)
+    assert instance._execution_recovery_blocked()
+    instance.db = FakeDB(False)
+    instance.execution_barrier = FakeBarrier(True)
+    assert instance._execution_recovery_blocked()
+    instance.db = FakeDB(RuntimeError("SQLite read failed"))
+    instance.execution_barrier = FakeBarrier(False)
+    assert instance._execution_recovery_blocked()
+    instance.db = FakeDB(False)
+    instance.execution_barrier = FakeBarrier(False)
+    assert not instance._execution_recovery_blocked()
+
+    # Guard must execute before writing a new entry_client_order_id, and the
+    # barrier-rejected branch must re-check unresolved state before deleting it.
+    buy_start = trader_source.index("    def buy(")
+    buy_end = trader_source.find("\\n    def ", buy_start + 1)
+    buy_body = trader_source[buy_start:buy_end if buy_end >= 0 else len(trader_source)]
+    guard_pos = buy_body.index("if self._execution_recovery_blocked():")
+    reservation_pos = buy_body.index("self.db.state_set('entry_client_order_id', cid)")
+    assert guard_pos < reservation_pos
+    rejected_pos = buy_body.index("if not result.accepted:")
+    unresolved_recheck = buy_body.index("if self._execution_recovery_blocked():", rejected_pos)
+    delete_pos = buy_body.index("self.db.state_delete('entry_client_order_id')", rejected_pos)
+    assert unresolved_recheck < delete_pos
