@@ -3597,7 +3597,7 @@ class FuturesCampaignExecutionService:
         try:
             rules = self._rules(symbol)
             tick_size = float((rules.get("PRICE_FILTER") or {}).get("tickSize", "0") or 0.0)
-        except (TypeError, ValueError, OverflowError, Exception) as exc:
+        except Exception as exc:
             return {
                 "symbol": symbol,
                 "action": "HOLD_PROTECTION",
