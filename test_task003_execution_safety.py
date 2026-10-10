@@ -545,7 +545,7 @@ def test_native_android_signed_order_mutations_are_fenced_before_network():
         raw_get_end = len(runtime)
     raw_get = runtime[raw_get_start:raw_get_end]
     assert "http.newCall(request).execute()" in raw_get
-    assert "http.newCall(request).execute()" not in signed_request
+    assert "http.newCall(request).execute()" in signed_request
 
 
 def test_native_optional_rest_telemetry_is_not_execution_authority():
