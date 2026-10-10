@@ -755,7 +755,7 @@ def configure(payload: CredentialPayload):
             payload.testnet,
         )
     except RuntimeError as e:
-        raise HTTPException(409, redact_text(str(e)))
+        raise HTTPException(409, redact_text(str(e))) from None
     return {
         'configured': True,
         'testnet': payload.testnet,
@@ -776,7 +776,7 @@ def clear_binance_config():
         raise HTTPException(
             503,
             redact_text('Cannot verify Spot account state before credential removal: ' + str(exc)),
-        )
+        ) from None
     if managed_positions or exchange_orders:
         raise HTTPException(
             409,
