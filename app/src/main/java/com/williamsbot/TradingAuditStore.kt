@@ -264,6 +264,45 @@ class TradingAuditStore(context: Context) :
         val now = System.currentTimeMillis()
         db.beginTransaction()
         try {
+            // Admission is serialized inside the same SQLite transaction as
+            // INSERT. A preflight COUNT outside this transaction is insufficient:
+            // two different CIDs for one symbol could otherwise both observe zero.
+            val blocking = db.rawQuery(
+                "SELECT intent_id,symbol,operation,status FROM execution_intents " +
+                    "WHERE status IN ('PENDING','SUBMITTING','AMBIGUOUS','RECONCILE_REQUIRED') " +
+                    "AND symbol=? AND intent_id<>? LIMIT 1",
+                arrayOf(symbol, intentId)
+            ).use { cursor ->
+                if (!cursor.moveToFirst()) null else
+                    "intent=" + cursor.getString(0) +
+                        " symbol=" + cursor.getString(1) +
+                        " operation=" + cursor.getString(2) +
+                        " status=" + cursor.getString(3)
+            }
+            if (blocking != null) {
+                throw IllegalStateException(
+                    "concurrent/previous mutation blocks this symbol: " + blocking
+                )
+            }
+            if (operation == "ENTRY_ORDER") {
+                val globalBlocking = db.rawQuery(
+                    "SELECT intent_id,symbol,operation,status FROM execution_intents " +
+                        "WHERE status IN ('PENDING','SUBMITTING','AMBIGUOUS','RECONCILE_REQUIRED') " +
+                        "AND intent_id<>? LIMIT 1",
+                    arrayOf(intentId)
+                ).use { cursor ->
+                    if (!cursor.moveToFirst()) null else
+                        "intent=" + cursor.getString(0) +
+                            " symbol=" + cursor.getString(1) +
+                            " operation=" + cursor.getString(2) +
+                            " status=" + cursor.getString(3)
+                }
+                if (globalBlocking != null) {
+                    throw IllegalStateException(
+                        "global unresolved execution mutation blocks new exposure: " + globalBlocking
+                    )
+                }
+            }
             val existing = db.rawQuery(
                 "SELECT intent_id,logical_key,client_order_id,symbol,operation,method,path," +
                     "target_order_id,target_order_list_id,request_json,status " +
@@ -566,6 +605,45 @@ class TradingAuditStore(context: Context) :
     }
 
     @Synchronized
+    @Synchronized
+    fun reconcileExecutionMutationByTargetClientOrderId(
+        targetClientOrderId: String,
+        exchangeStatus: String,
+        executedQty: Double,
+        responseJson: String?
+    ) {
+        if (targetClientOrderId.isBlank()) return
+        val normalized = exchangeStatus.uppercase(Locale.US)
+        val status = when {
+            executedQty < 0.0 || executedQty > 0.0 ||
+                normalized in setOf("PARTIALLY_FILLED", "FILLED") -> "RECONCILE_REQUIRED"
+            normalized in setOf("NEW", "PENDING_NEW") -> "RECONCILED_ACTIVE"
+            normalized in setOf("CANCELED", "CANCELLED", "EXPIRED", "REJECTED") -> "RECONCILED"
+            else -> "RECONCILE_REQUIRED"
+        }
+        val values = ContentValues().apply {
+            put("status", status)
+            put("exchange_status", exchangeStatus)
+            put("executed_qty", executedQty.toString())
+            put("response_json", responseJson)
+            put("reason", "authoritative Binance GET by target origClientOrderId")
+            put("updated_at", System.currentTimeMillis())
+        }
+        val updated = writableDatabase.update(
+            "execution_intents",
+            values,
+            "target_client_order_id=? AND method='DELETE' " +
+                "AND status IN ('PENDING','SUBMITTING','AMBIGUOUS','RECONCILE_REQUIRED')",
+            arrayOf(targetClientOrderId)
+        )
+        if (updated == 0) return
+        val persisted = writableDatabase.rawQuery(
+            "SELECT COUNT(*) FROM execution_intents WHERE target_client_order_id=? AND method='DELETE' AND status=?",
+            arrayOf(targetClientOrderId, status)
+        ).use { cursor -> cursor.moveToFirst() && cursor.getInt(0) >= updated }
+        if (!persisted) throw IllegalStateException("target clientOrderId reconciliation read-back failed")
+    }
+
     fun reconcileExecutionMutationByTargetOrderId(
         targetOrderId: String,
         exchangeStatus: String,
@@ -647,16 +725,17 @@ class TradingAuditStore(context: Context) :
             put("reason", "authoritative Binance GET by orderListId; legs=" + (reports?.length() ?: 0))
             put("updated_at", System.currentTimeMillis())
         }
-        db.update(
+        val updated = db.update(
             "execution_intents",
             values,
             "target_order_list_id=? AND method='DELETE' AND status IN ('PENDING','SUBMITTING','AMBIGUOUS','RECONCILE_REQUIRED')",
             arrayOf(targetOrderListId)
         )
+        if (updated == 0) return
         val reread = db.rawQuery(
             "SELECT COUNT(*) FROM execution_intents WHERE target_order_list_id=? AND method='DELETE' AND status=?",
             arrayOf(targetOrderListId, status)
-        ).use { cursor -> cursor.moveToFirst() && cursor.getInt(0) >= 0 }
+        ).use { cursor -> cursor.moveToFirst() && cursor.getInt(0) >= updated }
         if (!reread) throw IllegalStateException("order-list reconciliation read-back failed")
     }
 
