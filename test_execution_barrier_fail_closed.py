@@ -430,3 +430,52 @@ def test_execution_permit_cannot_be_reused_for_second_exchange_mutation():
         with pytest.raises(RuntimeError, match="one mutation per ExecutionBarrier permit"):
             client.cancel_order("BTCUSDT", orig_client_order_id="CID_ONE_SHOT")
     assert session.calls == 1
+
+
+def test_legacy_portfolio_mutation_wrapper_requires_barrier_and_blocks_submit():
+    from types import SimpleNamespace
+    from portfolio_trader import MultiPositionTrader
+
+    trader = MultiPositionTrader.__new__(MultiPositionTrader)
+    trader.execution_barrier = None
+    calls = []
+    with pytest.raises(RuntimeError, match="canonical ExecutionBarrier unavailable"):
+        trader._execute_mutation(
+            "BTCUSDT", "SELL", "MARKET", "CID_LEGACY",
+            lambda: calls.append("submit"), "EMERGENCY_EXIT",
+        )
+    assert calls == []
+
+
+def test_legacy_portfolio_mutation_wrapper_routes_through_barrier():
+    from portfolio_trader import MultiPositionTrader
+
+    class DB:
+        states = {}
+        def state_set(self, key, value):
+            self.states[key] = value
+
+    class RejectingBarrier:
+        def __init__(self):
+            self.intent = None
+        def execute(self, intent, submit, *, pre_submit_checks=None):
+            self.intent = intent
+            return type("Result", (), {
+                "accepted": False,
+                "reason": "synthetic_preflight_block",
+                "response": None,
+            })()
+
+    trader = MultiPositionTrader.__new__(MultiPositionTrader)
+    trader.db = DB()
+    trader.execution_barrier = RejectingBarrier()
+    calls = []
+    with pytest.raises(RuntimeError, match="synthetic_preflight_block"):
+        trader._execute_mutation(
+            "BTCUSDT", "SELL", "MARKET", "CID_LEGACY_BARRIER",
+            lambda: calls.append("submit"), "MANUAL_EXIT",
+        )
+    assert calls == []
+    assert trader.execution_barrier.intent.client_order_id == "CID_LEGACY_BARRIER"
+    assert trader.execution_barrier.intent.purpose == "CAMPAIGN_MANUAL_EXIT"
+    assert trader.db.states["position_state:BTCUSDT"] == "RECONCILE_REQUIRED"
