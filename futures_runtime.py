@@ -114,7 +114,7 @@ def choose_initial_williams_signal(
             continue
         if not math.isfinite(trigger) or trigger <= 0:
             continue
-        if expires and expires <= now:
+        if expires <= 0 or expires <= now:
             continue
         candidates.append(replace(signal, role=SignalRole.ENTRY))
     return CampaignEngine.choose_initial_signal(candidates)
@@ -516,7 +516,7 @@ class FuturesRuntime:
                 continue
             if spec.direction != direction or int(spec.signal_bar_time_ms) <= latest_time:
                 continue
-            if spec.expires_at_ms and int(spec.expires_at_ms) <= int(time.time() * 1000):
+            if int(spec.expires_at_ms or 0) <= int(time.time() * 1000):
                 continue
             parsed.append(replace(spec, role=SignalRole.ADD_ON))
         if not parsed:
