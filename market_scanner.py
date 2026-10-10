@@ -7,7 +7,9 @@ from typing import Dict, List, Optional, Tuple
 import pandas as pd
 
 from data import fetch_klines
-from strategy import calculate_indicators, config_from_env
+from strategy import (\
+    calculate_indicators, config_from_env, canonical_williams_parameter_blockers,\
+)
 from wave_engine import DIRECTION_NEUTRAL, MultiTimeframeWaveEngine
 from feature_store import FeatureStore, build_market_feature_vector
 from ai_shadow import ShadowDecisionEngine, journal_shadow_decision
@@ -384,6 +386,15 @@ class MarketScanner:
     def _analyse_base(self, symbol, metadata=None) -> Optional[Tuple[Candidate, pd.DataFrame]]:
         symbol = str(symbol).upper()
         try:
+            # M15 is execution/fill monitoring and M5 is diagnostic/replay only.
+            # They must never create a canonical Williams entry candidate.
+            if self.interval != "1h":
+                log.warning("canonical Williams entries blocked on non-H1 interval: %s", self.interval)
+                return None
+            parameter_blockers = canonical_williams_parameter_blockers(config_from_env())
+            if parameter_blockers:
+                log.error("canonical Williams profile blocked: %s", "; ".join(parameter_blockers))
+                return None
             if not self._symbol_is_valid(symbol, metadata):
                 return None
 
@@ -394,11 +405,11 @@ class MarketScanner:
             else:
                 df = fetch_klines(self.client, symbol, self.interval, limit=self.scan_kline_limit)
                 self._kline_cache[symbol] = (time.monotonic(), df.copy())
-            if len(df) < 100:
+            if len(df) < 141:
                 return None
 
             closed = df.iloc[:-1].copy()
-            if len(closed) < 100:
+            if len(closed) < 140:
                 return None
 
             indicators = calculate_indicators(closed, config_from_env())
