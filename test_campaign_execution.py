@@ -284,3 +284,55 @@ def test_execution_barrier_does_not_apply_entry_timeframe_gate_to_campaign_exit(
     )
     result = barrier.execute(intent, lambda: {"status": "FILLED"})
     assert result.accepted
+
+
+
+def test_missing_source_h1_candle_blocks_before_fake_exchange_mutation(monkeypatch):
+    import pandas as pd
+    import data
+
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "campaign.sqlite3"))
+        client = MockExchange()
+        svc = service(db, client)
+        spec = signal()
+        now = pd.Timestamp.now(tz="UTC").floor("h")
+        idx = pd.date_range(end=now - pd.Timedelta(hours=1), periods=3, freq="h", tz="UTC")
+        frame = pd.DataFrame(
+            {"open": [100.0] * 3, "high": [100.5] * 3,
+             "low": [98.0] * 3, "close": [100.0] * 3, "volume": [1000.0] * 3},
+            index=idx,
+        )
+        monkeypatch.setattr(data, "fetch_klines", lambda *_a, **_kw: frame)
+        try:
+            svc.arm_initial_entry(spec, equity_quote=10_000, candidate_risk_pct=0.004)
+            assert False, "missing source candle must block"
+        except Exception as exc:
+            assert "source H1 candle" in str(exc) or "source candle" in str(exc)
+        assert client.orders == []
+
+
+def test_structural_invalidation_blocks_before_fake_exchange_mutation(monkeypatch):
+    import pandas as pd
+    import data
+
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "campaign.sqlite3"))
+        client = MockExchange()
+        svc = service(db, client)
+        spec = signal()
+        source = pd.to_datetime(spec.signal_bar_time_ms, unit="ms", utc=True)
+        idx = pd.date_range(start=source, periods=4, freq="h")
+        frame = pd.DataFrame(
+            {"open": [100.0] * 4, "high": [100.5] * 4,
+             "low": [98.0, 96.0, 98.0, 98.0], "close": [100.0] * 4,
+             "volume": [1000.0] * 4},
+            index=idx,
+        )
+        monkeypatch.setattr(data, "fetch_klines", lambda *_a, **_kw: frame)
+        try:
+            svc.arm_initial_entry(spec, equity_quote=10_000, candidate_risk_pct=0.004)
+            assert False, "structurally invalidated signal must block"
+        except Exception as exc:
+            assert "structurally invalidated" in str(exc)
+        assert client.orders == []
