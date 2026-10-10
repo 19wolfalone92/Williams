@@ -3204,7 +3204,10 @@ private class NativeEngine(
                 symbol + ": campaign exit quantity below minimum"
             }
 
-            val cid = "W5X_" + System.nanoTime().toString(16)
+            val cid = stableNativeClientOrderId(
+                "W5X_", position.symbol, position.campaignId, position.signalId,
+                qty.toString(), reason, "CAMPAIGN_EXIT"
+            )
             val order = withCampaignMutation(symbol, "CAMPAIGN_EXIT") {
                 signedPost(
                     "/api/v3/order",
@@ -3591,7 +3594,10 @@ private class NativeEngine(
                         if (rules.marketMinQty > 0.0) rules.marketMinQty else rules.minQty
                     )
                 )
-                val cid = "W5EM_" + System.nanoTime().toString(16)
+                val cid = stableNativeClientOrderId(
+                    "W5EM_", intent.symbol, intent.campaignId, intent.signalId,
+                    emergencyQty.toString(), "PROTECTION_FAILURE_EXIT"
+                )
                 val emergency = withCampaignMutation(
                     intent.symbol,
                     "CAMPAIGN_EMERGENCY_EXIT"
@@ -4484,11 +4490,16 @@ private class NativeEngine(
                         require(qty >= rules.minQty) {
                             "Emergency SELL quantity below Binance minimum"
                         }
+                        val emergencyClientId = stableNativeClientOrderId(
+                            "W5X_", stored.symbol, stored.campaignId, stored.signalId,
+                            qty.toString(), "UNPROTECTED_POSITION_EXIT"
+                        )
                         val sell = signedPost(
                             "/api/v3/order",
                             "symbol=" + stored.symbol +
                                 "&side=SELL&type=MARKET&quantity=" +
-                                fmtQty(qty, rules.decimals)
+                                fmtQty(qty, rules.decimals) +
+                                "&newClientOrderId=" + emergencyClientId
                         )
                         val exitPrice = sell.optString("cummulativeQuoteQty")
                             .toDoubleOrNull()
@@ -6361,7 +6372,12 @@ private class NativeEngine(
                                     "symbol=" + candidate.symbol +
                                         "&side=SELL&type=MARKET" +
                                         "&quantity=" +
-                                        fmtQty(filled, rules.decimals)
+                                        fmtQty(filled, rules.decimals) +
+                                        "&newClientOrderId=" +
+                                        stableNativeClientOrderId(
+                                            "W4X_", candidate.symbol, clientOrderId,
+                                            filled.toString(), "UNPROTECTED_BUY_EXIT"
+                                        )
                                 )
                             }.onFailure {
                                 setReconcileRequired(
