@@ -7,6 +7,7 @@ bot cannot keep a stale signal armed forever.
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict
+import math
 import os
 import time
 
@@ -111,30 +112,58 @@ class PendingSignal:
         return self.expires_at_ms <= 0 or now >= self.expires_at_ms
 
     def actionable(self, now_ms: int | None = None) -> bool:
+        now = int(now_ms if now_ms is not None else time.time() * 1000)
+        try:
+            source_time = int(self.signal_bar_time_ms)
+            confirmation_time = int(self.confirmation_time_ms or source_time)
+            expiry = int(self.expires_at_ms)
+            trigger = float(self.trigger_price)
+            protective = float(self.protective_reference)
+        except (TypeError, ValueError, OverflowError):
+            return False
         return (
             self.state in {
                 SignalState.DETECTED.value,
                 SignalState.ARMED.value,
             }
-            and not self.is_expired(now_ms)
-            and self.trigger_price > 0
-            and self.protective_reference > 0
+            and source_time > 0
+            and confirmation_time >= source_time
+            and expiry > confirmation_time
+            and expiry > 0
+            and now < expiry
+            and math.isfinite(trigger)
+            and trigger > 0.0
+            and math.isfinite(protective)
+            and protective > 0.0
         )
 
     def to_dict(self) -> dict:
         return asdict(self)
 
 
-def should_replace(old: PendingSignal, new: PendingSignal, min_price_delta: float = 0.0) -> bool:
-    if old.signal_id == new.signal_id:
+def should_replace(
+    old: PendingSignal,
+    new: PendingSignal,
+    min_price_delta: float = 0.0,
+    *,
+    now_ms: int | None = None,
+) -> bool:
+    if old.signal_id == new.signal_id or not new.actionable(now_ms):
         return False
     if old.symbol != new.symbol or old.side != new.side:
         return True
-    if old.is_expired() and not new.is_expired():
+    if old.is_expired(now_ms):
         return True
     old_actionable_time = int(old.confirmation_time_ms or old.signal_bar_time_ms)
     new_actionable_time = int(new.confirmation_time_ms or new.signal_bar_time_ms)
+    try:
+        delta = float(min_price_delta)
+        price_distance = abs(float(new.trigger_price) - float(old.trigger_price))
+    except (TypeError, ValueError, OverflowError):
+        return False
+    if not math.isfinite(delta) or not math.isfinite(price_distance):
+        return False
     return (
         new_actionable_time > old_actionable_time
-        and abs(new.trigger_price - old.trigger_price) >= max(0.0, min_price_delta)
+        and price_distance >= max(0.0, delta)
     )
