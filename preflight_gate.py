@@ -5,6 +5,7 @@ trading until reconciliation is performed.
 """
 
 import os
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -31,6 +32,8 @@ class PreflightReport:
         return {
             "ready": self.ready,
             "environment": self.environment,
+            "product": "SPOT",
+            "checked_at_ms": int(time.time() * 1000),
             "checks": dict(self.checks),
             "details": dict(self.details),
             "requires_reconciliation": self.requires_reconciliation,
@@ -151,7 +154,8 @@ class PreflightCheckService:
 
     REQUIRED_CHECKS = (
         "environment", "api_reachable", "server_time", "credentials",
-        "authentication", "account", "balances", "exchange_info",
+        "authentication", "account", "balances", "api_restrictions",
+        "api_trading_status", "exchange_info",
         "exchange_filters", "candles", "market_websocket",
         "user_data_stream", "scanner_heartbeat", "market_context",
         "diagnostics_freshness", "storage_integrity", "reconciliation",
@@ -184,8 +188,8 @@ class PreflightCheckService:
             report.checks[name] = "UNKNOWN"
             report.details[name] = {"reason": "required proof not performed"}
 
-        if report.environment != "TESTNET":
-            report.fail("environment", "Spot Testnet is not explicitly selected")
+        if report.environment != "TESTNET" or getattr(self.client, "base_url", None) != "https://testnet.binance.vision":
+            report.fail("environment", "Binance Spot Testnet host is not explicitly selected")
             return report.as_dict()
         if not getattr(self.client, "api_key", None) or not getattr(self.client, "api_secret", None):
             report.fail("credentials", "Binance API credentials are missing")
@@ -242,6 +246,31 @@ class PreflightCheckService:
             report.fail("account", "account state could not be confirmed")
             report.fail("balances", "balances could not be confirmed")
             return report.as_dict()
+
+        restrictions_reader = getattr(self.client, "api_restrictions", None)
+        if callable(restrictions_reader):
+            try:
+                restrictions = restrictions_reader()
+                if not isinstance(restrictions, dict) or not self.verify_api_permissions(restrictions):
+                    report.fail("api_restrictions", "API permissions are unsafe or malformed")
+                else:
+                    report.passed("api_restrictions", withdrawals_disabled=True)
+            except Exception as exc:
+                report.fail("api_restrictions", "API permission check failed", error=self._safe_reason(exc))
+
+        trading_status_reader = getattr(self.client, "api_trading_status", None)
+        if callable(trading_status_reader):
+            try:
+                trading_status = trading_status_reader()
+                data = trading_status.get("data", trading_status) if isinstance(trading_status, dict) else None
+                if not isinstance(data, dict):
+                    report.fail("api_trading_status", "trading status response is malformed")
+                elif bool(data.get("isLocked", True)) or int(data.get("plannedRecoverTime", 0) or 0) > int(time.time() * 1000):
+                    report.fail("api_trading_status", "account trading is locked or under recovery")
+                else:
+                    report.passed("api_trading_status", is_locked=False)
+            except Exception as exc:
+                report.fail("api_trading_status", "trading status check failed", error=self._safe_reason(exc))
 
         try:
             if not self._check_symbols(report):
