@@ -156,6 +156,9 @@ def test_long_super_ao_and_fractal_are_independent_initial_entry_candidates():
     assert SignalType.FRACTAL in by_type
     assert by_type[SignalType.SUPER_AO].role is SignalRole.ENTRY
     assert by_type[SignalType.FRACTAL].role is SignalRole.ENTRY
+    assert by_type[SignalType.FRACTAL].protective_reference == pytest.approx(
+        min(data.loc[9:11, "low"]) - 0.1
+    )
     assert len([signal for signal in signals if signal.role is SignalRole.ENTRY]) == 2
     # The fixture uses small synthetic row indices as candle timestamps.
     selected = CampaignEngine.choose_initial_signal(signals, now_ms=1)
