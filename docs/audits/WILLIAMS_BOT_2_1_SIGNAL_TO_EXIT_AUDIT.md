@@ -386,7 +386,7 @@ Native Futures previously allowed up to three campaigns by default and used a 3%
 ### Current status after fourth pass
 
 - The changes above are on the audit branch only. The new head must pass Python tests, Campaign CI and Android lint/unit-test/APK workflows.
-- Python/Android WM1 admission, hard-exit predicates and candidate fallback still differ. These are strategy-parity blockers; they have not been silently “fixed” by choosing an unverified interpretation of the books.
+- Python/Android signal parity is improved in this pass: Android now retains all live candidates until context admission, uses the same increasing Jaw-separation approximation for WM1, checks WM3's Balance-Line relation on its confirmation candle, and mirrors Python's two-bar Alligator/Teeth/AO hard-exit predicate. Shared golden-vector parity is still unverified.
 - Android aggregation of multiple market exits racing with protective-child fills remains fail-closed but incomplete.
 - Authorized Demo LONG/SHORT entry → protection → trailing/exit → accounting → restart-recovery and read-only release-gate runs remain outstanding.
 - **NOT READY FOR LIVE TRADING.** No real orders were sent.
@@ -407,3 +407,14 @@ Python Futures now persists `last_signal_confirmation_time_ms` for the campaign 
 ### Verification note
 
 These additions were committed after earlier green runs. They are **not verified until CI passes on the exact current head**. Android native signal semantics still differ from Python for WM1 admission and hard exits; the shared golden-vector suite is still outstanding. No Demo or real orders were sent.
+
+
+### 43. Android repeated WM2 on the fourth and later AO bars — corrected
+
+The native helper treated any last three rising/falling AO differences as Super AO, so a four- or five-bar same-colour run could emit WM2 repeatedly. Added an exact third-bar predicate that checks the previous comparison and scans recent actionable bars; later bars in the same streak no longer manufacture a new WM2. Tests cover LONG, SHORT and a reset/restart of the AO colour run.
+
+### 44. Native WM1 and context timing diverged from the Python Futures chain — aligned; golden-vector proof pending
+
+The native WM1 detector previously required AO and AC to improve on the signal bar and was only called after a directional AO/AC gate. Python instead identifies the divergent bar and increasing Jaw separation, then applies directional context later. Android now uses the same five-bar increasing-separation approximation for WM1 and retains candidates until the shared admission stage. WM3's outside-Teeth test now uses the actual confirmation candle. The common context gate now requires H1/H4 directional permission and uses D1 only as an active opposite-direction veto, matching the Python context contract. Native hard exits now use two closed bars with opposite Alligator ordering, close beyond Teeth and opposite AO; AC is not an extra exit gate. Added unit tests for WM1 angulation, exact WM2 timing, LONG/SHORT hard exits and H1/H4/D1 context policy.
+
+These are implementation-level parity fixes, not proof that the approximation fully captures the books' visual judgments. The next required test is the same hand-checked OHLCV golden vectors run through Python and Android, comparing signal type, source candle, confirmation time, trigger, protective reference, context verdict and exit reason.
