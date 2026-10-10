@@ -707,7 +707,7 @@ private class NativeEngine(
     private val livePrices = java.util.concurrent.ConcurrentHashMap<String, Double>()
     private val tradeFlow = java.util.concurrent.ConcurrentHashMap<String, ArrayDeque<TradeFlowSample>>()
     private val lastUserEventTimeByType = java.util.concurrent.ConcurrentHashMap<String, Long>()
-    private var marketSocket: WebSocket? = null
+    @Volatile private var marketSocket: WebSocket? = null
     private val orderBookCache = OrderBookCache()
     @Volatile private var marketSocketConnected = false
     @Volatile private var marketSocketLastEventMs = 0L
