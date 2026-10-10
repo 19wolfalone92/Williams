@@ -24,6 +24,9 @@ class _FailingIntentDB:
     def find_execution_intent(self, intent_id, client_order_id=""):
         return None
 
+    def unresolved_execution_intents(self):
+        return []
+
     def save_execution_intent(self, intent, status, reason=""):
         raise OSError("synthetic sqlite commit failure")
 
@@ -35,6 +38,9 @@ class _FailingIntentDB:
 class _FailingAdmissionEventDB:
     def find_execution_intent(self, intent_id, client_order_id=""):
         return None
+
+    def unresolved_execution_intents(self):
+        return []
 
     def __init__(self):
         self.intents = []
