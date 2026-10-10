@@ -1089,6 +1089,27 @@ internal class FuturesNativeEngine(
         return buildFrame(symbol, bars, tickSize, timeframe)
     }
 
+    /**
+     * TC2 chapter 12 allows a WM3-first campaign to use the lowest/highest
+     * extreme of the last 3 or 5 closed price bars as its initial structural
+     * protection. Keep this calculation identical to the campaign trailing
+     * policy, and fail closed if the configured window/data is invalid.
+     */
+    private fun initialTc2FractalStop(bars: List<Bar>, direction: String, tickSize: Double): Double? {
+        val trailingBars = prefs.getInt("tc2_trailing_bars", 3)
+        if (trailingBars !in setOf(3, 5) || bars.size < trailingBars) return null
+        val selected = bars.takeLast(trailingBars)
+        return runCatching {
+            FuturesPriceBarTrailPolicy.propose(
+                direction = direction,
+                lows = selected.map { it.low },
+                highs = selected.map { it.high },
+                tickSize = tickSize,
+                trailingBars = trailingBars
+            ).rawStopPrice
+        }.getOrNull()?.takeIf { it.isFinite() && it > 0.0 }
+    }
+
     private fun buildFrame(symbol: String, bars: List<Bar>, tickSize: Double, timeframe: String): Frame {
         val median = bars.map { (it.high + it.low) / 2.0 }
         val jawRaw = smma(median, 13)
@@ -1143,11 +1164,12 @@ internal class FuturesNativeEngine(
                 val level = upFractal.level
                 val teethAtConfirmation = teeth.getOrElse(confirmationIndex) { Double.NaN }
                 val entryTrigger = level + tickSize
-                val stop = bars[center].low - tickSize
-                if (teethAtConfirmation.isFinite() && teethAtConfirmation > 0.0 &&
+                val stop = initialTc2FractalStop(bars, "LONG", tickSize)
+                if (stop != null &&
+                    teethAtConfirmation.isFinite() && teethAtConfirmation > 0.0 &&
                     level > teethAtConfirmation && teeth[i].isFinite() && teeth[i] > 0.0 &&
                     entryTrigger > teeth[i] && bars[i].close < entryTrigger &&
-                    stop > 0.0 && stop < entryTrigger
+                    stop < bars[i].close && stop < entryTrigger
                 ) {
                     signalCandidates.add(
                         Signal(symbol, "LONG", "FRACTAL", bars[center].openTime, entryTrigger, stop, atr,
@@ -1162,11 +1184,12 @@ internal class FuturesNativeEngine(
                 val level = downFractal.level
                 val teethAtConfirmation = teeth.getOrElse(confirmationIndex) { Double.NaN }
                 val entryTrigger = level - tickSize
-                val stop = bars[center].high + tickSize
-                if (teethAtConfirmation.isFinite() && teethAtConfirmation > 0.0 &&
+                val stop = initialTc2FractalStop(bars, "SHORT", tickSize)
+                if (stop != null &&
+                    teethAtConfirmation.isFinite() && teethAtConfirmation > 0.0 &&
                     level < teethAtConfirmation && teeth[i].isFinite() && teeth[i] > 0.0 &&
                     entryTrigger < teeth[i] && bars[i].close > entryTrigger &&
-                    stop > entryTrigger
+                    stop > bars[i].close && stop > entryTrigger
                 ) {
                     signalCandidates.add(
                         Signal(symbol, "SHORT", "FRACTAL", bars[center].openTime, entryTrigger, stop, atr,
