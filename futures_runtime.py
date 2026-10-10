@@ -32,7 +32,7 @@ from portfolio_controller import PortfolioController
 from strategy import (
     calculate_indicators,
     canonical_live_config_from_env,
-    canonical_williams_parameter_blockers,
+    canonical_williams_environment_blockers,
     config_from_env,
 )
 from trading_config import TradingConfig
@@ -809,8 +809,7 @@ class FuturesRuntime:
         kill_latched = self._kill_latched
 
         preflight_errors: list[str] = []
-        indicator_config = config_from_env()
-        canonical_blockers = canonical_williams_parameter_blockers(indicator_config)
+        canonical_blockers = canonical_williams_environment_blockers()
         if canonical_blockers:
             preflight_errors.append(
                 "Non-canonical Williams indicator parameters block new entries: "
