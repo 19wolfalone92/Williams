@@ -3149,7 +3149,13 @@ internal class FuturesNativeEngine(
         ) throw FuturesApiException("$symbol protective child identity/side mismatch")
         if (campaign.optString("exchange_exit_order_id") == orderId &&
             campaign.optBoolean("exchange_exit_accounted", false)
-        ) return
+        ) {
+            // Recovery must retry the idempotent history upsert if the previous
+            // attempt accounted the exchange fill but failed before persistence.
+            recordClosedFuturesTrade(campaign, campaign.optString("exit_reason", reason))
+            auditStore.saveFuturesCampaign(symbol, campaign)
+            return
+        }
         val executed = actualOrder.optString("executedQty").toDoubleOrNull()
             ?: throw FuturesApiException("$symbol protective exit executedQty is invalid")
         if (actualOrder.optString("status").uppercase(Locale.US) != "FILLED" ||
