@@ -447,6 +447,46 @@ class Database:
         if not self._transaction_active:
             self.conn.commit()
 
+    def claim_execution_intent(self, intent):
+        """Atomically reserve a symbol's mutation slot before any network call.
+
+        The transaction is serialized by SQLite across independent connections.
+        An intent remains blocking while its exchange outcome is unresolved.
+        """
+        client_order_id = str(getattr(intent, "client_order_id", "") or "").strip()
+        if not client_order_id:
+            raise RuntimeError("stable clientOrderId is required for durable claim")
+        with self.transaction():
+            existing_intent = self.conn.execute(
+                "SELECT intent_id FROM execution_intents WHERE intent_id=? LIMIT 1",
+                (str(intent.intent_id),),
+            ).fetchone()
+            if existing_intent is not None:
+                raise RuntimeError("intent ID already exists; reconcile the prior intent")
+            existing_client = self.conn.execute(
+                "SELECT intent_id FROM execution_intents WHERE symbol=? AND client_order_id=? LIMIT 1",
+                (str(intent.symbol).upper(), client_order_id),
+            ).fetchone()
+            if existing_client is not None:
+                raise RuntimeError("clientOrderId already belongs to a durable intent")
+            recovery_state = str(self.state_get("recovery_state", "REQUIRED")).upper()
+            statuses = (
+                "'PENDING','SUBMITTED','AMBIGUOUS','RECONCILE_REQUIRED'"
+                if recovery_state == "READY"
+                else "'PENDING','SUBMITTED','AMBIGUOUS','RECONCILE_REQUIRED','CONFIRMED'"
+            )
+            unresolved = self.conn.execute(
+                "SELECT intent_id,status FROM execution_intents WHERE symbol=? "
+                f"AND UPPER(status) IN ({statuses}) LIMIT 1",
+                (str(intent.symbol).upper(),),
+            ).fetchone()
+            if unresolved is not None:
+                raise RuntimeError(
+                    "unresolved same-symbol intent blocks mutation: "
+                    f"{unresolved['intent_id']}:{unresolved['status']}"
+                )
+            self.save_execution_intent(intent, "PENDING")
+
     def save_execution_intent(self, intent, status, reason=''):
         # UPDATE-in-place preserves creation time and makes repeated observations
         # idempotent; SQLite REPLACE would delete/recreate the durable intent.
