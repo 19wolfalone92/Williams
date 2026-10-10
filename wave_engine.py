@@ -221,18 +221,21 @@ class MultiTimeframeWaveEngine:
                 ["1d", self.context_interval, self.base_interval],
             ))
 
-        for interval in (
-            self.context_interval,
-            self.base_interval,
-            self.execution_interval,
-        ):
+        # An explicit hierarchy is a contract, not a hint: do not append an
+        # execution/diagnostic interval behind the caller's back.
+        required_intervals = (
+            (self.context_interval, self.base_interval)
+            if intervals is not None
+            else (self.context_interval, self.base_interval, self.execution_interval)
+        )
+        for interval in required_intervals:
             if interval not in wanted:
                 wanted.append(interval)
 
         # For full historical wave analysis, use Binance-native intervals across
         # the complete hierarchy. A custom WAVE_TF_CHAIN can still narrow this
         # for tests or low-resource deployments.
-        if not raw and os.getenv("WAVE_FULL_TF_ALL", "true").lower() == "true":
+        if intervals is None and not raw and os.getenv("WAVE_FULL_TF_ALL", "true").lower() == "true":
             wanted = list(self.INTERVAL_SECONDS.keys())
 
         # Synthetic seconds are never used for structural wave counting.
