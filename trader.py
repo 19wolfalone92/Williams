@@ -243,7 +243,37 @@ class Trader:
             symbol = str(intent["symbol"] or "").upper()
             client_id = str(intent["client_order_id"] or "")
             intent_type = str(intent["order_type"] or "").upper()
-            if intent_type == "CANCEL_OCO":
+            if intent_type == "OCO":
+                if not client_id:
+                    raise RuntimeError(
+                        f"recovery gate cannot resolve OCO intent {intent['intent_id']}: list client ID missing"
+                    )
+                try:
+                    target_list = self.client.order_list(
+                        symbol, list_client_order_id=client_id
+                    )
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"recovery gate cannot resolve OCO intent {intent['intent_id']}: "
+                        f"exchange list state unavailable"
+                    ) from exc
+                if not target_list.get("orderListId"):
+                    raise RuntimeError(
+                        f"recovery gate cannot resolve OCO intent {intent['intent_id']}: list ID missing"
+                    )
+                list_status = str(
+                    target_list.get("listOrderStatus", target_list.get("listStatusType", ""))
+                ).upper()
+                if list_status not in {"EXECUTING", "EXEC_STARTED", "ALL_DONE", "REJECT"}:
+                    raise RuntimeError(
+                        f"recovery gate cannot resolve OCO intent {intent['intent_id']}: "
+                        f"status={list_status or 'UNKNOWN'}"
+                    )
+                reason = (
+                    "exchange OCO list confirmed during startup reconciliation: "
+                    + list_status
+                )
+            elif intent_type == "CANCEL_OCO":
                 target_list_id = str(intent["target_order_list_id"] or "")
                 if not target_list_id:
                     raise RuntimeError(
