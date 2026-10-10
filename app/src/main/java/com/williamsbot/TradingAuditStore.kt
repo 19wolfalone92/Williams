@@ -47,11 +47,17 @@ class TradingAuditStore(context: Context) :
                 last_price REAL DEFAULT 0,
                 commission REAL DEFAULT 0,
                 commission_asset TEXT,
+                commission_known INTEGER NOT NULL DEFAULT 1,
                 event_time INTEGER DEFAULT 0,
                 transaction_time INTEGER DEFAULT 0,
                 raw_json TEXT NOT NULL
             )
         """.trimIndent())
+
+        db.execSQL(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_executions_trade_identity " +
+                "ON executions(symbol, trade_id) WHERE execution_type='TRADE' AND trade_id!='-1'"
+        )
 
         db.execSQL("""
             CREATE TABLE events(
@@ -165,6 +171,61 @@ class TradingAuditStore(context: Context) :
         }
 
         db.execSQL("""
+            CREATE TABLE IF NOT EXISTS executions(
+                event_key TEXT PRIMARY KEY,
+                symbol TEXT,
+                order_id TEXT,
+                trade_id TEXT,
+                execution_type TEXT,
+                order_status TEXT,
+                last_qty REAL DEFAULT 0,
+                last_price REAL DEFAULT 0,
+                commission REAL DEFAULT 0,
+                commission_asset TEXT,
+                commission_known INTEGER NOT NULL DEFAULT 1,
+                event_time INTEGER DEFAULT 0,
+                transaction_time INTEGER DEFAULT 0,
+                raw_json TEXT NOT NULL
+            )
+        """.trimIndent())
+        try {
+            db.execSQL("ALTER TABLE executions ADD COLUMN commission_known INTEGER NOT NULL DEFAULT 1")
+        } catch (_: Exception) {
+        }
+        // If legacy data contains duplicate exchange trade IDs, retain one row
+        // but poison its fee-known flag so reconciliation cannot treat it as exact.
+        db.execSQL("""
+            UPDATE executions SET commission_known=0
+            WHERE execution_type='TRADE' AND trade_id!='-1'
+              AND (symbol, trade_id) IN (
+                SELECT symbol, trade_id FROM executions
+                WHERE execution_type='TRADE' AND trade_id!='-1'
+                GROUP BY symbol, trade_id HAVING COUNT(*) > 1
+              )
+        """.trimIndent())
+        db.execSQL("""
+            UPDATE executions SET commission_known=0
+            WHERE execution_type='TRADE'
+              AND (trade_id IS NULL OR trade_id='-1'
+                   OR commission_asset IS NULL OR TRIM(commission_asset)=''
+                   OR commission < 0 OR last_qty <= 0 OR last_price <= 0
+                   OR transaction_time <= 0)
+        """.trimIndent())
+        db.execSQL("""
+            DELETE FROM executions
+            WHERE execution_type='TRADE' AND trade_id!='-1'
+              AND rowid NOT IN (
+                SELECT MIN(rowid) FROM executions
+                WHERE execution_type='TRADE' AND trade_id!='-1'
+                GROUP BY symbol, trade_id
+              )
+        """.trimIndent())
+        db.execSQL(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_executions_trade_identity " +
+                "ON executions(symbol, trade_id) WHERE execution_type='TRADE' AND trade_id!='-1'"
+        )
+
+        db.execSQL("""
             CREATE TABLE IF NOT EXISTS rest_calls(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 method TEXT NOT NULL,
@@ -245,7 +306,8 @@ class TradingAuditStore(context: Context) :
         symbol: String,
         openedAt: Long,
         closedAt: Long,
-        exitPrice: Double
+        exitPrice: Double,
+        historicalFeePrice: ((String, Long) -> Double?)? = null
     ): Pair<Double, Boolean> {
         val baseAsset = symbol.removeSuffix("USDT")
         var feeUsdt = 0.0
@@ -257,9 +319,10 @@ class TradingAuditStore(context: Context) :
                 "commission",
                 "commission_asset",
                 "last_price",
-                "transaction_time"
+                "transaction_time",
+                "commission_known"
             ),
-            "symbol=? AND transaction_time>=? AND transaction_time<=?",
+            "symbol=? AND transaction_time>=? AND transaction_time<=? AND execution_type='TRADE'",
             arrayOf(
                 symbol,
                 openedAt.toString(),
@@ -270,15 +333,37 @@ class TradingAuditStore(context: Context) :
             "transaction_time ASC"
         ).use { cursor ->
             while (cursor.moveToNext()) {
+                if (cursor.getInt(4) != 1) {
+                    known = false
+                    continue
+                }
                 val commission = cursor.getDouble(0)
-                if (commission <= 0.0) continue
-                val asset = cursor.getString(1) ?: ""
-                val price = cursor.getDouble(2).takeIf { it > 0.0 } ?: exitPrice
+                if (!commission.isFinite() || commission < 0.0) {
+                    known = false
+                    continue
+                }
+                if (commission == 0.0) continue
+                val asset = cursor.getString(1)?.uppercase() ?: ""
+                val price = cursor.getDouble(2)
+                val time = cursor.getLong(3)
+                if (asset.isBlank() || time <= 0L) {
+                    known = false
+                    continue
+                }
                 when (asset) {
                     "USDT" -> feeUsdt += commission
-                    baseAsset -> feeUsdt += commission * price
-                    "" -> Unit
-                    else -> known = false
+                    baseAsset -> {
+                        if (!price.isFinite() || price <= 0.0) known = false
+                        else feeUsdt += commission * price
+                    }
+                    else -> {
+                        val conversion = runCatching { historicalFeePrice?.invoke(asset, time) }.getOrNull()
+                        if (conversion == null || !conversion.isFinite() || conversion <= 0.0) {
+                            known = false
+                        } else {
+                            feeUsdt += commission * conversion
+                        }
+                    }
                 }
             }
         }
@@ -287,13 +372,13 @@ class TradingAuditStore(context: Context) :
     }
 
     @Synchronized
-    fun executionEvents(orderId: String): List<JSONObject> {
+    fun executionEvents(symbol: String, orderId: String): List<JSONObject> {
         val rows = mutableListOf<JSONObject>()
         writableDatabase.query(
             "executions",
             arrayOf("raw_json"),
-            "order_id=?",
-            arrayOf(orderId),
+            "symbol=? AND order_id=?",
+            arrayOf(symbol, orderId),
             null,
             null,
             "transaction_time ASC, event_time ASC"
@@ -344,6 +429,47 @@ class TradingAuditStore(context: Context) :
             eventTime.toString()
         ).joinToString(":")
 
+        val commissionRaw = event.optString("n")
+        val parsedCommission = commissionRaw.toDoubleOrNull()
+        val commissionAsset = event.optString("N").trim().uppercase()
+        val lastQty = event.optString("l").toDoubleOrNull() ?: 0.0
+        val lastPrice = event.optString("L").toDoubleOrNull() ?: 0.0
+        val commissionKnown = executionType != "TRADE" || (
+            tradeId != "-1" &&
+            parsedCommission != null && parsedCommission.isFinite() && parsedCommission >= 0.0 &&
+            commissionAsset.isNotBlank() &&
+            lastQty.isFinite() && lastQty > 0.0 &&
+            lastPrice.isFinite() && lastPrice > 0.0
+        )
+        var duplicateTrade = false
+        if (executionType == "TRADE" && tradeId != "-1") {
+            writableDatabase.query(
+                "executions",
+                arrayOf("last_qty", "last_price", "commission", "commission_asset", "commission_known"),
+                "symbol=? AND trade_id=? AND execution_type='TRADE'",
+                arrayOf(symbol, tradeId),
+                null, null, null
+            ).use { cursor ->
+                if (cursor.moveToFirst()) {
+                    duplicateTrade = true
+                    val same = cursor.getDouble(0) == lastQty &&
+                        cursor.getDouble(1) == lastPrice &&
+                        cursor.getDouble(2) == (parsedCommission ?: -1.0) &&
+                        (cursor.getString(3) ?: "").uppercase() == commissionAsset &&
+                        commissionKnown && cursor.getInt(4) == 1
+                    if (!same) {
+                        val poison = ContentValues()
+                        poison.put("commission_known", 0)
+                        writableDatabase.update(
+                            "executions", poison,
+                            "symbol=? AND trade_id=? AND execution_type='TRADE'",
+                            arrayOf(symbol, tradeId)
+                        )
+                    }
+                }
+            }
+        }
+
         val execution = ContentValues()
         execution.put("event_key", eventKey)
         execution.put("symbol", symbol)
@@ -354,16 +480,19 @@ class TradingAuditStore(context: Context) :
         execution.put("last_qty", event.optString("l").toDoubleOrNull() ?: 0.0)
         execution.put("last_price", event.optString("L").toDoubleOrNull() ?: 0.0)
         execution.put("commission", event.optString("n").toDoubleOrNull() ?: 0.0)
-        execution.put("commission_asset", event.optString("N"))
+        execution.put("commission_asset", commissionAsset)
+        execution.put("commission_known", if (commissionKnown) 1 else 0)
         execution.put("event_time", eventTime)
         execution.put("transaction_time", event.optLong("T", 0L))
         execution.put("raw_json", event.toString())
-        writableDatabase.insertWithOnConflict(
-            "executions",
-            null,
-            execution,
-            SQLiteDatabase.CONFLICT_IGNORE
-        )
+        if (!duplicateTrade) {
+            writableDatabase.insertWithOnConflict(
+                "executions",
+                null,
+                execution,
+                SQLiteDatabase.CONFLICT_IGNORE
+            )
+        }
 
         val order = ContentValues()
         order.put("client_order_id", clientId.ifBlank { orderId })

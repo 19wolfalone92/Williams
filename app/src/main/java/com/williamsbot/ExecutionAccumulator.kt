@@ -35,13 +35,17 @@ class ExecutionAccumulator {
 
     private val orders = mutableMapOf<String, Mutable>()
 
+    private fun storageKey(symbol: String, orderId: String): String =
+        "${symbol.trim().uppercase()}:$orderId"
+
     @Synchronized
     fun accept(event: JSONObject, exitPriceForUnknownFee: BigDecimal? = null): Snapshot? {
         val orderId = event.optString("i").ifBlank { return null }
-        if (event.optString("x").uppercase() != "TRADE") return snapshot(orderId)
+        val symbol = event.optString("s").trim().uppercase()
+        if (event.optString("x").uppercase() != "TRADE") return snapshot(symbol, orderId)
         return acceptFill(
             orderId = orderId,
-            symbol = event.optString("s"),
+            symbol = symbol,
             tradeId = event.optString("t", "-1"),
             eventTime = event.optLong("E", 0L),
             qty = decimal(event.optString("l")),
@@ -65,24 +69,43 @@ class ExecutionAccumulator {
         exitPriceForUnknownFee: BigDecimal? = null
     ): Snapshot? {
         if (orderId.isBlank()) return null
-        val state = orders.getOrPut(orderId) { Mutable(symbol = symbol) }
-        val key = "$orderId:$tradeId:$eventTime"
-        if (!state.seen.add(key)) return snapshot(orderId)
+        val normalizedSymbol = symbol.trim().uppercase()
+        val stateKey = storageKey(normalizedSymbol, orderId)
+        val state = orders.getOrPut(stateKey) { Mutable(symbol = normalizedSymbol) }
+        if (
+            tradeId.isBlank() || tradeId == "-1" ||
+            normalizedSymbol.isBlank() ||
+            qty <= BigDecimal.ZERO || price <= BigDecimal.ZERO ||
+            commission < BigDecimal.ZERO
+        ) {
+            state.feeKnown = false
+            return snapshot(normalizedSymbol, orderId)
+        }
+
+        // Binance trade IDs are stable across duplicate event delivery; event time
+        // is not part of identity because a replay may be timestamped differently.
+        if (!state.seen.add(tradeId)) return snapshot(normalizedSymbol, orderId)
 
         state.qty = state.qty.add(qty)
         state.quote = state.quote.add(qty.multiply(price))
         state.fills += 1
 
-        if (commission > BigDecimal.ZERO) {
+        val feeAsset = commissionAsset.trim().uppercase()
+        if (feeAsset.isBlank()) {
+            state.feeKnown = false
+        } else if (commission > BigDecimal.ZERO) {
             when {
-                commissionAsset == "USDT" ->
+                feeAsset == "USDT" ->
                     state.feeUsdt = state.feeUsdt.add(commission)
-                commissionAsset == symbol.removeSuffix("USDT") ->
+                feeAsset == normalizedSymbol.removeSuffix("USDT") ->
                     state.feeUsdt = state.feeUsdt.add(commission.multiply(price))
-                commissionAsset.isBlank() -> Unit
                 else -> {
                     state.feeKnown = false
-                    if (exitPriceForUnknownFee != null) {
+                    // A caller-supplied price may be useful diagnostically, but it
+                    // does not make an unverified third-asset valuation authoritative.
+                    if (exitPriceForUnknownFee != null &&
+                        exitPriceForUnknownFee > BigDecimal.ZERO
+                    ) {
                         state.feeUsdt = state.feeUsdt.add(
                             commission.multiply(exitPriceForUnknownFee)
                         )
@@ -90,20 +113,28 @@ class ExecutionAccumulator {
                 }
             }
         }
-        return snapshot(orderId)
+        return snapshot(normalizedSymbol, orderId)
     }
 
     @Synchronized
-    fun restore(orderId: String, fills: List<JSONObject>): Snapshot? {
-        orders.remove(orderId)
-        var result: Snapshot? = null
-        fills.forEach { result = accept(it) }
-        return result
+    fun restore(symbol: String, orderId: String, fills: List<JSONObject>): Snapshot? {
+        val normalizedSymbol = symbol.trim().uppercase()
+        orders.remove(storageKey(normalizedSymbol, orderId))
+        fills.forEach { event ->
+            if (
+                event.optString("i") == orderId &&
+                event.optString("s").trim().uppercase() == normalizedSymbol
+            ) {
+                accept(event)
+            }
+        }
+        return snapshot(normalizedSymbol, orderId)
     }
 
     @Synchronized
-    fun snapshot(orderId: String): Snapshot? {
-        val state = orders[orderId] ?: return null
+    fun snapshot(symbol: String, orderId: String): Snapshot? {
+        val normalizedSymbol = symbol.trim().uppercase()
+        val state = orders[storageKey(normalizedSymbol, orderId)] ?: return null
         val vwap =
             if (state.qty > BigDecimal.ZERO)
                 state.quote.divide(state.qty, 18, RoundingMode.HALF_UP)
@@ -121,8 +152,8 @@ class ExecutionAccumulator {
     }
 
     @Synchronized
-    fun clear(orderId: String) {
-        orders.remove(orderId)
+    fun clear(symbol: String, orderId: String) {
+        orders.remove(storageKey(symbol, orderId))
     }
 
     private fun decimal(value: String): BigDecimal =

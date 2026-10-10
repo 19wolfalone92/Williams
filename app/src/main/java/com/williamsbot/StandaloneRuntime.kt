@@ -727,13 +727,14 @@ private class NativeEngine(
     }
 
     private fun restoreExecutionAccumulators() {
-        val orderIds = mutableSetOf<String>()
-        positionList().forEach { if (it.entryOrderId.isNotBlank()) orderIds.add(it.entryOrderId) }
-        orderIds.forEach { orderId ->
-            executionAccumulator.restore(
-                orderId,
-                auditStore.executionEvents(orderId)
-            )
+        positionList().forEach { position ->
+            if (position.entryOrderId.isNotBlank()) {
+                executionAccumulator.restore(
+                    position.symbol,
+                    position.entryOrderId,
+                    auditStore.executionEvents(position.symbol, position.entryOrderId)
+                )
+            }
         }
     }
 
@@ -4223,18 +4224,18 @@ private class NativeEngine(
                             ?.let { q -> if (qty > 0.0) q / qty else 0.0 }
                             ?.takeIf { it > 0.0 }
                             ?: stored.entry
+                        recordCompletedTrade(
+                            stored = stored,
+                            exitPrice = exitPrice,
+                            reason = "EMERGENCY_UNPROTECTED_EXIT",
+                            raw = sell
+                        )
                         TradeJournal.close(
                             prefs = prefs,
                             symbol = stored.symbol,
                             exitPrice = exitPrice,
                             reason = "EMERGENCY_UNPROTECTED_EXIT",
                             order = sell
-                        )
-                        recordCompletedTrade(
-                            stored = stored,
-                            exitPrice = exitPrice,
-                            reason = "EMERGENCY_UNPROTECTED_EXIT",
-                            raw = sell
                         )
                         synchronized(positions) {
                             positions.remove(stored.symbol)
@@ -4271,6 +4272,34 @@ private class NativeEngine(
         }
     }
 
+    private fun historicalFeeConversionPriceUsdt(asset: String, timestampMs: Long): Double? {
+        val normalized = asset.trim().uppercase()
+        if (normalized.isBlank() || normalized == "USDT" || timestampMs <= 0L) return null
+        val minuteStart = timestampMs - (timestampMs % 60_000L)
+        val candidates = listOf(
+            (normalized + "USDT") to false,
+            ("USDT" + normalized) to true
+        )
+        for ((pair, inverse) in candidates) {
+            try {
+                val encoded = URLEncoder.encode(pair, StandardCharsets.UTF_8.name())
+                val path = "/api/v3/klines?symbol=" + encoded +
+                    "&interval=1m&startTime=" + minuteStart +
+                    "&endTime=" + (minuteStart + 60_000L) +
+                    "&limit=1"
+                val rows = JSONArray(getBody(path))
+                if (rows.length() == 0) continue
+                val close = rows.getJSONArray(0).optString(4).toDoubleOrNull() ?: continue
+                if (!close.isFinite() || close <= 0.0) continue
+                val quotePerAsset = if (inverse) 1.0 / close else close
+                if (quotePerAsset.isFinite() && quotePerAsset > 0.0) return quotePerAsset
+            } catch (_: Exception) {
+                // Try inverse pair; if neither has a historical candle, fee remains unknown.
+            }
+        }
+        return null
+    }
+
     private fun recordCompletedTrade(
         stored: PositionState,
         exitPrice: Double,
@@ -4285,8 +4314,19 @@ private class NativeEngine(
                 symbol = stored.symbol,
                 openedAt = stored.openedAt,
                 closedAt = closedAt,
-                exitPrice = exitPrice
+                exitPrice = exitPrice,
+                historicalFeePrice = { asset, timestamp ->
+                    historicalFeeConversionPriceUsdt(asset, timestamp)
+                }
             )
+        if (!feeKnown) {
+            setReconcileRequired(
+                stored.symbol + ": commission valuation is incomplete; trade closure and new entries blocked"
+            )
+            throw IllegalStateException(
+                stored.symbol + ": unknown/unvalued commission; authoritative fee reconciliation required"
+            )
+        }
         val net = gross - feeUsdt
         val risk =
             ((stored.entry - stored.stop) / stored.entry)
@@ -4960,18 +5000,18 @@ private class NativeEngine(
                             "BOT_OCO_EXIT"
                     }
 
+                recordCompletedTrade(
+                    stored = stored,
+                    exitPrice = exitPrice,
+                    reason = reason,
+                    raw = lastExit
+                )
                 TradeJournal.close(
                     prefs = prefs,
                     symbol = stored.symbol,
                     exitPrice = exitPrice,
                     reason = reason,
                     order = lastExit
-                )
-                recordCompletedTrade(
-                    stored = stored,
-                    exitPrice = exitPrice,
-                    reason = reason,
-                    raw = lastExit
                 )
                 continue
             }
@@ -6401,18 +6441,18 @@ private class NativeEngine(
                             getBody("/api/v3/ticker/price?symbol=" + symbol)
                         ).optString("price").toDoubleOrNull() ?: stored.entry
                     }.getOrDefault(stored.entry)
+            recordCompletedTrade(
+                stored = stored,
+                exitPrice = exitPrice,
+                reason = "MANUAL_SELL",
+                raw = sell
+            )
             TradeJournal.close(
                 prefs = prefs,
                 symbol = symbol,
                 exitPrice = exitPrice,
                 reason = "MANUAL_SELL",
                 order = sell
-            )
-            recordCompletedTrade(
-                stored = stored,
-                exitPrice = exitPrice,
-                reason = "MANUAL_SELL",
-                raw = sell
             )
             synchronized(positions) {
                 positions.remove(symbol)
