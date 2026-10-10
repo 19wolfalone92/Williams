@@ -4,10 +4,10 @@ from db import Database
 from futures_runtime import FuturesRuntime
 
 
-def insert_event(db, campaign_id, event, reason, created_at):
+def insert_event(db, campaign_id, event, reason, created_at, payload_json=None):
     db.conn.execute(
-        "INSERT INTO campaign_events(campaign_id, event, reason, created_at) VALUES (?, ?, ?, ?)",
-        (campaign_id, event, reason, created_at),
+        "INSERT INTO campaign_events(campaign_id, event, reason, created_at, payload_json) VALUES (?, ?, ?, ?, ?)",
+        (campaign_id, event, reason, created_at, payload_json),
     )
     db.conn.commit()
 
@@ -18,6 +18,8 @@ def test_daily_stop_count_counts_only_finalized_stop_closes_in_utc_window():
     insert_event(db, "stop1", "CAMPAIGN_CLOSED", "EXCHANGE_PROTECTIVE_STOP_FILLED", "2026-10-10 00:01:00")
     insert_event(db, "stop2", "CAMPAIGN_CLOSED", "STRUCTURAL_STOP", "2026-10-10 08:00:00")
     insert_event(db, "target", "CAMPAIGN_CLOSED", "STRUCTURAL_TARGET", "2026-10-10 08:10:00")
+    insert_event(db, "trail", "CAMPAIGN_CLOSED", "TRAILING_STOP", "2026-10-10 08:15:00",
+                 '{"realized_pnl_quote_net_known_fees": 4.5}')
     insert_event(db, "pending", "EXIT_PENDING", "STOP requested but not filled", "2026-10-10 08:20:00")
 
     assert db.count_confirmed_stop_exits_since("2026-10-10 00:00:00") == 2
