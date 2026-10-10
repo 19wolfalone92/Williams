@@ -419,6 +419,105 @@ def test_futures_campaign_arms_correct_directional_conditional_entry(
         db.conn.close()
 
 
+def test_tc2_context_versions_ignore_m15_and_d1(tmp_path, monkeypatch):
+    from dataclasses import replace
+
+    monkeypatch.setenv("WILLIAMS_STRATEGY_PROFILE", "TC2_THREE_WISE_MEN")
+    db = Database(str(tmp_path / "tc2-context-dependencies.sqlite3"))
+    try:
+        cache = ContextCache()
+        make_context(cache, allow_long=True, allow_short=False)
+        client = FakeFuturesClient(mark_price=102.0)
+        service = FuturesCampaignExecutionService(
+            client, db, execution_barrier=ExecutionBarrier(cache, db)
+        )
+        versions = cache.snapshot().versions("BTCUSDT", ["1h", "4h"])
+        signal = replace(
+            make_signal("LONG"),
+            context_versions={
+                **versions,
+                "15m": 999999,
+                "1d": 999999,
+            },
+        )
+
+        accepted_versions = service._context_versions(signal)
+
+        assert accepted_versions == versions
+        assert set(accepted_versions) == {"1h", "4h"}
+    finally:
+        db.conn.close()
+
+
+def test_tc2_wm2_context_is_not_universally_gated_by_alligator_direction(tmp_path, monkeypatch):
+    from dataclasses import replace
+
+    monkeypatch.setenv("WILLIAMS_STRATEGY_PROFILE", "TC2_THREE_WISE_MEN")
+    db = Database(str(tmp_path / "tc2-wm2-context.sqlite3"))
+    try:
+        cache = ContextCache()
+        # H1 is sleeping and directional allow flags are false. WM2 must rely
+        # on its own three-AO-bar evidence, not an unrelated WM1 trend filter.
+        make_context(cache, allow_long=False, allow_short=False)
+        client = FakeFuturesClient(mark_price=102.0)
+        service = FuturesCampaignExecutionService(
+            client, db, execution_barrier=ExecutionBarrier(cache, db)
+        )
+        snapshot = cache.snapshot()
+        signal = replace(
+            make_signal("LONG"),
+            signal_type=SignalType.SUPER_AO,
+            htf_confirmed=False,
+            context_versions=snapshot.versions("BTCUSDT", ["1h", "4h"]),
+        )
+
+        assert service._tc2_core_context_allowed(signal, snapshot) is True
+    finally:
+        db.conn.close()
+
+
+def test_initial_entry_rechecks_portfolio_risk_inside_durable_reservation(tmp_path, monkeypatch):
+    db = Database(str(tmp_path / "initial-portfolio-cap.sqlite3"))
+    try:
+        cache = ContextCache()
+        make_context(cache, allow_long=True, allow_short=False)
+        client = FakeFuturesClient(mark_price=102.0)
+        service = FuturesCampaignExecutionService(
+            client,
+            db,
+            execution_barrier=ExecutionBarrier(cache, db),
+            portfolio_risk_limit_pct=0.01,
+            campaign_risk_limit_pct=0.005,
+        )
+        calls = {"count": 0}
+
+        def racing_reserved_risk():
+            calls["count"] += 1
+            # First read sizes the intent; the second simulates another
+            # concurrent reservation that won before this transaction.
+            return 0.0 if calls["count"] == 1 else 99.0
+
+        monkeypatch.setattr(service.engine, "portfolio_reserved_risk_quote", racing_reserved_risk)
+
+        with pytest.raises(FuturesCampaignExecutionError, match="portfolio risk capacity changed"):
+            service.arm_initial_entry(
+                make_signal("LONG"),
+                equity_quote=10000.0,
+                atr=2.0,
+                candidate_risk_fraction=0.005,
+            )
+
+        assert calls["count"] >= 2
+        assert client.stop_entries == []
+        assert db.state_get("futures_entry_pending:BTCUSDT") is None
+        active = db.conn.execute(
+            "SELECT COUNT(*) FROM campaigns WHERE state NOT IN ('CLOSED','FLAT')"
+        ).fetchone()[0]
+        assert active == 0
+    finally:
+        db.conn.close()
+
+
 def test_short_entry_is_blocked_by_non_bearish_operational_context(tmp_path):
     db = Database(str(tmp_path / "futures.sqlite3"))
     try:
