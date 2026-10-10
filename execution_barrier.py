@@ -150,11 +150,34 @@ class ExecutionBarrier:
                 return f"context {permission_tf} does not allow SHORT"
 
         risk_reducing = self._risk_reducing(intent)
-        if self._poisoned and not risk_reducing:
+        # Once this process has observed an ambiguous mutation, no further
+        # mutation is safe until an exchange reconciliation cycle has completed.
+        if self._poisoned:
             return "execution_barrier_poisoned_reconciliation_required"
 
         if self.db is None or not hasattr(self.db, "state_get"):
             return "durable recovery gate is unavailable"
+        # A fresh barrier instance after process restart must not bypass an
+        # unresolved same-symbol intent merely by generating a new client ID.
+        if hasattr(self.db, "conn"):
+            try:
+                unresolved = self.db.conn.execute(
+                    "SELECT intent_id,status,purpose FROM execution_intents "
+                    "WHERE symbol=? AND intent_id<>? "
+                    "AND UPPER(status) IN ('PENDING','SUBMITTED','AMBIGUOUS','RECONCILE_REQUIRED') "
+                    "LIMIT 1",
+                    (intent.symbol.upper(), intent.intent_id),
+                ).fetchone()
+            except Exception:
+                return "cannot verify unresolved same-symbol execution intents"
+            if unresolved is not None:
+                return (
+                    "UNRESOLVED_SYMBOL_INTENT:"
+                    + str(unresolved["intent_id"])
+                    + ":"
+                    + str(unresolved["status"])
+                )
+
         recovery_state = str(self.db.state_get("recovery_state", "REQUIRED")).upper()
         if recovery_state != "READY" and not risk_reducing:
             return f"RECOVERY_REQUIRED:{recovery_state}"
