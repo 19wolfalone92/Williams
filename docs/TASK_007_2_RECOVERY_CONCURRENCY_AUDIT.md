@@ -12,10 +12,10 @@ This report is an evidence record, not a declaration of production readiness. No
 - Task 007.2 starting SHA: `01d8472dbadf3d903b243d618de627bd2962aed7`
 - Baseline `main` SHA: `04da5f9c09572e99ff310be3a1908179165e528c`
 - Implementation SHA exercised by the latest Python CI at report authoring: `9fcbc5f148adadceb3c6f7ee61125fcc419faedb`
-- Compare result for implementation SHA: 111 commits ahead, 0 behind baseline.
+- Compare result for implementation SHA: 117 commits ahead, 0 behind baseline.
 - `main` was rechecked and remains at `04da5f9c09572e99ff310be3a1908179165e528c`.
 - No PR exists for this exact recovery branch. Existing PR #43 is on `fix/task-007-risk-management`, not this branch. No PR was created and no merge was performed.
-- CI run for implementation SHA: [run 38089861539](https://github.com/19wolfalone92/Williams/actions/runs/38089861539). Python job passed: **196 passed, 4 warnings**. Android build/unit tests/lint were still in progress when this report was authored. Updating this report will trigger a new run; the exact resulting branch HEAD must be checked independently.
+- The latest completed all-jobs PASS is [run 38088262297](https://github.com/19wolfalone92/Williams/actions/runs/38088262297) at SHA `4da4643e2ca3115556df727440fa5aceb07ce500`; it is not evidence for subsequent code changes. Python passed **196 tests, 4 warnings** at SHA `7333b94263c14180efdc7713a40928af48d46277`, before the latest commission-valuation changes. The exact code SHA `b3b7c7ee007d53457ff012a171e513830de78b0f` has a pending workflow run [38090025435](https://github.com/19wolfalone92/Williams/actions/runs/38090025435); it is not yet accepted. This report update creates a documentation commit and another run, which must be checked independently.
 
 ## 2. Changes made in this continuation
 
@@ -26,9 +26,39 @@ This report is an evidence record, not a declaration of production readiness. No
 5. Hardened campaign exit fill validation so a fill missing commission amount or commission asset is rejected.
 6. Updated test adapters to provide explicit, deterministic fill/commission records rather than relying on implicit zero-fee fallbacks.
 7. Added regression tests for missing commission evidence and the independent-runtime mutation race.
+8. Added an independent-process SQLite claim race test: two OS processes open separate SQLite connections and attempt to claim the same symbol; exactly one durable claim is expected. It passed in the Python suite on SHA `7333b94263c14180efdc7713a40928af48d46277`.
+9. Found and patched a further financial-integrity gap: the shared execution accumulator previously left nonzero third-asset commissions out of quote-equivalent fees, and legacy `Trader` did not account for base-asset commissions. The accumulator now reports unvalued fee assets; legacy reconciliation blocks if any remain unvalued; portfolio conversion rejects non-positive market prices. Regression tests were added, but these latest changes still require CI on the exact SHA.
 
 These changes reduce known risks but do not close the entire TASK 007.2 acceptance matrix.
 
+
+## 2A. Cumulative changed-file inventory relative to baseline
+
+The cumulative compare against baseline `04da5f9c09572e99ff310be3a1908179165e528c` lists these 23 changed files (branch diff; not all were changed in this single continuation):
+
+- .github/workflows/campaign-ci.yml
+- app/src/main/java/com/williamsbot/StandaloneRuntime.kt
+- campaign_engine.py
+- campaign_execution.py
+- db.py
+- docs/TASK_007_2_RECOVERY_CONCURRENCY_AUDIT.md
+- execution_accumulator.py
+- execution_barrier.py
+- gradle/wrapper/gradle-wrapper.properties
+- mock_exchange.py
+- portfolio_trader.py
+- preflight_gate.py
+- recovery_oco_failure_test.py
+- recovery_test.py
+- test_android_mutation_ledger_contract.py
+- test_campaign_execution.py
+- test_integration_bindings.py
+- test_multi_position_execution.py
+- test_multi_position_lifecycle.py
+- test_preflight_gate.py
+- test_production_architecture.py
+- test_task007_recovery_contract.py
+- trader.py
 ## 3. Mutation path inventory (partial; completeness NOT VERIFIED)
 
 | Path | Observed call chain | Low-level mutation | Barrier / durable intent | Current evidence and remaining gap |
@@ -71,8 +101,10 @@ The atomic claim prevents the previously identified check-then-insert race for a
 - Fill persistence requires a stable exchange trade ID.
 - Duplicate fill IDs are idempotent; incompatible repeated data raises an error.
 - Duplicate durable client order IDs are rejected.
-- Missing commission amount/asset and missing authoritative trade history now block the reviewed portfolio/legacy reconciliation paths rather than being silently represented as zero fees.
-- A third-asset commission conversion that cannot be valued safely must remain incomplete/blocked in the reviewed portfolio path.
+- Missing commission amount/asset and missing authoritative trade history block the reviewed portfolio/legacy reconciliation paths rather than being silently represented as zero fees.
+- Base-asset commission is passed to the shared accumulator in the reviewed legacy `Trader` path; third-asset fees remain explicitly unvalued unless a trusted conversion is available. Legacy reconciliation blocks when such assets remain unvalued.
+- Portfolio third-asset conversion now rejects zero/non-positive prices; the newly added regression tests still require an exact-SHA CI pass.
+- These are code changes plus test cases; full end-to-end financial reconciliation is still not closed.
 
 ### Still open
 - End-to-end proof for commission charged in base asset, quote asset and a third asset across every entry, partial fill, exit, restart and PnL path.
