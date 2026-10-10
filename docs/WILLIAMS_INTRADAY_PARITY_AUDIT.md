@@ -4,13 +4,20 @@
 **Audit snapshot:** 2026-10-10  
 **Status:** PARTIAL — full source parity is NOT established. Do not describe this branch as 100% Bill Williams-compliant or production-ready.
 
+## Universe and market context update (2026-10-10)
+
+- Default configured fallback universe is now **CORE_10**: BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT, ADAUSDT, DOGEUSDT, LINKUSDT, AVAXUSDT, LTCUSDT.
+- The Spot scanner defaults to liquidity preselection and a maximum of 10 symbols (`LIQUIDITY_PRESELECT=10`, `SCAN_MAX_SYMBOLS=10`). Explicit environment overrides can change those values; verify the effective runtime config before a test run.
+- **D1 is permitted as informational broad-market context**, but must not independently create an entry signal or act as a blanket directional veto. H4 remains the sole required higher-timeframe context for the current intraday admission contract; H1 remains the canonical decision timeframe. D1 is not part of the default structural decision chain.
+- This is a proposed default universe, not a guarantee that every symbol is tradable on both Spot and USDⓈ-M Futures in every environment. Validate each symbol against the relevant exchangeInfo and account permissions at startup; invalid symbols fail closed.
+
 ## Required timeframe contract
 
 - **H4:** sole higher-timeframe context for this intraday configuration.
 - **H1:** canonical decision timeframe; typed Williams signals are detected here.
 - **M15:** execution/fill monitoring only; must not originate TC2 signals.
 - **M5:** diagnostics/replay only; must not originate TC2 signals.
-- **D1:** excluded from the intraday TC2 admission dependency and from default intraday timeframe chains.
+- **D1:** may be inspected as informational macro context, but is excluded from the intraday TC2 admission dependency and from default intraday timeframe chains.
 
 The selected H4/H1/M15/M5 arrangement is an explicit engineering mapping for this bot, not a universal timeframe prescription stated by Williams. The Alligator itself encodes nested balance-line horizons within a chart; timeframe mapping must not be represented as a verbatim book rule.
 
