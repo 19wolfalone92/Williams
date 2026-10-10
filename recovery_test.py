@@ -124,7 +124,11 @@ def scenario_fresh_missing_baseline():
 
         assert baseline is not None
         assert abs(float(baseline)-1.0)<1e-9
-        assert t.state()=='FLAT'
+        # recover_state() is one reconciliation phase, not the complete
+        # startup gate. New entries remain blocked until preflight plus the
+        # canonical multi-position and fill-history checks are completed.
+        assert t.state()=='RECONCILE_REQUIRED'
+        assert t.db.state_get('recovery_state')=='REQUIRED'
         assert t.recovered is True
         assert c.created_oco_count==0
 
@@ -167,7 +171,7 @@ def test_recovery_suite():
 
 def run():
     tests=[
-        ('fresh DB -> missing baseline -> safe FLAT recovery',scenario_fresh_missing_baseline),
+        ('fresh DB -> baseline initialized but entry gate remains closed',scenario_fresh_missing_baseline),
         ('fresh DB -> explicit Williams BUY -> safe position recovery',scenario_fresh_db_recovers_explicit_bot_buy),
         ('BUY -> OCO -> crash -> TP',lambda:scenario_exit(104)),
         ('BUY -> OCO -> crash -> SL',lambda:scenario_exit(98)),
