@@ -545,7 +545,7 @@ def test_native_android_signed_order_mutations_are_fenced_before_network():
     )
     def function_body(name):
         start = runtime.index(f"private fun {name}(")
-        end = runtime.find("\\n    private fun ", start + 1)
+        end = runtime.find("\n    private fun ", start + 1)
         return runtime[start:] if end < 0 else runtime[start:end]
     backend_get = function_body("getBody")
     raw_get = function_body("signedRawGet")
@@ -596,8 +596,8 @@ def test_release_version_contracts_are_consistent():
         root / "app" / "src" / "main" / "java" / "com" / "williamsbot"
         / "MainActivity.kt"
     ).read_text(encoding="utf-8")
-    gate_match = re.search(r"EXPECTED_VERSION\s*=\s*['\\\"]([^'\\\"]+)['\\\"]", gate)
-    server_match = re.search(r"^VERSION\s*=\s*['\\\"]([^'\\\"]+)['\\\"]", server, re.MULTILINE)
+    gate_match = re.search(r"EXPECTED_VERSION\s*=\s*['"]([^'"]+)['"]", gate)
+    server_match = re.search(r"^VERSION\s*=\s*['"]([^'"]+)['"]", server, re.MULTILINE)
     gradle_match = re.search(r'versionName\s*=\s*"([^"]+)"', gradle)
     assert gate_match and server_match and gradle_match
     canonical = server_match.group(1)
