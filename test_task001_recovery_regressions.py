@@ -413,4 +413,73 @@ def test_cancel_replace_restart_refuses_to_infer_old_leg_from_replacement_only(t
     assert db.state_get("position_state") == "RECONCILE_REQUIRED"
 
 
+
+def test_cancel_replace_operation_journal_persists_both_legs_and_recovers_independently(tmp_path):
+    """Restart queries the old exchange ID and replacement client ID without resubmitting."""
+    cache = ready_context()
+    db = ready_db(tmp_path)
+    old_id = "811"
+    old_cid = "TASK001_OLD_STOP"
+    new_cid = "TASK001_NEW_STOP"
+    intent = OrderIntent.new(
+        "BTCUSDT", "SELL", "STOP_LOSS", required_context_versions={},
+        purpose="CAMPAIGN_TRAIL", client_order_id=new_cid,
+    )
+    db.save_execution_intent(intent, "AMBIGUOUS", "simulated response loss")
+    db.create_cancel_replace_operation(
+        operation_id=intent.intent_id, intent_id=intent.intent_id,
+        symbol="BTCUSDT", old_order_id=old_id, old_client_order_id=old_cid,
+        replacement_client_order_id=new_cid,
+    )
+    saved = db.get_cancel_replace_operation(intent.intent_id)
+    assert saved["old_exchange_order_id"] == old_id
+    assert saved["old_client_order_id"] == old_cid
+    assert saved["replacement_client_order_id"] == new_cid
+    assert saved["contract_version"] == 1
+    assert saved["reconcile_required"] == 1
+
+    class FakeExchange:
+        def __init__(self):
+            self.lookups = []
+            self.mutations = 0
+        def get_order(self, symbol, order_id=None, orig_client_order_id=None):
+            self.lookups.append((symbol, str(order_id) if order_id is not None else None,
+                                 orig_client_order_id))
+            if order_id is not None:
+                return {"symbol": symbol, "orderId": int(order_id),
+                        "clientOrderId": old_cid, "status": "CANCELED",
+                        "executedQty": "0.1", "origQty": "1"}
+            return {"symbol": symbol, "orderId": 912,
+                    "clientOrderId": new_cid, "status": "NEW",
+                    "executedQty": "0", "origQty": "0.9"}
+        def cancel_replace(self, *args, **kwargs):
+            self.mutations += 1
+            raise AssertionError("recovery must never repeat cancelReplace")
+
+    exchange = FakeExchange()
+    service = CampaignExecutionService(exchange, db, ExecutionBarrier(cache, db))
+    assert exchange.lookups == [
+        ("BTCUSDT", old_id, None),
+        ("BTCUSDT", None, new_cid),
+    ]
+    assert exchange.mutations == 0
+    assert service.startup_recovery_report["resolved"] == []
+    assert service.startup_recovery_report["unresolved"] == [
+        intent.intent_id + ": order legs observed; full financial and protection reconciliation required"
+    ]
+    saved = db.get_cancel_replace_operation(intent.intent_id)
+    assert saved["cancel_state"] == "CANCELED"
+    assert saved["replacement_state"] == "NEW"
+    assert saved["reconcile_required"] == 1
+    assert saved["replacement_exchange_order_id"] == "912"
+    assert db.state_get("position_state") == "RECONCILE_REQUIRED"
+
+
+def test_cancel_replace_operation_identity_is_immutable(tmp_path):
+    db = ready_db(tmp_path)
+    db.create_cancel_replace_operation("op1", "intent1", "BTCUSDT", "11", "OLD", "NEW")
+    import pytest
+    with pytest.raises(RuntimeError, match="identity collision"):
+        db.create_cancel_replace_operation("op1", "intent1", "BTCUSDT", "12", "OLD", "NEW")
+
 # Release-gate note: fake-exchange recovery tests are not physical-device or Spot Testnet evidence.
