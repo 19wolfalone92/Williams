@@ -207,6 +207,7 @@ class ControlState:
                     api_secret=self.api_secret or None,
                     testnet=self.testnet,
                     context_cache=context_cache,
+                    context_service=mtf_service,
                 )
             return self.trader
 
@@ -226,6 +227,7 @@ class ControlState:
                     db=t.db,
                     symbols=t.auto_scan_symbols,
                     execution_barrier=t.execution_barrier,
+                    context_service=mtf_service,
                 )
             return t._multi_position_trader
 
