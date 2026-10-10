@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from enum import Enum
+import math
 
 
 class OrderState(str, Enum):
@@ -24,8 +25,8 @@ _ALLOWED = {
     OrderState.ADMISSION: {OrderState.SUBMITTING, OrderState.CANCELED, OrderState.RECONCILE_REQUIRED},
     OrderState.SUBMITTING: {
         OrderState.OPEN, OrderState.PARTIALLY_FILLED, OrderState.FILLED,
-        OrderState.REJECTED, OrderState.EXPIRED, OrderState.AMBIGUOUS,
-        OrderState.RECONCILE_REQUIRED,
+        OrderState.REJECTED, OrderState.EXPIRED, OrderState.CANCELED,
+        OrderState.AMBIGUOUS, OrderState.RECONCILE_REQUIRED,
     },
     OrderState.OPEN: {
         OrderState.PARTIALLY_FILLED, OrderState.FILLED,
@@ -68,7 +69,23 @@ class OrderStateMachine:
 
     def observe_exchange_status(self, status: str, executed_qty: float = 0.0) -> OrderState:
         s = str(status or "").upper()
-        executed = float(executed_qty or 0.0)
+        try:
+            executed = float(executed_qty or 0.0)
+        except (TypeError, ValueError):
+            self.state = OrderState.RECONCILE_REQUIRED
+            return self.state
+        if not math.isfinite(executed) or executed < 0.0:
+            self.state = OrderState.RECONCILE_REQUIRED
+            return self.state
+        # A cancel racing with any execution is not a flat/cancelled outcome for
+        # the campaign. Preserve the UNKNOWN/reconcile gate until fills and
+        # remaining quantity have been authoritatively enumerated.
+        if s in {"CANCELED", "CANCELLED"} and executed > 0.0:
+            self.state = OrderState.RECONCILE_REQUIRED
+            return self.state
+        if s in {"FILLED", "PARTIALLY_FILLED"} and executed <= 0.0:
+            self.state = OrderState.RECONCILE_REQUIRED
+            return self.state
         if s in {"PENDING_NEW", "NEW"}:
             target = OrderState.OPEN
         elif s == "PARTIALLY_FILLED":
