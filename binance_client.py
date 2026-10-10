@@ -6,7 +6,6 @@ from safe_logging import redact_text, redact_value, register_sensitive_value
 
 class BinanceAPIError(RuntimeError):
     def __init__(self, message, *, unknown_execution=False, status_code=None, payload=None):
-        super().__init__(message)
         super().__init__(redact_text(message))
         self.unknown_execution = bool(unknown_execution)
         self.status_code = status_code
