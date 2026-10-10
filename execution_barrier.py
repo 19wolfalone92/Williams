@@ -232,28 +232,60 @@ class ExecutionBarrier:
 
     @staticmethod
     def _oco_response_authoritative(response: dict) -> bool:
+        # List-level status is insufficient without authoritative child states.
         if not response.get("orderListId") or not response.get("listClientOrderId"):
             return False
-        list_status = str(response.get("listStatusType", "")).upper()
-        list_order_status = str(response.get("listOrderStatus", "")).upper()
-        if list_status in {"EXEC_STARTED", "EXECUTING", "ALL_DONE"} and list_order_status in {
-            "EXECUTING", "ALL_DONE"
-        }:
-            return True
+        if str(response.get("listStatusType", "")).upper() not in {"EXEC_STARTED", "EXECUTING", "ALL_DONE", "REJECT"}:
+            return False
+        if str(response.get("listOrderStatus", "")).upper() not in {"EXECUTING", "ALL_DONE", "REJECT"}:
+            return False
         reports = response.get("orderReports")
         if not isinstance(reports, list) or len(reports) < 2:
             return False
-        allowed_child_statuses = {
-            "NEW", "PARTIALLY_FILLED", "FILLED", "PENDING_NEW",
-            "PENDING_CANCEL", "CANCELED", "EXPIRED", "REJECTED",
-        }
+        allowed = {"NEW", "PARTIALLY_FILLED", "FILLED", "PENDING_NEW", "PENDING_CANCEL", "CANCELED", "EXPIRED", "REJECTED"}
+        ids = set()
         for report in reports:
             if not isinstance(report, dict):
                 return False
-            if not report.get("orderId"):
+            order_id = report.get("orderId")
+            if order_id in (None, "", 0, "0") or str(order_id) in ids:
                 return False
-            if str(report.get("status", "")).upper() not in allowed_child_statuses:
+            ids.add(str(order_id))
+            if str(report.get("status", "")).upper() not in allowed:
                 return False
+        return len(ids) >= 2
+
+    def _mark_reconcile_required(self, intent: OrderIntent, reason: str) -> None:
+        # PENDING is itself unresolved if the DB is too broken to update it.
+        try:
+            self._persist(intent, "AMBIGUOUS", reason)
+        except Exception:
+            pass
+        if self.db is not None and callable(getattr(self.db, "state_set", None)):
+            for key in ("position_state", f"position_state:{intent.symbol.upper()}"):
+                try:
+                    self.db.state_set(key, "RECONCILE_REQUIRED")
+                except Exception:
+                    pass
+
+    @staticmethod
+    def _cancel_replace_response_authoritative(response: dict) -> bool:
+        if not isinstance(response, dict):
+            return False
+        if str(response.get("cancelResult", "")).upper() != "SUCCESS":
+            return False
+        if str(response.get("newOrderResult", "")).upper() != "SUCCESS":
+            return False
+        cancel = response.get("cancelResponse")
+        replacement = response.get("newOrderResponse")
+        if not isinstance(cancel, dict) or not isinstance(replacement, dict):
+            return False
+        if not cancel.get("orderId") or not replacement.get("orderId"):
+            return False
+        if str(cancel.get("status", "")).upper() not in {"CANCELED", "FILLED", "EXPIRED", "REJECTED"}:
+            return False
+        if str(replacement.get("status", "")).upper() not in {"NEW", "PARTIALLY_FILLED", "FILLED"}:
+            return False
         return True
 
     def execute(
@@ -355,16 +387,26 @@ class ExecutionBarrier:
                 response = submit()
             except Exception as exc:
                 order_fsm.state = OrderState.AMBIGUOUS
-                self._persist(intent, "AMBIGUOUS", f"{type(exc).__name__}: {exc}")
+                reason = f"{type(exc).__name__}: {exc}"
+                self._mark_reconcile_required(intent, reason)
                 self._record(
-                    "ERROR",
-                    "execution_ambiguous",
-                    intent,
+                    "ERROR", "execution_ambiguous", intent,
                     "Binance submission failed or timed out; reconciliation required",
-                    {"error": f"{type(exc).__name__}: {exc}"},
+                    {"error": reason},
                 )
                 raise
 
+            # cancelReplace is non-transactional: require both authoritative legs.
+            if isinstance(response, dict) and (
+                "cancelResult" in response or "newOrderResult" in response
+            ):
+                if not self._cancel_replace_response_authoritative(response):
+                    reason = "cancelReplace response does not authoritatively prove both old and replacement orders"
+                    order_fsm.state = OrderState.RECONCILE_REQUIRED
+                    self._mark_reconcile_required(intent, reason)
+                    self._record("ERROR", "cancel_replace_ambiguous", intent, reason,
+                                 {"response_keys": list(response.keys())})
+                    raise RuntimeError("ExecutionBarrier: " + reason)
             if intent.order_type != "CANCEL":
                 status = str(
                     response.get("status", "")
@@ -398,10 +440,8 @@ class ExecutionBarrier:
                     order_fsm.state = OrderState.OPEN
                 else:
                     order_fsm.state = OrderState.RECONCILE_REQUIRED
-                    self._persist(
-                        intent,
-                        "AMBIGUOUS",
-                        "exchange response did not contain authoritative order state",
+                    self._mark_reconcile_required(
+                        intent, "exchange response did not contain authoritative order state"
                     )
                     self._record(
                         "ERROR",
@@ -418,6 +458,10 @@ class ExecutionBarrier:
             except Exception as exc:
                 # The exchange may already have accepted the request. Mark it as
                 # ambiguous and never expose an ordinary retryable failure.
+                self._mark_reconcile_required(
+                    intent,
+                    f"exchange outcome persistence failed: {type(exc).__name__}: {exc}",
+                )
                 self._record(
                     "ERROR",
                     "execution_outcome_persistence_failed",
