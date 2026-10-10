@@ -86,10 +86,17 @@ class FakeSpotClient:
     base_url = "https://testnet.binance.vision"
 
 
-def _barrier(db, provider=_ready_preflight):
+def _barrier(db, provider=_ready_preflight, *, client=None, service_client=None):
     cache = ContextCache()
     cache.publish(_context())
-    return ExecutionBarrier(cache, db, preflight_provider=provider, exchange_client=FakeSpotClient())
+    client = client or FakeSpotClient()
+    service = None
+    if provider is not None:
+        service = PreflightCheckService(service_client if service_client is not None else client, symbols=["BTCUSDT"])
+        # Controlled test seam: production callers cannot supply a callback to
+        # ExecutionBarrier; tests can deterministically model Preflight outcomes.
+        service.verify_all = provider
+    return ExecutionBarrier(cache, db, preflight_service=service, exchange_client=client)
 
 
 def _pre_submit(_snapshot):
@@ -124,7 +131,7 @@ def test_missing_or_stale_preflight_never_calls_submit():
     no_provider = _barrier(db, provider=None)
     result = no_provider.execute(_intent("CID_NO_PREFLIGHT"), lambda: calls.append("submit"), pre_submit_checks=_pre_submit)
     assert not result.accepted
-    assert result.reason == "mandatory_preflight_provider_missing"
+    assert result.reason == "trusted_preflight_service_missing_or_invalid"
     assert calls == []
 
     stale = dict(_ready_preflight(), checked_at_ms=int(time.time() * 1000) - 10_000)
@@ -323,4 +330,75 @@ def test_mainnet_exchange_client_is_rejected_even_with_green_preflight():
     result = barrier.execute(_intent("CID_MAINNET_BLOCK"), lambda: calls.append("submit"), pre_submit_checks=_pre_submit)
     assert not result.accepted
     assert result.reason == "execution_client_not_pinned_to_spot_testnet"
+    assert calls == []
+
+
+def test_arbitrary_ready_callback_is_not_trusted_and_never_submits():
+    db = FakeDB()
+    cache = ContextCache()
+    cache.publish(_context())
+    calls = []
+    # Legacy arbitrary callback is intentionally ignored, even if it returns a
+    # complete fabricated ready report.
+    barrier = ExecutionBarrier(
+        cache, db, preflight_provider=_ready_preflight,
+        exchange_client=FakeSpotClient(),
+    )
+    result = barrier.execute(
+        _intent("CID_UNTRUSTED_CALLBACK"),
+        lambda: calls.append("submit"),
+        pre_submit_checks=_pre_submit,
+    )
+    assert not result.accepted
+    assert result.reason == "trusted_preflight_service_missing_or_invalid"
+    assert calls == []
+
+
+def test_preflight_service_bound_to_different_client_never_submits():
+    db = FakeDB()
+    execution_client = FakeSpotClient()
+    other_client = FakeSpotClient()
+    barrier = _barrier(
+        db, client=execution_client, service_client=other_client,
+    )
+    calls = []
+    result = barrier.execute(
+        _intent("CID_PREFLIGHT_CLIENT_MISMATCH"),
+        lambda: calls.append("submit"),
+        pre_submit_checks=_pre_submit,
+    )
+    assert not result.accepted
+    assert result.reason == "preflight_execution_client_mismatch"
+    assert calls == []
+
+
+@pytest.mark.parametrize("violation", [
+    "endpoint", "environment", "missing_checks", "future", "unknown", "reconcile",
+])
+def test_preflight_integrity_violations_never_submit(violation):
+    report = _ready_preflight()
+    if violation == "endpoint":
+        client = FakeSpotClient()
+        client.base_url = "https://api.binance.com"
+        barrier = _barrier(FakeDB(), client=client)
+    else:
+        client = None
+        if violation == "environment":
+            report["environment"] = "LIVE"
+        elif violation == "missing_checks":
+            report["checks"].pop(PreflightCheckService.REQUIRED_CHECKS[0])
+        elif violation == "future":
+            report["checked_at_ms"] = int(time.time() * 1000) + 60_000
+        elif violation == "unknown":
+            report["checks"][PreflightCheckService.REQUIRED_CHECKS[0]] = "UNKNOWN"
+        elif violation == "reconcile":
+            report["requires_reconciliation"] = True
+        barrier = _barrier(FakeDB(), provider=lambda: report)
+    calls = []
+    result = barrier.execute(
+        _intent("CID_PREFLIGHT_" + violation.upper()),
+        lambda: calls.append("submit") or {"status": "FILLED", "executedQty": "1"},
+        pre_submit_checks=_pre_submit,
+    )
+    assert not result.accepted
     assert calls == []
