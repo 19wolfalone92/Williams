@@ -1775,6 +1775,7 @@ private class NativeEngine(
         val query = parseSignedParams(params)
         val response = runCatching { JSONObject(body) }.getOrNull()
             ?: throw IllegalStateException("Exchange read used for reconciliation is not valid JSON")
+        var evidenceBody = body
 
         when (path) {
             "/api/v3/order" -> {
@@ -1805,16 +1806,52 @@ private class NativeEngine(
                 val listStatus = response.optString("listOrderStatus").ifBlank {
                     response.optString("listStatusType")
                 }.uppercase(Locale.US)
+
+                // Spot GET /api/v3/orderList normally returns order IDs, not
+                // orderReports. Query every child by exchange orderId before
+                // resolving an ambiguous list creation/cancellation.
+                if (response.optJSONArray("orderReports") == null) {
+                    val orderSummaries = response.optJSONArray("orders")
+                        ?: throw IllegalStateException(
+                            "order-list response lacks both orderReports and orders"
+                        )
+                    if (orderSummaries.length() == 0) {
+                        throw IllegalStateException("order-list query returned no leg identities")
+                    }
+                    val detailedReports = JSONArray()
+                    for (index in 0 until orderSummaries.length()) {
+                        val summary = orderSummaries.optJSONObject(index)
+                            ?: throw IllegalStateException("malformed order-list leg summary")
+                        val orderId = summary.optString("orderId").takeIf { it.isNotBlank() }
+                            ?: throw IllegalStateException("order-list leg has no exchange orderId")
+                        val symbol = summary.optString("symbol").ifBlank {
+                            query["symbol"].orEmpty()
+                        }.uppercase(Locale.US)
+                        if (symbol.isBlank()) {
+                            throw IllegalStateException("order-list leg has no symbol for authoritative lookup")
+                        }
+                        detailedReports.put(
+                            signedRequest(
+                                "GET",
+                                "/api/v3/order",
+                                "symbol=" + symbol + "&orderId=" + orderId
+                            )
+                        )
+                    }
+                    response.put("orderReports", detailedReports)
+                    evidenceBody = response.toString()
+                }
+
                 if (!listClientId.isNullOrBlank()) {
                     auditStore.reconcileExecutionMutationByClientOrderId(
-                        listClientId, listStatus, body
+                        listClientId, listStatus, evidenceBody
                     )
                     auditStore.reconcileExecutionMutationByTargetOrderListClientId(
-                        listClientId, body
+                        listClientId, evidenceBody
                     )
                 }
                 if (!listId.isNullOrBlank()) {
-                    auditStore.reconcileExecutionMutationByTargetOrderListId(listId, body)
+                    auditStore.reconcileExecutionMutationByTargetOrderListId(listId, evidenceBody)
                 }
             }
         }
