@@ -537,6 +537,7 @@ private class NativeEngine(
     )
     private val tradingEventLoop = TradingEventLoop()
     private val executionGate = ExecutionGate()
+    private val exchangeMutationLock = Any()
     private val executionExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "williams-execution-io").apply { isDaemon = true }
     }
@@ -1525,6 +1526,200 @@ private class NativeEngine(
         )
 
     private fun signedRequest(
+        method: String,
+        path: String,
+        params: String
+    ): JSONObject {
+        val normalizedMethod = method.uppercase(Locale.US)
+        if (normalizedMethod == "GET") {
+            return performSignedRequest(normalizedMethod, path, params)
+        }
+        return synchronized(exchangeMutationLock) {
+            authorizeExchangeMutation(normalizedMethod, path, params)
+            val fields = params.split("&").mapNotNull { part ->
+                val splitAt = part.indexOf('=')
+                if (splitAt <= 0) null else part.substring(0, splitAt) to part.substring(splitAt + 1)
+            }.toMap()
+            val symbol = fields["symbol"].orEmpty().uppercase(Locale.US)
+            val side = fields["side"]?.uppercase(Locale.US)
+            val clientOrderId = fields["newClientOrderId"]
+                ?: fields["origClientOrderId"]
+                ?: fields["listClientOrderId"]
+                ?: ""
+            val mutationId = java.util.UUID.randomUUID().toString()
+            // Persist before network I/O; SQLite failures prevent the request.
+            auditStore.beginMutationIntent(
+                intentId = mutationId,
+                method = normalizedMethod,
+                path = path,
+                symbol = symbol,
+                side = side,
+                clientOrderId = clientOrderId.ifBlank { null },
+                requestJson = JSONObject()
+                    .put("params", params)
+                    .put("client_order_id", clientOrderId)
+                    .toString()
+            )
+            try {
+                val response = performSignedRequest(normalizedMethod, path, params)
+                try {
+                    auditStore.finishMutationIntent(
+                        mutationId,
+                        "EXCHANGE_CONFIRMED",
+                        response.toString(),
+                        null
+                    )
+                } catch (persistError: Throwable) {
+                    setReconcileRequired(
+                        "Binance response received but mutation outcome persistence failed: " +
+                            (persistError.message ?: persistError.javaClass.simpleName)
+                    )
+                    throw IllegalStateException(
+                        "Exchange outcome persistence failed; reconciliation required",
+                        persistError
+                    )
+                }
+                response
+            } catch (failure: Throwable) {
+                runCatching {
+                    auditStore.finishMutationIntent(
+                        mutationId,
+                        "UNKNOWN",
+                        null,
+                        failure.message ?: failure.javaClass.simpleName
+                    )
+                }
+                runCatching {
+                    setReconcileRequired(
+                        "Binance mutation outcome is UNKNOWN for " + symbol + ": " +
+                            (failure.message ?: failure.javaClass.simpleName)
+                    )
+                }
+                throw failure
+            }
+        }
+    }
+
+    private fun authorizeExchangeMutation(
+        method: String,
+        path: String,
+        params: String
+    ) {
+        require(method == "POST" || method == "DELETE") {
+            "Unapproved Binance mutation method: " + method
+        }
+        val fields = params.split("&").mapNotNull { part ->
+            val splitAt = part.indexOf('=')
+            if (splitAt <= 0) null else part.substring(0, splitAt) to part.substring(splitAt + 1)
+        }.toMap()
+        val symbol = fields["symbol"].orEmpty().uppercase(Locale.US)
+        require(symbol.isNotBlank()) { "Binance mutation is missing symbol" }
+
+        when {
+            method == "POST" && path == "/api/v3/order" -> {
+                val side = fields["side"].orEmpty().uppercase(Locale.US)
+                val type = fields["type"].orEmpty().uppercase(Locale.US)
+                val clientOrderId = fields["newClientOrderId"].orEmpty()
+                require(clientOrderId.isNotBlank()) {
+                    "Order mutation requires a clientOrderId for recovery"
+                }
+                when (side) {
+                    "BUY" -> {
+                        require(type == "STOP_LOSS") {
+                            "Spot entry must be conditional STOP_LOSS; market substitution is blocked"
+                        }
+                        require(running && !paused && !reconcileRequired && !killLatched) {
+                            "Spot entry blocked by runtime/reconciliation state"
+                        }
+                        require(marketDataFresh() && restAccountReady && historyReady &&
+                            !equityCircuitBreaker.isTripped()) {
+                            "Spot entry blocked: market/account/history/risk readiness failed"
+                        }
+                        require(executionGate.isReserved(symbol)) {
+                            "Spot entry bypassed ExecutionGate reservation"
+                        }
+                        require(stateMachine.state == TradingState.ENTRY_PENDING) {
+                            "Spot entry blocked: FSM is not ENTRY_PENDING"
+                        }
+                        val pending = synchronized(pendingEntries) { pendingEntries[symbol] }
+                        require(pending != null && pending.clientOrderId == clientOrderId &&
+                            pending.signalId.isNotBlank() && pending.signalType.isNotBlank()) {
+                            "Spot entry has no matching persisted Williams PendingSignal"
+                        }
+                        val signalParts = pending.signalId.split(":")
+                        require(signalParts.size >= 4) {
+                            "Spot entry signal lacks symbol/timeframe/type/bar provenance"
+                        }
+                        val signalFrame = signalParts[signalParts.size - 3].lowercase(Locale.US)
+                        val signalBarTime = signalParts.last().toLongOrNull() ?: 0L
+                        val timeframeMs = when (signalFrame) {
+                            "1m" -> 60_000L
+                            "3m" -> 180_000L
+                            "5m" -> 300_000L
+                            "15m" -> 900_000L
+                            "30m" -> 1_800_000L
+                            "1h" -> 3_600_000L
+                            "2h" -> 7_200_000L
+                            "4h" -> 14_400_000L
+                            "6h" -> 21_600_000L
+                            "8h" -> 28_800_000L
+                            "12h" -> 43_200_000L
+                            "1d" -> 86_400_000L
+                            "3d" -> 259_200_000L
+                            "1w" -> 604_800_000L
+                            else -> 0L
+                        }
+                        val signalAge = System.currentTimeMillis() - signalBarTime
+                        require(signalBarTime > 0L && timeframeMs > 0L &&
+                            signalAge >= -5_000L && signalAge <= timeframeMs + 30_000L) {
+                            "Spot entry blocked: Williams signal context is stale or unverifiable"
+                        }
+                    }
+                    "SELL" -> {
+                        require(type in setOf("MARKET", "STOP_LOSS", "LIMIT")) {
+                            "Unapproved Spot SELL order type: " + type
+                        }
+                        // SELL is only exposed to this boundary from explicit
+                        // protection/exit code; unlike BUY it is not blocked by
+                        // RECONCILE_REQUIRED so protective exits can still run.
+                    }
+                    else -> error("Unapproved Binance order side: " + side)
+                }
+            }
+            method == "POST" && path == "/api/v3/orderList/oco" -> {
+                require(fields["side"].orEmpty().equals("SELL", ignoreCase = true)) {
+                    "Only Spot SELL OCO protection is admitted"
+                }
+                require(fields["listClientOrderId"].orEmpty().isNotBlank()) {
+                    "OCO mutation requires listClientOrderId"
+                }
+            }
+            method == "POST" && path == "/api/v3/order/cancelReplace" -> {
+                require(fields["side"].orEmpty().equals("SELL", ignoreCase = true)) {
+                    "Only Spot SELL protection replacement is admitted"
+                }
+                require(fields["cancelOrderId"].orEmpty().isNotBlank() &&
+                    fields["newClientOrderId"].orEmpty().isNotBlank()) {
+                    "Protection replacement requires old and new client/order identifiers"
+                }
+            }
+            method == "DELETE" && path == "/api/v3/order" -> {
+                require(fields["orderId"].orEmpty().isNotBlank() ||
+                    fields["origClientOrderId"].orEmpty().isNotBlank()) {
+                    "Single-order cancellation requires an order identifier"
+                }
+            }
+            method == "DELETE" && path == "/api/v3/orderList" -> {
+                require(fields["orderListId"].orEmpty().isNotBlank() ||
+                    fields["listClientOrderId"].orEmpty().isNotBlank()) {
+                    "OCO cancellation requires a managed order-list identifier"
+                }
+            }
+            else -> error("Unapproved Binance mutation route: " + method + " " + path)
+        }
+    }
+
+    private fun performSignedRequest(
         method: String,
         path: String,
         params: String
