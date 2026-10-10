@@ -287,9 +287,12 @@ internal class FuturesNativeEngine(
             if (exchange != null) {
                 require(exchange.positionRisk().let { rows ->
                     (0 until rows.length()).all { i ->
-                        abs(rows.optJSONObject(i)?.optString("positionAmt")?.toDoubleOrNull() ?: 0.0) < 1e-12
+                        val row = rows.optJSONObject(i) ?: return@all false
+                        val amount = row.optString("positionAmt").toDoubleOrNull()
+                            ?: return@all false
+                        amount.isFinite() && abs(amount) < 1e-12
                     }
-                }) { "Cannot remove Futures credentials while any Futures position is open" }
+                }) { "Cannot remove Futures credentials while any Futures position is open or its state is malformed" }
                 require(exchange.openOrders().length() == 0 && exchange.openAlgoOrders().length() == 0) {
                     "Cannot remove Futures credentials while exchange orders remain open"
                 }
