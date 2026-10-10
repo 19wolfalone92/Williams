@@ -331,7 +331,7 @@ class FuturesRuntime:
             execution_barrier=self.execution_barrier,
             max_open_positions=self.max_open_positions,
             portfolio_risk_limit_pct=self.config.max_total_risk_pct,
-            campaign_risk_limit_pct=min(0.006, max(0.0, float(os.getenv("CAMPAIGN_RISK_LIMIT_PCT", "0.006")))),
+            campaign_risk_limit_pct=min(0.01, max(0.0, float(os.getenv("CAMPAIGN_RISK_LIMIT_PCT", "0.01")))),
         )
         self._lock = threading.RLock()
         self._cycle_lock = threading.RLock()
