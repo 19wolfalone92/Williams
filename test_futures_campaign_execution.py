@@ -202,10 +202,11 @@ class FakeFuturesClient:
 
 def make_context(cache, *, allow_long, allow_short):
     now_ms = int(time.time() * 1000)
+    # TC2 admission intentionally depends only on the H1 decision chart
+    # and H4 higher-timeframe context; D1 must not be required.
     specs = (
         ("1h", allow_long, allow_short, 20_000),
         ("4h", False, False, 40_000),
-        ("1d", False, False, 60_000),
     )
     for interval, interval_long, interval_short, age_ms in specs:
         awake = bool(interval_long or interval_short)
