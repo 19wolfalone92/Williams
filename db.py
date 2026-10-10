@@ -1021,6 +1021,31 @@ class Database:
         if not self._transaction_active:
             self.conn.commit()
 
+    def count_confirmed_stop_exits_since(self, utc_start: str) -> int:
+        """Count durable, finalized campaign closes explicitly tagged as stop exits.
+
+        The caller supplies a UTC SQLite timestamp (YYYY-MM-DD HH:MM:SS).
+        Only CAMPAIGN_CLOSED events count; pending orders, cancellations and
+        unresolved campaigns must never consume or reset this daily stop budget.
+        """
+        start = str(utc_start or "").strip()
+        if len(start) != 19 or start[4] != "-" or start[7] != "-" or start[10] != " ":
+            raise ValueError("utc_start must be YYYY-MM-DD HH:MM:SS")
+        row = self.conn.execute(
+            """
+            SELECT COUNT(*) AS n
+            FROM campaign_events
+            WHERE event = ?
+              AND created_at >= ?
+              AND UPPER(COALESCE(reason, '')) LIKE '%STOP%'
+            """,
+            ("CAMPAIGN_CLOSED", start),
+        ).fetchone()
+        count = int(row["n"])
+        if count < 0:
+            raise RuntimeError("database returned a negative stop-exit count")
+        return count
+
     def campaign_risk_reserved_quote(self):
         # RECONCILE_REQUIRED does not release risk: the exchange may still
         # hold the position/order even when local state is uncertain.
