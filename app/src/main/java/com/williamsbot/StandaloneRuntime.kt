@@ -1530,10 +1530,23 @@ private class NativeEngine(
             TradingState.KILL_SWITCH_LATCHED,
             "kill switch requested"
         )
-        prefs.edit()
-            .putBoolean("kill_latched", true)
-            .putBoolean("auto_run", false)
-            .apply()
+        val killLatchPersisted = runCatching {
+            prefs.edit()
+                .putBoolean("kill_latched", true)
+                .putBoolean("auto_run", false)
+                .putBoolean("paused", true)
+                .commit() &&
+                prefs.getBoolean("kill_latched", false) &&
+                !prefs.getBoolean("auto_run", true) &&
+                prefs.getBoolean("paused", false)
+        }.getOrDefault(false)
+        if (!killLatchPersisted) {
+            reconcileRequired = true
+            runCatching {
+                prefs.edit().putBoolean("reconcile_required", true).commit()
+            }
+            lastError = "KILL_SWITCH_PERSISTENCE_FAILED: latch read-back unverified"
+        }
 
         running = false
         paused = true
@@ -1576,26 +1589,29 @@ private class NativeEngine(
 
         val failedSymbols = errors.map { it.substringBefore(":") }.toSet()
         val forcedState =
-            if (errors.isEmpty() && recoveryOk) {
+            if (errors.isEmpty() && recoveryOk && killLatchPersisted) {
                 stateName()
             } else {
                 reconcileRequired = true
-                prefs.edit()
-                    .putBoolean("reconcile_required", true)
-                    .apply()
+                runCatching {
+                    prefs.edit().putBoolean("reconcile_required", true).commit()
+                }
                 "RECONCILE_REQUIRED"
             }
 
-        lastError =
-            if (errors.isEmpty() && recoveryOk) {
-                "KILL_SWITCH executed; trading remains latched OFF"
-            } else {
+        lastError = when {
+            !killLatchPersisted ->
+                "KILL_SWITCH executed but latch persistence could not be verified"
+            errors.isNotEmpty() || !recoveryOk ->
                 "KILL_SWITCH completed with reconciliation warnings"
-            }
+            else ->
+                "KILL_SWITCH executed; trading remains latched OFF"
+        }
 
         return JSONObject()
             .put("killed", true)
             .put("latched", true)
+            .put("latch_persistence_verified", killLatchPersisted)
             .put("state", forcedState)
             .put(
                 "closed_symbols",
