@@ -49,6 +49,97 @@ def test_core_skips_invalid_protection_reference_if_later_signal_is_valid():
     assert decision.signal.signal_bar_time_ms == 2_000
 
 
+def test_fractal_actionability_uses_confirmation_time_not_old_center_time():
+    core = DigitalWilliamsCore()
+    expires = 100_000
+    fractal = SignalSpec.new(
+        symbol="BTCUSDT",
+        side="BUY",
+        signal_type=SignalType.FRACTAL,
+        role=SignalRole.ENTRY,
+        timeframe="1h",
+        signal_bar_time_ms=100,
+        confirmation_time_ms=300,
+        trigger_price=110.0,
+        protective_reference=95.0,
+        created_at_ms=1_000,
+        expires_at_ms=expires,
+    )
+    reversal = SignalSpec.new(
+        symbol="BTCUSDT",
+        side="BUY",
+        signal_type=SignalType.REVERSAL,
+        role=SignalRole.ENTRY,
+        timeframe="1h",
+        signal_bar_time_ms=200,
+        confirmation_time_ms=250,
+        trigger_price=111.0,
+        protective_reference=96.0,
+        created_at_ms=1_001,
+        expires_at_ms=expires,
+    )
+    selected = core.select_initial([fractal, reversal], now_ms=10_000)
+    assert selected is reversal
+
+
+def test_pending_replacement_uses_actionable_confirmation_chronology():
+    from pending_signal import PendingSignal
+
+    core = DigitalWilliamsCore()
+    old = SignalSpec.new(
+        symbol="BTCUSDT",
+        side="BUY",
+        signal_type=SignalType.FRACTAL,
+        role=SignalRole.ENTRY,
+        timeframe="1h",
+        signal_bar_time_ms=100,
+        confirmation_time_ms=300,
+        trigger_price=110.0,
+        protective_reference=95.0,
+        created_at_ms=1_000,
+        expires_at_ms=100_000,
+    )
+    later_center_but_earlier_confirmation = SignalSpec.new(
+        symbol="BTCUSDT",
+        side="BUY",
+        signal_type=SignalType.REVERSAL,
+        role=SignalRole.ENTRY,
+        timeframe="1h",
+        signal_bar_time_ms=200,
+        confirmation_time_ms=250,
+        trigger_price=111.0,
+        protective_reference=96.0,
+        created_at_ms=1_001,
+        expires_at_ms=100_000,
+    )
+    assert core.replace_pending(
+        PendingSignal.from_spec(old),
+        later_center_but_earlier_confirmation,
+        campaign_id="campaign-1",
+    ) is None
+
+    truly_newer_confirmation = SignalSpec.new(
+        symbol="BTCUSDT",
+        side="BUY",
+        signal_type=SignalType.REVERSAL,
+        role=SignalRole.ENTRY,
+        timeframe="1h",
+        signal_bar_time_ms=150,
+        confirmation_time_ms=400,
+        trigger_price=112.0,
+        protective_reference=96.0,
+        created_at_ms=1_002,
+        expires_at_ms=100_000,
+    )
+    replacement = core.replace_pending(
+        PendingSignal.from_spec(old),
+        truly_newer_confirmation,
+        campaign_id="campaign-1",
+    )
+    assert replacement is not None
+    assert replacement.confirmation_time_ms == 400
+
+
 def test_contract_keeps_protection_during_market_exit_resolution():
     contract = DigitalWilliamsCore().contract()["execution_contract"]["exit"]
     assert "keep exchange-side protection live" in contract
