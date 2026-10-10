@@ -628,32 +628,87 @@ class MultiPositionTrader:
         return "BOT_OCO_EXIT"
 
     def _exit_fee_quote(self, symbol, exit_orders):
-        if not hasattr(self.client, "my_trades"):
-            return 0.0
-        total = 0.0
-        seen = set()
+        """Return quote-valued exit fees only when every executed fill is auditable.
+
+        Raw exchange trades are durably recorded before fee conversion. Missing
+        trade history, trade identity, commission amount, or commission asset is
+        UNKNOWN, never a zero fee. The float return is a legacy compatibility
+        boundary only; the fill ledger retains exact exchange decimal strings.
+        """
+        from decimal import Decimal, InvalidOperation
+
+        symbol = str(symbol or "").upper()
         base_asset = symbol[:-4] if symbol.endswith("USDT") else ""
-        for order in exit_orders or []:
+        trade_reader = getattr(self.client, "my_trades", None)
+        orders = list(exit_orders or [])
+        executed_orders = [
+            order for order in orders
+            if str(order.get("executedQty", "0") or "0") not in {"", "0", "0.0"}
+        ]
+        if executed_orders and not callable(trade_reader):
+            raise RuntimeError(f"{symbol}: exit commission history is unavailable")
+        total = Decimal("0")
+        seen = set()
+        for order in orders:
             order_id = str(order.get("orderId") or "").strip()
             if not order_id or order_id in seen:
                 continue
             seen.add(order_id)
             try:
-                rows = self.client.my_trades(symbol, order_id=order_id, limit=1000)
-            except Exception:
-                continue
-            for row in rows or []:
-                commission = float(row.get("commission", 0) or 0)
-                asset = str(row.get("commissionAsset", "")).upper()
-                if commission <= 0:
-                    continue
-                price = float(row.get("price", 0) or 0)
-                total += commission * self._fee_quote_for_asset(
-                    asset,
-                    base_asset,
-                    trade_price=price,
+                rows = trade_reader(symbol, order_id=order_id, limit=1000) if callable(trade_reader) else []
+            except Exception as exc:
+                raise RuntimeError(
+                    f"{symbol}: cannot reconcile exit commissions for order {order_id}"
+                ) from exc
+            if not rows and str(order.get("executedQty", "0") or "0") not in {"", "0", "0.0"}:
+                raise RuntimeError(
+                    f"{symbol}: order {order_id} has executed quantity but no authoritative trade records"
                 )
-        return total
+            for row in rows or []:
+                try:
+                    if not isinstance(row, dict):
+                        raise ValueError("trade row is not an object")
+                    if str(row.get("symbol", symbol)).upper() != symbol:
+                        raise ValueError("trade symbol mismatch")
+                    if str(row.get("orderId", "")) != order_id:
+                        raise ValueError("trade order ID mismatch")
+                    trade_id = row.get("id")
+                    if trade_id in (None, ""):
+                        raise ValueError("trade ID is missing")
+                    quantity = Decimal(str(row.get("qty", "")))
+                    price = Decimal(str(row.get("price", "")))
+                    commission_value = row.get("commission")
+                    commission_asset_value = row.get("commissionAsset")
+                    if commission_value in (None, "") or commission_asset_value in (None, ""):
+                        raise ValueError("commission amount or asset is unknown")
+                    commission = Decimal(str(commission_value))
+                    asset = str(commission_asset_value).upper()
+                    if (
+                        not quantity.is_finite() or quantity <= 0
+                        or not price.is_finite() or price <= 0
+                        or not commission.is_finite() or commission < 0
+                        or not asset
+                    ):
+                        raise ValueError("invalid trade quantity, price, or commission")
+                    self.db.record_exchange_fill(symbol, row)
+                    if asset in {"USDT", "USDC", "FDUSD", "BUSD"}:
+                        total += commission
+                    elif asset == base_asset:
+                        total += commission * price
+                    elif commission > 0:
+                        quote_rate = Decimal(str(self._fee_quote_for_asset(
+                            asset, base_asset, trade_price=float(price)
+                        )))
+                        if not quote_rate.is_finite() or quote_rate <= 0:
+                            raise ValueError(f"cannot value {asset} commission in quote asset")
+                        total += commission * quote_rate
+                except (InvalidOperation, ValueError, RuntimeError) as exc:
+                    # Keep any fill evidence already persisted, but do not finalize
+                    # the trade while financial data is incomplete or conflicting.
+                    raise RuntimeError(
+                        f"{symbol}: exit fill/commission reconciliation is unresolved: {exc}"
+                    ) from exc
+        return float(total)
 
     def _sell_belongs_to_bot(self, order, all_orders):
         client_id = str(order.get("clientOrderId") or "").strip()
