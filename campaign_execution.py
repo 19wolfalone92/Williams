@@ -126,6 +126,24 @@ class CampaignExecutionService:
             qty = self._floor(market_max, market_step)
         if qty < minimum or qty > maximum or qty < market_min or qty > market_max:
             raise CampaignExecutionError(f"{symbol}: normalized entry quantity violates LOT_SIZE/MARKET_LOT_SIZE")
+        # Binance requires every applicable quantity grid to be satisfied.
+        # Sequential flooring alone is not sufficient when the steps differ.
+        try:
+            qty_d = Decimal(str(qty))
+            lot_step_d = Decimal(str(lot["stepSize"]))
+            market_step_d = Decimal(str(market_lot["stepSize"]))
+        except Exception as exc:
+            raise CampaignExecutionError(f"{symbol}: quantity-step decimal conversion failed") from exc
+        if (
+            not qty_d.is_finite()
+            or not lot_step_d.is_finite()
+            or not market_step_d.is_finite()
+            or qty_d % lot_step_d != 0
+            or qty_d % market_step_d != 0
+        ):
+            raise CampaignExecutionError(
+                f"{symbol}: rounded quantity is not an exact multiple of every applicable lot step"
+            )
         nf = filters.get("NOTIONAL") or filters.get("MIN_NOTIONAL")
         if not isinstance(nf, dict) or "minNotional" not in nf:
             raise CampaignExecutionError(f"{symbol}: NOTIONAL/MIN_NOTIONAL filter unavailable")

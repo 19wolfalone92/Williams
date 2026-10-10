@@ -1,5 +1,7 @@
 import os
 import tempfile
+
+import pytest
 from datetime import datetime, timezone
 
 from campaign_engine import CampaignEngine
@@ -122,6 +124,13 @@ def test_partial_conditional_entry_is_cancelled_and_residual_protected():
         assert order["status"] in {"PARTIALLY_FILLED", "CANCELED"}
         campaign = svc.engine.load_campaign(result["campaign_id"])
         assert campaign.position_qty > 0
+        protected = [
+            o for o in client.open_orders("BTCUSDT")
+            if str(o.get("side", "")).upper() == "SELL"
+            and str(o.get("clientOrderId", "")).startswith(svc.STOP_PREFIX)
+        ]
+        assert len(protected) == 1
+        assert float(protected[0]["origQty"]) == pytest.approx(campaign.position_qty)
 
 
 def test_restart_adopts_pending_campaign_by_client_id():
