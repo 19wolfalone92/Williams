@@ -39,6 +39,44 @@ def _profitunity_window(volume_up, mfi_up):
     return result
 
 
+CANONICAL_WILLIAMS_PARAMETERS = {
+    "jaw": 13,
+    "teeth": 8,
+    "lips": 5,
+    "jaw_shift": 8,
+    "teeth_shift": 5,
+    "lips_shift": 3,
+    "ao_fast": 5,
+    "ao_slow": 34,
+    "ac_period": 5,
+    "fractal_left": 2,
+    "fractal_right": 2,
+    "super_ao_bars": 3,
+}
+
+
+def canonical_williams_parameter_blockers(cfg):
+    """Return explicit blockers when live signal math departs from book constants.
+
+    Research/backtest callers may still explore alternate values. The Futures
+    execution runtime must not silently trade those variants as canonical
+    Williams signals.
+    """
+    blockers = []
+    for name, expected in CANONICAL_WILLIAMS_PARAMETERS.items():
+        raw = cfg.get(name)
+        try:
+            actual = int(raw)
+        except (TypeError, ValueError, OverflowError):
+            blockers.append(f"{name} is missing or non-integral")
+            continue
+        if isinstance(raw, float) and not raw.is_integer():
+            blockers.append(f"{name} must equal canonical value {expected}")
+        elif actual != expected:
+            blockers.append(f"{name}={actual} differs from canonical {expected}")
+    return blockers
+
+
 def calculate_indicators(df, cfg):
     x = df.copy()
     if x.empty:
