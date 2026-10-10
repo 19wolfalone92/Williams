@@ -6,7 +6,7 @@ from contextlib import contextmanager
 
 
 class Database:
-    SCHEMA_VERSION = 7
+    SCHEMA_VERSION = 8
 
     def __init__(self, path=None):
         path = path or os.getenv('WILLIAMS_DB_PATH') or 'data/trader.sqlite3'
@@ -140,7 +140,8 @@ class Database:
             invalidation_level REAL,
             status TEXT NOT NULL,
             reason TEXT,
-            client_order_id TEXT
+            client_order_id TEXT,
+            target_order_id TEXT
         );
         CREATE TABLE IF NOT EXISTS execution_events(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -299,6 +300,12 @@ class Database:
             )
 
     def _migrate_recovery_schema(self):
+        intent_columns = {
+            row['name']
+            for row in self.conn.execute('PRAGMA table_info(execution_intents)').fetchall()
+        }
+        if 'target_order_id' not in intent_columns:
+            self.conn.execute('ALTER TABLE execution_intents ADD COLUMN target_order_id TEXT')
         columns = {
             row['name']
             for row in self.conn.execute('PRAGMA table_info(campaign_fills)').fetchall()
@@ -427,17 +434,20 @@ class Database:
         self.conn.execute(
             '''INSERT INTO execution_intents(
                 intent_id,symbol,side,order_type,purpose,
-                required_context_versions_json,hypothesis_id,invalidation_level,status,reason,client_order_id
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+                required_context_versions_json,hypothesis_id,invalidation_level,status,reason,
+                client_order_id,target_order_id
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(intent_id) DO UPDATE SET
                 status=excluded.status, reason=excluded.reason,
-                client_order_id=COALESCE(NULLIF(excluded.client_order_id,''), execution_intents.client_order_id)''',
+                client_order_id=COALESCE(NULLIF(excluded.client_order_id,''), execution_intents.client_order_id),
+                target_order_id=COALESCE(NULLIF(excluded.target_order_id,''), execution_intents.target_order_id)''',
             (
                 intent.intent_id, intent.symbol, intent.side, intent.order_type,
                 intent.purpose,
                 json.dumps(dict(intent.required_context_versions), sort_keys=True),
                 intent.hypothesis_id, float(intent.invalidation_level or 0.0),
                 status, reason, getattr(intent, 'client_order_id', ''),
+                getattr(intent, 'target_order_id', ''),
             ),
         )
         if not self._transaction_active:
