@@ -1,11 +1,13 @@
 import os
 import tempfile
+import time
 from datetime import datetime, timezone
 
 from campaign_engine import CampaignEngine
 from campaign_execution import CampaignExecutionService
 from campaign_model import CampaignState, SignalRole, SignalSpec, SignalType
 from execution_barrier import ExecutionBarrier
+from preflight_gate import PreflightCheckService
 from mock_exchange import MockExchange
 from db import Database
 
@@ -46,8 +48,26 @@ def signal(kind=SignalType.REVERSAL, role=SignalRole.ENTRY, bar=100, trigger=101
     )
 
 
+def ready_preflight():
+    return {
+        "ready": True,
+        "environment": "TESTNET",
+        "product": "SPOT",
+        "checked_at_ms": int(time.time() * 1000),
+        "checks": {name: "PASS" for name in PreflightCheckService.REQUIRED_CHECKS},
+        "requires_reconciliation": False,
+    }
+
+
 def service(db, client):
-    barrier = ExecutionBarrier(FakeCache(), db)
+    # This service fixture uses MockExchange only; it never opens a network connection.
+    client.testnet = True
+    client.base_url = "https://testnet.binance.vision"
+    barrier = ExecutionBarrier(
+        FakeCache(), db,
+        preflight_provider=ready_preflight,
+        exchange_client=client,
+    )
     return CampaignExecutionService(client, db, barrier)
 
 
