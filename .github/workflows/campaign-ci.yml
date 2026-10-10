@@ -1,4 +1,5 @@
 name: Williams Campaign CI
+# Task 006 recovery acceptance: re-run campaign and Android checks on the final audit head.
 
 on:
   push:

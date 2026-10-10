@@ -1,4 +1,5 @@
 name: Python backend tests
+# Task 006 recovery acceptance: this workflow is intentionally retriggered on the final audit head.
 
 on:
   push:

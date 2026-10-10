@@ -1,4 +1,5 @@
 name: Build Android APK
+# Task 006 recovery acceptance: build and verify artifacts for the final audit head.
 
 on:
   push:

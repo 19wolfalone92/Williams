@@ -76,3 +76,65 @@ At baseline the foreground service and loopback API existed, but their presence 
 No physical Android device was available through this audit session, and the Android Gradle build/unit tests were not run here. Therefore this report does **not** claim a completed APK validation, hardware soak test, successful end-to-end trading runtime, golden-vector parity, or readiness for real trading. A build/test success is necessary but does not close the device acceptance matrix above.
 
 One high-risk scenario remains to prove under controlled Spot Testnet testing: if an order is already accepted by the exchange and the user stream disconnects before its fill event is consumed, the newly tightened readiness gate blocks new execution, but acceptance still requires demonstrating reliable reconciliation/protection of that in-flight order after the stream returns. Do not enable live trading until this and all recovery/device tests pass.
+
+
+---
+
+## Follow-up — durable execution-intent recovery, exact-head gates, and remaining acceptance blockers
+
+### Scope and safety
+This follow-up continues only on `audit/williams-2.1-task-006-android-runtime` and PR #46. It does not modify `main`, merge the PR, enable Mainnet, or send exchange mutations. Recovery tests use a local SQLite database and a fake exchange only.
+
+The recovery implementation source immediately before this audit/CI-trigger commit is `eaaf4e6d7d79567f2ab302070497d25764e9e206`. The audit/CI-trigger commit adds this report and comments to workflow files to force all required checks to run again on one exact candidate SHA. **Do not use the earlier CI results below as acceptance evidence for the final candidate SHA; use only workflow runs whose `head_sha` exactly equals the PR's final head.**
+
+### Recovery resolver implementation
+- Added `execution_recovery.py`, a read-only resolver. It never invokes order mutations.
+- Supported mutation kinds: normal order, emergency exit, OCO create, single-order cancel, OCO cancel, and cancel-replace.
+- Durable execution intents now store mutation kind and target exchange identity fields: order ID/client order ID, order-list ID/list client order ID, and replacement client order ID.
+- SQLite schema migration adds those fields and an atomic `resolve_execution_intent` operation. Order snapshots, terminal intent status, and `EXCHANGE_RECONCILED` evidence are committed in one transaction.
+- `SUBMIT_ATTEMPT_STARTED` is durably recorded before invoking the mutation callable. If that marker exists and exact exchange evidence is missing, the intent remains unresolved and the global barrier stays fail-closed.
+- A pre-submit intent can be cleared only when the marker is absent and Binance explicitly returns the exact-ID not-found code for a supported create operation. A missing replacement order in cancel-replace is not treated as proof of rejection; it remains blocked.
+- The resolver is invoked before portfolio/campaign recovery. The stale-symbol repair path now refuses to clear a symbol barrier while an execution intent for that symbol remains unresolved.
+
+### Recovery test matrix
+The new offline tests cover:
+- lost POST response with exact `clientOrderId` lookup and no second mutation;
+- partial fill persistence as exchange authority;
+- unknown order outcome remains blocked;
+- OCO create requires an exact list identity and both confirmed legs;
+- cancel uses the target exchange order ID, not the cancel-intent ID;
+- cancel-replace requires both the old order and replacement order;
+- unknown/missing replacement remains blocked;
+- OCO cancel requires exact list identity and confirmed leg states;
+- local SQLite write failure rolls back resolution and preserves the unresolved intent;
+- explicit exact-ID not-found can resolve a pre-submit crash only when the durable submit-attempt marker is absent;
+- the same reconciled intent cannot be replayed;
+- stale per-symbol reconciliation state cannot be cleared while an unresolved intent exists;
+- AST inventory asserts known production Binance mutation call sites in `trader.py`, `campaign_execution.py`, and `portfolio_trader.py` are enclosed by the barrier/submission helper;
+- synthetic secrets are exercised through the local ASGI HTTP error response and diagnostic/SQLite redaction tests.
+
+### Production mutation-path inventory
+| Call site | Barrier path | Durable intent identity | Recovery behavior | Evidence/tests |
+|---|---|---|---|---|
+| `Trader.market_buy` → `BinanceSpotClient.order` | `ExecutionBarrier.execute` | client order ID + write-ahead events | exact order lookup; missing/ambiguous after submit stays blocked | execution-barrier durability, lost-POST and call-site inventory tests |
+| `Trader.place_oco` → `create_oco_sell` | `ExecutionBarrier.execute` | OCO list client ID | exact list lookup + both leg order lookups | OCO resolver tests |
+| `CampaignExecutionService` entry/exit/protection/trail | `_submit` → barrier | order CID; cancel target ID; cancel-replace old ID + replacement CID | order lookup; cancel target lookup; both cancel-replace legs required | recovery resolver tests |
+| `MultiPositionTrader` entry/manual exit/emergency exit/OCO create | `_submit_order` → barrier | order CID; emergency exit CID; OCO list CID | exact order/list lookup; no automatic replay | resolver and lifecycle tests |
+| `MultiPositionTrader.manual_sell` OCO cancel | `_submit_order` → barrier | target order-list ID and/or list client ID | exact list + leg lookup; never reissues cancel | OCO-cancel resolver test |
+| `BinanceSpotClient.cancel_open_orders` | No production caller found in the inspected call-site inventory | No intent supplied by an external caller | Treat any future use as a blocker until wrapped by the barrier or removed | static inventory; no direct production caller identified |
+
+This inventory is code/static evidence, not a proof of every runtime interleaving. The resolver intentionally leaves unsupported mutation kinds or incomplete identity/evidence blocked.
+
+### Exact-head validation and APK evidence
+The earlier candidate `62cf3e9db785d72a7911cba36887941abdfb3570` had Python backend CI `182 passed, 4 warnings` and Campaign CI Python `193 passed, 4 warnings`. Those results are historical only because a later fail-closed stale-symbol-barrier fix and additional test were committed afterward.
+
+The final audit/CI-trigger commit changes this document and workflow comments only; it forces Python backend CI, Campaign CI, and the Android APK workflow to execute against the same final head. Record acceptance results only from those exact-head runs. APK version metadata, checksums, and signature status are **NOT VERIFIED for the final candidate until its own Build Android APK workflow finishes and its artifacts are downloaded and inspected**. The expected release output is intentionally named `app-release-unsigned.apk`; do not describe it as signed. The debug APK is accepted only if the workflow's `apksigner verify` and certificate-digest comparison both succeed.
+
+### Remaining blockers — do not accept
+- Full physical-device execution has not been performed. Android logs, backup contents on a device, power/Doze/background behavior, process-kill/restart behavior, and hardware recovery remain **NOT VERIFIED**.
+- WebSocket loss/freshness and user-stream REST catch-up have unit/integration coverage, but a single end-to-end test that joins lost WebSocket → SQLite/FSM → campaign/order/protection recovery after process restart is not yet proven.
+- Unknown cancel-replace outcomes where one leg is absent deliberately remain blocked; there is no automatic retry.
+- A complete runtime proof that every conceivable external/plugin caller is unable to reach the low-level Binance mutation client without the barrier is not established by static inventory alone.
+- Do not enable live trading or remove any fail-closed guard based on CI alone.
+
+**Acceptance status: BLOCKED — NOT ACCEPTED.** Keep PR #46 open as Draft, keep `main` unchanged, and do not enable Mainnet or send real orders.
