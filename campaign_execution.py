@@ -550,7 +550,12 @@ class CampaignExecutionService:
                             f"{symbol}: partial conditional BUY cannot be safely cancelled"
                         )
                     try:
-                        cancel(symbol, order_id=order.get("orderId"))
+                        self._execute_cancel(
+                            campaign,
+                            int(order.get("orderId")),
+                            "CAMPAIGN_ENTRY_CANCEL",
+                            target_client_id=client_id,
+                        )
                     except Exception as exc:
                         self.engine.mark_reconcile_required(
                             campaign,
@@ -1261,29 +1266,75 @@ class CampaignExecutionService:
             "quantity": qty,
         }
 
-    def _execute_cancel(self, campaign, order_id: int, purpose: str) -> dict[str, Any]:
+    def _execute_cancel(
+        self,
+        campaign,
+        order_id: int,
+        purpose: str,
+        *,
+        target_client_id: str = "",
+    ) -> dict[str, Any]:
+        client_id = stable_client_order_id(
+            f"{self.STOP_PREFIX}CANCEL_", campaign.campaign_id,
+            str(order_id), purpose,
+        )
         intent = OrderIntent.new(
             campaign.symbol,
             "SELL",
             "CANCEL",
             required_context_versions={},
-            client_order_id=stable_client_order_id(
-                f"{self.STOP_PREFIX}CANCEL_", campaign.campaign_id,
-                str(order_id), purpose,
-            ),
+            client_order_id=client_id,
             purpose=purpose,
             campaign_id=campaign.campaign_id,
             signal_id=campaign.current_signal_id,
             operation_kind="CANCEL",
             related_order_id=str(order_id),
         )
+
+        def _check_cancel_ownership(_snapshot):
+            current_campaign = self.engine.load_campaign(campaign.campaign_id)
+            if current_campaign is None or str(current_campaign.symbol).upper() != str(campaign.symbol).upper():
+                raise CampaignExecutionError("cancel rejected: campaign owner is unavailable")
+            order_row = self.db.conn.execute(
+                "SELECT campaign_id,symbol,client_order_id,status FROM campaign_orders "
+                "WHERE order_id=? AND symbol=? ORDER BY id DESC LIMIT 1",
+                (str(order_id), str(campaign.symbol).upper()),
+            ).fetchone()
+            if order_row is not None:
+                if str(order_row["campaign_id"]) != str(campaign.campaign_id):
+                    raise CampaignExecutionError("cancel rejected: order belongs to another campaign")
+                stored_cid = str(order_row["client_order_id"] or "")
+                if target_client_id and stored_cid != str(target_client_id):
+                    raise CampaignExecutionError("cancel rejected: target clientOrderId mismatch")
+                if stored_cid and not (
+                    stored_cid.startswith(self.STOP_PREFIX)
+                    or stored_cid.startswith(self.ENTRY_PREFIX)
+                ):
+                    raise CampaignExecutionError("cancel rejected: target order is not Williams-managed")
+            else:
+                tags = current_campaign.tags
+                known_pending = (
+                    target_client_id
+                    and str(tags.get("pending_order_client_id", "")) == str(target_client_id)
+                )
+                known_protection = str(tags.get("protective_order_id", "")) == str(order_id)
+                if not (known_pending or known_protection):
+                    raise CampaignExecutionError(
+                        "cancel rejected: target order ownership cannot be proven from durable campaign state"
+                    )
+                if target_client_id and not (
+                    str(target_client_id).startswith(self.ENTRY_PREFIX)
+                    or str(target_client_id).startswith(self.STOP_PREFIX)
+                ):
+                    raise CampaignExecutionError("cancel rejected: unmanaged clientOrderId")
+
         return self._submit(
             intent,
             lambda: self.client.cancel_order(
                 campaign.symbol,
                 order_id=order_id,
             ),
-            lambda _snapshot: None,
+            _check_cancel_ownership,
         )
 
     def exit_market(
