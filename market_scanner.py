@@ -7,9 +7,7 @@ from typing import Dict, List, Optional, Tuple
 import pandas as pd
 
 from data import fetch_klines
-from strategy import (\
-    calculate_indicators, config_from_env, canonical_williams_parameter_blockers,\
-)
+from strategy import (\n    calculate_indicators,\n    config_from_env,\n    canonical_williams_parameter_blockers,\n)
 from wave_engine import DIRECTION_NEUTRAL, MultiTimeframeWaveEngine
 from feature_store import FeatureStore, build_market_feature_vector
 from ai_shadow import ShadowDecisionEngine, journal_shadow_decision
