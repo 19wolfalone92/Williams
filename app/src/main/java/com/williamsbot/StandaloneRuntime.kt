@@ -2628,18 +2628,21 @@ private class NativeEngine(
             ?: error("ENTRY_REVALIDATION_UNAVAILABLE: no persisted pending signal")
         val nowMs = System.currentTimeMillis()
         val frameMs = frameSeconds(WilliamsTimeframeContract.CANONICAL_DECISION) * 1000L
-        require(WilliamsTimeframeContract.canCreateCanonicalSignal(intent.signalTimeframe)) {
-            "ENTRY_TIMEFRAME_BLOCKED: missing/non-H1 persisted timeframe"
-        }
-        require(intent.symbol == symbol && intent.signalId.isNotBlank() && intent.campaignId.isNotBlank()) {
-            "ENTRY_PROVENANCE_BLOCKED: signal/campaign/symbol mismatch"
-        }
-        require(intent.signalBarTimeMs > 0L &&
-            intent.signalConfirmationTimeMs >= intent.signalBarTimeMs + frameMs &&
-            intent.signalConfirmationTimeMs <= nowMs &&
-            intent.signalExpiresAtMs > nowMs &&
-            intent.triggerPrice > 0.0 && intent.invalidationPrice > 0.0) {
-            "ENTRY_PROVENANCE_BLOCKED: missing, future-dated, or expired signal"
+        val provenanceBlocker = WilliamsTimeframeContract.entryProvenanceBlocker(
+            timeframe = intent.signalTimeframe,
+            signalBarTimeMs = intent.signalBarTimeMs,
+            confirmationTimeMs = intent.signalConfirmationTimeMs,
+            expiresAtMs = intent.signalExpiresAtMs,
+            nowMs = nowMs,
+            symbolMatches = intent.symbol == symbol,
+            signalIdPresent = intent.signalId.isNotBlank(),
+            campaignIdPresent = intent.campaignId.isNotBlank(),
+            triggerPrice = intent.triggerPrice,
+            invalidationPrice = intent.invalidationPrice
+        )
+        require(provenanceBlocker == null) {
+            (provenanceBlocker ?: "ENTRY_PROVENANCE_BLOCKED") +
+                ": missing, non-H1, future-dated, or expired signal"
         }
         require(marketDataFresh()) { "ENTRY_MARKET_DATA_STALE" }
         val history = fetchCandles(symbol, WilliamsTimeframeContract.CANONICAL_DECISION, 151)
