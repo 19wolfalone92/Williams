@@ -268,3 +268,10 @@ The Python signal extractor required the third consecutive same-colour AO bar to
 Although initial signal selection treated `now >= expires_at_ms` as expired, the scanner and last-mile Python entry/add-on methods still used strict `<`/ `>=` comparisons. A signal at the exact expiry millisecond could therefore remain in scanner output and pass the last-mile expiry check if called directly or during a timing race.
 
 **Correction:** scanner candidates require `expires_at_ms > now`; both initial-entry and add-on execution checks reject `expires_at_ms <= now`; runtime add-on selection uses the same boundary. Added LONG/SHORT regression tests that set the initial signal expiry exactly equal to the current mocked time and assert no conditional order is submitted.
+
+
+### 33. Missing expiry was still treated as non-expiring in several live-chain gates — corrected
+
+The canonical `PendingSignal` treated zero/negative expiry as invalid, but the Futures selector, scanner and last-mile entry/add-on methods still used truthy checks such as `if expires_at_ms and expires_at_ms <= now`. A malformed/restored signal with `expires_at_ms=0` could bypass those checks, be armed on Binance, and persist with no automatic expiry.
+
+**Correction:** signal selection requires a positive expiry strictly later than now; scanner output excludes missing-expiry signals; initial-entry and add-on execution refuse missing, zero, negative or expired expiry before any exchange mutation. Test signal factories now supply explicit future expiry, and regression tests cover missing-expiry rejection for both LONG and SHORT and both initial/add-on entry paths.
