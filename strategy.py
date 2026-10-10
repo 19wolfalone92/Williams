@@ -77,18 +77,56 @@ def canonical_williams_parameter_blockers(cfg):
     return blockers
 
 
+CANONICAL_WILLIAMS_ENV_KEYS = {
+    "jaw": "ALLIGATOR_JAW",
+    "teeth": "ALLIGATOR_TEETH",
+    "lips": "ALLIGATOR_LIPS",
+    "jaw_shift": "JAW_SHIFT",
+    "teeth_shift": "TEETH_SHIFT",
+    "lips_shift": "LIPS_SHIFT",
+    "ao_fast": "AO_FAST",
+    "ao_slow": "AO_SLOW",
+    "ac_period": "AC_PERIOD",
+    "fractal_left": "FRACTAL_LEFT",
+    "fractal_right": "FRACTAL_RIGHT",
+    "super_ao_bars": "SUPER_AO_BARS",
+}
+
+
+def canonical_williams_environment_blockers(env=os.environ):
+    """Inspect raw live environment safely; malformed overrides are blockers."""
+    blockers = []
+    for name, expected in CANONICAL_WILLIAMS_PARAMETERS.items():
+        key = CANONICAL_WILLIAMS_ENV_KEYS[name]
+        raw = env.get(key, str(expected))
+        try:
+            actual = int(raw)
+        except (TypeError, ValueError, OverflowError):
+            blockers.append(f"{key} is not an integral canonical value")
+            continue
+        if str(raw).strip() not in {str(actual), f"+{actual}"} or actual != expected:
+            blockers.append(f"{key}={raw!r} differs from canonical {expected}")
+    return blockers
+
+
 def canonical_live_config_from_env(env=os.environ):
-    """Use book constants for live calculations while preserving explicit overlays.
+    """Use canonical indicator math for live management even if overrides are bad.
 
-    The caller separately checks the original env config and blocks new entries
-    when canonical indicator constants were overridden. Existing-position
-    management still calculates the canonical indicator series rather than
-    accidentally managing a live position with research parameters.
+    Engineering overlays are preserved only when valid. The caller separately
+    checks raw canonical parameters and blocks new entries on any drift.
     """
-    cfg = config_from_env(env)
-    cfg.update(CANONICAL_WILLIAMS_PARAMETERS)
+    cfg = config_from_env({})
+    raw_spread = env.get("MIN_ALLIGATOR_SPREAD_PCT", "0.001")
+    try:
+        spread = float(raw_spread)
+        if math.isfinite(spread) and spread >= 0:
+            cfg["min_alligator_spread_pct"] = spread
+    except (TypeError, ValueError, OverflowError):
+        pass
+    cfg["allow_countertrend_wise_man"] = (
+        str(env.get("ALLOW_COUNTERTREND_WISE_MAN", "false")).lower() == "true"
+    )
     return cfg
-
 
 def calculate_indicators(df, cfg):
     x = df.copy()
