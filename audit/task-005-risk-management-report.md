@@ -104,3 +104,8 @@ Exact-head checks on `2125caa9646ad6dec59daba5208bdc4985f67ab4` completed with f
 Corrective changes now align the release gate and example environment with the actual fail-closed contract: max one active campaign, entry risk <=0.25%, aggregate risk <=0.60%, daily loss <=1.00%. Gradle wrapper and CI setup are moved to 8.14.6 to address the explicit lint diagnostic. These changes require fresh exact-head CI; no prior run is evidence for the new SHA.
 
 Fee-adjusted fill accounting, third-asset fee conversion, idempotent per-fill ledgering, SQLite fault injection, and comprehensive UTC-boundary restart tests are still under audit. Status remains IN PROGRESS — NOT APPROVED.
+
+
+### Follow-up finding on SHA `952a73bc557f446cdf2272e9e370013dd366b25f`
+
+The Python backend workflow failed in the release gate at `trading_config.py` because a second legacy assertion still expected `min(0.005)`, despite the current hard cap being 0.0025. This is another stale gate assertion, not a runtime test failure. The assertion has been corrected to 0.0025 and an explicit 0.006 aggregate-cap assertion added. New exact-head CI is required.

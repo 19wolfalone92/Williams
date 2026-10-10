@@ -44,8 +44,9 @@ def main() -> None:
     must(cfg, 'MAX_OPEN_POSITIONS", 1', "trading_config.py")
     must(cfg, '{"ALL", "AUTO", "*"}', "trading_config.py")
     must(cfg, 'risk_key = "MAX_RISK_PER_TRADE_PCT"', "trading_config.py")
-    must(cfg, 'min(0.005', "trading_config.py")
+    must(cfg, 'min(0.0025', "trading_config.py")
     must(cfg, 'min(0.01', "trading_config.py")
+    must(cfg, 'min(0.006', "trading_config.py")
 
     scanner = read("market_scanner.py")
     for needle in (
