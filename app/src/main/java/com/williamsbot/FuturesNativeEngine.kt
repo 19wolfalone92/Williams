@@ -71,8 +71,10 @@ internal fun hasIncreasingWilliamsAngulation(
     if (side !in setOf("LONG", "SHORT")) return false
     val start = max(0, index - max(3, window) + 1)
     if (index - start + 1 < 3) return false
-    val distances = (start..index).map { i ->
+    for (i in start..index) {
         if (!jaw[i].isFinite() || !lows[i].isFinite() || !highs[i].isFinite()) return false
+    }
+    val distances = (start..index).map { i ->
         if (side == "LONG") max(0.0, jaw[i] - lows[i]) else max(0.0, highs[i] - jaw[i])
     }
     if (distances.last() - distances.first() <= 0.0) return false
