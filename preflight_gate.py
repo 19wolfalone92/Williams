@@ -50,10 +50,13 @@ class PreflightCheckService:
         self.client = client
         self.symbols = [str(x).upper() for x in (symbols or []) if str(x).strip()]
         self.max_open_positions = int(max_open_positions)
-        self.max_offset_ms = int(
-            max_offset_ms if max_offset_ms is not None
-            else os.getenv("LIVE_MAX_TIME_OFFSET_MS", "1000")
-        )
+        # No approved clock-offset budget is defined in the repository contract.
+        # An explicitly supplied constructor value or deployment setting is required;
+        # absence must remain UNKNOWN rather than silently defaulting to 1000 ms.
+        configured_offset = max_offset_ms
+        if configured_offset is None:
+            configured_offset = os.getenv("LIVE_MAX_TIME_OFFSET_MS")
+        self.max_offset_ms = None if configured_offset in (None, "") else int(configured_offset)
 
     @staticmethod
     def verify_api_permissions(restrictions_data):
@@ -144,10 +147,15 @@ class PreflightCheckService:
             return False
         if known:
             report.requires_reconciliation = True
-            if allow_known_orders:
-                report.passed("open_orders", known_williams_orders=len(known), reconciled=True)
-                return True
-            report.fail("open_orders", "known Williams orders require reconciliation", count=len(known))
+            # A boolean caller flag is not evidence that exchange/local state was
+            # reconciled. Never mark this check PASS without durable, current,
+            # generation-bound reconciliation evidence from the recovery service.
+            report.fail(
+                "open_orders",
+                "known Williams orders require verified durable reconciliation",
+                count=len(known),
+                caller_override_ignored=bool(allow_known_orders),
+            )
             return False
         report.passed("open_orders")
         return True
@@ -202,6 +210,17 @@ class PreflightCheckService:
             offset = int(getattr(self.client, "time_offset_ms", 0))
             if not isinstance(server, dict) or "serverTime" not in server:
                 report.fail("server_time", "server time response is invalid")
+                return report.as_dict()
+            if self.max_offset_ms is None:
+                # A synchronized clock alone is not proof that skew is within an
+                # approved execution budget. Leave the check UNKNOWN and block.
+                report.details["server_time"] = {
+                    "reason": "clock_offset_budget_unapproved",
+                    "offset_ms": offset,
+                }
+                return report.as_dict()
+            if self.max_offset_ms < 0:
+                report.fail("server_time", "clock offset budget is invalid")
                 return report.as_dict()
             if abs(offset) > self.max_offset_ms:
                 report.fail("server_time", "clock offset exceeds safety limit",
