@@ -67,6 +67,9 @@ class FakeClient:
             and (symbol is None or str(x.get("symbol", "")).upper() == symbol.upper())
         ]
 
+    def ticker_price(self, symbol):
+        return {"price": {"SOLUSDT": "200", "ETHUSDT": "100", "BTCUSDT": "100"}.get(symbol.upper(), "100")}
+
     def open_order_lists(self, symbol=None):
         rows = list(self.open_lists)
         if symbol:
@@ -123,7 +126,7 @@ class FakeClient:
             "listStatusType": "EXEC_STARTED",
             "listOrderStatus": "EXECUTING",
         })
-        return {
+        response = {
             "orderListId": order_list_id,
             "listClientOrderId": list_client_order_id,
             "orderReports": [
@@ -153,6 +156,12 @@ class FakeClient:
                 },
             ],
         }
+        # Make a successful OCO response visible through subsequent authoritative
+        # open-order reads, as it would be on Binance after accepting the list.
+        self.orders_by_symbol.setdefault(symbol.upper(), []).extend(
+            response["orderReports"]
+        )
+        return response
 
     @staticmethod
     def decimal_floor(value, step):
