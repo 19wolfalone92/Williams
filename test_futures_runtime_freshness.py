@@ -179,3 +179,23 @@ def test_loss_guard_fails_closed_on_malformed_close_ledger(rows):
     )
     assert not ok
     assert "blocked" in reason
+
+
+def test_database_returns_only_finalized_campaign_close_events():
+    from db import Database
+
+    db = Database(":memory:")
+    try:
+        db.log_campaign_event(
+            "campaign-a", "CAMPAIGN_CLOSED", reason="STOP_LOSS",
+            payload={"realized_pnl_quote_net_known_fees": -2.0},
+        )
+        db.log_campaign_event(
+            "campaign-b", "EXIT_FILLED", reason="STOP_LOSS",
+            payload={"realized_pnl_quote_net_known_fees": -1.0},
+        )
+        rows = db.recent_campaign_closes()
+        assert len(rows) == 1
+        assert rows[0]["reason"] == "STOP_LOSS"
+    finally:
+        db.conn.close()
