@@ -37,6 +37,7 @@ class FakeCandidate:
     htf_confirmed: bool
     setup_state: str
     reason: str
+    direction: str = ""
 
 
 @dataclass
@@ -269,3 +270,33 @@ if __name__ == "__main__":
     main()
     test_portfolio_risk_caps_total_at_one_percent()
     test_portfolio_respects_existing_risk()
+
+
+def test_futures_candidate_without_explicit_direction_is_blocked():
+    controller = make_controller()
+    controller.client.is_usdm_futures = True
+    candidate = FakeCandidate(
+        symbol="BTCUSDT", score=99.0, signal=True, setup_score=100.0,
+        signal_strength=1.0, breakout_distance_pct=0.1, risk_pct=1.0,
+        risk_reward=2.0, atr_pct=0.005, spread_pct=0.001,
+        htf_confirmed=True, setup_state="STRICT_SIGNAL",
+        reason="direction deliberately omitted",
+    )
+    selections = controller._analyse_candidates([candidate])
+    assert selections == []
+
+
+def test_futures_candidate_preserves_explicit_short_direction():
+    controller = make_controller()
+    controller.client.is_usdm_futures = True
+    candidate = FakeCandidate(
+        symbol="BTCUSDT", score=99.0, signal=True, setup_score=100.0,
+        signal_strength=1.0, breakout_distance_pct=0.1, risk_pct=1.0,
+        risk_reward=2.0, atr_pct=0.005, spread_pct=0.001,
+        htf_confirmed=True, setup_state="STRICT_SIGNAL",
+        reason="valid short signal", direction="SHORT",
+    )
+    selections = controller._analyse_candidates([candidate])
+    assert len(selections) == 1
+    assert selections[0].risk.side == "SHORT"
+    assert selections[0].action == "SHORT_ALLOWED"
