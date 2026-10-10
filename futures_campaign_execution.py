@@ -544,6 +544,15 @@ class FuturesCampaignExecutionService:
                 f"{signal.symbol}: no current MarketContext for {operative}"
             )
         versions.setdefault(operative, int(ctx.version))
+        if signal.signal_type == SignalType.REVERSAL:
+            # WM1 admission may precede H1/H4 directional alignment, so its
+            # separate D1 macro veto must be a versioned execution dependency.
+            macro = snapshot.context(signal.symbol, "1d")
+            if macro is None:
+                raise FuturesCampaignExecutionError(
+                    f"{signal.symbol}: WM1 requires current D1 macro context"
+                )
+            versions.setdefault("1d", int(macro.version))
         for interval, version in list(versions.items()):
             if snapshot.context(signal.symbol, interval) is None:
                 raise FuturesCampaignExecutionError(
