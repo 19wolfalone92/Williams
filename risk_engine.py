@@ -80,8 +80,8 @@ class RiskEngine:
                 raise ValueError(f"{name} must be finite")
         if parsed["balance_quote"] <= 0:
             raise ValueError("balance_quote must be positive")
-        if not 0 <= parsed["risk_per_trade_pct"] <= 0.05:
-            raise ValueError("risk_per_trade_pct must be in [0, 0.05]")
+        if not 0 <= parsed["risk_per_trade_pct"] <= 0.01:
+            raise ValueError("risk_per_trade_pct must be in [0, 0.01]")
         if not 0 < parsed["max_position_fraction"] <= 1:
             raise ValueError("max_position_fraction must be in (0, 1]")
         if not 0 <= parsed["max_daily_loss_pct"] <= 1:
@@ -224,8 +224,8 @@ class RiskEngine:
         # protective stop plus bounded fee/slippage reserve.
         if effective_risk_pct <= 0:
             return self._blocked(symbol, side, entry, "risk allocation is zero")
-        if effective_risk_pct > 0.05:
-            return self._blocked(symbol, side, entry, "risk allocation exceeds the hard 5% per-trade cap")
+        if effective_risk_pct > 0.01:
+            return self._blocked(symbol, side, entry, "risk allocation exceeds the hard 1% per-trade cap")
         risk_quote = self.balance * effective_risk_pct
         effective_loss_fraction = (
             stop_pct
