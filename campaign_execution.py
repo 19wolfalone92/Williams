@@ -901,7 +901,10 @@ class CampaignExecutionService:
                             self.db.conn.commit()
 
                         self.db.state_delete(f"entry_client_order_id:{symbol}")
-                        self.db.state_set(f"position_state:{symbol}", "OPEN")
+                        self.db.state_set(
+                            f"position_state:{symbol}",
+                            "RECONCILE_REQUIRED" if campaign.state == CampaignState.RECONCILE_REQUIRED else "OPEN",
+                        )
                         campaign.tags.pop("pending_order_id", None)
                         self.db.save_campaign(campaign)
                         results.append({
@@ -1009,13 +1012,16 @@ class CampaignExecutionService:
                         )
 
                     self.db.state_delete(f"entry_client_order_id:{symbol}")
-                    self.db.state_set(f"position_state:{symbol}", "OPEN")
+                    self.db.state_set(
+                        f"position_state:{symbol}",
+                        "RECONCILE_REQUIRED" if campaign.state == CampaignState.RECONCILE_REQUIRED else "OPEN",
+                    )
                     campaign.tags.pop("pending_order_id", None)
                     self.db.save_campaign(campaign)
                     results.append({
                         "symbol": symbol,
                         "campaign_id": campaign.campaign_id,
-                        "state": campaign.state.value,
+                        "state": "RECONCILE_REQUIRED" if campaign.state == CampaignState.RECONCILE_REQUIRED else "OPEN",
                         "filled_quantity": executed,
                         "protective_quantity": protected_qty,
                         "unprotected_exposure_qty": protection_gap,

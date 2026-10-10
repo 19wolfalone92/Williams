@@ -119,7 +119,7 @@ def test_partial_conditional_entry_is_cancelled_and_residual_protected():
         )
         client.set_price("BTCUSDT", 101.5)
         recovered = svc.reconcile_pending_entries()
-        assert recovered[0]["state"] == "OPEN"
+        assert recovered[0]["state"] == "RECONCILE_REQUIRED"
         order = client.get_order("BTCUSDT", orig_client_order_id=result["client_order_id"])
         assert order["status"] in {"PARTIALLY_FILLED", "CANCELED"}
         campaign = svc.engine.load_campaign(result["campaign_id"])
@@ -254,12 +254,12 @@ def test_third_asset_commission_uses_fill_minute_conversion():
             signal(trigger=101.0), equity_quote=10_000, candidate_risk_pct=0.004
         )
         client.set_price("BTCUSDT", 101.5)
-        svc.reconcile_pending_entries()
+        recovered = svc.reconcile_pending_entries()
         order = client.get_order("BTCUSDT", orig_client_order_id=result["client_order_id"])
         fills = client.my_trades("BTCUSDT", order_id=order["orderId"])
         expected_fee_quote = sum(
             float(f["commission"]) * 300.0 for f in fills
         )
         trade = db.open_trade("BTCUSDT")
-        assert trade is not None
+        assert trade is not None, recovered
         assert float(trade["fees"]) == pytest.approx(expected_fee_quote)
