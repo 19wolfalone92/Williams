@@ -26,6 +26,10 @@ class _DB:
         self.fail_statuses = set(fail_statuses)
         self.fail_event = fail_event
 
+    def unresolved_execution_intents(self):
+        unresolved = {"PENDING", "AMBIGUOUS", "SUBMITTING", "RECONCILE_REQUIRED"}
+        return [dict(row) for row in self.rows.values() if row["status"] in unresolved]
+
     def find_execution_intent(self, intent_id, client_order_id=""):
         for row in self.rows.values():
             if row["intent_id"] == intent_id or (
@@ -145,6 +149,14 @@ def test_submit_may_have_succeeded_but_ambiguous_write_fails_no_replay_after_res
     retry = restarted.execute(intent, submit)
     assert not retry.accepted
     assert "prior_intent_exists:PENDING" in retry.reason
+    assert calls == [1]
+    assert len(exchange.orders) == 1
+
+    # A different intent must also be blocked while the original outcome is unresolved.
+    other_intent = _intent("WILL_TASK006_NEW_ENTRY_WHILE_UNKNOWN_007")
+    other = restarted.execute(other_intent, submit)
+    assert not other.accepted
+    assert "unresolved_execution_intent_requires_reconciliation" in other.reason
     assert calls == [1]
     assert len(exchange.orders) == 1
 
