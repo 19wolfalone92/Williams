@@ -390,8 +390,12 @@ class MarketScanner:
         try:
             # M15 is execution/fill monitoring and M5 is diagnostic/replay only.
             # They must never create a canonical Williams entry candidate.
-            if self.interval != "1h":
-                log.warning("canonical Williams entries blocked on non-H1 interval: %s", self.interval)
+            requested_execution_tf = _normalize_interval(os.getenv("EXECUTION_TIMEFRAME", "1h"))
+            if self.interval != "1h" or requested_execution_tf != "1h":
+                log.warning(
+                    "canonical Williams entries blocked: scanner_interval=%s execution_timeframe=%s",
+                    self.interval, requested_execution_tf,
+                )
                 return None
             parameter_blockers = canonical_williams_parameter_blockers(config_from_env())
             if parameter_blockers:
