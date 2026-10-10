@@ -1468,12 +1468,12 @@ internal class FuturesNativeEngine(
                 clientAlgoId,
                 params,
                 preSubmitCheck = {
-                    if (!currentContextAllows(exchange, symbol, signal.direction)) {
+                    if (!currentContextAllows(exchange, symbol, signal.direction, signal.type)) {
                         throw FuturesApiException(
                             "$symbol context invalidated immediately before conditional entry submission"
                         )
                     }
-                    val latestMark = exchange.markPrice(symbol).toDoubleOrNull()
+                    val latestMark = exchange.markPrice(symbol)
                         ?: throw FuturesApiException("$symbol mark price invalid at submission boundary")
                     if (!latestMark.isFinite() ||
                         (signal.direction == "LONG" && !(stopValue < latestMark && latestMark < triggerValue)) ||
@@ -1741,7 +1741,7 @@ internal class FuturesNativeEngine(
                         )
                     }
                     val contextStillAllows = runCatching {
-                        currentContextAllows(exchange, symbol, direction)
+                        currentContextAllows(exchange, symbol, direction, campaign.optString("signal_type", "WM2"))
                     }.getOrDefault(false)
                     if (!contextStillAllows) {
                         cancelPendingEntry(exchange, campaign, "CONTEXT_INVALIDATED_OR_UNAVAILABLE")
