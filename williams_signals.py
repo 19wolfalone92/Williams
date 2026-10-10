@@ -279,8 +279,7 @@ def extract_long_signal_specs(
         return []
 
     tick = max(float(tick_size), 1e-12)
-    current_time = _row_time_ms(current)
-    versions = dict(context_versions or {})
+        versions = dict(context_versions or {})
 
     # Prefer the earliest still-active signal: the book describes the first
     # signal as the initial entry, with later Wise Men becoming adds.
@@ -302,6 +301,7 @@ def extract_long_signal_specs(
                     role=SignalRole.ENTRY,
                     timeframe=timeframe,
                     signal_bar_time_ms=_row_time_ms(row),
+                    confirmation_time_ms=_row_time_ms(row),
                     trigger_price=trigger,
                     protective_reference=protective,
                     trigger_buffer_ticks=1,
@@ -318,9 +318,9 @@ def extract_long_signal_specs(
                     source_candle_index=i,
                     expires_at_ms=(
                         _row_time_ms(row)
-                        + _timeframe_ms(timeframe) * max(
+                        + _timeframe_ms(timeframe) * (1 + max(
                             1, int(os.getenv("WILLIAMS_PENDING_REVERSAL_BARS", "2"))
-                        )
+                        ))
                     ),
                 )
             )
@@ -339,6 +339,7 @@ def extract_long_signal_specs(
                     role=SignalRole.ADD_ON,
                     timeframe=timeframe,
                     signal_bar_time_ms=_row_time_ms(row),
+                    confirmation_time_ms=_row_time_ms(row),
                     trigger_price=trigger,
                     protective_reference=protective,
                     trigger_buffer_ticks=1,
@@ -354,9 +355,9 @@ def extract_long_signal_specs(
                     source_candle_index=i,
                     expires_at_ms=(
                         _row_time_ms(row)
-                        + _timeframe_ms(timeframe) * max(
+                        + _timeframe_ms(timeframe) * (1 + max(
                             1, int(os.getenv("WILLIAMS_PENDING_SUPER_AO_BARS", "2"))
-                        )
+                        ))
                     ),
                 )
             )
@@ -378,6 +379,7 @@ def extract_long_signal_specs(
                     role=SignalRole.ADD_ON,
                     timeframe=timeframe,
                     signal_bar_time_ms=_row_time_ms(row),
+                    confirmation_time_ms=_row_time_ms(row),
                     trigger_price=trigger,
                     protective_reference=protective,
                     trigger_buffer_ticks=1,
@@ -392,10 +394,10 @@ def extract_long_signal_specs(
                     reason="WM3 buy fractal; trigger only while price/trigger remains above Teeth",
                     source_candle_index=center_i,
                     expires_at_ms=(
-                        _row_time_ms(row)
-                        + _timeframe_ms(timeframe) * max(
+                        _row_time_ms(ind.iloc[confirmation_i])
+                        + _timeframe_ms(timeframe) * (1 + max(
                             1, int(os.getenv("WILLIAMS_PENDING_FRACTAL_BARS", "8"))
-                        )
+                        ))
                     ),
                 )
             )
@@ -461,6 +463,7 @@ def extract_short_signal_specs(
                     role=SignalRole.ENTRY,
                     timeframe=timeframe,
                     signal_bar_time_ms=_row_time_ms(row),
+                    confirmation_time_ms=_row_time_ms(ind.iloc[confirmation_i]),
                     trigger_price=trigger,
                     protective_reference=protective,
                     trigger_buffer_ticks=1,
