@@ -205,3 +205,38 @@ def test_server_trader_and_mtf_service_share_the_same_context_cache(monkeypatch)
     created = server.state.ensure_trader()
     assert created.context_cache is server.context_cache
     assert captured["context_cache"] is server.mtf_service.cache
+
+
+def test_android_spot_rest_mutations_have_one_fail_closed_boundary():
+    source = Path(__file__).parent.joinpath(
+        "app/src/main/java/com/williamsbot/StandaloneRuntime.kt"
+    ).read_text(encoding="utf-8")
+    wrapper_start = source.index("    private fun signedRequest(")
+    perform_start = source.index("    private fun performSignedRequest(", wrapper_start)
+    wrapper = source[wrapper_start:perform_start]
+    assert "authorizeExchangeMutation(normalizedMethod, path, params)" in wrapper
+    assert "auditStore.beginMutationIntent(" in wrapper
+    assert wrapper.index("auditStore.beginMutationIntent(") < wrapper.index(
+        "val response = performSignedRequest(normalizedMethod, path, params)"
+    )
+    assert '"UNKNOWN"' in wrapper
+    assert "setReconcileRequired(" in wrapper
+    # The only OkHttp POST and DELETE primitives stay inside the guarded transport.
+    assert source.count(".post(") == 1
+    assert source.count(".delete()") == 1
+    assert "else -> error(\"Unapproved Binance mutation route:" in wrapper
+    # Legacy direct MARKET BUY implementations must remain tombstoned, not hidden
+    # after a guard clause where they could later be re-enabled accidentally.
+    legacy_start = source.index("    private fun executeBuyWithProtection(")
+    legacy_end = source.index("\n    private fun createProtection(", legacy_start)
+    assert "signedPost(" not in source[legacy_start:legacy_end]
+
+
+def test_spot_client_and_release_contract_do_not_alias_futures_routes():
+    spot_client = Path(__file__).with_name("binance_client.py").read_text(encoding="utf-8")
+    server = Path(__file__).with_name("server.py").read_text(encoding="utf-8")
+    gate = Path(__file__).with_name("ci_release_gate.py").read_text(encoding="utf-8")
+    assert "/api/v3/order" in spot_client
+    assert "/fapi/" not in spot_client and "/dapi/" not in spot_client
+    assert "TESTNET" in server and "testnet" in server.lower()
+    assert "EXPECTED_VERSION = '4.25.0'" in gate
