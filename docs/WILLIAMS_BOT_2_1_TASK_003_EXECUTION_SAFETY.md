@@ -261,3 +261,80 @@ This is an exact-SHA snapshot for `57eec5d08c8080ec94686ef75f984fee571109ed` onl
 - Full fee-adjusted account/position/protective-order equivalence after restart against authoritative live exchange data.
 
 Overall task status remains **BLOCKED — NOT ACCEPTED**. Green CI is necessary but does not substitute for the unresolved live Testnet/device recovery and exhaustive call-graph evidence. No Binance Mainnet endpoint, credentials, or real trading operation was used.
+
+
+### Latest source review — TASK 003 Gradle contract and mutation-gate limitation
+
+**Review basis before this report commit:** branch HEAD `a95d653df4cc6ae686bdcfa77b743d7950877d7e`; PR #48 remains open/draft and unmerged; `main` remains `04da5f9c09572e99ff310be3a1908179165e528c`. Results from other SHAs are not treated as validation of the report-bearing SHA.
+
+#### Additional confirmed CI contract mismatch and correction
+
+The exact-head review found a version mismatch not covered by the prior release gate:
+- `gradle/wrapper/gradle-wrapper.properties`: Gradle `8.14.6`.
+- `.github/workflows/android-apk.yml`: `GRADLE_VERSION: '8.14.6'`.
+- `.github/workflows/campaign-ci.yml`: was pinned to `gradle-version: "8.14.5"`, and the Campaign CI log for run `38089001009` confirms Gradle `8.14.5` was provisioned.
+- App version remains canonical `4.25.0` in `server.py`, `app/build.gradle.kts`, Android UI and release gate.
+
+Correction on this task branch: Campaign CI is now pinned to `8.14.6`; `ci_release_gate.py` asserts both Android workflows match the wrapper; `test_release_version_contracts_are_consistent` checks the wrapper, APK workflow and Campaign workflow. This does not change `main` or disable a gate. All workflows must pass on the final SHA created by these changes.
+
+#### Exact original error evidence (initial failing SHA only)
+
+Run/job identities and source SHA are in the incident record above. The key unabridged error strings captured from the original GitHub Actions logs were:
+
+```text
+AssertionError: server.py: missing "VERSION = '4.24.0'"
+```
+
+This was the terminal release-gate assertion in both Python backend run `38080355142` (job `114295816305`) and Build Android APK run `38080355161` (job `114295816125`). The gate stopped the respective validation before downstream checks could serve as evidence.
+
+Campaign Python job `114295825122` ended with:
+
+```text
+test_campaign_execution.py:96: AssertionError
+E           AssertionError: assert 'RECONCILE_REQUIRED' == 'OPEN'
+E             - OPEN
+E             + RECONCILE_REQUIRED
+
+test_campaign_execution.py:123: AssertionError
+E           AssertionError: assert 'RECONCILE_REQUIRED' == 'OPEN'
+E             - OPEN
+E             + RECONCILE_REQUIRED
+
+test_campaign_execution.py:146: KeyError
+E           KeyError: 'campaign_id'
+
+test_task003_execution_safety.py:539: AssertionError
+E       AssertionError: native raw HTTP senders changed; audit every path before acceptance
+E       assert 3 == 2
+
+test_task003_execution_safety.py:573: AssertionError
+E       assert 4214 < 3373
+
+5 failed, 172 passed, 4 warnings in 4.44s
+```
+
+The Campaign Android job `114295824990` ended at Kotlin compilation with:
+
+```text
+e: file:///home/runner/work/Williams/Williams/app/src/main/java/com/williamsbot/TradingAuditStore.kt:609:5 This annotation is not repeatable.
+> Task :app:compileDebugKotlin FAILED
+Execution failed for task ':app:compileDebugKotlin'.
+> A failure occurred while executing org.jetbrains.kotlin.compilerRunner.btapi.BuildToolsApiCompilationWork
+> Compilation error. See log for more details
+BUILD FAILED in 30s
+```
+
+These are preserved as baseline diagnostics only, not evidence of the present source state. Their root-cause disposition is documented above.
+
+#### Remaining safety finding — native mutation gate is conservative but not yet accepted
+
+At the current source, `NativeEngine.validateAndPersistMutationIntent` checks the global kill/reconciliation/unresolved-intent gates for BUY exposure, then applies `unresolvedExecutionMutationCount(spec.symbol) == 0` to **every** modeled mutation. This safely prevents ambiguous mutations from being repeated, but it also blocks cancellation or a reducing/protective operation on a symbol with any unresolved mutation. The required distinction between (a) an exact-target cancellation after authoritative order lookup and (b) a reducing exit against a separately confirmed position is therefore **NOT VERIFIED as implemented**. Do not weaken this gate by simply allowing all SELL/DELETE operations; an evidence-based, exact-identity recovery rule and regression tests are required.
+
+Also, the native low-level boundary proves durable intent, mutation classification, kill/reconciliation latch and unresolved-intent gates. Signal freshness, campaign ownership, full risk-budget validation and position-quantity authority are currently enforced by higher-level call paths; this review has not yet proved every legacy/manual/emergency call site independently carries all of those checks. The source inventory is not a proof of absence of every bypass.
+
+**Acceptance blockers after this source review**
+- Exact-target cancellation and confirmed-position reducing exit need distinct recovery/admission rules when a symbol has an unresolved mutation.
+- Exhaustive call-graph evidence must establish that every entry/replace/cancel/exit route retains signal freshness, campaign ownership, risk, and reconciliation checks.
+- Live Testnet lost-response recovery, physical-device crash recovery, live OCO sibling-fill race, mass-cancel variations and fee-adjusted account/position equivalence remain **NOT VERIFIED**.
+
+The task remains **BLOCKED — NOT ACCEPTED**, regardless of green CI. No Binance Mainnet endpoint, credentials, or real trade was used.
