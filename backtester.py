@@ -1,8 +1,11 @@
-"""Deterministic, long-only OHLC backtester with explicit conservative fills.
+"""Deterministic LONG/SHORT OHLC research simulator with conservative fills.
 
-This is a research simulator, not an exchange execution emulator. Short-side
-simulation is deliberately rejected until its funding/margin/accounting model
-is implemented rather than silently ignored.
+This is a simplified research simulator, not an exchange execution emulator or
+the canonical TC2 campaign engine. Its percentage stop/target remains a legacy
+overlay; it must not be used as evidence of literal Williams campaign parity.
+Short positions are collateral-accounted and include adverse entry/cover
+slippage and fees, but Futures funding, liquidation and margin mechanics are
+not modeled.
 """
 from dataclasses import dataclass
 import math
@@ -66,10 +69,8 @@ class Backtester:
             raise ValueError("stop_loss_pct must be in (0, 1)")
         if parsed["take_profit_pct"] <= 0:
             raise ValueError("take_profit_pct must be positive")
-        if allow_shorts:
-            raise NotImplementedError(
-                "Short backtesting is not implemented; allow_shorts=True is unsafe"
-            )
+        if allow_shorts and parsed["take_profit_pct"] >= 1.0:
+            raise ValueError("take_profit_pct must be below 1.0 when short backtesting is enabled")
         if intrabar_exit_policy not in {"stop_first", "target_first"}:
             raise ValueError("intrabar_exit_policy must be stop_first or target_first")
 
@@ -79,7 +80,7 @@ class Backtester:
         self.position_fraction = parsed["position_fraction"]
         self.stop = parsed["stop_loss_pct"]
         self.target = parsed["take_profit_pct"]
-        self.allow_shorts = False
+        self.allow_shorts = bool(allow_shorts)
         self.intrabar_policy = intrabar_exit_policy
 
     def _buy_price(self, price):
@@ -89,21 +90,29 @@ class Backtester:
         return float(price) * (1 - self.slippage)
 
     @staticmethod
-    def _validate_frame(df):
+    def _validate_frame(df, *, allow_shorts=False):
         if not isinstance(df, pd.DataFrame):
             raise TypeError("Backtest input must be a pandas DataFrame")
         if df.empty:
             return
-        missing = {"open", "high", "low", "close", "long_signal"} - set(df.columns)
+        required = {"open", "high", "low", "close", "long_signal"}
+        if allow_shorts:
+            required.add("short_signal")
+        missing = required - set(df.columns)
         if missing:
             raise ValueError(f"Backtest data missing columns: {sorted(missing)}")
         if not df.index.is_monotonic_increasing or not df.index.is_unique:
             raise ValueError("Backtest index must be strictly increasing and unique")
-        signals = df["long_signal"]
-        if signals.isna().any():
-            raise ValueError("long_signal contains missing values")
-        if not signals.map(lambda value: isinstance(value, (bool, np.bool_)) or value in (0, 1)).all():
-            raise ValueError("long_signal must contain booleans or 0/1 values")
+
+        signal_columns = ["long_signal"] + (["short_signal"] if allow_shorts else [])
+        for column in signal_columns:
+            signals = df[column]
+            if signals.isna().any():
+                raise ValueError(f"{column} contains missing values")
+            if not signals.map(
+                lambda value: isinstance(value, (bool, np.bool_)) or value in (0, 1)
+            ).all():
+                raise ValueError(f"{column} must contain booleans or 0/1 values")
         prices = df[["open", "high", "low", "close"]].apply(
             pd.to_numeric, errors="coerce"
         )
@@ -118,7 +127,7 @@ class Backtester:
             raise ValueError("OHLC invariant failed: high/low do not contain open/close")
 
     def run(self, df):
-        self._validate_frame(df)
+        self._validate_frame(df, allow_shorts=self.allow_shorts)
         if df.empty:
             empty_equity = pd.DataFrame(columns=["equity"])
             empty_equity.index.name = "time"
@@ -129,13 +138,14 @@ class Backtester:
         cash = self.starting_capital
         qty = 0.0
         side = None
+        margin_locked = 0.0
         entry_price = None
         entry_time = None
         entry_notional = 0.0
         entry_fee = 0.0
         trades = []
         equity = []
-        pending = False
+        pending_side = None
 
         for i in range(len(df)):
             row = df.iloc[i]
@@ -146,19 +156,36 @@ class Backtester:
 
             # A signal observed at the prior candle close can enter only at this
             # candle's open; never fill a newly observed signal on the same bar.
-            if pending and side is None:
-                spend = cash * self.position_fraction
-                fill = self._buy_price(open_price)
-                if spend > 0 and fill > 0:
-                    entry_fee = spend * self.fee
-                    qty = (spend - entry_fee) / fill
-                    if qty > 0 and math.isfinite(qty):
-                        cash -= spend
-                        entry_price = fill
-                        entry_notional = qty * entry_price
-                        entry_time = timestamp
-                        side = "LONG"
-                pending = False
+            if pending_side is not None and side is None:
+                if pending_side == "LONG":
+                    spend = cash * self.position_fraction
+                    fill = self._buy_price(open_price)
+                    if spend > 0 and fill > 0:
+                        entry_fee = spend * self.fee
+                        qty = (spend - entry_fee) / fill
+                        if qty > 0 and math.isfinite(qty):
+                            cash -= spend
+                            entry_price = fill
+                            entry_notional = qty * entry_price
+                            entry_time = timestamp
+                            margin_locked = 0.0
+                            side = "LONG"
+                elif pending_side == "SHORT":
+                    # Reserve the short notional as collateral and keep the entry
+                    # commission funded from cash. Proceeds are not reusable cash.
+                    spend = cash * self.position_fraction / (1.0 + self.fee)
+                    fill = self._sell_price(open_price)
+                    if spend > 0 and fill > 0:
+                        entry_fee = spend * self.fee
+                        qty = spend / fill
+                        if qty > 0 and math.isfinite(qty):
+                            cash -= spend + entry_fee
+                            margin_locked = spend
+                            entry_price = fill
+                            entry_notional = qty * entry_price
+                            entry_time = timestamp
+                            side = "SHORT"
+                pending_side = None
 
             if side == "LONG":
                 stop_price = entry_price * (1 - self.stop)
@@ -198,14 +225,70 @@ class Backtester:
                     )
                     qty = 0.0
                     side = None
+                    margin_locked = 0.0
                     entry_price = None
                     entry_time = None
                     entry_notional = 0.0
                     entry_fee = 0.0
 
-            equity.append((timestamp, cash + qty * close if side == "LONG" else cash))
-            if side is None and bool(row.get("long_signal", False)):
-                pending = True
+            elif side == "SHORT":
+                stop_price = entry_price * (1 + self.stop)
+                target_price = entry_price * (1 - self.target)
+                stop_hit = high >= stop_price
+                target_hit = low <= target_price
+                exit_trigger = None
+                reason = None
+
+                if stop_hit and target_hit:
+                    if self.intrabar_policy == "target_first":
+                        exit_trigger, reason = target_price, "TARGET"
+                    else:
+                        # For a short, a gap upward through the stop is adverse.
+                        exit_trigger, reason = max(stop_price, open_price), "STOP"
+                elif stop_hit:
+                    exit_trigger = max(stop_price, open_price)
+                    reason = "STOP"
+                elif target_hit:
+                    exit_trigger = target_price
+                    reason = "TARGET"
+
+                if exit_trigger is not None:
+                    exit_price = self._buy_price(exit_trigger)
+                    exit_notional = qty * exit_price
+                    exit_fee = exit_notional * self.fee
+                    gross_pnl = (entry_price - exit_price) * qty
+                    cash += margin_locked + gross_pnl - exit_fee
+                    pnl = gross_pnl - entry_fee - exit_fee
+                    trades.append(
+                        Trade(
+                            entry_time, timestamp, side, entry_price, exit_price,
+                            qty, pnl, pnl / max(entry_notional, 1e-12) * 100.0,
+                            reason, entry_fee + exit_fee,
+                        )
+                    )
+                    qty = 0.0
+                    side = None
+                    margin_locked = 0.0
+                    entry_price = None
+                    entry_time = None
+                    entry_notional = 0.0
+                    entry_fee = 0.0
+
+            current_equity = (
+                cash + qty * close
+                if side == "LONG"
+                else cash + margin_locked + (entry_price - close) * qty
+                if side == "SHORT"
+                else cash
+            )
+            equity.append((timestamp, current_equity))
+            if side is None:
+                long_signal = bool(row.get("long_signal", False))
+                short_signal = bool(row.get("short_signal", False)) if self.allow_shorts else False
+                # Both directions appearing on the same close are ambiguous.
+                # Do not queue two entries or choose a side arbitrarily.
+                if long_signal != short_signal:
+                    pending_side = "LONG" if long_signal else "SHORT"
 
         # Synthetic end-of-data close is explicitly labelled END in trade output.
         if side == "LONG":
@@ -214,6 +297,21 @@ class Backtester:
             exit_fee = proceeds * self.fee
             cash += proceeds - exit_fee
             pnl = (exit_price - entry_price) * qty - entry_fee - exit_fee
+            trades.append(
+                Trade(
+                    entry_time, df.index[-1], side, entry_price, exit_price, qty,
+                    pnl, pnl / max(entry_notional, 1e-12) * 100, "END",
+                    entry_fee + exit_fee,
+                )
+            )
+            equity[-1] = (df.index[-1], cash)
+        elif side == "SHORT":
+            exit_price = self._buy_price(float(df.close.iloc[-1]))
+            exit_notional = qty * exit_price
+            exit_fee = exit_notional * self.fee
+            gross_pnl = (entry_price - exit_price) * qty
+            cash += margin_locked + gross_pnl - exit_fee
+            pnl = gross_pnl - entry_fee - exit_fee
             trades.append(
                 Trade(
                     entry_time, df.index[-1], side, entry_price, exit_price, qty,
