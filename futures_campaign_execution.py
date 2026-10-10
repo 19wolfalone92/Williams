@@ -534,26 +534,36 @@ class FuturesCampaignExecutionService:
                     )
         return 0.0
 
-    def _tc2_wm1_early_context_allowed(self, signal: SignalSpec, snapshot=None) -> bool:
-        """Validate the narrow TC2 early-WM1 exception to strict trend admission.
+    def _tc2_core_context_allowed(
+        self,
+        signal: SignalSpec,
+        snapshot=None,
+        *,
+        allow_early_wm1: bool = False,
+    ) -> bool:
+        """Validate TC2's H1 signal context plus the D1 macro airbag.
 
-        WM1 may lead an H1/H4 Alligator+AO alignment, but it is never a context-
-        free entry: the detector must provide positive angulation evidence,
-        H1/H4/D1 context must be fresh and version-pinned, and active opposite D1
-        context remains a hard macro veto.
+        H1 is the canonical decision timeframe. H4 is required as fresh context,
+        but it is not a duplicate signal trigger. A WM1 may be admitted before H1
+        has turned only when its positive angulation evidence is present. WM2/WM3
+        require H1 Alligator direction, awakening, and AO direction. D1 may veto
+        an active opposite regime but never creates an entry.
         """
-        if (
-            signal.signal_type != SignalType.REVERSAL
-            or str(signal.timeframe).lower() != "1h"
-            or str(signal.direction).upper() not in {"LONG", "SHORT"}
-        ):
+        direction = str(getattr(signal, "direction", "") or "").upper()
+        timeframe = str(getattr(signal, "timeframe", "") or "").lower()
+        is_reversal = signal.signal_type == SignalType.REVERSAL
+        if direction not in {"LONG", "SHORT"} or timeframe != "1h":
             return False
-        try:
-            angulation = float(signal.angulation_score)
-        except (TypeError, ValueError, OverflowError):
-            return False
-        if not math.isfinite(angulation) or angulation <= 0.0:
-            return False
+
+        if allow_early_wm1:
+            if not is_reversal:
+                return False
+            try:
+                angle = float(signal.angulation_score)
+            except (TypeError, ValueError, OverflowError):
+                return False
+            if not math.isfinite(angle) or angle <= 0.0:
+                return False
 
         snapshot = snapshot or self.barrier.context_cache.snapshot()
         versions = {
@@ -561,16 +571,25 @@ class FuturesCampaignExecutionService:
             for key, value in dict(signal.context_versions or {}).items()
         }
         now_ms = int(time.time() * 1000)
-        intervals_ms = {"1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000}
+        durations_ms = {"1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000}
         contexts = {}
-        for interval, duration_ms in intervals_ms.items():
+
+        for interval, duration_ms in durations_ms.items():
             context = snapshot.context(signal.symbol, interval)
             if context is None or interval not in versions:
                 return False
             if int(context.version) != versions[interval]:
                 return False
+            if not bool(context.williams_core_ready):
+                return False
             try:
                 close_ms = int(context.candle_close_time_ms)
+                ao = float(context.ao_value)
+                price = float(context.price)
+                atr = float(context.atr)
+                jaw = float(context.jaw)
+                teeth = float(context.teeth)
+                lips = float(context.lips)
             except (TypeError, ValueError, OverflowError):
                 return False
             age_ms = now_ms - close_ms
@@ -578,16 +597,61 @@ class FuturesCampaignExecutionService:
                 close_ms <= 0
                 or age_ms < -60_000
                 or age_ms > max(120_000, 2 * duration_ms)
+                or not all(math.isfinite(value) for value in (ao, price, atr, jaw, teeth, lips))
+                or min(price, atr, jaw, teeth, lips) <= 0.0
             ):
                 return False
             contexts[interval] = context
 
+        operative = contexts["1h"]
+        state = str(operative.alligator_state or "").strip().upper()
+        try:
+            ao_value = float(operative.ao_value)
+        except (TypeError, ValueError, OverflowError):
+            return False
+        if not math.isfinite(ao_value):
+            return False
+        if not allow_early_wm1:
+            if direction == "LONG" and not (
+                state == "BULLISH" and operative.alligator_awake and ao_value > 0.0
+            ):
+                return False
+            if direction == "SHORT" and not (
+                state == "BEARISH" and operative.alligator_awake and ao_value < 0.0
+            ):
+                return False
+
         macro = contexts["1d"]
-        if signal.direction == "LONG" and macro.allow_short:
+        macro_state = str(macro.alligator_state or "").strip().upper()
+        try:
+            macro_ao = float(macro.ao_value)
+        except (TypeError, ValueError, OverflowError):
             return False
-        if signal.direction == "SHORT" and macro.allow_long:
+        if not math.isfinite(macro_ao):
             return False
+        macro_opposes_long = (
+            macro_state == "BEARISH"
+            and bool(macro.alligator_awake)
+            and macro_ao < 0.0
+        )
+        macro_opposes_short = (
+            macro_state == "BULLISH"
+            and bool(macro.alligator_awake)
+            and macro_ao > 0.0
+        )
+        if direction == "LONG" and (macro.allow_short or macro_opposes_long):
+            return False
+        if direction == "SHORT" and (macro.allow_long or macro_opposes_short):
+            return False
+
         return True
+
+    def _tc2_wm1_early_context_allowed(self, signal: SignalSpec, snapshot=None) -> bool:
+        return self._tc2_core_context_allowed(
+            signal,
+            snapshot,
+            allow_early_wm1=True,
+        )
 
     def _context_versions(self, signal: SignalSpec) -> dict[str, int]:
         snapshot = self.barrier.context_cache.snapshot()
