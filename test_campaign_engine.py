@@ -61,6 +61,29 @@ def test_first_available_signal_starts_campaign():
     assert CampaignEngine.choose_initial_signal(signals).signal_type == SignalType.REVERSAL
 
 
+def test_first_presenting_wm2_or_wm3_addon_role_can_start_campaign():
+    wm2 = make_signal(
+        SignalType.SUPER_AO,
+        role=SignalRole.ADD_ON,
+        bar=10,
+        trigger=103.0,
+    )
+    wm3 = make_signal(
+        SignalType.FRACTAL,
+        role=SignalRole.ADD_ON,
+        bar=20,
+        trigger=104.0,
+    )
+
+    chosen = CampaignEngine.choose_initial_signal([wm2, wm3])
+
+    assert chosen is not None
+    assert chosen.signal_type == SignalType.SUPER_AO
+    assert chosen.role == SignalRole.ENTRY
+    # Promote for this initial-campaign decision only; detector evidence stays immutable.
+    assert wm2.role == SignalRole.ADD_ON
+
+
 def test_initial_selection_skips_expired_signal_and_blocks_missing_expiry():
     now = int(time.time() * 1000)
     expired = make_signal(SignalType.REVERSAL, bar=10)
