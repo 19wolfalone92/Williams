@@ -612,12 +612,15 @@ class FuturesCampaignExecutionService:
         if not math.isfinite(ao_value):
             return False
         if not allow_early_wm1:
+            # The setup-specific WM2/WM3 detectors already establish AO/fractal
+            # evidence. Do not turn AO's zero-line sign into a universal gate;
+            # the H1 Alligator regime is context and AO remains recorded evidence.
             if direction == "LONG" and not (
-                state == "BULLISH" and operative.alligator_awake and ao_value > 0.0
+                state == "BULLISH" and operative.alligator_awake
             ):
                 return False
             if direction == "SHORT" and not (
-                state == "BEARISH" and operative.alligator_awake and ao_value < 0.0
+                state == "BEARISH" and operative.alligator_awake
             ):
                 return False
 
@@ -639,9 +642,9 @@ class FuturesCampaignExecutionService:
             and bool(macro.alligator_awake)
             and macro_ao > 0.0
         )
-        if direction == "LONG" and (macro.allow_short or macro_opposes_long):
+        if direction == "LONG" and macro_opposes_long:
             return False
-        if direction == "SHORT" and (macro.allow_long or macro_opposes_short):
+        if direction == "SHORT" and macro_opposes_short:
             return False
 
         return True
