@@ -1,12 +1,13 @@
 import os
 import json, sqlite3
+import threading
 from pathlib import Path
 from datetime import datetime, timezone
 from contextlib import contextmanager
 
 
 class Database:
-    SCHEMA_VERSION = 6
+    SCHEMA_VERSION = 7
 
     def __init__(self, path=None):
         path = path or os.getenv('WILLIAMS_DB_PATH') or 'data/trader.sqlite3'
@@ -15,27 +16,45 @@ class Database:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute('PRAGMA busy_timeout=20000')
         self.conn.execute('PRAGMA journal_mode=WAL')
-        self.conn.execute('PRAGMA synchronous=NORMAL')
+        # FULL synchronous durability is important for the write-ahead execution intent.
+        self.conn.execute('PRAGMA synchronous=FULL')
+        self._db_lock = threading.RLock()
         self._transaction_active = False
+        self._transaction_owner = None
         self.init()
+
+    def _commit_durable(self):
+        """Single injectable commit boundary for safety-critical writes."""
+        self.conn.commit()
 
     @contextmanager
     def transaction(self):
-        """Atomic transaction for multi-step DB operations."""
-        if self._transaction_active:
-            yield self
-            return
+        """Atomic transaction; serialize callers sharing this SQLite connection."""
+        with self._db_lock:
+            owner = threading.get_ident()
+            if self._transaction_active:
+                if self._transaction_owner != owner:
+                    # The RLock should make this unreachable; fail closed if the
+                    # transaction-owner invariant is ever broken.
+                    raise RuntimeError("SQLite transaction owned by another thread")
+                yield self
+                return
 
-        self._transaction_active = True
-        try:
-            self.conn.execute('BEGIN')
-            yield self
-            self.conn.commit()
-        except Exception:
-            self.conn.rollback()
-            raise
-        finally:
-            self._transaction_active = False
+            self._transaction_active = True
+            self._transaction_owner = owner
+            try:
+                self.conn.execute('BEGIN IMMEDIATE')
+                yield self
+                self._commit_durable()
+            except Exception:
+                try:
+                    self.conn.rollback()
+                except Exception:
+                    pass
+                raise
+            finally:
+                self._transaction_active = False
+                self._transaction_owner = None
 
     def init(self):
         self.conn.executescript('''
@@ -133,7 +152,15 @@ class Database:
             invalidation_level REAL,
             status TEXT NOT NULL,
             reason TEXT,
-            client_order_id TEXT
+            client_order_id TEXT,
+            campaign_id TEXT,
+            signal_id TEXT,
+            risk_quote REAL DEFAULT 0,
+            capital_reserved_quote REAL DEFAULT 0,
+            quantity TEXT,
+            quote_order_quantity TEXT,
+            created_at_ms INTEGER,
+            max_age_ms INTEGER DEFAULT 15000
         );
         CREATE TABLE IF NOT EXISTS execution_events(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -261,9 +288,41 @@ class Database:
             ON campaign_events(campaign_id, id);
         ''')
         self._migrate_trade_columns()
+        self._migrate_execution_intent_columns()
+        self.conn.execute(
+            'CREATE INDEX IF NOT EXISTS idx_execution_intents_client_order_id '
+            'ON execution_intents(client_order_id)'
+        )
+        self.conn.execute(
+            'CREATE INDEX IF NOT EXISTS idx_execution_intents_status '
+            'ON execution_intents(status)'
+        )
         self.state_set('schema_version', self.SCHEMA_VERSION)
         self.state_set('position_state', self.state_get('position_state', 'FLAT'))
         self.conn.commit()
+
+    def _migrate_execution_intent_columns(self):
+        columns = {
+            row["name"]
+            for row in self.conn.execute(
+                "PRAGMA table_info(execution_intents)"
+            ).fetchall()
+        }
+        additions = {
+            "campaign_id": "TEXT",
+            "signal_id": "TEXT",
+            "risk_quote": "REAL DEFAULT 0",
+            "capital_reserved_quote": "REAL DEFAULT 0",
+            "quantity": "TEXT",
+            "quote_order_quantity": "TEXT",
+            "created_at_ms": "INTEGER",
+            "max_age_ms": "INTEGER DEFAULT 15000",
+        }
+        for name, sql_type in additions.items():
+            if name not in columns:
+                self.conn.execute(
+                    f"ALTER TABLE execution_intents ADD COLUMN {name} {sql_type}"
+                )
 
     def _migrate_trade_columns(self):
         columns = {
@@ -285,66 +344,290 @@ class Database:
                 )
 
     def state_get(self, key, default=None):
-        r = self.conn.execute(
-            'SELECT value FROM bot_state WHERE key=?',
-            (key,)
-        ).fetchone()
-        return default if r is None else r['value']
+        with self._db_lock:
+            r = self.conn.execute(
+                'SELECT value FROM bot_state WHERE key=?',
+                (key,)
+            ).fetchone()
+            return default if r is None else r['value']
 
     def state_set(self, key, value):
-        self.conn.execute(
-            'INSERT INTO bot_state(key,value) VALUES(?,?) '
-            'ON CONFLICT(key) DO UPDATE SET value=excluded.value',
-            (key, str(value))
-        )
-        if not self._transaction_active:
-            self.conn.commit()
+        with self._db_lock:
+            self.conn.execute(
+                'INSERT INTO bot_state(key,value) VALUES(?,?) '
+                'ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+                (key, str(value))
+            )
+            if not self._transaction_active:
+                self._commit_durable()
 
     def try_claim_state(self, key, value) -> bool:
-        """Atomically create a state key only if it does not already exist.
-
-        Used for durable entry intents: concurrent execution loops/processes
-        may both observe FLAT, but only one can successfully claim the
-        pending-entry key in SQLite.
-        """
-        cur = self.conn.execute(
-            'INSERT OR IGNORE INTO bot_state(key,value) VALUES(?,?)',
-            (str(key), str(value)),
-        )
-        if not self._transaction_active:
-            self.conn.commit()
-        return cur.rowcount == 1
+        """Durably claim a unique bot_state key (cross-thread/process safe)."""
+        with self._db_lock:
+            cur = self.conn.execute(
+                'INSERT OR IGNORE INTO bot_state(key,value) VALUES(?,?)',
+                (str(key), str(value)),
+            )
+            if not self._transaction_active:
+                self._commit_durable()
+            return cur.rowcount == 1
 
     def state_delete(self, key):
-        self.conn.execute(
-            'DELETE FROM bot_state WHERE key=?',
-            (key,)
+        with self._db_lock:
+            self.conn.execute(
+                'DELETE FROM bot_state WHERE key=?',
+                (key,)
+            )
+            if not self._transaction_active:
+                self._commit_durable()
+
+    def release_state_claim(self, key, owner) -> bool:
+        """Delete a claim only when the recorded owner still matches."""
+        with self._db_lock:
+            cur = self.conn.execute(
+                'DELETE FROM bot_state WHERE key=? AND value=?',
+                (str(key), str(owner)),
+            )
+            if not self._transaction_active:
+                self._commit_durable()
+            return cur.rowcount == 1
+
+    def claim_execution_identity(
+        self,
+        intent_id,
+        client_order_id,
+        logical_key="",
+    ) -> bool:
+        """Atomically claim exchange and logical-signal identities before mutation."""
+        keys = []
+        cid = str(client_order_id or "").strip()
+        logical = str(logical_key or "").strip()
+        if cid:
+            keys.append(f"execution_client_order_id:{cid}")
+        if logical:
+            keys.append(f"execution_logical_order:{logical}")
+        if not keys:
+            return False
+
+        with self._db_lock:
+            if self._transaction_active:
+                raise RuntimeError(
+                    "execution identity claims require their own durable transaction"
+                )
+            try:
+                self.conn.execute("BEGIN IMMEDIATE")
+                for key in keys:
+                    cur = self.conn.execute(
+                        "INSERT OR IGNORE INTO bot_state(key,value) VALUES(?,?)",
+                        (key, str(intent_id)),
+                    )
+                    if cur.rowcount != 1:
+                        self.conn.rollback()
+                        return False
+                self._commit_durable()
+                for key in keys:
+                    row = self.conn.execute(
+                        "SELECT value FROM bot_state WHERE key=?", (key,)
+                    ).fetchone()
+                    if row is None or str(row["value"]) != str(intent_id):
+                        raise RuntimeError(
+                            f"execution identity claim read-back failed: {key}"
+                        )
+                return True
+            except Exception:
+                try:
+                    self.conn.rollback()
+                except Exception:
+                    pass
+                raise
+
+    def release_execution_identity(
+        self,
+        intent_id,
+        client_order_id,
+        logical_key="",
+    ) -> None:
+        """Release only pre-submit claims owned by this intent."""
+        cid = str(client_order_id or "").strip()
+        logical = str(logical_key or "").strip()
+        keys = []
+        if cid:
+            keys.append(f"execution_client_order_id:{cid}")
+        if logical:
+            keys.append(f"execution_logical_order:{logical}")
+        with self._db_lock:
+            for key in keys:
+                self.conn.execute(
+                    "DELETE FROM bot_state WHERE key=? AND value=?",
+                    (key, str(intent_id)),
+                )
+            if not self._transaction_active:
+                self._commit_durable()
+
+    @staticmethod
+    def _execution_intent_identity(intent):
+        return (
+            str(intent.symbol).upper(),
+            str(intent.side).upper(),
+            str(intent.order_type).upper(),
+            str(intent.purpose).upper(),
+            json.dumps(dict(intent.required_context_versions), sort_keys=True),
+            str(getattr(intent, "client_order_id", "") or ""),
+            str(getattr(intent, "campaign_id", "") or ""),
+            str(getattr(intent, "signal_id", "") or ""),
         )
-        if not self._transaction_active:
-            self.conn.commit()
 
     def save_execution_intent(self, intent, status, reason=''):
-        self.conn.execute(
-            '''INSERT OR REPLACE INTO execution_intents(
-                intent_id,symbol,side,order_type,purpose,
-                required_context_versions_json,hypothesis_id,invalidation_level,status,reason,client_order_id
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?)''',
-            (
-                intent.intent_id,
-                intent.symbol,
-                intent.side,
-                intent.order_type,
-                intent.purpose,
-                json.dumps(dict(intent.required_context_versions), sort_keys=True),
-                intent.hypothesis_id,
-                float(intent.invalidation_level or 0.0),
-                status,
-                reason,
-                getattr(intent, 'client_order_id', ''),
-            ),
+        """Write-ahead state update with collision checks, COMMIT, and read-back.
+
+        This method intentionally does not use INSERT OR REPLACE: an identity
+        collision must fail rather than overwrite evidence of a prior request.
+        """
+        identity = self._execution_intent_identity(intent)
+        cid = identity[5]
+        with self._db_lock:
+            if self._transaction_active:
+                raise RuntimeError(
+                    "execution intent must commit in its own durable transaction"
+                )
+            try:
+                self.conn.execute("BEGIN IMMEDIATE")
+                existing = self.conn.execute(
+                    "SELECT * FROM execution_intents WHERE intent_id=?",
+                    (str(intent.intent_id),),
+                ).fetchone()
+                if existing is not None:
+                    actual = (
+                        str(existing["symbol"]).upper(),
+                        str(existing["side"]).upper(),
+                        str(existing["order_type"]).upper(),
+                        str(existing["purpose"]).upper(),
+                        str(existing["required_context_versions_json"]),
+                        str(existing["client_order_id"] or ""),
+                        str(existing["campaign_id"] or ""),
+                        str(existing["signal_id"] or ""),
+                    )
+                    if actual != identity:
+                        raise sqlite3.IntegrityError(
+                            "execution intent_id collision with different immutable fields"
+                        )
+                    self.conn.execute(
+                        "UPDATE execution_intents SET status=?, reason=? WHERE intent_id=?",
+                        (str(status).upper(), str(reason or ""), str(intent.intent_id)),
+                    )
+                else:
+                    if cid:
+                        prior = self.conn.execute(
+                            "SELECT intent_id,status FROM execution_intents "
+                            "WHERE client_order_id=? LIMIT 1",
+                            (cid,),
+                        ).fetchone()
+                        if prior is not None:
+                            raise sqlite3.IntegrityError(
+                                f"client_order_id already recorded by intent {prior['intent_id']}"
+                            )
+                    self.conn.execute(
+                        """INSERT INTO execution_intents(
+                            intent_id,symbol,side,order_type,purpose,
+                            required_context_versions_json,hypothesis_id,
+                            invalidation_level,status,reason,client_order_id,
+                            campaign_id,signal_id,risk_quote,capital_reserved_quote,
+                            quantity,quote_order_quantity,created_at_ms,max_age_ms
+                        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        (
+                            str(intent.intent_id),
+                            identity[0],
+                            identity[1],
+                            identity[2],
+                            identity[3],
+                            identity[4],
+                            str(getattr(intent, "hypothesis_id", "") or ""),
+                            float(getattr(intent, "invalidation_level", 0.0) or 0.0),
+                            str(status).upper(),
+                            str(reason or ""),
+                            cid,
+                            identity[6],
+                            identity[7],
+                            float(getattr(intent, "risk_quote", 0.0) or 0.0),
+                            float(getattr(intent, "capital_reserved_quote", 0.0) or 0.0),
+                            str(getattr(intent, "quantity", "") or ""),
+                            str(getattr(intent, "quote_order_quantity", "") or ""),
+                            int(getattr(intent, "created_at_ms", 0) or 0),
+                            int(getattr(intent, "max_age_ms", 15000) or 15000),
+                        ),
+                    )
+                self._commit_durable()
+            except Exception:
+                try:
+                    self.conn.rollback()
+                except Exception:
+                    pass
+                raise
+
+        # Read only after the COMMIT call returned successfully. A failed read
+        # is a failed durability confirmation, even if the row may exist.
+        row = self.load_execution_intent(intent.intent_id)
+        if row is None or self._execution_intent_identity_from_row(row) != identity:
+            raise RuntimeError("execution intent committed but read-back verification failed")
+        if str(row.get("status", "")).upper() != str(status).upper():
+            raise RuntimeError("execution intent status read-back verification failed")
+        return True
+
+    @staticmethod
+    def _execution_intent_identity_from_row(row):
+        return (
+            str(row["symbol"]).upper(),
+            str(row["side"]).upper(),
+            str(row["order_type"]).upper(),
+            str(row["purpose"]).upper(),
+            str(row["required_context_versions_json"]),
+            str(row.get("client_order_id") or ""),
+            str(row.get("campaign_id") or ""),
+            str(row.get("signal_id") or ""),
         )
-        if not self._transaction_active:
-            self.conn.commit()
+
+    def load_execution_intent(self, intent_id):
+        with self._db_lock:
+            row = self.conn.execute(
+                "SELECT * FROM execution_intents WHERE intent_id=?",
+                (str(intent_id),),
+            ).fetchone()
+            return dict(row) if row is not None else None
+
+    def find_execution_intent_by_client_order_id(self, client_order_id, symbol=None):
+        with self._db_lock:
+            if symbol is None:
+                row = self.conn.execute(
+                    "SELECT * FROM execution_intents WHERE client_order_id=? "
+                    "ORDER BY created_at DESC LIMIT 1",
+                    (str(client_order_id),),
+                ).fetchone()
+            else:
+                row = self.conn.execute(
+                    "SELECT * FROM execution_intents WHERE client_order_id=? AND symbol=? "
+                    "ORDER BY created_at DESC LIMIT 1",
+                    (str(client_order_id), str(symbol).upper()),
+                ).fetchone()
+            return dict(row) if row is not None else None
+
+    def unresolved_execution_intents(self):
+        """List order mutations whose exchange outcome must be reconciled."""
+        with self._db_lock:
+            rows = self.conn.execute(
+                "SELECT * FROM execution_intents "
+                "WHERE UPPER(status) IN ('PENDING','SUBMITTING','AMBIGUOUS','RECONCILE_REQUIRED') "
+                "ORDER BY created_at, intent_id"
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def has_unresolved_execution_intents(self):
+        with self._db_lock:
+            row = self.conn.execute(
+                "SELECT 1 FROM execution_intents "
+                "WHERE UPPER(status) IN ('PENDING','SUBMITTING','AMBIGUOUS','RECONCILE_REQUIRED') "
+                "LIMIT 1"
+            ).fetchone()
+            return row is not None
 
     def save_execution_event(self, intent_id, event, payload=None):
         self.conn.execute(
