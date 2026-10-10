@@ -72,12 +72,15 @@ class ExecutionBarrier:
         self.context_cache = context_cache
         self.db = db
 
-    def _persist(self, intent: OrderIntent, status: str, reason: str = "") -> None:
-        if self.db is not None and hasattr(self.db, "save_execution_intent"):
-            try:
-                self.db.save_execution_intent(intent, status, reason)
-            except Exception:
-                pass
+    def _persist(self, intent: OrderIntent, status: str, reason: str = "") -> bool:
+        """Persist execution state; never treat missing/failed storage as success."""
+        if self.db is None or not hasattr(self.db, "save_execution_intent"):
+            return False
+        try:
+            result = self.db.save_execution_intent(intent, status, reason)
+            return result is not False
+        except Exception:
+            return False
 
     def _record(self, level: str, event: str, intent: OrderIntent, message: str, raw=None) -> None:
         if self.db is not None and hasattr(self.db, "log_event"):
@@ -148,7 +151,12 @@ class ExecutionBarrier:
         with self.context_cache.execution_lock:
             order_fsm = OrderStateMachine()
             order_fsm.transition(OrderState.ADMISSION)
-            self._persist(intent, "PENDING")
+            if not self._persist(intent, "PENDING"):
+                return ExecutionResult(
+                    intent.intent_id,
+                    False,
+                    reason="execution_intent_persistence_failed",
+                )
             if self.db is not None and hasattr(self.db, "save_execution_event"):
                 try:
                     self.db.save_execution_event(intent.intent_id, "ADMISSION_STARTED", dict(intent.required_context_versions))
@@ -165,6 +173,14 @@ class ExecutionBarrier:
                 self._persist(intent, "BLOCKED", reason)
                 return ExecutionResult(intent.intent_id, False, reason=reason)
 
+            if intent.purpose.upper() == "ENTRY" and pre_submit_checks is None:
+                self._persist(intent, "BLOCKED", "missing_pre_submit_gate")
+                return ExecutionResult(
+                    intent.intent_id,
+                    False,
+                    reason="missing_pre_submit_gate",
+                )
+
             if pre_submit_checks is not None:
                 try:
                     pre_submit_checks(snapshot)
@@ -173,7 +189,7 @@ class ExecutionBarrier:
                         order_fsm.transition(OrderState.CANCELED)
                     except ValueError:
                         order_fsm.state = OrderState.RECONCILE_REQUIRED
-                    reason = f"pre_submit_check_failed: {type(exc).__name__}: {exc}"
+                    reason = f"pre_submit_check_failed: {type(exc).__name__}"
                     self._persist(intent, "BLOCKED", reason)
                     self._record("WARNING", "execution_blocked", intent, reason)
                     return ExecutionResult(intent.intent_id, False, reason=reason)
@@ -200,13 +216,13 @@ class ExecutionBarrier:
             except Exception as exc:
                 order_fsm.state = OrderState.AMBIGUOUS
                 order_fsm.state = OrderState.AMBIGUOUS
-                self._persist(intent, "AMBIGUOUS", f"{type(exc).__name__}: {exc}")
+                self._persist(intent, "AMBIGUOUS", type(exc).__name__)
                 self._record(
                     "ERROR",
                     "execution_ambiguous",
                     intent,
                     "Binance submission failed or timed out; reconciliation required",
-                    {"error": f"{type(exc).__name__}: {exc}"},
+                    {"error": type(exc).__name__},
                 )
                 raise
 
