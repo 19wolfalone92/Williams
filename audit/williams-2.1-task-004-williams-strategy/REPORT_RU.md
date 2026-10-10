@@ -85,3 +85,35 @@ At the time of inspection, the connector did not return useful commit-status or 
 7. Spot SELL requires existing inventory; no Spot signal can create a short.
 8. Unresolved angulation, seed convention, signal TTL and campaign stop provenance remain explicitly marked and block the affected automated rule where the source cannot justify a deterministic decision.
 9. Full pass of Python CI + Android unit tests at the exact new commit; followed by closed-bar historical replay, cancellation/restart tests, and read-only Demo validation. The task is **not accepted** until all gates are evidenced.
+
+
+## 9. TASK 004.2 — Канонический H1: повторная проверка и изменения
+
+Проверенный базовый SHA перед этой серией изменений: `b3f6c03bccc2009730ea905be2ea75efc7d51269`. PR #49 оставался открытым Draft; base `main` — `04da5f9c09572e99ff310be3a1908179165e528c`. Ниже описаны изменения в существующей ветке; окончательный SHA и CI должны быть перепроверены после этого обновления отчёта.
+
+### Исправления в коде
+
+| Область | Файл/символ | Изменение | Статус доказательства |
+|---|---|---|---|
+| Конфигурация Python | `trading_config.py::execution_timeframe_blocker` | Добавлена явная проверка: только `EXECUTION_TIMEFRAME=1h`; M5/M15, пустое и неизвестное значение блокируются | CODE-CONFIRMED; поведенческие тесты ожидают CI |
+| Preflight Python | `strategy.py::canonical_williams_environment_blockers` | Неканонический `EXECUTION_TIMEFRAME` включается в блокирующие причины | CODE-CONFIRMED; поведенческие тесты ожидают CI |
+| Сканер Python | `market_scanner.py::MarketScanner._analyse_base` | Сканер блокирует кандидата, если собственный интервал или `EXECUTION_TIMEFRAME` не равен H1; проверка выполняется до обращения к market data | CODE-CONFIRMED; поведенческие тесты ожидают CI |
+| Временная математика сигналов | `williams_signals.py::_timeframe_ms` | Неизвестный таймфрейм больше не превращается в M5; возвращается 0 | CODE-CONFIRMED; поведенческий тест добавлен |
+| Android timeframe contract | `app/src/main/java/com/williamsbot/WilliamsTimeframeContract.kt` | В существующем коде canonical decision уже зафиксирован как `1h`; `5m` и `15m` не проходят `canCreateCanonicalSignal` | CODE-CONFIRMED; существующий Kotlin-тест проверяет H1/M15/M5 |
+
+### Новые регрессионные проверки
+
+- `test_market_scanner.py`: сканер не создаёт кандидата при интервале M5; блокирует сигнал при `EXECUTION_TIMEFRAME=15m`, даже если scanner interval равен H1; пустая конфигурация блокируется.
+- `tests/test_williams_strategy_golden_vectors.py`: H1-only environment guard, блокировка M5/M15/пустого/неизвестного timeframe, разрешение H1/default, отсутствие скрытого M5 fallback в `_timeframe_ms`.
+- Существующий Android-тест `WilliamsStrategyGoldenVectorsTest.onlyH1CanCreateCanonicalCampaignSignals` проверяет только контрактный helper. Он сам по себе не доказывает, что каждый legacy/persisted/runtime execution path подчиняется этому контракту.
+
+### Оставшиеся критические проверки
+
+1. `TradingConfig.from_env` хранит переданное значение таймфрейма, даже когда helper выдаёт блокировку. Все production entry points должны обязательно применять блокирующий результат до допуска к сигналам; одного helper недостаточно.
+2. Python scanner получает интервал через `INTERVAL`, а config — через `EXECUTION_TIMEFRAME`. Теперь несоответствие блокируется в `_analyse_base`, но требуется CI и проверка всех иных путей запуска/сканеров.
+3. Android campaign path фиксирует H1 и при ошибке запроса H1 возвращает пустые свечи/состояние без сигнала. При этом в `StandaloneRuntime.kt` остаются MTF/legacy wave-analysis участки с M5/M15. Не доказано, что каждый такой участок не может влиять на путь исполнения через косвенные данные; нужен call-graph до фактического order intent/execution gate.
+4. `ExecutionGate.kt` резервирует символ и не валидирует timeframe. Доказательство H1-only на фактическом execution admission path не завершено; требуется проверить, что в него невозможно передать сигнал, сформированный вне canonical H1 пути.
+5. Persisted preferences/restart, release/preflight gates и все launch profiles должны быть проверены end-to-end. Не заявляется, что они уже все доказаны.
+6. Полный WM1/WM2/WM3 replay, cross-runtime behavioural parity, source-page audit и безопасный жизненный цикл исполнения остаются отдельными P0/P1/P2 блокерами.
+
+**Текущий статус задачи: IN PROGRESS — NOT APPROVED.** Указанные изменения — реализация fail-closed защиты H1, но не доказательство полного отсутствия M5/M15 влияния на все execution paths. Успешный CI не заменяет call-graph, replay и первоисточниковый аудит.
