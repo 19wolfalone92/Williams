@@ -291,3 +291,20 @@ def test_persisted_monthly_signal_keeps_monthly_timeframe():
     }
     signal = signal_spec_from_dict(raw)
     assert signal.timeframe == "1M"
+
+
+
+def test_monthly_timeframe_is_preserved_by_runtime_and_config():
+    from futures_runtime import _normalize_interval, _interval_seconds
+    from trading_config import TradingConfig
+
+    cfg = TradingConfig.from_env({
+        "EXECUTION_TIMEFRAME": "1M",
+        "STRUCTURAL_TIMEFRAMES": "1M,1w,1d",
+    })
+    assert cfg.execution_timeframe == "1M"
+    assert cfg.structural_timeframes == ("1M", "1w", "1d")
+    assert _normalize_interval("1M") == "1M"
+    assert _normalize_interval("1m") == "1m"
+    assert _interval_seconds("1M") == 30 * 24 * 60 * 60
+    assert _interval_seconds("1m") == 60
