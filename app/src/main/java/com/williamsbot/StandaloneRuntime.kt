@@ -5305,11 +5305,26 @@ private class NativeEngine(
         val response = try {
             signedRequest(verb, path, params)
         } catch (x: Throwable) {
-            updateMutationIntent(intentKey, "UNKNOWN", error = x.message ?: x.javaClass.simpleName)
-            setReconcileRequired(
-                "Binance mutation result is unknown; reconcile before further exposure changes: " +
-                    intentKey
-            )
+            val journalFailure = runCatching {
+                updateMutationIntent(
+                    intentKey,
+                    "UNKNOWN",
+                    error = x.message ?: x.javaClass.simpleName
+                )
+            }.exceptionOrNull()
+            runCatching {
+                setReconcileRequired(
+                    "Binance mutation result is unknown; reconcile before further exposure changes: " +
+                        intentKey +
+                        if (journalFailure != null) "; mutation journal update also failed" else ""
+                )
+            }
+            if (journalFailure != null) {
+                throw IllegalStateException(
+                    "Mutation result is unknown and UNKNOWN status could not be persisted: " + intentKey,
+                    journalFailure
+                )
+            }
             throw x
         }
 
