@@ -302,6 +302,34 @@ class TradingAuditStore(context: Context) :
     }
 
     @Synchronized
+    fun markFeeAccountingUnknown(symbol: String, orderId: String, reason: String) {
+        val now = System.currentTimeMillis()
+        recordUserEvent(
+            JSONObject()
+                .put("e", "executionReport")
+                .put("x", "TRADE")
+                .put("s", symbol)
+                .put("i", orderId)
+                .put("t", "-1")
+                .put("l", "0")
+                .put("L", "0")
+                .put("n", "")
+                .put("N", "")
+                .put("T", now)
+                .put("E", now)
+                .put("X", "FILLED")
+                .put("feeAccountingError", reason)
+        )
+    }
+
+    fun clearFeeAccountingUnknown(symbol: String, orderId: String) {
+        writableDatabase.delete(
+            "executions",
+            "symbol=? AND order_id=? AND execution_type='TRADE' AND trade_id='-1' AND commission_known=0",
+            arrayOf(symbol, orderId)
+        )
+    }
+
     fun estimateFeesUsdt(
         symbol: String,
         openedAt: Long,
@@ -445,18 +473,19 @@ class TradingAuditStore(context: Context) :
         if (executionType == "TRADE" && tradeId != "-1") {
             writableDatabase.query(
                 "executions",
-                arrayOf("last_qty", "last_price", "commission", "commission_asset", "commission_known"),
+                arrayOf("order_id", "last_qty", "last_price", "commission", "commission_asset", "commission_known"),
                 "symbol=? AND trade_id=? AND execution_type='TRADE'",
                 arrayOf(symbol, tradeId),
                 null, null, null
             ).use { cursor ->
                 if (cursor.moveToFirst()) {
                     duplicateTrade = true
-                    val same = cursor.getDouble(0) == lastQty &&
-                        cursor.getDouble(1) == lastPrice &&
-                        cursor.getDouble(2) == (parsedCommission ?: -1.0) &&
-                        (cursor.getString(3) ?: "").uppercase() == commissionAsset &&
-                        commissionKnown && cursor.getInt(4) == 1
+                    val same = (cursor.getString(0) ?: "") == orderId &&
+                        cursor.getDouble(1) == lastQty &&
+                        cursor.getDouble(2) == lastPrice &&
+                        cursor.getDouble(3) == (parsedCommission ?: -1.0) &&
+                        (cursor.getString(4) ?: "").uppercase() == commissionAsset &&
+                        commissionKnown && cursor.getInt(5) == 1
                     if (!same) {
                         val poison = ContentValues()
                         poison.put("commission_known", 0)
