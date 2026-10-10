@@ -911,21 +911,17 @@ internal class FuturesNativeEngine(
         val primary = analyseFrame(exchange, symbol, tf) ?: return null
         val higherTf = parentInterval(tf)
         val higher = analyseFrame(exchange, symbol, higherTf) ?: return null
+        val macro = analyseFrame(exchange, symbol, "1d") ?: return null
         val currentClosedBarTime = primary.bars.lastOrNull()?.openTime ?: return null
+        val operativeState = FuturesContextState(primary.bullish, primary.bearish, primary.awake, primary.ao)
+        val parentState = FuturesContextState(higher.bullish, higher.bearish, higher.awake, higher.ao)
+        val macroState = FuturesContextState(macro.bullish, macro.bearish, macro.awake, macro.ao)
         val candidates = primary.signalCandidates
             .filter { signal ->
-                // A trigger is not permission by itself: operative Alligator
-                // context and the structural parent must both support direction.
-                val fresh = isSignalFresh(signal, currentClosedBarTime, tf)
-                if (!fresh) {
-                    false
-                } else if (signal.direction == "LONG") {
-                    primary.bullish && primary.awake && primary.ao > 0.0 &&
-                        higher.bullish && higher.awake && higher.ao > 0.0
-                } else {
-                    primary.bearish && primary.awake && primary.ao < 0.0 &&
-                        higher.bearish && higher.awake && higher.ao < 0.0
-                }
+                // H1/H4 must permit the direction; D1 only vetoes an active
+                // opposite context. A trigger alone never authorizes entry.
+                isSignalFresh(signal, currentClosedBarTime, tf) &&
+                    FuturesContextPolicy.allows(signal.direction, operativeState, parentState, macroState)
             }
         if (candidates.isEmpty()) return null
         val chosen = candidates.minByOrNull { it.confirmationTime } ?: return null
