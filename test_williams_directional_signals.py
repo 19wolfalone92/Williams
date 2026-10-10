@@ -2,6 +2,7 @@ import pandas as pd
 import pytest
 
 from campaign_model import SignalRole, SignalSpec, SignalType
+from campaign_engine import CampaignEngine
 from digital_williams_core import DigitalWilliamsCore
 from strategy import calculate_indicators, config_from_env
 from williams_signals import (
@@ -152,9 +153,9 @@ def test_long_super_ao_and_fractal_are_independent_initial_entry_candidates():
     assert by_type[SignalType.SUPER_AO].role is SignalRole.ENTRY
     assert by_type[SignalType.FRACTAL].role is SignalRole.ENTRY
     assert len([signal for signal in signals if signal.role is SignalRole.ENTRY]) == 2
-    selected = DigitalWilliamsCore().select_initial(signals, now_ms=10**15)
-    assert selected is None  # the synthetic frame has no live expiry timestamps
-    # When made live, either signal family can seed a flat campaign without the other.
+    selected = CampaignEngine.choose_initial_signal(signals)
+    assert selected is by_type[SignalType.SUPER_AO]
+    # Either signal family is independently eligible; WM2 is first by confirmation time here.
 
 
 def test_fractal_signal_uses_configured_confirmation_delay_not_hardcoded_two_bars():
