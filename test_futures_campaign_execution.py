@@ -2416,3 +2416,50 @@ def test_pending_entry_with_missing_expiry_is_cancelled_during_reconciliation(tm
         assert client.algo_status == "CANCELED"
     finally:
         db.conn.close()
+
+def test_context_vetoed_older_signal_does_not_hide_later_valid_wm1():
+    from types import SimpleNamespace
+    from campaign_model import SignalRole, SignalSpec, SignalType
+    from market_context import ContextCache, TFMarketContext
+
+    now = int(time.time() * 1000)
+    cache = ContextCache()
+    common = dict(
+        symbol="BTCUSDT", version=1,
+        candle_open_time_ms=now - 3_600_000,
+        candle_close_time_ms=now, price=100.0, data_bars=200,
+        allow_long=False, allow_short=False, alligator_state="SLEEP",
+    )
+    for interval in ("1h", "4h", "1d"):
+        cache.publish(TFMarketContext(**common, interval=interval))
+
+    earlier_wm2 = SignalSpec.new(
+        symbol="BTCUSDT", side="BUY", signal_type=SignalType.SUPER_AO,
+        role=SignalRole.ADD_ON, timeframe="1h",
+        signal_bar_time_ms=now - 10_000, confirmation_time_ms=now - 10_000,
+        trigger_price=101.0, protective_reference=99.0,
+        expires_at_ms=now + 60_000,
+    )
+    later_wm1 = SignalSpec.new(
+        symbol="BTCUSDT", side="BUY", signal_type=SignalType.REVERSAL,
+        role=SignalRole.ENTRY, timeframe="1h",
+        signal_bar_time_ms=now - 5_000, confirmation_time_ms=now - 5_000,
+        trigger_price=102.0, protective_reference=98.0,
+        expires_at_ms=now + 60_000,
+    )
+    runtime = object.__new__(FuturesRuntime)
+    runtime.context_cache = cache
+    runtime.context_intervals = ("1h", "4h", "1d")
+    runtime.require_htf_confirmation = True
+
+    selected = runtime._directional_signal(
+        SimpleNamespace(
+            symbol="BTCUSDT",
+            campaign_signal_specs=[earlier_wm2.to_dict(), later_wm1.to_dict()],
+        ),
+        "LONG",
+        {},
+    )
+    assert selected.signal_type == SignalType.REVERSAL
+    assert selected.htf_confirmed is False
+    assert selected.context_versions == {"1h": 1, "4h": 1, "1d": 1}
