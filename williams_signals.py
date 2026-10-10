@@ -265,8 +265,14 @@ def extract_long_signal_specs(
     context_versions: dict[str, int] | None = None,
     max_reversal_age_bars: int = 20,
 ) -> list[SignalSpec]:
-    """Extract all presently armable LONG signals from closed candles."""
-    if ind is None or ind.empty:
+    """Extract all presently armable LONG signals from closed canonical H1 candles."""
+    if ind is None or ind.empty or str(timeframe).strip().lower() != "1h" or len(ind) < 140:
+        return []
+    # The live caller should already supply only closed candles. Enforce the
+    # invariant again at this public boundary so a second caller cannot build
+    # a canonical signal from an unfinished H1 candle or unknown timestamp.
+    last_open_ms = _row_time_ms(ind.iloc[-1])
+    if last_open_ms <= 0 or last_open_ms + _timeframe_ms("1h") > int(pd.Timestamp.utcnow().timestamp() * 1000):
         return []
 
     specs: list[SignalSpec] = []
