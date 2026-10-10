@@ -987,6 +987,29 @@ class MultiPositionTrader:
         self.set_state(symbol, "EXIT_PENDING")
 
         create_oco = getattr(self.client, "create_oco_sell_safe", None) or self.client.create_oco_sell
+        def _pre_submit_oco(_snapshot):
+            account = self.client.account()
+            free_qty = self._asset_balance(symbol, account=account)
+            if qty > free_qty + max(1e-8, qty * 1e-6):
+                raise RuntimeError(
+                    f"{symbol}: free base balance changed before OCO submission"
+                )
+            if hasattr(self.client, "ticker_price"):
+                last_price = float(self.client.ticker_price(symbol).get("price", 0) or 0)
+                if last_price > 0 and not (tp > last_price > sl):
+                    raise RuntimeError(
+                        f"{symbol}: OCO price relationship invalid at submit time: "
+                        f"last={last_price} TP={tp} SL={sl}"
+                    )
+            if hasattr(self.client, "book_ticker"):
+                book = self.client.book_ticker(symbol)
+                bid = float(book.get("bidPrice", 0) or 0)
+                if bid > 0 and not (tp > bid > sl):
+                    raise RuntimeError(
+                        f"{symbol}: OCO protection levels crossed at submit time: "
+                        f"bid={bid} TP={tp} SL={sl}"
+                    )
+
         result = self._execute_mutation(
             symbol,
             "SELL",
@@ -1002,7 +1025,7 @@ class MultiPositionTrader:
                 client_id,
             ),
             trade_id=trade_id,
-            pre_submit_checks=lambda _snapshot: self._oco_equity_check(),
+            pre_submit_checks=_pre_submit_oco,
         )
 
         for leg in result.get("orderReports", []):
