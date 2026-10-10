@@ -6497,7 +6497,11 @@ private class NativeEngine(
                 angulationScore(i) > 0.0
             ) {
                 val trigger = candles[i].h + tick
-                if (candles[current].c < trigger) {
+                if (
+                    current - i <= 2 &&
+                    candles[current].c < trigger &&
+                    isLongSignalStillActionable(i, current, highs, lows, trigger)
+                ) {
                     out += CampaignSignalN(
                         signalId = campaignSignalId(symbol, frame, "REVERSAL", candles[i].t),
                         type = "REVERSAL",
@@ -6514,48 +6518,44 @@ private class NativeEngine(
             }
         }
 
-        // WM2: three consecutive rising AO histogram bars, with the previously
-        // valid buy-fractal/Balance-Line context still present.
-        var streak = 0
-        for (i in candles.lastIndex downTo 35) {
-            val a = ao(candles, i)
-            val p = ao(candles, i - 1)
-            if (a > p) streak++ else break
-            if (streak == 3) {
-                val priorFractalValid = lastValidFractalLevel(i - 1)?.let { fractal ->
-                    val confirmTeeth = teethS.getOrNull(fractal.confirmationIndex) ?: Double.NaN
-                    confirmTeeth.isFinite() && fractal.level > confirmTeeth
-                } ?: false
-                if (priorFractalValid) {
-                    val trigger = candles[i].h + tick
-                    if (candles[current].c < trigger) {
-                        out += CampaignSignalN(
-                            signalId = campaignSignalId(symbol, frame, "SUPER_AO", candles[i].t),
-                            type = "SUPER_AO",
-                            role = "ENTRY",
-                            signalBarTimeMs = candles[i].t,
-                            triggerPrice = trigger,
-                            protectivePrice = candles[i].l - tick,
-                            teethAtDetection = teethS[i].takeIf { it.isFinite() } ?: 0.0,
-                            invalidationPrice = candles[i].l - tick,
-                            reason = "WM2 Super AO: third rising AO bar; conditional trigger above price bar"
-                        )
-                    }
-                }
-                break
+        // WM2: the third rising AO bar is an independent Wise-Man signal.
+        // It does not require a prior fractal. The indexed AO helper prevents
+        // the historical scanner from backdating a three-bar run by two bars.
+        val aoSeries = candles.indices.map { ao(candles, it) }
+        val superAoIndex = (max(3, current - 80)..current)
+            .lastOrNull { isThirdSameColorAoBar(aoSeries, it, "LONG") }
+        if (superAoIndex != null && current - superAoIndex <= 2) {
+            val i = superAoIndex
+            val trigger = candles[i].h + tick
+            if (
+                candles[current].c < trigger &&
+                isLongSignalStillActionable(i, current, highs, lows, trigger)
+            ) {
+                out += CampaignSignalN(
+                    signalId = campaignSignalId(symbol, frame, "SUPER_AO", candles[i].t),
+                    type = "SUPER_AO",
+                    role = "ENTRY",
+                    signalBarTimeMs = candles[i].t,
+                    triggerPrice = trigger,
+                    protectivePrice = candles[i].l - tick,
+                    teethAtDetection = teethS[i].takeIf { it.isFinite() } ?: 0.0,
+                    invalidationPrice = candles[i].l - tick,
+                    reason = "WM2 Super AO: third rising AO bar; independent of fractal; conditional trigger above price bar"
+                )
             }
         }
 
         // WM3: most recent confirmed buy fractal. The signal is persistent,
         // but the trigger is armable only while it remains above current Teeth.
         val fractal = latestUpFractal(candles.lastIndex)
-        if (fractal != null) {
+        if (fractal != null && current - fractal.confirmationIndex <= 8) {
             val fractalCenter = fractal.centerIndex
             val trigger = fractal.level + tick
             val currentTeeth = teethS[current].takeIf { it.isFinite() } ?: 0.0
             val confirmationTeeth = teethS.getOrNull(fractal.confirmationIndex) ?: Double.NaN
             if (confirmationTeeth.isFinite() && fractal.level > confirmationTeeth &&
-                candles[current].c < trigger && trigger > currentTeeth
+                candles[current].c < trigger && trigger > currentTeeth &&
+                isLongSignalStillActionable(fractalCenter, current, highs, lows, trigger)
             ) {
                 out += CampaignSignalN(
                     signalId = campaignSignalId(symbol, frame, "FRACTAL", candles[fractalCenter].t),
