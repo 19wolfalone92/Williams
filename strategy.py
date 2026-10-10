@@ -389,6 +389,11 @@ def canonical_williams_environment_blockers(env=None):
         "FRACTAL_RIGHT": ("fractal_right", 2), "SUPER_AO_BARS": ("super_ao_bars", 3),
     }
     blockers = []
+    requested_timeframe = str(source.get("EXECUTION_TIMEFRAME", "1h")).strip().lower()
+    if requested_timeframe != "1h":
+        blockers.append(
+            f"EXECUTION_TIMEFRAME={requested_timeframe or '<empty>'}; canonical Williams signals require H1 (1h)"
+        )
     for name, (key, expected) in names.items():
         if name not in source or str(source.get(name, "")).strip() == "":
             continue
