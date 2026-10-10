@@ -508,8 +508,24 @@ class ExecutionBarrier:
             new_ok = new_result in {"SUCCESS", "NOT_ATTEMPTED"}
             new_response = response.get("newOrderResponse")
             new_status = ExecutionBarrier._response_status(new_response)
-            if cancel_ok and new_ok and (new_result != "SUCCESS" or new_status in ExecutionBarrier.KNOWN_ORDER_STATES):
-                if new_result == "SUCCESS" and new_status in {"NEW", "PARTIALLY_FILLED", "FILLED"}:
+            try:
+                new_executed = float(
+                    (new_response or {}).get("executedQty", 0) or 0
+                )
+            except (TypeError, ValueError):
+                new_executed = -1.0
+            if (
+                cancel_ok
+                and new_ok
+                and (
+                    new_result != "SUCCESS"
+                    or (
+                        new_status in {"NEW", "PENDING_NEW"}
+                        and new_executed == 0.0
+                    )
+                )
+            ):
+                if new_result == "SUCCESS" and new_status in {"NEW", "PENDING_NEW"}:
                     return True, "SUBMITTED", ""
                 if cancel_result == "SUCCESS" and new_result == "NOT_ATTEMPTED":
                     return True, "SUBMITTED", ""
