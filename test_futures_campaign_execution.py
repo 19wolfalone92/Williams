@@ -2451,6 +2451,7 @@ def test_context_vetoed_older_signal_does_not_hide_later_valid_wm1():
     runtime.context_cache = cache
     runtime.context_intervals = ("1h", "4h", "1d")
     runtime.require_htf_confirmation = True
+    runtime.client = SimpleNamespace(mark_price=lambda symbol: {"markPrice": "100.0"})
 
     selected = runtime._directional_signal(
         SimpleNamespace(
