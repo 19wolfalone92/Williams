@@ -160,7 +160,11 @@ class Database:
             quantity TEXT,
             quote_order_quantity TEXT,
             created_at_ms INTEGER,
-            max_age_ms INTEGER DEFAULT 15000
+            max_age_ms INTEGER DEFAULT 15000,
+            signal_type TEXT,
+            operation_kind TEXT DEFAULT 'PLACE',
+            related_order_id TEXT,
+            related_order_list_id TEXT
         );
         CREATE TABLE IF NOT EXISTS execution_events(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -317,6 +321,10 @@ class Database:
             "quote_order_quantity": "TEXT",
             "created_at_ms": "INTEGER",
             "max_age_ms": "INTEGER DEFAULT 15000",
+            "signal_type": "TEXT",
+            "operation_kind": "TEXT DEFAULT 'PLACE'",
+            "related_order_id": "TEXT",
+            "related_order_list_id": "TEXT",
         }
         for name, sql_type in additions.items():
             if name not in columns:
@@ -475,6 +483,10 @@ class Database:
             str(getattr(intent, "client_order_id", "") or ""),
             str(getattr(intent, "campaign_id", "") or ""),
             str(getattr(intent, "signal_id", "") or ""),
+            str(getattr(intent, "signal_type", "") or "").upper(),
+            str(getattr(intent, "operation_kind", "PLACE") or "PLACE").upper(),
+            str(getattr(intent, "related_order_id", "") or ""),
+            str(getattr(intent, "related_order_list_id", "") or ""),
         )
 
     def save_execution_intent(self, intent, status, reason=''):
@@ -506,6 +518,10 @@ class Database:
                         str(existing["client_order_id"] or ""),
                         str(existing["campaign_id"] or ""),
                         str(existing["signal_id"] or ""),
+                        str(existing["signal_type"] or "").upper(),
+                        str(existing["operation_kind"] or "PLACE").upper(),
+                        str(existing["related_order_id"] or ""),
+                        str(existing["related_order_list_id"] or ""),
                     )
                     if actual != identity:
                         raise sqlite3.IntegrityError(
@@ -532,8 +548,9 @@ class Database:
                             required_context_versions_json,hypothesis_id,
                             invalidation_level,status,reason,client_order_id,
                             campaign_id,signal_id,risk_quote,capital_reserved_quote,
-                            quantity,quote_order_quantity,created_at_ms,max_age_ms
-                        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                            quantity,quote_order_quantity,created_at_ms,max_age_ms,
+                            signal_type,operation_kind,related_order_id,related_order_list_id
+                        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                         (
                             str(intent.intent_id),
                             identity[0],
@@ -554,6 +571,10 @@ class Database:
                             str(getattr(intent, "quote_order_quantity", "") or ""),
                             int(getattr(intent, "created_at_ms", 0) or 0),
                             int(getattr(intent, "max_age_ms", 15000) or 15000),
+                            str(getattr(intent, "signal_type", "") or ""),
+                            str(getattr(intent, "operation_kind", "PLACE") or "PLACE").upper(),
+                            str(getattr(intent, "related_order_id", "") or ""),
+                            str(getattr(intent, "related_order_list_id", "") or ""),
                         ),
                     )
                 self._commit_durable()
@@ -584,6 +605,10 @@ class Database:
             str(row.get("client_order_id") or ""),
             str(row.get("campaign_id") or ""),
             str(row.get("signal_id") or ""),
+            str(row.get("signal_type") or "").upper(),
+            str(row.get("operation_kind") or "PLACE").upper(),
+            str(row.get("related_order_id") or ""),
+            str(row.get("related_order_list_id") or ""),
         )
 
     def load_execution_intent(self, intent_id):
