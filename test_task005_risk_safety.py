@@ -146,3 +146,16 @@ def test_unknown_realized_pnl_fails_closed():
     allowed, reason = EquityCircuitBreaker().check(UnreadablePnl(), 10_000.0)
     assert not allowed
     assert "realized PnL unavailable" in reason
+
+
+
+def test_closed_trade_with_null_pnl_is_unknown_not_zero():
+    db = Database(":memory:")
+    db.conn.execute(
+        "INSERT INTO trades (entry_time, exit_time, symbol, pnl) "
+        "VALUES (datetime('now'), datetime('now'), 'BTCUSDT', NULL)"
+    )
+    db.conn.commit()
+    allowed, reason = EquityCircuitBreaker().check(db, 10_000.0)
+    assert not allowed
+    assert "realized PnL unavailable" in reason

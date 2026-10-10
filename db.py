@@ -1038,21 +1038,31 @@ class Database:
 
 
     def pnl_today_all(self):
-        """Return realized PnL for all closed trades since the UTC date boundary.
+        """Return verified realized PnL since UTC midnight; unknown rows are errors.
 
-        The trades.pnl field is the persisted net trade PnL; do not subtract the
-        same fees again here.
+        No closed trades is a legitimate zero. A closed trade with missing,
+        non-numeric or non-finite PnL is not zero and must block new entries.
+        The persisted pnl field is not fee-adjusted again here.
         """
-        row = self.conn.execute(
-            "SELECT SUM(pnl) AS pnl FROM trades "
+        import math
+        rows = self.conn.execute(
+            "SELECT id,pnl FROM trades "
             "WHERE exit_time IS NOT NULL AND exit_time >= date('now')"
-        ).fetchone()
-        if row is None or row["pnl"] is None:
-            return 0.0
-        value = float(row["pnl"])
-        if not __import__("math").isfinite(value):
-            raise ValueError("persisted realized PnL is non-finite")
-        return value
+        ).fetchall()
+        total = 0.0
+        for row in rows:
+            if row["pnl"] is None:
+                raise ValueError(f"closed trade {row['id']} has unknown realized PnL")
+            try:
+                value = float(row["pnl"])
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError(f"closed trade {row['id']} has invalid realized PnL") from exc
+            if not math.isfinite(value):
+                raise ValueError(f"closed trade {row['id']} has non-finite realized PnL")
+            total += value
+        if not math.isfinite(total):
+            raise ValueError("aggregate realized PnL is non-finite")
+        return total
 
     def active_campaign_count(self):
         row = self.conn.execute(
@@ -1070,13 +1080,26 @@ class Database:
         )
 
     def pnl_today(self, symbol):
-        r = self.conn.execute(
-            "SELECT COALESCE(SUM(pnl),0) AS pnl FROM trades "
-            "WHERE symbol=? AND exit_time IS NOT NULL "
-            "AND exit_time >= date('now')",
+        import math
+        rows = self.conn.execute(
+            "SELECT id,pnl FROM trades WHERE symbol=? "
+            "AND exit_time IS NOT NULL AND exit_time >= date('now')",
             (str(symbol).upper(),)
-        ).fetchone()
-        return float(r['pnl'] or 0)
+        ).fetchall()
+        total = 0.0
+        for row in rows:
+            if row["pnl"] is None:
+                raise ValueError(f"closed trade {row['id']} has unknown realized PnL")
+            try:
+                value = float(row["pnl"])
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError(f"closed trade {row['id']} has invalid realized PnL") from exc
+            if not math.isfinite(value):
+                raise ValueError(f"closed trade {row['id']} has non-finite realized PnL")
+            total += value
+        if not math.isfinite(total):
+            raise ValueError("aggregate realized PnL is non-finite")
+        return total
 
     def consecutive_losses(self, symbol, limit=20):
         rows = self.conn.execute(
