@@ -1074,15 +1074,34 @@ class Database:
         safe_limit = max(1, min(int(limit), 500))
         rows = self.conn.execute(
             """
-            SELECT id, created_at, reason, payload_json
-            FROM campaign_events
-            WHERE event = ?
-            ORDER BY created_at DESC, id DESC
+            SELECT e.id, e.created_at, e.reason, e.payload_json,
+                   c.tags_json AS campaign_tags_json
+            FROM campaign_events AS e
+            LEFT JOIN campaigns AS c ON c.campaign_id = e.campaign_id
+            WHERE e.event = ?
+            ORDER BY e.created_at DESC, e.id DESC
             LIMIT ?
             """,
             ("CAMPAIGN_CLOSED", safe_limit),
         ).fetchall()
-        return [dict(row) for row in rows]
+        result = []
+        for raw in rows:
+            row = dict(raw)
+            try:
+                tags_raw = row.pop("campaign_tags_json", None)
+                tags = json.loads(tags_raw) if tags_raw else {}
+                mode = str(tags.get("execution_mode", "") or "").upper()
+            except (TypeError, ValueError, json.JSONDecodeError):
+                mode = ""
+            if mode == "SPOT":
+                continue
+            if mode != "FUTURES":
+                # Unknown campaign ownership is not allowed to reset/bypass
+                # the Futures loss circuit breaker.
+                row["payload_json"] = "{}"
+                row["reason"] = "UNKNOWN_CAMPAIGN_MODE"
+            result.append(row)
+        return result
 
     def campaign_risk_reserved_quote(self):
         # RECONCILE_REQUIRED does not release risk: the exchange may still
