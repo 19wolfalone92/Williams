@@ -1770,8 +1770,12 @@ private class NativeEngine(
                 val clientId = query["origClientOrderId"]
                 val orderId = query["orderId"]
                 if (!clientId.isNullOrBlank()) {
+                    val executed = response.optString("executedQty").toDoubleOrNull() ?: -1.0
                     auditStore.reconcileExecutionMutationByClientOrderId(
                         clientId, exchangeStatus, body
+                    )
+                    auditStore.reconcileExecutionMutationByTargetClientOrderId(
+                        clientId, exchangeStatus, executed, body
                     )
                 }
                 if (!orderId.isNullOrBlank()) {
@@ -1792,6 +1796,9 @@ private class NativeEngine(
                 if (!listClientId.isNullOrBlank()) {
                     auditStore.reconcileExecutionMutationByClientOrderId(
                         listClientId, listStatus, body
+                    )
+                    auditStore.reconcileExecutionMutationByTargetOrderListClientId(
+                        listClientId, body
                     )
                 }
                 if (!listId.isNullOrBlank()) {
