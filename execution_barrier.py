@@ -179,8 +179,10 @@ class ExecutionBarrier:
         global_state = str(self.db.state_get("position_state", "UNKNOWN") or "UNKNOWN").upper()
         if global_state in {"UNKNOWN", "RECONCILE_REQUIRED"}:
             return global_state
+        # Per-symbol state is mandatory. A healthy global portfolio state
+        # cannot establish that this particular symbol is flat.
         symbol_state = str(
-            self.db.state_get(f"position_state:{intent.symbol.upper()}", global_state)
+            self.db.state_get(f"position_state:{intent.symbol.upper()}", "UNKNOWN")
             or "UNKNOWN"
         ).upper()
         if symbol_state in {"UNKNOWN", "RECONCILE_REQUIRED"}:
