@@ -221,17 +221,17 @@ class CampaignExecutionService:
         *,
         expected_versions: dict[str, int],
     ) -> tuple[bool, bool]:
-        """Return (allowed, is_early_wm1) from the canonical H1/H4/D1 context.
+        """Return (allowed, is_early_wm1) using H1 evidence plus fresh H4 context.
 
-        H1 is the decision frame; H4 is valid context but is not a duplicate
-        directional trigger. D1 is a macro airbag. Only WM1 may be admitted
-        before H1 has turned, and only with positive angulation evidence.
+        D1 can be displayed as broad-market information but is not a hard gate.
+        H4 freshness/data validity is required; it does not duplicate the H1
+        signal-specific trigger logic with a universal directional veto.
         """
         if str(signal.timeframe).lower() != "1h" or signal.side != "BUY":
             return False, False
 
         now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-        durations_ms = {"1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000}
+        durations_ms = {"1h": 3_600_000, "4h": 14_400_000}
         contexts = {}
         versions = {
             str(interval).lower(): int(version)
@@ -268,14 +268,12 @@ class CampaignExecutionService:
             contexts[interval] = context
 
         h1 = contexts["1h"]
-        d1 = contexts["1d"]
         try:
             h1_ao = float(h1.ao_value)
-            d1_ao = float(d1.ao_value)
             angle = float(signal.angulation_score)
         except (TypeError, ValueError, OverflowError):
             return False, False
-        if not math.isfinite(h1_ao) or not math.isfinite(d1_ao):
+        if not math.isfinite(h1_ao):
             return False, False
 
         h1_long = (
@@ -283,22 +281,11 @@ class CampaignExecutionService:
             and bool(h1.alligator_awake)
         )
         if h1_long:
-            strict_allowed = True
-        else:
-            strict_allowed = False
-
-        d1_opposes_long = (
-            str(d1.alligator_state or "").upper() == "BEARISH"
-            and bool(d1.alligator_awake)
-            and d1_ao < 0.0
-        )
-        if d1_opposes_long:
-            return False, False
-        if strict_allowed:
             return True, False
 
-        # The source's early First Wise Man may lead the new H1 trend. Do not
-        # grant the same exception to Super AO, fractal breakouts, or generic setups.
+        # WM1 is an early presenting signal and may precede an aligned H1
+        # Alligator. The caller must opt in to the detector's approximate numeric
+        # angulation; that approximation is intentionally blocked by default.
         if (
             signal.signal_type == SignalType.REVERSAL
             and math.isfinite(angle)
