@@ -610,6 +610,13 @@ class FuturesCampaignExecutionService:
         direction = signal_direction(signal)
         if signal.role != SignalRole.ENTRY:
             raise FuturesCampaignExecutionError("Initial entry requires a SignalRole.ENTRY signal")
+        if signal.signal_type == SignalType.REVERSAL:
+            try:
+                angulation = float(signal.angulation_score)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise FuturesCampaignExecutionError("WM1 angulation evidence is not numeric") from exc
+            if not math.isfinite(angulation) or angulation <= 0.0:
+                raise FuturesCampaignExecutionError("WM1 requires finite positive angulation evidence")
         if not math.isfinite(float(signal.trigger_price)) or float(signal.trigger_price) <= 0:
             raise FuturesCampaignExecutionError("Signal trigger price must be finite and positive")
         if int(signal.expires_at_ms or 0) <= int(time.time() * 1000):
@@ -831,6 +838,13 @@ class FuturesCampaignExecutionService:
                 client_order_id=client_algo_id,
                 purpose="CAMPAIGN_ENTRY",
                 permission_interval=signal.timeframe,
+                context_admission_mode=(
+                    "TC2_WM1_EARLY"
+                    if signal.signal_type == SignalType.REVERSAL
+                    else "STRICT_DIRECTIONAL"
+                ),
+                signal_type=signal.signal_type.value,
+                angulation_score=float(signal.angulation_score or 0.0),
                 campaign_id=campaign.campaign_id,
                 signal_id=signal.signal_id,
                 risk_quote=actual_risk,
@@ -841,11 +855,17 @@ class FuturesCampaignExecutionService:
                 ctx = snapshot.context(symbol, signal.timeframe)
                 if ctx is None:
                     raise FuturesCampaignExecutionError("operative MarketContext disappeared")
-                allow = ctx.allow_long if direction == "LONG" else ctx.allow_short
-                if not allow:
-                    raise FuturesCampaignExecutionError(
-                        f"operative MarketContext no longer allows {direction}"
-                    )
+                if signal.signal_type == SignalType.REVERSAL:
+                    if not self._tc2_wm1_early_context_allowed(signal, snapshot):
+                        raise FuturesCampaignExecutionError(
+                            "WM1 early context/angulation/D1 macro admission no longer valid"
+                        )
+                else:
+                    allow = ctx.allow_long if direction == "LONG" else ctx.allow_short
+                    if not allow:
+                        raise FuturesCampaignExecutionError(
+                            f"operative MarketContext no longer allows {direction}"
+                        )
                 self._entry_preflight(
                     signal,
                     direction,
