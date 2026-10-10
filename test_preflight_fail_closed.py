@@ -62,7 +62,7 @@ def test_readiness_never_passes_without_all_runtime_proofs():
     assert report["ready"] is False
     assert report["checks"]["api_reachable"] == "PASS"
     for name in (
-        "candles", "market_websocket", "user_data_stream", "scanner_heartbeat",
+        "api_restrictions", "api_trading_status", "candles", "market_websocket", "user_data_stream", "scanner_heartbeat",
         "market_context", "diagnostics_freshness", "storage_integrity",
         "reconciliation", "execution_state_known", "android_freshness",
     ):
