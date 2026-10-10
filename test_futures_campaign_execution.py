@@ -21,6 +21,7 @@ class FakeFuturesClient:
         self.stop_entries = []
         self.market_exits = []
         self.protective_stops = []
+        self.quantity_normalization_modes = []
         self.protection_response_missing_ids = False
         self.protection_response_status = "NEW"
         self.entry_response_status = "NEW"
@@ -87,6 +88,7 @@ class FakeFuturesClient:
         return f"{float(price):.2f}"
 
     def normalize_quantity(self, symbol, quantity, *, market=True):
+        self.quantity_normalization_modes.append(bool(market))
         return f"{int(float(quantity) * 1000) / 1000:.3f}"
 
     def stop_entry(self, symbol, direction, quantity, trigger_price, client_algo_id):
@@ -388,6 +390,9 @@ def test_futures_campaign_arms_correct_directional_conditional_entry(
         assert result["direction"] == direction
         assert len(client.stop_entries) == initial_entry_count + 1
         assert client.stop_entries[0]["direction"] == direction
+        # STOP_MARKET conditional entries execute as market orders at trigger;
+        # quantity must satisfy MARKET_LOT_SIZE, not only LOT_SIZE.
+        assert client.quantity_normalization_modes == [True]
         assert result["status"] == "NEW"
         saved = db.conn.execute(
             "SELECT side, purpose, status FROM execution_intents ORDER BY rowid DESC LIMIT 1"
