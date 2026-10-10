@@ -599,3 +599,14 @@ The audit is traced across both Python and Android paths, not just the indicator
 **Book-alignment boundary.** The change removes a non-book veto; it does not claim that the current native structural exit is an exact transcription of every book/edition. The two-bar hard-exit and trailing implementation still require comparison against source-derived golden charts.
 
 **Verification.** Change committed at `555de2ff4935e2cf56fce3caaf8d789b61d9b0fe`. The exact-head Campaign CI was in progress at the last check. Do not count the earlier passing run at `df19c4de830543c5bad2d56d270b4c048c775633` as verification of this correction.
+
+
+### 56. Conditional STOP_MARKET entries were normalized with the limit-order lot filter — corrected; exact-head verification pending
+
+**Root cause.** Python Futures initial entries and add-ons, and the Android native initial-entry sizing path, normalized quantities with `LOT_SIZE` even though the submitted conditional entry is `STOP_MARKET` and executes as a market order when triggered. Where `MARKET_LOT_SIZE` differs, the bot could submit a quantity that passes local validation but is rejected by Binance, or normalize to a quantity inconsistent with the market-order filter.
+
+**Correction.** The Python initial/add-on sizing paths and Android native sizing path now explicitly use the market lot filter for conditional `STOP_MARKET` entries. Added a Python regression assertion that initial conditional entry sizing requests market normalization. Market exits already use market normalization. The native client has separate `LOT_SIZE`/`MARKET_LOT_SIZE` handling and its existing client tests cover market normalization; exact-head Android build/unit tests remain required.
+
+**Source basis.** Binance USDⓈ-M Futures documents `MARKET_LOT_SIZE` as the filter for market orders, distinct from `LOT_SIZE`; conditional `STOP_MARKET` entries execute as market orders when triggered. This is an exchange-contract correction, not a Williams strategy rule.
+
+**Verification.** Code and regression test are committed, but the CI run on the final head has not yet completed. No Demo order was sent.
