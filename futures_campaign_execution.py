@@ -3449,6 +3449,213 @@ class FuturesCampaignExecutionService:
             ) from exc
 
     def manage_campaign(self, campaign, indicators, *, atr: float) -> dict[str, Any]:
+        """Manage a TC2 campaign with a price-bar structural trail.
+
+        The TC2 core trail is behind the extreme of the last 3 closed decision
+        bars by default. A 5-bar trail can be explicitly selected with
+        WILLIAMS_TC2_TRAILING_BARS=5. ATR/Teeth smoothing and the legacy two-bar
+        reversal are not silently mixed into this source profile. They remain
+        available only through the named non-TC2 legacy profile / explicit exit
+        overlay. Exchange protection remains authoritative.
+        """
+        profile = os.getenv(
+            "WILLIAMS_STRATEGY_PROFILE", "TC2_THREE_WISE_MEN"
+        ).strip().upper()
+        if profile != "TC2_THREE_WISE_MEN":
+            return self._manage_legacy_campaign(campaign, indicators, atr=atr)
+
+        symbol = campaign.symbol.upper()
+        direction = self._campaign_direction(campaign)
+        if str(getattr(campaign, "execution_timeframe", "") or "").lower() != "1h":
+            return {
+                "symbol": symbol,
+                "action": "HOLD_PROTECTION",
+                "reason": "TC2 campaign management requires canonical H1 closed candles",
+            }
+        if indicators is None:
+            return {"symbol": symbol, "action": "HOLD_PROTECTION", "reason": "closed H1 candles unavailable"}
+
+        try:
+            trail_bars = int(os.getenv("WILLIAMS_TC2_TRAILING_BARS", "3"))
+        except (TypeError, ValueError, OverflowError):
+            return {
+                "symbol": symbol,
+                "action": "HOLD_PROTECTION",
+                "reason": "WILLIAMS_TC2_TRAILING_BARS must be 3 or 5",
+            }
+        if trail_bars not in {3, 5}:
+            return {
+                "symbol": symbol,
+                "action": "HOLD_PROTECTION",
+                "reason": "WILLIAMS_TC2_TRAILING_BARS must be 3 or 5",
+            }
+
+        if len(indicators) < trail_bars:
+            return {
+                "symbol": symbol,
+                "action": "HOLD_PROTECTION",
+                "reason": f"need {trail_bars} closed H1 bars for TC2 structural trailing",
+            }
+
+        position = self._position_row(symbol)
+        try:
+            signed_qty = float(position.get("positionAmt", 0) or 0.0)
+        except (TypeError, ValueError, OverflowError):
+            signed_qty = float("nan")
+        if not math.isfinite(signed_qty):
+            reason = "invalid or non-finite exchange quantity during campaign management"
+            self.engine.mark_reconcile_required(campaign, reason)
+            self.db.state_set(f"campaign_state:{campaign.campaign_id}", CampaignState.RECONCILE_REQUIRED.value)
+            self.db.state_set(f"position_state:{symbol}", CampaignState.RECONCILE_REQUIRED.value)
+            return {"symbol": symbol, "action": "RECONCILE_REQUIRED", "reason": reason}
+        if abs(signed_qty) <= 1e-12:
+            return self.reconcile_symbol(symbol)
+        if (direction == "LONG" and signed_qty < 0) or (direction == "SHORT" and signed_qty > 0):
+            reason = "Position direction mismatch during campaign management"
+            self.engine.mark_reconcile_required(campaign, reason)
+            self.db.state_set(f"campaign_state:{campaign.campaign_id}", CampaignState.RECONCILE_REQUIRED.value)
+            self.db.state_set(f"position_state:{symbol}", CampaignState.RECONCILE_REQUIRED.value)
+            return {"symbol": symbol, "action": "RECONCILE_REQUIRED", "reason": reason}
+
+        # A two-bar Alligator/AO reversal is a separate overlay, not the core
+        # TC2 stop rule. If explicitly enabled, keep its decision auditable.
+        if os.getenv("WILLIAMS_TC2_TWO_BAR_REVERSAL_EXIT", "false").strip().lower() == "true":
+            if len(indicators) < 2:
+                return {"symbol": symbol, "action": "HOLD_PROTECTION", "reason": "two-bar overlay lacks data"}
+            opposite_structure: list[bool] = []
+            for _, row in indicators.tail(2).iterrows():
+                try:
+                    teeth = float(row.get("teeth_shifted", float("nan")))
+                    close = float(row.get("close", float("nan")))
+                    ao = float(row.get("ao", float("nan")))
+                except (TypeError, ValueError, OverflowError):
+                    opposite_structure.append(False)
+                    continue
+                if not all(math.isfinite(value) for value in (teeth, close, ao)):
+                    opposite_structure.append(False)
+                elif direction == "LONG":
+                    opposite_structure.append(
+                        bool(row.get("bearish_alligator", False))
+                        and teeth > 0 and close < teeth and ao < 0
+                    )
+                else:
+                    opposite_structure.append(
+                        bool(row.get("bullish_alligator", False))
+                        and teeth > 0 and close > teeth and ao > 0
+                    )
+            if len(opposite_structure) == 2 and all(opposite_structure):
+                result = self.exit_position(
+                    campaign,
+                    reason="SYSTEM_OVERLAY_TWO_BAR_STRUCTURAL_REVERSAL",
+                )
+                return {**result, "management_signal": "OPTIONAL_TWO_BAR_EXIT_OVERLAY"}
+
+        try:
+            rules = self._rules(symbol)
+            tick_size = float((rules.get("PRICE_FILTER") or {}).get("tickSize", "0") or 0.0)
+        except (TypeError, ValueError, OverflowError, Exception) as exc:
+            return {
+                "symbol": symbol,
+                "action": "HOLD_PROTECTION",
+                "reason": f"exchange tick-size metadata unavailable for TC2 trailing: {exc}",
+            }
+        if not math.isfinite(tick_size) or tick_size <= 0:
+            return {"symbol": symbol, "action": "HOLD_PROTECTION", "reason": "exchange tick size invalid"}
+
+        rows = indicators.tail(trail_bars)
+        try:
+            if direction == "LONG":
+                extremes = [float(value) for value in rows["low"].tolist()]
+                if not all(math.isfinite(value) and value > 0 for value in extremes):
+                    raise ValueError("closed-bar lows are malformed")
+                raw_stop = min(extremes) - tick_size
+            else:
+                extremes = [float(value) for value in rows["high"].tolist()]
+                if not all(math.isfinite(value) and value > 0 for value in extremes):
+                    raise ValueError("closed-bar highs are malformed")
+                raw_stop = max(extremes) + tick_size
+        except (KeyError, TypeError, ValueError, OverflowError) as exc:
+            return {
+                "symbol": symbol,
+                "action": "HOLD_PROTECTION",
+                "reason": f"TC2 structural trail data invalid: {exc}",
+            }
+
+        try:
+            proposed = float(
+                self.client.normalize_price(
+                    symbol, raw_stop, direction=direction, purpose="STOP"
+                )
+            )
+            mark = float(self._market_mark(symbol))
+        except Exception as exc:
+            return {
+                "symbol": symbol,
+                "action": "HOLD_PROTECTION",
+                "reason": f"TC2 structural stop normalization/mark unavailable: {exc}",
+            }
+        if not math.isfinite(proposed) or proposed <= 0 or not math.isfinite(mark) or mark <= 0:
+            return {"symbol": symbol, "action": "HOLD_PROTECTION", "reason": "TC2 structural stop or mark price invalid"}
+
+        old_stop = float(campaign.current_stop_price or campaign.initial_stop_price or 0.0)
+        if direction == "LONG":
+            safe = proposed < mark
+            tighter = old_stop <= 0 or proposed > old_stop
+        else:
+            safe = proposed > mark
+            tighter = old_stop <= 0 or proposed < old_stop
+
+        if not safe or not tighter:
+            return {
+                "symbol": symbol,
+                "direction": direction,
+                "action": "HOLD_PROTECTION",
+                "trailing_bars": trail_bars,
+                "structural_extreme": (min(extremes) if direction == "LONG" else max(extremes)),
+                "proposed_stop": proposed,
+                "current_stop": old_stop,
+                "mark_price": mark,
+                "reason": "no safe, strictly tighter TC2 price-bar stop",
+            }
+
+        try:
+            result = self.replace_protection(campaign, stop_price=proposed)
+        except Exception as exc:
+            reason = f"TC2 structural stop replacement failed: {type(exc).__name__}: {exc}"
+            self.engine.mark_reconcile_required(campaign, reason)
+            self.db.state_set(f"campaign_state:{campaign.campaign_id}", CampaignState.RECONCILE_REQUIRED.value)
+            self.db.state_set(f"position_state:{symbol}", CampaignState.RECONCILE_REQUIRED.value)
+            return {"symbol": symbol, "action": "RECONCILE_REQUIRED", "reason": reason}
+
+        if campaign.state == CampaignState.OPEN_INITIAL:
+            campaign.transition(CampaignState.TREND_ACTIVE, reason="TC2 price-bar structure supports trailing")
+        if campaign.state == CampaignState.TREND_ACTIVE:
+            campaign.transition(CampaignState.TRAILING, reason="TC2 price-bar stop tightened")
+        self.db.save_campaign(campaign)
+        self.db.log_campaign_event(
+            campaign.campaign_id,
+            CampaignEventType.STOP_MOVED.value,
+            reason=f"{direction} TC2 {trail_bars}-bar structural trailing stop advanced",
+            payload={
+                "direction": direction,
+                "mark_price": mark,
+                "trailing_bars": trail_bars,
+                "structural_extreme": min(extremes) if direction == "LONG" else max(extremes),
+                "new_stop": result.get("stop_price", proposed),
+                "tick_size": tick_size,
+                "source_profile": "TC2_THREE_WISE_MEN",
+            },
+        )
+        return {
+            "symbol": symbol,
+            "direction": direction,
+            "action": "TRAILING_STOP_MOVED",
+            "trailing_bars": trail_bars,
+            "source_profile": "TC2_THREE_WISE_MEN",
+            **result,
+        }
+
+    def _manage_legacy_campaign(self, campaign, indicators, *, atr: float) -> dict[str, Any]:
         """Manage an exchange-confirmed position using only closed Williams bars.
 
         The policy uses a two-bar structural reversal for hard exit and an
