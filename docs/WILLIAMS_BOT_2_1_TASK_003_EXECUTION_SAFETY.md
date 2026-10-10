@@ -354,3 +354,28 @@ Build metadata from the successful APK workflow: app version `4.25.0`, versionCo
 The branch and PR were rechecked before this report update: branch HEAD was `f6f78cb9f57811738623409642cc5e33b7c0b79a`; `main` remained `04da5f9c09572e99ff310be3a1908179165e528c`; PR #48 remained open, draft, and unmerged. This documentation commit changes the branch HEAD, so the three workflows must be rerun against the resulting report-bearing SHA before claiming exact-final-SHA CI validation.
 
 The task remains **BLOCKED — NOT ACCEPTED**. Green CI does not verify live Testnet response-loss recovery, physical Android process-death recovery, exact residual inventory after live OCO sibling-fill races, all mass-cancel variants, or the exhaustive absence of external/legacy bypasses. No Binance Mainnet or real trade was used.
+
+
+### Exact-SHA verification after Gradle contract correction — SHA `575159b7cd7c837179ac6b96f064527c361ebf8a`
+
+GitHub branch/PR state was checked before this section was added:
+- Branch HEAD: `575159b7cd7c837179ac6b96f064527c361ebf8a`.
+- PR #48: open, draft, not merged; base `main`.
+- `main` remained `04da5f9c09572e99ff310be3a1908179165e528c`.
+- All three required workflows completed successfully on this same SHA:
+
+| Workflow | Run ID | Job ID(s) | Result |
+|---|---:|---|---|
+| Python backend tests | [38090340316](https://github.com/19wolfalone92/Williams/actions/runs/38090340316) | 114325305035 | PASS — `148 passed, 4 warnings`; release gate passed. |
+| Williams Campaign CI | [38090340338](https://github.com/19wolfalone92/Williams/actions/runs/38090340338) | 114325316855, 114325316977 | PASS — `181 passed, 4 warnings`; Android unit tests, lint and debug APK build succeeded. Both Python and Android jobs provisioned Gradle `8.14.6`. |
+| Build Android APK | [38090340317](https://github.com/19wolfalone92/Williams/actions/runs/38090340317) | 114325304653 | PASS — release gate, lint, Android unit tests, debug and unsigned release APK assembly, metadata checks and debug-signature verification passed. Gradle `8.14.6`. |
+
+APK artifacts from Build Android APK run `38090340317`:
+- Debug APK artifact ID `11682988607`: package `com.williamsbot.debug`, version `4.25.0-debug`, versionCode `1892`.
+- Unsigned release APK artifact ID `11683882895`: package `com.williamsbot`, version `4.25.0`, versionCode `1892`.
+- Campaign CI debug APK artifact ID `11683239965`; lint report artifact ID `11683539774`; backend pytest report artifact ID `11684042225`.
+- APK signature verification and metadata checks passed. No checksum value is recorded here because the job log excerpt available for this review exposed the checksum commands but not their resulting digest lines.
+
+The release-gate regression now checks the app version `4.25.0` across server/UI/Gradle and compares both CI Gradle pins against the wrapper version. The test initially exposed an over-escaped regex; the regex was corrected, and the above Campaign/backend workflows passed on the exact SHA after correction.
+
+**This SHA's CI is necessary evidence, not acceptance.** The report update that follows changes the branch SHA; the three workflows have been configured to run when `docs/**` changes so the report-bearing commit can also be checked. The conservative Android same-symbol unresolved-mutation gate and the unverified recovery scenarios listed above remain blockers. Final status remains **BLOCKED — NOT ACCEPTED**.
