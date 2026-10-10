@@ -41,8 +41,9 @@ At baseline the foreground service and loopback API existed, but their presence 
 
 ### Build contract and tests added
 
-- The release contract gate expected version `4.24.0` while `server.py`, Gradle and the Android source declared `4.25.0`. The task branch aligns the gate to `4.25.0` and asserts presence of key Android safety contracts.
-- Added pure unit tests for local bearer authorization and runtime freshness boundary/error cases. Existing unit tests and Android workflow remain the authoritative compile/test gate.
+- The release contract gate expected version `4.24.0` while `server.py`, Gradle and Android source declared `4.25.0`. The task branch aligns the gate to `4.25.0` and asserts presence of key Android safety contracts.
+- The first Android CI run failed before unit tests because required Android Lint flagged the wrapper's Gradle `8.14.5` as behind the available `8.14.6`. The task branch now aligns `gradle-wrapper.properties`, `.github/workflows/android-apk.yml` and `.github/workflows/campaign-ci.yml` to `8.14.6`. A fresh CI run against the new head is the acceptance check; the earlier lint failure remains recorded as a resolved configuration issue, not a passing build.
+- Added pure unit tests for local bearer authorization, backend URL validation, and runtime freshness boundary/error cases. Existing unit tests and Android workflow remain the authoritative compile/test gate.
 
 ## Acceptance matrix
 
@@ -56,8 +57,8 @@ At baseline the foreground service and loopback API existed, but their presence 
 | Recovery and duplicate-worker cleanup | Source changes prepared | Restart/force-stop/process-kill cycles and proof that only one engine/probe/scanner is alive |
 | Android foreground/background reliability | Manifest, sticky FGS, notification and diagnostics inspected/hardened | Long-duration physical-device test with screen off, power saving, system process kill, app swiping and notification permission states |
 | Python/Android golden-vector parity for Alligator, AO/AC, fractals, confirmations, risk, structural stops, campaign transitions/recovery | **NOT VERIFIED in this task run** | Execute the canonical golden vectors on both implementations; do not alter expected values without source/spec evidence |
-| Unit tests | Tests added/updated; **not executed in this environment** | Green `:app:testDebugUnitTest` and relevant Python test workflows |
-| Static checks and APK | **PENDING** | Green release gate, Android lint, debug/release APK build and artifact inspection |
+| Unit tests | Python backend: **PASS, 148 passed** on the prior tested head; new Android unit tests are being re-run on the Gradle-corrected head | Green `:app:testDebugUnitTest` and relevant Python test workflows on the exact final head |
+| Static checks and APK | **PENDING**; earlier Android lint run failed because Gradle wrapper was `8.14.5`, now aligned to `8.14.6` in wrapper and workflows | Green release gate, Android lint, debug/release APK build and artifact inspection on the exact final head |
 | Physical Android acceptance | **NOT RUN** | Record device model, Android version, APK SHA, launch, background soak, network loss, restart and diagnostics |
 | Mainnet/real orders | NOT used | None; keep disabled |
 
