@@ -840,7 +840,11 @@ class FuturesCampaignExecutionService:
                 permission_interval=signal.timeframe,
                 context_admission_mode=(
                     "TC2_WM1_EARLY"
-                    if signal.signal_type == SignalType.REVERSAL
+                    if (
+                        signal.signal_type == SignalType.REVERSAL
+                        and str(signal.timeframe).lower() == "1h"
+                        and not bool(signal.htf_confirmed)
+                    )
                     else "STRICT_DIRECTIONAL"
                 ),
                 signal_type=signal.signal_type.value,
