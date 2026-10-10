@@ -650,40 +650,89 @@ class MultiPositionTrader:
             raise RuntimeError(f"{asset}: cannot value Binance commission in USDT") from exc
 
     def _authoritative_execution(self, symbol, order):
+        """Resolve every executed unit against exchange trade rows and explicit commission fields.
+
+        An order-level executedQty is not sufficient to prove fee-adjusted inventory.
+        If Binance trade history or any commission field is unavailable, fail closed;
+        callers must preserve reservation and reconcile instead of assuming zero fees.
+        """
         payload = dict(order or {})
         fills = list(payload.get("fills") or [])
         order_id = payload.get("orderId")
-        if not fills and order_id is not None and hasattr(self.client, "my_trades"):
+        executed = Decimal(str(payload.get("executedQty", "0") or "0"))
+        if not executed.is_finite() or executed < 0:
+            raise RuntimeError(f"{symbol}: invalid exchange executedQty")
+        if executed > 0 and not fills:
+            history = getattr(self.client, "my_trades", None)
+            if order_id is None or not callable(history):
+                raise RuntimeError(
+                    f"{symbol}: executed order lacks fills and authoritative myTrades; fee status UNKNOWN"
+                )
             try:
-                rows = self.client.my_trades(symbol, order_id=order_id, limit=1000)
-                fills = [
-                    {
-                        "price": row.get("price", "0"),
-                        "qty": row.get("qty", row.get("executedQty", "0")),
-                        "commission": row.get("commission", "0"),
-                        "commissionAsset": row.get("commissionAsset", ""),
-                    }
-                    for row in (rows or [])
-                ]
-                if fills:
-                    payload["fills"] = fills
+                rows = history(symbol, order_id=order_id, limit=1000)
             except Exception as exc:
                 self.db.log_event(
-                    "WARNING",
+                    "ERROR",
                     "fill_commission_lookup_failed",
-                    f"{symbol}: myTrades lookup unavailable; using order-level fill data",
-                    {"order_id": order_id, "error": str(exc)},
+                    f"{symbol}: myTrades lookup failed; execution remains unresolved",
+                    {"order_id": order_id, "error": str(exc), "fee_status": "UNKNOWN"},
                 )
+                raise RuntimeError(
+                    f"{symbol}: myTrades unavailable for executed order {order_id}; reconciliation required"
+                ) from exc
+            if not isinstance(rows, list) or not rows:
+                raise RuntimeError(
+                    f"{symbol}: executed order {order_id} has no authoritative trade rows; fee status UNKNOWN"
+                )
+            fills = []
+            for row in rows:
+                if str(row.get("orderId", "")) != str(order_id):
+                    continue
+                fills.append({
+                    "id": row.get("id"),
+                    "orderId": row.get("orderId"),
+                    "price": row.get("price"),
+                    "qty": row.get("qty"),
+                    "commission": row.get("commission"),
+                    "commissionAsset": row.get("commissionAsset"),
+                    "time": row.get("time"),
+                })
+            if not fills:
+                raise RuntimeError(
+                    f"{symbol}: myTrades contains no fills for order {order_id}; fee status UNKNOWN"
+                )
+            payload["fills"] = fills
+
+        if executed > 0:
+            for index, fill in enumerate(fills):
+                if fill.get("commission") is None or not str(fill.get("commissionAsset") or "").strip():
+                    raise RuntimeError(
+                        f"{symbol}: fill {fill.get('id', index)} lacks authoritative commission amount/asset; "
+                        "fee status UNKNOWN"
+                    )
+                try:
+                    commission = Decimal(str(fill["commission"]))
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"{symbol}: fill {fill.get('id', index)} has invalid commission; fee status UNKNOWN"
+                    ) from exc
+                if not commission.is_finite() or commission < 0:
+                    raise RuntimeError(
+                        f"{symbol}: fill {fill.get('id', index)} has invalid commission; fee status UNKNOWN"
+                    )
+
         base_asset = symbol[:-4] if symbol.endswith("USDT") else ""
         summary = accumulate_order(payload, base_asset=base_asset)
         extra_fee_quote = Decimal("0")
         known_assets = {"USDT", "USDC", "FDUSD", "BUSD", base_asset}
         for fill in payload.get("fills") or []:
-            commission = Decimal(str(fill.get("commission", "0") or "0"))
-            asset = str(fill.get("commissionAsset", "")).upper()
-            if commission <= 0 or asset in known_assets:
+            commission = Decimal(str(fill["commission"]))
+            asset = str(fill["commissionAsset"]).upper()
+            if commission == 0 or asset in known_assets:
                 continue
             price = float(fill.get("price", "0") or 0.0)
+            # Third-asset conversion must be explicitly resolvable. If the
+            # converter cannot prove a value, propagate UNKNOWN instead of zero.
             extra_fee_quote += commission * Decimal(str(
                 self._fee_quote_for_asset(asset, base_asset, trade_price=price)
             ))
