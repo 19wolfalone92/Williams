@@ -72,3 +72,29 @@ def test_transport_exception_marker_is_not_rendered_in_traceback():
     surfaces = str(caught.value) + repr(caught.value.payload) + rendered
     assert SECRET_MARKER not in surfaces
     assert "Timeout" in str(caught.value)
+
+
+def test_spot_testnet_permit_cannot_authorize_mainnet_client():
+    testnet_client = BinanceSpotClient("fake-key", "fake-secret", testnet=True)
+    mainnet_client = BinanceSpotClient("fake-key", "fake-secret", testnet=False)
+
+    class NoNetworkSession:
+        called = False
+        def request(self, *args, **kwargs):
+            self.called = True
+            raise AssertionError("network must not be reached")
+
+    testnet_session = NoNetworkSession()
+    mainnet_session = NoNetworkSession()
+    testnet_client.session = testnet_session
+    mainnet_client.session = mainnet_session
+
+    with mutation_permit(testnet_client):
+        with pytest.raises(RuntimeError, match="matching ExecutionBarrier permit required"):
+            mainnet_client.order(
+                "BTCUSDT", "BUY", "MARKET",
+                quantity="0.001", new_client_order_id="CID_WRONG_CLIENT",
+            )
+
+    assert not testnet_session.called
+    assert not mainnet_session.called
