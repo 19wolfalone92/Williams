@@ -425,16 +425,12 @@ class ExecutionBarrier:
                 if kill_switch not in {"", "0", "false", "off", "none"}:
                     return "kill switch is latched"
                 try:
-                    conn = getattr(self.db, "conn", None)
-                    if conn is None:
+                    reconcile_lookup = getattr(self.db, "has_reconcile_required_state", None)
+                    if not callable(reconcile_lookup):
                         return "global reconciliation-state lookup unavailable"
-                    unresolved_state = conn.execute(
-                        "SELECT key FROM bot_state WHERE UPPER(value)='RECONCILE_REQUIRED' "
-                        "AND (key='position_state' OR key LIKE 'position_state:%' "
-                        "OR key LIKE 'campaign_state:%') LIMIT 1"
-                    ).fetchone()
-                    if unresolved_state is not None:
-                        return f"global RECONCILE_REQUIRED state: {unresolved_state['key']}"
+                    unresolved_state = reconcile_lookup()
+                    if unresolved_state:
+                        return f"global RECONCILE_REQUIRED state: {unresolved_state}"
                 except Exception as exc:
                     return f"global reconciliation-state lookup failed: {type(exc).__name__}: {exc}"
                 symbol_state = str(state_get(f"position_state:{intent.symbol}", "FLAT")).upper()
