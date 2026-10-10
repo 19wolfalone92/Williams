@@ -13,6 +13,7 @@ import math
 import os
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -331,6 +332,7 @@ class FuturesRuntime:
         )
         self._daily_observation_last_refresh: dict[str, float] = {}
         self._daily_observations: dict[str, dict[str, Any]] = {}
+        self._daily_overview_updated_at_ms = 0
         self.db_path = db_path or os.getenv("FUTURES_DB_PATH", "data/williams_futures.sqlite3")
         self.db = Database(self.db_path)
         self.client = BinanceUsdmFuturesClient(
@@ -587,6 +589,51 @@ class FuturesRuntime:
             "ac": ac,
             "updated_at_ms": int(time.time() * 1000),
         }
+
+
+    def _refresh_daily_market_overview(self) -> None:
+        """Refresh informational D1 snapshots for the full configured universe.
+
+        This runs after existing positions have already been managed. Failures
+        are recorded per symbol and never participate in strategy admission.
+        """
+        symbols = tuple(self.symbols)
+        if not symbols:
+            return
+
+        def refresh_one(symbol: str) -> tuple[str, str]:
+            try:
+                self._refresh_informational_daily_context(symbol)
+                state = str(
+                    self._daily_observations.get(symbol, {}).get("alligator_state", "UNAVAILABLE")
+                )
+                return symbol, state
+            except Exception as exc:
+                previous = self._daily_observations.get(symbol, {})
+                self._daily_observations[symbol] = {
+                    "available": False,
+                    "informational_only": True,
+                    "interval": "1d",
+                    "last_closed_candle_close_time_ms": previous.get(
+                        "last_closed_candle_close_time_ms", 0
+                    ),
+                    "updated_at_ms": int(time.time() * 1000),
+                    "reason": f"{type(exc).__name__}: {exc}",
+                }
+                log.warning(
+                    "%s/1d daily overview unavailable; strategy admission unchanged: %s",
+                    symbol, exc,
+                )
+                return symbol, "UNAVAILABLE"
+
+        workers = min(4, len(symbols))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(refresh_one, symbol) for symbol in symbols]
+            # Consume every result; worker exceptions are already translated to
+            # unavailable-per-symbol status and may not abort the trading cycle.
+            for future in as_completed(futures):
+                future.result()
+        self._daily_overview_updated_at_ms = int(time.time() * 1000)
 
     def _refresh_symbol_context(self, symbol: str) -> dict[str, pd.DataFrame]:
         """Publish structural TFs plus a best-effort informational D1 observation."""
@@ -1078,6 +1125,12 @@ class FuturesRuntime:
                 risk_engine.balance = equity
         reconciliations = self._recover()
         management = self._manage_existing_positions()
+        # D1 is dashboard context, refreshed only after live-position management.
+        # Its availability cannot gate order admission or block protective exits.
+        try:
+            self._refresh_daily_market_overview()
+        except Exception as exc:
+            log.warning("D1 overview refresh failed; strategy admission unchanged: %s", exc)
         # A single cancel attempt is not enough after an unknown Binance
         # response. While paused/killed, keep reconciling/cancelling stable
         # pending entry and add-on IDs on each cycle; normal scans never cancel
@@ -1729,6 +1782,7 @@ class FuturesRuntime:
             ]
             daily_market_context = {
                 "informational_only": True,
+                "overview_updated_at_ms": self._daily_overview_updated_at_ms,
                 "counts": {
                     state: daily_states.count(state)
                     for state in ("BULLISH", "BEARISH", "SLEEP", "UNAVAILABLE")
