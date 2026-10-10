@@ -147,6 +147,39 @@ def test_loss_guard_clears_streak_after_a_non_loss():
     assert "consecutive_losses=0" in reason
 
 
+def test_loss_streak_resets_at_utc_day_boundary():
+    from datetime import datetime, timezone
+    from futures_runtime import _loss_streak_allows_entry
+
+    now = datetime(2026, 10, 10, 10, 5, tzinfo=timezone.utc)
+    ok, reason = _loss_streak_allows_entry(
+        _FakeCloseDb([
+            _close(-2, "2026-10-09 23:00:00"),
+            _close(-1, "2026-10-09 22:00:00"),
+        ]),
+        max_consecutive_losses=2,
+        cooldown_minutes=0,
+        now=now,
+    )
+    assert ok
+    assert "consecutive_losses=0" in reason
+
+
+def test_post_loss_cooldown_still_applies_across_utc_midnight():
+    from datetime import datetime, timezone
+    from futures_runtime import _loss_streak_allows_entry
+
+    now = datetime(2026, 10, 10, 0, 10, tzinfo=timezone.utc)
+    ok, reason = _loss_streak_allows_entry(
+        _FakeCloseDb([_close(-2, "2026-10-09 23:50:00")]),
+        max_consecutive_losses=2,
+        cooldown_minutes=30,
+        now=now,
+    )
+    assert not ok
+    assert "cooldown active" in reason
+
+
 def test_loss_guard_enforces_post_loss_cooldown():
     from datetime import datetime, timezone
     from futures_runtime import _loss_streak_allows_entry
