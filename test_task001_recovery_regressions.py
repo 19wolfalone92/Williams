@@ -296,3 +296,13 @@ def test_oco_timeout_restart_queries_list_and_both_children(
     assert row["status"] == "RECONCILED"
     # Order/list lookup alone cannot clear the portfolio exposure latch.
     assert db.state_get("position_state") == "RECONCILE_REQUIRED"
+
+
+
+def test_android_oco_recovery_requires_authoritative_state_for_both_children():
+    from pathlib import Path
+    source = (Path(__file__).parent /
+              "app/src/main/java/com/williamsbot/StandaloneRuntime.kt").read_text(encoding="utf-8")
+    assert "Binance order-list lookup did not identify both child orders" in source
+    assert "Binance OCO child order state is not authoritative" in source
+    assert 'signedGet(\n                                "/api/v3/order",' in source
