@@ -1899,6 +1899,47 @@ def test_add_on_rechecks_portfolio_risk_inside_durable_reservation(tmp_path, mon
         db.conn.close()
 
 
+def test_add_on_rechecks_portfolio_risk_inside_durable_reservation(tmp_path, monkeypatch):
+    from dataclasses import replace
+
+    monkeypatch.setenv("WILLIAMS_STRATEGY_PROFILE", "LEGACY")
+    db, client, service, campaign = _prepare_open_campaign_for_add_on(tmp_path, "LONG")
+    try:
+        signal = replace(
+            _make_add_on_signal("LONG"),
+            timeframe="1h",
+            context_versions=service.barrier.context_cache.snapshot().versions(
+                "BTCUSDT", ["1h", "4h"]
+            ),
+        )
+        original_count = len(client.stop_entries)
+        reads = {"count": 0}
+
+        def racing_reserved_risk():
+            reads["count"] += 1
+            return 20.0 if reads["count"] == 1 else 95.0
+
+        monkeypatch.setattr(service.engine, "portfolio_reserved_risk_quote", racing_reserved_risk)
+
+        with pytest.raises(FuturesCampaignExecutionError, match="portfolio risk capacity changed"):
+            service.arm_add_on(
+                signal,
+                equity_quote=10000.0,
+                candidate_risk_fraction=0.001,
+                available_quote=5000.0,
+            )
+
+        assert reads["count"] >= 2
+        assert len(client.stop_entries) == original_count
+        assert db.state_get("futures_entry_pending:BTCUSDT") is None
+        saved = service.engine.load_campaign(campaign.campaign_id)
+        assert saved.state.value == "OPEN_INITIAL"
+        assert saved.pending_risk_quote == pytest.approx(0.0)
+        assert "pending_add_on_client_algo_id" not in saved.tags
+    finally:
+        db.conn.close()
+
+
 def test_futures_add_on_partial_fill_reconciles_position_and_risk(tmp_path):
     db, client, service, campaign = _prepare_open_campaign_for_add_on(tmp_path, "LONG")
     try:
