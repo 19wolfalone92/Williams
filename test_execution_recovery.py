@@ -294,3 +294,34 @@ def test_oco_cancel_requires_exact_list_and_leg_evidence(tmp_path):
     assert report["ok"] is True
     assert db.find_execution_intent(intent.intent_id, intent.client_order_id)["status"] == "RECONCILED"
     assert exchange.mutations == 0
+
+
+def test_pre_submit_crash_resolves_only_after_exact_exchange_not_found(tmp_path):
+    from binance_client import BinanceAPIError
+
+    db = Database(str(tmp_path / "pre-submit-crash.sqlite3"))
+    intent = OrderIntent.new(
+        "BTCUSDT", "BUY", "MARKET", {},
+        purpose="CAMPAIGN_RECOVERY",
+        client_order_id="WILL_RECOVERY_NOT_SUBMITTED_011",
+    )
+    db.save_execution_intent(intent, "PENDING")
+    # No SUBMIT_ATTEMPT_STARTED event means the mutation callable was never entered.
+
+    class NotFoundExchange(FakeExchange):
+        def get_order(self, symbol, order_id=None, orig_client_order_id=None):
+            self.reads += 1
+            raise BinanceAPIError(
+                "Binance HTTP 400; API code -2013",
+                status_code=400,
+                payload={"code": -2013, "msg": "response body redacted"},
+            )
+
+    exchange = NotFoundExchange()
+    report = ExecutionRecoveryResolver(db, exchange).resolve_pending()
+
+    assert report["ok"] is True
+    assert report["resolved"][0]["exchange_result"] == "NOT_SUBMITTED_CONFIRMED"
+    assert db.find_execution_intent(intent.intent_id, intent.client_order_id)["status"] == "RECONCILED"
+    assert db.unresolved_execution_intents() == []
+    assert exchange.mutations == 0
