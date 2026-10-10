@@ -693,15 +693,20 @@ class MultiPositionTrader:
         if trade_price > 0 and asset == str(base_asset or "").upper():
             return float(trade_price)
         try:
-            return float(self.client.ticker_price(asset + "USDT")["price"])
+            direct = float(self.client.ticker_price(asset + "USDT")["price"])
+            if direct > 0:
+                return direct
         except Exception:
             pass
         try:
             cross = float(self.client.ticker_price(asset + "BTC")["price"])
             btc = float(self.client.ticker_price("BTCUSDT")["price"])
-            return cross * btc
+            converted = cross * btc
+            if cross > 0 and btc > 0 and converted > 0:
+                return converted
         except Exception as exc:
             raise RuntimeError(f"{asset}: cannot value Binance commission in USDT") from exc
+        raise RuntimeError(f"{asset}: non-positive commission conversion price; reconciliation required")
 
     def _authoritative_execution(self, symbol, order):
         payload = dict(order or {})
@@ -739,6 +744,10 @@ class MultiPositionTrader:
             extra_fee_quote += commission * Decimal(str(
                 self._fee_quote_for_asset(asset, base_asset, trade_price=price)
             ))
+        if summary.unvalued_commission_assets and extra_fee_quote <= 0:
+            raise RuntimeError(
+                f"{symbol}: third-asset commission was not valued; reconciliation required"
+            )
         if extra_fee_quote <= 0:
             return summary
         return ExecutionSummary(
@@ -748,6 +757,7 @@ class MultiPositionTrader:
             summary.fee_quote,
             summary.commission_base,
             summary.fee_quote_equivalent + extra_fee_quote,
+            (),
         )
 
     # ------------------------------------------------------------------
