@@ -167,7 +167,13 @@ class Database:
             related_order_list_id TEXT,
             exchange_status TEXT,
             resolution_evidence TEXT,
-            resolved_at_ms INTEGER
+            resolved_at_ms INTEGER,
+            exchange_order_id TEXT,
+            exchange_order_list_id TEXT,
+            exchange_executed_qty TEXT,
+            exchange_cumulative_quote_qty TEXT,
+            exchange_response_json TEXT,
+            result_recorded_at_ms INTEGER
         );
         CREATE TABLE IF NOT EXISTS execution_events(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -331,6 +337,12 @@ class Database:
             "exchange_status": "TEXT",
             "resolution_evidence": "TEXT",
             "resolved_at_ms": "INTEGER",
+            "exchange_order_id": "TEXT",
+            "exchange_order_list_id": "TEXT",
+            "exchange_executed_qty": "TEXT",
+            "exchange_cumulative_quote_qty": "TEXT",
+            "exchange_response_json": "TEXT",
+            "result_recorded_at_ms": "INTEGER",
         }
         for name, sql_type in additions.items():
             if name not in columns:
@@ -669,6 +681,107 @@ class Database:
                 "OR key LIKE 'campaign_state:%') LIMIT 1"
             ).fetchone()
             return str(row["key"]) if row is not None else ""
+
+    def save_execution_result(
+        self,
+        intent_id,
+        response,
+        final_status="SUBMITTED",
+        reason="",
+    ):
+        """Persist the actual exchange response as mandatory execution state.
+
+        This write is deliberately separate from optional event telemetry. A
+        successful return from the exchange adapter is not an execution
+        confirmation until the raw response, order identity, status and fill
+        quantities have committed and passed a post-commit read-back.
+        """
+        intent_id = str(intent_id or "").strip()
+        status = str(final_status or "").upper()
+        if not intent_id or status not in {"SUBMITTED", "AMBIGUOUS", "RECONCILE_REQUIRED"}:
+            raise ValueError("valid intent_id and execution result status are required")
+        try:
+            response_json = json.dumps(
+                response, sort_keys=True, separators=(",", ":"), default=str
+            )
+        except Exception as exc:
+            raise TypeError("exchange response cannot be serialized for durable storage") from exc
+
+        payload = response if isinstance(response, dict) else {}
+        order_id = payload.get("orderId")
+        order_list_id = payload.get("orderListId")
+        exchange_status = str(
+            payload.get("status")
+            or payload.get("algoStatus")
+            or payload.get("listStatusType")
+            or payload.get("listOrderStatus")
+            or ""
+        ).upper()
+        executed_qty = payload.get("executedQty")
+        cumulative_quote_qty = payload.get(
+            "cummulativeQuoteQty",
+            payload.get("cumulativeQuoteQty"),
+        )
+        result_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+
+        with self._db_lock:
+            if self._transaction_active:
+                raise RuntimeError(
+                    "exchange result requires its own durable transaction"
+                )
+            try:
+                self.conn.execute("BEGIN IMMEDIATE")
+                prior = self.conn.execute(
+                    "SELECT status FROM execution_intents WHERE intent_id=?",
+                    (intent_id,),
+                ).fetchone()
+                if prior is None:
+                    raise RuntimeError(
+                        f"cannot persist exchange result without durable intent {intent_id}"
+                    )
+                self.conn.execute(
+                    """UPDATE execution_intents
+                       SET status=?, reason=?, exchange_status=?,
+                           exchange_order_id=?, exchange_order_list_id=?,
+                           exchange_executed_qty=?, exchange_cumulative_quote_qty=?,
+                           exchange_response_json=?, result_recorded_at_ms=?
+                       WHERE intent_id=?""",
+                    (
+                        status,
+                        str(reason or ""),
+                        exchange_status,
+                        None if order_id is None else str(order_id),
+                        None if order_list_id is None else str(order_list_id),
+                        None if executed_qty is None else str(executed_qty),
+                        None if cumulative_quote_qty is None else str(cumulative_quote_qty),
+                        response_json,
+                        result_ms,
+                        intent_id,
+                    ),
+                )
+                self._commit_durable()
+            except Exception:
+                try:
+                    self.conn.rollback()
+                except Exception:
+                    pass
+                raise
+
+        row = self.load_execution_intent(intent_id)
+        if row is None:
+            raise RuntimeError("committed execution result is not readable")
+        if (
+            str(row.get("status", "")).upper() != status
+            or row.get("exchange_response_json") != response_json
+            or str(row.get("exchange_status") or "").upper() != exchange_status
+            or str(row.get("exchange_order_id") or "") != (str(order_id) if order_id is not None else "")
+            or str(row.get("exchange_order_list_id") or "") != (str(order_list_id) if order_list_id is not None else "")
+            or str(row.get("exchange_executed_qty") or "") != (str(executed_qty) if executed_qty is not None else "")
+            or str(row.get("exchange_cumulative_quote_qty") or "") != (str(cumulative_quote_qty) if cumulative_quote_qty is not None else "")
+            or not row.get("result_recorded_at_ms")
+        ):
+            raise RuntimeError("post-commit exchange-result read-back verification failed")
+        return True
 
     def mark_execution_intent_reconciled(
         self,
