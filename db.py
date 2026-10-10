@@ -1079,6 +1079,10 @@ class Database:
             FROM campaign_events AS e
             LEFT JOIN campaigns AS c ON c.campaign_id = e.campaign_id
             WHERE e.event = ?
+              AND (
+                  c.tags_json IS NULL
+                  OR UPPER(c.tags_json) NOT LIKE '%"EXECUTION_MODE": "SPOT"%'
+              )
             ORDER BY e.created_at DESC, e.id DESC
             LIMIT ?
             """,
