@@ -203,7 +203,6 @@ internal class FuturesNativeEngine(
     private val feeBufferPerSideFraction = 0.001
     private val slippageBufferFraction = 0.0015
     private val maxSpreadFraction = 0.0015
-    private val minRiskReward = 1.5
     private val pollMillis = 20_000L
 
     private fun futuresKey(): String = prefs.getString("futures_api_key", "")?.trim().orEmpty()
