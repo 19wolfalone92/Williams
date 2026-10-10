@@ -16,6 +16,18 @@ import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 
+/** True only when the last three AO histogram bars have the requested colour. */
+internal fun hasThreeSameColorAo(values: List<Double>, direction: String): Boolean {
+    if (values.size < 4) return false
+    val recent = values.takeLast(4)
+    if (!recent.all(Double::isFinite)) return false
+    return when (direction.uppercase(Locale.US)) {
+        "LONG" -> recent[0] < recent[1] && recent[1] < recent[2] && recent[2] < recent[3]
+        "SHORT" -> recent[0] > recent[1] && recent[1] > recent[2] && recent[2] > recent[3]
+        else -> false
+    }
+}
+
 /**
  * Dedicated native Android USDⓈ-M Futures engine.
  *
@@ -971,7 +983,7 @@ internal class FuturesNativeEngine(
             // WM2: three consecutive AO bars in the same direction after the
             // corresponding outside fractal. It can be the first signal of a
             // new campaign if no earlier valid WM1/WM3 signal is available.
-            if (superAo(ao, bars, "LONG")) {
+            if (superAo(ao, "LONG")) {
                 val row = bars[i]
                 val trigger = row.high + tickSize
                 val stop = row.low - tickSize
@@ -982,7 +994,7 @@ internal class FuturesNativeEngine(
                     )
                 }
             }
-            if (superAo(ao, bars, "SHORT")) {
+            if (superAo(ao, "SHORT")) {
                 val row = bars[i]
                 val trigger = row.low - tickSize
                 val stop = row.high + tickSize
@@ -1116,22 +1128,9 @@ internal class FuturesNativeEngine(
         return null
     }
 
-    private fun superAo(
-        ao: List<Double>,
-        bars: List<Bar>,
-        direction: String
-    ): Boolean {
-        // Three same-colour AO bars require three consecutive changes, hence
-        // four AO values. WM2 is independent of a separate fractal event.
-        if (ao.size < 4 || bars.isEmpty()) return false
-        val end = ao.lastIndex
-        val recent = (end - 3..end).map { ao.getOrElse(it) { Double.NaN } }
-        if (!recent.all(Double::isFinite)) return false
-        return if (direction == "LONG") {
-            recent[0] < recent[1] && recent[1] < recent[2] && recent[2] < recent[3]
-        } else {
-            recent[0] > recent[1] && recent[1] > recent[2] && recent[2] > recent[3]
-        }
+    private fun superAo(ao: List<Double>, direction: String): Boolean {
+        // WM2 is independent of a separate fractal event.
+        return hasThreeSameColorAo(ao, direction)
     }
 
     private fun latestFractal(bars: List<Bar>, up: Boolean): Pair<Int, Double>? {
