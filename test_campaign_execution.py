@@ -253,6 +253,39 @@ def test_restart_adopts_pending_campaign_by_client_id():
         assert out[0]["state"] == "OPEN"
 
 
+def test_stop_replacement_confirms_old_terminal_and_new_active():
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "campaign.sqlite3"))
+        client = MockExchange()
+        svc = service(db, client)
+        result = svc.arm_initial_entry(
+            signal(trigger=101.0),
+            equity_quote=10_000,
+            candidate_risk_pct=0.004,
+        )
+        client.set_price("BTCUSDT", 101.5)
+        assert svc.reconcile_pending_entries()[0]["state"] == "OPEN"
+        campaign = svc.engine.load_campaign(result["campaign_id"])
+        old_id = int(campaign.tags["protective_order_id"])
+        proposed = float(campaign.current_stop_price) + 0.1
+
+        replaced = svc.replace_structural_stop(
+            campaign,
+            existing_order_id=old_id,
+            quantity=float(campaign.position_qty),
+            proposed_stop=proposed,
+        )
+
+        old_order = client.get_order("BTCUSDT", order_id=old_id)
+        new_order = client.get_order(
+            "BTCUSDT",
+            orig_client_order_id=replaced["newOrderResponse"]["clientOrderId"],
+        )
+        assert old_order["status"] == "CANCELED"
+        assert new_order["status"] == "NEW"
+        assert str(new_order["orderId"]) == str(replaced["newOrderResponse"]["orderId"])
+
+
 def test_campaign_exit_never_sells_foreign_base_inventory():
     with tempfile.TemporaryDirectory() as d:
         db = Database(os.path.join(d, "campaign.sqlite3"))
