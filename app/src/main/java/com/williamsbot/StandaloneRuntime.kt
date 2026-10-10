@@ -3084,7 +3084,10 @@ private class NativeEngine(
             symbol + ": market price is already at/below campaign stop"
         }
 
-        val clientId = "W5S_" + System.nanoTime().toString(16)
+        val clientId = stableNativeClientOrderId(
+            "W5S_", position.symbol, position.campaignId, position.signalId,
+            qty.toString(), stop.toString(), "PROTECTIVE_STOP"
+        )
         val order = withCampaignMutation(symbol, "CAMPAIGN_PROTECTION") {
             checkCampaignOrderCapacity(symbol, 1)
             signedPost(
@@ -3127,7 +3130,11 @@ private class NativeEngine(
             return
         }
 
-        val newClientId = "W5S_" + System.nanoTime().toString(16)
+        val newClientId = stableNativeClientOrderId(
+            "W5S_", position.symbol, position.campaignId, position.signalId,
+            oldId.toString(), position.qty.toString(), stop.toString(),
+            "PROTECTIVE_STOP_REPLACE"
+        )
         val result = withCampaignMutation(position.symbol, "CAMPAIGN_TRAIL") {
             signedCancelReplace(
                 position.symbol,
@@ -3887,9 +3894,11 @@ private class NativeEngine(
             campaignBaseBalance(candidate.symbol) + qty > rules.maxPosition
         ) return
 
-        val clientId =
-            "W5E_ADD_" + signal.type + "_" + signal.signalBarTimeMs + "_" +
-                System.nanoTime().toString(16).takeLast(8)
+        val clientId = stableNativeClientOrderId(
+            "W5A_", candidate.symbol, position.campaignId, signal.signalId,
+            signal.type, signal.signalBarTimeMs.toString(), trigger.toString(),
+            "CAMPAIGN_ADD_ON"
+        )
         val pending = PendingEntry(
             symbol = candidate.symbol,
             clientOrderId = clientId,
