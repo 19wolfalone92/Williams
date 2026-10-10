@@ -9,6 +9,7 @@ on:
       - 'gradle.properties'
       - 'gradle/**'
       - 'settings.gradle.kts'
+      - 'docs/**'
       - '.github/workflows/**'
   pull_request:
     paths:
@@ -17,6 +18,7 @@ on:
       - 'gradle.properties'
       - 'gradle/**'
       - 'settings.gradle.kts'
+      - 'docs/**'
       - '.github/workflows/**'
   workflow_dispatch:
 
