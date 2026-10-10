@@ -116,3 +116,43 @@ def test_execution_barrier_refuses_duplicate_stable_client_id_after_unknown_retr
         assert submissions == ["sent"]
     finally:
         db.conn.close()
+
+
+def test_execution_barrier_allows_wm1_before_directional_context_turns_but_honors_d1_veto():
+    import time
+    from market_context import ContextCache, TFMarketContext
+    from execution_barrier import ExecutionBarrier, OrderIntent
+
+    cache = ContextCache()
+    base = dict(
+        symbol="BTCUSDT", version=1, candle_open_time_ms=1,
+        candle_close_time_ms=2, price=100.0, data_bars=200,
+    )
+    # H1/H4 are not yet bullish; D1 is neutral. A structurally valid WM1 may
+    # be admitted without pretending the higher-timeframe trend has confirmed.
+    for interval in ("1h", "4h", "1d"):
+        cache.publish(TFMarketContext(
+            **base, interval=interval,
+            allow_long=False, allow_short=False, alligator_state="SLEEP",
+        ))
+    barrier = ExecutionBarrier(cache, db=None, require_durable_intent=False)
+    intent = OrderIntent.new(
+        "BTCUSDT", "BUY", "STOP_MARKET",
+        {"1h": 1, "4h": 1, "1d": 1},
+        purpose="CAMPAIGN_ENTRY", permission_interval="1h",
+        signal_type="REVERSAL", client_order_id="wm1-entry-1",
+    )
+    assert barrier._validate(intent, cache.snapshot()) == ""
+
+    # A directional D1 macro context opposing the WM1 is still a hard veto.
+    cache.publish(TFMarketContext(
+        **{**base, "version": 1}, interval="1d",
+        allow_long=False, allow_short=True, alligator_state="BEARISH",
+    ))
+    refreshed = OrderIntent.new(
+        "BTCUSDT", "BUY", "STOP_MARKET",
+        {"1h": 1, "4h": 1, "1d": 2},
+        purpose="CAMPAIGN_ENTRY", permission_interval="1h",
+        signal_type="REVERSAL", client_order_id="wm1-entry-2",
+    )
+    assert "D1 macro context vetoes" in barrier._validate(refreshed, cache.snapshot())
