@@ -86,6 +86,7 @@ def test_pending_replacement_uses_actionable_confirmation_chronology():
     from pending_signal import PendingSignal
 
     core = DigitalWilliamsCore()
+    expiry = int(time.time() * 1000) + 60_000
     old = SignalSpec.new(
         symbol="BTCUSDT",
         side="BUY",
@@ -97,7 +98,7 @@ def test_pending_replacement_uses_actionable_confirmation_chronology():
         trigger_price=110.0,
         protective_reference=95.0,
         created_at_ms=1_000,
-        expires_at_ms=100_000,
+        expires_at_ms=expiry,
     )
     later_center_but_earlier_confirmation = SignalSpec.new(
         symbol="BTCUSDT",
@@ -110,7 +111,7 @@ def test_pending_replacement_uses_actionable_confirmation_chronology():
         trigger_price=111.0,
         protective_reference=96.0,
         created_at_ms=1_001,
-        expires_at_ms=100_000,
+        expires_at_ms=expiry,
     )
     assert core.replace_pending(
         PendingSignal.from_spec(old),
@@ -129,7 +130,7 @@ def test_pending_replacement_uses_actionable_confirmation_chronology():
         trigger_price=112.0,
         protective_reference=96.0,
         created_at_ms=1_002,
-        expires_at_ms=100_000,
+        expires_at_ms=expiry,
     )
     replacement = core.replace_pending(
         PendingSignal.from_spec(old),
