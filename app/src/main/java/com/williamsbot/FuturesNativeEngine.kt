@@ -3143,8 +3143,12 @@ internal class FuturesNativeEngine(
             !campaign.optBoolean("entry_fee_unknown", false)
         val feeTotal = feeEntry + feeExit
         if (!feeTotal.isFinite()) throw FuturesApiException("$symbol closed trade fees are non-finite")
-        val riskMultiple = if (risk.isFinite() && risk > 0.0) net / risk else 0.0
-        val outcome = when {
+        // Incomplete non-USDT commission conversion means net PnL and R are
+        // provisional. Never label such a record WIN/LOSS or publish a fake R.
+        val riskMultiple = if (knownFees) net / risk else 0.0
+        val outcome = if (!knownFees) {
+            "UNKNOWN"
+        } else when {
             net > 0.0 -> "WIN"
             net < 0.0 -> "LOSS"
             else -> "FLAT"
