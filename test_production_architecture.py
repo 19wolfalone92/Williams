@@ -1,6 +1,7 @@
 import json
 import threading
 import time
+import pytest
 
 from execution_barrier import ExecutionBarrier, OrderIntent
 from market_context import ContextCache, TFMarketContext, WaveHypothesis
