@@ -37,6 +37,18 @@ def _bar_ms(timeframe: str) -> int:
     return _TF_MS.get(str(timeframe), 0)
 
 
+def _configured_ttl_bars(env_name: str, default: int) -> int:
+    """Return a configured positive TTL; malformed/non-positive values fail closed."""
+    raw = os.getenv(env_name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw.strip())
+    except (TypeError, ValueError, AttributeError):
+        return 0
+    return value if value > 0 else 0
+
+
 def default_expiry_ms(signal: SignalSpec) -> int:
     # Respect an explicit expiry even when it is already in the past; never
     # revive an expired signal by falling back to a fresh TTL.
@@ -47,11 +59,13 @@ def default_expiry_ms(signal: SignalSpec) -> int:
         return 0
 
     if signal.signal_type.value == "REVERSAL":
-        bars = max(1, int(os.getenv("WILLIAMS_PENDING_REVERSAL_BARS", "2")))
+        bars = _configured_ttl_bars("WILLIAMS_PENDING_REVERSAL_BARS", 2)
     elif signal.signal_type.value == "SUPER_AO":
-        bars = max(1, int(os.getenv("WILLIAMS_PENDING_SUPER_AO_BARS", "2")))
+        bars = _configured_ttl_bars("WILLIAMS_PENDING_SUPER_AO_BARS", 2)
     else:
-        bars = max(1, int(os.getenv("WILLIAMS_PENDING_FRACTAL_BARS", "8")))
+        bars = _configured_ttl_bars("WILLIAMS_PENDING_FRACTAL_BARS", 8)
+    if bars <= 0:
+        return 0
 
     # An unknown timeframe has no approved duration. Return no expiry so
     # PendingSignal.actionable() fails closed instead of silently using M5.
