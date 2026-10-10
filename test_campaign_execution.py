@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from campaign_engine import CampaignEngine
 from campaign_execution import CampaignExecutionService
 from campaign_model import CampaignState, SignalRole, SignalSpec, SignalType
-from execution_barrier import ExecutionBarrier
+from execution_barrier import ExecutionBarrier, OrderIntent
 from mock_exchange import MockExchange
 from db import Database
 
@@ -84,6 +84,101 @@ def _enable_approximate_wm1_for_synthetic_spot_tests(monkeypatch):
     # Tests below hand-build a WM1 SignalSpec to exercise order mechanics.
     # Source-unverified numeric angulation stays blocked in the real default.
     monkeypatch.setenv("WILLIAMS_ALLOW_APPROXIMATE_ANGULATION", "true")
+
+
+def _tc2_barrier_intent(signal_type, *, mode="STRICT_DIRECTIONAL", trigger=101.0, angle=0.0):
+    return OrderIntent.new(
+        "BTCUSDT",
+        "BUY",
+        "STOP_LOSS",
+        {"1h": 1, "4h": 1},
+        invalidation_level=97.0,
+        signal_trigger_price=trigger,
+        quantity="1.0",
+        client_order_id=f"TC2_TEST_{signal_type}_{mode}",
+        purpose="CAMPAIGN_ENTRY",
+        permission_interval="1h",
+        context_admission_mode=mode,
+        signal_type=signal_type,
+        angulation_score=angle,
+    )
+
+
+def test_final_execution_barrier_accepts_wm2_without_d1_or_aligned_alligator(monkeypatch):
+    monkeypatch.setenv("WILLIAMS_STRATEGY_PROFILE", "TC2_THREE_WISE_MEN")
+
+    class SleepingH1WithoutD1(FakeSnapshot):
+        def context(self, symbol, interval):
+            if str(interval).lower() == "1d":
+                return None
+            context = super().context(symbol, interval)
+            if str(interval).lower() == "1h":
+                context.alligator_state = "SLEEP"
+                context.alligator_awake = False
+                context.allow_long = False
+            return context
+
+    with tempfile.TemporaryDirectory() as directory:
+        db = Database(os.path.join(directory, "barrier-wm2-no-d1.sqlite3"))
+        try:
+            barrier = ExecutionBarrier(FakeCache(), db)
+            reason = barrier._validate(
+                _tc2_barrier_intent("SUPER_AO"),
+                SleepingH1WithoutD1(),
+            )
+            assert reason == ""
+        finally:
+            db.conn.close()
+
+
+def test_final_execution_barrier_checks_wm3_against_h1_teeth(monkeypatch):
+    monkeypatch.setenv("WILLIAMS_STRATEGY_PROFILE", "TC2_THREE_WISE_MEN")
+
+    class SleepingH1WithoutD1(FakeSnapshot):
+        def context(self, symbol, interval):
+            if str(interval).lower() == "1d":
+                return None
+            context = super().context(symbol, interval)
+            if str(interval).lower() == "1h":
+                context.alligator_state = "SLEEP"
+                context.alligator_awake = False
+                context.allow_long = False
+                context.teeth = 100.0
+            return context
+
+    with tempfile.TemporaryDirectory() as directory:
+        db = Database(os.path.join(directory, "barrier-wm3-teeth.sqlite3"))
+        try:
+            barrier = ExecutionBarrier(FakeCache(), db)
+            assert barrier._validate(
+                _tc2_barrier_intent("FRACTAL", trigger=101.0),
+                SleepingH1WithoutD1(),
+            ) == ""
+            assert "above H1 Teeth" in barrier._validate(
+                _tc2_barrier_intent("FRACTAL", trigger=99.0),
+                SleepingH1WithoutD1(),
+            )
+        finally:
+            db.conn.close()
+
+
+def test_final_execution_barrier_wm1_early_uses_only_h1_h4_and_fails_closed_by_default(monkeypatch):
+    monkeypatch.setenv("WILLIAMS_STRATEGY_PROFILE", "TC2_THREE_WISE_MEN")
+    with tempfile.TemporaryDirectory() as directory:
+        db = Database(os.path.join(directory, "barrier-wm1-no-d1.sqlite3"))
+        try:
+            barrier = ExecutionBarrier(FakeCache(), db)
+            intent = _tc2_barrier_intent(
+                "REVERSAL", mode="TC2_WM1_EARLY", angle=2.5
+            )
+            monkeypatch.setenv("WILLIAMS_ALLOW_APPROXIMATE_ANGULATION", "false")
+            assert "approximate angulation is disabled" in barrier._validate(
+                intent, FakeSnapshot()
+            )
+            monkeypatch.setenv("WILLIAMS_ALLOW_APPROXIMATE_ANGULATION", "true")
+            assert barrier._validate(intent, FakeSnapshot()) == ""
+        finally:
+            db.conn.close()
 
 
 def test_spot_tc2_admission_does_not_require_d1_context():
