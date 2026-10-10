@@ -769,6 +769,7 @@ class MultiPositionTrader:
                 new_client_order_id=client_id,
             ),
             quantity=self.client.decimal_format(sell_qty),
+            mutation_kind="EMERGENCY_EXIT",
         )
         self.db.save_order(sell)
 
