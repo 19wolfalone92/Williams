@@ -120,6 +120,77 @@ def choose_initial_williams_signal(
     return CampaignEngine.choose_initial_signal(candidates)
 
 
+def _loss_streak_allows_entry(
+    db: Database,
+    *,
+    max_consecutive_losses: int,
+    cooldown_minutes: int,
+    now: datetime | None = None,
+) -> tuple[bool, str]:
+    """Fail-closed loss-streak and post-loss cooldown gate for new exposure."""
+    try:
+        max_losses = int(max_consecutive_losses)
+        cooldown = int(cooldown_minutes)
+        if max_losses < 0 or cooldown < 0:
+            raise ValueError("loss guard limits cannot be negative")
+        current = now or datetime.now(timezone.utc)
+        if current.tzinfo is None:
+            raise ValueError("loss guard requires timezone-aware time")
+        current = current.astimezone(timezone.utc)
+        rows = db.recent_campaign_closes(limit=max(500, max_losses + 2))
+        consecutive = 0
+        most_recent_loss_at = None
+        for row in rows:
+            payload_raw = row.get("payload_json")
+            if not payload_raw:
+                return False, "latest finalized campaign close has no PnL payload; new entries blocked"
+            payload = json.loads(payload_raw) if isinstance(payload_raw, str) else payload_raw
+            if not isinstance(payload, dict):
+                return False, "finalized campaign close has malformed PnL payload; new entries blocked"
+            pnl_raw = payload.get(
+                "realized_pnl_quote_net_known_fees",
+                payload.get("realized_pnl_quote"),
+            )
+            pnl = float(pnl_raw)
+            if not math.isfinite(pnl):
+                return False, "finalized campaign close has non-finite PnL; new entries blocked"
+            created_raw = str(row.get("created_at") or "").strip()
+            if not created_raw:
+                return False, "finalized campaign close has no timestamp; new entries blocked"
+            try:
+                closed_at = datetime.fromisoformat(created_raw.replace("Z", "+00:00"))
+                if closed_at.tzinfo is None:
+                    closed_at = closed_at.replace(tzinfo=timezone.utc)
+                else:
+                    closed_at = closed_at.astimezone(timezone.utc)
+            except ValueError:
+                return False, "finalized campaign close has invalid timestamp; new entries blocked"
+            if pnl < 0:
+                consecutive += 1
+                if most_recent_loss_at is None:
+                    most_recent_loss_at = closed_at
+            else:
+                break
+        if max_losses > 0 and consecutive >= max_losses:
+            return False, (
+                f"consecutive loss limit reached: {consecutive} >= {max_losses}; "
+                "new entries blocked"
+            )
+        if cooldown > 0 and most_recent_loss_at is not None:
+            elapsed = (current - most_recent_loss_at).total_seconds()
+            if elapsed < 0:
+                return False, "latest loss timestamp is in the future; new entries blocked"
+            remaining = cooldown * 60 - elapsed
+            if remaining > 0:
+                return False, (
+                    f"post-loss cooldown active for {math.ceil(remaining)} more seconds; "
+                    "new entries blocked"
+                )
+        return True, f"loss-streak guard clear (consecutive_losses={consecutive})"
+    except Exception as exc:
+        return False, f"loss-streak/cooldown state unavailable; new entries blocked ({type(exc).__name__}: {exc})"
+
+
 def signal_spec_from_dict(raw: dict[str, Any]) -> SignalSpec:
     """Rebuild the canonical domain signal without losing direction metadata."""
     side = str(raw.get("side", "")).upper()
@@ -767,6 +838,14 @@ class FuturesRuntime:
         if not stop_outs_ok:
             daily_ok = False
             daily_reason = f"{daily_reason}; {stop_outs_reason}"
+        loss_guard_ok, loss_guard_reason = _loss_streak_allows_entry(
+            self.db,
+            max_consecutive_losses=int(self.config.max_consecutive_losses),
+            cooldown_minutes=int(self.config.cooldown_minutes),
+        )
+        if not loss_guard_ok:
+            daily_ok = False
+            daily_reason = f"{daily_reason}; {loss_guard_reason}"
         if preflight_errors:
             daily_ok = False
             daily_reason = "; ".join(preflight_errors) + "; new entries blocked"
