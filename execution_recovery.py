@@ -83,10 +83,12 @@ class ExecutionRecoveryCoordinator:
         order_id = intent.get("order_id")
         if not client_id and not order_id:
             raise ExecutionRecoveryBlocked("durable intent has neither clientOrderId nor orderId")
+        # Binance's order lookup should use one unambiguous identity. If orderId
+        # exists, clientOrderId is still compared against the returned payload below.
         order = self.client.get_order(
             str(intent["symbol"]).upper(),
             order_id=order_id if order_id else None,
-            orig_client_order_id=client_id if client_id else None,
+            orig_client_order_id=None if order_id else (client_id if client_id else None),
         )
         if not isinstance(order, dict):
             raise ExecutionRecoveryBlocked("Binance order lookup did not return an object")
@@ -105,8 +107,8 @@ class ExecutionRecoveryCoordinator:
 
     def _query_trades(self, intent, order):
         executed = self._decimal(order.get("executedQty", "0"), "executedQty")
-        if executed == 0:
-            return [], Decimal("0")
+        # Query trade history even when executedQty is zero: delayed history and
+        # cancel/fill races must become a mismatch, never an optimistic unlock.
         method = getattr(self.client, "my_trades", None)
         if not callable(method):
             raise ExecutionRecoveryBlocked("signed myTrades API unavailable; recovery remains locked")
@@ -116,6 +118,7 @@ class ExecutionRecoveryCoordinator:
         if len(rows) >= 1000:
             raise ExecutionRecoveryBlocked("myTrades reached its page limit; completeness is unproven")
         total_qty = Decimal("0")
+        total_quote = Decimal("0")
         seen = set()
         normalized = []
         for item in rows:
@@ -138,6 +141,7 @@ class ExecutionRecoveryCoordinator:
             if "isBuyer" in item and bool(item["isBuyer"]) != (str(intent.get("side", "")).upper() == "BUY"):
                 raise ExecutionRecoveryBlocked("myTrades direction conflicts with the durable order")
             total_qty += qty
+            total_quote += qty * price
             normalized.append({
                 **item,
                 "trade_id": str(trade_id),
@@ -148,6 +152,16 @@ class ExecutionRecoveryCoordinator:
             raise ExecutionRecoveryBlocked(
                 f"myTrades quantity {total_qty} does not match order executedQty {executed}"
             )
+        reported_quote_raw = order.get("cummulativeQuoteQty")
+        if reported_quote_raw not in (None, ""):
+            reported_quote = self._decimal(reported_quote_raw, "cummulativeQuoteQty")
+            if total_qty > 0 and (
+                reported_quote <= 0
+                or abs(total_quote - reported_quote) > max(Decimal("0.00000001"), reported_quote * Decimal("0.00000001"))
+            ):
+                raise ExecutionRecoveryBlocked(
+                    f"myTrades quote total {total_quote} does not match order cummulativeQuoteQty {reported_quote}"
+                )
         return normalized, total_qty
 
     def _evidence(self, intent, order, trades, history_qty):
