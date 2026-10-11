@@ -351,3 +351,10 @@ The new SQLite tests are committed in the branch, but **TEST-PROVEN and CI-PROVE
 - Final exact-SHA CI: pending.
 
 **TASK 005.11 — BLOCKED — NOT ACCEPTED.** The next minimum safe step is to validate this transaction-ownership patch on the exact resulting SHA, fix any regression without weakening tests, and only then continue sink closure/recovery work. Acceptance remains prohibited while any P0 blocker above is open.
+
+
+### TASK 005.11 CI wiring correction
+
+The previous workflow filters did not run `Python backend tests` or `Build Android APK` for an audit-only report commit on pull requests, despite their push filters covering `audit/**`. The PR filters now include `audit/**`; the Android PR filter also includes root Python files and `tests/**`. This is a CI-coverage correction, not evidence of a passing build. The new branch head must have fresh Python, Android and Campaign runs, all on the same exact SHA, before their status can be recorded as accepted evidence.
+
+The code-level transaction fix is limited to Python SQLite connection ownership and its tests. It does not close the emergency recovery, financial handoff, Decimal, exposure, complete sink inventory, global gate, or Android durability blockers listed above.
