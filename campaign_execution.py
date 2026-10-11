@@ -873,7 +873,7 @@ class CampaignExecutionService:
                     "exchange accepted an operation but durable recovery is incomplete; "
                     "execution contour remains blocked"
                 )
-        if intent.order_type == "CANCEL":
+        if intent.order_type == "CANCEL" and self._recovery_depth == 0:
             row = self.db.conn.execute(
                 "SELECT status FROM execution_intents WHERE intent_id=?",
                 (intent.intent_id,),
