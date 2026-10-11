@@ -1,7 +1,7 @@
 import pytest
 
 from binance_client import BinanceAPIError, BinanceSpotClient
-from execution_permit import mutation_permit
+from execution_permit import _BARRIER_ADMISSION_TOKEN, _mutation_permit
 
 
 def make_client():
@@ -101,7 +101,7 @@ def test_signed_post_retries_once_only_for_timestamp_rejection(monkeypatch):
     monkeypatch.setattr(client.session, "request", fake_request)
     monkeypatch.setattr(client, "sync_time", lambda: setattr(client, "time_offset_ms", 123))
 
-    with mutation_permit(client):
+    with _mutation_permit(client, admission_token=_BARRIER_ADMISSION_TOKEN):
         result = client._request(
             "POST",
             "/api/v3/order",
@@ -125,7 +125,7 @@ def test_signed_post_transport_error_is_not_retried(monkeypatch):
     monkeypatch.setattr(client.session, "request", fake_request)
 
     with pytest.raises(BinanceAPIError) as exc:
-        with mutation_permit(client):
+        with _mutation_permit(client, admission_token=_BARRIER_ADMISSION_TOKEN):
             client._request(
                 "POST",
                 "/api/v3/order",
@@ -258,7 +258,7 @@ def test_cancel_replace_http_409_is_unknown_and_not_retried(monkeypatch):
     monkeypatch.setattr(client.session, "request", fake_request)
 
     with pytest.raises(BinanceAPIError) as exc:
-        with mutation_permit(client):
+        with _mutation_permit(client, admission_token=_BARRIER_ADMISSION_TOKEN):
             client._request(
                 "POST",
                 "/api/v3/order/cancelReplace",
@@ -297,7 +297,7 @@ def test_order_mutation_rate_limit_is_unknown_and_not_retried(monkeypatch):
     monkeypatch.setattr(client.session, "request", fake_request)
 
     with pytest.raises(BinanceAPIError) as exc:
-        with mutation_permit(client):
+        with _mutation_permit(client, admission_token=_BARRIER_ADMISSION_TOKEN):
             client._request(
                 "POST",
                 "/api/v3/order",
