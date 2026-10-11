@@ -25,11 +25,14 @@ class BinanceSpotClient:
     def order(self):
         return self._request("POST", "/api/v3/order")
 '''
-    # The generic transport fixture models the registered sink; registry endpoint
-    # presence is separately checked against the real binance_client.py in CI.
-    errors = analyze(source, "binance_client.py")
-    assert not any("raw/dynamic HTTP request outside registered transport sink" in e for e in errors)
-    assert not any("direct _request call bypasses registered Binance client" in e for e in errors)
+    import copy
+    registry = copy.deepcopy(REGISTRY)
+    registry["python_mutation_endpoints"] = [
+        item for item in registry["python_mutation_endpoints"]
+        if item["method"] == "POST" and item["endpoint"] == "/api/v3/order"
+    ]
+    errors = analyze_python_sources({"binance_client.py": source}, registry)
+    assert errors == []
 
 
 def test_negative_01_direct_requests_post_is_rejected():
