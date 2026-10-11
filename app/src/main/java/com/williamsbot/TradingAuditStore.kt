@@ -182,6 +182,16 @@ class TradingAuditStore(context: Context) :
                 created_at INTEGER NOT NULL
             )
         """.trimIndent())
+
+        if (oldVersion < 4) {
+            db.execSQL("""
+                CREATE TABLE IF NOT EXISTS signal_claims(
+                    signal_id TEXT PRIMARY KEY,
+                    canonical_payload TEXT NOT NULL,
+                    claimed_at INTEGER NOT NULL
+                )
+            """.trimIndent())
+        }
     }
 
     /**
@@ -235,15 +245,6 @@ class TradingAuditStore(context: Context) :
         if (inserted) return "CLAIMED"
         return if (stored == canonicalPayload) "DUPLICATE" else "CONFLICT"
     }
-        if (oldVersion < 4) {
-            db.execSQL("""
-                CREATE TABLE IF NOT EXISTS signal_claims(
-                    signal_id TEXT PRIMARY KEY,
-                    canonical_payload TEXT NOT NULL,
-                    claimed_at INTEGER NOT NULL
-                )
-            """.trimIndent())
-        }
     @Synchronized
     fun recordRestCall(
         method: String,
