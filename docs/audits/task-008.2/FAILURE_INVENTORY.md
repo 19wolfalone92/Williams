@@ -24,3 +24,10 @@ Environment: see `ENVIRONMENT_MANIFEST.md`. Full tracebacks: `baseline-logs/pyth
 - F0082-007 through F0082-010 share a confirmed early-return path: without configured `max_offset_ms`, preflight leaves the time check UNKNOWN and returns before API restrictions/open-order checks.
 - Failure status means the assertion/test did not pass; it does not automatically establish that the implementation contract is wrong. In particular, fail-closed behavior must not be weakened to satisfy a test.
 - All unproven underlying causes remain UNKNOWN. See `FAILURE_ROOT_CAUSE_MATRIX.md`.
+
+
+## TASK 008.3 status update
+
+The baseline inventory remains tied to SHA 1a7e7209c99152c3bf29f3e2f07e7db088d9243b and run 38129367877. Review of the source/tests confirms immediate setup/contract mismatches for F0082-001, F0082-002 and F0082-003; a confirmed missing emergency-exit capability for F0082-005; a one-use permit versus same-permit retry conflict for F0082-006; and the missing approved offset-budget prerequisite for F0082-007 through F0082-010. F0082-004 and F0082-011 remain NOT VERIFIED at root-cause level.
+
+No failure is marked fixed. No post-correction SHA exists, and the full CI has not been rerun after a correction. See ../task-008.3/CORRECTION_PLAN.md for per-failure status.
