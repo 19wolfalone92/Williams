@@ -483,3 +483,18 @@ The canonical payload currently captures the fields that are present on `OrderIn
 | main unchanged / PR not merged | PASS | `main` remains `04da5f9c09572e99ff310be3a1908179165e528c`; PR #49 open Draft |
 
 **Decision: IN PROGRESS — NOT APPROVED.** This checkpoint improves Python SQLite signal claiming but does not close the cross-platform P0 requirements. Do not resume trading or treat the branch as execution-safe until the remaining acceptance criteria are independently proven.
+
+
+## TASK 004.7 implementation amendment — Android durable entry/add-on claim
+
+This amendment supersedes the earlier statement in the interim checkpoint that Android signal claiming had not yet been wired.
+
+- `app/src/main/java/com/williamsbot/TradingAuditStore.kt`: schema version raised to 4; added persistent `signal_claims` table with `signal_id TEXT PRIMARY KEY`, canonical payload and claim time; migration for existing version < 4 databases; `claimSignalOnce` performs a SQLite transaction, checks existing payload, ends/commits the transaction, and performs a post-commit read-back. It returns `CLAIMED`, `DUPLICATE`, or `CONFLICT`; database errors throw.
+- `app/src/main/java/com/williamsbot/StandaloneRuntime.kt`: the canonical campaign entry and add-on submit paths call `claimCampaignSignalOnce` after last-mile checks and before their `signedPost("/api/v3/order", ...)`. The durable key is the stable `signal.signalId`, not the per-attempt `clientOrderId` that includes `System.nanoTime()`. Canonical payload currently includes symbol, BUY side, timeframe, signal-bar time, confirmation time, signal type and `BuildConfig.VERSION_NAME`.
+- The Android change is source-level implementation only until the latest APK workflow completes. There is still no Android runtime mutation-spy test proving zero calls for all requested negative scenarios, and other direct mutation paths (emergency SELL, managed exits, cancellation/cancel-replace, protection/recovery) have not yet been proven to share this durable claim contract. The Python and Android canonical contracts are not yet identical: Python currently lacks an explicit strategy-version field and the input dataset/version, and its available payload shape differs. Cross-platform parity remains OPEN.
+
+## CI failure investigation and correction
+
+The first Python backend run after the barrier change failed on SHA `8ac2efe1f2dd8d4942449055547237a213563373` (run [38116577327](https://github.com/19wolfalone92/Williams/actions/runs/38116577327)); the next affected run on `972617ef83ae9bf90176ea27b69253f8355449bc` also failed (run [38116588109](https://github.com/19wolfalone92/Williams/actions/runs/38116588109)). Both failures had the same root cause: `test_execution_barrier_serializes_publish_and_submit` constructed an entry barrier without a database and expected the network callback to run. The production code correctly rejected the DB-less entry. The test fixture was corrected to supply a durable-claim test DB; production fail-closed behavior was not weakened. These failed runs are retained as failures and are not counted as passing evidence.
+
+At the time of this amendment, the latest implementation commit is `04081cf4d44cb1dec1b876304ca04ec00c1f1b98`; the report amendment itself will create a new SHA and trigger fresh CI. The exact final-SHA statuses must be rechecked before any acceptance decision.
