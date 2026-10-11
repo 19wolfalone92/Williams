@@ -453,3 +453,96 @@ The three runs above agree on the same SHA as returned by the commit-associated 
 The native mutation fence currently blocks unresolved same-symbol mutations conservatively. Do not loosen that rule or treat a SELL/DELETE operation as inherently safe without explicit target identity, confirmed exposure, durable intent and reconciliation semantics. Green CI is necessary but not sufficient for acceptance.
 
 This report update creates a new branch commit. The three workflows must be checked again against the resulting report-bearing SHA; results for `2519e122584c9fb78b023c81b5c39864e24e194f` must not be reused as final-SHA evidence. `main` must remain unchanged and PR #48 must remain unmerged.
+
+
+### TASK 003.2 — exact-HEAD audit checkpoint (2026-10-11)
+
+**Status: BLOCKED — NOT ACCEPTED.** This section records the observed state and gaps; it does not claim the acceptance criteria are complete.
+
+#### Repository / exact-SHA CI
+
+- Repository: `19wolfalone92/Williams`.
+- Branch: `audit/williams-2.1-task-003-execution-safety`.
+- Branch HEAD / PR #48 head at inspection: `ff6d9be08616ca5605e9206ea4cbf4482e422cc2`.
+- Base `main`: `04da5f9c09572e99ff310be3a1908179165e528c`; PR #48 remains open, draft, unmerged. No merge was performed.
+- The commit-associated GitHub Actions query returned three completed successful workflows for this exact SHA:
+
+| Workflow | Run ID | Job ID | Status | Evidence |
+|---|---:|---:|---|---|
+| Python backend tests | 38116231828 | 114401554968 | PASS | https://github.com/19wolfalone92/Williams/actions/runs/38116231828 |
+| Williams Campaign CI | 38116231835 | 114401554881, 114401555072 | PASS | https://github.com/19wolfalone92/Williams/actions/runs/38116231835 |
+| Build Android APK | 38116231794 | 114401554546 | PASS | https://github.com/19wolfalone92/Williams/actions/runs/38116231794 |
+
+The associated jobs report conclusion `success`. This proves the configured jobs completed successfully at the queried commit; it does **not** prove all Task 003.2 scenarios, and does not imply a physical-device or live-exchange test. Per-test totals and artifacts were not independently re-extracted in this checkpoint; do not infer unreported test counts.
+
+#### Source inventory — evidence and boundaries
+
+| Entry point / path | Admission gate | Durable intent / barrier | Network sink / result | Recovery / tests | Status |
+|---|---|---|---|---|---|
+| Python `ExecutionBarrier.execute` | Context/version, signal age, required entry risk proof, final pre-submit callback, identity claims and reconciliation lock are present in the inspected implementation | `Database.save_execution_intent`, stable client-order identity claims, durable submit/result handling | The barrier accepts a supplied `submit` callback; this module alone does not enumerate every production callback to the exchange client's actual socket call | `test_task003_execution_safety.py` has persistence-failure, timeout/ambiguous, duplicate-thread entry, partial-fill, cancel/fill race, OCO cancel race and cancel-replace tests | PARTIAL — exhaustive production caller-to-client sink map NOT VERIFIED |
+| Python campaign/trader/portfolio callers | Several modules are in the PR diff (`campaign_execution.py`, `portfolio_trader.py`, `trader.py`) | Expected to route through barrier, but all transitive callers and legacy/manual/worker paths have not been proven exhaustively in this checkpoint | Actual client sink closure has not been independently traced for every caller | Static and integration checks exist; no complete mutation-path test matrix was extracted here | NOT VERIFIED |
+| Android `StandaloneRuntime.signedRequest(method,path,params)` | Explicitly models supported order, OCO and cancel-replace mutations; entry checks include kill/reconciliation/unresolved intents; unresolved same-symbol mutation gate applies broadly | `validateAndPersistMutationIntent` calls `beginExecutionMutation` then `markExecutionMutationSubmitting` before request; result is persisted by `recordExecutionMutationResult`; ambiguous outcomes latch reconciliation | The inspected static test asserts this ordering relative to `http.newCall(request).execute()` | Static source assertions exist; this is not a runtime mutation-spy or fault-injected Android test | PARTIAL — sink fencing has static evidence, runtime coverage NOT VERIFIED |
+| Android `getBody(path)` | GET-only local/backend read helper | No exchange mutation intent applicable | OkHttp GET | Static test asserts GET usage | PASS for read-only method shape only |
+| Android `signedRawGet(path,params)` | GET-only signed Binance read/reconciliation helper | No mutation intent applicable | OkHttp GET | Static test asserts no POST/DELETE/PUT in helper | PASS for read-only method shape only |
+| Android other/legacy/external paths | No complete exhaustive transitive caller graph was established | Not established for every possible call site | Static test counts three raw OkHttp send sites in this source snapshot, but that count is not proof that no alternate client/library/process can mutate | Physical app, external command, and every legacy path not exercised | NOT VERIFIED |
+
+#### Confirmed test coverage versus required matrix
+
+The inspected `test_task003_execution_safety.py` includes actual temporary SQLite database tests for: intent-save failure preventing exchange callback; injected intent commit failure; missing mandatory writer; two parallel threads attempting the same entry; timeout after possible send blocking retry; cancel/fill race; OCO cancel/fill race; cancel-replace partial old fill; stale context; reconciliation state blocking entry; optional telemetry failure; mandatory result persistence failure; missing/corrupt store fail-closed; and static Android source-boundary assertions.
+
+These tests are useful evidence, but **do not satisfy the full Task 003.2 matrix**:
+- OS-process concurrency against one persistent SQLite file: NOT VERIFIED (the inspected duplicate-entry test uses threads in one process).
+- Full fault injection at all 18 specified boundaries, including fill, position, Campaign, risk-reserve, protection writes, `SQLITE_BUSY/SQLITE_LOCKED`, malformed recovery rows and interruption during reconciliation: NOT VERIFIED.
+- Independent-process duplicate fill application and exactly-once financial effects across fill, fees, position, Campaign, risk and protection: NOT VERIFIED.
+- Actual Android mutation-spy proving zero network mutation for each negative admission/persistence scenario: NOT VERIFIED.
+- Android process-death/relaunch tests at every durability boundary: NOT VERIFIED.
+- Live Spot Testnet accepted-order/lost-response reconciliation and OCO/cancel-replace races: NOT RUN.
+- Physical Android device: NOT VERIFIED.
+- Futures: NOT VERIFIED; Spot-oriented evidence must not be generalized to Futures.
+
+#### Financial integrity / recovery findings
+
+- Python DB setup uses WAL and `synchronous=FULL`, a per-instance thread lock, and `BEGIN IMMEDIATE` for its transaction context. This is evidence for local transaction configuration, **not** proof of cross-process exactly-once financial effects.
+- Python `ExecutionBarrier` correctly treats possible-send timeout and mandatory result persistence failure as ambiguous in the inspected test scenarios; new entries are expected to remain blocked. Exhaustive reconciliation across all callers and all ledger tables remains NOT VERIFIED.
+- Android `TradingAuditStore` schema uses SQLite `REAL` for order/fill quantities, prices and commission amounts. That representation is not a decimal-exact financial ledger; end-to-end Decimal/integer-quantized accounting equivalence is NOT VERIFIED.
+- Android `executions.commission` has `REAL DEFAULT 0`, while `commission_asset` is nullable. The schema alone does not prove unknown commission is distinguishable from a known zero commission in every consumer. A complete unknown-fee propagation audit and recovery test is NOT VERIFIED.
+- Android schema contains a `fee_known` field for the `trades` table, but existing/upgrade defaults and every writer/consumer have not been demonstrated to preserve unknown fee state end-to-end. Fee correctness remains NOT VERIFIED.
+- No evidence in this checkpoint proves that fill persistence, position, Campaign, risk reservation and protection are committed as one atomic financial effect or recover idempotently after process death. That requirement remains a P0 blocker.
+- OCO and cancel-replace response classifiers conservatively reject missing per-leg/terminal evidence in the inspected paths. This is useful fail-closed behavior, not proof of authoritative reconciliation for every exchange race or supported mass-cancel variation.
+
+#### Acceptance matrix — Task 003.2
+
+| Criterion | Status | Reason |
+|---|---|---|
+| Exact HEAD / PR state checked; no merge | PASS | Observed SHA and open/draft/unmerged PR recorded above |
+| Three required workflows successful on same exact SHA | PASS | Run IDs above |
+| All production mutation sinks and transitive caller chains inventoried | NOT VERIFIED | Complete caller-to-network map not proven |
+| No unprotected production mutation bypass | NOT VERIFIED | Static sender inventory is not exhaustive bypass proof |
+| Mandatory persistence failure before send prevents network call | PARTIAL | Covered for selected Python fault points; Android runtime sink-spy and full matrix absent |
+| Unknown POST outcome blocks blind retry and requires reconciliation | PARTIAL | Python timeout and selected Android static/result handling evidence; exhaustive recovery not proven |
+| Stable logical identity prevents repeated entry | PARTIAL | Same-process/thread test and stable IDs; two OS processes not tested |
+| Full 18-point persistence fault injection | NOT VERIFIED | Only selected fault points are currently covered |
+| Two independent OS processes on shared persistent SQLite | NOT VERIFIED | Existing test observed here uses threads |
+| Duplicate fill cannot duplicate fees/PnL/position/Campaign/risk effects | NOT VERIFIED | No full cross-process financial-ledger proof |
+| Authoritative fees, balances, position, Campaign, risk and protection reconcile | NOT VERIFIED | No end-to-end recovery proof |
+| Android mutation-spy negative scenarios | NOT VERIFIED | Existing Android evidence is static source assertions |
+| Android process-death recovery | NOT VERIFIED | No physical/runtime proof supplied |
+| OCO/cancel-replace all required crash/race scenarios | PARTIAL | Selected classifier/unit scenarios exist; complete matrix/live evidence absent |
+| Global recovery gate covers all entry paths and all ledger stages | NOT VERIFIED | Exhaustive gate-release/call-path audit incomplete |
+| Spot Testnet live recovery | NOT RUN | No exchange order placed or cancelled |
+| Physical Android device | NOT VERIFIED | No device test claimed |
+| Futures scenarios | NOT VERIFIED | Not established by Spot-focused checks |
+| `main` unchanged and no merge | PASS | PR remains unmerged; base SHA recorded |
+
+#### Remaining P0 / required next work
+
+1. Add and run a full production mutation-sink/caller-chain inventory with tests observing the actual exchange-client sink, not only source text.
+2. Add OS-process tests using two independent processes and one persistent SQLite file for duplicate signal/intent/fill, commit crash, ambiguous POST and recovery contention.
+3. Implement the complete specified fault-injection matrix across durable intent, execution events, fills, fees, position, Campaign, risk reservation and protection.
+4. Prove an atomic/idempotent financial-ledger application model; replace or strictly bound floating-point accounting where financial equality depends on decimal precision; propagate unknown fees without defaulting them to zero.
+5. Add Android runtime mutation-spy and process-death/relaunch tests; retain the conservative fail-closed gate until safe exact-target recovery paths are evidenced.
+6. Verify all supported OCO, cancel-replace, protection and bulk-cancel variants against authoritative per-order/per-leg state and residual exposure.
+7. Prove that the global recovery gate only clears after Orders → Fills → Fees → Balances → Positions/Campaigns → Risk → Protection are reconciled.
+8. Re-run every required workflow on the final report-bearing SHA after any changes. Live Spot Testnet recovery and physical-device results must remain NOT RUN / NOT VERIFIED unless actually performed.
+
+No Binance Mainnet or real trading operation was used. Do not resume trading. Overall status remains **BLOCKED — NOT ACCEPTED**.
