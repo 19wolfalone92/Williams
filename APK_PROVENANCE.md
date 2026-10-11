@@ -1,40 +1,59 @@
 # APK_PROVENANCE — TASK 006
 
-**Status: BLOCKED — APK artifact and trusted build provenance not available in this run**
+**Status: BLOCKED — trusted source provenance and physical-device match not established**  
+**Artifact retrieval:** successful from GitHub Actions workflow run `38143567123` (run #2117) on branch `audit/williams-2.1-task-006-android-runtime`, head SHA `dc634573eb26c491d125feecd158319f1f5daa79`.
 
-## Reference record
+## Retrieved artifact and independently computed hashes
 
-Previously recorded reference SHA-256:
+- Artifact name: `williams-bot-release-unsigned-2117`
+- GitHub artifact ID: `11703862596`
+- GitHub-reported artifact digest: `sha256:394ff75cf04a4f4cbbf458b7df311f83fd3e760c255940a1a89395e377e781ad`
+- Retrieved ZIP SHA-256 (independently computed): `394ff75cf04a4f4cbbf458b7df311f83fd3e760c255940a1a89395e377e781ad`
+- ZIP member: `app-release-unsigned.apk`
+- APK SHA-256 (independently computed): `08fdd472bcb6ab0fc88f3ca03593636582d76beea4ca2e981dd27bf8e88ccad1`
+- Included checksum file matched the computed APK SHA-256.
+- Artifact ZIP size: 14,192,065 bytes.
+- APK size: 14,842,560 bytes.
+- Artifact created: 2026-10-11 13:37 UTC (workflow metadata).
+
+These hashes describe the retrieved workflow artifact and its APK. They do not establish that the APK is the previously registered APK or the one installed on any physical device.
+
+## Previously registered reference
+
+Historical reference SHA-256:
 
 `4823d5a414afa3343be65e4bdb15c030ad86d29ffb487bcda3378fe270ebccd5`
 
-This value is a historical reference only. It was not recomputed against a retrieved APK during this run.
+The newly retrieved APK hash is different. The two artifacts must not be treated as identical. The origin of the earlier reference artifact remains unresolved.
 
 ## Verification matrix
 
 | Item | Result | Evidence/limitation |
 |---|---|---|
-| Actual APK artifact acquired | NOT RUN | No APK file available in this runtime |
-| SHA-256 independently computed | NOT RUN | Reference hash not independently verified |
-| applicationId | NOT RUN | Requires APK manifest/tooling |
-| versionName/versionCode | NOT RUN | Requires actual APK metadata |
-| Signing certificate / signer digest | NOT RUN | Requires actual APK and signature inspection |
-| Build variant and build configuration | NOT VERIFIED | Workflow/source metadata alone does not identify the installed APK |
-| Git source SHA used to build artifact | BLOCKED | No verified provenance statement/artifact association |
-| Reproducible build comparison | NOT RUN | Requires trusted checkout, toolchain and actual APK |
-| Installed device APK matches inspected artifact | NOT RUN | No device evidence |
+| Actual APK artifact acquired | PASS | Retrieved from workflow artifact ZIP |
+| ZIP SHA-256 independently computed | PASS | Matches GitHub artifact digest |
+| APK SHA-256 independently computed | PASS | Matches included checksum file |
+| Workflow run/head SHA association | PARTIALLY VERIFIED | GitHub artifact metadata associates run 38143567123 with head SHA `dc634573eb26c491d125feecd158319f1f5daa79`; not an independently signed provenance attestation |
+| applicationId | NOT RUN | Android manifest tooling unavailable in this runtime |
+| versionName/versionCode | NOT RUN | Android manifest tooling unavailable in this runtime |
+| Signature/certificate | NOT RUN | Artifact is explicitly named unsigned; no signed release certificate to verify |
+| Build variant | PARTIALLY VERIFIED | Artifact name and path identify release unsigned APK; complete build configuration not independently verified |
+| Exact trusted source provenance | BLOCKED | Trusted checkout/bundle and independent build provenance unavailable |
+| Reproducible build | NOT RUN | Requires trusted source and controlled Android toolchain |
+| Installed APK matches artifact | NOT RUN | No physical device/ADB evidence |
 
-## Required provenance procedure
+## Environment observations
 
-1. Obtain the APK as an actual file and record its acquisition source.
-2. Compute `sha256sum <apk>` and preserve the command output/exit code.
-3. Inspect package metadata (application ID, version name/code, min/target SDK).
-4. Verify signer/certificate digest using Android build tools; record tool version and output.
-5. Record the exact source commit, workflow run, build variant, Gradle/JDK/SDK versions and artifact digest in build provenance.
-6. Rebuild from the trusted source in a controlled environment and compare the output. If byte-for-byte reproducibility is not expected, document the build-system reason and compare the signed/unsigned artifact metadata and content under a defined reproducibility policy.
-7. On the physical device, record installed package/version and independently pull/inspect the installed APK where permitted; compare its digest with the tested artifact.
-8. Never infer provenance from matching version strings or CI green status alone.
+The retrieved ZIP was inspected with `unzip -l`; the APK and checksum file were present. The environment had Git available, but `adb`, `aapt`, and `apksigner` were not found on PATH. No physical device was attached in the available environment.
+
+## Required next steps
+
+1. Obtain and validate trusted source bundle/checkout; record its provenance, SHA-256, refs, HEAD, parents, `git bundle verify` where applicable, `git fsck --full`, and `git status`.
+2. Use a trusted Android SDK/build-tools environment to extract application ID, versionName/versionCode, SDK metadata, and inspect APK signing state.
+3. Build from the trusted source SHA and compare the resulting artifact under a documented reproducibility policy.
+4. On the physical device, capture package metadata and compare the installed artifact to the APK SHA above.
+5. Preserve the workflow run metadata and artifact digest as supporting evidence, not as a substitute for source trust or physical-device evidence.
 
 ## Conclusion
 
-The reference hash is not proof that the APK matches branch `audit/williams-2.1-task-006-android-runtime`, commit `36c22327774b2bd3c0a3df4130cb10cc0e483766`, or main. Provenance remains BLOCKED until the artifact and source/build linkage are independently verified.
+Artifact retrieval and hashing are now complete for the unsigned APK produced by workflow run #2117. **APK provenance remains BLOCKED** because the trusted source/build linkage, package metadata/signature inspection, reproducible build comparison, and installed-device match have not been established. No physical-device test is claimed.
