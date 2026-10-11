@@ -17,16 +17,16 @@ Live GitHub metadata was re-read during this task.
 | Item | Observed result |
 |---|---|
 | `main` | `04da5f9c09572e99ff310be3a1908179165e528c` |
-| Working branch HEAD | `d064c814c2fdaa52470cfb7d18a0270cb9b4b910` |
+| Working branch HEAD at baseline capture | `d064c814c2fdaa52470cfb7d18a0270cb9b4b910` |
 | Requested source SHA | `d064c814c2fdaa52470cfb7d18a0270cb9b4b910` — exact match |
 | Parent of source SHA | `63a701564751bc1a82840bccdde8c7bc16758658` |
-| PR #47 | OPEN, DRAFT, NOT MERGED; base `main`; head matches SOURCE_SHA |
+| PR #47 at baseline capture | OPEN, DRAFT, NOT MERGED; base `main`; head matched SOURCE_SHA |
 | PR changed-file inventory | 22 files; includes Python execution/persistence, Android runtime, tests and workflows |
 | Local checkout in this task | NOT obtained; local clone previously failed because GitHub DNS/network resolution was unavailable |
 | Executable source access | Confirmed through GitHub Actions runners that checked out the exact SOURCE_SHA; source files also read at the exact SHA via GitHub API |
 | Changes to `main` / merge / Binance trading mutation | None performed by this task |
 
-The source commit message is `docs(task-001.10): record fresh financial writer baseline and blockers`. Its tree is `c4a41890bd7cb352bd694b11fa7140dc6984080c`. The PR head is unchanged at the requested SHA in the current metadata snapshot. No branch advancement was silently substituted.
+The source commit message is `docs(task-001.10): record fresh financial writer baseline and blockers`. Its tree is `c4a41890bd7cb352bd694b11fa7140dc6984080c`. After baseline evidence was captured, this report was committed to the existing PR branch as a documentation-only change. The branch/PR head therefore advanced to the report commit SHA shown in the task result; SOURCE_SHA and VALIDATION_SHA remain pinned to `d064c814c2fdaa52470cfb7d18a0270cb9b4b910`. No production source changed and no branch advancement was substituted as the tested baseline.
 
 ## 2. Remote execution evidence
 
