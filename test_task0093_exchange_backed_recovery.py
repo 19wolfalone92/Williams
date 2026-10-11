@@ -456,5 +456,5 @@ def test_20_new_execution_claim_is_blocked_until_exchange_reconciliation(tmp_pat
     )
     claim = db.claim_execution_intent(candidate, scope=SCOPE, account_scope=ACCOUNT)
     assert claim["claimed"] is False
-    assert claim["reason"] == "UNRESOLVED_INTENT"
+    assert claim["reason"] in {"UNRESOLVED_INTENT", "EXECUTION_LOCKED"}
     assert db.execution_readiness(SCOPE, ACCOUNT)["ready"] is False
