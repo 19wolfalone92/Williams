@@ -498,3 +498,82 @@ This amendment supersedes the earlier statement in the interim checkpoint that A
 The first Python backend run after the barrier change failed on SHA `8ac2efe1f2dd8d4942449055547237a213563373` (run [38116577327](https://github.com/19wolfalone92/Williams/actions/runs/38116577327)); the next affected run on `972617ef83ae9bf90176ea27b69253f8355449bc` also failed (run [38116588109](https://github.com/19wolfalone92/Williams/actions/runs/38116588109)). Both failures had the same root cause: `test_execution_barrier_serializes_publish_and_submit` constructed an entry barrier without a database and expected the network callback to run. The production code correctly rejected the DB-less entry. The test fixture was corrected to supply a durable-claim test DB; production fail-closed behavior was not weakened. These failed runs are retained as failures and are not counted as passing evidence.
 
 At the time of this amendment, the latest implementation commit is `04081cf4d44cb1dec1b876304ca04ec00c1f1b98`; the report amendment itself will create a new SHA and trigger fresh CI. The exact final-SHA statuses must be rechecked before any acceptance decision.
+
+
+---
+
+# TASK 004.8 — checkpoint: identity, mutation sinks, SQLite concurrency
+
+**Checkpoint status: IN PROGRESS — NOT APPROVED.** This section records source-confirmed findings and the exact CI evidence available during TASK 004.8 work. It does not claim completion of the acceptance matrix.
+
+## Repository / previous SHA CI
+
+- Branch: `audit/williams-2.1-task-004-williams-strategy`
+- Base/main SHA verified unchanged: `04da5f9c09572e99ff310be3a1908179165e528c`
+- PR #49 verified OPEN, Draft, not merged.
+- HEAD at start of TASK 004.8: `5b3afd83aa9714023b0d57b60f67e06bb3d57b61`
+- Subsequent implementation commits: Android KTX transaction fix `411b1372d4ceb6516330e8b6efb3b58ac27e5150`; expanded SQLite process tests `4ddbe949799a8085d9ffd3425a81688c2fe938ea`; BUSY test setup correction `75be2aa2532ff1bd9477f53958cbf3b1faad8fb1`. This SHA is the pre-report checkpoint, not the final SHA after this report edit.
+
+| Check | Run ID | Tested SHA | Actual result | Evidence |
+|---|---:|---|---|---|
+| Python backend tests | 38116792057 | `5b3afd83aa9714023b0d57b60f67e06bb3d57b61` | SUCCESS | https://github.com/19wolfalone92/Williams/actions/runs/38116792057 |
+| Williams Campaign CI | 38116792054 | `5b3afd83aa9714023b0d57b60f67e06bb3d57b61` | FAILURE — Android build/static-check job failed; Python job passed | https://github.com/19wolfalone92/Williams/actions/runs/38116792054 |
+| Build Android APK | 38116792048 | `5b3afd83aa9714023b0d57b60f67e06bb3d57b61` | FAILURE — required Android lint failed | https://github.com/19wolfalone92/Williams/actions/runs/38116792048 |
+
+### Root cause from failed Android runs
+
+Both failing Android jobs identify the same lint error in `TradingAuditStore.kt`: `UseKtx` requires the SQLite KTX `SQLiteDatabase.transaction` extension instead of manual `beginTransaction()/setTransactionSuccessful()/endTransaction()`. The transaction body was changed to use `androidx.core.database.sqlite.transaction` in commit `411b1372d4ceb6516330e8b6efb3b58ac27e5150`; production lint rules were not disabled. New workflows must prove this fix on the final SHA.
+
+## TASK 004.8 changes in this checkpoint
+
+- `app/src/main/java/com/williamsbot/TradingAuditStore.kt`: claim transaction now uses the required KTX transaction extension; post-commit read-back remains mandatory.
+- `test_signal_claim_processes.py`: retained existing real-OS-process tests and added an eight-process contention case, a conflicting-payload two-process case, and a real SQLite write-lock contention test. These are intended regression tests; they are not marked TEST-PROVEN until the relevant workflow completes successfully.
+- Existing `db.py::Database.claim_signal_once` uses a primary-keyed `bot_state` key and `BEGIN IMMEDIATE`, canonical JSON serialization, commit, and post-commit read-back. The method rejects nested/uncommitted caller transactions. This is CODE-CONFIRMED, not a full proof of every commit/read-back fault mode.
+
+## Canonical identity audit — unresolved P0
+
+Python `campaign_model.py::SignalSpec.new` currently creates `SYMBOL:timeframe:signal_type:signal_bar_time_ms`; Android `StandaloneRuntime.kt::campaignSignalId` creates a similar string. Neither generated ID includes side, market type, strategy-contract version, schema version, operation role, or data/configuration version. Android's durable claim payload uses `BuildConfig.VERSION_NAME`, which is the application version (and can include a build-type suffix), not an independently governed strategy version. Python's barrier payload includes symbol, side, timeframe, signal/confirmation times, campaign ID and purpose-derived type but has no explicit strategy/schema/configuration version. The payloads are therefore not cross-platform equivalent.
+
+No guessed strategy version or fallback identity was silently introduced in this checkpoint. A shared versioned contract, deterministic normalization and common Python/Android fixtures remain required before the identity P0 can close.
+
+## Mutation-sink audit — source-confirmed gaps
+
+### Python campaign path
+
+`CampaignExecution` uses `_submit(...)` → `ExecutionBarrier` → `BinanceClient.order_safe(...)` for the campaign conditional-entry path. The adapter's `order_safe` explicitly handles ambiguous submission by querying the exchange rather than blindly retrying. However, the audit has not established that every production caller, exit/cancel/protection path and server control endpoint is routed through that barrier. No full sink coverage claim is made.
+
+### Android direct sink inventory
+
+The following production mutation paths were found in `StandaloneRuntime.kt`:
+
+| Operation | Source path / sink | Durable signal claim currently proven in source? | Status |
+|---|---|---|---|
+| Campaign initial conditional BUY | `submitCampaignEntry` → `claimCampaignSignalOnce` → `signedPost("/api/v3/order")` | Yes, signal claim before POST | CODE-CONFIRMED; no Android mutation-spy |
+| Campaign add-on conditional BUY | add-on submit → `claimCampaignSignalOnce` → `signedPost("/api/v3/order")` | Yes, signal claim before POST | CODE-CONFIRMED; no Android mutation-spy |
+| Legacy/direct market BUY | `signedPost("/api/v3/order")` near the legacy buy path around line 6055 | No equivalent campaign signal claim confirmed | P0 GAP |
+| Regular SELL / manual sell | `sell(symbol)` → `signedPost("/api/v3/order")` near line 6561; kill path calls `sell` | No operation-level durable intent/claim proven | P0 GAP |
+| Emergency SELL after OCO replacement failure | direct `signedPost("/api/v3/order")` near line 4399 | No durable emergency SELL intent proven in this path | P0 GAP |
+| OCO cancellation/replacement | `signedDelete("/api/v3/orderList")`, then `createProtection`; other OCO create/cancel sites include lines ~6393 and ~6501 | No complete durable operation identity/recovery proof | P0 GAP |
+| Pending-entry cancellation | `signedDelete("/api/v3/order")` in kill and pending-entry cleanup | No common durable cancellation intent proven | P0 GAP |
+| Cancel-replace | `signedCancelReplace` → `signedPost("/api/v3/order/cancelReplace")` | No common durable intent proven | P0 GAP |
+
+These are direct source paths, not a complete tested call graph. `signedRequest` is a shared HTTP sink, but currently does not itself require a durable operation permit before POST/DELETE. The retry branch for Binance timestamp error `-1021` also requires an explicit endpoint/method safety test before it can be treated as safe for every mutation type.
+
+## SQLite process-test scope
+
+The new tests exercise genuine independent spawned OS processes against one temporary SQLite file, plus actual SQLite write-lock contention. They do **not yet** cover every requested case: injected commit failure, post-commit read-back failure, SQLITE_LOCKED, corruption, process termination at every transaction boundary, concurrent migration, or Android SQLite fault injection. Those cases remain NOT VERIFIED; no fake exception is being represented as proof of a real SQLite commit failure.
+
+## Not yet tested / remaining P0
+
+- Cross-platform shared canonical identity and golden fixtures.
+- Complete mutation-sink enforcement and mutation-spy on Android.
+- Durable intent and recovery proof for direct BUY, SELL, emergency SELL, OCO, cancellation and cancel-replace.
+- Fault injection for UNKNOWN POST, lost response, late fills/fees and two concurrent recovery processes.
+- Causal replay against future-candle mutations and deterministic replay fixtures.
+- Exit/protection residual exposure and financial-effect exactly-once tests.
+- Android schema migration and claim concurrency tests on-device/emulator.
+- Physical Android device: NOT VERIFIED.
+- Binance Spot Testnet: NOT VERIFIED; no order operations performed.
+- Futures: NOT VERIFIED.
+
+No Mainnet access or live trade was used. No merge was performed. TASK 004.8 remains IN PROGRESS — NOT APPROVED until the above P0 evidence exists on one final SHA.
