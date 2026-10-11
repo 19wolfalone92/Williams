@@ -1,5 +1,6 @@
 import os
 import json, sqlite3
+import threading
 from pathlib import Path
 from datetime import datetime, timezone
 from contextlib import contextmanager
@@ -17,6 +18,7 @@ class Database:
         self.conn.execute('PRAGMA journal_mode=WAL')
         self.conn.execute('PRAGMA synchronous=NORMAL')
         self._transaction_active = False
+        self._claim_lock = threading.RLock()
         self.init()
 
     @contextmanager
@@ -314,6 +316,67 @@ class Database:
         if not self._transaction_active:
             self.conn.commit()
         return cur.rowcount == 1
+
+    def claim_signal_once(self, signal_id, canonical_payload) -> str:
+        """Atomically and durably claim a canonical signal identity.
+
+        Returns CLAIMED, DUPLICATE, or CONFLICT. The claim is committed and
+        read back before CLAIMED is returned, so callers can safely place the
+        network mutation after this method. Any SQLite error raises; callers
+        must fail closed. Claims are never removed by this method.
+        """
+        signal_id = str(signal_id or "").strip()
+        if not signal_id:
+            raise ValueError("signal_id is required")
+        canonical = json.dumps(canonical_payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        key = f"consumed_signal:{signal_id}"
+
+        with self._claim_lock:
+            # A nested caller transaction cannot prove the claim is committed
+            # before a network mutation. Reject rather than returning early.
+            if self._transaction_active or self.conn.in_transaction:
+                raise RuntimeError("signal claim requires an independent durable transaction")
+            try:
+                self.conn.execute("BEGIN IMMEDIATE")
+                self._transaction_active = True
+                cur = self.conn.execute(
+                    "INSERT OR IGNORE INTO bot_state(key,value) VALUES(?,?)",
+                    (key, canonical),
+                )
+                row = self.conn.execute(
+                    "SELECT value FROM bot_state WHERE key=?",
+                    (key,),
+                ).fetchone()
+                if row is None:
+                    raise RuntimeError("signal claim read-before-commit returned no row")
+                stored = str(row["value"])
+                inserted = cur.rowcount == 1
+                self.conn.commit()
+                self._transaction_active = False
+
+                # Post-commit read-back is deliberate. Failure here means the
+                # caller must block mutation even though the claim may exist.
+                verify = self.conn.execute(
+                    "SELECT value FROM bot_state WHERE key=?",
+                    (key,),
+                ).fetchone()
+                if verify is None:
+                    raise RuntimeError("signal claim post-commit read-back returned no row")
+                if str(verify["value"]) != stored:
+                    raise RuntimeError("signal claim post-commit read-back mismatch")
+                if inserted:
+                    return "CLAIMED"
+                return "DUPLICATE" if stored == canonical else "CONFLICT"
+            except Exception:
+                if self.conn.in_transaction:
+                    try:
+                        self.conn.rollback()
+                    except Exception:
+                        # Preserve the original failure; caller must fail closed.
+                        pass
+                raise
+            finally:
+                self._transaction_active = False
 
     def state_delete(self, key):
         self.conn.execute(
