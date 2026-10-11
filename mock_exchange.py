@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import math
 import time
 import uuid
 
@@ -100,10 +101,22 @@ class MockExchange:
             for k, v in self.balances.items()
         ]}
 
+    def _partial_fill_qty(self, symbol, requested_qty):
+        """Simulate exchange fills that obey the symbol's LOT_SIZE step."""
+        requested = max(0.0, float(requested_qty))
+        ratio = max(0.0, min(1.0, float(self.partial_fill_ratio)))
+        filters = self.exchange_info(symbol).get("symbols", [{}])[0].get("filters", [])
+        lot = next((row for row in filters if row.get("filterType") == "LOT_SIZE"), {})
+        step = float(lot.get("stepSize", "0.001") or "0.001")
+        if step <= 0:
+            raise ValueError(f"invalid mock LOT_SIZE step for {symbol}")
+        units = math.floor((requested * ratio + 1e-12) / step)
+        return round(units * step, 12)
+
     def _new_order(self, symbol, side, qty, status="FILLED", client_order_id="", order_type="MARKET", stop_price=0.0):
         oid = str(len(self.orders) + 1)
         executed = (
-            float(qty) * float(self.partial_fill_ratio)
+            self._partial_fill_qty(symbol, qty)
             if str(status).upper() != "NEW"
             else 0.0
         )
@@ -143,7 +156,7 @@ class MockExchange:
         price = self.prices[symbol]
         qty = float(quantity) if quantity is not None else float(quote_order_qty) / price
         qty = max(0.0, qty)
-        filled = qty * float(self.partial_fill_ratio)
+        filled = self._partial_fill_qty(symbol, qty)
         self.balances["USDT"] -= filled * price
         self.balances[symbol.replace("USDT", "")] += filled
         return self._new_order(symbol, "BUY", qty, client_order_id=client_order_id or "")
@@ -153,7 +166,7 @@ class MockExchange:
             self.timeout_next = False
             raise TimeoutError("mock 504 timeout")
         base = symbol.replace("USDT", "")
-        filled = min(float(quantity) * float(self.partial_fill_ratio), self.balances.get(base, 0.0))
+        filled = min(self._partial_fill_qty(symbol, quantity), self.balances.get(base, 0.0))
         self.balances[base] -= filled
         self.balances["USDT"] += filled * self.prices[symbol]
         return self._new_order(symbol, "SELL", quantity, client_order_id=client_order_id or "")
@@ -236,7 +249,7 @@ class MockExchange:
                 continue
 
             requested = float(order.get("origQty", 0) or 0)
-            executed = requested * float(self.partial_fill_ratio)
+            executed = self._partial_fill_qty(symbol, requested)
             if side == "BUY":
                 cost = executed * self.prices[symbol]
                 self.balances["USDT"] -= cost
