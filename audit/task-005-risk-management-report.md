@@ -281,3 +281,73 @@ Android's `ExecutionGate` is an in-memory one-campaign reservation; it does not 
 - Main unchanged; PR #50 remains Open/Draft/unmerged; no real trading mutation performed.
 
 **TASK 005.10 — BLOCKED — NOT ACCEPTED.**
+
+
+---
+
+## TASK 005.11 — SQLite transaction ownership closure (checkpoint; not acceptance)
+
+**Baseline SHA:** `6846e1e6a0d796f81bc10488a77bcdfabefa796e`  
+**Base/main SHA:** `04da5f9c09572e99ff310be3a1908179165e528c`  
+**Branch:** `audit/williams-2.1-task-005-risk-management`  
+**PR #50:** Open / Draft / unmerged.
+
+### Revalidated repository state
+
+At task start, branch HEAD was `6846e1e6a0d796f81bc10488a77bcdfabefa796e`; `main` remained `04da5f9c09572e99ff310be3a1908179165e528c`. PR #50 remained open, Draft, base `main`. The report file contained the TASK 005.10 audit and explicit P0 blockers. No real Binance mutation was performed.
+
+On the baseline SHA, the failed Campaign CI Python job showed the test's two worker threads sharing one `Database(":memory:")` connection. `Database.transaction()` protected only callers that entered the context; ordinary helper/direct connection writes were not serialized under the same lock. In addition, the connection used sqlite3's implicit transaction mode while `_transaction_active` was a database-instance-wide boolean. A non-owner thread could perform a write in the window around an outer transaction's commit/final state reset, start an implicit transaction, and skip its commit because the shared flag was still true. The next `BEGIN IMMEDIATE` then failed with `sqlite3.OperationalError: cannot start a transaction within a transaction`. This is a connection ownership race, not a portfolio-capacity assertion failure.
+
+### Changes made on this branch
+
+- `db.py`: added a connection/cursor facade that serializes SQL, cursor fetches, commit, rollback and close on the same re-entrant lock used by `Database.transaction()`.
+- `db.py`: switched the connection to SQLite autocommit mode for standalone statements; multi-step critical operations continue to use explicit `BEGIN IMMEDIATE` transactions.
+- `db.py`: made transaction ownership explicit by thread identity. Nested calls by the owning thread use SQLite SAVEPOINTs; an unowned active transaction is rejected without committing or rolling it back. Exception paths roll back only a transaction/savepoint owned by the current context.
+- `test_task005_risk_safety.py`: added tests for nested savepoint rollback, outer rollback and subsequent reuse, inter-thread SQL exclusion during a transaction, and refusal to adopt/roll back an unowned transaction.
+
+These are code changes, not yet accepted evidence. Their compatibility with every existing database caller must be established by exact-head CI and the targeted regression tests. Multi-process correctness still depends on SQLite's own locking and must be re-proven on the new SHA.
+
+### Mutation sink inventory — current evidence is incomplete
+
+| Production path / sink family | Durable intent and gate | UNKNOWN / recovery | Status |
+|---|---|---|---|
+| Emergency SELL: `portfolio_trader.py::_emergency_market_sell()` → Binance client REST order submission | `emergency_sell_intents`; one-shot `authorize_emergency_sell_mutation()` at REST boundary for the emergency client-ID namespace | `RECONCILE_REQUIRED` is persisted, but a complete restart recovery worker is not present/proven | CODE-CONFIRMED for the special guard; universal enforcement NOT VERIFIED |
+| Campaign entry / protective stop / exit: `campaign_execution.py` → `ExecutionBarrier` → Binance client | `execution_intents` and barrier persistence for paths that call the barrier | Barrier records ambiguous submissions, but all callers and all low-level sinks are not proven to be forced through it | CODE-CONFIRMED for barrier implementation; complete caller closure NOT VERIFIED |
+| Generic Python Spot order APIs | General Binance client mutation methods remain reachable from production callers; the emergency prefix does not cover ordinary IDs | No universal intent/operation authorization contract proven for every mutation method | NOT VERIFIED |
+| Cancel / cancel-replace / OCO and equivalent order-list APIs | Full call graph and sink-level durable authorization not yet demonstrated | UNKNOWN cancel/replace/list outcomes not proven to be recovered without duplicate or conflicting mutation | NOT VERIFIED |
+| Android `StandaloneRuntime.kt` signed REST mutation paths and `ExecutionGate.kt` | Local in-memory admission/reservation is visible; durable emergency intent before every mutation is not proven | Process-death UNKNOWN POST recovery and durable fill handoff not proven | CODE-CONFIRMED for in-memory gate; DEVICE-PROVEN NOT VERIFIED |
+
+This table is deliberately not presented as a complete sink count: the source-to-sink graph and the number of fully protected sinks remain **NOT VERIFIED**. No claim is made that a generic order method, cancel, replace, OCO, or Android network sink is universally blocked by the emergency-only permit.
+
+### Durable emergency recovery and financial handoff
+
+No production `execution_recovery.py` worker was found in the repository tree at the baseline. Existing emergency intent identity includes `operation_id`, environment/account scope, symbol, trade identity, requested quantity, parameters hash, client order ID, status, exchange order ID/status, timestamps, error and `mutation_started_at`. This is not yet a full recovery protocol: a durable worker lease/cursor, complete authoritative order/fill association, bounded read-only retry/backoff, conflict state and restart proof remain NOT VERIFIED.
+
+The emergency caller still has float-based conversions and direct local financial projection updates before `APPLIED`. The current audit has not proved that the exact emergency SELL fills pass through the existing canonical Financial Effect Applier in one atomic effect transaction. No second ledger or emergency-only financial writer was added. Unknown/late/conflicting commission handling, exactly-once projection effects, and fill recovery after commit uncertainty remain **BLOCKED**.
+
+### Spot exposure, global gate and Android
+
+- **Decimal integrity:** NOT VERIFIED end-to-end; float/SQLite REAL remain in affected financial paths.
+- **Residual Spot exposure:** NOT VERIFIED from a consistent authoritative snapshot of free/locked balances, open SELL orders, executed fills and base-asset commissions.
+- **Global Recovery Gate:** NOT VERIFIED across all Python BUY/add-on/retry/background paths and all Android mutation callers.
+- **Android process-death recovery:** DEVICE-PROVEN — NOT VERIFIED; no physical-device run was performed.
+- **Testnet observation:** TESTNET-OBSERVED — NOT PERFORMED. No order mutation was sent to Mainnet or Testnet.
+
+### Fault-injection and CI evidence
+
+The new SQLite tests are committed in the branch, but **TEST-PROVEN and CI-PROVEN remain pending** until the workflow jobs finish against the final report/code SHA. The broader emergency SELL fault-injection matrix (UNKNOWN POST, lookup miss, API outage, partial/full fills, fee correction, duplicate fill, commit uncertainty, concurrent recovery workers, residual balance conflict, Global Recovery Gate and Android process death) is not complete.
+
+### TASK 005.11 acceptance matrix
+
+- SQLite transaction ownership: code changed; exact-head regression and full-suite evidence pending.
+- Two-thread and independent-connection capacity reservation: existing assertions retained; fresh exact-head run pending.
+- Multi-process transaction/capacity proof: NOT VERIFIED on this revision.
+- Complete mutation sink inventory and universal authorization: NOT VERIFIED / P0 blocker.
+- Durable UNKNOWN POST recovery worker: NOT VERIFIED / P0 blocker.
+- Canonical Financial Effect Applier and exactly-once effects: NOT VERIFIED / P0 blocker.
+- Decimal integrity and residual Spot exposure reconciliation: NOT VERIFIED / P0 blocker.
+- Global Recovery Gate and Android restart recovery: NOT VERIFIED / P0 blocker.
+- Emulator/device/Testnet evidence: NOT VERIFIED / NOT PERFORMED.
+- Final exact-SHA CI: pending.
+
+**TASK 005.11 — BLOCKED — NOT ACCEPTED.** The next minimum safe step is to validate this transaction-ownership patch on the exact resulting SHA, fix any regression without weakening tests, and only then continue sink closure/recovery work. Acceptance remains prohibited while any P0 blocker above is open.
