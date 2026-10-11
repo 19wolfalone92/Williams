@@ -192,3 +192,18 @@ Target status remains **READY FOR READ-ONLY TESTNET VERIFICATION**, not live-tra
 - Latest branch workflow query showed no in-progress run at the time of this check; the ten most recent listed runs were completed. The documentation refresh will create a new run, which must be independently inspected on its exact SHA.
 - Existing related open PRs found: #43 `fix/task-007-risk-management`, #42 `audit/williams-2.1-futures-safety`, and #44 `fix/williams-fractal-stop-provenance-20261010` (targets another branch). No PR targets `audit/williams-2.1-task-007-recovery`; none was created.
 - Testnet remains prohibited for now: independent-runtime concurrency coverage is partial; the requested full crash matrix, complete direct/indirect mutation reachability proof, comprehensive fee/balance/exposure reconciliation, and Android process-kill fault injection are not complete.
+
+
+## 13. Latest exact-HEAD verification — 2026-10-11
+
+- Current branch HEAD checked: `8be12a58347810c1d77615a9b57d943092191b76`.
+- Baseline `main` checked again: `04da5f9c09572e99ff310be3a1908179165e528c`; unchanged.
+- Compare `main...HEAD`: **122 commits ahead, 0 behind**.
+- Exact-SHA GitHub Actions run: [38091051594](https://github.com/19wolfalone92/Williams/actions/runs/38091051594) — **SUCCESS**, head SHA exactly `8be12a58347810c1d77615a9b57d943092191b76`.
+  - Python job `114327383965`: **199 passed, 4 warnings**.
+  - Android job `114327384145`: **SUCCESS**. The workflow's Android job includes `:app:testDebugUnitTest`, `:app:lintDebug`, and `:app:assembleDebug`.
+- At the time of the latest run-list query, the ten newest branch runs were completed; the newest run above is the exact current SHA.
+- Related open PRs rechecked: #43 `fix/task-007-risk-management`, #42 `audit/williams-2.1-futures-safety`, and #44 `fix/williams-fractal-stop-provenance-20261010` (targets another branch). No PR targets this recovery branch. No PR was created and no merge was performed.
+- A broader static sweep was run against the 85 production Python/Kotlin source files in the branch tree. It found the low-level signed order-changing adapter calls in `binance_client.py`, mutation call sites in `campaign_execution.py`, `portfolio_trader.py`, and `trader.py`, and Android signed mutation call sites in `StandaloneRuntime.kt` routed through `durableMutation`. The `requests.post` in `telegram_bot.py` is a Telegram notification request, not a Binance order mutation. This static sweep strengthens the inventory but **does not prove complete indirect reachability**; the report deliberately retains P0-A as open until the call graph and runtime reachability are exhaustively verified.
+- Testnet gate remains **NOT MET**: the independent-process coverage currently proves atomic same-symbol intent claiming, but does not cover every required concurrent recovery/cancel-vs-fill scenario; the complete order/protection/OCO/exit fault matrix, full financial reconciliation, and Android process-kill ledger tests remain unverified.
+- Decision remains **IN PROGRESS — NOT APPROVED**. Read-only Binance Testnet was not attempted because the required local gates are still open. No Binance Mainnet request or order-changing exchange request was made.
