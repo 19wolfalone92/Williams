@@ -834,43 +834,118 @@ class MultiPositionTrader:
             raise RuntimeError(f"{asset}: cannot value Binance commission in USDT") from exc
 
     def _authoritative_execution(self, symbol, order):
+        """Build an execution summary only from fills with explicit fee evidence.
+
+        Fill rows are persisted before any legacy position/trade writer consumes
+        this summary. Missing trade identity or fee evidence is a reconciliation
+        failure; it must not be normalized to a zero commission.
+        """
         payload = dict(order or {})
-        fills = list(payload.get("fills") or [])
+        symbol = str(symbol or "").upper()
         order_id = payload.get("orderId")
-        if not fills and order_id is not None and hasattr(self.client, "my_trades"):
+        executed_qty = Decimal(str(payload.get("executedQty", "0") or "0"))
+        if not executed_qty.is_finite() or executed_qty < 0:
+            raise RuntimeError(f"{symbol}: invalid exchange executed quantity")
+
+        fills = list(payload.get("fills") or [])
+        trade_reader = getattr(self.client, "my_trades", None)
+        if not fills and executed_qty > 0:
+            if order_id in (None, "") or not callable(trade_reader):
+                self._latch_financial_reconciliation(symbol, order_id, "authoritative trade history unavailable")
+                raise RuntimeError(f"{symbol}: filled order has no authoritative trade history")
             try:
-                rows = self.client.my_trades(symbol, order_id=order_id, limit=1000)
-                fills = [
-                    {
-                        "price": row.get("price", "0"),
-                        "qty": row.get("qty", row.get("executedQty", "0")),
-                        "commission": row.get("commission", "0"),
-                        "commissionAsset": row.get("commissionAsset", ""),
-                    }
-                    for row in (rows or [])
-                ]
-                if fills:
-                    payload["fills"] = fills
+                rows = trade_reader(symbol, order_id=order_id, limit=1000)
             except Exception as exc:
-                self.db.log_event(
-                    "WARNING",
-                    "fill_commission_lookup_failed",
-                    f"{symbol}: myTrades lookup unavailable; using order-level fill data",
-                    {"order_id": order_id, "error": str(exc)},
-                )
-        base_asset = symbol[:-4] if symbol.endswith("USDT") else ""
-        summary = accumulate_order(payload, base_asset=base_asset)
+                self._latch_financial_reconciliation(symbol, order_id, f"myTrades lookup failed: {exc}")
+                raise RuntimeError(f"{symbol}: cannot reconcile filled order {order_id}") from exc
+            if not isinstance(rows, list) or not rows:
+                self._latch_financial_reconciliation(symbol, order_id, "myTrades returned no fills for executed order")
+                raise RuntimeError(f"{symbol}: executed order {order_id} has no authoritative trade records")
+            fills = []
+            for row in rows:
+                if not isinstance(row, dict):
+                    self._latch_financial_reconciliation(symbol, order_id, "malformed myTrades row")
+                    raise RuntimeError(f"{symbol}: malformed trade record for order {order_id}")
+                if str(row.get("symbol", symbol)).upper() != symbol or str(row.get("orderId", "")) != str(order_id):
+                    self._latch_financial_reconciliation(symbol, order_id, "myTrades identity mismatch")
+                    raise RuntimeError(f"{symbol}: trade identity mismatch for order {order_id}")
+                fills.append({
+                    "tradeId": row.get("id"),
+                    "orderId": row.get("orderId"),
+                    "symbol": row.get("symbol", symbol),
+                    "price": row.get("price"),
+                    "qty": row.get("qty"),
+                    "quoteQty": row.get("quoteQty"),
+                    "commission": row.get("commission"),
+                    "commissionAsset": row.get("commissionAsset"),
+                })
+            payload["fills"] = fills
+
+        normalized_fills = []
         extra_fee_quote = Decimal("0")
-        known_assets = {"USDT", "USDC", "FDUSD", "BUSD", base_asset}
-        for fill in payload.get("fills") or []:
-            commission = Decimal(str(fill.get("commission", "0") or "0"))
-            asset = str(fill.get("commissionAsset", "")).upper()
-            if commission <= 0 or asset in known_assets:
-                continue
-            price = float(fill.get("price", "0") or 0.0)
-            extra_fee_quote += commission * Decimal(str(
-                self._fee_quote_for_asset(asset, base_asset, trade_price=price)
-            ))
+        base_asset = symbol[:-4] if symbol.endswith("USDT") else ""
+        known_quote_assets = {"USDT", "USDC", "FDUSD", "BUSD"}
+        for fill in fills:
+            try:
+                if not isinstance(fill, dict):
+                    raise ValueError("fill row is not an object")
+                trade_id = fill.get("tradeId", fill.get("id"))
+                fee_value = fill.get("commission")
+                fee_asset_value = fill.get("commissionAsset")
+                if trade_id in (None, ""):
+                    raise ValueError("exchange trade ID is missing")
+                if fee_value in (None, "") or fee_asset_value in (None, ""):
+                    raise ValueError("commission amount or asset is unknown")
+                quantity = Decimal(str(fill.get("qty", "")))
+                price = Decimal(str(fill.get("price", "")))
+                commission = Decimal(str(fee_value))
+                fee_asset = str(fee_asset_value).upper()
+                if (not quantity.is_finite() or quantity <= 0 or
+                        not price.is_finite() or price <= 0 or
+                        not commission.is_finite() or commission < 0 or not fee_asset):
+                    raise ValueError("invalid fill quantity, price or commission")
+                quote_value = fill.get("quoteQty")
+                quote_qty = Decimal(str(quote_value)) if quote_value not in (None, "") else quantity * price
+                if not quote_qty.is_finite() or quote_qty < 0:
+                    raise ValueError("invalid quote quantity")
+                raw_trade = {
+                    "id": str(trade_id),
+                    "orderId": str(fill.get("orderId", order_id or "")),
+                    "symbol": symbol,
+                    "qty": format(quantity, "f"),
+                    "price": format(price, "f"),
+                    "quoteQty": format(quote_qty, "f"),
+                    "commission": format(commission, "f"),
+                    "commissionAsset": fee_asset,
+                }
+                if not raw_trade["orderId"]:
+                    raise ValueError("exchange order ID is missing")
+                self.db.record_exchange_fill(symbol, raw_trade)
+                normalized_fills.append({
+                    "tradeId": str(trade_id),
+                    "price": format(price, "f"),
+                    "qty": format(quantity, "f"),
+                    "commission": format(commission, "f"),
+                    "commissionAsset": fee_asset,
+                })
+                if commission > 0 and fee_asset not in known_quote_assets and fee_asset != base_asset:
+                    # This is a compatibility valuation only; the exact native
+                    # commission amount/asset remains canonical in the ledger.
+                    rate = Decimal(str(self._fee_quote_for_asset(
+                        fee_asset, base_asset, trade_price=float(price)
+                    )))
+                    if not rate.is_finite() or rate <= 0:
+                        raise ValueError(f"cannot value {fee_asset} commission in quote asset")
+                    extra_fee_quote += commission * rate
+            except Exception as exc:
+                self._latch_financial_reconciliation(symbol, order_id, str(exc))
+                raise RuntimeError(f"{symbol}: financial fill reconciliation failed: {exc}") from exc
+
+        if executed_qty > 0 and not normalized_fills:
+            self._latch_financial_reconciliation(symbol, order_id, "executed quantity has no fee-confirmed fills")
+            raise RuntimeError(f"{symbol}: executed order has no fee-confirmed fills")
+        payload["fills"] = normalized_fills
+        summary = accumulate_order(payload, base_asset=base_asset)
         if extra_fee_quote <= 0:
             return summary
         return ExecutionSummary(
@@ -881,6 +956,22 @@ class MultiPositionTrader:
             summary.commission_base,
             summary.fee_quote_equivalent + extra_fee_quote,
         )
+
+    def _latch_financial_reconciliation(self, symbol, order_id, reason):
+        """Durably block entries when an executed fill cannot be financially proved."""
+        detail = str(reason)[:1000]
+        try:
+            self.db.state_set("position_state", "RECONCILE_REQUIRED")
+            self.db.state_set(f"position_state:{str(symbol).upper()}", "RECONCILE_REQUIRED")
+            self.db.log_event(
+                "ERROR", "financial_fill_reconciliation_required",
+                f"{str(symbol).upper()}: {detail}",
+                {"order_id": order_id, "reason": detail},
+            )
+        except Exception:
+            # Failure to persist the latch is itself a hard failure. The caller
+            # raises and must not continue into legacy financial writers.
+            pass
 
     # ------------------------------------------------------------------
     # Protection
