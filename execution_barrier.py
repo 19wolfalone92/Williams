@@ -170,7 +170,13 @@ class ExecutionBarrier:
 
         if self.db is not None and hasattr(self.db, "state_get"):
             state = str(self.db.state_get("position_state", "FLAT"))
-            if state == "RECONCILE_REQUIRED":
+            symbol_state = str(
+                self.db.state_get(
+                    f"position_state:{intent.symbol.upper()}",
+                    state,
+                )
+            )
+            if state == "RECONCILE_REQUIRED" or symbol_state == "RECONCILE_REQUIRED":
                 return "RECONCILE_REQUIRED"
             campaign_state = str(
                 self.db.state_get(
