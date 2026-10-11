@@ -1699,7 +1699,11 @@ class MultiPositionTrader:
             unresolved = self.unresolved_symbols()
             pending_keys = self._pending_entries()
             unresolved_intents = self.db.unresolved_execution_intents()
-            ok = not unresolved and not pending_keys and not unresolved_intents
+            pending_fill_effects = self.db.pending_exchange_fill_effects()
+            ok = (
+                not unresolved and not pending_keys and not unresolved_intents
+                and not pending_fill_effects
+            )
             canonical_state = self._sync_legacy_state()
             results = pending + active
             results.extend(
@@ -1716,6 +1720,7 @@ class MultiPositionTrader:
                     "unresolved_symbols": unresolved,
                     "pending_entries": [x[0] for x in pending_keys],
                     "unresolved_execution_intents": len(unresolved_intents),
+                    "pending_fill_effects": len(pending_fill_effects),
                     "execution_recovery": execution_recovery,
                 },
             )
@@ -1728,6 +1733,7 @@ class MultiPositionTrader:
                 "state": canonical_state,
                 "execution_recovery": execution_recovery,
                 "unresolved_execution_intents": len(unresolved_intents),
+                "pending_fill_effects": len(pending_fill_effects),
             }
 
         results = self.reconcile_open_positions()
@@ -1735,7 +1741,11 @@ class MultiPositionTrader:
         unresolved = self.unresolved_symbols()
         pending = self._pending_entries()
         unresolved_intents = self.db.unresolved_execution_intents()
-        ok = not unresolved and not pending and not unresolved_intents
+        pending_fill_effects = self.db.pending_exchange_fill_effects()
+        ok = (
+            not unresolved and not pending and not unresolved_intents
+            and not pending_fill_effects
+        )
         canonical_state = self._sync_legacy_state()
         results.extend(
             {"symbol": symbol, "state": "FLAT", "stale_reconcile_cleared": True}
@@ -1750,6 +1760,7 @@ class MultiPositionTrader:
                 "unresolved_symbols": unresolved,
                 "pending_entries": [x[0] for x in self._pending_entries()],
                 "unresolved_execution_intents": len(unresolved_intents),
+                "pending_fill_effects": len(pending_fill_effects),
                 "execution_recovery": execution_recovery,
             },
         )
@@ -1760,6 +1771,7 @@ class MultiPositionTrader:
             "unresolved_symbols": unresolved,
             "execution_recovery": execution_recovery,
             "unresolved_execution_intents": len(unresolved_intents),
+            "pending_fill_effects": len(pending_fill_effects),
         }
 
     # ------------------------------------------------------------------
