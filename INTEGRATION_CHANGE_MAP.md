@@ -127,3 +127,12 @@ For every incoming change, the integration review must classify it as:
 - Detailed contract, confirmed Python/Android mutation paths and remaining P0 blockers: `docs/WILLIAMS_BOT_2_1_TASK_009_1_EXECUTION_CONTRACT.md`.
 - This checkpoint remains BLOCKED: direct mutation paths in `portfolio_trader.py` and `StandaloneRuntime.kt`, unresolved-intent restart gating, stable idempotency claims, cancel/fill reconciliation and exactly-once fill projection are not closed by this patch.
 - Do not merge this branch until all TASK 009.1 acceptance gates pass on the exact final source SHA.
+
+
+## TASK 009.2 — Atomic persistence checkpoint
+
+- Added immutable atomic execution-intent claims, unique non-empty `client_order_id`, durable UNKNOWN lock, atomic exchange-result recording and a unique execution-fill ledger primitive in `db.py`.
+- Updated `execution_barrier.py` to require readiness + claim, persist `SUBMITTING` before the network callback, and fail closed on ambiguous submission/result persistence.
+- Added fault-injection tests in `test_task0092_atomic_execution_persistence.py` and a concurrent/timeout barrier test in `test_task0091_execution_barrier_fail_closed.py`; Campaign CI now explicitly runs these files.
+- Details: `docs/WILLIAMS_BOT_2_1_TASK_009_2_ATOMIC_EXECUTION_PERSISTENCE.md`.
+- **Status remains BLOCKED** until exact-HEAD CI is confirmed and an exchange-backed startup reconciler plus production CampaignExecutionService/financial-ledger fill integration are implemented and proven. Direct Python/Android mutation paths remain.
