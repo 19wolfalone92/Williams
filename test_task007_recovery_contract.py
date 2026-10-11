@@ -940,7 +940,7 @@ def test_sqlite_busy_during_durable_claim_blocks_exchange_mutation(tmp_path):
     )
     external_mutations = []
     try:
-        with pytest.raises(ExecutionPersistenceError, match="durable intent reservation"):
+        with pytest.raises(ExecutionPersistenceError, match="atomically reserve intent"):
             barrier.execute(intent, lambda: external_mutations.append("sent") or {"orderId": "must-not-exist"})
         assert external_mutations == []
         assert barrier._poisoned is True
