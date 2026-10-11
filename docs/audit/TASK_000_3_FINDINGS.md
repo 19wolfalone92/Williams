@@ -46,3 +46,14 @@ No exactly-once financial effect or global mutation-path coverage claim is made.
 The exact-ref source was re-opened for `campaign_execution.py` lines 2201–2268 and `binance_client.py` lines 110–160. `CampaignExecutionService.replace_structural_stop` creates a new CID and standard `OrderIntent`, calls `cancel_replace` with the existing order ID, then checks `cancelResult` and `newOrderResult`. `BinanceSpotClient._request` explicitly maps HTTP 409 for `/api/v3/order/cancelReplace` to `unknown_execution=True` and says reconciliation is required before retry. This supports conservative ambiguity classification, but does not establish durable two-leg recovery: the standard intent contains the new CID and the generic recovery lookup centers on the intent's order/CID and trades. P1-1 remains open.
 
 The immutable Git tree contains 122 Python files including tests. The priority source files were fetched at the required SHA, but a complete line-by-line review of all 122 modules and dynamic alias/callback paths has not been established. P1-2 and the `cancel_open_orders`/OCO reachability items remain open. No mandatory-gate bypass was confirmed in the known inspected production callsites.
+
+
+## Follow-up review — 2026-10-11
+
+The required-ref source was reopened for `binance_client.py` and `campaign_execution.py`. The low-level client implements `cancel_replace` as `POST /api/v3/order/cancelReplace` with `cancelReplaceMode=STOP_ON_FAILURE`; its docstring explicitly states the operation is non-transactional. `CampaignExecutionService.replace_structural_stop` submits the replacement through `_submit`, then evaluates `cancelResult` and `newOrderResult`; ambiguous/non-success results mark reconciliation required. The durable standard intent visible at this callsite records the replacement CID, but not the old protective order's clientOrderId as a second leg. This corroborates P1-1; it does not prove both protective-order states can be reconstructed after a lost response.
+
+The public wrapper definitions for `cancel_open_orders`, `create_oco_sell`, `create_oco_sell_safe`, and `cancel_oco` are present in `binance_client.py`. Existing call-path evidence only establishes the known legacy guards/non-client branches documented above. A complete repository-wide interprocedural analysis of aliases, callbacks and dynamic dispatch was not completed in this follow-up, so P1-2 and the cancel-all/OCO reachability questions remain open.
+
+Current PR metadata reports head `6a6e47c798e4a2cc6e2d2a5245911a22788170fe`, and newer PR-triggered registry, backend, campaign and APK workflows are green. They do not close the findings: the audit target is still immutable source `f6dd193f9147ba49ff7f11efc81b18e10c1e2c44`, and the inspected backend/campaign job logs explicitly checked out merge ref `c24e28defc38e19baf20c777a069e80b87c7aecf`, not the source commit by itself.
+
+**Status remains BLOCKED. Do not merge PR #51.**
