@@ -1016,3 +1016,80 @@ def test_independent_processes_apply_one_financial_fill_effect(tmp_path):
     assert journal[0]["projection_status"] == "APPLIED"
     assert len(projection) == 1
     assert projection[0]["quantity_decimal"] == "0.01000000"
+
+
+def test_fill_identity_conflict_is_fail_closed_and_does_not_reapply(tmp_path):
+    db = Database(str(tmp_path / "fill-conflict.sqlite3"))
+    db.conn.execute(
+        "CREATE TABLE test_financial_projection(effect_id TEXT PRIMARY KEY, quantity_decimal TEXT NOT NULL)"
+    )
+    db.conn.commit()
+    calls = []
+
+    def project(database, normalized):
+        calls.append(normalized)
+        database.conn.execute(
+            "INSERT INTO test_financial_projection(effect_id,quantity_decimal) VALUES(?,?)",
+            (normalized["exchange_fill_id"], normalized["quantity"]),
+        )
+
+    db.apply_financial_fill_effect(_financial_fill("9010"), project)
+    with pytest.raises(RuntimeError, match="immutable fill payload differs"):
+        db.apply_financial_fill_effect(
+            _financial_fill("9010", quantity="0.02000000"), project
+        )
+    assert len(calls) == 1
+    assert db.conn.execute("SELECT COUNT(*) FROM test_financial_projection").fetchone()[0] == 1
+    row = db.conn.execute("SELECT quantity_decimal,projection_status FROM financial_effect_journal").fetchone()
+    assert row["quantity_decimal"] == "0.01"
+    assert row["projection_status"] == "APPLIED"
+
+
+def test_decimal_equivalent_fill_payload_is_canonical_duplicate(tmp_path):
+    db = Database(str(tmp_path / "decimal-canonical.sqlite3"))
+    db.conn.execute(
+        "CREATE TABLE test_financial_projection(effect_id TEXT PRIMARY KEY, quantity_decimal TEXT NOT NULL)"
+    )
+    db.conn.commit()
+    calls = []
+
+    def project(database, normalized):
+        calls.append(normalized)
+        database.conn.execute(
+            "INSERT INTO test_financial_projection(effect_id,quantity_decimal) VALUES(?,?)",
+            (normalized["exchange_fill_id"], normalized["quantity"]),
+        )
+
+    first = db.apply_financial_fill_effect(
+        _financial_fill("9011", quantity="0.010000", price="61234.1200",
+                        quote_quantity="612.341200", commission="0.00001000"),
+        project,
+    )
+    second = db.apply_financial_fill_effect(
+        _financial_fill("9011", quantity="0.01", price="61234.12",
+                        quote_quantity="612.3412", commission="0.00001"),
+        project,
+    )
+    assert first["status"] == second["status"] == "APPLIED"
+    assert not first["duplicate"] and second["duplicate"]
+    assert len(calls) == 1
+    row = db.conn.execute("SELECT * FROM financial_effect_journal").fetchone()
+    assert row["quantity_decimal"] == "0.01"
+    assert row["price_decimal"] == "61234.12"
+    assert row["commission_decimal"] == "0.00001"
+
+
+def test_unknown_fee_first_delivery_and_duplicate_are_distinguished(tmp_path):
+    db = Database(str(tmp_path / "unknown-fee-duplicate.sqlite3"))
+    calls = []
+
+    def project(_database, normalized):
+        calls.append(normalized)
+
+    fill = _financial_fill("9012", commission=None, commission_asset=None)
+    first = db.apply_financial_fill_effect(fill, project)
+    duplicate = db.apply_financial_fill_effect(fill, project)
+    assert first["status"] == duplicate["status"] == "PENDING_FEE"
+    assert first["duplicate"] is False
+    assert duplicate["duplicate"] is True
+    assert calls == []
