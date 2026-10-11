@@ -571,20 +571,22 @@ def test_partial_emergency_sell_never_closes_trade_as_flat(tmp_path: Path):
             return {
                 "balances": [
                     {"asset": "USDT", "free": "9400", "locked": "0"},
-                    {"asset": "BTC", "free": "0.4", "locked": "0"},
+                    {"asset": "BTC", "free": "1.0", "locked": "0"},
                 ],
             }
 
         def order_safe(self, symbol, side, type_, *, quantity=None, new_client_order_id=None, **kwargs):
             assert side == "SELL"
             assert type_ == "MARKET"
+            assert float(quantity) == 1.0
             return {
                 "symbol": symbol,
                 "side": "SELL",
                 "type": "MARKET",
                 "orderId": "emergency-1",
+                "origQty": "1.0",
                 "clientOrderId": new_client_order_id,
-                "status": "FILLED",
+                "status": "EXPIRED",
                 "executedQty": "0.6",
                 "cummulativeQuoteQty": "60",
             }
@@ -595,11 +597,28 @@ def test_partial_emergency_sell_never_closes_trade_as_flat(tmp_path: Path):
                 "side": "SELL",
                 "type": "MARKET",
                 "orderId": "emergency-1",
+                "origQty": "1.0",
                 "clientOrderId": orig_client_order_id or "WILLV4_EMERGENCY_TEST",
-                "status": "FILLED",
+                "status": "EXPIRED",
                 "executedQty": "0.6",
                 "cummulativeQuoteQty": "60",
             }
+
+        def my_trades(self, symbol, order_id=None, limit=1000):
+            assert symbol == "BTCUSDT"
+            assert str(order_id) == "emergency-1"
+            return [{
+                "id": 1001,
+                "orderId": "emergency-1",
+                "symbol": "BTCUSDT",
+                "isBuyer": False,
+                "price": "100",
+                "qty": "0.6",
+                "quoteQty": "60",
+                "commission": "0",
+                "commissionAsset": "USDT",
+                "time": 1760000000000,
+            }]
 
     db = Database(str(tmp_path / "emergency-partial.sqlite3"))
     client = EmergencyPartialClient()
