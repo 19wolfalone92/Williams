@@ -507,18 +507,25 @@ class CampaignExecutionService:
                 f"ExecutionBarrier blocked {intent.purpose}: {result.reason}"
             )
         response = result.response
-        response_status = str(
-            response.get("status", "") if isinstance(response, dict) else ""
-        ).upper()
-        if response_status in {"NEW", "PENDING_NEW"}:
-            # A durable SUBMITTED record is not yet a reconciled exchange state.
-            # Resolve the returned open order before admitting the next mutation.
-            self.recovery_coordinator.recover()
-            readiness = self.recovery_coordinator.readiness()
-            if not readiness.get("ready"):
+        # The write-ahead intent remains SUBMITTED until the exchange order and
+        # every per-trade fill have been re-read and reconciled, even when the
+        # immediate POST/DELETE response looked successful.
+        self.recovery_coordinator.recover()
+        readiness = self.recovery_coordinator.readiness()
+        if not readiness.get("ready"):
+            raise CampaignExecutionError(
+                "exchange accepted an operation but durable recovery is incomplete; "
+                "execution contour remains blocked"
+            )
+        if intent.order_type == "CANCEL":
+            row = self.db.conn.execute(
+                "SELECT status FROM execution_intents WHERE intent_id=?",
+                (intent.intent_id,),
+            ).fetchone()
+            reconciled_status = str(row["status"] if row else "").upper()
+            if reconciled_status not in {"CANCELED", "EXPIRED", "FILLED", "REJECTED"}:
                 raise CampaignExecutionError(
-                    "exchange accepted order but durable recovery is incomplete; "
-                    "execution contour remains blocked"
+                    f"cancel target remains {reconciled_status or 'UNKNOWN'}; refusing subsequent mutation"
                 )
         return response
 
@@ -1530,12 +1537,24 @@ class CampaignExecutionService:
         }
 
     def _execute_cancel(self, campaign, order_id: int, purpose: str) -> dict[str, Any]:
+        # Persist both the intended target order ID and its exchange clientOrderId
+        # before sending DELETE. A cancel operation's own client ID cannot locate
+        # the order being canceled after a lost response.
+        target = self.client.get_order(campaign.symbol, order_id=order_id)
+        if (
+            str(target.get("symbol", "")).upper() != campaign.symbol.upper()
+            or str(target.get("orderId")) != str(order_id)
+            or not str(target.get("clientOrderId") or "")
+        ):
+            raise CampaignExecutionError("cannot verify cancellation target identity")
         intent = OrderIntent.new(
             campaign.symbol,
-            "SELL",
+            str(target.get("side", "SELL")).upper(),
             "CANCEL",
             required_context_versions={},
             client_order_id=f"{self.STOP_PREFIX}CANCEL_{uuid.uuid4().hex[:14]}",
+            target_order_id=str(order_id),
+            target_client_order_id=str(target["clientOrderId"]),
             purpose=purpose,
             campaign_id=campaign.campaign_id,
             signal_id=campaign.current_signal_id,
