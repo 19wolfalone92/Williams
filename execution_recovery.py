@@ -21,7 +21,7 @@ class ExecutionRecoveryBlocked(RuntimeError):
 
 
 class ExecutionRecoveryCoordinator:
-    UNRESOLVED = {"PENDING", "SUBMITTING", "SUBMITTED", "UNKNOWN", "AMBIGUOUS", "RECONCILE_REQUIRED"}
+    UNRESOLVED = {"PENDING", "SUBMITTING", "SUBMITTED", "UNKNOWN", "AMBIGUOUS", "RECONCILE_REQUIRED", "PROTECTION_PENDING"}
     ACCEPTED_EXCHANGE_STATUSES = {
         "NEW": "OPEN",
         "PENDING_NEW": "OPEN",
@@ -38,6 +38,7 @@ class ExecutionRecoveryCoordinator:
         db,
         *,
         fill_handler: Callable[[dict[str, Any], dict[str, Any], dict[str, Any]], None] | None = None,
+        post_fill_handler: Callable[[dict[str, Any], dict[str, Any], list[dict[str, Any]]], None] | None = None,
         exchange: str = "BINANCE",
         account_scope: str | None = None,
         execution_scope: str = "spot",
@@ -45,6 +46,7 @@ class ExecutionRecoveryCoordinator:
         self.client = client
         self.db = db
         self.fill_handler = fill_handler
+        self.post_fill_handler = post_fill_handler
         self.exchange = str(exchange).upper()
         self.execution_scope = str(execution_scope or "spot").strip().lower()
         self.account_scope = db._default_account_scope(self.execution_scope, account_scope)
@@ -285,6 +287,8 @@ class ExecutionRecoveryCoordinator:
                     applied_count += 1
 
             evidence = self._evidence(intent, order, trades, history_qty)
+            if trades and self.post_fill_handler is not None:
+                self.post_fill_handler(intent, order, trades)
             if originally_unresolved:
                 self.db.resolve_execution_intent(
                     intent_id, evidence, scope=self.execution_scope
