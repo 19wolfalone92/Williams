@@ -131,8 +131,11 @@ class FakeClient:
         self.buy_calls += 1
         self.order_counter += 1
         order_id = str(self.order_counter)
-        quote = float(quote_order_qty or 0)
-        qty = quote / 100.0
+        requested_quote = float(quote_order_qty or 0)
+        qty = float(f"{requested_quote / 100.0:.6f}")
+        # The mock exchange must report internally consistent authoritative
+        # executed quantity and quote totals after quantity-step rounding.
+        quote = float(f"{qty * 100.0:.6f}")
         base = symbol.replace("USDT", "")
         self.balances["USDT"] = self.balances.get("USDT", 0.0) - quote
         self.balances[base] = self.balances.get(base, 0.0) + qty
@@ -145,7 +148,7 @@ class FakeClient:
             "status": "FILLED",
             "executedQty": f"{qty:.6f}",
             "cummulativeQuoteQty": f"{quote:.6f}",
-            "fills": [{"tradeId": 1, "price": "100.0", "qty": f"{qty:.6f}", "commission": "0", "commissionAsset": "USDT"}],
+            "fills": [{"tradeId": self.order_counter, "price": "100.0", "qty": f"{qty:.6f}", "quoteQty": f"{quote:.6f}", "commission": "0", "commissionAsset": "USDT"}],
         }
         self.orders[order_id] = row
         return row
