@@ -2,6 +2,7 @@ package com.williamsbot
 
 import java.math.BigDecimal
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -26,5 +27,79 @@ class ExecutionAccumulatorTest {
         assertEquals("1", s.executedQty.toPlainString())
         assertEquals(1, s.fills)
         assertEquals("0.1", s.feeUsdt.toPlainString())
+    }
+
+    @Test
+    fun duplicateTradeIdWithDifferentEventTimeIsStillOneFill() {
+        val a = ExecutionAccumulator()
+        a.acceptFill("12", "BTCUSDT", "99", 100, BigDecimal("0.01"), BigDecimal("100"), BigDecimal("0.001"), "USDT")
+        val replay = a.acceptFill("12", "BTCUSDT", "99", 101, BigDecimal("0.01"), BigDecimal("100"), BigDecimal("0.001"), "USDT")!!
+        assertEquals("0.01", replay.executedQty.toPlainString())
+        assertEquals(1, replay.fills)
+        assertEquals("0.001", replay.feeUsdt.toPlainString())
+    }
+
+    @Test
+    fun missingCommissionAssetMarksAccountingUnknownInsteadOfZeroFee() {
+        val a = ExecutionAccumulator()
+        val snapshot = a.acceptFill(
+            "13", "BTCUSDT", "100", 100,
+            BigDecimal("0.01"), BigDecimal("100"),
+            BigDecimal("0.001"), ""
+        )!!
+        assertEquals("0.01", snapshot.executedQty.toPlainString())
+        assertFalse(snapshot.feeKnown)
+    }
+
+    @Test
+    fun thirdAssetCommissionWithoutHistoricalConversionRemainsUnknown() {
+        val a = ExecutionAccumulator()
+        val snapshot = a.acceptFill(
+            "14", "BTCUSDT", "101", 100,
+            BigDecimal("0.01"), BigDecimal("100"),
+            BigDecimal("0.001"), "BNB"
+        )!!
+        assertFalse(snapshot.feeKnown)
+        assertEquals("0", snapshot.feeUsdt.toPlainString())
+    }
+
+    @Test
+    fun thirdAssetFeeDoesNotUseExitPriceAsHistoricalValuation() {
+        val a = ExecutionAccumulator()
+        val snapshot = a.acceptFill(
+            "16", "BTCUSDT", "103", 100,
+            BigDecimal("0.01"), BigDecimal("100"),
+            BigDecimal("0.001"), "BNB",
+            exitPriceForUnknownFee = BigDecimal("900")
+        )!!
+        assertFalse(snapshot.feeKnown)
+        assertEquals("0", snapshot.feeUsdt.toPlainString())
+    }
+
+    @Test
+    fun invalidFillDoesNotIncreasePositionAccounting() {
+        val a = ExecutionAccumulator()
+        val snapshot = a.acceptFill(
+            "15", "BTCUSDT", "102", 100,
+            BigDecimal.ZERO, BigDecimal("100"),
+            BigDecimal.ZERO, "USDT"
+        )!!
+        assertEquals("0", snapshot.executedQty.toPlainString())
+        assertEquals(0, snapshot.fills)
+        assertFalse(snapshot.feeKnown)
+    }
+
+
+    @Test
+    fun sameOrderIdAcrossSymbolsDoesNotMergeFills() {
+        val a = ExecutionAccumulator()
+        a.acceptFill("7", "BTCUSDT", "1", 1, BigDecimal("0.01"), BigDecimal("100"), BigDecimal.ZERO, "USDT")
+        a.acceptFill("7", "ETHUSDT", "1", 1, BigDecimal("0.02"), BigDecimal("2000"), BigDecimal.ZERO, "USDT")
+        val btc = a.snapshot("BTCUSDT", "7")!!
+        val eth = a.snapshot("ETHUSDT", "7")!!
+        assertEquals("0.01", btc.executedQty.toPlainString())
+        assertEquals("0.02", eth.executedQty.toPlainString())
+        assertEquals(1, btc.fills)
+        assertEquals(1, eth.fills)
     }
 }

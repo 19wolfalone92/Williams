@@ -1,5 +1,3 @@
-import os
-
 from types import SimpleNamespace
 
 from portfolio_controller import PortfolioController
@@ -18,45 +16,38 @@ class FakeScanner:
 
     def scan(self):
         return [
-            SimpleNamespace(symbol="BTCUSDT", signal=True, score=95.0, signal_strength=1.0,
+            SimpleNamespace(symbol=symbol, signal=True, score=score, signal_strength=1.0,
                              htf_confirmed=True, spread_pct=0.0001, atr_pct=0.02,
-                             wave_invalidation_price=98.0),
-            SimpleNamespace(symbol="ETHUSDT", signal=True, score=90.0, signal_strength=1.0,
-                             htf_confirmed=True, spread_pct=0.0001, atr_pct=0.02,
-                             wave_invalidation_price=98.0),
-            SimpleNamespace(symbol="SOLUSDT", signal=True, score=85.0, signal_strength=1.0,
-                             htf_confirmed=True, spread_pct=0.0001, atr_pct=0.02,
-                             wave_invalidation_price=98.0),
+                             wave_invalidation_price=98.0)
+            for symbol, score in (("BTCUSDT", 95.0), ("ETHUSDT", 90.0), ("SOLUSDT", 85.0))
         ]
 
 
-def test_multiple_positions_fit_aggregate_risk(monkeypatch):
-    monkeypatch.setenv("MAX_OPEN_POSITIONS", "0")
+def test_selector_caps_new_entries_to_one_campaign(monkeypatch):
+    monkeypatch.setenv("MAX_OPEN_POSITIONS", "5")
     monkeypatch.setenv("MAX_TOTAL_RISK_PCT", "0.01")
     monkeypatch.setenv("MAX_RISK_PER_TRADE_PCT", "0.005")
     monkeypatch.setenv("MIN_RISK_ALLOCATION_PCT", "0.001")
-
-    controller = PortfolioController(FakeClient(), balance_quote=10000.0)
+    controller = PortfolioController(FakeClient(), balance_quote=10_000.0)
     controller.scanner = FakeScanner()
-
-    # RiskEngine receives an override allocation. Two 0.5% positions fit;
-    # the third must not exceed the 1% aggregate budget.
     selections = controller.select_portfolio(open_risk_quote=0.0, open_positions=0)
+    assert len(selections) == 1
+    assert selections[0].risk.risk_pct <= 0.25
+    assert selections[0].risk.risk_quote <= 25.0
+    assert controller.max_total_risk_pct <= 0.006
 
-    assert len(selections) == 2
-    assert round(sum(s.risk.risk_pct for s in selections), 6) <= 1.0
-    assert all(s.risk.risk_pct <= 0.5 for s in selections)
 
-
-def test_existing_risk_leaves_only_remaining_budget(monkeypatch):
+def test_zero_positions_disables_entries_instead_of_meaning_unlimited(monkeypatch):
     monkeypatch.setenv("MAX_OPEN_POSITIONS", "0")
-    monkeypatch.setenv("MAX_TOTAL_RISK_PCT", "0.01")
-    monkeypatch.setenv("MAX_RISK_PER_TRADE_PCT", "0.005")
-
-    controller = PortfolioController(FakeClient(), balance_quote=10000.0)
+    controller = PortfolioController(FakeClient(), balance_quote=10_000.0)
     controller.scanner = FakeScanner()
+    assert controller.select_portfolio(open_risk_quote=0.0, open_positions=0) == []
 
-    selections = controller.select_portfolio(open_risk_quote=75.0, open_positions=1)
 
-    assert selections
-    assert sum(s.risk.risk_pct for s in selections) <= 0.2500001
+def test_existing_risk_at_or_above_portfolio_limit_blocks_entries(monkeypatch):
+    monkeypatch.setenv("MAX_OPEN_POSITIONS", "1")
+    monkeypatch.setenv("MAX_TOTAL_RISK_PCT", "0.01")
+    controller = PortfolioController(FakeClient(), balance_quote=10_000.0)
+    controller.scanner = FakeScanner()
+    assert controller.select_portfolio(open_risk_quote=60.0, open_positions=0) == []
+    assert controller.select_portfolio(open_risk_quote=10.0, open_positions=1) == []

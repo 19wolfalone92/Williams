@@ -1,41 +1,200 @@
 import os
 import json, sqlite3
+import threading
 from pathlib import Path
 from datetime import datetime, timezone
 from contextlib import contextmanager
 
 
+class _LockedSQLiteCursor:
+    """Serialize cursor operations with Database transactions on a shared connection."""
+
+    def __init__(self, cursor, lock):
+        self._cursor = cursor
+        self._lock = lock
+
+    def execute(self, *args, **kwargs):
+        with self._lock:
+            self._cursor.execute(*args, **kwargs)
+        return self
+
+    def executemany(self, *args, **kwargs):
+        with self._lock:
+            self._cursor.executemany(*args, **kwargs)
+        return self
+
+    def executescript(self, *args, **kwargs):
+        with self._lock:
+            self._cursor.executescript(*args, **kwargs)
+        return self
+
+    def fetchone(self):
+        with self._lock:
+            return self._cursor.fetchone()
+
+    def fetchmany(self, *args, **kwargs):
+        with self._lock:
+            return self._cursor.fetchmany(*args, **kwargs)
+
+    def fetchall(self):
+        with self._lock:
+            return self._cursor.fetchall()
+
+    def close(self):
+        with self._lock:
+            return self._cursor.close()
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        with self._lock:
+            return next(self._cursor)
+
+    def __getattr__(self, name):
+        return getattr(self._cursor, name)
+
+
+class _LockedSQLiteConnection:
+    """Connection facade: all SQL/cursor operations share the transaction RLock."""
+
+    def __init__(self, connection, lock):
+        object.__setattr__(self, "_connection", connection)
+        object.__setattr__(self, "_lock", lock)
+
+    def execute(self, *args, **kwargs):
+        with self._lock:
+            cursor = self._connection.execute(*args, **kwargs)
+        return _LockedSQLiteCursor(cursor, self._lock)
+
+    def executemany(self, *args, **kwargs):
+        with self._lock:
+            cursor = self._connection.executemany(*args, **kwargs)
+        return _LockedSQLiteCursor(cursor, self._lock)
+
+    def executescript(self, *args, **kwargs):
+        with self._lock:
+            cursor = self._connection.executescript(*args, **kwargs)
+        return _LockedSQLiteCursor(cursor, self._lock)
+
+    def cursor(self, *args, **kwargs):
+        with self._lock:
+            cursor = self._connection.cursor(*args, **kwargs)
+        return _LockedSQLiteCursor(cursor, self._lock)
+
+    def commit(self):
+        with self._lock:
+            return self._connection.commit()
+
+    def rollback(self):
+        with self._lock:
+            return self._connection.rollback()
+
+    def close(self):
+        with self._lock:
+            return self._connection.close()
+
+    def __enter__(self):
+        self._lock.acquire()
+        try:
+            self._connection.__enter__()
+        except BaseException:
+            self._lock.release()
+            raise
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        try:
+            return self._connection.__exit__(exc_type, exc_value, traceback)
+        finally:
+            self._lock.release()
+
+    def __getattr__(self, name):
+        with self._lock:
+            return getattr(self._connection, name)
+
+    def __setattr__(self, name, value):
+        if name in {"_connection", "_lock"}:
+            object.__setattr__(self, name, value)
+        else:
+            with self._lock:
+                setattr(self._connection, name, value)
+
+
 class Database:
-    SCHEMA_VERSION = 6
+    SCHEMA_VERSION = 8
 
     def __init__(self, path=None):
         path = path or os.getenv('WILLIAMS_DB_PATH') or 'data/trader.sqlite3'
         Path(path).parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(path, check_same_thread=False, timeout=20)
+        self._transaction_lock = threading.RLock()
+        self._transaction_active = False
+        self._transaction_owner = None
+        self._transaction_depth = 0
+        self._savepoint_counter = 0
+        raw_conn = sqlite3.connect(
+            path, check_same_thread=False, timeout=20, isolation_level=None
+        )
+        self.conn = _LockedSQLiteConnection(raw_conn, self._transaction_lock)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute('PRAGMA busy_timeout=20000')
         self.conn.execute('PRAGMA journal_mode=WAL')
-        self.conn.execute('PRAGMA synchronous=NORMAL')
-        self._transaction_active = False
+        # Durable intent/ledger commits must survive process and OS interruption.
+        self.conn.execute('PRAGMA synchronous=FULL')
         self.init()
 
     @contextmanager
     def transaction(self):
-        """Atomic transaction for multi-step DB operations."""
-        if self._transaction_active:
-            yield self
-            return
+        """Own an explicit SQLite write transaction; nested calls use savepoints.
 
-        self._transaction_active = True
-        try:
-            self.conn.execute('BEGIN')
-            yield self
-            self.conn.commit()
-        except Exception:
-            self.conn.rollback()
-            raise
-        finally:
-            self._transaction_active = False
+        The shared connection facade takes the same re-entrant lock for every SQL
+        and cursor operation. Autocommit mode prevents a standalone helper write
+        from leaving an implicit transaction that a later BEGIN could inherit.
+        BEGIN IMMEDIATE still serializes writers across independent connections
+        and processes.
+        """
+        with self._transaction_lock:
+            owner = threading.get_ident()
+            if self._transaction_owner == owner:
+                self._savepoint_counter += 1
+                savepoint = f"db_nested_{self._savepoint_counter}"
+                self.conn.execute(f"SAVEPOINT {savepoint}")
+                self._transaction_depth += 1
+                try:
+                    yield self
+                except BaseException:
+                    try:
+                        self.conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                    finally:
+                        self.conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+                    raise
+                else:
+                    self.conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+                finally:
+                    self._transaction_depth -= 1
+                return
+
+            # Never adopt or roll back a transaction whose owner is unknown.
+            if self.conn.in_transaction:
+                raise RuntimeError(
+                    "SQLite connection has an unowned active transaction; mutation blocked"
+                )
+
+            self._transaction_owner = owner
+            self._transaction_depth = 1
+            self._transaction_active = True
+            try:
+                self.conn.execute("BEGIN IMMEDIATE")
+                yield self
+                self.conn.commit()
+            except BaseException:
+                if self.conn.in_transaction:
+                    self.conn.rollback()
+                raise
+            finally:
+                self._transaction_active = False
+                self._transaction_depth = 0
+                self._transaction_owner = None
 
     def init(self):
         self.conn.executescript('''
@@ -121,6 +280,28 @@ class Database:
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY(symbol, side)
         );
+        CREATE TABLE IF NOT EXISTS emergency_sell_intents(
+            operation_id TEXT PRIMARY KEY,
+            identity_version INTEGER NOT NULL,
+            environment TEXT NOT NULL,
+            account_scope TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            trade_id TEXT NOT NULL,
+            operation_type TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            requested_qty TEXT NOT NULL,
+            parameters_hash TEXT NOT NULL,
+            client_order_id TEXT NOT NULL UNIQUE,
+            status TEXT NOT NULL,
+            exchange_order_id TEXT,
+            exchange_status TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            last_error TEXT,
+            mutation_started_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_emergency_sell_status
+            ON emergency_sell_intents(status, symbol);
         CREATE TABLE IF NOT EXISTS execution_intents(
             intent_id TEXT PRIMARY KEY,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -221,6 +402,7 @@ class Database:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             campaign_id TEXT NOT NULL,
             order_id TEXT,
+            trade_id TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             symbol TEXT NOT NULL,
             side TEXT NOT NULL,
@@ -261,9 +443,121 @@ class Database:
             ON campaign_events(campaign_id, id);
         ''')
         self._migrate_trade_columns()
+        self._migrate_campaign_fill_columns()
+        self._migrate_emergency_sell_columns()
         self.state_set('schema_version', self.SCHEMA_VERSION)
         self.state_set('position_state', self.state_get('position_state', 'FLAT'))
         self.conn.commit()
+
+    def _migrate_emergency_sell_columns(self):
+        """Add sink-level one-shot authorization state without rewriting old intents."""
+        columns = {
+            row["name"]
+            for row in self.conn.execute(
+                "PRAGMA table_info(emergency_sell_intents)"
+            ).fetchall()
+        }
+        if "mutation_started_at" not in columns:
+            self.conn.execute(
+                "ALTER TABLE emergency_sell_intents ADD COLUMN mutation_started_at TEXT"
+            )
+
+    def authorize_emergency_sell_mutation(
+        self, *, symbol, quantity, client_order_id, environment, account_scope
+    ):
+        """Consume the single durable permit at the final SELL network boundary.
+
+        This is deliberately one-shot: after a process crash, a consumed permit
+        never authorizes another POST. Recovery must reconcile the existing ID.
+        """
+        from decimal import Decimal, InvalidOperation
+
+        cid = str(client_order_id or "").strip()
+        sym = str(symbol or "").upper()
+        try:
+            qty = Decimal(str(quantity))
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            raise RuntimeError("emergency SELL sink blocked: invalid quantity") from exc
+        if not cid.startswith("WILLV4_EMERGENCY_") or not qty.is_finite() or qty <= 0:
+            raise RuntimeError("emergency SELL sink blocked: invalid identity or quantity")
+
+        now = datetime.now(timezone.utc).isoformat()
+        with self.transaction():
+            row = self.conn.execute(
+                """SELECT * FROM emergency_sell_intents
+                   WHERE client_order_id=?""",
+                (cid,),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("emergency SELL sink blocked: durable intent missing")
+            expected = {
+                "symbol": sym,
+                "environment": str(environment),
+                "account_scope": str(account_scope),
+                "status": "SUBMITTING",
+            }
+            for key, value in expected.items():
+                if str(row[key]) != value:
+                    raise RuntimeError(
+                        f"emergency SELL sink blocked: intent {key} mismatch"
+                    )
+            try:
+                stored_qty = Decimal(str(row["requested_qty"]))
+            except (InvalidOperation, TypeError, ValueError) as exc:
+                raise RuntimeError("emergency SELL sink blocked: corrupt durable quantity") from exc
+            if not stored_qty.is_finite() or stored_qty != qty:
+                raise RuntimeError("emergency SELL sink blocked: quantity mismatch")
+            if row["mutation_started_at"] is not None:
+                raise RuntimeError(
+                    "emergency SELL sink blocked: one-shot mutation permit already consumed"
+                )
+            cur = self.conn.execute(
+                """UPDATE emergency_sell_intents
+                   SET mutation_started_at=?, updated_at=?
+                   WHERE operation_id=? AND status='SUBMITTING'
+                     AND mutation_started_at IS NULL""",
+                (now, now, str(row["operation_id"])),
+            )
+            if cur.rowcount != 1:
+                raise RuntimeError("emergency SELL sink blocked: permit claim lost")
+        check = self.conn.execute(
+            "SELECT mutation_started_at,status FROM emergency_sell_intents WHERE client_order_id=?",
+            (cid,),
+        ).fetchone()
+        if check is None or check["mutation_started_at"] != now or check["status"] != "SUBMITTING":
+            raise RuntimeError("emergency SELL sink blocked: permit commit/readback uncertain")
+        return str(row["operation_id"])
+
+    def _migrate_campaign_fill_columns(self):
+        columns = {
+            row["name"]
+            for row in self.conn.execute("PRAGMA table_info(campaign_fills)").fetchall()
+        }
+        if "trade_id" not in columns:
+            self.conn.execute("ALTER TABLE campaign_fills ADD COLUMN trade_id TEXT")
+        # Never delete or silently merge historical duplicates. If an old
+        # database already contains conflicting duplicate exchange IDs, fail
+        # migration with the exact keys so an operator can resolve them with an
+        # auditable repair before trading is enabled.
+        duplicates = self.conn.execute(
+            "SELECT symbol, trade_id, COUNT(*) AS n FROM campaign_fills "
+            "WHERE trade_id IS NOT NULL GROUP BY symbol, trade_id HAVING COUNT(*) > 1"
+        ).fetchall()
+        if duplicates:
+            keys = [
+                {"symbol": row["symbol"], "trade_id": row["trade_id"], "count": row["n"]}
+                for row in duplicates
+            ]
+            raise RuntimeError(
+                "campaign_fills migration blocked: historical duplicate exchange trade IDs "
+                f"require audited resolution: {json.dumps(keys, sort_keys=True)}"
+            )
+        # Binance trade IDs are unique within a symbol. Legacy rows without an
+        # exchange trade ID remain readable but cannot collide with new rows.
+        self.conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_campaign_fill_exchange_trade "
+            "ON campaign_fills(symbol, trade_id) WHERE trade_id IS NOT NULL"
+        )
 
     def _migrate_trade_columns(self):
         columns = {
@@ -411,6 +705,110 @@ class Database:
             return json.loads(row["state_json"])
         except Exception:
             return None
+
+    def claim_emergency_sell_intent(self, intent):
+        """Durably claim one logical emergency SELL across SQLite connections/processes.
+
+        Caller must provide canonical strings and a stable operation/client ID.
+        Existing identities are immutable: incompatible parameters raise rather
+        than being overwritten. PREPARED is the only state safe to submit.
+        """
+        required = (
+            "operation_id", "identity_version", "environment", "account_scope",
+            "symbol", "trade_id", "operation_type", "reason", "requested_qty",
+            "parameters_hash", "client_order_id",
+        )
+        missing = [key for key in required if key not in intent]
+        if missing:
+            raise ValueError(f"emergency SELL intent missing fields: {missing}")
+        now = datetime.now(timezone.utc).isoformat()
+        with self.transaction():
+            self.conn.execute(
+                """INSERT OR IGNORE INTO emergency_sell_intents(
+                    operation_id,identity_version,environment,account_scope,symbol,
+                    trade_id,operation_type,reason,requested_qty,parameters_hash,
+                    client_order_id,status,created_at,updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,'PREPARED',?,?)""",
+                (
+                    str(intent["operation_id"]), int(intent["identity_version"]),
+                    str(intent["environment"]), str(intent["account_scope"]),
+                    str(intent["symbol"]).upper(), str(intent["trade_id"]),
+                    str(intent["operation_type"]), str(intent["reason"]),
+                    str(intent["requested_qty"]), str(intent["parameters_hash"]),
+                    str(intent["client_order_id"]), now, now,
+                ),
+            )
+            row = self.conn.execute(
+                "SELECT * FROM emergency_sell_intents WHERE operation_id=?",
+                (str(intent["operation_id"]),),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("emergency SELL intent commit/readback missing")
+            for key in required:
+                stored = row[key]
+                expected = int(intent[key]) if key == "identity_version" else str(intent[key])
+                if str(stored) != str(expected):
+                    raise RuntimeError(
+                        f"emergency SELL identity conflict for {key}; execution blocked"
+                    )
+            # A unique client ID claimed by another operation is a hard conflict.
+            other = self.conn.execute(
+                "SELECT operation_id FROM emergency_sell_intents WHERE client_order_id=?",
+                (str(intent["client_order_id"]),),
+            ).fetchone()
+            if other is None or str(other["operation_id"]) != str(intent["operation_id"]):
+                raise RuntimeError("emergency SELL clientOrderId identity conflict")
+            # transaction() committed before returning; readback above is inside
+            # the same write transaction, so explicitly verify durability outside it.
+        committed = self.conn.execute(
+            "SELECT operation_id,status,parameters_hash,client_order_id FROM emergency_sell_intents WHERE operation_id=?",
+            (str(intent["operation_id"]),),
+        ).fetchone()
+        if committed is None or str(committed["parameters_hash"]) != str(intent["parameters_hash"]):
+            raise RuntimeError("emergency SELL durable commit/readback uncertain")
+        return dict(committed)
+
+    def transition_emergency_sell_intent(self, operation_id, status, *, exchange_order_id=None,
+                                         exchange_status=None, last_error=None):
+        """Durably transition an emergency intent without resetting its identity."""
+        allowed = {
+            "PREPARED": {"SUBMITTING", "RECONCILE_REQUIRED"},
+            "SUBMITTING": {"SUBMITTED", "RECONCILE_REQUIRED"},
+            "SUBMITTED": {"RECONCILE_REQUIRED", "APPLIED"},
+            "RECONCILE_REQUIRED": {"RECONCILE_REQUIRED", "SUBMITTED", "APPLIED"},
+            "APPLIED": {"APPLIED"},
+        }
+        now = datetime.now(timezone.utc).isoformat()
+        with self.transaction():
+            row = self.conn.execute(
+                "SELECT status FROM emergency_sell_intents WHERE operation_id=?",
+                (str(operation_id),),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("emergency SELL intent does not exist")
+            current = str(row["status"])
+            if status not in allowed.get(current, set()):
+                raise RuntimeError(
+                    f"illegal emergency SELL intent transition {current}->{status}"
+                )
+            self.conn.execute(
+                """UPDATE emergency_sell_intents SET status=?,updated_at=?,
+                   exchange_order_id=COALESCE(?,exchange_order_id),
+                   exchange_status=COALESCE(?,exchange_status),
+                   last_error=? WHERE operation_id=?""",
+                (str(status), now,
+                 None if exchange_order_id is None else str(exchange_order_id),
+                 None if exchange_status is None else str(exchange_status),
+                 None if last_error is None else str(last_error)[:1000],
+                 str(operation_id)),
+            )
+            check = self.conn.execute(
+                "SELECT status FROM emergency_sell_intents WHERE operation_id=?",
+                (str(operation_id),),
+            ).fetchone()
+            if check is None or str(check["status"]) != str(status):
+                raise RuntimeError("emergency SELL status readback mismatch")
+        return True
 
     def save_order(self, data):
         oid = (
@@ -971,22 +1369,83 @@ class Database:
             self.conn.commit()
 
     def save_campaign_fill(self, fill):
-        data=fill if isinstance(fill,dict) else dict(fill)
-        self.conn.execute(
-            """INSERT INTO campaign_fills(
-                campaign_id,order_id,symbol,side,quantity,price,quote_quantity,
+        """Persist one exchange fill idempotently and reject conflicting replays."""
+        data = fill if isinstance(fill, dict) else dict(fill)
+        symbol = str(data.get("symbol", "")).upper()
+        trade_id = data.get("trade_id")
+        if not symbol or trade_id is None or not str(trade_id).strip():
+            raise ValueError("campaign fill requires symbol and authoritative exchange trade_id")
+        normalized = {
+            "campaign_id": str(data.get("campaign_id", "")),
+            "order_id": str(data.get("order_id") or ""),
+            "trade_id": str(trade_id),
+            "symbol": symbol,
+            "side": str(data.get("side", "")).upper(),
+            "quantity": float(data.get("quantity", 0) or 0),
+            "price": float(data.get("price", 0) or 0),
+            "quote_quantity": float(data.get("quote_quantity", 0) or 0),
+            "fee_quote": float(data.get("fee_quote", 0) or 0),
+            "commission_base": float(data.get("commission_base", 0) or 0),
+            "commission_asset": str(data.get("commission_asset") or "").upper(),
+        }
+        import math
+        if (
+            normalized["side"] not in {"BUY", "SELL"}
+            or not all(math.isfinite(normalized[k]) for k in
+                       ("quantity", "price", "quote_quantity", "fee_quote", "commission_base"))
+            or normalized["quantity"] <= 0 or normalized["price"] <= 0
+            or normalized["quote_quantity"] <= 0 or normalized["fee_quote"] < 0
+            or normalized["commission_base"] < 0 or not normalized["commission_asset"]
+        ):
+            raise ValueError("campaign fill has invalid quantity, price, quote or commission fields")
+        cursor = self.conn.execute(
+            """INSERT OR IGNORE INTO campaign_fills(
+                campaign_id,order_id,trade_id,symbol,side,quantity,price,quote_quantity,
                 fee_quote,commission_base,commission_asset,raw_json
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
-                data.get("campaign_id",""),data.get("order_id"),data.get("symbol",""),
-                data.get("side",""),float(data.get("quantity",0) or 0),float(data.get("price",0) or 0),
-                float(data.get("quote_quantity",0) or 0),float(data.get("fee_quote",0) or 0),
-                float(data.get("commission_base",0) or 0),data.get("commission_asset",""),
-                json.dumps(data,default=str),
+                normalized["campaign_id"], normalized["order_id"], normalized["trade_id"],
+                normalized["symbol"], normalized["side"], normalized["quantity"],
+                normalized["price"], normalized["quote_quantity"], normalized["fee_quote"],
+                normalized["commission_base"], normalized["commission_asset"],
+                json.dumps(data, default=str, sort_keys=True),
             ),
         )
+        if cursor.rowcount == 0:
+            existing = self.conn.execute(
+                "SELECT campaign_id,order_id,trade_id,symbol,side,quantity,price,quote_quantity,"
+                "fee_quote,commission_base,commission_asset FROM campaign_fills "
+                "WHERE symbol=? AND trade_id=?",
+                (symbol, str(trade_id)),
+            ).fetchone()
+            if existing is None:
+                raise RuntimeError(
+                    f"campaign fill insert ignored without matching exchange key {symbol}/{trade_id}"
+                )
+            for key in normalized:
+                actual = existing[key]
+                expected = normalized[key]
+                if key in {"quantity", "price", "quote_quantity", "fee_quote", "commission_base"}:
+                    if float(actual) != float(expected):
+                        raise RuntimeError(
+                            f"conflicting replay for exchange fill {symbol}/{trade_id}: {key} "
+                            f"stored={actual!r} incoming={expected!r}"
+                        )
+                elif str(actual or "") != str(expected or ""):
+                    raise RuntimeError(
+                        f"conflicting replay for exchange fill {symbol}/{trade_id}: {key} "
+                        f"stored={actual!r} incoming={expected!r}"
+                    )
         if not self._transaction_active:
             self.conn.commit()
+        return cursor.rowcount == 1
+
+    def campaign_fills_for_order(self, symbol, order_id):
+        rows = self.conn.execute(
+            "SELECT * FROM campaign_fills WHERE symbol=? AND order_id=? ORDER BY id",
+            (str(symbol).upper(), str(order_id)),
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     def log_campaign_event(self, campaign_id, event, *, level="INFO", signal_id=None, order_id=None, reason="", payload=None):
         self.conn.execute(
@@ -1001,7 +1460,7 @@ class Database:
     def campaign_risk_reserved_quote(self):
         row=self.conn.execute(
             "SELECT COALESCE(SUM(open_risk_quote),0)+COALESCE(SUM(pending_risk_quote),0) AS risk "
-            "FROM campaigns WHERE state NOT IN ('CLOSED','FLAT','RECONCILE_REQUIRED')"
+            "FROM campaigns WHERE state NOT IN ('CLOSED','FLAT')"
         ).fetchone()
         return float(row["risk"] or 0.0)
 
@@ -1031,6 +1490,40 @@ class Database:
             ).fetchall()
         ]
 
+
+    def pnl_today_all(self):
+        """Return verified realized PnL since UTC midnight; unknown rows are errors.
+
+        No closed trades is a legitimate zero. A closed trade with missing,
+        non-numeric or non-finite PnL is not zero and must block new entries.
+        The persisted pnl field is not fee-adjusted again here.
+        """
+        import math
+        rows = self.conn.execute(
+            "SELECT id,pnl FROM trades "
+            "WHERE exit_time IS NOT NULL AND exit_time >= date('now')"
+        ).fetchall()
+        total = 0.0
+        for row in rows:
+            if row["pnl"] is None:
+                raise ValueError(f"closed trade {row['id']} has unknown realized PnL")
+            try:
+                value = float(row["pnl"])
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError(f"closed trade {row['id']} has invalid realized PnL") from exc
+            if not math.isfinite(value):
+                raise ValueError(f"closed trade {row['id']} has non-finite realized PnL")
+            total += value
+        if not math.isfinite(total):
+            raise ValueError("aggregate realized PnL is non-finite")
+        return total
+
+    def active_campaign_count(self):
+        row = self.conn.execute(
+            "SELECT COUNT(*) AS count FROM campaigns WHERE state NOT IN ('CLOSED','FLAT')"
+        ).fetchone()
+        return int(row["count"] if row else 0)
+
     def trades_today(self, symbol):
         return int(
             self.conn.execute(
@@ -1041,13 +1534,26 @@ class Database:
         )
 
     def pnl_today(self, symbol):
-        r = self.conn.execute(
-            "SELECT COALESCE(SUM(pnl),0) AS pnl FROM trades "
-            "WHERE symbol=? AND exit_time IS NOT NULL "
-            "AND exit_time >= date('now')",
+        import math
+        rows = self.conn.execute(
+            "SELECT id,pnl FROM trades WHERE symbol=? "
+            "AND exit_time IS NOT NULL AND exit_time >= date('now')",
             (str(symbol).upper(),)
-        ).fetchone()
-        return float(r['pnl'] or 0)
+        ).fetchall()
+        total = 0.0
+        for row in rows:
+            if row["pnl"] is None:
+                raise ValueError(f"closed trade {row['id']} has unknown realized PnL")
+            try:
+                value = float(row["pnl"])
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError(f"closed trade {row['id']} has invalid realized PnL") from exc
+            if not math.isfinite(value):
+                raise ValueError(f"closed trade {row['id']} has non-finite realized PnL")
+            total += value
+        if not math.isfinite(total):
+            raise ValueError("aggregate realized PnL is non-finite")
+        return total
 
     def consecutive_losses(self, symbol, limit=20):
         rows = self.conn.execute(

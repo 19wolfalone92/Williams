@@ -69,7 +69,20 @@ t.db.state_set("position_state","FLAT")
 # before opening a managed position.
 t.db.state_set("foreign_base_balance:BTCUSDT", 0.0)
 
-print("1) BUY")
+print("1) BUY (deterministic fake fill; bypasses disabled production BUY route)")
+# This recovery test validates the post-fill protection/restart path, not entry
+# authorization. Simulate the already-filled order without invoking Trader.market_buy.
+def _fake_filled_buy(quote):
+    order = t.client.order(
+        "BTCUSDT", "BUY", "MARKET",
+        quoteOrderQty=quote,
+        newClientOrderId="WILLV4_ENTRY_recovery_test",
+    )
+    t.db.state_set("entry_client_order_id", "WILLV4_ENTRY_recovery_test")
+    t._set_state("ENTRY_PENDING")
+    return order, 0.01, 100.0
+
+t.market_buy = _fake_filled_buy
 order,qty,entry=t.market_buy(100)
 assert qty>0 and entry>0
 print("[PASS] BUY FILLED:",qty,entry)

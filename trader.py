@@ -33,7 +33,7 @@ class Trader:
         self.config = TradingConfig.from_env()
         self.context_cache = context_cache or ContextCache()
         self.symbol=os.getenv('SYMBOL',self.config.symbols[0]).upper(); self.interval=os.getenv('INTERVAL','1h')
-        self.position_fraction=float(os.getenv('POSITION_FRACTION','0.25')); self.stop_pct=float(os.getenv('STOP_LOSS_PCT','0.02')); self.target_pct=float(os.getenv('TAKE_PROFIT_PCT','0.04'))
+        self.position_fraction=min(0.25, max(0.0, float(os.getenv('POSITION_FRACTION','0.25')))); self.stop_pct=float(os.getenv('STOP_LOSS_PCT','0.02')); self.target_pct=float(os.getenv('TAKE_PROFIT_PCT','0.04'))
         self.poll_seconds=int(os.getenv('POLL_SECONDS','20'))
         self.risk_per_trade_pct=self.config.risk_per_trade_pct; self.max_daily_loss_pct=self.config.max_daily_loss_pct
         self.max_trades_day=int(os.getenv('MAX_TRADES_PER_DAY','5')); self.max_consecutive_losses=int(os.getenv('MAX_CONSECUTIVE_LOSSES','3')); self.cooldown_minutes=int(os.getenv('COOLDOWN_MINUTES','30'))
@@ -81,8 +81,8 @@ class Trader:
         self._auto_scan_lock = False
 
         self.max_open_positions = max(0, int(self.config.max_open_positions))
-        self.max_total_risk_pct = min(0.01, max(0.0, float(os.getenv('MAX_TOTAL_RISK_PCT', '0.01'))))
-        self.max_risk_per_trade_pct = min(0.005, max(0.0, float(os.getenv('MAX_RISK_PER_TRADE_PCT', '0.005'))))
+        self.max_total_risk_pct = min(0.006, max(0.0, float(os.getenv('MAX_TOTAL_RISK_PCT', '0.006'))))
+        self.max_risk_per_trade_pct = min(0.0025, max(0.0, float(os.getenv('MAX_RISK_PER_TRADE_PCT', '0.0025'))))
         self.active_symbol = self.symbol
 
         self.db.state_set('active_symbol', self.symbol)
@@ -814,8 +814,16 @@ class Trader:
         if self.state()!='FLAT': return False,f'state={self.state()}'
         if self.db.trades_today(self.symbol)>=self.max_trades_day:return False,'max daily trades reached'
         if self.db.consecutive_losses(self.symbol)>=self.max_consecutive_losses:return False,'max consecutive losses reached'
-        today_pnl=self.db.pnl_today(self.symbol); balance=max(self.available_quote(),0.0)
-        if balance>0 and today_pnl <= -balance*self.max_daily_loss_pct:return False,'daily loss limit reached'
+        try:
+            today_pnl = float(self.db.pnl_today_all())
+            balance = float(self.available_quote())
+        except Exception:
+            return False, 'daily PnL or available balance unknown'
+        import math
+        if not math.isfinite(today_pnl) or not math.isfinite(balance) or balance <= 0:
+            return False, 'daily PnL or available balance invalid'
+        if today_pnl <= -balance * min(self.max_daily_loss_pct, 0.01):
+            return False, 'daily loss limit reached'
         last_exit=self.db.last_exit_time(self.symbol)
         if last_exit:
             try:
@@ -835,16 +843,29 @@ class Trader:
         return True,'ok'
 
     def _position_quote(self, entry_price, invalidation_price=0.0):
-        """Size from structural invalidation when valid, else configured fallback stop."""
-        balance = self.available_quote()
-        cap = balance * self.position_fraction
-        entry = float(entry_price)
-        invalidation = float(invalidation_price or 0.0)
-        stop_distance_pct = self.stop_pct
-        if 0.0 < invalidation < entry:
-            stop_distance_pct = (entry - invalidation) / max(entry, 1e-12)
-        risk_quote = balance * self.risk_per_trade_pct / max(stop_distance_pct, 1e-9)
-        return max(0.0, min(cap, risk_quote))
+        """Size only from a valid structural stop plus explicit cost buffers."""
+        import math
+        try:
+            balance = float(self.available_quote())
+            entry = float(entry_price)
+            invalidation = float(invalidation_price)
+            fee = float(os.getenv("FEE_BUFFER_PER_SIDE_PCT", "0.001"))
+            slippage = float(os.getenv("RISK_SLIPPAGE_BUFFER_PCT", "0.0015"))
+        except (TypeError, ValueError, OverflowError):
+            return 0.0
+        values = (balance, entry, invalidation, fee, slippage)
+        if not all(math.isfinite(value) for value in values):
+            return 0.0
+        if balance <= 0 or entry <= 0 or invalidation <= 0 or invalidation >= entry:
+            return 0.0
+        if fee < 0 or slippage < 0 or self.risk_per_trade_pct <= 0:
+            return 0.0
+        stop_fraction = (entry - invalidation) / entry
+        effective_loss_fraction = stop_fraction + 2.0 * fee + slippage
+        if not math.isfinite(effective_loss_fraction) or effective_loss_fraction <= 0:
+            return 0.0
+        risk_quote = balance * min(self.risk_per_trade_pct, 0.0025)
+        return min(balance * self.position_fraction, risk_quote / effective_loss_fraction)
 
     def refresh_execution_context(self, symbol=None):
         """Build a fresh immutable MTF context immediately before execution.
@@ -996,6 +1017,9 @@ class Trader:
         return order, summary
 
     def market_buy(self, quote):
+        # This legacy route has no structural-signal contract and cannot reserve
+        # the cross-symbol campaign budget atomically. It must never mutate orders.
+        raise RuntimeError("direct Trader.market_buy is disabled; use CampaignExecutionService")
         if self.dry_run:
             raise RuntimeError(
                 'BUY blocked: DRY_RUN=true. No live order execution is permitted.'

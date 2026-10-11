@@ -25,6 +25,7 @@ import java.nio.charset.StandardCharsets
 import java.util.Locale
 import java.util.ArrayDeque
 import java.util.Calendar
+import java.util.TimeZone
 import java.util.concurrent.Callable
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -139,7 +140,10 @@ private data class PositionState(
     var campaignState: String = "OPEN_INITIAL",
     var stopSource: String = "INITIAL_SIGNAL",
     var additions: Int = 0,
-    var protectiveOrderId: String = ""
+    var protectiveOrderId: String = "",
+    var initialQty: Double = qty,
+    var realizedExitQuote: Double = 0.0,
+    var realizedExitQty: Double = 0.0
 )
 
 private data class PendingEntry(
@@ -605,24 +609,24 @@ private class NativeEngine(
     private var primaryCandles = emptyList<CandleN>()
     private var lastScanDurationMs = 0L
     private var lastSymbolsScanned = 0
-    // Default supports the portfolio model: up to five independent positions;
-    // aggregate risk remains capped separately at 1%.
-    private val maxOpenPositions: Int
-        get() = prefs.getInt("max_open_positions", 5).coerceIn(1, 10)
+    // Canonical safety contract: at most one active campaign, regardless of
+    // legacy preferences or remote configuration.
+    private val maxOpenPositions: Int = 1
     private val campaignEngineEnabled: Boolean
         get() = prefs.getBoolean("campaign_engine_enabled", true)
     private val campaignExecutionTimeframe: String
         get() = prefs.getString("campaign_execution_timeframe", "5m") ?: "5m"
-    private val campaignRiskLimitPct = 0.005
-    private val campaignInitialRiskPct = 0.002
+    private val campaignRiskLimitPct = 0.006
+    private val campaignInitialRiskPct = 0.0025
     private val campaignAddRiskCapPct = 0.002
     private val campaignTrailBars: Int
         get() = prefs.getInt("campaign_trail_bars", 5).coerceIn(3, 5)
-    private val maxTotalRiskPct = 0.01
-    private val maxRiskPerTradePct = 0.005
+    private val maxTotalRiskPct = 0.006
+    private val maxRiskPerTradePct = 0.0025
     private val maxSpreadPct = 0.0015
     private val maxSlippagePct = 0.0015
-    private val equityCircuitBreaker = EquityCircuitBreaker(maxDrawdownPct = 0.05)
+    private val equityCircuitBreaker = EquityCircuitBreaker(maxDrawdownPct = 0.01, stateStore = prefs)
+    @Volatile private var riskInputsHealthy = false
     @Volatile private var lastEquityCheckMs = 0L
     @Volatile private var circuitBreakerTripInProgress = false
     private val feeBufferPerSidePct = 0.001
@@ -726,13 +730,14 @@ private class NativeEngine(
     }
 
     private fun restoreExecutionAccumulators() {
-        val orderIds = mutableSetOf<String>()
-        positionList().forEach { if (it.entryOrderId.isNotBlank()) orderIds.add(it.entryOrderId) }
-        orderIds.forEach { orderId ->
-            executionAccumulator.restore(
-                orderId,
-                auditStore.executionEvents(orderId)
-            )
+        positionList().forEach { position ->
+            if (position.entryOrderId.isNotBlank()) {
+                executionAccumulator.restore(
+                    position.symbol,
+                    position.entryOrderId,
+                    auditStore.executionEvents(position.symbol, position.entryOrderId)
+                )
+            }
         }
     }
 
@@ -776,6 +781,8 @@ private class NativeEngine(
             restAccountReady &&
             historyReady &&
             stateMachine.executionAllowed() &&
+            riskInputsHealthy &&
+            equityCircuitBreaker.hasValidBaseline() &&
             !equityCircuitBreaker.isTripped()
 
     private fun executionBlockers(): List<String> =
@@ -828,6 +835,9 @@ private class NativeEngine(
                     .put("stop_source", it.stopSource)
                     .put("additions", it.additions)
                     .put("protective_order_id", it.protectiveOrderId)
+                    .put("initial_qty", it.initialQty)
+                    .put("realized_exit_quote", it.realizedExitQuote)
+                    .put("realized_exit_qty", it.realizedExitQty)
             )
         }
 
@@ -851,10 +861,12 @@ private class NativeEngine(
             }
         }
 
-        prefs.edit()
-            .putString("positions_json", pos.toString())
-            .putString("pending_entries_json", pending.toString())
-            .apply()
+        check(
+            prefs.edit()
+                .putString("positions_json", pos.toString())
+                .putString("pending_entries_json", pending.toString())
+                .commit()
+        ) { "Cannot durably persist positions/pending risk reservations; execution blocked" }
     }
 
     private fun loadPersistedState() {
@@ -867,14 +879,30 @@ private class NativeEngine(
                 for (i in 0 until array.length()) {
                     val item = array.getJSONObject(i)
                     val symbol = item.optString("symbol").uppercase()
-                    if (symbol.isBlank()) continue
+                    val qty = item.optDouble("qty", Double.NaN)
+                    val entry = item.optDouble("entry", Double.NaN)
+                    val stop = item.optDouble("stop", Double.NaN)
+                    val risk = item.optDouble("risk_pct", Double.NaN)
+                    val take = item.optDouble("take", 0.0)
+                    val initialQty = item.optDouble("initial_qty", qty)
+                    val realizedExitQuote = item.optDouble("realized_exit_quote", 0.0)
+                    val realizedExitQty = item.optDouble("realized_exit_qty", 0.0)
+                    require(symbol.isNotBlank() && qty.isFinite() && qty > 0.0 &&
+                        entry.isFinite() && entry > 0.0 && stop.isFinite() && stop > 0.0 &&
+                        stop < entry && take.isFinite() && take >= 0.0 &&
+                        initialQty.isFinite() && initialQty >= qty &&
+                        realizedExitQuote.isFinite() && realizedExitQuote >= 0.0 &&
+                        realizedExitQty.isFinite() && realizedExitQty >= 0.0 &&
+                        risk.isFinite() && risk in 0.0..maxTotalRiskPct) {
+                        "Persisted position contains invalid quantity/price/risk"
+                    }
                     positions[symbol] = PositionState(
                         symbol = symbol,
-                        qty = item.optDouble("qty", 0.0),
-                        entry = item.optDouble("entry", 0.0),
-                        stop = item.optDouble("stop", 0.0),
-                        take = item.optDouble("take", 0.0),
-                        riskPct = item.optDouble("risk_pct", 0.0),
+                        qty = qty,
+                        entry = entry,
+                        stop = stop,
+                        take = take,
+                        riskPct = risk,
                         ocoListClientId = item.optString(
                             "oco_list_client_id"
                         ),
@@ -890,9 +918,18 @@ private class NativeEngine(
                         campaignState = item.optString("campaign_state", "OPEN_INITIAL"),
                         stopSource = item.optString("stop_source", "INITIAL_SIGNAL"),
                         additions = item.optInt("additions", 0),
-                        protectiveOrderId = item.optString("protective_order_id", "")
+                        protectiveOrderId = item.optString("protective_order_id", ""),
+                        initialQty = initialQty,
+                        realizedExitQuote = realizedExitQuote,
+                        realizedExitQty = realizedExitQty
                     )
                 }
+            }.onFailure {
+                reconcileRequired = true
+                riskInputsHealthy = false
+                lastError = "RECONCILE_REQUIRED: persisted position state corrupt: " +
+                    (it.message ?: it.javaClass.simpleName)
+                stateMachine.force(TradingState.RECONCILE_REQUIRED, lastError!!)
             }
         }
 
@@ -905,34 +942,47 @@ private class NativeEngine(
                 for (i in 0 until array.length()) {
                     val item = array.getJSONObject(i)
                     val symbol = item.optString("symbol").uppercase()
-                    if (symbol.isBlank()) continue
+                    val clientOrderId = item.optString("client_order_id")
+                    val notional = item.optDouble("notional", Double.NaN)
+                    val stopDistance = item.optDouble("stop_distance", Double.NaN)
+                    val triggerPrice = item.optDouble("trigger_price", Double.NaN)
+                    val protectivePrice = item.optDouble("protective_price", Double.NaN)
+                    val riskReserved = item.optDouble("risk_reserved_pct", Double.NaN)
+                    val capitalReserved = item.optDouble("capital_reserved_quote", Double.NaN)
+                    require(symbol.isNotBlank() && clientOrderId.isNotBlank() &&
+                        notional.isFinite() && notional > 0.0 &&
+                        stopDistance.isFinite() && stopDistance > 0.0 &&
+                        triggerPrice.isFinite() && triggerPrice > 0.0 &&
+                        protectivePrice.isFinite() && protectivePrice > 0.0 &&
+                        riskReserved.isFinite() && riskReserved > 0.0 && riskReserved <= maxTotalRiskPct &&
+                        capitalReserved.isFinite() && capitalReserved > 0.0) {
+                        "Persisted pending entry contains invalid risk/price/capital"
+                    }
                     pendingEntries[symbol] = PendingEntry(
                         symbol = symbol,
-                        clientOrderId = item.optString(
-                            "client_order_id"
-                        ),
-                        notional = item.optDouble(
-                            "notional",
-                            0.0
-                        ),
-                        stopDistance = item.optDouble(
-                            "stop_distance",
-                            0.02
-                        ),
-                        triggerPrice = item.optDouble("trigger_price", 0.0),
-                        protectivePrice = item.optDouble("protective_price", 0.0),
-                        riskReservedPct = item.optDouble("risk_reserved_pct", 0.0),
-                        capitalReservedQuote = item.optDouble("capital_reserved_quote", 0.0),
+                        clientOrderId = clientOrderId,
+                        notional = notional,
+                        stopDistance = stopDistance,
+                        triggerPrice = triggerPrice,
+                        protectivePrice = protectivePrice,
+                        riskReservedPct = riskReserved,
+                        capitalReservedQuote = capitalReserved,
                         campaignId = item.optString("campaign_id", ""),
                         signalId = item.optString("signal_id", ""),
                         signalType = item.optString("signal_type", "REVERSAL")
                     )
                 }
+            }.onFailure {
+                reconcileRequired = true
+                riskInputsHealthy = false
+                lastError = "RECONCILE_REQUIRED: persisted pending-entry state corrupt: " +
+                    (it.message ?: it.javaClass.simpleName)
+                stateMachine.force(TradingState.RECONCILE_REQUIRED, lastError!!)
             }
         }
 
         reconcileRequired =
-            prefs.getBoolean("reconcile_required", false)
+            reconcileRequired || prefs.getBoolean("reconcile_required", false)
         killLatched =
             prefs.getBoolean("kill_latched", false)
     }
@@ -1177,6 +1227,8 @@ private class NativeEngine(
                         ?: 0.0
                 }
             equityCircuitBreaker.reset(estimateManagedEquity())
+            riskInputsHealthy = equityCircuitBreaker.hasValidBaseline() &&
+                !equityCircuitBreaker.isTripped()
         } catch (x: Exception) {
             setReconcileRequired(
                 "startup exchange synchronization failed: " +
@@ -2608,9 +2660,10 @@ private class NativeEngine(
 
     private fun submitCampaignEntry(candidate: BaseAnalysis) {
         if (!campaignEngineEnabled || !candidate.campaignReady) return
-        if (reconcileRequired || paused || killLatched) return
-        if (positionList().any { it.symbol == candidate.symbol }) return
-        if (synchronized(pendingEntries) { pendingEntries.containsKey(candidate.symbol) }) return
+        if (reconcileRequired || paused || killLatched || !riskInputsHealthy ||
+            !equityCircuitBreaker.hasValidBaseline() || equityCircuitBreaker.isTripped()) return
+        if (positionList().isNotEmpty()) return
+        if (synchronized(pendingEntries) { pendingEntries.isNotEmpty() }) return
         if (positionList().size >= maxOpenPositions) return
 
         val signal = campaignEntryCandidate(candidate) ?: return
@@ -2620,7 +2673,7 @@ private class NativeEngine(
             campaignInitialRiskPct,
             min(maxRiskPerTradePct, remainingRisk)
         )
-        if (riskPct <= 0.0 || equity <= 0.0) return
+        if (!riskPct.isFinite() || riskPct <= 0.0 || !equity.isFinite() || equity <= 0.0) return
 
         val current = runCatching { currentCampaignPrice(candidate.symbol) }.getOrDefault(0.0)
         if (current <= 0.0) return
@@ -2638,13 +2691,25 @@ private class NativeEngine(
             pendingEntries.values.sumOf { it.capitalReservedQuote }
         }
         val usableCapital = max(0.0, freeUsdt - pendingCapital)
+        if (!equity.isFinite() || equity <= 0.0 || !effectiveLoss.isFinite() || effectiveLoss <= 0.0 ||
+            !freeUsdt.isFinite() || freeUsdt <= 0.0) return
         val notional = min(
             equity * 0.25,
             min(usableCapital * 0.95, riskQuote / effectiveLoss)
         )
-        val qty = floorStep(notional / trigger, rules.step)
-        if (qty <= 0.0 || qty < rules.minQty) return
-        if (qty * trigger < rules.minNotional) return
+        var qty = floorStep(notional / trigger, rules.step)
+        if (rules.marketStep > 0.0) qty = floorStep(qty, rules.marketStep)
+        val actualNotional = qty * trigger
+        val actualRiskQuote = actualNotional * effectiveLoss
+        if (!qty.isFinite() || qty <= 0.0 || qty < rules.minQty || qty > rules.maxQty) return
+        if (rules.marketStep > 0.0 && (qty < rules.marketMinQty || qty > rules.marketMaxQty)) return
+        if (!ExecutionMath.isMultiple(qty, rules.step)) return
+        if (rules.marketStep > 0.0 && !ExecutionMath.isMultiple(qty, rules.marketStep)) return
+        if (!actualNotional.isFinite() || actualNotional > notional + max(1e-10, notional * 1e-10)) return
+        if (!actualRiskQuote.isFinite() || actualRiskQuote > riskQuote + max(1e-8, riskQuote * 1e-9)) return
+        if (actualNotional < rules.minNotional || actualNotional > rules.maxNotional) return
+        if (trigger < rules.minPrice || trigger > rules.maxPrice) return
+        if (stop < rules.minPrice || stop > rules.maxPrice) return
 
         val existingBase = runCatching {
             campaignBaseBalance(candidate.symbol)
@@ -2686,6 +2751,16 @@ private class NativeEngine(
                 ) {
                     require(currentCampaignPrice(candidate.symbol) < trigger) {
                         "Campaign trigger already crossed; no market substitution"
+                    }
+                    val accountNow = signedAccount()
+                    val balancesNow = accountNow.getJSONArray("balances")
+                    val freeNow = (0 until balancesNow.length()).asSequence()
+                        .map { balancesNow.getJSONObject(it) }
+                        .firstOrNull { it.optString("asset") == "USDT" }
+                        ?.optString("free")?.toDoubleOrNull()
+                        ?: error("Fresh USDT free balance unavailable; entry blocked")
+                    require(freeNow.isFinite() && freeNow >= qty * trigger) {
+                        "Insufficient fresh free USDT for reserved campaign quantity"
                     }
                     checkCampaignOrderCapacity(candidate.symbol, 1)
                     if (
@@ -2834,19 +2909,81 @@ private class NativeEngine(
             ).optString("price").toDoubleOrNull()
             ?: 0.0
 
+    private fun restoreCampaignResidualProtection(
+        position: PositionState,
+        remaining: Double,
+        reason: String
+    ) {
+        val symbol = position.symbol
+        val numericTolerance = max(1e-12, position.initialQty * 1e-12)
+        val account = runCatching { signedAccount() }.getOrNull()
+        val available = if (account != null) {
+            runCatching { campaignBaseBalance(symbol, account) }.getOrDefault(0.0)
+        } else 0.0
+        val desiredExposure = if (remaining > numericTolerance) {
+            min(remaining, available.takeIf { it > 0.0 } ?: remaining)
+        } else {
+            min(position.qty, available)
+        }
+        // If exchange inventory cannot be read, preserve the old quantity as a
+        // conservative reservation and leave the position latched for recovery.
+        val storedQty = if (desiredExposure > numericTolerance) desiredExposure else position.qty
+        var updated = position.copy(
+            qty = storedQty,
+            protectiveOrderId = "",
+            campaignState = "RECONCILE_REQUIRED"
+        )
+        synchronized(positions) { positions[symbol] = updated }
+        savePersistedState()
+
+        var protectionNote = if (account == null) {
+            "account balance unavailable; residual protection not proven"
+        } else {
+            "no sellable residual quantity"
+        }
+        if (account != null && desiredExposure > numericTolerance) {
+            try {
+                val rules = symbolFilters(symbol)
+                val candidate = min(desiredExposure, available)
+                val marketStep = if (rules.marketStep > 0.0) rules.marketStep else rules.step
+                val protectedQty = floorStep(
+                    floorStep(candidate, rules.step),
+                    marketStep
+                )
+                val minQty = max(rules.minQty, rules.marketMinQty)
+                if (protectedQty > 0.0 && protectedQty >= minQty) {
+                    val protection = createCampaignStop(updated.copy(qty = protectedQty))
+                    val protectionId = protection.optString("orderId", "")
+                    require(protectionId.isNotBlank()) {
+                        "$symbol: residual protective stop returned no orderId"
+                    }
+                    val gap = max(0.0, desiredExposure - protectedQty)
+                    updated = updated.copy(protectiveOrderId = protectionId)
+                    protectionNote = "residual=$desiredExposure protected=$protectedQty gap=$gap"
+                } else {
+                    protectionNote =
+                        "residual=$desiredExposure cannot meet common LOT_SIZE/MARKET_LOT_SIZE minimum"
+                }
+            } catch (error: Throwable) {
+                protectionNote = "residual protection failed: " +
+                    (error.message ?: error.javaClass.simpleName)
+            }
+        }
+        synchronized(positions) { positions[symbol] = updated }
+        savePersistedState()
+        setReconcileRequired(reason + "; " + protectionNote)
+    }
+
     private fun campaignExitMarket(position: PositionState, reason: String) {
         val symbol = position.symbol
+        var submittedOrder: JSONObject? = null
+        var exitRequestAttempted = false
+        var exitClientOrderId = ""
         try {
             val stopId = position.protectiveOrderId.toLongOrNull()
             if (stopId != null) {
-                withCampaignMutation(
-                    symbol,
-                    "CAMPAIGN_EXIT_CANCEL_PROTECTION"
-                ) {
-                    signedDelete(
-                        "/api/v3/order",
-                        "symbol=" + symbol + "&orderId=" + stopId
-                    )
+                withCampaignMutation(symbol, "CAMPAIGN_EXIT_CANCEL_PROTECTION") {
+                    signedDelete("/api/v3/order", "symbol=" + symbol + "&orderId=" + stopId)
                     JSONObject()
                 }
             }
@@ -2859,11 +2996,11 @@ private class NativeEngine(
                 if (rules.marketStep > 0.0) rules.marketStep else rules.step
             )
             val minQty = if (rules.marketMinQty > 0.0) rules.marketMinQty else rules.minQty
-            require(qty >= minQty) {
-                symbol + ": campaign exit quantity below minimum"
-            }
+            require(qty >= minQty) { symbol + ": campaign exit quantity below minimum" }
 
             val cid = "W5X_" + System.nanoTime().toString(16)
+            exitClientOrderId = cid
+            exitRequestAttempted = true
             val order = withCampaignMutation(symbol, "CAMPAIGN_EXIT") {
                 signedPost(
                     "/api/v3/order",
@@ -2872,18 +3009,13 @@ private class NativeEngine(
                         "&quantity=" + fmtQty(
                             qty,
                             if (rules.marketStep > 0.0) {
-                                max(
-                                    0,
-                                    rules.marketStep.toString()
-                                        .substringAfter('.', "")
-                                        .trimEnd('0')
-                                        .length
-                                )
+                                max(0, rules.marketStep.toString().substringAfter('.', "").trimEnd('0').length)
                             } else rules.decimals
                         ) +
                         "&newClientOrderId=" + cid
                 )
             }
+            submittedOrder = order
             lastOrder = order
             val executed = order.optString("executedQty").toDoubleOrNull() ?: 0.0
             val quote = order.optString("cummulativeQuoteQty").toDoubleOrNull() ?: 0.0
@@ -2891,31 +3023,94 @@ private class NativeEngine(
                 symbol + ": campaign exit has no authoritative fill"
             }
 
-            val remaining = max(0.0, position.qty - executed)
-            if (remaining > max(0.000001, position.qty * 0.005)) {
-                setReconcileRequired(
-                    symbol + ": campaign exit partially filled; residual=" + remaining
+            val accounting = authoritativeSpotFill(symbol, order, "SELL", executed, quote)
+            val remainingByFill = max(0.0, position.qty - accounting.netQty)
+            val numericTolerance = max(1e-12, position.initialQty * 1e-12)
+            val remaining = if (accounting.feeKnown) {
+                remainingByFill
+            } else {
+                val balanceAfter = runCatching {
+                    campaignBaseBalance(symbol, signedAccount())
+                }.getOrDefault(remainingByFill)
+                min(remainingByFill, balanceAfter)
+            }
+            if (!accounting.feeKnown || remaining > numericTolerance) {
+                val conservativeRemaining = if (remaining > numericTolerance) remaining else position.qty
+                val updated = position.copy(
+                    qty = conservativeRemaining,
+                    realizedExitQuote = position.realizedExitQuote + accounting.quoteQty,
+                    realizedExitQty = position.realizedExitQty + accounting.grossQty,
+                    campaignState = "RECONCILE_REQUIRED",
+                    protectiveOrderId = ""
+                )
+                restoreCampaignResidualProtection(
+                    updated, remaining,
+                    if (!accounting.feeKnown) {
+                        symbol + ": exit fill/fee accounting is unknown"
+                    } else {
+                        symbol + ": campaign exit partially filled"
+                    }
                 )
                 return
             }
 
-            recordCompletedTrade(
-                position,
-                quote / executed,
-                reason,
-                order
-            )
+            recordCompletedTrade(position, quote / executed, reason, order)
             synchronized(positions) { positions.remove(symbol) }
             savePersistedState()
             stateMachine.force(
                 if (positionList().isEmpty()) TradingState.READY_FLAT else TradingState.PROTECTED,
                 "Williams campaign closed"
             )
-        } catch (x: Throwable) {
-            setReconcileRequired(
-                symbol + ": campaign exit failed: " +
-                    (x.message ?: x.javaClass.simpleName)
-            )
+        } catch (error: Throwable) {
+            var order = submittedOrder
+            if (order == null && exitRequestAttempted && exitClientOrderId.isNotBlank()) {
+                // Resolve by the stable client ID; never submit a replacement blindly.
+                order = runCatching {
+                    signedGet(
+                        "/api/v3/order",
+                        "symbol=" + symbol + "&origClientOrderId=" + exitClientOrderId
+                    )
+                }.getOrNull()
+            }
+            if (order != null) {
+                val executed = order.optString("executedQty").toDoubleOrNull() ?: 0.0
+                val quote = order.optString("cummulativeQuoteQty").toDoubleOrNull() ?: 0.0
+                val accounting = if (executed > 0.0 && quote > 0.0) {
+                    runCatching { authoritativeSpotFill(symbol, order, "SELL", executed, quote) }.getOrNull()
+                } else null
+                val inventoryDebit = accounting?.netQty ?: executed
+                val remaining = max(0.0, position.qty - inventoryDebit)
+                val updated = position.copy(
+                    qty = if (remaining > 1e-12) remaining else position.qty,
+                    realizedExitQuote = position.realizedExitQuote + (accounting?.quoteQty ?: quote),
+                    realizedExitQty = position.realizedExitQty + (accounting?.grossQty ?: executed),
+                    campaignState = "RECONCILE_REQUIRED",
+                    protectiveOrderId = ""
+                )
+                restoreCampaignResidualProtection(
+                    updated, remaining,
+                    symbol + ": campaign exit outcome/accounting unresolved: " +
+                        (error.message ?: error.javaClass.simpleName)
+                )
+            } else if (exitRequestAttempted) {
+                val remaining = runCatching {
+                    min(position.qty, campaignBaseBalance(symbol, signedAccount()))
+                }.getOrDefault(position.qty)
+                restoreCampaignResidualProtection(
+                    position.copy(
+                        qty = if (remaining > 1e-12) remaining else position.qty,
+                        campaignState = "RECONCILE_REQUIRED",
+                        protectiveOrderId = ""
+                    ),
+                    remaining,
+                    symbol + ": exit submission outcome unknown; client ID reconciliation required"
+                )
+            } else {
+                setReconcileRequired(
+                    symbol + ": campaign exit failed before submission: " +
+                        (error.message ?: error.javaClass.simpleName)
+                )
+            }
         }
     }
 
@@ -3049,6 +3244,7 @@ private class NativeEngine(
 
         val provisional = existing.copy(
             qty = newQty,
+            initialQty = existing.initialQty + qty,
             entry = newAvg,
             riskPct = existing.riskPct + intent.riskReservedPct,
             signalId = intent.signalId,
@@ -3126,27 +3322,211 @@ private class NativeEngine(
         }
     }
 
+    private data class FeeAdjustedSpotFill(
+        val grossQty: Double,
+        val netQty: Double,
+        val quoteQty: Double,
+        val feeQuote: Double,
+        val commissionBase: Double,
+        val feeKnown: Boolean
+    )
+
+    private fun authoritativeSpotFill(
+        symbol: String,
+        order: JSONObject,
+        side: String,
+        fallbackQty: Double,
+        fallbackQuote: Double
+    ): FeeAdjustedSpotFill {
+        val orderId = order.optString("orderId")
+        if (orderId.isBlank() || orderId == "-1") {
+            auditStore.markFeeAccountingUnknown(
+                symbol, orderId.ifBlank { "UNKNOWN" }, "order ID missing during fill accounting"
+            )
+            return FeeAdjustedSpotFill(fallbackQty, fallbackQty, fallbackQuote, 0.0, 0.0, false)
+        }
+        val expectedSide = side.trim().uppercase(Locale.US)
+        val baseAsset = symbol.removeSuffix("USDT").uppercase(Locale.US)
+        var grossQty = 0.0
+        var quoteQty = 0.0
+        var feeQuote = 0.0
+        var commissionBase = 0.0
+        var feeKnown = true
+        val rows = try {
+            JSONArray(
+                signedRawGet(
+                    "/api/v3/myTrades",
+                    "symbol=" + symbol + "&orderId=" + orderId + "&limit=1000"
+                )
+            )
+        } catch (error: Throwable) {
+            auditStore.markFeeAccountingUnknown(
+                symbol, orderId,
+                "myTrades request failed: " + (error.message ?: error.javaClass.simpleName)
+            )
+            return FeeAdjustedSpotFill(fallbackQty, fallbackQty, fallbackQuote, 0.0, 0.0, false)
+        }
+        if (rows.length() == 0) {
+            auditStore.markFeeAccountingUnknown(symbol, orderId, "myTrades returned no fills")
+            return FeeAdjustedSpotFill(fallbackQty, fallbackQty, fallbackQuote, 0.0, 0.0, false)
+        }
+
+        for (index in 0 until rows.length()) {
+            val fill = rows.optJSONObject(index)
+            if (fill == null) {
+                feeKnown = false
+                continue
+            }
+            val tradeId = fill.optString("id", "-1")
+            val fillOrderId = fill.optString("orderId")
+            val fillSymbol = fill.optString("symbol").uppercase(Locale.US)
+            val isBuyer = fill.optBoolean("isBuyer", false)
+            val qty = fill.optString("qty").toDoubleOrNull()
+            val price = fill.optString("price").toDoubleOrNull()
+            val quoteRaw = fill.optString("quoteQty").toDoubleOrNull()
+            val commissionRaw = fill.optString("commission").toDoubleOrNull()
+            val feeAsset = fill.optString("commissionAsset").trim().uppercase(Locale.US)
+            val fillTime = fill.optLong("time", 0L)
+            if (
+                tradeId.isBlank() || tradeId == "-1" ||
+                fillOrderId != orderId || fillSymbol != symbol.uppercase(Locale.US) ||
+                isBuyer != (expectedSide == "BUY") ||
+                qty == null || price == null ||
+                !qty.isFinite() || qty <= 0.0 ||
+                !price.isFinite() || price <= 0.0
+            ) {
+                feeKnown = false
+                continue
+            }
+            val quote = quoteRaw ?: (qty * price).also { feeKnown = false }
+            if (!quote.isFinite() || quote <= 0.0 || fillTime <= 0L) {
+                feeKnown = false
+                continue
+            }
+            grossQty += qty
+            quoteQty += quote
+            val commission = commissionRaw
+            if (commission == null || !commission.isFinite() || commission < 0.0 || feeAsset.isBlank()) {
+                feeKnown = false
+            } else if (commission > 0.0) {
+                when (feeAsset) {
+                    "USDT" -> feeQuote += commission
+                    baseAsset -> {
+                        commissionBase += commission
+                        feeQuote += commission * price
+                    }
+                    else -> {
+                        val conversion = historicalFeeConversionPriceUsdt(feeAsset, fillTime)
+                        if (conversion == null || !conversion.isFinite() || conversion <= 0.0) {
+                            feeKnown = false
+                        } else {
+                            feeQuote += commission * conversion
+                        }
+                    }
+                }
+            }
+            val event = JSONObject()
+                .put("e", "executionReport")
+                .put("x", "TRADE")
+                .put("s", symbol)
+                .put("i", orderId)
+                .put("t", tradeId)
+                .put("l", qty)
+                .put("L", price)
+                .put("n", commissionRaw?.toString() ?: "")
+                .put("N", feeAsset)
+                .put("T", fillTime)
+                .put("E", fillTime)
+                .put("X", "FILLED")
+                .put("S", expectedSide)
+            auditStore.recordUserEvent(event)
+        }
+
+        val expectedQty = order.optString("executedQty").toDoubleOrNull() ?: fallbackQty
+        val expectedQuote = order.optString("cummulativeQuoteQty").toDoubleOrNull() ?: fallbackQuote
+        val qtyTolerance = max(1e-12, max(abs(expectedQty), abs(grossQty)) * 1e-9)
+        val quoteTolerance = max(1e-8, max(abs(expectedQuote), abs(quoteQty)) * 1e-9)
+        if (
+            grossQty <= 0.0 ||
+            abs(grossQty - expectedQty) > qtyTolerance ||
+            abs(quoteQty - expectedQuote) > quoteTolerance
+        ) {
+            feeKnown = false
+        }
+        if (grossQty <= 0.0) {
+            grossQty = fallbackQty
+            quoteQty = fallbackQuote
+        } else if (abs(grossQty - expectedQty) > qtyTolerance ||
+            abs(quoteQty - expectedQuote) > quoteTolerance
+        ) {
+            // The order response is the authoritative aggregate for this order;
+            // balance reconciliation will determine net inventory below.
+            grossQty = expectedQty
+            quoteQty = expectedQuote
+        }
+        if (feeKnown) {
+            auditStore.clearFeeAccountingUnknown(symbol, orderId)
+        } else {
+            auditStore.markFeeAccountingUnknown(
+                symbol, orderId, "fill/fee history incomplete or inconsistent"
+            )
+        }
+        val netQty = if (expectedSide == "BUY") grossQty - commissionBase else grossQty + commissionBase
+        return FeeAdjustedSpotFill(
+            grossQty = grossQty,
+            netQty = netQty,
+            quoteQty = quoteQty,
+            feeQuote = feeQuote,
+            commissionBase = commissionBase,
+            feeKnown = feeKnown && netQty > 0.0 && netQty.isFinite()
+        )
+    }
+
     private fun applyCampaignFill(
         intent: PendingEntry,
         order: JSONObject,
         qty: Double,
         quote: Double
     ) {
+        val accounting = authoritativeSpotFill(
+            intent.symbol, order, "BUY", qty, quote
+        )
         val existing = synchronized(positions) { positions[intent.symbol] }
+        val availableBase = campaignBaseBalance(intent.symbol)
+        val availableForCampaign = if (existing != null) {
+            max(0.0, availableBase - existing.qty)
+        } else {
+            availableBase
+        }
+        val proposedQty = if (accounting.feeKnown) accounting.netQty else accounting.grossQty
+        val netQty = min(proposedQty, availableForCampaign)
+        if (!netQty.isFinite() || netQty <= 0.0 || accounting.quoteQty <= 0.0) {
+            setReconcileRequired(
+                intent.symbol + ": fill accounting yielded no safely protectable base inventory"
+            )
+            throw IllegalStateException(
+                intent.symbol + ": fill accounting unresolved; no new entry permitted"
+            )
+        }
         if (existing != null && existing.campaignId == intent.campaignId) {
             applyCampaignAddOnFill(
                 existing,
                 intent,
                 order,
-                qty,
-                quote
+                netQty,
+                accounting.quoteQty
             )
         } else {
             createCampaignPositionFromFill(
                 intent,
                 order,
-                qty,
-                quote
+                netQty,
+                accounting.quoteQty
+            )
+        }
+        if (!accounting.feeKnown) {
+            setReconcileRequired(
+                intent.symbol + ": exchange fill exists but fee/quantity accounting is unknown; exposure protected best-effort"
             )
         }
     }
@@ -3277,7 +3657,7 @@ private class NativeEngine(
                 }
                 lastOrder = emergency
                 val sold = emergency.optString("executedQty").toDoubleOrNull() ?: 0.0
-                if (sold + max(0.000001, qty * 0.005) >= qty) {
+                if (sold + max(1e-12, qty * 1e-12) >= qty) {
                     synchronized(pendingEntries) { pendingEntries.remove(intent.symbol) }
                     savePersistedState()
                     stateMachine.force(
@@ -3303,7 +3683,7 @@ private class NativeEngine(
             try {
                 val rules = symbolFilters(stored.symbol)
                 val actualBase = campaignBaseBalance(stored.symbol)
-                val tolerance = max(0.000001, stored.qty * 0.005)
+                val tolerance = max(1e-12, stored.initialQty * 1e-12)
                 require(actualBase + tolerance >= stored.qty) {
                     stored.symbol + ": campaign inventory below expected"
                 }
@@ -3491,7 +3871,9 @@ private class NativeEngine(
             .firstOrNull()
             ?: return
 
-        if (synchronized(pendingEntries) { pendingEntries.containsKey(candidate.symbol) }) return
+        if (synchronized(pendingEntries) { pendingEntries.isNotEmpty() }) return
+        val currentPrice = runCatching { currentCampaignPrice(candidate.symbol) }.getOrDefault(0.0)
+        if (!currentPrice.isFinite() || currentPrice <= position.entry) return
 
         val equity = estimateManagedEquity()
         val remainingCampaign =
@@ -3534,9 +3916,17 @@ private class NativeEngine(
             )
         )
         val qty = floorStep(notional / trigger, rules.step)
-        if (qty < rules.minQty || qty * trigger < rules.minNotional) return
-        if (
-            rules.maxPosition.isFinite() &&
+        if (!qty.isFinite() || qty <= 0.0 || qty < rules.minQty || qty > rules.maxQty) return
+        if (rules.marketStep > 0.0 && (qty < rules.marketMinQty || qty > rules.marketMaxQty)) return
+        if (!ExecutionMath.isMultiple(qty, rules.step)) return
+        if (rules.marketStep > 0.0 && !ExecutionMath.isMultiple(qty, rules.marketStep)) return
+        val addNotional = qty * trigger
+        val addEffectiveRisk = addNotional * effectiveLoss
+        if (!addNotional.isFinite() || addNotional > notional + max(1e-10, notional * 1e-10)) return
+        if (!addEffectiveRisk.isFinite() || addEffectiveRisk > riskQuote + max(1e-8, riskQuote * 1e-9)) return
+        if (addNotional < rules.minNotional || addNotional > rules.maxNotional) return
+        if (trigger < rules.minPrice || trigger > rules.maxPrice) return
+        if (rules.maxPosition.isFinite() &&
             campaignBaseBalance(candidate.symbol) + qty > rules.maxPosition
         ) return
 
@@ -4154,18 +4544,18 @@ private class NativeEngine(
                             ?.let { q -> if (qty > 0.0) q / qty else 0.0 }
                             ?.takeIf { it > 0.0 }
                             ?: stored.entry
-                        TradeJournal.close(
-                            prefs = prefs,
-                            symbol = stored.symbol,
-                            exitPrice = exitPrice,
-                            reason = "EMERGENCY_UNPROTECTED_EXIT",
-                            order = sell
-                        )
-                        recordCompletedTrade(
+                        val journalExitPrice = recordCompletedTrade(
                             stored = stored,
                             exitPrice = exitPrice,
                             reason = "EMERGENCY_UNPROTECTED_EXIT",
                             raw = sell
+                        )
+                        TradeJournal.close(
+                            prefs = prefs,
+                            symbol = stored.symbol,
+                            exitPrice = journalExitPrice,
+                            reason = "EMERGENCY_UNPROTECTED_EXIT",
+                            order = sell
                         )
                         synchronized(positions) {
                             positions.remove(stored.symbol)
@@ -4202,29 +4592,113 @@ private class NativeEngine(
         }
     }
 
+    private fun historicalFeeConversionPriceUsdt(asset: String, timestampMs: Long): Double? {
+        val normalized = asset.trim().uppercase()
+        if (normalized.isBlank() || normalized == "USDT" || timestampMs <= 0L) return null
+        val minuteStart = timestampMs - (timestampMs % 60_000L)
+        val candidates = listOf(
+            (normalized + "USDT") to false,
+            ("USDT" + normalized) to true
+        )
+        for ((pair, inverse) in candidates) {
+            try {
+                val encoded = URLEncoder.encode(pair, StandardCharsets.UTF_8.name())
+                val path = "/api/v3/klines?symbol=" + encoded +
+                    "&interval=1m&startTime=" + minuteStart +
+                    "&endTime=" + (minuteStart + 60_000L) +
+                    "&limit=1"
+                val rows = JSONArray(getBody(path))
+                if (rows.length() == 0) continue
+                val close = rows.getJSONArray(0).optString(4).toDoubleOrNull() ?: continue
+                if (!close.isFinite() || close <= 0.0) continue
+                val quotePerAsset = if (inverse) 1.0 / close else close
+                if (quotePerAsset.isFinite() && quotePerAsset > 0.0) return quotePerAsset
+            } catch (_: Exception) {
+                // Try inverse pair; if neither has a historical candle, fee remains unknown.
+            }
+        }
+        return null
+    }
+
     private fun recordCompletedTrade(
         stored: PositionState,
         exitPrice: Double,
         reason: String,
         raw: JSONObject?
-    ) {
+    ): Double {
         val closedAt = System.currentTimeMillis()
-        val gross =
-            (exitPrice - stored.entry) * stored.qty
+        val entryOrderId = stored.entryOrderId
+        if (entryOrderId.isBlank() || entryOrderId == "0") {
+            setReconcileRequired(stored.symbol + ": entry order identity missing for fee reconciliation")
+            throw IllegalStateException(stored.symbol + ": entry order identity missing")
+        }
+        val entryOrder = signedGet(
+            "/api/v3/order",
+            "symbol=" + stored.symbol + "&orderId=" + entryOrderId
+        )
+        val entryQty = entryOrder.optString("executedQty").toDoubleOrNull() ?: 0.0
+        val entryQuote = entryOrder.optString("cummulativeQuoteQty").toDoubleOrNull() ?: 0.0
+        val entryAccounting = authoritativeSpotFill(
+            stored.symbol, entryOrder, "BUY", entryQty, entryQuote
+        )
+        if (!entryAccounting.feeKnown) {
+            setReconcileRequired(
+                stored.symbol + ": authoritative entry fee/quantity reconciliation incomplete"
+            )
+            throw IllegalStateException(stored.symbol + ": entry fees remain unknown")
+        }
+        val exitOrder = raw ?: run {
+            setReconcileRequired(stored.symbol + ": exit order identity missing for fee reconciliation")
+            throw IllegalStateException(stored.symbol + ": exit order identity missing")
+        }
+        val exitOrderId = exitOrder.optString("orderId")
+        val exitQty = exitOrder.optString("executedQty").toDoubleOrNull() ?: 0.0
+        val exitQuote = exitOrder.optString("cummulativeQuoteQty").toDoubleOrNull() ?: 0.0
+        val exitAccounting = authoritativeSpotFill(
+            stored.symbol, exitOrder, "SELL", exitQty, exitQuote
+        )
+        if (!exitAccounting.feeKnown) {
+            setReconcileRequired(
+                stored.symbol + ": authoritative exit fee/quantity reconciliation incomplete"
+            )
+            throw IllegalStateException(stored.symbol + ": exit fees remain unknown")
+        }
+
         val (feeUsdt, feeKnown) =
             auditStore.estimateFeesUsdt(
                 symbol = stored.symbol,
                 openedAt = stored.openedAt,
                 closedAt = closedAt,
-                exitPrice = exitPrice
+                exitPrice = exitPrice,
+                historicalFeePrice = { asset, timestamp ->
+                    historicalFeeConversionPriceUsdt(asset, timestamp)
+                }
             )
+        if (!feeKnown) {
+            setReconcileRequired(
+                stored.symbol + ": commission valuation is incomplete; trade closure and new entries blocked"
+            )
+            throw IllegalStateException(
+                stored.symbol + ": unknown/unvalued commission; authoritative fee reconciliation required"
+            )
+        }
+        val totalExitQuote = stored.realizedExitQuote + exitAccounting.quoteQty
+        val totalSoldQty = stored.realizedExitQty + exitAccounting.grossQty
+        if (!totalExitQuote.isFinite() || totalExitQuote <= 0.0 ||
+            !totalSoldQty.isFinite() || totalSoldQty <= 0.0
+        ) {
+            setReconcileRequired(stored.symbol + ": cumulative exit accounting invalid")
+            throw IllegalStateException(stored.symbol + ": cumulative exit accounting invalid")
+        }
+        val weightedExitPrice = totalExitQuote / totalSoldQty
+        val gross = totalExitQuote - stored.entry * stored.initialQty
         val net = gross - feeUsdt
         val risk =
             ((stored.entry - stored.stop) / stored.entry)
                 .coerceAtLeast(0.000001)
         val rMultiple =
             if (stored.entry > 0.0) {
-                (net / (stored.entry * stored.qty)) / risk
+                (net / (stored.entry * stored.initialQty)) / risk
             } else 0.0
         val outcome =
             when {
@@ -4239,9 +4713,9 @@ private class NativeEngine(
                     stored.entryOrderId,
             symbol = stored.symbol,
             entryPrice = stored.entry,
-            exitPrice = exitPrice,
-            qty = stored.qty,
-            notionalUsdt = stored.entry * stored.qty,
+            exitPrice = weightedExitPrice,
+            qty = stored.initialQty,
+            notionalUsdt = stored.entry * stored.initialQty,
             grossPnl = gross,
             netPnl = net,
             rMultiple = rMultiple,
@@ -4253,6 +4727,7 @@ private class NativeEngine(
             feeUsdt = feeUsdt,
             feeKnown = feeKnown
         )
+        return weightedExitPrice
     }
 
     private fun handleUserEvent(event: JSONObject) {
@@ -4532,12 +5007,27 @@ private class NativeEngine(
                         )
                     }
 
+                    val accounting = authoritativeSpotFill(
+                        intent.symbol, order, "BUY", qty, quote
+                    )
+                    val availableBase = runCatching {
+                        campaignBaseBalance(intent.symbol, signedAccount())
+                    }.getOrDefault(0.0)
+                    val proposedQty = if (accounting.feeKnown) accounting.netQty else accounting.grossQty
+                    val positionQty = min(proposedQty, availableBase)
+                    val positionQuote = accounting.quoteQty.takeIf { it > 0.0 } ?: quote
+                    if (!positionQty.isFinite() || positionQty <= 0.0 || positionQuote <= 0.0) {
+                        setReconcileRequired(
+                            intent.symbol + ": filled BUY has no safely protectable net base quantity"
+                        )
+                        return
+                    }
                     val lists =
                         signedGet(
                             "/api/v3/openOrderList",
                             ""
                         )
-                    val entryPrice = quote / qty
+                    val entryPrice = positionQuote / positionQty
 
                     val existingBotOco =
                         (lists.optJSONArray("orderList")
@@ -4558,7 +5048,7 @@ private class NativeEngine(
                         if (existingBotOco != null) {
                             adoptExistingProtection(
                                 symbol = intent.symbol,
-                                qty = qty,
+                                qty = positionQty,
                                 entry = entryPrice,
                                 stopDistance = intent.stopDistance,
                                 oco = existingBotOco
@@ -4577,7 +5067,7 @@ private class NativeEngine(
                             }
                             createProtection(
                                 symbol = intent.symbol,
-                                qty = qty,
+                                qty = positionQty,
                                 entry = entryPrice,
                                 stopDistance = intent.stopDistance
                             )
@@ -4587,7 +5077,7 @@ private class NativeEngine(
                         positions[intent.symbol] =
                             PositionState(
                                 symbol = intent.symbol,
-                                qty = protection.qty,
+                                qty = positionQty,
                                 entry = entryPrice,
                                 stop = protection.stop,
                                 take = protection.take,
@@ -4614,6 +5104,17 @@ private class NativeEngine(
                         )
                     }
                     savePersistedState()
+                    val quantityTolerance = max(1e-12, positionQty * 1e-12)
+                    if (
+                        !accounting.feeKnown ||
+                        abs(protection.qty - positionQty) > quantityTolerance
+                    ) {
+                        setReconcileRequired(
+                            intent.symbol + ": entry fee accounting unknown or protective quantity gap=" +
+                                abs(positionQty - protection.qty)
+                        )
+                        return
+                    }
                 }
 
                 "CANCELED", "EXPIRED", "REJECTED" -> {
@@ -4749,7 +5250,8 @@ private class NativeEngine(
             }
 
         val updated = mutableListOf<PositionState>()
-        val minRecoveryQty = 0.000001
+        val minRecoveryQty = 1e-12
+        var partialExitDetected = false
 
         for (stored in positionList()) {
             if (
@@ -4834,14 +5336,7 @@ private class NativeEngine(
 
             val expectedRemaining =
                 max(0.0, stored.qty - soldQty)
-            val tolerance =
-                max(
-                    minRecoveryQty,
-                    max(
-                        expectedRemaining,
-                        stored.qty
-                    ) * 0.005
-                )
+            val tolerance = max(1e-12, stored.initialQty * 1e-12)
 
             if (soldQty > 0.0 && expectedRemaining <= minRecoveryQty) {
                 if (total > tolerance) {
@@ -4891,18 +5386,33 @@ private class NativeEngine(
                             "BOT_OCO_EXIT"
                     }
 
-                TradeJournal.close(
-                    prefs = prefs,
-                    symbol = stored.symbol,
-                    exitPrice = exitPrice,
-                    reason = reason,
-                    order = lastExit
+                val lastExitQty = lastExit.optString("executedQty").toDoubleOrNull() ?: 0.0
+                val lastExitQuote = lastExit.optString("cummulativeQuoteQty").toDoubleOrNull() ?: 0.0
+                val lastExitAccounting = authoritativeSpotFill(
+                    stored.symbol, lastExit, "SELL", lastExitQty, lastExitQuote
                 )
-                recordCompletedTrade(
-                    stored = stored,
+                if (!lastExitAccounting.feeKnown) {
+                    throw IllegalStateException(
+                        stored.symbol + ": OCO exit fill/fee accounting is unknown"
+                    )
+                }
+                val priorExitQuote = max(0.0, soldQuote - lastExitAccounting.quoteQty)
+                val priorExitQty = max(0.0, soldQty - lastExitAccounting.grossQty)
+                val journalExitPrice = recordCompletedTrade(
+                    stored = stored.copy(
+                        realizedExitQuote = priorExitQuote,
+                        realizedExitQty = priorExitQty
+                    ),
                     exitPrice = exitPrice,
                     reason = reason,
                     raw = lastExit
+                )
+                TradeJournal.close(
+                    prefs = prefs,
+                    symbol = stored.symbol,
+                    exitPrice = journalExitPrice,
+                    reason = reason,
+                    order = lastExit
                 )
                 continue
             }
@@ -4938,10 +5448,14 @@ private class NativeEngine(
                 )
             }
 
+            if (soldQty > 0.0 && expectedRemaining > minRecoveryQty) {
+                partialExitDetected = true
+            }
             var current =
                 stored.copy(
-                    qty = expectedRemaining
-                        .coerceAtMost(total)
+                    qty = expectedRemaining.coerceAtMost(total),
+                    realizedExitQuote = soldQuote,
+                    realizedExitQty = soldQty
                 )
 
             val protected =
@@ -5010,6 +5524,11 @@ private class NativeEngine(
             }
         }
         savePersistedState()
+        if (partialExitDetected) {
+            setReconcileRequired(
+                "Partial managed OCO exit detected; residual inventory/protection requires reconciliation"
+            )
+        }
     }
 
     private fun hasAnyOpenListForSymbol(
@@ -5123,13 +5642,17 @@ private class NativeEngine(
     }
 
     private fun normalizePrice(price: Double, tick: Double): Double {
-        if (price <= 0.0 || tick <= 0.0) return price
-        return floor(price / tick + 1e-12) * tick
+        require(price.isFinite() && price > 0.0 && tick.isFinite() && tick > 0.0) {
+            "Price and PRICE_FILTER tick must be finite and positive"
+        }
+        return ExecutionMath.priceToTick(price, tick)
     }
 
     private fun normalizeTriggerPrice(price: Double, tick: Double): Double {
-        if (price <= 0.0 || tick <= 0.0) return price
-        return ceil(price / tick - 1e-12) * tick
+        require(price.isFinite() && price > 0.0 && tick.isFinite() && tick > 0.0) {
+            "Trigger price and PRICE_FILTER tick must be finite and positive"
+        }
+        return ExecutionMath.ceilToStep(price, tick)
     }
 
     private fun symbolFilters(symbol: String): SymbolRules {
@@ -5139,13 +5662,16 @@ private class NativeEngine(
         val row = info.getJSONArray("symbols").getJSONObject(0)
         val filters = row.getJSONArray("filters")
 
-        var step = 0.000001
-        var minQty = 0.0
-        var maxQty = Double.POSITIVE_INFINITY
+        var step = 0.0
+        var minQty = Double.NaN
+        var maxQty = Double.NaN
         var marketStep = 0.0
         var marketMinQty = 0.0
         var marketMaxQty = Double.POSITIVE_INFINITY
-        var tick = 0.000001
+        var tick = 0.0
+        var hasLotSize = false
+        var hasPriceFilter = false
+        var hasNotionalFilter = false
         var minPrice = 0.0
         var maxPrice = Double.POSITIVE_INFINITY
         var minNotional = 0.0
@@ -5166,6 +5692,7 @@ private class NativeEngine(
             val f = filters.getJSONObject(i)
             when (f.optString("filterType")) {
                 "LOT_SIZE" -> {
+                    hasLotSize = true
                     step = f.optString("stepSize").toDoubleOrNull() ?: step
                     minQty = f.optString("minQty").toDoubleOrNull() ?: minQty
                     maxQty = f.optString("maxQty").toDoubleOrNull() ?: maxQty
@@ -5176,17 +5703,20 @@ private class NativeEngine(
                     marketMaxQty = f.optString("maxQty").toDoubleOrNull() ?: marketMaxQty
                 }
                 "PRICE_FILTER" -> {
+                    hasPriceFilter = true
                     tick = f.optString("tickSize").toDoubleOrNull() ?: tick
                     minPrice = f.optString("minPrice").toDoubleOrNull() ?: minPrice
                     maxPrice = f.optString("maxPrice").toDoubleOrNull() ?: maxPrice
                 }
                 "MIN_NOTIONAL" -> {
+                    hasNotionalFilter = true
                     minNotional = max(
                         minNotional,
                         f.optString("minNotional").toDoubleOrNull() ?: 0.0
                     )
                 }
                 "NOTIONAL" -> {
+                    hasNotionalFilter = true
                     minNotional = max(
                         minNotional,
                         f.optString("minNotional").toDoubleOrNull() ?: 0.0
@@ -5226,6 +5756,18 @@ private class NativeEngine(
             }
         }
 
+        require(hasLotSize && step.isFinite() && step > 0.0 &&
+            minQty.isFinite() && minQty >= 0.0 && maxQty.isFinite() && maxQty > 0.0 &&
+            minQty <= maxQty) { symbol + ": LOT_SIZE filter missing or invalid" }
+        require(hasPriceFilter && tick.isFinite() && tick > 0.0 &&
+            minPrice.isFinite() && minPrice >= 0.0 && maxPrice > 0.0 &&
+            (!maxPrice.isFinite() || maxPrice >= minPrice)) {
+            symbol + ": PRICE_FILTER missing or invalid"
+        }
+        require(hasNotionalFilter && minNotional.isFinite() && minNotional > 0.0 &&
+            (!maxNotional.isFinite() || maxNotional >= minNotional)) {
+            symbol + ": NOTIONAL/MIN_NOTIONAL filter missing or invalid"
+        }
         val decimals = max(
             0,
             step.toString().substringAfter('.', "").trimEnd('0').length
@@ -5277,7 +5819,7 @@ private class NativeEngine(
     }
 
     private fun floorStep(value: Double, step: Double): Double =
-        if (step <= 0.0) value else ExecutionMath.floorToStep(value, step)
+        ExecutionMath.floorToStep(value, step)
 
     private fun fmtQty(value: Double, decimals: Int): String =
         ExecutionMath.floorToScale(value, decimals)
@@ -5507,27 +6049,16 @@ private class NativeEngine(
                 estimateManagedEquity(),
                 now
             )
-            if (snapshot.tripped) {
-                circuitBreakerTripInProgress = true
-                lastError =
-                    "AUTOMATIC CIRCUIT BREAKER: managed equity drawdown " +
-                        "%.2f%%".format(
-                            Locale.US,
-                            snapshot.drawdownPct * 100.0
-                        )
-                Thread {
-                    try {
-                        kill()
-                    } finally {
-                        circuitBreakerTripInProgress = false
-                    }
-                }.apply {
-                    isDaemon = true
-                    name = "williams-equity-circuit-breaker"
-                    start()
-                }
+            riskInputsHealthy = snapshot.baselineValid && !snapshot.tripped
+            if (!snapshot.baselineValid) {
+                lastError = "Daily equity baseline is unknown or stale; new entries blocked"
+            } else if (snapshot.tripped) {
+                // Keep exchange-side protective orders working. The daily breaker
+                // blocks new entries; it must not cancel protection on open risk.
+                lastError = "Daily equity-loss limit reached; new entries blocked"
             }
         }.onFailure {
+            riskInputsHealthy = false
             lastError =
                 "equity monitor: " +
                     (it.message ?: it.javaClass.simpleName)
@@ -6320,18 +6851,18 @@ private class NativeEngine(
                             getBody("/api/v3/ticker/price?symbol=" + symbol)
                         ).optString("price").toDoubleOrNull() ?: stored.entry
                     }.getOrDefault(stored.entry)
-            TradeJournal.close(
-                prefs = prefs,
-                symbol = symbol,
-                exitPrice = exitPrice,
-                reason = "MANUAL_SELL",
-                order = sell
-            )
-            recordCompletedTrade(
+            val journalExitPrice = recordCompletedTrade(
                 stored = stored,
                 exitPrice = exitPrice,
                 reason = "MANUAL_SELL",
                 raw = sell
+            )
+            TradeJournal.close(
+                prefs = prefs,
+                symbol = symbol,
+                exitPrice = journalExitPrice,
+                reason = "MANUAL_SELL",
+                order = sell
             )
             synchronized(positions) {
                 positions.remove(symbol)
@@ -7539,32 +8070,43 @@ private class NativeEngine(
 
 
     private fun dailyTradeGuard(): JSONObject {
-        val start = Calendar.getInstance().apply {
+        val start = Calendar.getInstance(TimeZone.getTimeZone("UTC")).apply {
             set(Calendar.HOUR_OF_DAY, 0)
             set(Calendar.MINUTE, 0)
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
         }.timeInMillis
+
+        val journalHealthy = TradeJournal.isHealthy(prefs)
         val rows = TradeJournal.trades(prefs)
         var count = 0
         var pnl = 0.0
+        var pnlDataValid = journalHealthy
+        var dailyLosses = 0
         var consecutiveLosses = 0
         var lastLossAt = 0L
-        for (i in 0 until rows.length()) {
-            val row = rows.getJSONObject(i)
-            val closedAt = row.optLong("closed_at", 0L)
-            if (closedAt < start || row.optString("status") != "CLOSED") continue
-            count++
-            pnl += row.optDouble("pnl", 0.0)
-        }
         val closedToday = mutableListOf<JSONObject>()
+
         for (i in 0 until rows.length()) {
-            val row = rows.getJSONObject(i)
-            val closedAt = row.optLong("closed_at", 0L)
-            if (closedAt >= start && row.optString("status") == "CLOSED") {
-                closedToday.add(row)
+            val row = rows.optJSONObject(i)
+            if (row == null) {
+                pnlDataValid = false
+                continue
             }
+            if (row.optString("status") != "CLOSED") continue
+            val closedAt = row.optLong("closed_at", 0L)
+            val rowPnl = row.optDouble("pnl", Double.NaN)
+            if (closedAt <= 0L || !rowPnl.isFinite()) {
+                pnlDataValid = false
+                continue
+            }
+            if (closedAt < start) continue
+            count++
+            pnl += rowPnl
+            closedToday.add(row)
+            if (rowPnl < 0.0) dailyLosses++
         }
+
         closedToday.sortByDescending { it.optLong("closed_at", 0L) }
         for (row in closedToday) {
             when (row.optString("outcome").uppercase(Locale.US)) {
@@ -7578,17 +8120,28 @@ private class NativeEngine(
         val cooldown = consecutiveLosses >= 2 && lastLossAt > 0L &&
             System.currentTimeMillis() - lastLossAt < 30L * 60L * 1000L
         val hardPause = consecutiveLosses >= 3
+        val stopLimitReached = dailyLosses >= 2
+        val breakerBlocked = equityCircuitBreaker.isTripped() ||
+            !equityCircuitBreaker.hasValidBaseline() || !riskInputsHealthy
+        val allow = pnlDataValid && !stopLimitReached && !cooldown && !hardPause && !breakerBlocked
+        val mode = when {
+            !pnlDataValid -> "RISK_DATA_UNKNOWN"
+            stopLimitReached -> "DAILY_STOP_LIMIT"
+            hardPause -> "PAUSED"
+            cooldown -> "COOLDOWN"
+            breakerBlocked -> "EQUITY_BREAKER_OR_UNKNOWN"
+            else -> "ACTIVE"
+        }
         return JSONObject()
             .put("trades_today", count)
-            .put("daily_pnl_usdt", pnl)
+            .put("daily_pnl_usdt", if (pnlDataValid) pnl else JSONObject.NULL)
+            .put("daily_stop_outs", dailyLosses)
+            .put("risk_data_valid", pnlDataValid)
+            .put("allow", allow)
             .put("consecutive_losses", consecutiveLosses)
-            .put("allow", !cooldown && !hardPause)
-            .put("mode", when {
-                hardPause -> "PAUSED"
-                cooldown -> "COOLDOWN"
-                else -> "ACTIVE"
-            })
+            .put("mode", mode)
     }
+
 
     private fun startRestDataProbe() {
         if (restProbeRunning) return
@@ -7837,7 +8390,7 @@ private class NativeEngine(
             .put("stop_loss_pct", 0.02)
             .put("take_profit_pct", if (campaignEngineEnabled) 0.0 else 0.04)
             .put("risk_per_trade_pct", maxRiskPerTradePct)
-            .put("max_daily_loss_pct", 0.03)
+            .put("max_daily_loss_pct", 0.01)
             .put("trades_today", dailyGuard.optInt("trades_today", 0))
             .put("daily_pnl_usdt", dailyGuard.optDouble("daily_pnl_usdt", 0.0))
             .put("consecutive_losses", dailyGuard.optInt("consecutive_losses", 0))
@@ -8305,7 +8858,7 @@ private class NativeEngine(
             .put("campaign_trail_bars", campaignTrailBars)
             .put("symbol", primarySymbol)
             .put("interval", interval)
-            .put("position_fraction", 0.95)
+            .put("position_fraction", 0.25)
             .put("stop_loss_pct", 0.02)
             .put("take_profit_pct", 0.04)
             .put("poll_seconds", 10)
@@ -8320,7 +8873,7 @@ private class NativeEngine(
             .put("startup_history_frames", startupFrames.joinToString(","))
             .put("testnet_live_execution", true)
             .put("risk_per_trade_pct", maxRiskPerTradePct)
-            .put("max_daily_loss_pct", 0.03)
+            .put("max_daily_loss_pct", 0.01)
             .put("max_trades_per_day", 0)
             .put("max_consecutive_losses", 3)
             .put("cooldown_minutes", 30)

@@ -52,8 +52,8 @@ def make_controller():
     controller = PortfolioController.__new__(PortfolioController)
     controller.client = FakeClient()
     controller.max_open_positions = 1
-    controller.max_total_risk_pct = 0.01
-    controller.max_risk_per_trade_pct = 0.005
+    controller.max_total_risk_pct = 0.006
+    controller.max_risk_per_trade_pct = 0.0025
     controller.min_risk_allocation_pct = 0.001
     controller.scanner = type("Scanner", (), {
         "max_spread_pct": 0.0015,
@@ -62,7 +62,7 @@ def make_controller():
 
     controller.risk_engine = RiskEngine(
         balance_quote=10000,
-        risk_per_trade_pct=0.005,
+        risk_per_trade_pct=0.0025,
         max_position_fraction=0.25,
         min_rr=1.5,
         max_atr_pct=0.08,
@@ -222,7 +222,7 @@ if __name__ == "__main__":
     main()
 
 
-def test_portfolio_risk_caps_total_at_one_percent():
+def test_portfolio_risk_caps_total_at_point_six_percent():
     controller = make_controller()
 
     candidates = []
@@ -239,10 +239,10 @@ def test_portfolio_risk_caps_total_at_one_percent():
     selections = controller.select_portfolio(open_risk_quote=0.0, open_positions=0)
 
     assert len(selections) == 1
-    assert all(s.risk.risk_pct <= 0.5 for s in selections)
-    assert abs(sum(s.risk.risk_pct for s in selections) - 0.5) < 1e-9
+    assert all(s.risk.risk_pct <= 0.25 for s in selections)
+    assert abs(sum(s.risk.risk_pct for s in selections) - 0.25) < 1e-9
     assert [s.candidate.symbol for s in selections] == ["BTCUSDT"]
-    print("[PASS] one-position cap + portfolio risk <= 1%, per trade <= 0.5%")
+    print("[PASS] one-position cap + portfolio risk <= 0.6%, per trade <= 0.25%")
 
 
 def test_portfolio_respects_existing_risk():

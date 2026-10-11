@@ -4,7 +4,7 @@ from risk_engine import RiskEngine
 def test_good_trade():
     engine = RiskEngine(
         balance_quote=10000,
-        risk_per_trade_pct=0.01,
+        risk_per_trade_pct=0.0025,
         max_position_fraction=0.25,
         min_rr=1.5,
     )
@@ -23,7 +23,7 @@ def test_good_trade():
     assert result.stop_price == 98000
     assert result.take_profit_price == 104000
     assert result.risk_reward == 2.0
-    assert result.risk_quote == 100
+    assert result.risk_quote == 25
     assert result.position_quote > 0
     assert 0 < result.score <= 100
 
@@ -31,7 +31,7 @@ def test_good_trade():
 def test_risk_based_position_size():
     engine = RiskEngine(
         balance_quote=10000,
-        risk_per_trade_pct=0.01,
+        risk_per_trade_pct=0.0025,
         max_position_fraction=0.25,
     )
 
@@ -46,12 +46,12 @@ def test_risk_based_position_size():
 
     # ATR = 1% of price.
     # Stop = 2 ATR = 2%.
-    # Risk = 100 USDT.
-    # Position = 100 / 0.02 = 5000 USDT.
-    # Exposure cap = 2500 USDT.
+    # Risk = 25 USDT (0.25% of equity).
+    # Effective loss fraction = 2% stop + 0.20% fees + 0.15% slippage.
+    # Position is capped by risk and by the 25% exposure ceiling.
     assert result.allowed is True
-    assert result.position_quote == 2500
-    assert result.risk_quote == 100
+    assert abs(result.position_quote - (25 / 0.0235)) < 1e-6
+    assert result.risk_quote == 25
 
 
 def test_high_atr_is_blocked():
@@ -194,7 +194,7 @@ def test_extreme_atr_is_blocked():
 test_extreme_atr_is_blocked()
 
 
-def test_default_risk_is_half_percent():
+def test_default_risk_is_quarter_percent():
     engine = RiskEngine(balance_quote=10000)
     result = engine.analyse(
         symbol="BTCUSDT",
@@ -205,6 +205,6 @@ def test_default_risk_is_half_percent():
         spread_pct=0.0002,
     )
     assert result.allowed is True
-    assert result.risk_quote == 50
-    assert result.risk_pct == 0.5
-    print("[PASS] default per-trade risk is 0.5%")
+    assert result.risk_quote == 25
+    assert result.risk_pct == 0.25
+    print("[PASS] default per-trade risk is 0.25%")

@@ -1,10 +1,13 @@
 from decimal import Decimal
 from pathlib import Path
+import pytest
 
 from execution_accumulator import accumulate_fills, accumulate_order
 from hypothesis_engine import build_hypotheses
 from market_context import TFMarketContext
 from db import Database
+from execution_barrier import ExecutionBarrier, ExecutionPersistenceError, OrderIntent
+from market_context import ContextCache
 
 
 def test_execution_accumulator_vwap():
@@ -72,3 +75,50 @@ def test_market_context_persistence(tmp_path: Path):
     ).fetchone()
     assert row["version"] == 3
     assert '"long_probability": 0.7' in row["context_json"]
+
+
+def _campaign_intent():
+    return OrderIntent.new(
+        "BTCUSDT",
+        "BUY",
+        "MARKET",
+        required_context_versions={},
+        purpose="CAMPAIGN_ENTRY",
+        client_order_id="WILLV5_ENTRY_TEST",
+        campaign_id="campaign-test",
+    )
+
+
+def test_execution_barrier_blocks_order_when_intent_write_fails():
+    db = Database(":memory:")
+    barrier = ExecutionBarrier(ContextCache(), db)
+    db.save_execution_intent = lambda *args: (_ for _ in ()).throw(OSError("disk write failed"))
+    submitted = []
+    with pytest.raises(ExecutionPersistenceError):
+        barrier.execute(_campaign_intent(), lambda: submitted.append("sent"))
+    assert submitted == []
+    assert db.conn.execute("SELECT COUNT(*) FROM execution_intents").fetchone()[0] == 0
+
+
+def test_execution_barrier_blocks_order_when_intent_readback_fails():
+    db = Database(":memory:")
+    original_connection = db.conn
+
+    class ReadbackFailure:
+        def __getattr__(self, name):
+            return getattr(original_connection, name)
+
+        def execute(self, sql, *args):
+            if "FROM execution_intents WHERE intent_id" in sql:
+                raise OSError("read-after-commit failed")
+            return original_connection.execute(sql, *args)
+
+    db.conn = ReadbackFailure()
+    barrier = ExecutionBarrier(ContextCache(), db)
+    submitted = []
+    with pytest.raises(ExecutionPersistenceError, match="persistence/readback failed"):
+        barrier.execute(_campaign_intent(), lambda: submitted.append("sent"))
+    assert submitted == []
+    assert original_connection.execute(
+        "SELECT COUNT(*) FROM execution_intents"
+    ).fetchone()[0] == 1

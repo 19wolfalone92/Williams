@@ -14,6 +14,8 @@ from portfolio_trader import MultiPositionTrader
 
 class FakeClient:
     testnet = True
+    # Non-secret deterministic account identity for offline intent tests.
+    api_key = "offline-test-account-key"
 
     def __init__(self):
         self.order_map = {}
@@ -56,6 +58,30 @@ class FakeClient:
 
     def all_orders(self, symbol, limit=1000):
         return list(self.orders_by_symbol.get(symbol.upper(), []))[-limit:]
+
+    def my_trades(self, symbol, order_id=None, limit=1000):
+        # Test-only authoritative exchange trade rows; zero commission is explicit.
+        rows = []
+        for order in self.all_orders(symbol, limit=1000):
+            if order_id is not None and str(order.get("orderId")) != str(order_id):
+                continue
+            qty = float(order.get("executedQty", 0) or 0)
+            quote = float(order.get("cummulativeQuoteQty", 0) or 0)
+            if qty <= 0 or quote <= 0:
+                continue
+            rows.append({
+                "id": f"test-trade-{order.get('orderId')}",
+                "orderId": order.get("orderId"),
+                "symbol": symbol.upper(),
+                "isBuyer": str(order.get("side", "")).upper() == "BUY",
+                "qty": str(qty),
+                "price": str(quote / qty),
+                "quoteQty": str(quote),
+                "commission": "0",
+                "commissionAsset": "USDT",
+                "time": int(order.get("time", order.get("transactTime", 1)) or 1),
+            })
+        return rows[-limit:]
 
     def open_orders(self, symbol=None):
         rows = []
@@ -547,20 +573,22 @@ def test_partial_emergency_sell_never_closes_trade_as_flat(tmp_path: Path):
             return {
                 "balances": [
                     {"asset": "USDT", "free": "9400", "locked": "0"},
-                    {"asset": "BTC", "free": "0.4", "locked": "0"},
+                    {"asset": "BTC", "free": "1.0", "locked": "0"},
                 ],
             }
 
         def order_safe(self, symbol, side, type_, *, quantity=None, new_client_order_id=None, **kwargs):
             assert side == "SELL"
             assert type_ == "MARKET"
+            assert float(quantity) == 1.0
             return {
                 "symbol": symbol,
                 "side": "SELL",
                 "type": "MARKET",
                 "orderId": "emergency-1",
+                "origQty": "1.0",
                 "clientOrderId": new_client_order_id,
-                "status": "FILLED",
+                "status": "EXPIRED",
                 "executedQty": "0.6",
                 "cummulativeQuoteQty": "60",
             }
@@ -571,11 +599,28 @@ def test_partial_emergency_sell_never_closes_trade_as_flat(tmp_path: Path):
                 "side": "SELL",
                 "type": "MARKET",
                 "orderId": "emergency-1",
+                "origQty": "1.0",
                 "clientOrderId": orig_client_order_id or "WILLV4_EMERGENCY_TEST",
-                "status": "FILLED",
+                "status": "EXPIRED",
                 "executedQty": "0.6",
                 "cummulativeQuoteQty": "60",
             }
+
+        def my_trades(self, symbol, order_id=None, limit=1000):
+            assert symbol == "BTCUSDT"
+            assert str(order_id) == "emergency-1"
+            return [{
+                "id": 1001,
+                "orderId": "emergency-1",
+                "symbol": "BTCUSDT",
+                "isBuyer": False,
+                "price": "100",
+                "qty": "0.6",
+                "quoteQty": "60",
+                "commission": "0",
+                "commissionAsset": "USDT",
+                "time": 1760000000000,
+            }]
 
     db = Database(str(tmp_path / "emergency-partial.sqlite3"))
     client = EmergencyPartialClient()

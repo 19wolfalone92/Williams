@@ -1,3 +1,6 @@
+import math
+import hashlib
+import json
 import os
 import uuid
 from decimal import Decimal
@@ -26,7 +29,7 @@ POSITION_STATES = {
 class MultiPositionTrader:
     """Durable lifecycle manager for Binance Spot.
     
-    The autonomous contract allows multiple managed positions while aggregate reserved risk stays within the portfolio budget.
+    The entry contract permits one active managed campaign; older concurrent positions remain visible for recovery and reconciliation.
     One SQLite trade row represents that position and remains OPEN until
     exchange evidence proves the position was fully sold.
 
@@ -45,6 +48,11 @@ class MultiPositionTrader:
     def __init__(self, client, db=None, symbols=None, execution_barrier=None):
         self.client = client
         self.db = db or Database()
+        # Install the durable one-shot permit verifier at the Binance REST
+        # mutation boundary. The client denies emergency SELL if this binding
+        # is missing or if the durable intent cannot be claimed exactly once.
+        if hasattr(self.client, "emergency_sell_authorizer"):
+            self.client.emergency_sell_authorizer = self.db.authorize_emergency_sell_mutation
         if symbols is not None:
             self.symbols = [str(x).strip().upper() for x in symbols if str(x).strip()]
         else:
@@ -54,23 +62,14 @@ class MultiPositionTrader:
                 if raw_symbols.upper() in {"ALL", "AUTO", "*"}
                 else [x.strip().upper() for x in raw_symbols.split(",") if x.strip()]
             )
-        self.max_open_positions = max(
-            0,
-            int(os.getenv("MAX_OPEN_POSITIONS", "5")),
-        )
+        self.max_open_positions = max(0, min(1, int(os.getenv("MAX_OPEN_POSITIONS", "1"))))
         self.max_total_risk_pct = min(
-            0.01,
-            max(
-                0.0,
-                float(os.getenv("MAX_TOTAL_RISK_PCT", "0.01")),
-            ),
+            0.006,
+            max(0.0, float(os.getenv("MAX_TOTAL_RISK_PCT", "0.006"))),
         )
         self.max_risk_per_trade_pct = min(
-            0.005,
-            max(
-                0.0,
-                float(os.getenv("MAX_RISK_PER_TRADE_PCT", os.getenv("RISK_PER_TRADE_PCT", "0.005"))),
-            ),
+            0.0025,
+            max(0.0, float(os.getenv("MAX_RISK_PER_TRADE_PCT", os.getenv("RISK_PER_TRADE_PCT", "0.0025")))),
         )
         self.dry_run = (
             os.getenv("DRY_RUN", "true").lower() == "true"
@@ -87,14 +86,14 @@ class MultiPositionTrader:
         self.l2_guard = L2SlippageGuard(
             float(os.getenv("MAX_L2_SLIPPAGE_PCT", os.getenv("MAX_SPREAD_PCT", "0.0015")))
         )
-        self.equity_breaker = EquityCircuitBreaker(float(os.getenv("MAX_DAILY_LOSS_PCT", "0.03")))
+        self.equity_breaker = EquityCircuitBreaker(min(0.01, float(os.getenv("MAX_DAILY_LOSS_PCT", "0.01"))))
         self.max_trades_per_day = max(0, int(os.getenv("MAX_TRADES_PER_DAY", "5")))
         self.max_consecutive_losses = max(0, int(os.getenv("MAX_CONSECUTIVE_LOSSES", "3")))
         self.cooldown_minutes = max(0, int(os.getenv("COOLDOWN_MINUTES", "30")))
         self.execution_barrier = execution_barrier
-        self.campaign_engine_enabled = (
-            os.getenv("CAMPAIGN_ENGINE", "true").lower() == "true"
-        )
+        # Campaign execution is the only new-entry route. The legacy direct
+        # MARKET BUY branch bypasses the shared campaign risk reservation.
+        self.campaign_engine_enabled = True
         self.campaign_execution = CampaignExecutionService(
             self.client,
             self.db,
@@ -602,26 +601,34 @@ class MultiPositionTrader:
         return max(0.0, float(stop_fraction) + (2.0 * fee_per_side) + slippage_buffer)
 
     def reserved_risk_quote(self):
+        total = 0.0
+        campaign_symbols = set()
         if self.campaign_engine_enabled:
             try:
-                return max(
+                total = max(
                     0.0,
                     float(self.campaign_execution.engine.portfolio_reserved_risk_quote()),
                 )
+                campaign_symbols = {
+                    str(row.get("symbol", "")).upper()
+                    for row in self.db.open_campaigns()
+                }
             except Exception:
-                # A campaign risk calculation failure must never open extra capacity.
+                # Unknown campaign state consumes all available risk capacity.
                 return self.max_total_risk_pct * max(self._balance(), 0.0)
-        total = 0.0
         for trade in self.open_trades():
-            entry = float(trade.get("entry_price") or 0.0)
-            qty = float(trade.get("quantity") or 0.0)
-            stop = float(trade.get("stop_price") or 0.0)
-            if entry <= 0 or qty <= 0:
+            symbol = str(trade.get("symbol", "")).upper()
+            if symbol in campaign_symbols:
                 continue
-            if stop > 0:
-                stop_fraction = max(0.0, (entry - stop) / entry)
-            else:
-                stop_fraction = float(os.getenv("STOP_LOSS_PCT", "0.02"))
+            try:
+                entry = float(trade.get("entry_price") or 0.0)
+                qty = float(trade.get("quantity") or 0.0)
+                stop = float(trade.get("stop_price") or 0.0)
+            except (TypeError, ValueError, OverflowError):
+                return self.max_total_risk_pct * max(self._balance(), 0.0)
+            if not all(math.isfinite(v) for v in (entry, qty, stop)) or entry <= 0 or qty <= 0:
+                return self.max_total_risk_pct * max(self._balance(), 0.0)
+            stop_fraction = max(0.0, (entry - stop) / entry) if stop > 0 else float(os.getenv("STOP_LOSS_PCT", "0.02"))
             total += entry * qty * self._effective_risk_fraction(stop_fraction)
         return total
 
@@ -650,40 +657,89 @@ class MultiPositionTrader:
             raise RuntimeError(f"{asset}: cannot value Binance commission in USDT") from exc
 
     def _authoritative_execution(self, symbol, order):
+        """Resolve every executed unit against exchange trade rows and explicit commission fields.
+
+        An order-level executedQty is not sufficient to prove fee-adjusted inventory.
+        If Binance trade history or any commission field is unavailable, fail closed;
+        callers must preserve reservation and reconcile instead of assuming zero fees.
+        """
         payload = dict(order or {})
         fills = list(payload.get("fills") or [])
         order_id = payload.get("orderId")
-        if not fills and order_id is not None and hasattr(self.client, "my_trades"):
+        executed = Decimal(str(payload.get("executedQty", "0") or "0"))
+        if not executed.is_finite() or executed < 0:
+            raise RuntimeError(f"{symbol}: invalid exchange executedQty")
+        if executed > 0 and not fills:
+            history = getattr(self.client, "my_trades", None)
+            if order_id is None or not callable(history):
+                raise RuntimeError(
+                    f"{symbol}: executed order lacks fills and authoritative myTrades; fee status UNKNOWN"
+                )
             try:
-                rows = self.client.my_trades(symbol, order_id=order_id, limit=1000)
-                fills = [
-                    {
-                        "price": row.get("price", "0"),
-                        "qty": row.get("qty", row.get("executedQty", "0")),
-                        "commission": row.get("commission", "0"),
-                        "commissionAsset": row.get("commissionAsset", ""),
-                    }
-                    for row in (rows or [])
-                ]
-                if fills:
-                    payload["fills"] = fills
+                rows = history(symbol, order_id=order_id, limit=1000)
             except Exception as exc:
                 self.db.log_event(
-                    "WARNING",
+                    "ERROR",
                     "fill_commission_lookup_failed",
-                    f"{symbol}: myTrades lookup unavailable; using order-level fill data",
-                    {"order_id": order_id, "error": str(exc)},
+                    f"{symbol}: myTrades lookup failed; execution remains unresolved",
+                    {"order_id": order_id, "error": str(exc), "fee_status": "UNKNOWN"},
                 )
+                raise RuntimeError(
+                    f"{symbol}: myTrades unavailable for executed order {order_id}; reconciliation required"
+                ) from exc
+            if not isinstance(rows, list) or not rows:
+                raise RuntimeError(
+                    f"{symbol}: executed order {order_id} has no authoritative trade rows; fee status UNKNOWN"
+                )
+            fills = []
+            for row in rows:
+                if str(row.get("orderId", "")) != str(order_id):
+                    continue
+                fills.append({
+                    "id": row.get("id"),
+                    "orderId": row.get("orderId"),
+                    "price": row.get("price"),
+                    "qty": row.get("qty"),
+                    "commission": row.get("commission"),
+                    "commissionAsset": row.get("commissionAsset"),
+                    "time": row.get("time"),
+                })
+            if not fills:
+                raise RuntimeError(
+                    f"{symbol}: myTrades contains no fills for order {order_id}; fee status UNKNOWN"
+                )
+            payload["fills"] = fills
+
+        if executed > 0:
+            for index, fill in enumerate(fills):
+                if fill.get("commission") is None or not str(fill.get("commissionAsset") or "").strip():
+                    raise RuntimeError(
+                        f"{symbol}: fill {fill.get('id', index)} lacks authoritative commission amount/asset; "
+                        "fee status UNKNOWN"
+                    )
+                try:
+                    commission = Decimal(str(fill["commission"]))
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"{symbol}: fill {fill.get('id', index)} has invalid commission; fee status UNKNOWN"
+                    ) from exc
+                if not commission.is_finite() or commission < 0:
+                    raise RuntimeError(
+                        f"{symbol}: fill {fill.get('id', index)} has invalid commission; fee status UNKNOWN"
+                    )
+
         base_asset = symbol[:-4] if symbol.endswith("USDT") else ""
         summary = accumulate_order(payload, base_asset=base_asset)
         extra_fee_quote = Decimal("0")
         known_assets = {"USDT", "USDC", "FDUSD", "BUSD", base_asset}
         for fill in payload.get("fills") or []:
-            commission = Decimal(str(fill.get("commission", "0") or "0"))
-            asset = str(fill.get("commissionAsset", "")).upper()
-            if commission <= 0 or asset in known_assets:
+            commission = Decimal(str(fill["commission"]))
+            asset = str(fill["commissionAsset"]).upper()
+            if commission == 0 or asset in known_assets:
                 continue
             price = float(fill.get("price", "0") or 0.0)
+            # Third-asset conversion must be explicitly resolvable. If the
+            # converter cannot prove a value, propagate UNKNOWN instead of zero.
             extra_fee_quote += commission * Decimal(str(
                 self._fee_quote_for_asset(asset, base_asset, trade_price=price)
             ))
@@ -703,43 +759,214 @@ class MultiPositionTrader:
     # ------------------------------------------------------------------
 
     def _emergency_market_sell(self, symbol, qty, trade_id, reason):
-        """Close a just-filled/unprotected Spot position if protection is already breached."""
+        """Close an unprotected Spot position with a durable, stable intent.
+
+        Any state at/after SUBMITTING is never resubmitted by this method.
+        Unknown POST outcomes are left for explicit authoritative reconciliation.
+        """
         if self.dry_run:
             raise RuntimeError(
                 f"{symbol}: emergency exit required ({reason}) but DRY_RUN=true"
             )
 
         symbol = str(symbol).upper()
+        trade_id_text = str(trade_id)
+        reason_text = str(reason or "").strip()
+        if not symbol or not trade_id_text or not reason_text:
+            raise RuntimeError("emergency SELL requires symbol, trade_id and stable reason")
+
+        # Account scope is a one-way fingerprint of the configured API key. The
+        # secret and raw key are never written to SQLite or event logs.
+        api_key = str(getattr(self.client, "api_key", "") or "")
+        if not api_key:
+            raise RuntimeError("emergency SELL blocked: account identity is unavailable")
+        account_scope = hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:24]
+        environment = "BINANCE_SPOT_TESTNET" if bool(getattr(self.client, "testnet", False)) else "BINANCE_SPOT_MAINNET"
+        identity_payload = {
+            "contract": "WILLIAMS_EMERGENCY_SELL_IDENTITY_V1",
+            "environment": environment,
+            "account_scope": account_scope,
+            "symbol": symbol,
+            "trade_id": trade_id_text,
+            # One emergency exit episode per managed trade. A different reason
+            # for the same trade is a parameter conflict, not a new SELL.
+            "operation_type": "EMERGENCY_MARKET_SELL",
+        }
+        operation_id = hashlib.sha256(
+            json.dumps(identity_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        # Binance Spot newClientOrderId permits at most 36 characters. Keep a
+        # stable, unique-looking prefix and 18 hex chars derived from operation_id.
+        client_id = f"{self.EMERGENCY_PREFIX}{operation_id[:18]}"
+        if len(client_id) > 36 or not all(ch.isalnum() or ch in "._:-/" for ch in client_id):
+            raise RuntimeError("emergency SELL clientOrderId violates exchange contract")
+
         account = self.client.account()
         free_qty = self._asset_balance(symbol, account=account)
-        sell_qty = self._normalize_qty(symbol, min(float(qty), free_qty), market=True)
-        if sell_qty <= 0:
+        try:
+            requested = Decimal(str(qty))
+            free = Decimal(str(free_qty))
+        except Exception as exc:
+            raise RuntimeError("emergency SELL quantity/balance is invalid") from exc
+        if not requested.is_finite() or not free.is_finite() or requested <= 0 or free < 0:
+            raise RuntimeError("emergency SELL quantity/balance is not finite and positive")
+        # Existing normalizer enforces the market lot grid. The durable intent
+        # stores the exact normalized decimal string, not a binary float value.
+        normalized = self._normalize_qty(symbol, min(float(requested), float(free)), market=True)
+        sell_qty = Decimal(str(normalized))
+        if not sell_qty.is_finite() or sell_qty <= 0:
+            raise RuntimeError(f"{symbol}: emergency exit quantity below Binance LOT_SIZE")
+        quantity_text = format(sell_qty, "f")
+        parameters = {
+            **identity_payload,
+            "reason": reason_text,
+            "requested_qty": quantity_text,
+        }
+        parameters_hash = hashlib.sha256(
+            json.dumps(parameters, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        intent = {
+            "operation_id": operation_id,
+            "identity_version": 1,
+            "environment": environment,
+            "account_scope": account_scope,
+            "symbol": symbol,
+            "trade_id": trade_id_text,
+            "operation_type": "EMERGENCY_MARKET_SELL",
+            "reason": reason_text,
+            "requested_qty": quantity_text,
+            "parameters_hash": parameters_hash,
+            "client_order_id": client_id,
+        }
+        try:
+            claimed = self.db.claim_emergency_sell_intent(intent)
+        except Exception as exc:
+            self.set_state(symbol, "RECONCILE_REQUIRED")
             raise RuntimeError(
-                f"{symbol}: emergency exit quantity below Binance LOT_SIZE"
+                f"{symbol}: emergency SELL durable intent could not be proven; mutation blocked"
+            ) from exc
+
+        intent_status = str(claimed.get("status", ""))
+        if intent_status != "PREPARED":
+            self.set_state(symbol, "RECONCILE_REQUIRED")
+            raise RuntimeError(
+                f"{symbol}: emergency SELL operation already exists in state {intent_status}; "
+                "reconcile by its stable clientOrderId; never resubmit"
             )
 
-        client_id = f"{self.EMERGENCY_PREFIX}{uuid.uuid4().hex[:16]}"
-        sell = self.client.order_safe(
-            symbol,
-            "SELL",
-            "MARKET",
-            quantity=self.client.decimal_format(sell_qty),
-            new_client_order_id=client_id,
-        )
-        self.db.save_order(sell)
+        # This commit is the last gate before the external mutation. A crash
+        # after SUBMITTING is conservatively UNKNOWN even if the socket write
+        # had not started; recovery must query Binance, not resend.
+        try:
+            self.db.transition_emergency_sell_intent(operation_id, "SUBMITTING")
+        except Exception as exc:
+            self.set_state(symbol, "RECONCILE_REQUIRED")
+            raise RuntimeError("emergency SELL SUBMITTING commit failed; mutation blocked") from exc
+
+        try:
+            sell = self.client.order_safe(
+                symbol,
+                "SELL",
+                "MARKET",
+                quantity=quantity_text,
+                new_client_order_id=client_id,
+            )
+        except Exception as exc:
+            try:
+                self.db.transition_emergency_sell_intent(
+                    operation_id, "RECONCILE_REQUIRED", last_error=f"{type(exc).__name__}: {exc}"
+                )
+            finally:
+                self.set_state(symbol, "RECONCILE_REQUIRED")
+            raise RuntimeError(
+                f"{symbol}: emergency SELL outcome UNKNOWN; reconcile {client_id}; no retry permitted"
+            ) from exc
+
+        # Record the response as evidence only. It does not by itself prove fills
+        # or financial effects, which are reconciled below from authoritative data.
+        try:
+            self.db.save_order(sell)
+            self.db.transition_emergency_sell_intent(
+                operation_id, "SUBMITTED",
+                exchange_order_id=sell.get("orderId"),
+                exchange_status=sell.get("status"),
+            )
+        except Exception as exc:
+            self.set_state(symbol, "RECONCILE_REQUIRED")
+            try:
+                self.db.transition_emergency_sell_intent(
+                    operation_id, "RECONCILE_REQUIRED", last_error=f"response persistence failed: {exc}"
+                )
+            except Exception:
+                pass
+            raise RuntimeError(
+                f"{symbol}: emergency SELL response persistence uncertain; reconcile {client_id}"
+            ) from exc
 
         order_id = sell.get("orderId")
-        confirmed = self.client.get_order(
-            symbol,
-            order_id=order_id,
-            orig_client_order_id=client_id if order_id is None else None,
-        )
-        if str(confirmed.get("status", "")).upper() != "FILLED":
+        try:
+            confirmed = self.client.get_order(
+                symbol,
+                order_id=order_id,
+                orig_client_order_id=client_id if order_id is None else None,
+            )
+        except Exception as exc:
+            self.set_state(symbol, "RECONCILE_REQUIRED")
+            try:
+                self.db.transition_emergency_sell_intent(
+                    operation_id, "RECONCILE_REQUIRED",
+                    exchange_order_id=order_id,
+                    last_error=f"authoritative order lookup failed: {type(exc).__name__}: {exc}",
+                )
+            except Exception:
+                pass
             raise RuntimeError(
-                f"{symbol}: emergency SELL is not fully filled"
+                f"{symbol}: emergency SELL order lookup failed; reconcile {client_id}; no retry permitted"
+            ) from exc
+        status = str(confirmed.get("status", "")).upper()
+        # A market SELL can terminate with a partial execution (for example,
+        # EXPIRED after partial matching). Only terminal exchange states may be
+        # materialized; NEW/PARTIALLY_FILLED remain ambiguous and must reconcile
+        # without resubmitting the mutation.
+        terminal_statuses = {"FILLED", "CANCELED", "EXPIRED", "REJECTED"}
+        if status not in terminal_statuses:
+            self.set_state(symbol, "RECONCILE_REQUIRED")
+            self.db.transition_emergency_sell_intent(
+                operation_id, "RECONCILE_REQUIRED",
+                exchange_order_id=order_id, exchange_status=status,
+                last_error="exchange order is non-terminal; reconciliation required",
+            )
+            self.db.log_event(
+                "ERROR",
+                "emergency_market_exit_unresolved",
+                "Emergency SELL is not in an authoritative terminal state; mutation must not be retried",
+                {
+                    "symbol": symbol,
+                    "trade_id": trade_id,
+                    "order_id": order_id,
+                    "status": status,
+                    "client_order_id": client_id,
+                },
+            )
+            raise RuntimeError(
+                f"{symbol}: emergency SELL status {status or 'UNKNOWN'} is non-terminal; reconciliation required"
             )
 
-        execution = self._authoritative_execution(symbol, confirmed)
+        try:
+            execution = self._authoritative_execution(symbol, confirmed)
+        except Exception as exc:
+            self.set_state(symbol, "RECONCILE_REQUIRED")
+            try:
+                self.db.transition_emergency_sell_intent(
+                    operation_id, "RECONCILE_REQUIRED",
+                    exchange_order_id=order_id, exchange_status=status,
+                    last_error=f"authoritative fills/fees unresolved: {type(exc).__name__}: {exc}",
+                )
+            except Exception:
+                pass
+            raise RuntimeError(
+                f"{symbol}: emergency SELL fills/fees remain UNKNOWN; reconciliation required"
+            ) from exc
         executed_qty = float(execution.executed_qty)
         exit_quote = float(execution.quote_qty)
         exit_fee_quote = float(execution.fee_quote_equivalent)
@@ -749,7 +976,12 @@ class MultiPositionTrader:
             else (exit_quote / executed_qty if executed_qty > 0 and exit_quote > 0 else 0.0)
         )
         if executed_qty <= 0 or exit_price <= 0:
-            raise RuntimeError(f"{symbol}: emergency SELL returned invalid fill")
+            self.set_state(symbol, "RECONCILE_REQUIRED")
+            raise RuntimeError(f"{symbol}: emergency SELL returned invalid/empty fill")
+
+        # A terminal order may have executed only part of the requested SELL.
+        # Do not infer completion from status alone; compare authoritative fills
+        # with the managed inventory below.
 
         trade = next(
             (
@@ -764,7 +996,13 @@ class MultiPositionTrader:
             managed_qty * self.balance_tolerance_pct,
         )
 
-        if trade is not None and executed_qty + tolerance >= managed_qty:
+        base_fee_qty = float(execution.commission_base)
+        if not math.isfinite(base_fee_qty) or base_fee_qty < 0:
+            self.set_state(symbol, "RECONCILE_REQUIRED")
+            raise RuntimeError(f"{symbol}: invalid base-asset commission; reconciliation required")
+        net_inventory_debit = executed_qty + base_fee_qty
+
+        if trade is not None and net_inventory_debit + tolerance >= managed_qty:
             entry_price = float(trade.get("entry_price") or 0.0)
             entry_fee_quote = float(trade.get("fees") or 0.0)
             pnl = (
@@ -786,8 +1024,8 @@ class MultiPositionTrader:
             self.set_state(symbol, "FLAT")
             state = "FLAT"
             residual_qty = 0.0
-        elif trade is not None and executed_qty > 0:
-            residual_qty = max(0.0, managed_qty - executed_qty)
+        elif trade is not None and net_inventory_debit > 0:
+            residual_qty = max(0.0, managed_qty - net_inventory_debit)
             self.db.update_trade_quantity(trade_id, residual_qty)
             self.set_state(symbol, "RECONCILE_REQUIRED")
             self.db.log_event(
@@ -809,6 +1047,18 @@ class MultiPositionTrader:
             residual_qty = managed_qty
             self.set_state(symbol, "RECONCILE_REQUIRED")
             state = "RECONCILE_REQUIRED"
+
+        try:
+            self.db.transition_emergency_sell_intent(
+                operation_id, "APPLIED",
+                exchange_order_id=order_id,
+                exchange_status=status,
+            )
+        except Exception as exc:
+            self.set_state(symbol, "RECONCILE_REQUIRED")
+            raise RuntimeError(
+                f"{symbol}: local financial update completed but intent finalization failed; recovery required"
+            ) from exc
 
         self.db.log_event(
             "WARNING",
@@ -987,9 +1237,12 @@ class MultiPositionTrader:
             if str(row["value"]).strip()
         ]
 
-    def recover_pending_entries(self):
+    def recover_pending_entries(self, symbols=None):
         results = []
+        allowed_symbols = None if symbols is None else {str(x).upper() for x in symbols}
         for symbol, client_id in self._pending_entries():
+            if allowed_symbols is not None and symbol not in allowed_symbols:
+                continue
             try:
                 order = self.client.get_order(
                     symbol,
@@ -1525,11 +1778,15 @@ class MultiPositionTrader:
             "partial_exit": total_sold_qty > 0,
         }
 
-    def reconcile_open_positions(self):
-        """Reconcile all managed positions; block globally on ambiguity."""
-        pending = self.recover_pending_entries()
+    def reconcile_open_positions(self, symbols=None):
+        """Reconcile selected positions; any ambiguity still blocks the portfolio."""
+        allowed_symbols = None if symbols is None else {str(x).upper() for x in symbols}
+        pending = self.recover_pending_entries(allowed_symbols)
 
-        trades = list(self.open_trades())
+        trades = [
+            trade for trade in self.open_trades()
+            if allowed_symbols is None or str(trade.get("symbol", "")).upper() in allowed_symbols
+        ]
         results = list(pending)
 
         if not trades:
@@ -1569,16 +1826,36 @@ class MultiPositionTrader:
         return results
 
     def recover(self):
-        """Startup/full recovery. Campaign mode never routes through legacy OCO recovery."""
+        """Recover campaigns and legacy orphan exposure without double-managing campaigns."""
         if self.campaign_engine_enabled:
             pending = self.campaign_execution.reconcile_pending_entries()
             active = self.campaign_execution.reconcile_active_campaigns()
+            # Older releases could leave a real filled Spot position in the
+            # legacy trade table without a campaign row. Recover only symbols
+            # not already owned by a still-active campaign.
+            campaign_symbols = {
+                str(row.get("symbol", "")).upper()
+                for row in self.db.open_campaigns()
+            }
+            legacy_symbols = {
+                str(row.get("symbol", "")).upper()
+                for row in self.open_trades()
+                if str(row.get("symbol", "")).upper() not in campaign_symbols
+            }
+            legacy_symbols.update(
+                symbol for symbol, _ in self._pending_entries()
+                if symbol not in campaign_symbols
+            )
+            legacy_results = self.reconcile_open_positions(legacy_symbols) if legacy_symbols else []
             repaired = self._repair_stale_reconcile_states()
             unresolved = self.unresolved_symbols()
-            pending_keys = self._pending_entries()
+            pending_keys = [
+                row for row in self._pending_entries()
+                if row[0] not in campaign_symbols
+            ]
             ok = not unresolved and not pending_keys
             canonical_state = self._sync_legacy_state()
-            results = pending + active
+            results = pending + active + legacy_results
             results.extend(
                 {"symbol": symbol, "state": "FLAT", "stale_reconcile_cleared": True}
                 for symbol in repaired
@@ -1821,11 +2098,14 @@ class MultiPositionTrader:
         realized = float(self.db.conn.execute(
             "SELECT COALESCE(SUM(pnl),0) FROM trades WHERE exit_time IS NOT NULL AND exit_time >= date('now')"
         ).fetchone()[0] or 0.0)
-        fees = float(self.db.conn.execute(
-            "SELECT COALESCE(SUM(fees),0) FROM trades WHERE exit_time IS NOT NULL AND exit_time >= date('now')"
-        ).fetchone()[0] or 0.0)
+        # Canonical writers persist net PnL after commission; avoid charging it twice.
+        fees = 0.0
         trades_today = int(self.db.conn.execute(
             "SELECT COUNT(*) FROM trades WHERE entry_time >= date('now')"
+        ).fetchone()[0])
+        daily_losses = int(self.db.conn.execute(
+            "SELECT COUNT(*) FROM trades WHERE exit_time IS NOT NULL "
+            "AND exit_time >= date('now') AND pnl < 0"
         ).fetchone()[0])
         recent = self.db.conn.execute(
             "SELECT pnl, exit_time FROM trades WHERE exit_time IS NOT NULL ORDER BY id DESC LIMIT 20"
@@ -1833,6 +2113,8 @@ class MultiPositionTrader:
 
         if self.max_trades_per_day and trades_today >= self.max_trades_per_day:
             return False, f"MAX_TRADES_PER_DAY reached: {trades_today}"
+        if daily_losses >= 2:
+            return False, f"MAX_DAILY_STOP_OUTS reached: {daily_losses}"
         losses = 0
         for row in recent:
             if float(row["pnl"] or 0) < 0:
@@ -2096,7 +2378,7 @@ class MultiPositionTrader:
             return False
         if self.db.open_trade(symbol):
             return False
-        if self.max_open_positions > 0 and len(self.open_trades()) >= self.max_open_positions:
+        if self.max_open_positions <= 0 or len(self.open_trades()) >= self.max_open_positions:
             return False
         if self._pending_entries():
             return False
