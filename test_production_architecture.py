@@ -198,3 +198,64 @@ def test_execution_barrier_required_admission_event_failure_never_calls_submit()
         raise AssertionError("required admission event failure must abort execution")
     assert db.intent_statuses == ["PENDING"]
     assert calls == []
+
+
+def test_execution_barrier_durably_blocks_replayed_signal_before_second_mutation():
+    class DurableDB:
+        def __init__(self):
+            self.claims = {}
+            self.intents = []
+            self.events = []
+        def save_execution_intent(self, intent, status, reason=""):
+            self.intents.append((intent.intent_id, status))
+        def save_execution_event(self, intent_id, event, payload=None):
+            self.events.append((intent_id, event))
+        def try_claim_state(self, key, value):
+            if key in self.claims:
+                return False
+            self.claims[key] = value
+            return True
+        def state_get(self, key, default=None):
+            return default
+
+    cache = ContextCache()
+    cache.publish(context())
+    db = DurableDB()
+    first_barrier = ExecutionBarrier(cache, db)
+    now_ms = int(time.time() * 1000)
+    common = dict(
+        purpose="CAMPAIGN_ENTRY",
+        permission_interval="1h",
+        signal_timeframe="1h",
+        signal_bar_time_ms=(now_ms // 3_600_000 - 2) * 3_600_000,
+        confirmation_time_ms=(now_ms // 3_600_000 - 1) * 3_600_000,
+        expires_at_ms=now_ms + 60_000,
+        signal_id="stable-replay-signal-v1",
+        campaign_id="stable-replay-campaign",
+    )
+    first = OrderIntent.new("BTCUSDT", "BUY", "MARKET", {"1h": 1}, **common)
+    calls = []
+    result = first_barrier.execute(
+        first, lambda: (calls.append("first"), {"status": "NEW"})[1],
+        pre_submit_checks=lambda _s: None,
+    )
+    assert result.accepted
+    assert calls == ["first"]
+
+    # Simulate a new barrier/runtime instance after restart while retaining the
+    # durable store. A new random intent id must not authorize the same signal.
+    second_barrier = ExecutionBarrier(cache, db)
+    second = OrderIntent.new("BTCUSDT", "BUY", "MARKET", {"1h": 1}, **common)
+    try:
+        second_barrier.execute(
+            second, lambda: (calls.append("second"), {"status": "NEW"})[1],
+            pre_submit_checks=lambda _s: None,
+        )
+    except RuntimeError as exc:
+        assert "duplicate signal blocked" in str(exc)
+    else:
+        raise AssertionError("replayed signal must be rejected by durable claim")
+    assert calls == ["first"]
+    assert list(k for k in db.claims if k == "consumed_signal:stable-replay-signal-v1") == [
+        "consumed_signal:stable-replay-signal-v1"
+    ]
