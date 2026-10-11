@@ -457,6 +457,21 @@ class Database:
         ).fetchall()
         return [dict(row) for row in rows]
 
+    def pending_exchange_fill_effects(self, limit=1000):
+        """Return canonical fills whose dependent financial effect is unresolved."""
+        rows = self.conn.execute(
+            """SELECT exchange,account_id,symbol,trade_id,order_id,intent_id,
+                      campaign_id,quantity_decimal,price_decimal,
+                      quote_quantity_decimal,commission_decimal,commission_asset,
+                      effect_state
+               FROM exchange_fill_ledger
+               WHERE effect_state != 'APPLIED'
+               ORDER BY created_at,exchange,account_id,symbol,trade_id
+               LIMIT ?""",
+            (max(1, min(int(limit), 10000)),),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
     def claim_execution_intent(self, intent) -> bool:
         """Atomically reserve one intent/client ID and serialize cross-process admissions."""
         if self._transaction_active:
