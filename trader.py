@@ -996,7 +996,13 @@ class Trader:
         return order, summary
 
     def market_buy(self, quote):
-        """Legacy single-symbol BUY disabled; campaign execution is canonical."""
+        """Legacy single-symbol BUY disabled; preserve earlier safety gates."""
+        if self.dry_run:
+            raise RuntimeError(
+                'BUY blocked: DRY_RUN=true. No live order execution is permitted.'
+            )
+        if not self.client.testnet and os.getenv('ALLOW_LIVE', 'false').lower() != 'true':
+            raise RuntimeError('BUY blocked: LIVE trading requires ALLOW_LIVE=true.')
         raise RuntimeError(
             "Legacy Trader.market_buy is disabled; use CampaignExecutionService"
         )
