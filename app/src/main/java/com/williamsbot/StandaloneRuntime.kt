@@ -14,9 +14,8 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.BufferedReader
-import java.io.InputStreamReader
-import java.io.Reader
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
@@ -235,20 +234,35 @@ internal class ApiHttpException(
 
 internal const val MAX_API_REQUEST_BODY_BYTES = 1_048_576
 
-internal fun readApiRequestBody(reader: Reader, length: Int): String {
+internal fun readApiHttpLine(input: InputStream): String? {
+    val bytes = ByteArrayOutputStream()
+    while (true) {
+        val value = input.read()
+        if (value < 0) {
+            if (bytes.size() == 0) return null
+            break
+        }
+        if (value == 10) break
+        if (value != 13) bytes.write(value)
+        if (bytes.size() > 16_384) throw ApiHttpException(400, "HTTP line too long")
+    }
+    return bytes.toByteArray().toString(StandardCharsets.UTF_8)
+}
+
+internal fun readApiRequestBody(input: InputStream, length: Int): String {
     if (length < 0) throw ApiHttpException(400, "Invalid Content-Length")
     if (length > MAX_API_REQUEST_BODY_BYTES) {
         throw ApiHttpException(413, "Request body too large")
     }
-    val chars = CharArray(length)
+    val bytes = ByteArray(length)
     var offset = 0
     while (offset < length) {
-        val count = reader.read(chars, offset, length - offset)
+        val count = input.read(bytes, offset, length - offset)
         if (count < 0) throw ApiHttpException(400, "Incomplete request body")
         if (count == 0) continue
         offset += count
     }
-    return String(chars)
+    return String(bytes, StandardCharsets.UTF_8)
 }
 
 internal fun parseApiQuery(target: String): Map<String, String> {
@@ -381,14 +395,8 @@ private class StandaloneServer(private val context: Context) {
     private fun handle(s: Socket) {
         s.use {
             try {
-                val reader = BufferedReader(
-                    InputStreamReader(
-                        s.getInputStream(),
-                        StandardCharsets.UTF_8
-                    )
-                )
-
-                val first = reader.readLine() ?: return
+                val input = s.getInputStream()
+                val first = readApiHttpLine(input) ?: return
                 val parts = first.split(" ")
                 if (parts.size < 2) return
 
@@ -398,7 +406,7 @@ private class StandaloneServer(private val context: Context) {
                 var length = 0
                 var sawContentLength = false
                 while (true) {
-                    val line = reader.readLine() ?: return
+                    val line = readApiHttpLine(input) ?: return
                     if (line.isEmpty()) break
 
                     val header = line.split(":", limit = 2)
@@ -412,7 +420,7 @@ private class StandaloneServer(private val context: Context) {
                     }
                 }
 
-                val body = readApiRequestBody(reader, if (sawContentLength) length else 0)
+                val body = readApiRequestBody(input, if (sawContentLength) length else 0)
                 val responseBody = route(method, target, body)
                 writeApiResponse(s, 200, responseBody)
             } catch (x: Exception) {
