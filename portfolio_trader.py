@@ -783,9 +783,28 @@ class MultiPositionTrader:
             order_id=order_id,
             orig_client_order_id=client_id if order_id is None else None,
         )
-        if str(confirmed.get("status", "")).upper() != "FILLED":
+        status = str(confirmed.get("status", "")).upper()
+        # A market SELL can terminate with a partial execution (for example,
+        # EXPIRED after partial matching). Only terminal exchange states may be
+        # materialized; NEW/PARTIALLY_FILLED remain ambiguous and must reconcile
+        # without resubmitting the mutation.
+        terminal_statuses = {"FILLED", "CANCELED", "EXPIRED", "REJECTED"}
+        if status not in terminal_statuses:
+            self.set_state(symbol, "RECONCILE_REQUIRED")
+            self.db.log_event(
+                "ERROR",
+                "emergency_market_exit_unresolved",
+                "Emergency SELL is not in an authoritative terminal state; mutation must not be retried",
+                {
+                    "symbol": symbol,
+                    "trade_id": trade_id,
+                    "order_id": order_id,
+                    "status": status,
+                    "client_order_id": client_id,
+                },
+            )
             raise RuntimeError(
-                f"{symbol}: emergency SELL is not fully filled"
+                f"{symbol}: emergency SELL status {status or 'UNKNOWN'} is non-terminal; reconciliation required"
             )
 
         execution = self._authoritative_execution(symbol, confirmed)
@@ -798,7 +817,12 @@ class MultiPositionTrader:
             else (exit_quote / executed_qty if executed_qty > 0 and exit_quote > 0 else 0.0)
         )
         if executed_qty <= 0 or exit_price <= 0:
-            raise RuntimeError(f"{symbol}: emergency SELL returned invalid fill")
+            self.set_state(symbol, "RECONCILE_REQUIRED")
+            raise RuntimeError(f"{symbol}: emergency SELL returned invalid/empty fill")
+
+        # A terminal order may have executed only part of the requested SELL.
+        # Do not infer completion from status alone; compare authoritative fills
+        # with the managed inventory below.
 
         trade = next(
             (
@@ -813,7 +837,13 @@ class MultiPositionTrader:
             managed_qty * self.balance_tolerance_pct,
         )
 
-        if trade is not None and executed_qty + tolerance >= managed_qty:
+        base_fee_qty = float(execution.commission_base)
+        if not math.isfinite(base_fee_qty) or base_fee_qty < 0:
+            self.set_state(symbol, "RECONCILE_REQUIRED")
+            raise RuntimeError(f"{symbol}: invalid base-asset commission; reconciliation required")
+        net_inventory_debit = executed_qty + base_fee_qty
+
+        if trade is not None and net_inventory_debit + tolerance >= managed_qty:
             entry_price = float(trade.get("entry_price") or 0.0)
             entry_fee_quote = float(trade.get("fees") or 0.0)
             pnl = (
@@ -835,8 +865,8 @@ class MultiPositionTrader:
             self.set_state(symbol, "FLAT")
             state = "FLAT"
             residual_qty = 0.0
-        elif trade is not None and executed_qty > 0:
-            residual_qty = max(0.0, managed_qty - executed_qty)
+        elif trade is not None and net_inventory_debit > 0:
+            residual_qty = max(0.0, managed_qty - net_inventory_debit)
             self.db.update_trade_quantity(trade_id, residual_qty)
             self.set_state(symbol, "RECONCILE_REQUIRED")
             self.db.log_event(
