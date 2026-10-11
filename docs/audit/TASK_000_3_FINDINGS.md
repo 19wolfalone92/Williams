@@ -32,7 +32,7 @@
 
 - **Files/symbols:** `binance_client.py::BinanceSpotClient.create_oco_sell/create_oco_sell_safe/cancel_oco`; `trader.py::Trader.place_oco`; `portfolio_trader.py::MultiPositionTrader._create_oco/manual_sell`.
 - **Evidence SHA:** `f6dd193f9147ba49ff7f11efc81b18e10c1e2c44`.
-- **Current evidence:** known legacy OCO create paths guard against the production Binance client; known OCO cancellation call is in the non-`BinanceSpotClient` branch. The repository tree includes 122 Python files including tests, but a complete runtime/dynamic call graph has not been proven.
+- **Current evidence:** known legacy OCO create paths guard against the production Binance client; known OCO cancellation call is in the non-`BinanceSpotClient` branch. The repository tree includes 123 Python files including tests, but a complete runtime/dynamic call graph has not been proven.
 - **Needed to resolve:** reference and alias analysis across every production module, tests proving production-client calls are rejected from legacy paths, and review of dynamically dispatched client interfaces.
 
 ## No confirmed mandatory-gate bypass in known production paths
@@ -45,7 +45,7 @@ No exactly-once financial effect or global mutation-path coverage claim is made.
 
 The exact-ref source was re-opened for `campaign_execution.py` lines 2201–2268 and `binance_client.py` lines 110–160. `CampaignExecutionService.replace_structural_stop` creates a new CID and standard `OrderIntent`, calls `cancel_replace` with the existing order ID, then checks `cancelResult` and `newOrderResult`. `BinanceSpotClient._request` explicitly maps HTTP 409 for `/api/v3/order/cancelReplace` to `unknown_execution=True` and says reconciliation is required before retry. This supports conservative ambiguity classification, but does not establish durable two-leg recovery: the standard intent contains the new CID and the generic recovery lookup centers on the intent's order/CID and trades. P1-1 remains open.
 
-The immutable Git tree contains 122 Python files including tests. The priority source files were fetched at the required SHA, but a complete line-by-line review of all 122 modules and dynamic alias/callback paths has not been established. P1-2 and the `cancel_open_orders`/OCO reachability items remain open. No mandatory-gate bypass was confirmed in the known inspected production callsites.
+The immutable Git tree contains 123 Python files including tests. The priority source files were fetched at the required SHA, but a complete line-by-line review of all 123 modules and dynamic alias/callback paths has not been established. P1-2 and the `cancel_open_orders`/OCO reachability items remain open. No mandatory-gate bypass was confirmed in the known inspected production callsites.
 
 
 ## Follow-up review — 2026-10-11
