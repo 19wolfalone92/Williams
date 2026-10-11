@@ -513,3 +513,98 @@ def test_portfolio_execution_missing_commission_asset_is_unknown():
                 "fills": [{"price": "50000", "qty": "0.01"}],
             },
         )
+
+
+
+def _emergency_intent_fixture(**overrides):
+    intent = {
+        "operation_id": "a" * 64,
+        "identity_version": 1,
+        "environment": "BINANCE_SPOT_TESTNET",
+        "account_scope": "b" * 24,
+        "symbol": "BTCUSDT",
+        "trade_id": "42",
+        "operation_type": "EMERGENCY_MARKET_SELL",
+        "reason": "STOP_LOSS_REACHED_BEFORE_OCO",
+        "requested_qty": "0.001000",
+        "parameters_hash": "c" * 64,
+        "client_order_id": "WILLV4_EMERGENCY_aaaaaaaaaaaaaaaaaa",
+    }
+    intent.update(overrides)
+    return intent
+
+
+def _process_claim_emergency_sell(db_path, start_event, result_queue):
+    from db import Database
+    db = Database(db_path)
+    try:
+        if not start_event.wait(timeout=10):
+            result_queue.put("start-timeout")
+            return
+        row = db.claim_emergency_sell_intent(_emergency_intent_fixture())
+        try:
+            db.transition_emergency_sell_intent(row["operation_id"], "SUBMITTING")
+            result_queue.put("submit-permit")
+        except RuntimeError:
+            result_queue.put("blocked")
+    except Exception as exc:
+        result_queue.put(f"error:{type(exc).__name__}:{exc}")
+    finally:
+        db.conn.close()
+
+
+def test_emergency_sell_intent_is_immutable_and_durable():
+    db = Database(":memory:")
+    try:
+        intent = _emergency_intent_fixture()
+        first = db.claim_emergency_sell_intent(intent)
+        assert first["status"] == "PREPARED"
+        second = db.claim_emergency_sell_intent(intent)
+        assert second["operation_id"] == first["operation_id"]
+        assert second["client_order_id"] == intent["client_order_id"]
+        with pytest.raises(RuntimeError, match="identity conflict"):
+            db.claim_emergency_sell_intent(
+                _emergency_intent_fixture(reason="different reason", parameters_hash="d" * 64)
+            )
+        db.transition_emergency_sell_intent(intent["operation_id"], "SUBMITTING")
+        with pytest.raises(RuntimeError, match="illegal emergency SELL intent transition"):
+            db.transition_emergency_sell_intent(intent["operation_id"], "SUBMITTING")
+        row = db.conn.execute(
+            "SELECT status,requested_qty,client_order_id FROM emergency_sell_intents WHERE operation_id=?",
+            (intent["operation_id"],),
+        ).fetchone()
+        assert row["status"] == "SUBMITTING"
+        assert row["requested_qty"] == "0.001000"
+        assert row["client_order_id"] == intent["client_order_id"]
+    finally:
+        db.conn.close()
+
+
+def test_independent_processes_cannot_both_claim_emergency_sell_submit_permission(tmp_path):
+    ctx = multiprocessing.get_context("spawn")
+    db_path = str(tmp_path / "emergency-intent.sqlite3")
+    db = Database(db_path)
+    db.conn.close()
+    start_event = ctx.Event()
+    result_queue = ctx.Queue()
+    workers = [
+        ctx.Process(target=_process_claim_emergency_sell, args=(db_path, start_event, result_queue))
+        for _ in range(8)
+    ]
+    for worker in workers:
+        worker.start()
+    start_event.set()
+    outcomes = [result_queue.get(timeout=30) for _ in workers]
+    for worker in workers:
+        worker.join(timeout=30)
+        assert not worker.is_alive()
+        assert worker.exitcode == 0
+    assert outcomes.count("submit-permit") == 1, outcomes
+    assert outcomes.count("blocked") == 7, outcomes
+    verify = Database(db_path)
+    try:
+        rows = verify.conn.execute("SELECT * FROM emergency_sell_intents").fetchall()
+        assert len(rows) == 1
+        assert rows[0]["status"] == "SUBMITTING"
+    finally:
+        verify.conn.close()
