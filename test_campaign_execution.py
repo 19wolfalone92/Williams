@@ -400,3 +400,30 @@ def test_execution_intent_rejects_conflicting_payload_for_same_id():
         ).fetchone()
         assert row["status"] == "PREPARED"
         assert row["side"] == "BUY"
+
+
+
+def test_execution_intent_refuses_uncommitted_caller_transaction():
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "intent-open-transaction.sqlite3"))
+        intent = OrderIntent.new(
+            symbol="BTCUSDT",
+            side="BUY",
+            order_type="MARKET",
+            required_context_versions={"1h": 7},
+            purpose="CAMPAIGN_ENTRY",
+        )
+        db._transaction_active = True
+        try:
+            db.save_execution_intent(intent, "PREPARED")
+        except RuntimeError as exc:
+            assert "uncommitted caller transaction" in str(exc)
+        else:
+            raise AssertionError("uncommitted intent must not be accepted as durable")
+        finally:
+            db._transaction_active = False
+        row = db.conn.execute(
+            "SELECT 1 FROM execution_intents WHERE intent_id=?",
+            (intent.intent_id,),
+        ).fetchone()
+        assert row is None
