@@ -1988,16 +1988,32 @@ class CampaignExecutionService:
         }
 
     def _execute_cancel(self, campaign, order_id: int, purpose: str) -> dict[str, Any]:
-        # Persist both the intended target order ID and its exchange clientOrderId
-        # before sending DELETE. A cancel operation's own client ID cannot locate
-        # the order being canceled after a lost response.
+        # Resolve target ownership from the durable campaign-order journal before
+        # asking Binance to cancel anything. The caller's numeric id alone is not
+        # sufficient evidence that this target belongs to this campaign.
+        local_target = self.db.conn.execute(
+            """SELECT order_id,client_order_id,campaign_id,symbol
+               FROM campaign_orders
+               WHERE campaign_id=? AND symbol=? AND order_id=?
+                 AND COALESCE(client_order_id,'')<>''
+               ORDER BY id DESC LIMIT 1""",
+            (campaign.campaign_id, campaign.symbol.upper(), str(order_id)),
+        ).fetchone()
+        if local_target is None:
+            raise CampaignExecutionError(
+                "cancel target has no matching durable campaign-order ownership record"
+            )
+        # Persist both target IDs on the cancellation intent before DELETE. A
+        # cancel operation's own client id cannot locate the target after a lost response.
         target = self.client.get_order(campaign.symbol, order_id=order_id)
         if (
             str(target.get("symbol", "")).upper() != campaign.symbol.upper()
             or str(target.get("orderId")) != str(order_id)
-            or not str(target.get("clientOrderId") or "")
+            or str(target.get("clientOrderId") or "") != str(local_target["client_order_id"])
         ):
-            raise CampaignExecutionError("cannot verify cancellation target identity")
+            raise CampaignExecutionError(
+                "exchange cancellation target does not match durable campaign-order identity"
+            )
         intent = OrderIntent.new(
             campaign.symbol,
             str(target.get("side", "SELL")).upper(),
