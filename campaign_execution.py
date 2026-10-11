@@ -484,7 +484,21 @@ class CampaignExecutionService:
             raise CampaignExecutionError(
                 f"ExecutionBarrier blocked {intent.purpose}: {result.reason}"
             )
-        return result.response
+        response = result.response
+        response_status = str(
+            response.get("status", "") if isinstance(response, dict) else ""
+        ).upper()
+        if response_status in {"NEW", "PENDING_NEW"}:
+            # A durable SUBMITTED record is not yet a reconciled exchange state.
+            # Resolve the returned open order before admitting the next mutation.
+            self.recovery_coordinator.recover()
+            readiness = self.recovery_coordinator.readiness()
+            if not readiness.get("ready"):
+                raise CampaignExecutionError(
+                    "exchange accepted order but durable recovery is incomplete; "
+                    "execution contour remains blocked"
+                )
+        return response
 
     def arm_initial_entry(
         self,
