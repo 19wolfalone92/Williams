@@ -118,3 +118,12 @@ For every incoming change, the integration review must classify it as:
 8. Futures Testnet, Spot Testnet and physical-device tests have not been run as part of this integration operation.
 
 **Decision:** proceed with small contract-aligned slices on this integration branch. Keep both Spot and Futures in scope, one Williams strategy core, and independent execution/risk/ledger contracts. No PR is accepted solely by title, mergeability flag or green isolated CI.
+
+
+## TASK 009.1 controlled checkpoint (2026-10-11)
+
+- Branch-only patch now makes missing/failed execution-intent persistence fail closed and requires durable recording of the raw exchange response before returning an accepted result.
+- Added `test_task0091_execution_barrier_fail_closed.py` and updated the existing barrier tests to use temporary SQLite stores, preserving their original stale-context and serialization assertions.
+- Detailed contract, confirmed Python/Android mutation paths and remaining P0 blockers: `docs/WILLIAMS_BOT_2_1_TASK_009_1_EXECUTION_CONTRACT.md`.
+- This checkpoint remains BLOCKED: direct mutation paths in `portfolio_trader.py` and `StandaloneRuntime.kt`, unresolved-intent restart gating, stable idempotency claims, cancel/fill reconciliation and exactly-once fill projection are not closed by this patch.
+- Do not merge this branch until all TASK 009.1 acceptance gates pass on the exact final source SHA.
