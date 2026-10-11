@@ -86,11 +86,22 @@ class CampaignExecutionService:
     ) -> None:
         """Before clearing a recovered BUY fill, prove a live stop or create it through the barrier."""
         side = str(intent.get("side", "")).upper()
-        if side != "BUY" or not trades:
+        if not trades:
             return
         campaign_id = str(intent.get("campaign_id") or "")
         if not campaign_id:
-            raise CampaignExecutionError("recovered BUY fills lack a durable campaign ID")
+            raise CampaignExecutionError("recovered campaign fills lack a durable campaign ID")
+        if side == "SELL":
+            campaign = self.engine.load_campaign(campaign_id)
+            if campaign is None:
+                raise CampaignExecutionError("recovered SELL fill campaign is missing")
+            if float(campaign.position_qty or 0) > 0:
+                raise CampaignExecutionError(
+                    "SELL fill leaves residual inventory; automated protection resize is not yet proven; contour remains locked"
+                )
+            return
+        if side != "BUY":
+            raise CampaignExecutionError(f"unsupported side for protection recovery: {side!r}")
         campaign = self.engine.load_campaign(campaign_id)
         if campaign is None or float(campaign.position_qty or 0) <= 0:
             raise CampaignExecutionError("recovered BUY fill did not produce a durable positive campaign position")
@@ -423,6 +434,10 @@ class CampaignExecutionService:
             campaign.health = "RED"
             campaign.reconciliation_state = "RECONCILE_REQUIRED"
             self.db.state_set(f"position_state:{symbol}", "RECONCILE_REQUIRED")
+            self.db.mark_execution_protection_pending(
+                str(intent.get("intent_id") or ""),
+                "SELL fill left residual inventory; protective order coverage must be reconciled",
+            )
             self.db.log_campaign_event(
                 campaign_id,
                 "PARTIAL_SELL_FILL_RECONCILE_REQUIRED",
