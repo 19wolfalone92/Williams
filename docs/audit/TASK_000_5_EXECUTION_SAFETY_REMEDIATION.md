@@ -101,3 +101,19 @@ No local tests were run. No new failure-injection tests were added or run. No te
 6. Reassess acceptance only after test evidence closes both P1s. Keep PR #51 Draft/open and automated Testnet execution disabled until then.
 
 **Final decision: BLOCKED — no production fix was safely implemented or verified in this environment. Do not merge PR #51.**
+
+
+## TASK 000.5 execution attempt — 2026-10-11 (separate branch)
+
+- Required baseline SHA: `f6dd193f9147ba49ff7f11efc81b18e10c1e2c44` (confirmed by fetching that commit).
+- Prior work branch HEAD rechecked through GitHub ref resolution: `839d3928609350cf975840781ca50c6d3b5258a8` (not the older `d0c3a4...` recorded in the earlier report).
+- New isolated branch: `audit/task-0005-p1-remediation`, created from `839d3928609350cf975840781ca50c6d3b5258a8`.
+- Source inspection confirmed that `OrderIntent` has target-leg fields, but the reviewed `CampaignExecutionService.replace_structural_stop` does not populate the original order identity into those fields before the `cancelReplace` submission. The low-level client documents non-blind retries, but this does not itself supply a durable two-leg journal.
+- `ExecutionBarrier._persist` blocks when intent persistence fails before submission. The post-submission ambiguity path relies on durable unknown marking; it does not prove independent recovery of both cancel/replace legs after a crash.
+- The previous inventory/audit records 123 Python paths, with 112 not reviewed line-by-line and 11 targeted-review-only. A keyword/source-pattern scan is not equivalent to the requested semantic review of all 123 files.
+- No production Python, Kotlin, strategy, schema, or test source was changed in this attempt: the available GitHub connector provides remote source/commit operations but no executable repository checkout/test runner, and a local clone/test run is unavailable in this environment. Creating speculative recovery code without fault-injection execution would not safely close a P1 order-execution blocker.
+- Commands/actions actually completed: fetched Issue #52; resolved `audit/williams-2.1-task-009-integration` to commit `839d3928609350cf975840781ca50c6d3b5258a8`; fetched baseline commit `f6dd193f9147ba49ff7f11efc81b18e10c1e2c44`; fetched `binance_client.py`, `campaign_execution.py`, `execution_barrier.py`, `trader.py`, `portfolio_trader.py` and both audit documents; created the separate branch from the verified HEAD.
+- Test commands executed: **none**. No test result is claimed. No real exchange requests, real orders, Testnet trading, or strategy changes were made.
+- Required next verification: run offline fault-injection tests on a runner that checks out the exact source SHAs; test pre/post-submit DB failures, lost response/timeouts, HTTP 409 combinations, partial/late fills, process restart and repeated recovery; map and negatively test all public mutators and dynamic adapter paths; complete line-by-line review of all 123 Python files. Record `git rev-parse HEAD`, exact commands, job URLs/logs and outcomes.
+
+**TASK 000.5 result remains BLOCKED.** No P1 is claimed fixed, and no merge or Testnet activation is authorized.
