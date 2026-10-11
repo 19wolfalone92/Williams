@@ -68,9 +68,24 @@ def fake_ready_preflight():
     }
 
 
+# Test-only seam for this offline OCO-failure recovery scenario. The
+# production barrier calls the concrete class implementation and ignores
+# instance-level providers; this class patch is scoped to this test process.
+_original_verify_all = PreflightCheckService.verify_all
+
+
+def _offline_fake_verify_all(service, *args, **kwargs):
+    return fake_ready_preflight()
+
+
+PreflightCheckService.verify_all = _offline_fake_verify_all
+
+
 def bind_fake_execution(trader):
     trader.execution_barrier.exchange_client = trader.client
-    trader.execution_barrier.preflight_provider = fake_ready_preflight
+    trader.execution_barrier.preflight_service = PreflightCheckService(
+        trader.client, symbols=["BTCUSDT"]
+    )
 
 
 os.environ["MAX_OPEN_POSITIONS"] = "1"
