@@ -40,3 +40,9 @@
 Known campaign entry/add-on/protection/exit/cancel/cancelReplace callsites enter `CampaignExecutionService._submit`, which checks account identity before invoking the barrier. The barrier uses durable readiness/intent claim, context/state and pre-submit checks, persists `SUBMITTING`, invokes the callback, persists outcome, and marks unknown outcomes for reconciliation. This is a bounded source conclusion, not whole-program proof.
 
 No exactly-once financial effect or global mutation-path coverage claim is made.
+
+## Follow-up source verification at required SHA
+
+The exact-ref source was re-opened for `campaign_execution.py` lines 2201–2268 and `binance_client.py` lines 110–160. `CampaignExecutionService.replace_structural_stop` creates a new CID and standard `OrderIntent`, calls `cancel_replace` with the existing order ID, then checks `cancelResult` and `newOrderResult`. `BinanceSpotClient._request` explicitly maps HTTP 409 for `/api/v3/order/cancelReplace` to `unknown_execution=True` and says reconciliation is required before retry. This supports conservative ambiguity classification, but does not establish durable two-leg recovery: the standard intent contains the new CID and the generic recovery lookup centers on the intent's order/CID and trades. P1-1 remains open.
+
+The immutable Git tree contains 122 Python files including tests. The priority source files were fetched at the required SHA, but a complete line-by-line review of all 122 modules and dynamic alias/callback paths has not been established. P1-2 and the `cancel_open_orders`/OCO reachability items remain open. No mandatory-gate bypass was confirmed in the known inspected production callsites.
