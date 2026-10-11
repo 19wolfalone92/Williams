@@ -634,14 +634,15 @@ After the source audit, a narrow fail-closed correction was committed in the sam
 
 ### 13.3 TASK 001.5 code change
 
-Implementation SHA immediately before this report refresh: `06b9848fcfb5a679e1b75c645ad3d87830414677`. The report refresh itself creates a new commit; mandatory CI must therefore be checked against the resulting exact report SHA.
+Implementation SHA immediately before this report refresh: `468d97e296b79fc02841f3577ef191fe9c7d5731`. The report refresh itself creates a new commit; mandatory CI must therefore be checked against the resulting exact report SHA.
 
 Changed files:
 1. `portfolio_trader.py`
 2. `test_task001_recovery_regressions.py`
 3. `.github/workflows/android-apk.yml` — Android APK CI now also runs for root Python/tests and audit-report changes, so backend financial changes can be checked on the same SHA.
-4. `.github/workflows/python-ci.yml` — backend CI now also runs for audit-report changes, allowing the final report SHA to be tested.
-5. This existing report.
+4. `.github/workflows/python-ci.yml` — backend CI now runs on audit branches and for audit-report changes, allowing the exact feature-branch SHA to be tested.
+5. `.github/workflows/android-apk.yml` — APK CI now runs on audit branches as well as backend/test/report changes.
+6. This existing report.
 
 In `MultiPositionTrader._authoritative_execution()` (exposed through the legacy PortfolioTrader compatibility import), a filled order without local fill details now requires authoritative `myTrades` evidence. Lookup failure, empty history, malformed identity, missing trade ID, missing fee amount/asset, invalid numeric data, or a ledger conflict latches global and symbol `RECONCILE_REQUIRED` and raises instead of silently falling back to order-level quantity data or treating missing commission as zero.
 
