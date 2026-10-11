@@ -14,6 +14,8 @@ from portfolio_trader import MultiPositionTrader
 
 class FakeClient:
     testnet = True
+    # Non-secret deterministic account identity for offline intent tests.
+    api_key = "offline-test-account-key"
 
     def __init__(self):
         self.order_map = {}
