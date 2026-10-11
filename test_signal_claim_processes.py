@@ -205,11 +205,11 @@ def test_sqlite_busy_is_an_error_not_an_execution_grant():
     locker = None
     claimant = None
     try:
+        claimant = Database(path)
+        claimant.conn.execute("PRAGMA busy_timeout=100")
         locker = sqlite3.connect(path, timeout=0.1, isolation_level=None)
         locker.execute("PRAGMA busy_timeout=100")
         locker.execute("BEGIN IMMEDIATE")
-        claimant = Database(path)
-        claimant.conn.execute("PRAGMA busy_timeout=100")
         try:
             claimant.claim_signal_once(
                 "signal-while-busy",
