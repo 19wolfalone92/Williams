@@ -8,7 +8,13 @@ from typing import Any, Callable, Mapping
 
 from market_context import ContextCache, MarketStateSnapshot
 from order_state_machine import OrderState, OrderStateMachine
-from order_state_machine import OrderState, OrderStateMachine
+
+
+class ExecutionPersistenceError(RuntimeError):
+    """Critical execution state could not be durably recorded."""
+
+class ExecutionOutcomeUnknown(RuntimeError):
+    """An exchange mutation may have occurred but its result was not durably recorded."""
 
 
 @dataclass(frozen=True)
@@ -73,11 +79,19 @@ class ExecutionBarrier:
         self.db = db
 
     def _persist(self, intent: OrderIntent, status: str, reason: str = "") -> None:
-        if self.db is not None and hasattr(self.db, "save_execution_intent"):
-            try:
-                self.db.save_execution_intent(intent, status, reason)
-            except Exception:
-                pass
+        save = getattr(self.db, "save_execution_intent", None) if self.db is not None else None
+        if not callable(save):
+            raise ExecutionPersistenceError(
+                "durable execution-intent store is unavailable; mutation blocked"
+            )
+        try:
+            result = save(intent, status, reason)
+            if result is False:
+                raise RuntimeError("execution-intent store rejected the write")
+        except Exception as exc:
+            raise ExecutionPersistenceError(
+                f"cannot persist execution intent {intent.intent_id} status={status}; mutation blocked"
+            ) from exc
 
     def _record(self, level: str, event: str, intent: OrderIntent, message: str, raw=None) -> None:
         if self.db is not None and hasattr(self.db, "log_event"):
@@ -179,7 +193,6 @@ class ExecutionBarrier:
                     return ExecutionResult(intent.intent_id, False, reason=reason)
 
             order_fsm.transition(OrderState.SUBMITTING)
-            order_fsm.transition(OrderState.SUBMITTING)
             self._record(
                 "INFO",
                 "execution_admitted",
@@ -198,7 +211,6 @@ class ExecutionBarrier:
             try:
                 response = submit()
             except Exception as exc:
-                order_fsm.state = OrderState.AMBIGUOUS
                 order_fsm.state = OrderState.AMBIGUOUS
                 self._persist(intent, "AMBIGUOUS", f"{type(exc).__name__}: {exc}")
                 self._record(
@@ -284,7 +296,15 @@ class ExecutionBarrier:
                     raise RuntimeError(
                         "ExecutionBarrier: exchange response lacks authoritative order state"
                     )
-            self._persist(intent, "SUBMITTED")
+            try:
+                self._persist(intent, "SUBMITTED")
+            except ExecutionPersistenceError as exc:
+                # Binance may have accepted or filled the order. Never report success
+                # or let a caller infer that retrying the submit is safe.
+                raise ExecutionOutcomeUnknown(
+                    f"exchange mutation may have occurred for intent {intent.intent_id}; "
+                    "durable result persistence failed; reconciliation is mandatory"
+                ) from exc
             if self.db is not None and hasattr(self.db, "save_execution_event"):
                 try:
                     self.db.save_execution_event(intent.intent_id, "BINANCE_SUBMITTED", {"symbol": intent.symbol, "side": intent.side})
