@@ -16,6 +16,7 @@ from campaign_model import CampaignState, PendingOrderRecord, SignalSpec, Signal
 from decision_trace import DecisionTrace
 from execution_barrier import ExecutionBarrier, OrderIntent
 from execution_recovery import ExecutionRecoveryCoordinator
+from execution_account_identity import verify_execution_account_identity
 
 
 class CampaignExecutionError(RuntimeError):
@@ -50,6 +51,20 @@ class CampaignExecutionService:
             execution_scope="spot",
         )
 
+    def _verify_account_identity(self) -> dict[str, Any]:
+        try:
+            return verify_execution_account_identity(
+                self.client,
+                self.db,
+                execution_scope="spot",
+                account_scope=os.getenv("WILLIAMS_ACCOUNT_SCOPE") or None,
+            )
+        except Exception as exc:
+            raise CampaignExecutionError(
+                "Binance account identity is not verified; execution remains blocked: "
+                + str(exc)
+            ) from exc
+
     def _ensure_recovered(self) -> list[dict[str, Any]]:
         # Use the same in-process lock as ExecutionBarrier. The durable DB gate
         # remains authoritative across independent processes.
@@ -58,6 +73,7 @@ class CampaignExecutionService:
             if self.barrier is not None else nullcontext()
         )
         with lock:
+            self._verify_account_identity()
             self._recovery_depth += 1
             try:
                 outcomes: list[dict[str, Any]] = []
@@ -860,6 +876,7 @@ class CampaignExecutionService:
             raise CampaignExecutionError(
                 "Campaign execution requires the canonical ExecutionBarrier"
             )
+        self._verify_account_identity()
         result = self.barrier.execute(
             intent,
             submit,
