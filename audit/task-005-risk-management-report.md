@@ -358,3 +358,80 @@ The new SQLite tests are committed in the branch, but **TEST-PROVEN and CI-PROVE
 The previous workflow filters did not run `Python backend tests` or `Build Android APK` for an audit-only report commit on pull requests, despite their push filters covering `audit/**`. The PR filters now include `audit/**`; the Android PR filter also includes root Python files and `tests/**`. This is a CI-coverage correction, not evidence of a passing build. The new branch head must have fresh Python, Android and Campaign runs, all on the same exact SHA, before their status can be recorded as accepted evidence.
 
 The code-level transaction fix is limited to Python SQLite connection ownership and its tests. It does not close the emergency recovery, financial handoff, Decimal, exposure, complete sink inventory, global gate, or Android durability blockers listed above.
+
+
+---
+
+# TASK 005.12 — Durable Emergency SELL Recovery / Mutation-Sink Closure
+
+**Status: BLOCKED — NOT ACCEPTED.** This section is an evidence-based audit checkpoint, not a claim that the recovery contract is complete.
+
+## Baseline / repository control
+
+- Requested baseline: `e49d0737ca9d5ea989d9f80efc07566b32f8d0b2`.
+- Actual branch at audit start: `audit/williams-2.1-task-005-risk-management`, HEAD `e49d0737ca9d5ea989d9f80efc07566b32f8d0b2`.
+- PR #50: Open, Draft, unmerged; base `main` at `04da5f9c09572e99ff310be3a1908179165e528c`.
+- `main` remains `04da5f9c09572e99ff310be3a1908179165e528c`.
+- No trading mutations were executed.
+- Exact-SHA baseline CI on e49d0737: Python backend run `38127503937` SUCCESS; Campaign CI PR run `38127503940` SUCCESS; Campaign CI push run `38127500157` SUCCESS; Android APK run `38127503951` SUCCESS. These are generic branch workflows and do **not** prove the new TASK 005.12 recovery, independent-process, or fault-injection acceptance matrix.
+
+## Confirmed source-to-sink inventory (initial, not complete)
+
+| Sink / source | Mutation | Current observed guard/evidence | TASK 005.12 finding |
+|---|---|---|---|
+| `binance_client.py::BinanceSpotClient._request` | Shared REST boundary for POST/DELETE | Emergency-prefix special case checks `emergency_sell_authorizer`; generic mutations are not proven to require a universal durable intent contract | P0: universal sink contract not proven |
+| `BinanceSpotClient.order` | POST `/api/v3/order` | Supports caller-provided client order ID; POST transport ambiguity is surfaced by client logic | P0: all callers and all order classes need sink-level admission proof |
+| `cancel_replace` | POST `/api/v3/order/cancelReplace` | Documents non-transactional cancel/replace | P0: cancellation and replacement outcomes need durable two-sided reconciliation |
+| `cancel_order` | DELETE `/api/v3/order` | Signed REST call | P0: durable cancel intent and UNKNOWN handling not proven universally |
+| `cancel_open_orders` | DELETE `/api/v3/openOrders` | Signed REST call | P0: broad cancellation can alter protection/risk; no complete contract proof |
+| `create_oco_sell` / `create_oco_sell_safe` | POST `/api/v3/orderList/oco` | Safe wrapper looks up by list client ID on an UNKNOWN exception | P0: complete durable intent + restart worker + all caller proof missing |
+| `cancel_oco` | DELETE `/api/v3/orderList` | Signed REST call | P0: durable cancellation recovery not proven |
+| `portfolio_trader.py::MultiPositionTrader._emergency_market_sell` | Emergency MARKET SELL | Stable operation/client IDs; persists PREPARED then SUBMITTING; one-shot sink permit; non-PREPARED states refuse resubmit; ambiguous response moves to reconciliation | Partial safeguard only; no complete restart recovery worker demonstrated |
+| `campaign_execution.py` | Campaign entry/exit/stop and cancel flows | Uses `ExecutionBarrier` for selected paths; contains fill-accounting and cancel helpers | P0: reachable mutation graph and every bypass/legacy caller not closed |
+| `trader.py` and legacy/alternate Python clients | Legacy or alternative order paths | Prior audit notes legacy market BUY disabled, but that does not prove all sinks | P0: complete call graph and negative tests missing |
+| Android `StandaloneRuntime.kt::signedPost` | POST mutation dispatcher | Wraps `signedRequest`; call sites include order and cancel/replace operations | P0: no demonstrated durable emergency SELL intent/recovery parity at every mutation |
+| Android `StandaloneRuntime.kt::signedDelete` | DELETE mutation dispatcher | Wraps `signedRequest`; call sites include cancellation | P0: universal mutation admission and durable cancel recovery not proven |
+| Android `ExecutionGate.kt` | In-memory symbol reservation | Synchronized, process-local reservation only | P0: not a durable cross-process Recovery Gate |
+
+This table is an inventory of confirmed entry points, **not** a claim that every reachable mutation has been found. A repository-wide call graph and negative sink-bypass tests remain required.
+
+## Existing emergency intent model — observed contract and gap
+
+The current `db.py` implementation has `claim_emergency_sell_intent`, `authorize_emergency_sell_mutation`, and `transition_emergency_sell_intent`. The observed transition set is limited to:
+- `PREPARED -> SUBMITTING | RECONCILE_REQUIRED`
+- `SUBMITTING -> SUBMITTED | RECONCILE_REQUIRED`
+- `SUBMITTED -> RECONCILE_REQUIRED | APPLIED`
+- `RECONCILE_REQUIRED -> RECONCILE_REQUIRED | SUBMITTED | APPLIED`
+- `APPLIED -> APPLIED`
+
+The one-shot `mutation_started_at` check is valuable: a consumed permit does not authorize another POST. However, the production transition set does not explicitly model the requested exchange lifecycle states (partial fill, filled, cancel pending/cancelled, rejected, terminal failure) and does not itself implement a durable worker that repeatedly reconciles an UNKNOWN after restart. `_emergency_market_sell` deliberately refuses a second submission once the stable operation exists outside PREPARED, but refusing duplicate submission alone does not resolve the original order or account for its fills.
+
+## Financial handoff and exactly-once status
+
+- `campaign_fills` has a unique partial index on `(symbol, trade_id)` when `trade_id` is non-NULL. This is a useful per-fill deduplication guard, but is not by itself proof of atomic exactly-once application to every financial projection.
+- `save_campaign_fill` is an existing writer candidate; its full call graph and transaction boundary must be demonstrated before it can be accepted as the canonical financial effect mechanism.
+- Emergency SELL recovery has not been proven to hand every authoritative Binance trade/fill to that writer exactly once.
+- Fee conversion, unknown fee behavior, late fee resolution, third-asset conversion, and atomic all-projection commit remain BLOCKED until a source-to-sink audit and fault-injection suite proves them.
+- No parallel ledger or financial projection writer was introduced by this checkpoint.
+
+## Spot exposure / Recovery Gate / Android
+
+- `_emergency_market_sell` obtains account data and normalizes quantity against the currently observed balance, but this does not prove authoritative exposure reconciliation across free + locked balances, open and partially-filled SELL orders, pending cancellations, other in-flight operations, and base-asset fees.
+- A fresh balance alone cannot establish sellable residual when existing orders may reserve the same asset. Before resubmission, unresolved intent must remain a hard block.
+- Python global Recovery Gate coverage across all risk-increasing mutation sinks is NOT VERIFIED.
+- Android `ExecutionGate` is an in-memory reservation and cannot independently prove persistence across process death or coordination across independent processes. Android durable intent, UNKNOWN POST restart recovery, and financial-writer parity are NOT VERIFIED.
+
+## TASK 005.12 mandatory blockers
+
+1. Complete and test the repository-wide Python + Android mutation source-to-sink graph, including direct REST calls, callbacks, workers, legacy clients, cancel/replace, OCO, and broad cancellation.
+2. Implement or prove a durable recovery worker for emergency SELL UNKNOWN POST, including repeated lookup misses, exchange outage, accepted-but-lost-response, restart, two concurrent workers, partial/full fills, cancel/fill race, and late fills. No blind SELL retry.
+3. Define and enforce the full durable state machine with compare-and-swap/transactional worker claims and explicit exchange lifecycle states.
+4. Prove canonical per-fill financial handoff and atomic exactly-once effects using the existing writer only. If no valid writer contract exists, leave financial integration blocked; do not add another writer.
+5. Complete Decimal/fee audit, including unknown and late fees, conflicting fee data, and all Decimal/TEXT/REAL/float conversions on the emergency path.
+6. Reconcile authoritative Spot sellable residual against balances, open orders, pending cancels/intents, executed quantities and base-asset commissions; apply symbol filters without rounding quantity up.
+7. Prove Recovery Gate at every Python/Android mutation sink and across restart/multiple processes; in-memory `ExecutionGate` alone is insufficient.
+8. Add independent-process and crash fault-injection tests for the 16 requested failure scenarios, asserting durable SQLite state and mock exchange state after each restart.
+9. Run all required task-specific checks on one final SHA. The successful generic CI runs listed above are not substitutes for missing acceptance tests.
+10. No device/emulator/Testnet proof is claimed. No trading mutations were executed.
+
+**Acceptance decision: BLOCKED — NOT ACCEPTED.** Minimum next implementation increment: build a narrowly scoped durable emergency-SELL recovery service around the existing `emergency_sell_intents` table and existing financial writer contract, first proving the writer transaction boundary and per-fill schema; wire it to a complete sink inventory and mock-only crash/concurrency tests. Do not permit automatic resubmission while the prior outcome is UNKNOWN.
