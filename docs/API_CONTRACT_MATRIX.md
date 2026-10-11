@@ -76,3 +76,36 @@ there). Do not infer wire-level status parity from the dispatcher's string.
 ## Follow-up verification needed
 
 The source dispatch establishes method/path and some query inputs, but it does not by itself establish local HTTP status codes, auth boundaries, timeout values, retry policy, or full DTO equivalence. Verify the Android local HTTP server wrapper and its callers before claiming those dimensions are aligned.
+
+
+## Verification addendum (2026-10-11)
+
+### Confirmed by source inspection
+
+- Android embedded server binds to `127.0.0.1:18080`, which limits network exposure to loopback on the device.
+- Android's HTTP handler writes `HTTP/1.1 200 OK` for every successfully dispatched route result, including the dispatcher's `{"error":"Not found"}` fallback. Thus an unknown route is returned with HTTP 200, unlike FastAPI's 404. This is a confirmed protocol-contract defect.
+- Android's handler maps caught exceptions to HTTP 500 with a JSON `error` field. It does not currently map input/validation errors to 400/422 or auth failures to 401/403 at this layer. Exact errors thrown inside route functions depend on exception type and are not normalized.
+- Android server's OkHttp client is configured with 10-second connect timeout, 45-second read timeout, and `retryOnConnectionFailure(false)`. These are confirmed client settings for outbound calls made through this client, not a server-side request deadline for incoming loopback HTTP requests.
+- Android route query parsing uses `URLDecoder` and `associate`; duplicate query keys collapse to one value (last value wins). Query parsing filters out items without `=`. Python/FastAPI may handle duplicate and malformed query values differently.
+- The handler reads request body into a character array using a single `reader.read(chars)` call. A single read is not guaranteed to fill the requested buffer; requests with larger/fragmented bodies can be truncated. This is a confirmed robustness concern.
+- Python `GET /api/v1/health` is unauthenticated; sensitive routes listed in the table use `Depends(auth)`. Android's loopback server does not share FastAPI's token dependency. Keep it loopback-only unless a separate local access-control design is implemented.
+- Android's outbound Binance REST helpers include retry loops for selected transient failures and timestamp error `-1021`. Those are exchange transport retries, not retries of the Android local API. This audit did not invoke them.
+
+### Static-test review
+
+The route tests are source-text checks, not HTTP integration tests. They can detect selected route declarations and selected auth decorators, but do not prove actual HTTP status codes, middleware/dependency behavior, query validation, response DTO equivalence, timeout handling, or retries. The Android route parser is regex-based and should not be treated as a complete Kotlin parser. The auth decorator check should be validated by actually running the unittest command before relying on it.
+
+### Test execution status
+
+**Not run in this environment.** The connected GitHub operations allow reading and committing repository files, but do not provide a shell/runner for executing `python -m unittest tests.test_api_route_contract -v` or the complete Python test suite. No test pass/fail result is claimed. Run the command and the project's full available Python suite in a checkout of this branch; record exact output before marking this PR ready.
+
+### Remaining blockers / recommended follow-up
+
+1. Fix Android HTTP status handling so unknown routes produce 404 and malformed/invalid requests use a documented 4xx response without exposing secrets. Add loopback-only socket-level tests for unknown path, unsupported method, malformed body, missing required `symbol`, and handler exceptions.
+2. Replace single-read request-body handling with a bounded read loop; reject invalid/oversized `Content-Length` explicitly.
+3. Add isolated FastAPI TestClient tests using dependency overrides/mocks for 401/403, validation errors, 404, and documented 409/503 paths. Do not instantiate live exchange clients or call execution controls.
+4. Verify Android UI/call-site timeouts and retry wrappers separately. Never automatically retry `sell`, kill/reset, credential changes, start/stop, or recovery unless operation idempotency is proven.
+5. Fix and execute the static unittest suite; run the full Python tests and append exact commands, counts, and outcomes here and to PR conversation.
+6. Review response DTO field-level parity endpoint by endpoint. Current matrix identifies route coverage and known differences but does not claim complete JSON schema equivalence.
+
+No new routes were added, no trading orders were sent, and no database schema, Gradle, or CI files were changed.
