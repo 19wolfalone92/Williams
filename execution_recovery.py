@@ -209,6 +209,7 @@ class ExecutionRecoveryCoordinator:
 
     def recover_one(self, intent):
         intent_id = str(intent["intent_id"])
+        originally_unresolved = str(intent.get("status", "")).upper() in self.UNRESOLVED
         try:
             if str(intent.get("execution_scope") or "spot").lower() != self.execution_scope:
                 return {"intent_id": intent_id, "state": "BLOCKED", "reason": "SCOPE_MISMATCH"}
@@ -244,6 +245,7 @@ class ExecutionRecoveryCoordinator:
             # rolls both back. No callback means filled operations remain blocked.
             if trades and self.fill_handler is None:
                 raise ExecutionRecoveryBlocked("campaign financial fill handler is not wired")
+            applied_count = 0
             for trade in trades:
                 commission = trade.get("commission", "0")
                 commission_asset = trade.get("commissionAsset", "")
@@ -266,15 +268,22 @@ class ExecutionRecoveryCoordinator:
                     "base_asset": base_asset,
                     "quote_asset": quote_asset,
                 }
-                self.db.apply_execution_fill(
+                if self.db.apply_execution_fill(
                     fill,
                     lambda _db, data, i=intent, o=order, t=fill: self.fill_handler(i, o, t),
-                )
+                ):
+                    applied_count += 1
 
             evidence = self._evidence(intent, order, trades, history_qty)
-            self.db.resolve_execution_intent(
-                intent_id, evidence, scope=self.execution_scope
-            )
+            if originally_unresolved:
+                self.db.resolve_execution_intent(
+                    intent_id, evidence, scope=self.execution_scope
+                )
+            else:
+                self.db.record_reconciliation_refresh(
+                    intent_id, evidence,
+                    changed=bool(applied_count) or evidence.status != str(intent.get("status", "")).upper(),
+                )
             return {
                 "intent_id": intent_id,
                 "state": evidence.status,
@@ -283,7 +292,15 @@ class ExecutionRecoveryCoordinator:
                 "evidence_id": evidence.evidence_id,
             }
         except Exception as exc:
-            self._record_blocked(intent_id, f"{type(exc).__name__}: {exc}")
+            reason = f"{type(exc).__name__}: {exc}"
+            self._record_blocked(intent_id, reason)
+            try:
+                self.db.mark_intent_reconcile_required(intent_id, reason)
+            except Exception:
+                # If persistence also fails, original unresolved/terminal history is
+                # not silently converted to success; startup gate may still stop on
+                # the extant lock, but callers must treat this as a P0 persistence fault.
+                pass
             return {
                 "intent_id": intent_id,
                 "state": "RECONCILE_REQUIRED",
@@ -291,11 +308,19 @@ class ExecutionRecoveryCoordinator:
             }
 
     def recover(self):
-        intents = self.db.list_unresolved_execution_intents(
+        unresolved = self.db.list_unresolved_execution_intents(
             scope=self.execution_scope,
             account_scope=self.account_scope,
         )
-        return [self.recover_one(row) for row in intents]
+        monitor = self.db.list_monitor_execution_intents(
+            scope=self.execution_scope,
+            account_scope=self.account_scope,
+        )
+        # Stable intent ID dedupe keeps one pass per operation despite list overlap.
+        by_id = {str(row["intent_id"]): row for row in unresolved}
+        for row in monitor:
+            by_id.setdefault(str(row["intent_id"]), row)
+        return [self.recover_one(row) for row in by_id.values()]
 
     def readiness(self):
         return self.db.execution_readiness(
