@@ -79,7 +79,7 @@ def test_unknown_lock_survives_restart_and_requires_evidence_to_clear(tmp_path):
     item = intent()
     set_submitting(db, item)
     db.mark_execution_unknown(item, "timeout after possible submit")
-    db.close()
+    db.conn.close()
 
     restarted = Database(path)
     gate = restarted.execution_readiness()
