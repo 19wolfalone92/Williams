@@ -894,16 +894,17 @@ class MultiPositionTrader:
                 fee_asset_value = fill.get("commissionAsset")
                 if trade_id in (None, ""):
                     raise ValueError("exchange trade ID is missing")
-                if fee_value in (None, "") or fee_asset_value in (None, ""):
-                    raise ValueError("commission amount or asset is unknown")
                 quantity = Decimal(str(fill.get("qty", "")))
                 price = Decimal(str(fill.get("price", "")))
-                commission = Decimal(str(fee_value))
-                fee_asset = str(fee_asset_value).upper()
                 if (not quantity.is_finite() or quantity <= 0 or
-                        not price.is_finite() or price <= 0 or
-                        not commission.is_finite() or commission < 0 or not fee_asset):
-                    raise ValueError("invalid fill quantity, price or commission")
+                        not price.is_finite() or price <= 0):
+                    raise ValueError("invalid fill quantity or price")
+                commission = None
+                if fee_value not in (None, ""):
+                    commission = Decimal(str(fee_value))
+                    if not commission.is_finite() or commission < 0:
+                        raise ValueError("invalid fill commission")
+                fee_asset = str(fee_asset_value).upper() if fee_asset_value not in (None, "") else None
                 quote_value = fill.get("quoteQty")
                 quote_qty = Decimal(str(quote_value)) if quote_value not in (None, "") else quantity * price
                 if not quote_qty.is_finite() or quote_qty < 0:
@@ -915,12 +916,14 @@ class MultiPositionTrader:
                     "qty": format(quantity, "f"),
                     "price": format(price, "f"),
                     "quoteQty": format(quote_qty, "f"),
-                    "commission": format(commission, "f"),
+                    "commission": format(commission, "f") if commission is not None else None,
                     "commissionAsset": fee_asset,
                 }
                 if not raw_trade["orderId"]:
                     raise ValueError("exchange order ID is missing")
                 self.db.record_exchange_fill(symbol, raw_trade)
+                if commission is None or not fee_asset:
+                    raise ValueError("commission amount or asset is unknown")
                 normalized_fills.append({
                     "tradeId": str(trade_id),
                     "price": format(price, "f"),
