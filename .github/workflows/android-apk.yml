@@ -10,6 +10,7 @@ on:
       - 'gradle/**'
       - 'settings.gradle.kts'
       - '.github/workflows/**'
+      - 'audit/**'
       - '*.py'
       - 'tests/**'
   pull_request:
