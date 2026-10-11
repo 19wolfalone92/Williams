@@ -61,3 +61,17 @@ Latest PR-triggered runs were inspected after the evidence package was committed
 - Android build runs `38164010386` and job `114542704611` were still in progress at last check.
 
 These are actual remote log results. They are PR-triggered merge-checkout runs; the available logs do not establish that they executed on exact source SHA `f6dd193f9147ba49ff7f11efc81b18e10c1e2c44`. Local tests were not run. Exact-SHA execution remains outstanding.
+
+
+## Follow-up verification — current PR head (2026-10-11)
+
+The current PR metadata reports head SHA `6a6e47c798e4a2cc6e2d2a5245911a22788170fe`, while the immutable task source SHA remains `f6dd193f9147ba49ff7f11efc81b18e10c1e2c44`. Current-head PR-triggered workflows were subsequently observed as completed successfully:
+
+- Mutation registry run `38164276135`: completed success; source-to-sink gate and negative-fixture steps succeeded.
+- Python backend run `38164276136`: completed success; release contract gate, Python compile, full static safety audit and offline tests succeeded.
+- Williams Campaign CI run `38164276128`: Python tests and Android build/static-check jobs completed success.
+- Build Android APK run `38164276047`: completed success.
+
+These newer results improve evidence for the current PR head, but they do not replace the required immutable-source test requirement. For example, the inspected backend and campaign logs for earlier run IDs `38156886908` and `38156886916` explicitly checked out merge ref `c24e28defc38e19baf20c777a069e80b87c7aecf` (merge of source `f6dd193f9147ba49ff7f11efc81b18e10c1e2c44` into base `04da5f9c09572e99ff310be3a1908179165e528c`). Therefore those test results are merge-ref evidence, not an isolated checkout of the immutable source SHA. No local test run is claimed.
+
+**Disposition unchanged:** exact-source validation remains unproven; cancelReplace two-leg recovery and complete mutation-caller reachability remain blockers.
