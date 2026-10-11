@@ -185,4 +185,4 @@ def test_late_partial_fill_is_distinct_and_applied_once_per_exchange_trade_id(tm
     later["quantity"] = "0.005"
     assert db.apply_execution_fill(later, apply) is True
     assert db.apply_execution_fill(later, apply) is False
-    assert float(db.state_get("filled_qty")) == pytest.approx(0.025)
+    assert float(db.state_get("filled_qty")) == pytest.approx(0.015)
