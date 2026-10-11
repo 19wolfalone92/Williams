@@ -3,8 +3,9 @@ package com.williamsbot
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Test
-import java.io.Reader
-import java.io.StringReader
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.nio.charset.StandardCharsets
 
 class ApiHttpContractTest {
     @Test
@@ -14,27 +15,23 @@ class ApiHttpContractTest {
 
     @Test
     fun requestBodyReaderHandlesPartialReads() {
-        val partial = object : Reader() {
-            private val source = "abcdef"
-            private var offset = 0
-
-            override fun read(buffer: CharArray, off: Int, len: Int): Int {
-                if (offset >= source.length) return -1
-                val count = minOf(2, len, source.length - offset)
-                source.toCharArray(buffer, off, offset, offset + count)
-                offset += count
-                return count
-            }
-
-            override fun close() = Unit
+        val partial = object : ByteArrayInputStream(
+            "café🙂".toByteArray(StandardCharsets.UTF_8)
+        ) {
+            override fun read(buffer: ByteArray, off: Int, len: Int): Int =
+                super.read(buffer, off, minOf(2, len))
         }
-        assertEquals("abcdef", readApiRequestBody(partial, 6))
+        val expected = "café🙂"
+        assertEquals(
+            expected,
+            readApiRequestBody(partial, expected.toByteArray(StandardCharsets.UTF_8).size)
+        )
     }
 
     @Test
     fun shortBodyIsBadRequest() {
         val error = assertThrows(ApiHttpException::class.java) {
-            readApiRequestBody(StringReader("abc"), 5)
+            readApiRequestBody(ByteArrayInputStream("abc".toByteArray()), 5)
         }
         assertEquals(400, error.statusCode)
     }
@@ -54,7 +51,7 @@ class ApiHttpContractTest {
     @Test
     fun oversizedBodyIsRejected() {
         val error = assertThrows(ApiHttpException::class.java) {
-            readApiRequestBody(StringReader(""), MAX_API_REQUEST_BODY_BYTES + 1)
+            readApiRequestBody(ByteArrayInputStream(byteArrayOf()), MAX_API_REQUEST_BODY_BYTES + 1)
         }
         assertEquals(413, error.statusCode)
     }
