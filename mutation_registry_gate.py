@@ -117,12 +117,24 @@ def analyze_python_sources(
             errors.append(f"{path}:{exc.lineno}: production Python cannot be parsed: {exc.msg}")
             continue
         parents = _parents(tree)
+        network_aliases: set[str] = set()
+        for assignment in ast.walk(tree):
+            if isinstance(assignment, ast.Assign) and isinstance(assignment.value, ast.Attribute):
+                if assignment.value.attr in DIRECT_MUTATION_CALLS | LOW_LEVEL_CALLS:
+                    for target in assignment.targets:
+                        if isinstance(target, ast.Name):
+                            network_aliases.add(target.id)
+            elif isinstance(assignment, ast.NamedExpr) and isinstance(assignment.value, ast.Attribute):
+                if assignment.value.attr in DIRECT_MUTATION_CALLS | LOW_LEVEL_CALLS and isinstance(assignment.target, ast.Name):
+                    network_aliases.add(assignment.target.id)
 
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
             name = _call_name(node)
             enclosing = _function_name(node, parents)
+            if name in network_aliases:
+                errors.append(f"{path}:{node.lineno}: alias-based network mutation call {name}() is unresolved")
 
             # The only permitted raw HTTP transport is the registered generic
             # Binance client transport. Its method/path are parameters, so the
@@ -164,7 +176,7 @@ def analyze_python_sources(
             # Calls to the generic Binance _request API outside its defining
             # module/class bypass the wrapper inventory and are rejected.
             if name == "_request":
-                if path != transport_path or enclosing.split(".")[-2:] != ["BinanceSpotClient", "_request"]:
+                if path != transport_path or not enclosing.startswith("BinanceSpotClient."):
                     errors.append(
                         f"{path}:{node.lineno}: direct _request call bypasses registered Binance client"
                     )
