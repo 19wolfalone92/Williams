@@ -145,7 +145,9 @@ def effect(db, intent, order, fill):
 
 def coordinator(client, db, account=ACCOUNT, scope=SCOPE):
     return ExecutionRecoveryCoordinator(
-        client, db, fill_handler=effect, account_scope=account, execution_scope=scope
+        client, db,
+        fill_handler=lambda intent, order, fill: effect(db, intent, order, fill),
+        account_scope=account, execution_scope=scope
     )
 
 
