@@ -754,7 +754,10 @@ class Database:
                 or str(evidence.execution_scope).lower() != expected_scope
                 or str(evidence.symbol).upper() != str(row["symbol"]).upper()
                 or str(evidence.client_order_id) != str(row["client_order_id"] or "")
-                or str(evidence.order_id) != str(row["order_id"] or evidence.order_id)
+                or str(evidence.order_id) != str(
+                    row["target_order_id"] if row["order_type"] == "CANCEL"
+                    else (row["order_id"] or evidence.order_id)
+                )
                 or not bool(evidence.order_verified)
                 or not bool(evidence.history_complete)
                 or not bool(evidence.fill_totals_match)
