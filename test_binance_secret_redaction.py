@@ -6,7 +6,7 @@ import pytest
 import requests
 
 from binance_client import BinanceAPIError, BinanceSpotClient
-from execution_permit import mutation_permit
+from execution_permit import _BARRIER_ADMISSION_TOKEN, _mutation_permit
 
 
 SECRET_MARKER = "SYNTHETIC_SECRET_MARKER_7d9a"
@@ -46,7 +46,7 @@ def test_http_error_payload_and_traceback_do_not_expose_marker(status):
 
     try:
         if method == "POST":
-            with mutation_permit(client):
+            with _mutation_permit(client, admission_token=_BARRIER_ADMISSION_TOKEN):
                 client._request(method, path, {}, signed=False)
         else:
             client._request(method, path, {}, signed=False)
@@ -89,7 +89,7 @@ def test_spot_testnet_permit_cannot_authorize_mainnet_client():
     testnet_client.session = testnet_session
     mainnet_client.session = mainnet_session
 
-    with mutation_permit(testnet_client):
+    with _mutation_permit(testnet_client, admission_token=_BARRIER_ADMISSION_TOKEN):
         with pytest.raises(RuntimeError, match="matching ExecutionBarrier permit required"):
             mainnet_client.order(
                 "BTCUSDT", "BUY", "MARKET",
