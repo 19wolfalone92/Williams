@@ -90,3 +90,13 @@ Latest observed PR-triggered runs:
 **Checkout SHA verified from job logs:** the mutation-registry, backend and campaign Python jobs checked out merge commit `e5bf8466760c4583e272d339036f59a4dfae03ef`, with log text: `Merge 2518a69f96a41f74a18445017c666855b420b4f1 into 04da5f9c09572e99ff310be3a1908179165e528c`. Therefore these successful tests are evidence for the PR merge checkout, not an isolated test of required SHA `f6dd193f9147ba49ff7f11efc81b18e10c1e2c44`. The exact-source test requirement remains unmet. No local tests were run.
 
 **Disposition remains BLOCKED:** green CI does not resolve cancelReplace two-leg recovery or prove complete production mutation-caller reachability. Do not merge PR #51.
+
+
+## TASK 000.4 follow-up — immutable source inventory and evidence boundary
+
+- Required audit source SHA: `f6dd193f9147ba49ff7f11efc81b18e10c1e2c44`.
+- Immutable Git tree query returned **123 Python files**. Each path and blob SHA is now recorded in `TASK_000_4_PYTHON_FILE_INVENTORY.csv`; the per-file status explicitly distinguishes targeted inspection from not reviewed line-by-line.
+- Targeted source review and limitations are documented in `TASK_000_4_EXECUTION_SAFETY_AUDIT.md`.
+- No local Python tests were executed in this environment. No isolated test run on the literal required SHA has been verified. Previously observed successful PR CI jobs checked out merge commits, not the immutable source SHA; those runs are not exact-source evidence.
+- The audit branch received documentation-only commits for the inventory and report. Its CI must be checked against the resulting head and the job logs must be inspected for the actual checkout SHA. That evidence is separate from exact-source validation.
+- **Decision remains BLOCKED:** P1-1 cancelReplace two-leg recovery and P1-2 whole-repository barrier reachability remain open. No real exchange orders, Testnet trading, or trading-strategy changes were used/performed.
