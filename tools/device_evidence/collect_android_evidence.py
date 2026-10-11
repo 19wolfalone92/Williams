@@ -35,7 +35,7 @@ POTENTIAL_SECRET = re.compile(r"(?i)(api[_-]?key|api[_-]?secret|access[_-]?token
 def redact(text: str) -> tuple[str, bool]:
     changed = False
     for pattern in SECRET_PATTERNS:
-        text, n = pattern.subn(lambda m: (m.group(1) + (m.group(2) if len(m.groups()) > 1 and m.group(2) else "") + "[REDACTED]") if m.lastindex and m.lastindex >= 2 else "[REDACTED]", text)
+        text, n = pattern.subn("[REDACTED_SENSITIVE_FIELD]", text)
         changed = changed or n > 0
     # Fail closed if a sensitive marker remains after known-value redaction.
     unresolved = bool(POTENTIAL_SECRET.search(text))
