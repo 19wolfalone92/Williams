@@ -99,3 +99,14 @@ To satisfy acceptance, run the relevant test suite on a runner checking out the 
 **BLOCKED — DO NOT MERGE PR #51.**
 
 This audit adds evidence and an immutable file inventory only. It does not claim a complete 123-file review, does not claim the cancelReplace recovery defect has been fixed, and does not claim exact-source tests passed. Continue with offline implementation/fault-injection tests and complete call-graph review before reconsidering PASS.
+
+
+## TASK 000.5 follow-up — 2026-10-11
+
+The follow-up fetched and keyword/source-pattern scanned all 123 Python files at the required immutable SHA. This increases scan coverage but does **not** convert the inventory into a full line-by-line semantic review: 112 files remain not reviewed line by line and 11 remain targeted-review-only.
+
+The scan confirmed an additional recovery-identity gap in the baseline OCO path: `trader.py` creates the durable `OrderIntent` before creating the separate OCO client/list CID; the CID is used only inside the submit closure. It also confirmed dynamic legacy adapter dispatch around `portfolio_trader.py` OCO creation/cancellation and the public `cancel_open_orders` wrapper. No whole-program proof is claimed.
+
+Latest PR CI passed on merge checkout `bc8d2a88da81dece541cb36bb2cd00646ae21150` (branch HEAD `d0c3a4fe71025f69e3356fa0d397b5544898d240` merged into base `04da5f9c09572e99ff310be3a1908179165e528c`): backend 148 passed, campaign 208 passed, mutation registry 14 passed, and Android checks/build passed. Baseline-associated PR runs checked out merge commit `c24e28defc38e19baf20c777a069e80b87c7aecf`, not the literal required baseline SHA. No isolated exact-SHA test is proven and no local tests were run.
+
+See `TASK_000_5_EXECUTION_SAFETY_REMEDIATION.md` for source evidence, CI links, confirmed defects, limitations and next steps. P1-1 and P1-2 remain open. **BLOCKED — DO NOT MERGE PR #51.**
