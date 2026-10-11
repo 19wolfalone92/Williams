@@ -366,8 +366,6 @@ def test_execution_intent_lifecycle_update_preserves_immutable_payload():
         assert row["side"] == "BUY"
         assert row["order_type"] == "MARKET"
         assert __import__("json").loads(row["required_context_versions_json"]) == {"1h": 7}
-        db.close()
-
 
 def test_execution_intent_rejects_conflicting_payload_for_same_id():
     with tempfile.TemporaryDirectory() as d:
@@ -402,4 +400,3 @@ def test_execution_intent_rejects_conflicting_payload_for_same_id():
         ).fetchone()
         assert row["status"] == "PREPARED"
         assert row["side"] == "BUY"
-        db.close()
