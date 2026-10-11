@@ -258,3 +258,14 @@ def test_canonical_fill_stays_recovery_blocking_until_effect_is_applied(tmp_path
     assert pending[0]["trade_id"] == "17"
     assert pending[0]["effect_state"] == "PENDING"
 
+def test_entry_barrier_rejects_pending_financial_effect_even_if_status_is_manually_complete(tmp_path):
+    from execution_barrier import ExecutionBarrier, OrderIntent
+    from market_context import ContextCache
+
+    db = Database(str(tmp_path / "pending-effect-gate.sqlite3"))
+    db.save_campaign_fill(ledger_fill())
+    db.state_set("recovery_status", "RECOVERY_COMPLETE")
+    gate = ExecutionBarrier(ContextCache(), db)
+    buy = OrderIntent.new("BTCUSDT", "BUY", "MARKET", {}, purpose="CAMPAIGN_ENTRY")
+    assert gate._validate(buy, object()) == "global_recovery_gate:pending_financial_effects"
+
