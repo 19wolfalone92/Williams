@@ -102,6 +102,12 @@ def analyze_python_sources(
     if not approved:
         errors.append("registry has no evidenced approved Python mutation endpoints")
 
+    external_sinks = {
+        (str(item.get("path", "")), str(item.get("symbol", "")), str(item.get("method", "")).lower())
+        for item in registry.get("external_non_exchange_sinks", [])
+        if item.get("status") == "approved" and item.get("reason") and item.get("evidence_tests")
+    }
+
     transport = registry["python_transport_sink"]
     transport_path = transport.get("path")
     transport_symbol = transport.get("symbol")
@@ -166,7 +172,8 @@ def analyze_python_sources(
                     "AsyncClient", "Client", "urlopen",
                 } or name in {"urlopen"}
                 if looks_like_network and not (
-                    path == transport_path and enclosing == transport_symbol and name == "request"
+                    (path == transport_path and enclosing == transport_symbol and name == "request")
+                    or (path, enclosing, name) in external_sinks
                 ):
                     errors.append(
                         f"{path}:{node.lineno}: direct network mutation primitive {name}() "
@@ -177,9 +184,14 @@ def analyze_python_sources(
             # module/class bypass the wrapper inventory and are rejected.
             if name == "_request":
                 if path != transport_path or not enclosing.startswith("BinanceSpotClient."):
-                    errors.append(
-                        f"{path}:{node.lineno}: direct _request call bypasses registered Binance client"
-                    )
+                    # Read-only GETs through the existing client are allowed for legacy
+                    # history loaders; any mutation or dynamic call remains forbidden.
+                    method = _literal_string(node.args[0]) if len(node.args) >= 2 else None
+                    endpoint = _literal_string(node.args[1]) if len(node.args) >= 2 else None
+                    if method is None or endpoint is None or method.upper() != "GET":
+                        errors.append(
+                            f"{path}:{node.lineno}: direct _request call bypasses registered Binance client"
+                        )
                 elif len(node.args) < 2:
                     errors.append(
                         f"{path}:{node.lineno}: _request method/path cannot be proven"
