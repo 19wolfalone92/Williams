@@ -7,7 +7,7 @@ from contextlib import contextmanager
 
 
 class Database:
-    SCHEMA_VERSION = 7
+    SCHEMA_VERSION = 8
 
     def __init__(self, path=None):
         path = path or os.getenv('WILLIAMS_DB_PATH') or 'data/trader.sqlite3'
@@ -16,7 +16,7 @@ class Database:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute('PRAGMA busy_timeout=20000')
         self.conn.execute('PRAGMA journal_mode=WAL')
-        self.conn.execute('PRAGMA synchronous=NORMAL')
+        # Durable intent/ledger commits must survive process and OS interruption.\n        self.conn.execute('PRAGMA synchronous=FULL')
         self._transaction_active = False
         self._transaction_lock = threading.RLock()
         self.init()
