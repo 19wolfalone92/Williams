@@ -1538,7 +1538,11 @@ class Database:
             raise ValueError(f"{field_name} is not a valid decimal") from exc
         if not number.is_finite():
             raise ValueError(f"{field_name} must be finite")
-        return format(number, "f")
+        if number == 0:
+            return "0"
+        # Decimal-equivalent exchange payloads must share one canonical form
+        # (e.g. "0.0100" and "0.01") without introducing binary float math.
+        return format(number.normalize(), "f")
 
     def apply_financial_fill_effect(self, fill, projection_writer):
         """Atomically deduplicate a fill and apply same-database projections once.
@@ -1580,7 +1584,7 @@ class Database:
             "\x1f".join((exchange, environment, account_scope, symbol, fill_id)).encode("utf-8")
         ).hexdigest()
         with self.transaction():
-            self.conn.execute(
+            inserted = self.conn.execute(
                 """INSERT OR IGNORE INTO financial_effect_journal(
                     effect_id,exchange_name,environment,account_scope,symbol,exchange_fill_id,
                     quantity_decimal,price_decimal,quote_quantity_decimal,commission_decimal,
@@ -1590,7 +1594,7 @@ class Database:
                  quantity, price, quote_quantity, commission, commission_asset or None,
                  commission_status, "PENDING_FEE" if not commission_known else "PENDING",
                  canonical),
-            )
+            ).rowcount == 1
             row = self.conn.execute(
                 "SELECT * FROM financial_effect_journal WHERE effect_id=?", (effect_id,)
             ).fetchone()
@@ -1601,7 +1605,7 @@ class Database:
             if row["projection_status"] == "APPLIED":
                 return {"effect_id": effect_id, "status": "APPLIED", "duplicate": True}
             if row["commission_status"] != "KNOWN":
-                return {"effect_id": effect_id, "status": "PENDING_FEE", "duplicate": row["created_at"] is not None}
+                return {"effect_id": effect_id, "status": "PENDING_FEE", "duplicate": not inserted}
             # Same SQLite transaction: projection writes and APPLIED marker commit together.
             projection_writer(self, normalized)
             self.conn.execute(
