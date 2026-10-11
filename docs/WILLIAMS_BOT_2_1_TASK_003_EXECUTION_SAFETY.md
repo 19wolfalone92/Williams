@@ -1108,3 +1108,106 @@ Selecting a writer now would violate the task's own entry criteria. No DTO, migr
 - PR #48 remains **OPEN / DRAFT / NOT MERGED**; `main` must remain unchanged.
 
 No production code, financial schema or migration was changed in this checkpoint. No real Binance trading mutation was performed.
+
+
+## TASK 003.11 — Canonical fill ownership and durable recovery gate closure
+
+**Decision: BLOCKED — NOT ACCEPTED.** This is an evidence checkpoint, not a production financial-writer integration. The first canonical writer remains intentionally disconnected. No financial schema migration or production financial-writer reroute was made for TASK 003.11.
+
+### 1. Source and repository state recheck
+
+- Requested starting checkpoint: `e013aae4f0632387b899086b3097cd7cc1b32f22`.
+- Verified PR #48 head at inspection: `e013aae4f0632387b899086b3097cd7cc1b32f22`; no later branch commit was present at the time of this check.
+- `main`: `04da5f9c09572e99ff310be3a1908179165e528c`; unchanged.
+- PR #48: **OPEN / DRAFT / NOT MERGED**, base `main`.
+- PR's current main-relative diff: 21 changed files, 6,699 additions and 438 deletions. This is the existing Task 003 execution-safety branch diff, not a TASK 003.11 financial-writer implementation.
+- The existing diff contains production changes in `StandaloneRuntime.kt`, execution barrier/intents and related Python/Android code; those changes belong to the prior execution-mutation-safety work. They must not be mistaken for a canonical per-fill financial effect integration.
+- This check used GitHub refs, PR metadata, file contents and Actions records. It did not execute a local working-tree status command, so local filesystem cleanliness is not asserted.
+- No Mainnet/Spot Testnet trade or order mutation was executed. Futures execution was not enabled.
+
+### 2. CI recheck for source SHA `e013aae4f0632387b899086b3097cd7cc1b32f22`
+
+All four relevant workflows have now reached terminal `success` on the same source SHA:
+
+| Workflow | Run ID | Exact SHA | Terminal result |
+|---|---:|---|---|
+| Python backend tests | 38127583767 | `e013aae4f0632387b899086b3097cd7cc1b32f22` | SUCCESS |
+| Williams Campaign CI — PR | 38127583771 | `e013aae4f0632387b899086b3097cd7cc1b32f22` | SUCCESS |
+| Williams Campaign CI — push | 38127581393 | `e013aae4f0632387b899086b3097cd7cc1b32f22` | SUCCESS |
+| Build Android APK | 38127583886 | `e013aae4f0632387b899086b3097cd7cc1b32f22` | SUCCESS |
+
+Run pages: [Python](https://github.com/19wolfalone92/Williams/actions/runs/38127583767), [Campaign PR](https://github.com/19wolfalone92/Williams/actions/runs/38127583771), [Campaign push](https://github.com/19wolfalone92/Williams/actions/runs/38127581393), [Android APK](https://github.com/19wolfalone92/Williams/actions/runs/38127583886).
+
+These successes apply to the source SHA before this TASK 003.11 documentation append. They do not prove CanonicalFillV1, production financial projection atomicity, multi-process exactly-once, physical-device recovery, or full mutation-route closure. CI must be rerun for the new final SHA after this report is committed.
+
+### 3. Financial writer ownership and schema evidence
+
+The bounded review in TASK 003.10 remains the latest consolidated writer matrix. Its conclusion has not been superseded by new production evidence:
+
+- `Database.apply_financial_fill_effect()` and `resolve_financial_effect_fee()` exist, but a production caller connected to the actual campaign/trade/position projection set has not been established.
+- Legacy `save_trade()` and `save_campaign_fill()` paths remain reachable from inspected execution flows. Their caller census and exclusion from duplicate accounting are incomplete.
+- Campaign entry/add-on recovery consumes order-level aggregates and contains `fee_quote=0.0`; that is not acceptable as a canonical per-fill path.
+- Portfolio/trader normalization can aggregate trade rows and discard individual fill identity before persistence.
+- Android's `TradingAuditStore` is a separate database; its REAL/Double fields and event audit do not constitute an atomic shared financial journal with Python.
+- The audit did not complete a repository-wide inventory of every writer, reader, schema migration, trigger, background worker, callback and reachable financial mutation sink. Therefore it cannot truthfully declare a single financial-effect owner or claim legacy-writer closure.
+- Existing production projections include REAL/float-based financial values. A broad migration is outside this checkpoint and would require a separate compatibility plan.
+
+**Writer owner:** NONE ACCEPTED for production per-fill financial effects.  
+**Canonical financial schema/migration:** NOT IMPLEMENTED for this task.  
+**Complete source-to-sink graph:** NOT VERIFIED.
+
+### 4. CanonicalFillV1 and commission contract
+
+No production CanonicalFillV1 DTO was added or wired. The accepted contract must still preserve version, exchange/environment/account scope, symbol, exchange order ID, exchange fill/trade ID, optional client order ID, side, exact price/base/quote quantity, commission amount/asset/status, timestamps, source endpoint/event, durable-intent association and provenance.
+
+A per-fill input must be structurally distinct from an aggregate `ExecutionSummary`. Repeated identical fill identity/payload may be idempotent; a payload conflict for the same scoped fill identity must latch reconciliation and must not be treated as a successful duplicate.
+
+Commission states `KNOWN`, `UNKNOWN`, `INVALID` and `CONFLICTED` are not proven end-to-end against actual production projections. Missing commission is not a confirmed zero; third-asset commission requires an authoritative, time-bound valuation contract before any quote-equivalent PnL is asserted. The existing `fee_quote=0.0` and default-to-zero paths remain blockers.
+
+**Canonical per-fill identity:** NOT VERIFIED end-to-end.  
+**Commission resolution:** NOT VERIFIED.  
+**Decimal integrity across exchange → storage → projections → recovery:** NOT VERIFIED.
+
+### 5. Durable Recovery Gate and cross-platform boundary
+
+Prior Task 003 code includes durable order-intent writes, stable client-order identity and fail-closed reconciliation around inspected order mutation routes. That is valuable order-submission safety, but it is not proof that all unresolved financial effects are checked at the final risk-increasing boundary.
+
+Not yet proven:
+- every Python BUY/add-on/retry/worker/callback path consults a durable gate for unresolved journal effects and inconsistent position/capital projections;
+- Android process-death recovery reconstructs and exactly-once applies each individual fill to authoritative financial projections;
+- every alternate/legacy writer is unable to apply the same fill again;
+- Futures mutation paths are unreachable or independently blocked from the Spot-only financial contract;
+- protective/reducing actions have a separately verified contract that safely accounts for pending orders, fills and free inventory while new exposure remains blocked.
+
+**Global financial Recovery Gate:** NOT VERIFIED.  
+**Python production financial integration:** NOT VERIFIED.  
+**Android process-death/exactly-once:** NOT VERIFIED.  
+**Python/Android parity:** NOT VERIFIED.  
+**Futures mutation exclusion:** NOT VERIFIED.
+
+### 6. Required production-shaped tests not yet established
+
+No evidence in this checkpoint establishes the full required matrix against real production financial tables: REST/WS/history duplicate delivery; two-worker and independent-process races; conflicting same-ID payload; late fee resolution; rollback of every linked projection; subprocess termination/reopen; SQLite BUSY/LOCKED; partial/corrupt projection recovery; legacy-writer duplicate attempt; or BUY rejection under unresolved financial recovery.
+
+Tests limited to a test-only projection callback or source-text assertions do not close these requirements. No live Binance mutation is allowed or needed for these tests.
+
+### 7. Minimum next step
+
+Complete and review a machine-checkable writer/caller/reader/migration/mutation-sink inventory, starting from every direct writer and tracing all callers to reachable entry points and all affected projections. Until that census identifies a bounded vertical path with no unaccounted alternate writer, do not create or connect a production financial writer. Then define the DTO/fee contract and implement production-shaped transaction/crash/concurrency tests for that single path before touching other projections.
+
+### 8. Final TASK 003.11 decision
+
+- **Status: BLOCKED — NOT ACCEPTED.**
+- Production financial writer: **NONE selected or connected**.
+- CanonicalFillV1: **NOT IMPLEMENTED / NOT VERIFIED**.
+- Single financial-effect owner: **NOT ESTABLISHED**.
+- Complete writer/caller/reader inventory: **NOT COMPLETE**.
+- Real projection atomicity / exactly-once: **NOT PROVEN**.
+- Commission / Decimal integrity: **NOT VERIFIED**.
+- Durable Global Recovery Gate: **NOT VERIFIED** for all reachable risk-increasing paths.
+- Android process-death recovery and parity: **NOT VERIFIED**.
+- Futures mutation exclusion: **NOT VERIFIED**.
+- CI at source SHA `e013aae4f0632387b899086b3097cd7cc1b32f22`: four workflows **SUCCESS**; these runs predate this report append.
+- PR #48 remains **OPEN / DRAFT / NOT MERGED**; `main` remains unchanged.
+
+No production financial writer, schema migration or real trading mutation was added/performed by this checkpoint.
