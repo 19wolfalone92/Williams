@@ -80,7 +80,7 @@ def test_changed_exchange_uid_is_blocked(tmp_path, monkeypatch):
 
 
 def test_identity_api_failure_does_not_pin_or_allow_mutation(tmp_path, monkeypatch):
-    monkeypatch.delenv("WILLIAMS_EXPECTED_API_KEY_SHA256", raising=False)
+    monkeypatch.setenv("WILLIAMS_EXPECTED_API_KEY_SHA256", hashlib.sha256(b"test-key-A").hexdigest())
     db = Database(str(tmp_path / "identity.sqlite"))
     client = SignedAccountClient(error=TimeoutError("network unavailable"))
     with pytest.raises(AccountIdentityBlocked, match="identity request failed"):
