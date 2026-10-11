@@ -73,8 +73,12 @@ class ExecutionBarrier:
 
     def _persist(self, intent: OrderIntent, status: str, reason: str = "") -> None:
         """Persist safety-critical order state; failures must reach the caller."""
-        if self.db is not None and hasattr(self.db, "save_execution_intent"):
-            self.db.save_execution_intent(intent, status, reason)
+        if self.db is None:
+            raise RuntimeError("durable execution-intent persistence is unavailable: database is not configured")
+        save_intent = getattr(self.db, "save_execution_intent", None)
+        if not callable(save_intent):
+            raise RuntimeError("durable execution-intent persistence is unavailable: save_execution_intent is missing")
+        save_intent(intent, status, reason)
 
     def _record(self, level: str, event: str, intent: OrderIntent, message: str, raw=None) -> None:
         if self.db is not None and hasattr(self.db, "log_event"):
@@ -206,14 +210,27 @@ class ExecutionBarrier:
                 response = submit()
             except Exception as exc:
                 order_fsm.state = OrderState.AMBIGUOUS
-                self._persist(intent, "AMBIGUOUS", f"{type(exc).__name__}: {exc}")
+                ambiguity_reason = f"{type(exc).__name__}: {exc}"
+                try:
+                    self._persist(intent, "AMBIGUOUS", ambiguity_reason)
+                except Exception as persist_exc:
+                    ambiguity_reason += (
+                        "; reconciliation_state_persistence_failed: "
+                        f"{type(persist_exc).__name__}: {persist_exc}; "
+                        "exchange reconciliation is mandatory before any retry"
+                    )
                 self._record(
                     "ERROR",
                     "execution_ambiguous",
                     intent,
                     "Binance submission failed or timed out; reconciliation required",
-                    {"error": f"{type(exc).__name__}: {exc}"},
+                    {"error": ambiguity_reason},
                 )
+                if "reconciliation_state_persistence_failed" in ambiguity_reason:
+                    raise RuntimeError(
+                        "submission outcome is ambiguous and durable reconciliation state "
+                        f"could not be saved: {ambiguity_reason}"
+                    ) from exc
                 raise
 
             if intent.order_type != "CANCEL":
