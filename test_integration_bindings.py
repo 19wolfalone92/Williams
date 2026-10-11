@@ -643,8 +643,10 @@ def test_execution_accumulator_removes_base_asset_commission_from_managed_qty():
             "cummulativeQuoteQty": "100",
             "fills": [
                 {
+                    "tradeId": "integration-btc-fee-1",
                     "price": "100",
                     "qty": "1.0",
+                    "quoteQty": "100",
                     "commission": "0.001",
                     "commissionAsset": "BTC",
                 }
@@ -666,10 +668,14 @@ def test_execution_accumulator_keeps_quote_commission_as_quote_fee():
             "symbol": "BTCUSDT",
             "side": "BUY",
             "status": "FILLED",
+            "executedQty": "1.0",
+            "cummulativeQuoteQty": "100",
             "fills": [
                 {
+                    "tradeId": "integration-usdt-fee-1",
                     "price": "100",
                     "qty": "1.0",
+                    "quoteQty": "100",
                     "commission": "0.1",
                     "commissionAsset": "USDT",
                 }
