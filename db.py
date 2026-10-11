@@ -349,22 +349,23 @@ class Database:
 
     def save_execution_intent(self, intent, status, reason=''):
         """Update status only; intent identity is inserted once by claim_execution_intent."""
-        cur = self.conn.execute(
-            '''UPDATE execution_intents
-               SET status=?, reason=?
-               WHERE intent_id=? AND symbol=? AND side=? AND order_type=?
-                 AND purpose=? AND client_order_id IS ?''',
-            (
-                str(status), str(reason or ""), str(intent.intent_id),
-                str(intent.symbol), str(intent.side), str(intent.order_type),
-                str(intent.purpose),
-                (str(getattr(intent, "client_order_id", "")) or None),
-            ),
-        )
-        if cur.rowcount != 1:
-            raise RuntimeError(
-                f"execution intent identity missing or changed: {intent.intent_id}"
+        with self.transaction():
+            cur = self.conn.execute(
+                '''UPDATE execution_intents
+                   SET status=?, reason=?
+                   WHERE intent_id=? AND symbol=? AND side=? AND order_type=?
+                     AND purpose=? AND client_order_id IS ?''',
+                (
+                    str(status), str(reason or ""), str(intent.intent_id),
+                    str(intent.symbol), str(intent.side), str(intent.order_type),
+                    str(intent.purpose),
+                    (str(getattr(intent, "client_order_id", "")) or None),
+                ),
             )
+            if cur.rowcount != 1:
+                raise RuntimeError(
+                    f"execution intent identity missing or changed: {intent.intent_id}"
+                )
 
     def save_execution_event(self, intent_id, event, payload=None):
         self.conn.execute(
