@@ -77,6 +77,99 @@ class CampaignExecutionService:
             f"commission asset {asset!r} cannot be converted to quote asset {quote_asset!r}; fill remains unresolved"
         )
 
+    def _apply_authoritative_order_fills(
+        self,
+        order: dict[str, Any],
+        campaign,
+        *,
+        purpose: str,
+        signal_id: str,
+        client_id: str,
+    ) -> bool:
+        """Apply the order's actual Binance trade IDs; executedQty is only a cross-check."""
+        order_id = order.get("orderId")
+        if order_id is None:
+            raise CampaignExecutionError("filled order has no exchange orderId")
+        trade_reader = getattr(self.client, "my_trades", None)
+        if not callable(trade_reader):
+            raise CampaignExecutionError("signed Binance myTrades is required for fill accounting")
+        rows = trade_reader(
+            str(order["symbol"]).upper(), order_id=order_id, limit=1000
+        )
+        if not isinstance(rows, list):
+            raise CampaignExecutionError("Binance myTrades did not return a JSON array")
+        if len(rows) >= 1000:
+            raise CampaignExecutionError("myTrades page limit reached; fill history is incomplete")
+        executed = Decimal(str(order.get("executedQty", "0") or "0"))
+        total_qty = Decimal("0")
+        normalized = []
+        seen = set()
+        for trade in rows:
+            if not isinstance(trade, dict):
+                raise CampaignExecutionError("malformed Binance myTrades row")
+            trade_id = trade.get("id", trade.get("tradeId"))
+            if trade_id is None:
+                raise CampaignExecutionError("Binance fill lacks a stable trade ID")
+            if str(trade.get("orderId")) != str(order_id):
+                raise CampaignExecutionError("Binance fill orderId mismatch")
+            if str(trade.get("symbol", order["symbol"])).upper() != str(order["symbol"]).upper():
+                raise CampaignExecutionError("Binance fill symbol mismatch")
+            if "isBuyer" in trade and bool(trade["isBuyer"]) != (str(order.get("side", "")).upper() == "BUY"):
+                raise CampaignExecutionError("Binance fill side mismatch")
+            if str(trade_id) in seen:
+                raise CampaignExecutionError("duplicate trade ID in one Binance response")
+            seen.add(str(trade_id))
+            qty = Decimal(str(trade.get("qty", "0") or "0"))
+            price = Decimal(str(trade.get("price", "0") or "0"))
+            if qty <= 0 or price <= 0:
+                raise CampaignExecutionError("Binance fill quantity/price must be positive")
+            total_qty += qty
+            normalized.append((trade_id, qty, price, trade))
+        if abs(total_qty - executed) > Decimal("0.000000000001"):
+            raise CampaignExecutionError(
+                f"Binance myTrades quantity {total_qty} does not match order executedQty {executed}"
+            )
+        if executed > 0 and not normalized:
+            raise CampaignExecutionError("order reports execution but no authoritative trade IDs were returned")
+
+        intent_row = self.db.conn.execute(
+            """SELECT intent_id,account_scope,execution_scope,exchange,campaign_id,purpose
+               FROM execution_intents WHERE client_order_id=?
+               ORDER BY created_at DESC LIMIT 1""",
+            (str(client_id),),
+        ).fetchone()
+        intent = dict(intent_row) if intent_row else {}
+        intent.setdefault("intent_id", "")
+        intent.setdefault("account_scope", self.db._default_account_scope("spot"))
+        intent.setdefault("execution_scope", "spot")
+        intent.setdefault("exchange", "BINANCE")
+        intent.setdefault("campaign_id", campaign.campaign_id)
+        intent.setdefault("purpose", purpose)
+        intent["signal_id"] = signal_id
+        for trade_id, qty, price, raw in normalized:
+            fill = {
+                "exchange": str(intent.get("exchange") or "BINANCE").upper(),
+                "account_scope": str(intent.get("account_scope") or self.db._default_account_scope("spot")),
+                "symbol": str(order["symbol"]).upper(),
+                "trade_id": str(trade_id),
+                "order_id": str(order_id),
+                "intent_id": str(intent.get("intent_id") or ""),
+                "campaign_id": str(campaign.campaign_id),
+                "purpose": str(purpose or intent.get("purpose") or ""),
+                "side": str(order.get("side", "")).upper(),
+                "client_order_id": str(client_id),
+                "quantity": str(qty),
+                "price": str(price),
+                "commission": str(raw.get("commission", "0") or "0"),
+                "commission_asset": str(raw.get("commissionAsset", "") or ""),
+                "raw": raw,
+            }
+            self.db.apply_execution_fill(
+                fill,
+                lambda _db, data, i=intent, o=order, f=fill: self._apply_recovered_campaign_fill(i, o, f),
+            )
+        return True
+
     def _apply_recovered_campaign_fill(
         self, intent: dict[str, Any], order: dict[str, Any], fill: dict[str, Any]
     ) -> None:
@@ -704,6 +797,7 @@ class CampaignExecutionService:
                     })
                     continue
 
+                fills_applied = False
                 if status == "PARTIALLY_FILLED" and order.get("orderId") is not None:
                     cancel = getattr(self.client, "cancel_order", None)
                     if cancel is None:
@@ -712,10 +806,17 @@ class CampaignExecutionService:
                         )
                     try:
                         cancel(symbol, order_id=order.get("orderId"))
+                        # Cancel may race a final fill. Always reread the authoritative
+                        # order and its individual trades after the cancel response.
+                        order = self.client.get_order(symbol, order_id=order.get("orderId"))
+                        self.db.save_order(order)
+                        status = str(order.get("status", "")).upper()
+                        executed = float(order.get("executedQty", 0) or 0)
+                        quote = float(order.get("cummulativeQuoteQty", 0) or 0)
                     except Exception as exc:
                         self.engine.mark_reconcile_required(
                             campaign,
-                            f"partial conditional BUY cancel ambiguous: {exc}",
+                            f"partial conditional BUY cancel/re-read ambiguous: {exc}",
                         )
                         raise
 
@@ -725,6 +826,16 @@ class CampaignExecutionService:
                             f"{symbol}: executed conditional BUY has no authoritative quote quantity"
                         )
                     avg = quote / executed
+                    fills_applied = self._apply_authoritative_order_fills(
+                        order,
+                        campaign,
+                        purpose=purpose,
+                        signal_id=signal_id,
+                        client_id=client_id,
+                    )
+                    campaign = self.engine.load_campaign(campaign.campaign_id)
+                    if campaign is None:
+                        raise CampaignExecutionError("campaign disappeared after atomic fill application")
 
                     if purpose == "ADD_ON" or campaign.state == CampaignState.ADD_ON_PENDING:
                         if campaign.state == CampaignState.ADD_ON_PENDING:
@@ -734,7 +845,7 @@ class CampaignExecutionService:
                             )
 
                         old_qty = float(campaign.position_qty)
-                        total_qty = old_qty + executed
+                        total_qty = old_qty if fills_applied else old_qty + executed
                         current_stop = float(campaign.current_stop_price or 0.0)
                         if current_stop <= 0 or current_stop >= avg:
                             raise CampaignExecutionError(
@@ -762,14 +873,15 @@ class CampaignExecutionService:
                                 "order_id", ""
                             )
 
-                        self.engine.record_add_on_fill(
-                            campaign,
-                            quantity=executed,
-                            average_entry_price=avg,
-                            fill_order_id=str(order.get("orderId", "")),
-                            risk_quote=float(campaign.pending_risk_quote),
-                            fee_quote=0.0,
-                        )
+                        if not fills_applied:
+                            self.engine.record_add_on_fill(
+                                campaign,
+                                quantity=executed,
+                                average_entry_price=avg,
+                                fill_order_id=str(order.get("orderId", "")),
+                                risk_quote=float(campaign.pending_risk_quote),
+                                fee_quote=0.0,
+                            )
                         self.db.set_campaign_signal_state(
                             signal_id,
                             SignalState.FILLED.value,
@@ -809,28 +921,36 @@ class CampaignExecutionService:
                         })
                         continue
 
-                    if campaign.state == CampaignState.ENTRY_PENDING:
-                        self.engine.mark_triggered(
-                            campaign,
-                            signal_id,
-                            str(order.get("orderId", "")),
-                        )
-                    elif campaign.state == CampaignState.SIGNAL_DETECTED:
-                        # Defensive recovery for a crash between state creation
-                        # and campaign arming. The durable Binance order is proof
-                        # that entry was already submitted; recover it, don't arm twice.
-                        campaign.transition(
-                            CampaignState.ENTRY_PENDING,
-                            reason="recovered submitted conditional entry",
-                        )
-                        self.engine.mark_triggered(
-                            campaign,
-                            signal_id,
-                            str(order.get("orderId", "")),
-                        )
-                    else:
+                    if not fills_applied:
+                        if campaign.state == CampaignState.ENTRY_PENDING:
+                            self.engine.mark_triggered(
+                                campaign,
+                                signal_id,
+                                str(order.get("orderId", "")),
+                            )
+                        elif campaign.state == CampaignState.SIGNAL_DETECTED:
+                            # Defensive recovery for a crash between state creation
+                            # and campaign arming. The durable Binance order is proof
+                            # that entry was already submitted; recover it, don't arm twice.
+                            campaign.transition(
+                                CampaignState.ENTRY_PENDING,
+                                reason="recovered submitted conditional entry",
+                            )
+                            self.engine.mark_triggered(
+                                campaign,
+                                signal_id,
+                                str(order.get("orderId", "")),
+                            )
+                        else:
+                            raise CampaignExecutionError(
+                                f"{symbol}: unexpected campaign state {campaign.state.value} for initial fill"
+                            )
+                    elif campaign.position_qty <= 0 or campaign.state not in {
+                        CampaignState.OPEN_INITIAL, CampaignState.TREND_ACTIVE,
+                        CampaignState.TRAILING, CampaignState.EXHAUSTION_WATCH,
+                    }:
                         raise CampaignExecutionError(
-                            f"{symbol}: unexpected campaign state {campaign.state.value} for initial fill"
+                            f"{symbol}: atomic fill effects conflict with campaign state {campaign.state.value}"
                         )
 
                     stop = float(
@@ -852,21 +972,29 @@ class CampaignExecutionService:
                         "order_id", ""
                     )
 
-                    self.engine.record_initial_fill(
-                        campaign,
-                        quantity=executed,
-                        average_entry_price=avg,
-                        initial_stop_price=stop,
-                        fill_order_id=str(order.get("orderId", "")),
-                        risk_quote=float(campaign.pending_risk_quote),
-                        fee_quote=0.0,
-                    )
+                    if not fills_applied:
+                        self.engine.record_initial_fill(
+                            campaign,
+                            quantity=executed,
+                            average_entry_price=avg,
+                            initial_stop_price=stop,
+                            fill_order_id=str(order.get("orderId", "")),
+                            risk_quote=float(campaign.pending_risk_quote),
+                            fee_quote=0.0,
+                        )
+                    else:
+                        # Fill, position and fee journal were committed atomically
+                        # by _apply_authoritative_order_fills before external protection.
+                        campaign.tags["protective_order_id"] = str(
+                            campaign.tags.get("protective_order_id", "") or ""
+                        )
+                        self.db.save_campaign(campaign)
                     self.db.set_campaign_signal_state(
                         signal_id,
                         SignalState.FILLED.value,
                     )
 
-                    if self.db.open_trade(symbol) is None:
+                    if self.db.open_trade(symbol) is None and not fills_applied:
                         self.db.save_trade(
                             entry_time=datetime.fromtimestamp(
                                 int(
