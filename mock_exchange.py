@@ -116,6 +116,7 @@ class MockExchange:
             "clientOrderId": client_order_id or "MOCK_" + uuid.uuid4().hex[:10],
             "origQty": str(qty),
             "executedQty": str(executed),
+            "cummulativeQuoteQty": str(executed * float(self.prices[symbol])),
             "stopPrice": str(stop_price) if float(stop_price or 0) > 0 else "0",
             "transactTime": int(time.time() * 1000),
             "time": int(time.time() * 1000),
