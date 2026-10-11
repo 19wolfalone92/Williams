@@ -4,7 +4,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Test
 import java.io.ByteArrayInputStream
-import java.io.ByteArrayOutputStream
 import java.nio.charset.StandardCharsets
 
 class ApiHttpContractTest {
@@ -43,9 +42,21 @@ class ApiHttpContractTest {
     }
 
     @Test
-    fun malformedClientInputMapsTo4xxAndUnexpectedErrorTo500() {
-        assertEquals(400, apiErrorStatus(IllegalArgumentException("bad input")))
+    fun malformedJsonMapsTo4xxAndUnexpectedErrorTo500() {
+        assertEquals(400, apiErrorStatus(org.json.JSONException("bad json")))
         assertEquals(500, apiErrorStatus(IllegalStateException("internal")))
+    }
+
+    @Test
+    fun tradesLimitDefaultsClampsAndRejectsNonIntegers() {
+        assertEquals(50, apiTradesLimit(emptyMap()))
+        assertEquals(2, apiTradesLimit(mapOf("limit" to "2")))
+        assertEquals(200, apiTradesLimit(mapOf("limit" to "999")))
+        assertEquals(1, apiTradesLimit(mapOf("limit" to "0")))
+        val error = assertThrows(ApiHttpException::class.java) {
+            apiTradesLimit(mapOf("limit" to "bad"))
+        }
+        assertEquals(422, error.statusCode)
     }
 
     @Test
