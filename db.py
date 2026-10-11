@@ -443,14 +443,14 @@ class Database:
             )
         return str(scope or "spot"), self._default_account_scope(scope)
 
-    def claim_execution_intent(self, intent, scope=None, account_scope=None):
+    def claim_execution_intent(self, intent, scope=None, account_scope=None, purpose=None):
         """Atomically claim one immutable intent inside its exchange/account contour."""
         scope = str(scope or getattr(intent, "execution_scope", "spot") or "spot").strip().lower()
         account_scope = self._default_account_scope(scope, account_scope or getattr(intent, "account_scope", None))
         client_order_id = str(getattr(intent, "client_order_id", "") or "") or None
         exchange = str(getattr(intent, "exchange", "BINANCE") or "BINANCE").upper()
         campaign_id = str(getattr(intent, "campaign_id", "") or "") or None
-        purpose = str(getattr(intent, "purpose", purpose if "purpose" in locals() else "") or "").upper()
+        purpose = str(purpose or getattr(intent, "purpose", "") or "").upper()
         with self.transaction():
             # Identity collisions are classified before readiness locks, but never
             # authorize a network call. This preserves stable idempotency semantics.
@@ -579,16 +579,22 @@ class Database:
             ).fetchone()
             if legacy_unresolved:
                 return {"ready": False, "reason": "LEGACY_SCOPE_REQUIRES_MANUAL_RECONCILIATION", "detail": dict(legacy_unresolved)}
-            unresolved = self.conn.execute(
+            unresolved_rows = self.conn.execute(
                 """SELECT intent_id,status,symbol,client_order_id,order_id
                    FROM execution_intents
                    WHERE execution_scope=? AND account_scope=?
                      AND status IN ('PENDING','SUBMITTING','SUBMITTED','UNKNOWN','AMBIGUOUS','RECONCILE_REQUIRED','PROTECTION_PENDING')
-                   ORDER BY created_at,intent_id LIMIT 1""",
+                   ORDER BY created_at,intent_id""",
                 (scope, account_scope),
-            ).fetchone()
-            if unresolved:
-                return {"ready": False, "reason": "UNRESOLVED_INTENT", "detail": dict(unresolved)}
+            ).fetchall()
+            if unresolved_rows:
+                protection_repair_only = (
+                    purpose == "CAMPAIGN_PROTECTION"
+                    and all(str(row["status"]).upper() == "PROTECTION_PENDING" for row in unresolved_rows)
+                )
+                if not protection_repair_only:
+                    return {"ready": False, "reason": "UNRESOLVED_INTENT", "detail": dict(unresolved_rows[0])}
+                return {"ready": True, "reason": "PROTECTION_REPAIR_ONLY", "detail": dict(unresolved_rows[0])}
             return {"ready": True, "reason": "", "detail": None}
         except Exception as exc:
             return {"ready": False, "reason": "READINESS_CHECK_FAILED", "detail": repr(exc)}
