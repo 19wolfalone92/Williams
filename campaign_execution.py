@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from contextlib import nullcontext
 from typing import Any
 import json
 import os
@@ -30,6 +31,7 @@ class CampaignExecutionService:
         self.client = client
         self.db = db
         self.barrier = execution_barrier
+        self._recovery_depth = 0
         self.engine = CampaignEngine(
             db,
             portfolio_risk_limit_pct=float(os.getenv("MAX_TOTAL_RISK_PCT", "0.01")),
@@ -42,20 +44,106 @@ class CampaignExecutionService:
             client,
             db,
             fill_handler=self._apply_recovered_campaign_fill,
+            post_fill_handler=self._ensure_campaign_protection_after_recovery,
             exchange="BINANCE",
             account_scope=os.getenv("WILLIAMS_ACCOUNT_SCOPE") or None,
             execution_scope="spot",
         )
 
     def _ensure_recovered(self) -> list[dict[str, Any]]:
-        outcomes = self.recovery_coordinator.recover()
-        readiness = self.recovery_coordinator.readiness()
-        if not readiness.get("ready"):
+        # Use the same in-process lock as ExecutionBarrier. The durable DB gate
+        # remains authoritative across independent processes.
+        lock = (
+            self.barrier.context_cache.execution_lock
+            if self.barrier is not None else nullcontext()
+        )
+        with lock:
+            self._recovery_depth += 1
+            try:
+                outcomes: list[dict[str, Any]] = []
+                for attempt in range(3):
+                    pass_outcomes = self.recovery_coordinator.recover()
+                    outcomes.extend(pass_outcomes)
+                    readiness = self.recovery_coordinator.readiness()
+                    if readiness.get("ready"):
+                        return outcomes
+                    if any(row.get("state") == "RECONCILE_REQUIRED" for row in pass_outcomes):
+                        break
+                    if readiness.get("reason") not in {"UNRESOLVED_INTENT", "EXECUTION_LOCKED"}:
+                        break
+                readiness = self.recovery_coordinator.readiness()
+                if not readiness.get("ready"):
+                    raise CampaignExecutionError(
+                        "execution recovery/protection repair is incomplete; no new mutation allowed: "
+                        + str(readiness.get("reason", "UNKNOWN"))
+                    )
+                return outcomes
+            finally:
+                self._recovery_depth -= 1
+
+    def _ensure_campaign_protection_after_recovery(
+        self, intent: dict[str, Any], order: dict[str, Any], trades: list[dict[str, Any]]
+    ) -> None:
+        """Before clearing a recovered BUY fill, prove a live stop or create it through the barrier."""
+        side = str(intent.get("side", "")).upper()
+        if side != "BUY" or not trades:
+            return
+        campaign_id = str(intent.get("campaign_id") or "")
+        if not campaign_id:
+            raise CampaignExecutionError("recovered BUY fills lack a durable campaign ID")
+        campaign = self.engine.load_campaign(campaign_id)
+        if campaign is None or float(campaign.position_qty or 0) <= 0:
+            raise CampaignExecutionError("recovered BUY fill did not produce a durable positive campaign position")
+        if campaign.additions > 0 or "ADD_ON" in str(intent.get("purpose", "")).upper():
+            # A changed tranche size needs cancel/replace proof, not a second oversized stop.
             raise CampaignExecutionError(
-                "execution recovery is incomplete; no new mutation allowed: "
-                + str(readiness.get("reason", "UNKNOWN"))
+                "add-on recovery requires atomic protective-stop resize; entry remains blocked"
             )
-        return outcomes
+        stop_price = float(
+            campaign.current_stop_price
+            or campaign.initial_stop_price
+            or campaign.tags.get("initial_stop_price", 0.0)
+            or 0.0
+        )
+        if stop_price <= 0:
+            raise CampaignExecutionError("recovered campaign lacks a valid structural stop")
+        position_qty = float(campaign.position_qty)
+        protective_id = str(campaign.tags.get("protective_order_id", "") or "")
+        if protective_id:
+            try:
+                existing = self.client.get_order(campaign.symbol, order_id=int(protective_id))
+                status = str(existing.get("status", "")).upper()
+                existing_qty = float(existing.get("origQty", 0) or 0)
+                existing_stop = float(existing.get("stopPrice", 0) or 0)
+                if status == "NEW":
+                    if (
+                        existing_qty + 1e-12 >= position_qty
+                        and existing_stop > 0
+                        and abs(existing_stop - stop_price) <= max(1e-8, stop_price * 1e-8)
+                    ):
+                        return
+                    raise CampaignExecutionError(
+                        "existing live protective order does not cover the recovered position exactly; safe resize required"
+                    )
+                if status not in {"CANCELED", "EXPIRED", "FILLED", "REJECTED"}:
+                    raise CampaignExecutionError(
+                        f"protective order status {status!r} is ambiguous"
+                    )
+            except CampaignExecutionError:
+                raise
+            except Exception as exc:
+                raise CampaignExecutionError(
+                    f"cannot verify existing protective order: {exc}"
+                ) from exc
+        protection = self.create_hard_stop(
+            campaign,
+            quantity=position_qty,
+            stop_price=stop_price,
+        )
+        campaign.tags["protective_order_id"] = str(protection.get("order_id") or "")
+        campaign.tags["protective_client_order_id"] = str(protection.get("client_order_id") or "")
+        campaign.tags["protective_stop_price"] = float(protection.get("stop_price") or stop_price)
+        self.db.save_campaign(campaign)
 
     def _fee_in_quote(
         self,
@@ -707,16 +795,25 @@ class CampaignExecutionService:
                 f"ExecutionBarrier blocked {intent.purpose}: {result.reason}"
             )
         response = result.response
-        # The write-ahead intent remains SUBMITTED until the exchange order and
-        # every per-trade fill have been re-read and reconciled, even when the
-        # immediate POST/DELETE response looked successful.
-        self.recovery_coordinator.recover()
-        readiness = self.recovery_coordinator.readiness()
-        if not readiness.get("ready"):
-            raise CampaignExecutionError(
-                "exchange accepted an operation but durable recovery is incomplete; "
-                "execution contour remains blocked"
-            )
+        # Avoid recursive recovery when a coordinator is repairing protection;
+        # only the explicitly admitted CAMPAIGN_PROTECTION mutation may nest.
+        if self._recovery_depth > 0:
+            if str(intent.purpose).upper() != "CAMPAIGN_PROTECTION":
+                raise CampaignExecutionError(
+                    "nested exchange mutation is forbidden during recovery"
+                )
+        else:
+            self._recovery_depth += 1
+            try:
+                self.recovery_coordinator.recover()
+            finally:
+                self._recovery_depth -= 1
+            readiness = self.recovery_coordinator.readiness()
+            if not readiness.get("ready"):
+                raise CampaignExecutionError(
+                    "exchange accepted an operation but durable recovery is incomplete; "
+                    "execution contour remains blocked"
+                )
         if intent.order_type == "CANCEL":
             row = self.db.conn.execute(
                 "SELECT status FROM execution_intents WHERE intent_id=?",
