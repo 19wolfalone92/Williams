@@ -27,6 +27,8 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Install test runner
+        run: python -m pip install --disable-pip-version-check pytest
       - name: Verify registry and negative fixtures
         run: |
           python -m py_compile mutation_registry_gate.py test_mutation_registry_gate.py
