@@ -66,8 +66,10 @@ def verify_execution_account_identity(
         ) from exc
     if not isinstance(account, dict):
         raise AccountIdentityBlocked("authenticated Binance account response is not an object")
-    if account.get("canTrade") is False:
-        raise AccountIdentityBlocked("authenticated Binance account reports canTrade=false")
+    if account.get("canTrade") is not True:
+        raise AccountIdentityBlocked("authenticated Binance account response lacks canTrade=true")
+    if not isinstance(account.get("balances"), list):
+        raise AccountIdentityBlocked("authenticated Binance account response lacks a balances array")
 
     uid_value = account.get("uid")
     uid = None if uid_value in (None, "") else str(uid_value)
