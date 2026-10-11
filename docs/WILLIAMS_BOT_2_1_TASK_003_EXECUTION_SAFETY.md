@@ -761,3 +761,51 @@ This table is a partial source map, not a claim that every production caller and
 5. Until that integration and global gate are proven, keep risk-increasing trading blocked.
 
 Overall status remains **BLOCKED — NOT ACCEPTED**. Do not resume trading.
+
+
+## TASK 003.7 — Production Fill-to-Ledger Integration
+
+**Status: BLOCKED — NOT ACCEPTED.** This checkpoint records the verified baseline and source-level blockers. It does not claim production integration or crash-recovery acceptance.
+
+### GitHub baseline re-check
+
+- Repository: `19wolfalone92/Williams`
+- Branch: `audit/williams-2.1-task-003-execution-safety`
+- PR #48: open, draft, unmerged.
+- Base/main SHA: `04da5f9c09572e99ff310be3a1908179165e528c`
+- Baseline HEAD verified directly: `17a0c27d76bbbcfdad800bc0f84824d707f18fcb`
+- Main remained at the base SHA; no merge performed.
+- Prior four required workflow runs for the baseline SHA completed successfully:
+  - Python backend tests: run `38120083497`
+  - Build Android APK: run `38120083530`
+  - Williams Campaign CI (PR): run `38120083522`
+  - Williams Campaign CI (push): run `38120081389`
+- These CI results apply only to the baseline SHA and do not prove the TASK 003.7 changes or its acceptance criteria.
+
+### Confirmed source-to-sink blockers
+
+1. `db.py::apply_financial_fill_effect` and `db.py::resolve_financial_effect_fee` implement the journal primitive, but the inspected production paths in `campaign_execution.py`, `campaign_engine.py`, `portfolio_trader.py`, `trader.py`, and `StandaloneRuntime.kt` do not demonstrate end-to-end use of this protocol.
+2. `campaign_execution.py` calls `CampaignEngine.record_initial_fill` / `record_add_on_fill` with `fee_quote=0.0` in two inspected locations. This is not evidence that the authoritative fee was zero.
+3. `campaign_engine.py` fill methods accept float-valued quantity, price, risk and default fee arguments; `db.py::save_campaign_fill` writes float values to SQLite REAL columns.
+4. `db.py::save_trade` remains an independent trade writer. Call paths in `portfolio_trader.py` and `trader.py` were found; their full reconciliation with the journal is not proven.
+5. `execution_accumulator.py` has a fallback that derives an aggregate summary from `executedQty` / `cummulativeQuoteQty`. Such aggregate values are not a per-fill identity ledger.
+6. `StandaloneRuntime.kt` contains direct `signedPost()` and `signedDelete()` callsites and its own runtime state. A shared durable financial journal, atomic projection boundary and process-death proof are not established.
+7. A repository-wide caller/writer inventory, full fee-source audit, Python/Android mutation-sink audit, Global Recovery Gate coverage, Spot SELL/OCO proof, and Futures fail-closed proof remain incomplete.
+
+### Required next implementation boundary
+
+Before wiring a production callback, complete the caller and projection inventory and identify the actual authoritative fill IDs and commission fields returned by each live ingestion/recovery source. The existing journal callback must write all required same-database projections through the same `Database` connection; it must not call exchange APIs or write another database. Unknown fees must remain pending and must not be represented as zero. Any conflict or uncertain projection outcome must block new risk-increasing entries until reconciliation proves consistency.
+
+### Acceptance evidence still missing
+
+- Production fill paths connected to the canonical journal.
+- All bypass writers eliminated or proven safe.
+- Durable, fail-closed handling of conflicting immutable fill payloads.
+- Atomic or durable-recovery projections covering campaign, position, risk and accounting.
+- Fault injection on real production entry points, including independent processes, commit/rollback failures and SQLite contention.
+- Verified Global Recovery Gate coverage across Python and Android.
+- Spot SELL, OCO/cancel-replace and Futures mutation-sink safety.
+- Android runtime/process-death evidence; APK build success alone is insufficient.
+- All mandatory workflows green on one final post-change SHA.
+
+No Binance Mainnet or Spot Testnet trading mutations were performed for this audit.
