@@ -143,7 +143,8 @@ class Database:
             exchange_status TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
-            last_error TEXT
+            last_error TEXT,
+            mutation_started_at TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_emergency_sell_status
             ON emergency_sell_intents(status, symbol);
@@ -289,9 +290,89 @@ class Database:
         ''')
         self._migrate_trade_columns()
         self._migrate_campaign_fill_columns()
+        self._migrate_emergency_sell_columns()
         self.state_set('schema_version', self.SCHEMA_VERSION)
         self.state_set('position_state', self.state_get('position_state', 'FLAT'))
         self.conn.commit()
+
+    def _migrate_emergency_sell_columns(self):
+        """Add sink-level one-shot authorization state without rewriting old intents."""
+        columns = {
+            row["name"]
+            for row in self.conn.execute(
+                "PRAGMA table_info(emergency_sell_intents)"
+            ).fetchall()
+        }
+        if "mutation_started_at" not in columns:
+            self.conn.execute(
+                "ALTER TABLE emergency_sell_intents ADD COLUMN mutation_started_at TEXT"
+            )
+
+    def authorize_emergency_sell_mutation(
+        self, *, symbol, quantity, client_order_id, environment, account_scope
+    ):
+        """Consume the single durable permit at the final SELL network boundary.
+
+        This is deliberately one-shot: after a process crash, a consumed permit
+        never authorizes another POST. Recovery must reconcile the existing ID.
+        """
+        from decimal import Decimal, InvalidOperation
+
+        cid = str(client_order_id or "").strip()
+        sym = str(symbol or "").upper()
+        try:
+            qty = Decimal(str(quantity))
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            raise RuntimeError("emergency SELL sink blocked: invalid quantity") from exc
+        if not cid.startswith("WILLV4_EMERGENCY_") or not qty.is_finite() or qty <= 0:
+            raise RuntimeError("emergency SELL sink blocked: invalid identity or quantity")
+
+        now = datetime.now(timezone.utc).isoformat()
+        with self.transaction():
+            row = self.conn.execute(
+                """SELECT * FROM emergency_sell_intents
+                   WHERE client_order_id=?""",
+                (cid,),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("emergency SELL sink blocked: durable intent missing")
+            expected = {
+                "symbol": sym,
+                "environment": str(environment),
+                "account_scope": str(account_scope),
+                "status": "SUBMITTING",
+            }
+            for key, value in expected.items():
+                if str(row[key]) != value:
+                    raise RuntimeError(
+                        f"emergency SELL sink blocked: intent {key} mismatch"
+                    )
+            try:
+                stored_qty = Decimal(str(row["requested_qty"]))
+            except (InvalidOperation, TypeError, ValueError) as exc:
+                raise RuntimeError("emergency SELL sink blocked: corrupt durable quantity") from exc
+            if not stored_qty.is_finite() or stored_qty != qty:
+                raise RuntimeError("emergency SELL sink blocked: quantity mismatch")
+            if row["mutation_started_at"] is not None:
+                raise RuntimeError(
+                    "emergency SELL sink blocked: one-shot mutation permit already consumed"
+                )
+            cur = self.conn.execute(
+                """UPDATE emergency_sell_intents
+                   SET mutation_started_at=?, updated_at=?
+                   WHERE operation_id=? AND status='SUBMITTING'
+                     AND mutation_started_at IS NULL""",
+                (now, now, str(row["operation_id"])),
+            )
+            if cur.rowcount != 1:
+                raise RuntimeError("emergency SELL sink blocked: permit claim lost")
+        check = self.conn.execute(
+            "SELECT mutation_started_at,status FROM emergency_sell_intents WHERE client_order_id=?",
+            (cid,),
+        ).fetchone()
+        if check is None or check["mutation_started_at"] != now or check["status"] != "SUBMITTING":
+            raise RuntimeError("emergency SELL sink blocked: permit commit/readback uncertain")
+        return str(row["operation_id"])
 
     def _migrate_campaign_fill_columns(self):
         columns = {
