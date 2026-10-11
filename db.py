@@ -454,7 +454,7 @@ class Database:
             unresolved = self.conn.execute(
                 """SELECT intent_id,status FROM execution_intents
                    WHERE execution_scope=? AND account_scope=?
-                     AND status IN ('PENDING','SUBMITTING','UNKNOWN','AMBIGUOUS','RECONCILE_REQUIRED')
+                     AND status IN ('PENDING','SUBMITTING','SUBMITTED','UNKNOWN','AMBIGUOUS','RECONCILE_REQUIRED')
                    LIMIT 1""",
                 (scope, account_scope),
             ).fetchone()
@@ -520,7 +520,7 @@ class Database:
                 """SELECT intent_id,status,symbol,client_order_id,order_id
                    FROM execution_intents
                    WHERE execution_scope=? AND account_scope=?
-                     AND status IN ('PENDING','SUBMITTING','UNKNOWN','AMBIGUOUS','RECONCILE_REQUIRED')
+                     AND status IN ('PENDING','SUBMITTING','SUBMITTED','UNKNOWN','AMBIGUOUS','RECONCILE_REQUIRED')
                    ORDER BY created_at,intent_id LIMIT 1""",
                 (scope, account_scope),
             ).fetchone()
@@ -532,7 +532,7 @@ class Database:
 
     def list_unresolved_execution_intents(self, scope=None, account_scope=None):
         query = """SELECT * FROM execution_intents
-                   WHERE status IN ('PENDING','SUBMITTING','UNKNOWN','AMBIGUOUS','RECONCILE_REQUIRED')"""
+                   WHERE status IN ('PENDING','SUBMITTING','SUBMITTED','UNKNOWN','AMBIGUOUS','RECONCILE_REQUIRED')"""
         args = []
         if scope is not None:
             query += " AND execution_scope=?"
@@ -634,7 +634,7 @@ class Database:
                 raise PermissionError("reconciliation evidence does not match the durable intent/account/order")
             cur = self.conn.execute(
                 """UPDATE execution_intents SET status=?,reason=?,order_id=COALESCE(order_id,?)
-                   WHERE intent_id=? AND status IN ('PENDING','SUBMITTING','UNKNOWN','AMBIGUOUS','RECONCILE_REQUIRED')""",
+                   WHERE intent_id=? AND status IN ('PENDING','SUBMITTING','SUBMITTED','UNKNOWN','AMBIGUOUS','RECONCILE_REQUIRED')""",
                 (status, "reconciled:" + str(evidence.evidence_id), str(evidence.order_id), intent_id),
             )
             if cur.rowcount != 1:
@@ -680,7 +680,7 @@ class Database:
             remaining = self.conn.execute(
                 """SELECT 1 FROM execution_intents
                    WHERE execution_scope=? AND account_scope=?
-                     AND status IN ('PENDING','SUBMITTING','UNKNOWN','AMBIGUOUS','RECONCILE_REQUIRED')
+                     AND status IN ('PENDING','SUBMITTING','SUBMITTED','UNKNOWN','AMBIGUOUS','RECONCILE_REQUIRED')
                    LIMIT 1""",
                 (expected_scope, expected_account),
             ).fetchone()
@@ -693,7 +693,7 @@ class Database:
                 any_scope_remaining = self.conn.execute(
                     """SELECT 1 FROM execution_intents
                        WHERE execution_scope=?
-                         AND status IN ('PENDING','SUBMITTING','UNKNOWN','AMBIGUOUS','RECONCILE_REQUIRED')
+                         AND status IN ('PENDING','SUBMITTING','SUBMITTED','UNKNOWN','AMBIGUOUS','RECONCILE_REQUIRED')
                        LIMIT 1""",
                     (expected_scope,),
                 ).fetchone()
