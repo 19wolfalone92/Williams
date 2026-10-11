@@ -973,3 +973,138 @@ Connecting one of these writers to the journal now would risk a split ledger: th
 - Exact-SHA CI set complete: **NOT VERIFIED** while the three Android/Campaign runs remain in progress.
 
 **TASK 003.9 checkpoint result: BLOCKED — NOT ACCEPTED.** PR #48 remains Open/Draft/unmerged. No production financial writer was changed, no migration was run, and no Mainnet/Spot Testnet trading mutation occurred.
+
+
+## TASK 003.10 — Canonical per-fill contract and production writer ownership checkpoint
+
+**Checkpoint date:** 2026-10-11  
+**Status:** **BLOCKED — NOT ACCEPTED**. This checkpoint deliberately does not connect a production writer: the complete writer/caller/read-model inventory and the required production projection/recovery contract are not yet proven. No production code or schema migration was changed.
+
+### A. Re-verified refs and working baseline
+
+- Repository: `19wolfalone92/Williams`
+- Branch / PR head: `audit/williams-2.1-task-003-execution-safety`
+- Source SHA at TASK 003.10 start: `0287b2dbdeedba841f15573e584616cb7efec271`
+- `main`: `04da5f9c09572e99ff310be3a1908179165e528c` (unchanged at verification)
+- PR #48: **OPEN / DRAFT / NOT MERGED**, base `main`, base SHA `04da5f9c09572e99ff310be3a1908179165e528c`.
+- Current branch document blob SHA at start: `98cadf0797c7862fe7c8ae1483ac1a521c33577b`.
+- The repository tree at the source SHA contains 154 files matching `.py`, `.kt`, `.java`, `.sql`, `.yml` or `.yaml`. This is a repository scope count, **not** a claim that all files or callers were semantically audited.
+- No Binance Mainnet or Spot Testnet order/trading mutation was executed. No Futures execution was enabled.
+
+### B. CI for the exact source SHA `0287b2dbdeedba841f15573e584616cb7efec271`
+
+| Workflow | Run ID | Exact SHA | Result | Scope / limitation |
+|---|---:|---|---|---|
+| Python backend tests | 38121965606 | `0287b2dbdeedba841f15573e584616cb7efec271` | **SUCCESS** | Workflow completed on the exact source SHA. This is not proof of production fill integration. |
+| Build Android APK | 38121965601 | `0287b2dbdeedba841f15573e584616cb7efec271` | **SUCCESS** | Workflow completed on the exact source SHA. This is not emulator/device/process-death evidence. |
+| Williams Campaign CI — PR | 38121965612 | `0287b2dbdeedba841f15573e584616cb7efec271` | **SUCCESS** | PR workflow completed on the exact source SHA. |
+| Williams Campaign CI — push | 38121963002 | `0287b2dbdeedba841f15573e584616cb7efec271` | **SUCCESS** | Push workflow completed on the exact source SHA. |
+
+The four runs above are terminal successes on one SHA. CI success does not satisfy the missing source-to-sink, exact financial projection, cross-process crash-recovery or device proof. These runs validate the checkpoint source, not any subsequent commit that appends this report.
+
+### C. Bounded source-to-sink writer inventory
+
+The following is the set of concrete writer families inspected for this checkpoint. It is **not exhaustive**: every caller of the legacy persistence methods, every worker/recovery caller, all projections/readers, all schema migrations and all mutation-adapter call chains have not been enumerated and cross-checked. Therefore no production writer may be connected in this task checkpoint.
+
+| Writer / family | Observed callers / input | Projections or durable tables | Per-fill identity | Fee / numeric handling | Atomicity / recovery | Result |
+|---|---|---|---|---|---|---|
+| `Database.apply_financial_fill_effect()` (`db.py`) | Method exists; inspected direct uses are tests with a test-only projection callback. Production caller not found in inspected call graph. | `financial_effect_journal` plus callback-selected tables | Requires `exchange_fill_id`; key scopes exchange/environment/account/symbol/fill ID. Does not itself prove that caller sourced a real Binance trade ID. | Decimal string serialization; missing commission maps to `UNKNOWN`. Current payload omits several requested CanonicalFillV1 fields including side, order/client IDs, source/times and durable-intent link. | One `Database.transaction()` only if callback exclusively uses the same connection and does not commit/open another transaction. | API code-confirmed; production integration **NOT VERIFIED**. |
+| `Database.resolve_financial_effect_fee()` | Test coverage exists; production resolution caller not established. | Journal row and callback-selected projection | Effect ID refers to journal identity; caller provenance is not proven. | Requires a commission asset and amount, but authoritative source/valuation and conflict workflow are not proven end-to-end. | Can run projection and fee resolution transactionally on the same connection under the callback contract. | API code-confirmed; production recovery **NOT VERIFIED**. |
+| `Database.save_trade()` / trade update methods | Numerous call sites; complete caller census not completed. | `trades`, including entry/exit price, quantity, PnL and fees | No enforced canonical fill/effect key in the inspected schema/API. | Legacy values stored as SQLite `REAL`; direct methods can commit. Fee defaults exist in schema/legacy paths. | Independent direct commits are possible; no required journal transaction demonstrated. | Legacy writer; **BLOCKER**. |
+| `Database.save_campaign_fill()` | Caller completeness not established. | `campaign_fills` | Schema does not enforce canonical per-fill effect identity. | Converts financial values to float and persists quantity/price/quote/fee/base commission in `REAL`; fee quote and base commission have zero defaults. | No demonstrated journal coupling or idempotent effect key. | Legacy writer; **BLOCKER**. |
+| Campaign initial-entry recovery (`campaign_execution.py` → `CampaignEngine.record_initial_fill()`) | Exchange order status response; order-level `executedQty` and `cummulativeQuoteQty`; one fallback lookup to `my_trades` only for quote estimation. | Campaign quantity/average/risk/tags/events and `trades`; protection is created/replaced separately. | Main mutation consumes order aggregates; passes order ID as `fill_order_id`, not an individual trade ID. | Float conversion; explicit `fee_quote=0.0`. | Campaign/trade writes and protection network mutations span separate boundaries. | **BLOCKER**; not a per-fill writer. |
+| Campaign add-on recovery (`campaign_execution.py` → `CampaignEngine.record_add_on_fill()`) | Order-level aggregate quantity/quote and pending campaign state. | Campaign position/risk/add-on state, campaign events, trade quantity, protective stop state. | Order ID rather than separate fill IDs. | Float conversion; explicit `fee_quote=0.0`. | Campaign update, trade update, protection and intent reconciliation are not one financial journal transaction. | **BLOCKER**. |
+| `PortfolioTrader._authoritative_execution()` (`portfolio_trader.py`) | Embedded order fills or `my_trades`; fee conversion can separately query trade rows. | Callers mutate `trades`, trade quantity, fee/PnL and protection state through separate methods. | Normalization retains price/qty/commission fields but drops the individual Binance trade ID before aggregation to `ExecutionSummary`. | Some paths convert commission and valuation prices to float; third-asset conversion depends on a price lookup; summary defaults fee fields to zero. | No demonstrated journal/projection atomicity; emergency sell/reconciliation paths are separate. | **BLOCKER**. |
+| `Trader` (`trader.py`) plus `execution_accumulator.py` | Embedded fills or `my_trades`; aggregate order fallback via `accumulate_order()`. | Legacy `trades`, order/state records and position reconciliation. | `ExecutionSummary` exposes totals/VWAP/fees, not a durable set of immutable per-fill IDs. Aggregate fallback is explicitly not per-fill evidence. | Accumulator uses Decimal arithmetic for some totals, but defaults absent commission to zero, skips nonpositive qty/price rows, and only recognizes a limited set of quote assets plus base-asset commission. This does not establish full fee certainty or exact storage. | Separate persistence/recovery path; no proof that every outcome is journaled. | **BLOCKER**. |
+| Python direct order/campaign state writers | Calls from campaign and portfolio execution paths; full call graph remains open. | `orders`, `campaign_orders`, `campaigns`, `campaign_events`, `execution_intents`, `execution_events` | Usually order/client identity, not necessarily individual fill identity. | Multiple legacy columns are `REAL`; intent quantity fields are text but do not make downstream projections exact. | Some intent operations are transactionally durable; they are not the financial fill journal/projection transaction. | Alternative state writers; their relationship to financial effects is **NOT VERIFIED**. |
+| Android `ExecutionAccumulator` | Binance `executionReport` user-stream event; event fields include trade ID `t`, last qty `l`, last price `L`, commission `n`, asset `N`. | In-memory accumulator snapshots consumed by runtime. | Event-derived key combines order ID, trade ID and event time; it is not the Python journal identity and is not itself proof of durable financial application. | Uses `BigDecimal` for accumulation, but unknown/blank commission semantics and third-asset valuation require further validation; some paths treat commission defaults as zero. | In-memory aggregation does not prove restart-safe exactly-once projections. | Code-confirmed event parsing; production financial application **NOT VERIFIED**. |
+| Android `TradingAuditStore.recordUserEvent()` | User-stream `executionReport`; stores raw event and extracted execution. | Separate `williams_trading_audit.db`: `events`, `executions`, `orders`, `trades`, execution intents. | `trade_id` column exists; event key includes symbol/order/trade/execution type/event time. Not connected to Python journal by a shared transaction/effect contract. | `executions.commission` is SQLite `REAL DEFAULT 0`; event parsing converts commission/qty/price to Double and falls back to zero on parse failure. | Separate database; no atomic commit spanning Android audit rows and Python projections; durable per-fill replay to authoritative financial projections not proven. | **BLOCKER**; Android parity **NOT VERIFIED**. |
+| Android runtime reconciliation / execution mutation paths (`StandaloneRuntime.kt`) | Signed REST mutation response and `executionReport`; routes into campaign or legacy reconciliation paths. | Android execution intent/audit state and runtime campaign/position state. | Event fields can carry trade ID, but the current downstream use is not proven to apply each fill through a canonical durable financial applier. | JSON strings are converted in several places to Double; event audit also stores commission as Double/REAL. | Mutation intent durability exists in the inspected signed-request boundary; it is distinct from atomic fill-to-financial-projection accounting. | Execution mutation safety is separate from financial exactly-once; **BLOCKER**. |
+| Futures mutation paths | Repository-wide mutation-sink classification is not complete in this checkpoint. | Potential order/position/fee projections outside the selected Spot path. | **NOT VERIFIED**. | Futures fee/position semantics not assessed as part of this Spot contract. | No proof all Futures mutations are excluded from shared runtime. | Must remain disabled/blocked until separately inventoried. |
+
+**Inventory result:** at least 11 writer/path families were inspected at source level, but this is not a complete inventory of all writers/callers/readers. An exhaustive count cannot be truthfully reported from the available evidence. The existence of a method, test callback, unique index or order-intent journal is not treated as proof of production integration.
+
+### D. CanonicalFillV1 selection
+
+**No production CanonicalFillV1 contract is accepted or wired by this checkpoint.** The current journal's normalized payload is narrower than the requested contract and is not backed by a proven production adapter.
+
+A safe contract still needs explicit, validated fields for contract version; exchange/environment/account scope; symbol; exchange order and fill IDs; client order ID when available; side; price/base and quote quantity; commission amount/asset/status; exchange and receive times; source endpoint/event; durable intent association; and provenance for each critical field. Optional endpoint fields must be represented as absent/unknown rather than silently fabricated. A source with only aggregate order totals must have a distinct aggregate type and must not satisfy the per-fill writer interface.
+
+The current journal does not validate all requested semantics: side/order/client IDs, timestamps, source, intent link, unknown currency handling, price × quantity versus authoritative quote quantity, allowed symbol/asset metadata, and conflict-state recovery are not proven as one contract. It also does not establish that repeated fee information can be resolved only from an authoritative source with immutable-payload conflict handling across all callers.
+
+### E. Commission contract status
+
+- Campaign recovery's `fee_quote=0.0` is confirmed and remains a P0 blocker.
+- Missing commission can become `UNKNOWN/PENDING_FEE` in the journal API, but that path has no established production caller and no demonstrated global entry gate.
+- The Python accumulator treats a missing commission as zero by default and has incomplete asset semantics; it is an aggregate utility, not a canonical commission authority.
+- Android event persistence converts absent or malformed commission to numeric zero in the inspected code and stores it in `REAL`.
+- Quote-asset fees, base-asset fees, and third-asset fees are not consistently reconciled across Python and Android. Third-asset conversion lacks a universally proven valuation source/timestamp contract.
+- No test suite currently proves all four states `KNOWN`, `UNKNOWN`, `INVALID`, `CONFLICTED` against real production projections. Confirmed zero versus missing commission is not consistently distinguishable end-to-end.
+
+**Result: Commission contract NOT VERIFIED; production path must remain blocked.**
+
+### F. Decimal integrity and atomic projection status
+
+- `db.py` has a canonical decimal-string helper and stores the journal's quantity, price, quote quantity and known commission as TEXT; this is a useful primitive, not proof of end-to-end exactness.
+- Existing authoritative/operational projections remain mixed: `trades`, `campaigns`, `campaign_fills`, `orders` and Android `executions` include `REAL` columns and legacy paths convert values through float/Double.
+- `execution_accumulator.py` uses Decimal for calculations, but its aggregate output discards individual fill identity and does not guarantee exact persistence.
+- Android `ExecutionAccumulator.kt` uses BigDecimal in aggregation, but the durable audit store uses REAL/Double and no shared Python/Android contract is proven.
+- The journal's callback transaction is only atomic for projection changes on the same SQLite connection. Actual campaign/trade/position/protection flows are not all inside that callback. Network protection mutations cannot be part of a SQLite transaction and need a separate durable state machine.
+- Existing tests around the journal create `test_financial_projection` tables. Those tests prove callback mechanics, not production campaign/trade/position projection atomicity.
+- No production-shaped subprocess kill/reopen, two-process duplicate fill, SQLite BUSY/LOCKED, fee resolution conflict or repeated-recovery proof was established for a real selected projection.
+
+**Result: Decimal integrity and production projection atomicity NOT VERIFIED.**
+
+### G. Global Recovery Gate / alternative writers
+
+The inspected Python entry/add-on paths and Android runtime have order-intent, reconciliation and reservation gates, but no demonstrated common durable gate that checks unresolved `financial_effect_journal` states (`PENDING_FEE`, conflicting payload, failed projection) at every risk-increasing boundary. The in-memory Android `ExecutionGate` is a symbol reservation, not a durable financial-recovery gate. The order-mutation barrier does not itself prove financial exactly-once projection application.
+
+Legacy `save_trade()`, campaign record methods, aggregate recovery and Android runtime paths remain potential alternative writers. The audit has not proven that a fill applied by one cannot be applied again by another. There is no basis to remove, bypass or dual-run any existing writer.
+
+**Result: Global Recovery Gate and legacy-writer exclusion NOT VERIFIED.**
+
+### H. Why no production writer was selected
+
+No candidate satisfies all mandatory conditions:
+
+1. Campaign recovery is aggregate/order-based, passes `fee_quote=0.0`, uses float and separately updates campaign/trade/protection state.
+2. Portfolio/trader can obtain individual rows from some sources, but the inspected normalization/accumulator reduces them to an aggregate summary before downstream persistence.
+3. Existing journal projection callbacks are not wired to production callers and do not cover all required production projections.
+4. Existing financial projection schemas and legacy writers are not decimal-exact.
+5. Unknown-fee and conflicting-payload states are not proven to block every risk-increasing entry path.
+6. Independent-process/restart/fault-injection tests against real production tables are not proven.
+7. Android's separate database and Futures mutation paths remain separate unresolved boundaries.
+8. Complete caller/writer/reader/migration inventory remains open.
+
+Selecting a writer now would violate the task's own entry criteria. No DTO, migration or production reroute was forced into the code to create a superficial PASS.
+
+### I. Required next actions before production integration
+
+1. Complete a repository-wide writer/caller/reader/migration/mutation-sink census and record each call edge, projection, transaction and recovery owner.
+2. Map actual Binance Spot `myTrades` and `executionReport` fields to an explicit versioned DTO; preserve Binance trade ID `id`/`t` and distinguish per-fill payloads from order aggregates.
+3. Define commission states and authoritative fee resolution, including base, quote, third asset, confirmed zero, missing and conflicting data.
+4. Select one projection that can be made canonical without mass migration; establish compatibility and block all alternate writers for the selected vertical path.
+5. Add a production adapter that writes the actual selected projection using the same `Database` connection and transaction as the journal; prove callback cannot commit/open another connection.
+6. Add persistent-database, independent-connection/process, subprocess termination, rollback, duplicate and fee-late-arrival tests against real production tables.
+7. Add a durable global recovery gate to every risk-increasing Python and Android boundary before admitting entries/add-ons; keep verified reducing/protective actions on a separately specified path.
+8. Independently inventory and block unverified Futures mutation routes; do not infer Android parity from Python or shared fixtures.
+9. Rerun every mandatory workflow after the next branch update and record the terminal result for that final SHA.
+
+### J. Final checkpoint decision
+
+- **TASK 003.10: BLOCKED — NOT ACCEPTED.**
+- Production writer selected: **NONE**.
+- CanonicalFillV1: **NOT IMPLEMENTED / NOT VERIFIED** as a production contract.
+- Per-fill identity through the full selected production path: **NOT VERIFIED**.
+- Commission certainty: **NOT VERIFIED**; default-to-zero legacy paths remain.
+- Decimal integrity: **NOT VERIFIED** end-to-end.
+- Atomic real production projections: **NOT VERIFIED**.
+- Exactly-once/restart/concurrent-process recovery: **NOT VERIFIED**.
+- Global Recovery Gate: **NOT VERIFIED** for all risk-increasing paths.
+- Python: journal primitive code-confirmed; production financial integration **NOT VERIFIED**.
+- Android: event ID parsing code-confirmed; durable financial exactly-once and process-death recovery **NOT VERIFIED**.
+- Futures exclusion: **NOT VERIFIED**.
+- CI on source SHA `0287b2dbdeedba841f15573e584616cb7efec271`: four listed workflows **SUCCESS**; these runs predate this documentation update.
+- PR #48 remains **OPEN / DRAFT / NOT MERGED**; `main` must remain unchanged.
+
+No production code, financial schema or migration was changed in this checkpoint. No real Binance trading mutation was performed.
