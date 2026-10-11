@@ -951,3 +951,73 @@ This is a source inventory of confirmed high-impact paths, **not yet a complete 
 - **NOT VERIFIED:** The durable-latch regression currently proves a single-process reopen path only; it does not establish two-process races, the complete applier, or the entire crash matrix.
 
 This narrow fix addresses one durable-diagnostics defect only. It does not close P0-01 through P0-13, and TASK 001.8 remains **BLOCKED — NOT ACCEPTED**. The report-only commit below must receive its own exact-SHA CI runs.
+
+
+---
+
+## TASK 001.9 — unified financial effect applier review
+
+**Review baseline:** `5cb969de0a10b69c40842701d0c8f118d82aabdb`  
+**Base SHA:** `04da5f9c09572e99ff310be3a1908179165e528c`  
+**Current implementation commits before this report update:**  
+- `7143b99921a4e8b64d6b0fa2988e13aa7fdc68e4` — block BUY admission while financial effects are unapplied or fee evidence is not confirmed.
+- `37d729a27e626f4ed755d188b49c8acb435f69a9` — regression tests for the effect gate and journal inspection failure.
+
+### A. Baseline CI for TASK 001.8 SHA
+
+All three originally specified runs have completed successfully on the same SHA `5cb969de0a10b69c40842701d0c8f118d82aabdb`:
+- Python backend tests: [38119383949](https://github.com/19wolfalone92/Williams/actions/runs/38119383949) — success.
+- Williams Campaign CI: [38119383882](https://github.com/19wolfalone92/Williams/actions/runs/38119383882) — success; Python and Android build/static-check jobs passed.
+- Build Android APK: [38119383903](https://github.com/19wolfalone92/Williams/actions/runs/38119383903) — success.
+
+These runs validate only that baseline SHA. They do not validate TASK 001.9 changes.
+
+### B. Source-to-sink inventory — current code evidence
+
+| Source / writer | Current behavior and sinks | Transaction / idempotency evidence | Status |
+|---|---|---|---|
+| `db.py::record_exchange_fill` / `_record_exchange_fill_transactional` | Writes `exchange_fill_ledger` and observation row in `financial_effect_journal`; unknown fee remains UNKNOWN; conflicting immutable facts raise and trigger durable recovery latch after rollback. | Ledger key is `(symbol, exchange_trade_id)`; journal key is `(venue, market_type, symbol, exchange_trade_id)`; one SQLite transaction for ingestion; separate transaction for conflict latch. | CODE-CONFIRMED; targeted conflict test exists. |
+| `portfolio_trader.py::_authoritative_execution` | Queries authoritative order/trade evidence, calls `record_exchange_fill`, then continues with legacy fill aggregation / commission handling and downstream trade/position/protection paths. | Ingestion ledger is idempotent; downstream financial projections are not yet proven to share the same transaction or effect identity. | CODE-CONFIRMED; unified application NOT VERIFIED. |
+| `trader.py::_authoritative_execution` | Legacy single-position execution/recovery path persists and consumes exchange facts; file includes float-based quantity/price/accounting paths. | No evidence that all downstream writes are delegated to one financial applier. | CODE-CONFIRMED; exactly-once projection BLOCKED. |
+| `campaign_execution.py` fill/exit paths | Records exchange trades through `record_exchange_fill`, computes fee quote values, and mutates Campaign position/state; `save_campaign_fill` is a separate insertion path. | Campaign state and fill writes are not proven atomic with journal status. `campaign_fills` has an autoincrement row ID and no unique canonical fill/effect key in the inspected schema. | CODE-CONFIRMED; bypass/duplicate risk BLOCKED. |
+| `db.py::save_campaign_fill` | Inserts `campaign_fills` using Python float conversion for quantity, price, quote quantity and fees. | No canonical effect key or dedupe constraint; commit depends on caller transaction state. | CODE-CONFIRMED; Decimal Integrity BLOCKED. |
+| `db.py::save_campaign` and direct Campaign mutation callers | Persist Campaign fields including `position_qty`, average entry, realized PnL and risk/capital reservations. | Schema uses SQLite REAL for multiple financial columns; no unified fill-effect transaction demonstrated. | CODE-CONFIRMED; atomic projection BLOCKED. |
+| `execution_barrier.py::ExecutionBarrier.execute` | Persists execution intent before external mutation and gates BUY admission. | Before TASK 001.9 it checked unresolved intents and position states, but not pending financial effects. | CODE-CONFIRMED; gate hardened in this task. |
+| Android `TradingAuditStore.kt` | Stores executions/orders and audit fields; financial fields include SQLite REAL and Kotlin Double; several missing numeric event fields are parsed with `?: 0.0`. | Separate Android database/runtime; no shared atomic transaction with Python SQLite or Binance financial projections demonstrated. | CODE-CONFIRMED; Decimal and cross-runtime exactly-once BLOCKED. |
+| `execution_recovery.py` | File is not present at the inspected branch path. Recovery functions exist in other modules, including `portfolio_trader.py` and `execution_barrier.py`. | No standalone module could be audited under this name. | NOT VERIFIED as a file; search other recovery call paths before acceptance. |
+
+This is a high-signal inventory of discovered paths, not proof that every repository writer has been exhaustively enumerated. Production writers remain outside a common applier; P0-01/P0-02 are not satisfied.
+
+### C. TASK 001.9 safety change
+
+**Root cause:** `financial_effect_journal` is an observation journal. Ingestion intentionally sets confirmed-fee rows to `READY_TO_APPLY`, not `APPLIED`; before this change, `ExecutionBarrier` did not inspect the journal during BUY admission. A durable but unapplied fill could therefore be absent from the execution-intent checks while still requiring financial projection work.
+
+**Change:** `ExecutionBarrier._validate()` now queries `financial_effect_journal` before admitting a non-risk-reducing BUY. If any row has `effect_status != 'APPLIED'` or `fee_state != 'CONFIRMED'`, the BUY is rejected with a diagnostic containing the fill identity and states. If journal inspection fails, admission fails closed. The risk-reducing SELL/CANCEL exception remains ahead of this entry-only check and is not routed around ExecutionBarrier.
+
+**Regression tests added:**
+- `test_unapplied_financial_effect_blocks_buy_before_exchange_mutation`
+- `test_financial_effect_journal_inspection_failure_blocks_buy`
+
+These tests exercise the admission gate with offline callbacks; they do not prove full effect application or exchange behavior. The gate intentionally remains closed for existing `READY_TO_APPLY` effects until a real applier/reconciliation path marks them APPLIED.
+
+### D. Financial correctness gaps still open
+
+- **No unified production Effect Applier:** no production component currently atomically updates the journal status and all applicable Position, Campaign/`campaign_fills`, fees, PnL and risk projections.
+- **Fill identity is incomplete for the requested contract:** current journal identity lacks an explicit account identifier and effect type is not part of the primary key. The separate ledger identity is narrower still. Account-scoped identity and effect-kind semantics require a backward-compatible design before schema changes.
+- **Conflict latch limitation:** current wrapper commits a separate latch after rollback for the known identity-conflict exceptions. This does not prove persistence under disk-full/corruption/second-transaction failure; such failure raises a fatal error and remains a recovery blocker.
+- **Decimal Integrity fails:** `campaigns`, `campaign_fills`, and other trading tables include SQLite REAL; `save_campaign_fill` converts canonical values to float; `risk_engine.py` uses float; Android `TradingAuditStore.kt` uses REAL/Double. No full cross-runtime exact-decimal contract exists.
+- **Fees/PnL:** late fee enrichment updates journal/ledger evidence but is not proven to apply an idempotent financial correction to cost basis, realized PnL, campaign fee totals and risk.
+- **Cross-process proof:** existing tests include multiple SQLite connections for ingestion identity, but do not prove two independent OS processes racing on the complete projection application.
+- **Crash/fault injection:** no complete transaction-boundary matrix for all financial projections has been proven.
+- **Migrations:** v6 coverage exists in tests; populated v7/v8, interrupted migration recovery and financial projection reconciliation are not proven for this task.
+- **Spot protection:** exact remaining base quantity, base-asset commission, open-order reservation and protective quantity are not proven by the new gate.
+- **Android:** no shared applier contract or physical process-death evidence. The Android audit store remains a separate store with inexact numeric representations.
+- **Testnet/Futures:** no Spot Testnet mutation was performed for this task. Futures and physical Android process-death remain NOT VERIFIED.
+
+### E. Acceptance
+
+**TASK 001.9 status: BLOCKED — NOT ACCEPTED.**
+
+The entry-gate correction is a fail-closed safety improvement, not completion of the requested applier. The next implementation must define a stable account-scoped fill/effect identity, migrate safely, implement the production applier inside the real financial write path, and then convert each legacy writer or disable its mutation capability. Exactly-once Position/Campaign/fees/PnL/risk, independent-process recovery and Decimal Integrity remain P0 blockers.
+
+PR #47 must remain Draft. No merge, Mainnet operation or Spot Testnet mutation is authorized by this task.
