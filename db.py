@@ -1201,11 +1201,24 @@ class Database:
             elif (existing_commission, existing_asset) != (incoming_commission, incoming_asset):
                 raise RuntimeError("exchange trade identity collision: commission fields differ")
 
+            # Re-read the canonical ledger row after fee enrichment. A later
+            # delivery with missing fee fields must not downgrade previously
+            # confirmed fee evidence, and must not create a false identity conflict.
+            canonical = self.conn.execute(
+                """SELECT order_id,quantity_text,price_text,quote_quantity_text,
+                          commission_amount_text,commission_asset,financial_state
+                   FROM exchange_fill_ledger WHERE symbol=? AND exchange_trade_id=?""",
+                (symbol, str(trade_id)),
+            ).fetchone()
+            canonical_fee_state = canonical["financial_state"]
+            canonical_commission = canonical["commission_amount_text"]
+            canonical_asset = canonical["commission_asset"]
+            effect_status = ("READY_TO_APPLY" if canonical_fee_state == "CONFIRMED"
+                             else "RECONCILE_REQUIRED")
             # Durable observation journal. This is deliberately NOT marked
             # APPLIED: downstream position/Campaign/risk projections have not
             # yet been proven to share this transaction. Unknown fees remain
             # reconciliation-blocking rather than being interpreted as zero.
-            effect_status = "READY_TO_APPLY" if state == "CONFIRMED" else "RECONCILE_REQUIRED"
             self.conn.execute(
                 """INSERT OR IGNORE INTO financial_effect_journal(
                     venue,market_type,symbol,exchange_trade_id,exchange_order_id,
@@ -1214,7 +1227,7 @@ class Database:
                     fee_state,contract_version,raw_json
                 ) VALUES('BINANCE','SPOT',?,?,?,?,?,?,?,?,?,?,?,1,?)""",
                 (symbol, str(trade_id), str(order_id), "SPOT_FILL", effect_status,
-                 qty, price, quote_qty, commission, asset, state, payload),
+                 qty, price, quote_qty, canonical_commission, canonical_asset, canonical_fee_state, payload),
             )
             effect = self.conn.execute(
                 """SELECT exchange_order_id,quantity_text,price_text,
@@ -1232,7 +1245,7 @@ class Database:
                 "quote_quantity_text","commission_amount_text","commission_asset",
                 "fee_state"))
             expected_effect_core = (str(order_id), qty, price, quote_qty,
-                                    commission, asset, state)
+                                    canonical_commission, canonical_asset, canonical_fee_state)
             if effect_core != expected_effect_core:
                 self.conn.execute(
                     """UPDATE financial_effect_journal
