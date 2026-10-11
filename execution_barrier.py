@@ -165,8 +165,18 @@ class ExecutionBarrier:
             recovery_status = str(
                 self.db.state_get("recovery_status", "RECOVERY_REQUIRED")
             ).upper()
-            if intent.side.upper() == "BUY" and recovery_status != "RECOVERY_COMPLETE":
-                return f"global_recovery_gate:{recovery_status}"
+            if intent.side.upper() == "BUY":
+                if recovery_status != "RECOVERY_COMPLETE":
+                    return f"global_recovery_gate:{recovery_status}"
+                # A writable status string is not sufficient evidence. The
+                # canonical fill ledger must also have no unapplied financial
+                # effects. Missing/unreadable proof is fail-closed.
+                try:
+                    pending_effects = self.db.pending_exchange_fill_effects()
+                except Exception:
+                    return "global_recovery_gate:financial_ledger_unavailable"
+                if pending_effects:
+                    return "global_recovery_gate:pending_financial_effects"
             state = str(self.db.state_get("position_state", "FLAT"))
             if state == "RECONCILE_REQUIRED":
                 return "RECONCILE_REQUIRED"
