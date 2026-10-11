@@ -418,3 +418,38 @@ The test now expects three senders only after this inventory was performed; it s
 - High-level signal freshness, campaign ownership, risk budget, and confirmed position quantity must still be proven for every entry, replace, cancel, emergency exit and protective-order path. CI/static tests alone do not establish this end-to-end property.
 
 These successful runs are evidence for this exact code SHA, not final acceptance. This documentation-only update changes the branch SHA; the three workflows must complete again on the resulting SHA before claiming exact-final-SHA CI evidence. Final status: **BLOCKED — NOT ACCEPTED**. No Binance Mainnet or real trade was used.
+
+
+### TASK 003.1 — exact-HEAD checkpoint (2026-10-11)
+
+This is a factual checkpoint, not a task-acceptance declaration.
+
+- Branch: `audit/williams-2.1-task-003-execution-safety`.
+- Branch HEAD / PR #48 head observed before this documentation update: `2519e122584c9fb78b023c81b5c39864e24e194f`.
+- PR #48: open, draft, unmerged; base branch `main` at `04da5f9c09572e99ff310be3a1908179165e528c`.
+- The diagnostic SHA `953d2c4e2831d1685f5531c76ac03fcedd42d00a` is an incident baseline only and is not treated as evidence for current code.
+
+GitHub Actions reported the following completed results for the exact observed SHA `2519e122584c9fb78b023c81b5c39864e24e194f`:
+
+| Workflow | Run ID | Job ID(s) | Result |
+|---|---:|---|---|
+| Python backend tests | 38115555012 | 114399629624 | SUCCESS — release contract gate, Python compilation, static safety audit and offline tests completed. |
+| Williams Campaign CI | 38115555061 | 114399629541, 114399629730 | SUCCESS — deterministic Campaign/Python tests; Android debug unit tests, lint and debug APK assembly completed. |
+| Build Android APK | 38115555058 | 114399629554 | SUCCESS — release contract gate, Python checks, Android lint/unit tests, debug and unsigned release APK builds, metadata and signature checks completed. |
+
+The three runs above agree on the same SHA as returned by the commit-associated workflow-runs API. This establishes workflow completion only; it does not prove the full production safety contract or live/device recovery.
+
+#### TASK 003.1 acceptance status
+
+**BLOCKED — NOT ACCEPTED.** The following remain NOT VERIFIED unless separately evidenced by reproducible tests and reviewed call paths:
+
+1. Physical Android process termination and restart at each intent/result persistence boundary.
+2. Live Spot Testnet read-only reconciliation of an accepted order whose response was lost; no order was created or cancelled for this checkpoint.
+3. Authoritative fee/fill/position reconstruction after a local result-write failure, including duplicate fill delivery and unknown commission handling.
+4. Live OCO partial-fill/sibling-cancel races and exact residual protection; all supported bulk-cancel variants.
+5. Exhaustive call-graph proof that every entry, exit, replace, cancel, OCO and protective mutation reaches the barrier and applies applicable risk/ownership/recovery gates.
+6. Cross-process concurrency and forced-process-death recovery on the Android SQLite store, beyond the CI tests explicitly reported above.
+
+The native mutation fence currently blocks unresolved same-symbol mutations conservatively. Do not loosen that rule or treat a SELL/DELETE operation as inherently safe without explicit target identity, confirmed exposure, durable intent and reconciliation semantics. Green CI is necessary but not sufficient for acceptance.
+
+This report update creates a new branch commit. The three workflows must be checked again against the resulting report-bearing SHA; results for `2519e122584c9fb78b023c81b5c39864e24e194f` must not be reused as final-SHA evidence. `main` must remain unchanged and PR #48 must remain unmerged.
