@@ -102,6 +102,28 @@ class FakeBinance:
             "transactTime": 1000,
         }
 
+    def my_trades(self, symbol, order_id=None, limit=1000):
+        order = next(
+            (row for row in self.all_orders(symbol)
+             if str(row.get("orderId")) == str(order_id)),
+            None,
+        )
+        if not order or str(order.get("executedQty", "0")) in {"", "0", "0.0"}:
+            return []
+        qty = str(order["executedQty"])
+        price = "98" if str(order.get("side", "")).upper() == "SELL" else "100"
+        quote_qty = str(order.get("cummulativeQuoteQty") or (float(qty) * float(price)))
+        return [{
+            "id": f"{order_id}-trade-1",
+            "orderId": order_id,
+            "symbol": symbol,
+            "qty": qty,
+            "price": price,
+            "quoteQty": quote_qty,
+            "commission": "0",
+            "commissionAsset": "USDT",
+        }]
+
     def exchange_info(self, symbol):
         return _filters()
 
