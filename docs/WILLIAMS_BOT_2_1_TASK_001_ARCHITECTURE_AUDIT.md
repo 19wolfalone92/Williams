@@ -782,3 +782,71 @@ Confirmed source facts:
 - **No Mainnet calls or real trading were performed. `main` remains unchanged and PR #47 remains open Draft.**
 
 **TASK 001.6 remains BLOCKED — NOT ACCEPTED. Do not resume trading and do not advance to a dependent task as if financial integrity were closed.** A green baseline CI or APK build is not proof of exactly-once financial effects.
+
+
+---
+
+## 15. TASK 001.7 — Financial Effect Journal Integration (2026-10-11)
+
+**Decision: BLOCKED — NOT ACCEPTED.** This pass introduces a durable, exact-text observation journal for authoritative Binance Spot fills and focused tests for its identity and fee-enrichment behavior. It is a first integration step, not a complete exactly-once financial projection implementation.
+
+### 15.1 Baseline and repository controls
+
+- Baseline HEAD confirmed before edits: `76dd678afd9761d1f02ed4a7ad5fcdf48bb58b31`.
+- Base / `main`: `04da5f9c09572e99ff310be3a1908179165e528c`; unchanged.
+- PR #47: open, Draft, not merged.
+- Baseline required CI for SHA `76dd678afd9761d1f02ed4a7ad5fcdf48bb58b31` completed successfully:
+  - [Python backend tests — run 38116507752](https://github.com/19wolfalone92/Williams/actions/runs/38116507752): success.
+  - [Williams Campaign CI — run 38116507753](https://github.com/19wolfalone92/Williams/actions/runs/38116507753): both Python and Android/static jobs success.
+  - [Build Android APK — run 38116507766](https://github.com/19wolfalone92/Williams/actions/runs/38116507766): success.
+- These baseline results do not certify TASK 001.7 changes.
+
+### 15.2 Changes made
+
+1. `db.py`
+   - Added `financial_effect_journal`, with canonical identity columns `venue`, `market_type`, `symbol`, and `exchange_trade_id`; the composite primary key prevents a trade ID reused by another symbol/market/venue from colliding.
+   - Stores exchange order ID, effect type/status, exact decimal strings for quantity/price/quote quantity/commission, commission asset/state, contract version and raw exchange evidence.
+   - `record_exchange_fill()` now writes the journal observation inside the same SQLite transaction as `exchange_fill_ledger` insertion/enrichment, and performs a journal read-back.
+   - Unknown commission is recorded as `RECONCILE_REQUIRED`, not as zero. When authoritative fee evidence arrives later, an unknown journal fee can be enriched to the confirmed amount/asset; later fee-less redelivery must not downgrade the confirmed evidence.
+   - The journal intentionally does **not** claim `APPLIED`: downstream position/Campaign/PnL/risk/protection projections are not yet atomically connected to this journal. `READY_TO_APPLY` means eligible for the future projection worker, not proof that those projections have been applied.
+2. `test_task001_recovery_regressions.py`
+   - Added tests for duplicate delivery, unknown-to-confirmed fee enrichment, exact decimal text preservation, replay after fee confirmation, and same trade ID across different Spot symbols.
+
+### 15.3 What these changes prove — and what they do not
+
+The new focused tests are designed to establish:
+- one journal row for repeated delivery under the same `BINANCE / SPOT / symbol / trade ID` key;
+- unknown fee stays unknown until authoritative fee evidence is present;
+- a confirmed zero fee remains explicitly confirmed with its asset;
+- later fee-less observations do not downgrade known commission data;
+- quantities and prices remain stored as decimal text in this journal;
+- the same numeric trade ID for two symbols is represented by two distinct canonical keys.
+
+They do **not** prove exactly-once financial effects for position, Campaign, commission/PnL projections, risk reservation or protection state. No projection writer has been migrated to consume and atomically acknowledge journal effects in this pass. No two-process race, full crash matrix, populated migration matrix, full Spot/Futures reconciliation, or physical Android process-death test is claimed.
+
+### 15.4 Remaining P0 blockers
+
+| Requirement | Current status |
+|---|---|
+| All production financial writers inventoried and routed through one contract | **BLOCKED** — legacy and Campaign writers remain |
+| Journal-to-position/Campaign/PnL/risk/protection exactly-once application | **BLOCKED** — not yet wired as one effect protocol |
+| Durable conflict record surviving transaction rollback | **NOT VERIFIED** — ledger conflict still relies on caller reconciliation latch |
+| End-to-end Decimal Integrity / removal of canonical REAL and float | **BLOCKED** |
+| Net base inventory for base-asset commission and all fee assets | **BLOCKED** |
+| Global recovery gate across every entry path | **BLOCKED** |
+| Fault injection at all required financial boundaries | **NOT VERIFIED** |
+| Two independent OS processes applying/recovering one fill | **NOT VERIFIED** |
+| Populated v6/v7/v8 migrations and interrupted migration recovery | **NOT VERIFIED** |
+| Complete Spot exposure and protection/OCO reconciliation | **NOT VERIFIED** |
+| Futures position modes, margin, leverage and fee semantics | **NOT VERIFIED — keep unsupported scenarios blocked** |
+| Android physical process death/restart | **NOT VERIFIED** |
+| Spot Testnet end-to-end lifecycle | **NOT RUN / NOT VERIFIED** |
+| All required workflows on final report SHA | **PENDING until exact-SHA runs complete** |
+
+### 15.5 Required next implementation step
+
+The next change must not merely add more journal fields. It must route the actual fill-to-position/Campaign/PnL/risk writers through a single transactional application function or a durable per-projection replay protocol. The application must record per-entity idempotency, use exact canonical decimal values, and only mark the effect complete after all required projections are read back and reconciled. Then add process-level race tests and fault injection with final-state assertions. Until that exists, journal presence is evidence of observation only.
+
+No Binance Mainnet or real trading operations were used. `main` was not modified, and PR #47 remains open Draft.
+
+**TASK 001.7 remains BLOCKED — NOT ACCEPTED. Do not resume trading.**
