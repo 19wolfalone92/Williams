@@ -206,14 +206,20 @@ class ExecutionBarrier:
                     "atomic execution claim/readiness store is unavailable; mutation blocked"
                 )
             try:
-                gate = readiness(scope=intent.execution_scope)
+                if hasattr(self.db, "mark_execution_protection_pending"):
+                    gate = readiness(scope=intent.execution_scope, purpose=intent.purpose)
+                else:
+                    gate = readiness(scope=intent.execution_scope)
             except Exception as exc:
                 raise ExecutionPersistenceError("execution readiness check failed; mutation blocked") from exc
             if not isinstance(gate, dict) or not gate.get("ready"):
                 reason = str((gate or {}).get("reason", "execution readiness unknown"))
                 return ExecutionResult(intent.intent_id, False, reason=f"fail_closed:{reason}")
             try:
-                claim_result = claim(intent, scope=intent.execution_scope)
+                if hasattr(self.db, "mark_execution_protection_pending"):
+                    claim_result = claim(intent, scope=intent.execution_scope, purpose=intent.purpose)
+                else:
+                    claim_result = claim(intent, scope=intent.execution_scope)
             except Exception as exc:
                 raise ExecutionPersistenceError("atomic intent claim failed; mutation blocked") from exc
             if not isinstance(claim_result, dict) or not claim_result.get("claimed"):
