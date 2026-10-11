@@ -30,6 +30,7 @@ class OrderIntent:
     quote_order_quantity: str = ""
     client_order_id: str = ""
     purpose: str = "ENTRY"
+    execution_scope: str = "spot"
     permission_interval: str = ""
     campaign_id: str = ""
     signal_id: str = ""
@@ -93,19 +94,32 @@ class ExecutionBarrier:
                 f"cannot persist execution intent {intent.intent_id} status={status}; mutation blocked"
             ) from exc
 
+    def _mark_unknown(self, intent: OrderIntent, reason: str) -> None:
+        marker = getattr(self.db, "mark_execution_unknown", None) if self.db is not None else None
+        if not callable(marker):
+            raise ExecutionOutcomeUnknown(
+                f"intent {intent.intent_id} is unresolved and no durable UNKNOWN lock is available"
+            )
+        marker(intent, reason, scope=intent.execution_scope)
+
     def _persist_exchange_result(self, intent: OrderIntent, response: Any) -> None:
-        writer = getattr(self.db, "save_execution_event", None) if self.db is not None else None
+        writer = getattr(self.db, "save_execution_result", None) if self.db is not None else None
         if not callable(writer):
             raise ExecutionOutcomeUnknown(
                 f"exchange may have applied intent {intent.intent_id}; "
-                "durable exchange-result writer is unavailable; reconciliation is mandatory"
+                "atomic exchange-result writer is unavailable; reconciliation is mandatory"
             )
         try:
-            writer(intent.intent_id, "BINANCE_RESULT", response)
+            writer(intent, response)
         except Exception as exc:
+            try:
+                self._mark_unknown(intent, f"exchange result persistence failed: {type(exc).__name__}: {exc}")
+            except Exception:
+                # Durable SUBMITTING remains unresolved and blocks new admission.
+                pass
             raise ExecutionOutcomeUnknown(
                 f"exchange may have applied intent {intent.intent_id}; "
-                "exchange response could not be durably recorded; reconciliation is mandatory"
+                "atomic exchange-result persistence failed; reconciliation is mandatory"
             ) from exc
 
     def _record(self, level: str, event: str, intent: OrderIntent, message: str, raw=None) -> None:
@@ -177,12 +191,35 @@ class ExecutionBarrier:
         with self.context_cache.execution_lock:
             order_fsm = OrderStateMachine()
             order_fsm.transition(OrderState.ADMISSION)
-            self._persist(intent, "PENDING")
+            readiness = getattr(self.db, "execution_readiness", None) if self.db is not None else None
+            claim = getattr(self.db, "claim_execution_intent", None) if self.db is not None else None
+            if not callable(readiness) or not callable(claim):
+                raise ExecutionPersistenceError(
+                    "atomic execution claim/readiness store is unavailable; mutation blocked"
+                )
+            try:
+                gate = readiness(scope=intent.execution_scope)
+            except Exception as exc:
+                raise ExecutionPersistenceError("execution readiness check failed; mutation blocked") from exc
+            if not isinstance(gate, dict) or not gate.get("ready"):
+                reason = str((gate or {}).get("reason", "execution readiness unknown"))
+                return ExecutionResult(intent.intent_id, False, reason=f"fail_closed:{reason}")
+            try:
+                claim_result = claim(intent, scope=intent.execution_scope)
+            except Exception as exc:
+                raise ExecutionPersistenceError("atomic intent claim failed; mutation blocked") from exc
+            if not isinstance(claim_result, dict) or not claim_result.get("claimed"):
+                reason = str((claim_result or {}).get("reason", "intent identity conflict"))
+                existing = (claim_result or {}).get("existing")
+                return ExecutionResult(
+                    intent.intent_id, False,
+                    reason=f"intent_not_claimed:{reason}:existing={existing}",
+                )
             if self.db is not None and hasattr(self.db, "save_execution_event"):
                 try:
                     self.db.save_execution_event(intent.intent_id, "ADMISSION_STARTED", dict(intent.required_context_versions))
-                except Exception:
-                    pass
+                except Exception as exc:
+                    raise ExecutionPersistenceError("cannot persist admission event; mutation blocked") from exc
             snapshot = self.context_cache.snapshot()
             reason = self._validate(intent, snapshot)
             if reason:
@@ -208,6 +245,9 @@ class ExecutionBarrier:
                     return ExecutionResult(intent.intent_id, False, reason=reason)
 
             order_fsm.transition(OrderState.SUBMITTING)
+            # Persist SUBMITTING before the network call. A crash after this point
+            # leaves a durable unresolved row that blocks new entries.
+            self._persist(intent, "SUBMITTING")
             self._record(
                 "INFO",
                 "execution_admitted",
@@ -227,15 +267,24 @@ class ExecutionBarrier:
                 response = submit()
             except Exception as exc:
                 order_fsm.state = OrderState.AMBIGUOUS
-                self._persist(intent, "AMBIGUOUS", f"{type(exc).__name__}: {exc}")
+                try:
+                    self._mark_unknown(intent, f"{type(exc).__name__}: {exc}")
+                except Exception as lock_exc:
+                    self._record(
+                        "CRITICAL", "execution_unknown_lock_failed", intent,
+                        "UNKNOWN lock persistence failed; durable SUBMITTING row must block admission",
+                        {"submit_error": repr(exc), "lock_error": repr(lock_exc)},
+                    )
                 self._record(
                     "ERROR",
                     "execution_ambiguous",
                     intent,
-                    "Binance submission failed or timed out; reconciliation required",
+                    "Binance submission may have reached the exchange; reconciliation required",
                     {"error": f"{type(exc).__name__}: {exc}"},
                 )
-                raise
+                raise ExecutionOutcomeUnknown(
+                    f"submission outcome for {intent.intent_id} is unknown; reconcile before retry"
+                ) from exc
 
             self._persist_exchange_result(intent, response)
 
@@ -261,11 +310,10 @@ class ExecutionBarrier:
                     order_fsm.state = OrderState.OPEN
                 else:
                     order_fsm.state = OrderState.RECONCILE_REQUIRED
-                    self._persist(
-                        intent,
-                        "AMBIGUOUS",
-                        "exchange response did not contain authoritative order state",
-                    )
+                    try:
+                        self._mark_unknown(intent, "exchange response did not contain authoritative order state")
+                    except Exception:
+                        pass
                     self._record(
                         "ERROR",
                         "execution_ambiguous",
@@ -276,15 +324,6 @@ class ExecutionBarrier:
                     raise RuntimeError(
                         "ExecutionBarrier: exchange response lacks authoritative order state"
                     )
-            try:
-                self._persist(intent, "SUBMITTED")
-            except ExecutionPersistenceError as exc:
-                # Binance may have accepted or filled the order. Never report success
-                # or let a caller infer that retrying the submit is safe.
-                raise ExecutionOutcomeUnknown(
-                    f"exchange mutation may have occurred for intent {intent.intent_id}; "
-                    "durable result persistence failed; reconciliation is mandatory"
-                ) from exc
             if self.db is not None and hasattr(self.db, "save_execution_event"):
                 try:
                     self.db.save_execution_event(intent.intent_id, "BINANCE_SUBMITTED", {"symbol": intent.symbol, "side": intent.side})
