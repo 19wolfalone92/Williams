@@ -283,7 +283,8 @@ internal fun parseApiQuery(target: String): Map<String, String> {
 
 internal fun apiErrorStatus(error: Throwable): Int = when (error) {
     is ApiHttpException -> error.statusCode
-    is org.json.JSONException -> 400
+    is org.json.JSONException -> 422
+    is java.net.SocketTimeoutException -> 408
     else -> 500
 }
 
@@ -298,6 +299,7 @@ internal fun apiReasonPhrase(status: Int): String = when (status) {
     200 -> "OK"
     400 -> "Bad Request"
     401 -> "Unauthorized"
+    408 -> "Request Timeout"
     403 -> "Forbidden"
     404 -> "Not Found"
     413 -> "Payload Too Large"
@@ -402,6 +404,7 @@ private class StandaloneServer(private val context: Context) {
     private fun handle(s: Socket) {
         s.use {
             try {
+                s.soTimeout = 10_000
                 val input = s.getInputStream()
                 val first = readApiHttpLine(input) ?: return
                 val parts = first.split(" ")
