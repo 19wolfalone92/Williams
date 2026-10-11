@@ -21,6 +21,9 @@ on:
       - 'gradle/**'
       - 'settings.gradle.kts'
       - '.github/workflows/**'
+      - 'audit/**'
+      - '*.py'
+      - 'tests/**'
   workflow_dispatch:
 
 permissions:
