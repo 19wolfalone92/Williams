@@ -1,0 +1,12 @@
+##[group]Run python -m compileall -q .
+2026-10-11T09:43:29.0769577Z [36;1mpython -m compileall -q .[0m
+2026-10-11T09:43:29.0808604Z shell: /usr/bin/bash -e {0}
+2026-10-11T09:43:29.0808933Z env:
+2026-10-11T09:43:29.0809267Z   pythonLocation: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-11T09:43:29.0809781Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.12.15/x64/lib/pkgconfig
+2026-10-11T09:43:29.0810205Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-11T09:43:29.0810631Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-11T09:43:29.0811059Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
+2026-10-11T09:43:29.0811486Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.12.15/x64/lib
+2026-10-11T09:43:29.0812143Z ##[endgroup]
+2026-10-11T09:43:29.3057709Z 
