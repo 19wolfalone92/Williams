@@ -1137,6 +1137,9 @@ private class NativeEngine(
             .put("cleared", true)
     }
 
+    // Synchronous persistence is intentional: the autonomous-start blocker must
+    // survive process death before start() returns.
+    @android.annotation.SuppressLint("ApplySharedPref")
     fun start(): JSONObject {
         if (!androidDurableMutationContractVerified) {
             prefs.edit()
