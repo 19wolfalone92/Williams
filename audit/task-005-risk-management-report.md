@@ -142,3 +142,58 @@ Audit found that `ExecutionBarrier._persist` swallowed database exceptions and d
 Exit execution now reads and persists authoritative per-trade SELL fills, values fees in quote/base/third assets using the same fill-accounting ledger, and includes accumulated exit proceeds and fees in final campaign PnL. It sells no more than the campaign's accounted quantity and current free base inventory. A partial exit no longer treats an arbitrary percentage/tiny-quantity threshold as closed: it updates the residual position, attempts to restore a stop for the residual, preserves risk reservation, and enters `RECONCILE_REQUIRED`. Missing trade history or persistence causes fail-closed reconciliation and a best-effort residual protection attempt.
 
 Regression tests cover quote-fee accounting on a full exit and a partial exit with residual protection. These changes are pending exact-head CI. This still does not by itself prove every process-crash point around exit order submission/recovery; those remain acceptance gates.
+
+
+
+## TASK 005.9 — Mutation-sink enforcement checkpoint (2026-10-11)
+
+**Status: BLOCKED — NOT ACCEPTED.** This checkpoint records production changes made after TASK 005.8; it does not claim that the full TASK 005.9 contract is complete.
+
+### Git state at this checkpoint
+
+- Repository: `19wolfalone92/Williams`
+- Branch: `audit/williams-2.1-task-005-risk-management`
+- PR #50: Open, Draft, not merged.
+- Base SHA: `04da5f9c09572e99ff310be3a1908179165e528c`
+- Implementation checkpoint before CI-trigger adjustment: `99e9367ca68405ab2173449f29a49dddae820bc1`
+- Subsequent CI path-trigger adjustment: `21dc92bcea51b258e798b7177b5e3b15e8d4183f`
+- No Mainnet/Testnet trading mutation was executed.
+
+### Production changes
+
+1. `db.py`
+   - Added `mutation_started_at` to `emergency_sell_intents`, including a safe additive migration for existing databases.
+   - Added `authorize_emergency_sell_mutation()`, which verifies the durable intent's saved client ID, symbol, account/environment fingerprint, quantity and `SUBMITTING` state, then atomically consumes a one-shot permit under SQLite `BEGIN IMMEDIATE`.
+   - Bumped the schema marker to 8 and changed SQLite synchronous mode from NORMAL to FULL to strengthen commit durability.
+2. `binance_client.py`
+   - Added an enforcement check at the REST request boundary for new emergency market SELL requests using the `WILLV4_EMERGENCY_` client-ID namespace.
+   - Direct use of the REST-backed `order()` path is denied if the authorizer is missing, the durable permit cannot be proven, or the permit was already consumed.
+   - Unsupported emergency-ID POST/DELETE mutation shapes fail closed.
+3. `portfolio_trader.py`
+   - Binds the configured durable DB authorizer to the Binance client during `MultiPositionTrader` initialization.
+4. `test_task005_risk_safety.py`
+   - Added offline mutation-sink tests for missing authorization, exact-quantity/account matching, one-shot consumption, and eight independent processes contending for the same permit.
+5. `.github/workflows/android-apk.yml`
+   - Added root Python/test paths to the build workflow filters so backend execution changes trigger an Android APK build as well.
+
+### Evidence classification
+
+- **CODE-CONFIRMED:** one-shot durable permit and emergency-ID sink guard are present in the branch source.
+- **TEST-PROVEN:** Python backend run `38121886860` on SHA `99e9367ca68405ab2173449f29a49dddae820bc1` reported `151 passed, 4 warnings`. This is an intermediate SHA only, not acceptance proof for the latest commit.
+- **CI-PROVEN:** not yet established for the latest SHA. The runs initiated for `21dc92bcea51b258e798b7177b5e3b15e8d4183f` were still pending/in progress at this checkpoint; they must not be treated as PASS.
+- **TESTNET-OBSERVED:** not performed; no trading mutations were used.
+
+### Remaining P0 blockers
+
+- The sink guard currently enforces the emergency client-ID namespace; the complete inventory and proof that every emergency-equivalent or alternate order path cannot bypass it is still outstanding.
+- A production recovery worker is not yet proven to reconcile every persisted intent against authoritative Binance order history and fills after UNKNOWN POST.
+- Fill ledger, fee resolution, campaign/position projections, and intent completion do not yet have a demonstrated single atomic or durable exactly-once protocol across every crash point.
+- Late-fee corrections, unresolved-fee handling, exact Decimal flow and SQLite REAL/float use remain incompletely audited across the full emergency exit path.
+- Remaining Spot exposure is not yet proven by a complete reconciliation of free/locked balances, open orders, fills and commissions.
+- Global Recovery Gate enforcement across every BUY/add-on/worker/Android path remains unproven.
+- Android execution-contract parity or fail-closed blocking has not been demonstrated by process-death and recovery tests.
+- Full adversarial test matrix ES-01 through ES-20 has not been proven on one final SHA.
+
+### Next required step
+
+Wait for all required workflows on the final source SHA, inspect their exact checkout SHA and logs, fix any failures without weakening assertions, and continue the missing recovery/financial-ledger/Decimal/Global Gate work. PR #50 remains Draft. No acceptance is implied by this checkpoint.
