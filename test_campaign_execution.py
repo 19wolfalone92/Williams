@@ -117,7 +117,7 @@ def test_partial_conditional_entry_is_cancelled_and_residual_protected():
         )
         client.set_price("BTCUSDT", 101.5)
         recovered = svc.reconcile_pending_entries()
-        assert recovered[0]["state"] == "OPEN"
+        assert recovered[0]["state"] == "OPEN", recovered
         order = client.get_order("BTCUSDT", orig_client_order_id=result["client_order_id"])
         assert order["status"] in {"PARTIALLY_FILLED", "CANCELED"}
         campaign = svc.engine.load_campaign(result["campaign_id"])
