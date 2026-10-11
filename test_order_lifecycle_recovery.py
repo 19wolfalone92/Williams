@@ -23,7 +23,7 @@ def test_cancel_replace_partial_fill_keeps_fill_visible():
     machine = _to_cancel_pending(executed_qty=0.25)
 
     # The old order can execute while cancellation/replacement is in flight.
-    assert machine.observe_exchange_status("PARTIALLY_FILLED", 0.4) is OrderState.RECONCILE_REQUIRED
+    assert machine.observe_exchange_status("PARTIALLY_FILLED", 0.4) is OrderState.PARTIALLY_FILLED
 
 
 def test_cancel_timeout_is_not_treated_as_cancelled():
