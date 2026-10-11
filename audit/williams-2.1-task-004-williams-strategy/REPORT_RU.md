@@ -367,3 +367,63 @@ This section records the passing CI for SHA `154bff8` specifically. If this repo
 | Binance Spot Testnet | NOT VERIFIED | No Testnet execution performed as part of this audit |
 
 **Decision: IN PROGRESS — NOT APPROVED.** The present evidence is intentionally an initial TASK 004.5 audit checkpoint. Green baseline CI does not close any of the outstanding behavioural or concurrency blockers. No claim is made that the full Bill Williams strategy is implemented or that this branch is ready for live trading.
+
+
+---
+
+# TASK 004.6 — Fail-closed persistence and signal replay guard (interim)
+
+## Repository state and scope
+
+- TASK 004.6 began from the verified branch head `b1f39cd043d0310593900c447d403740fc9ebaf9`.
+- The working branch remains `audit/williams-2.1-task-004-williams-strategy`; PR #49 remains OPEN, Draft, unmerged; base/main remains `04da5f9c09572e99ff310be3a1908179165e528c`.
+- No Mainnet access or real exchange orders were used.
+- This section records code changes and tests added. It does not claim all P0 acceptance criteria are met.
+
+## Changes implemented in this checkpoint
+
+### Python — `execution_barrier.py`
+
+1. `_persist()` no longer swallows exceptions from `save_execution_intent`. When a DB is configured but the required writer is unavailable, or a write/commit raises, execution stops with an explicit persistence error.
+2. Added `_persist_event_required()` for critical execution events. `ADMISSION_STARTED` and `SUBMIT_ATTEMPT_STARTED` must persist before the submit callback can be invoked.
+3. Added a durable entry-signal claim using the existing SQLite `try_claim_state()` primitive and key `consumed_signal:<signal_id>`. It runs after read-only admission checks and before the network boundary. An existing claim blocks replay across barrier/runtime instances. The claim is deliberately conservative: a crash or persistence ambiguity after reservation may require reconciliation/manual resolution; it does not free the signal for blind retry.
+4. The barrier persists `SUBMITTING` and `SUBMIT_ATTEMPT_STARTED` before the network callback. This is the durable boundary: after restart, that state must be treated as potentially sent unless exchange reconciliation proves otherwise.
+5. If persistence of the post-submit status/event fails, the caller receives a reconciliation-required exception. The code attempts to record `AMBIGUOUS`; if SQLite remains unavailable, it does not claim the local outcome is known.
+6. Noncritical diagnostic `log_event` failures remain best-effort. They are distinct from required execution-intent and execution-event writes.
+
+### Python tests added — `test_production_architecture.py`
+
+- `test_execution_barrier_required_intent_persistence_failure_never_calls_submit`: injects a required-intent write/commit failure and asserts the network callback count is zero.
+- `test_execution_barrier_required_admission_event_failure_never_calls_submit`: injects an admission-event failure and asserts the network callback count is zero.
+- `test_execution_barrier_durably_blocks_replayed_signal_before_second_mutation`: uses a shared durable-claim test double across two barrier instances; asserts the second replay cannot invoke the callback.
+
+These are focused regression tests. They do **not** yet replace required tests using real SQLite, two independent OS processes, commit/busy/corruption fault injection, or the full campaign execution path.
+
+## Important limits / remaining P0 blockers
+
+- `SignalSpec.new()` currently derives its deterministic ID from symbol, timeframe, signal type and source-bar time. The ID does not include side or an explicit strategy-contract version. Conflicting canonical payloads are conservatively blocked when they reuse an ID, but the canonical identity contract is not yet cross-platform verified.
+- The existing SQLite `try_claim_state()` primitive is atomic at the database insert/commit boundary, but a two-independent-process test using the same on-disk DB has not yet been run. Transaction rollback, busy/locked, commit-failure and process-kill windows remain unverified.
+- Android has not yet been changed to persist the same signal-claim contract before its actual signed mutation sink. `ExecutionGate` alone is not durable idempotency proof.
+- No Android mutation-spy suite has yet demonstrated zero calls for all negative entry vectors and allowed safe exits.
+- No shared Python/Android golden execution fixture has yet compared signal ID, reason, recovery state and action.
+- No complete causal replay has yet demonstrated invariance under future-candle mutation.
+- Exit/protection/recovery sink tests, SQLite migration matrix, physical-device process-death tests, and Binance Spot Testnet checks remain unverified.
+
+## TASK 004.6 interim acceptance matrix
+
+| Criterion | Status | Evidence |
+|---|---|---|
+| Required intent persistence failure blocks submit callback | IMPLEMENTED — CI pending | Added regression test with observed callback count |
+| Required admission event failure blocks submit callback | IMPLEMENTED — CI pending | Added regression test with observed callback count |
+| Durable signal replay guard in Python barrier | IMPLEMENTED — partial | Existing `try_claim_state()` used; test double covers replay across barrier instances |
+| Real SQLite + two independent process concurrency | UNRESOLVED | Not yet run |
+| Full Python entry-path and legacy-path closure | UNRESOLVED | Requires exhaustive call-path tests |
+| Android mutation-spy and durable gate | UNRESOLVED | No complete sink-level proof yet |
+| Python↔Android golden replay | UNRESOLVED | Not yet implemented |
+| Causal replay / no look-ahead | UNRESOLVED | Not yet implemented |
+| Exit/protection/recovery under failures | UNRESOLVED | No complete sink-level proof yet |
+| SQLite migration and failure-window matrix | UNRESOLVED | Not yet run |
+| Physical Android | NOT VERIFIED | No device evidence |
+| Binance Spot Testnet | NOT VERIFIED | No Testnet order tests performed |
+
+**Decision: IN PROGRESS — NOT APPROVED.** The new Python barrier changes are a partial safety improvement, not completion of TASK 004.6 and not proof of full Williams strategy parity.
