@@ -546,3 +546,71 @@ These tests are useful evidence, but **do not satisfy the full Task 003.2 matrix
 8. Re-run every required workflow on the final report-bearing SHA after any changes. Live Spot Testnet recovery and physical-device results must remain NOT RUN / NOT VERIFIED unless actually performed.
 
 No Binance Mainnet or real trading operation was used. Do not resume trading. Overall status remains **BLOCKED — NOT ACCEPTED**.
+
+
+### TASK 003.3 — cross-process recovery checkpoint (2026-10-11)
+
+**Overall status: BLOCKED — NOT ACCEPTED.** No production trading behavior was loosened. No Mainnet or real orders were used.
+
+#### Exact HEAD / PR
+
+- Verified PR #48 head before this checkpoint: `8f902a5b458402e5235a9fd1149277cb9026f6b8`.
+- Base SHA: `04da5f9c09572e99ff310be3a1908179165e528c`.
+- PR #48 is open, Draft, unmerged.
+- Added independent-process regression tests in commit `2d056caa5655647da8922828b4dbe2880d8dc62d`:
+  - `test_independent_processes_same_logical_intent_submit_at_most_once`: two spawned OS processes open independent SQLite connections to one pre-initialized persistent file, race the same logical intent, and assert exactly one submit callback and one accepted result.
+  - `test_os_process_death_after_submitting_blocks_second_process_retry`: a spawned process durably writes SUBMITTING, is terminated, and a second process attempts the same intent; the test asserts no retry callback and unresolved state remains.
+- These tests address only cross-process intent submission and restart blocking. They do not prove exactly-once fill accounting or financial ledger effects.
+
+#### Exact-SHA CI for the test commit
+
+Runs were created for SHA `2d056caa5655647da8922828b4dbe2880d8dc62d`:
+- Python backend tests: run `38117093237`, job `114404039998`, status IN_PROGRESS at checkpoint.
+- Williams Campaign CI: run `38117093169`, Python job `114404039824` and Android job `114404039747`, statuses QUEUED/IN_PROGRESS at checkpoint.
+- Build Android APK: run `38117093268`, job `114404040092`, status IN_PROGRESS at checkpoint.
+
+Links:
+- https://github.com/19wolfalone92/Williams/actions/runs/38117093237
+- https://github.com/19wolfalone92/Williams/actions/runs/38117093169
+- https://github.com/19wolfalone92/Williams/actions/runs/38117093268
+
+These run IDs are tied to `2d056caa...`, not to this later report commit. Final-head CI must be checked again after this documentation change. No conclusion is inferred while jobs are running.
+
+#### Task 003.3 evidence matrix
+
+| Area | Status | Evidence / limit |
+|---|---|---|
+| HEAD / PR / base | PASS | Queried live; PR open, Draft, unmerged |
+| Python production mutation sink map | NOT VERIFIED | Exhaustive transitive caller-to-client graph still incomplete |
+| Android production mutation sink map | NOT VERIFIED | Static sink inventory is not a runtime bypass proof |
+| Runtime mutation spy | NOT VERIFIED | Not implemented in this checkpoint |
+| Independent OS-process same-intent submission | PENDING | Two-process test added; exact-SHA workflow results pending at checkpoint |
+| OS-process death after SUBMITTING | PENDING | Process termination/reopen test added; exact-SHA workflow results pending at checkpoint |
+| Cross-process duplicate fill accounting | NOT VERIFIED | No canonical transactional fill-to-financial-effects ledger proof |
+| Unknown-fee handling | NOT VERIFIED | Android REAL/default schema and end-to-end writers/readers/migrations not corrected/proven |
+| Decimal-exact Android financial ledger | NOT VERIFIED | No complete migration to canonical decimal representation in this checkpoint |
+| Full 18-point fault injection | NOT VERIFIED | Not implemented as a complete reproducible matrix |
+| Android process-death across all 12 boundaries | NOT VERIFIED | Two-process Python test does not substitute for Android process-death |
+| OCO/cancel-replace/bulk cancel full matrix | NOT VERIFIED | Selected existing unit cases only; authoritative race proof absent |
+| Global Orders→Fills→Fees→Balances→Positions/Campaigns→Risk→Protection gate | NOT VERIFIED | Full gate-release proof absent |
+| Python CI on test commit | PENDING | Run 38117093237 |
+| Campaign CI on test commit | PENDING | Run 38117093169 |
+| Android APK CI on test commit | PENDING | Run 38117093268 |
+| Physical Android device | NOT VERIFIED | No physical-device test performed |
+| Spot Testnet lost-response recovery | NOT RUN | No order placed/cancelled |
+| Futures | NOT VERIFIED | No separate Futures proof |
+| main unchanged / no merge | PASS | Base SHA unchanged; PR remains unmerged |
+
+#### Remaining P0 blockers
+
+1. Finish and verify all production mutation caller chains through actual network clients; add runtime mutation-spy negative-path tests.
+2. Complete OS-process tests for concurrent fill delivery, recovery contention, SQLite BUSY/LOCKED/write/commit errors and malformed recovery rows.
+3. Implement a canonical fill ledger with durable unique exchange fill identity and an atomic/idempotent application protocol for fees, net quantity, position, PnL, Campaign, risk reservation and protection.
+4. Propagate explicit commission completeness states; unknown commission/asset/history must keep recovery unresolved. Convert or bound canonical Android financial values using decimal-safe representation and verified migrations.
+5. Implement and run all 18 fault-injection scenarios with persisted pre-state, injected failure, recovery action, post-state and invariant assertions.
+6. Add Android runtime mutation-spy and actual process-death/relaunch tests across the listed boundaries.
+7. Close OCO, cancel-replace, mass-cancel and residual-exposure recovery scenarios against authoritative order/fill/balance state.
+8. Prove every entry point observes one global recovery gate whose release requires all required ledger stages to reconcile.
+9. Check required workflows and individual jobs on the final report-bearing SHA; do not reuse results from an earlier commit.
+
+Do not resume trading. Status remains **BLOCKED — NOT ACCEPTED** until every P0 has executable evidence.
