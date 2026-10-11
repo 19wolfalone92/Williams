@@ -76,3 +76,76 @@ The zero commission above exists only in test fixtures as an explicit exchange-t
 ## 7. Acceptance decision
 
 **IN PROGRESS — NOT APPROVED.** The initial CI failures have concrete diagnoses and corrective changes have been pushed to the existing branch, but the latest SHA's workflows must finish, and the financial, recovery, concurrency, filter and daily-equity P0 evidence remains incomplete. Do not merge PR #50 or enable live trading based on this report.
+
+
+---
+
+# TASK 005.5 Addendum — Emergency SELL Recovery / Exact-SHA CI
+
+**Decision: BLOCKED — NOT ACCEPTED**  
+**Branch:** `audit/williams-2.1-task-005-risk-management`  
+**PR:** [#50](https://github.com/19wolfalone92/Williams/pull/50), open, Draft, not merged  
+**Base SHA:** `04da5f9c09572e99ff310be3a1908179165e528c`  
+**Source HEAD before this addendum:** `e035d52d7f2c7e7aa1e2b65845c10ff70fdfcdb7`  
+**Safety:** no Mainnet use and no real trading operations.
+
+## A. GitHub state and CI SHA mapping
+
+The run metadata from GitHub's Actions API records the PR head as `e7afee404920abef6891a081e7b323df208569d7` for runs 38115006581, 38115006603 and 38115006580. The PR event metadata says the same head SHA and base SHA as above. The job logs for the Python failures contain the failing emergency-SELL test and fee-unknown traceback. Prior job output reported checkout commit `c3d12f3313a95f25162a1503be624f3b0617f8c0`; that is not the PR head SHA and must be treated as a synthetic/merge checkout until parent/ref evidence is conclusively mapped. Do not transfer any result from that checkout to the branch head.
+
+| Workflow | Run | Job | PR head in run metadata | Result | Evidence |
+|---|---:|---|---|---|---|
+| Python backend tests | [38115006581](https://github.com/19wolfalone92/Williams/actions/runs/38115006581) | backend-test, job 114398048523 | `e7afee404920abef6891a081e7b323df208569d7` | FAILURE; 1 failed, 150 passed | [full job log](https://github.com/19wolfalone92/Williams/actions/runs/38115006581) |
+| Williams Campaign CI | [38115006603](https://github.com/19wolfalone92/Williams/actions/runs/38115006603) | Python tests, job 114398092299 | `e7afee404920abef6891a081e7b323df208569d7` | FAILURE; 1 failed, 167 passed | [full job log](https://github.com/19wolfalone92/Williams/actions/runs/38115006603) |
+| Williams Campaign CI | [38115006603](https://github.com/19wolfalone92/Williams/actions/runs/38115006603) | Android build and static checks, job 114398092238 | `e7afee404920abef6891a081e7b323df208569d7` | SUCCESS | job steps show unit tests, lint and debug APK completed |
+| Build Android APK | [38115006580](https://github.com/19wolfalone92/Williams/actions/runs/38115006580) | Build APKs, job 114398048576 | `e7afee404920abef6891a081e7b323df208569d7` | SUCCESS | job steps show Android unit tests, lint, debug/release APK and artifact checks completed |
+
+These are historical results for `e7afee...`, not evidence for the newer commits in TASK 005.5. Exact-SHA CI on the eventual final HEAD remains **NOT VERIFIED**.
+
+## B. Python failure — established root cause for the currently failing test
+
+The two latest Python workflows fail at `test_multi_position_lifecycle.py::test_partial_emergency_sell_never_closes_trade_as_flat`, with:
+
+`RuntimeError: BTCUSDT: executed order emergency-1 has no authoritative trade rows; fee status UNKNOWN`
+
+Traceback reaches `portfolio_trader.py::_emergency_market_sell` → `_authoritative_execution` → line 684. The production guard is intentional: order-level `executedQty` is not sufficient to infer commission-adjusted inventory. The previous fixture returned an executed order but did not provide matching authoritative `myTrades` rows; it also reported 0.4 BTC free in account while claiming a 0.6 BTC SELL execution against a 1.0 BTC managed position. The fixture therefore did not model a coherent exchange state.
+
+The existing test was changed to model a terminal partial order: requested/original quantity 1.0, status `EXPIRED`, authoritative executed quantity 0.6, quote quantity 60, and an explicit trade-history row with explicit commission amount and asset. This does not substitute synthetic fills into production: the row is a controlled fixture representing the exchange response contract. The production path now accepts terminal `FILLED`, `CANCELED`, `EXPIRED`, and `REJECTED` states for reconciliation, but rejects non-terminal/ambiguous states into `RECONCILE_REQUIRED` without resubmission. Partial residual quantity subtracts a known base-asset commission from managed inventory; unknown or invalid commission remains a hard failure.
+
+Changes committed on the existing branch:
+- `86710ec33cc6db13a8c788f7e4705b835d6fedf9` — production terminal partial emergency-SELL handling and net inventory debit.
+- `e035d52d7f2c7e7aa1e2b65845c10ff70fdfcdb7` — regression fixture with terminal partial execution and authoritative trade history.
+
+**Validation status:** the patch has not yet been shown passing on the final SHA. Other previously reported Python failures (filled pending BUY recovery, partial manual SELL protection, terminal partial entry materialization) were not shown as failing in the latest 150/167-test runs; their full independent state-transition/root-cause proofs remain **NOT VERIFIED**.
+
+## C. Test-count discrepancy
+
+The differing counts are explained at least in part by workflow test selection, not by assuming environment-only variance:
+- `.github/workflows/python-ci.yml` uses Python 3.13 and runs the listed backend suite without `test_campaign_engine.py` and `test_campaign_execution.py`.
+- `.github/workflows/campaign-ci.yml` uses Python 3.12 and adds `test_campaign_engine.py` and `test_campaign_execution.py`.
+- Latest outcomes are 150 passed versus 167 passed (17 additional passing tests in Campaign CI); older outcomes were 147 versus 164 (also a difference of 17).
+
+This matches the workflow command difference, but the exact collected test-ID diff and the individual count from those two added files have not yet been retrieved from pytest collection output. Therefore the detailed 17-test attribution is **PARTIALLY VERIFIED**, not fully closed. The workflows currently do not share one identical test command or Python version.
+
+## D. Android initializationError
+
+Historical runs 38089367620 and 38089367639 failed at `:app:testDebugUnitTest`; the job logs show 28 tests completed, one failed, and Gradle's wrapper exception. The detailed test XML/inner stack trace is not present in the fetched console log. The previous report attributes the failure to test methods being outside the intended class, but that exact diagnosis is **NOT VERIFIED** from the available full log alone. On SHA `e7afee...`, the later Campaign CI Android job and APK workflow completed Android unit tests successfully. That later success does not prove the historical root cause, and it does not cover the new TASK 005.5 commits.
+
+## E. P0 gaps still open
+
+| Requirement | Status | Why not accepted |
+|---|---|---|
+| Exact final-SHA CI | BLOCKED | No completed required workflow results have yet been established for final report commit SHA. |
+| Emergency SELL after lost response | NOT VERIFIED | Current path still needs proof of durable intent before network mutation and order lookup by stable client order ID after a timeout/process death. |
+| Atomic fill/fee/net-quantity/PnL/position/campaign/risk update | NOT VERIFIED | No single transaction or documented replayable durable protocol has been demonstrated across all financial effects. |
+| Exactly-once cross-process accounting | NOT VERIFIED | No independent OS-process test with shared DB and concurrent duplicate fill recovery has been demonstrated. |
+| Unknown fee and base-asset fee | PARTIAL | Guard remains fail-closed and residual now subtracts known base commission; end-to-end ledger/restart proof remains absent. |
+| Crash/fault injection matrix | NOT RUN / NOT VERIFIED | Required kill points and recovered-state invariants have not all been exercised. |
+| Daily capital baseline and daily loss | NOT VERIFIED | Restart, UTC boundary, persistence failure, stale equity and cross-process initialization matrix is incomplete. |
+| Binance filter boundary matrix | NOT VERIFIED | All filter combinations and before/on/after threshold cases have not been shown passing. |
+| Four Python lifecycle failures | PARTIAL | The current emergency SELL fixture failure has a targeted correction; independent regression proofs for the other historical failures are not all attached. |
+| Android historical initializationError root cause | NOT VERIFIED | Historical test XML/inner trace not recovered from console log. |
+
+## F. Decision
+
+**TASK 005.5 = BLOCKED — NOT ACCEPTED.** The emergency SELL regression fixture and production terminal-partial handling were changed on the existing TASK 005 branch, but the final SHA still requires fresh exact-SHA CI and the financial-ledger, lost-response, atomicity, cross-process, fault-injection, daily-capital and Binance-filter evidence above. PR #50 remains open/Draft; do not merge, do not modify `main`, and do not enable real trading based on this report.
