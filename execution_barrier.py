@@ -176,7 +176,17 @@ class ExecutionBarrier:
                     state,
                 )
             )
-            if state == "RECONCILE_REQUIRED" or symbol_state == "RECONCILE_REQUIRED":
+            repair_purpose = str(intent.purpose).upper() in {
+                "CAMPAIGN_PROTECTION",
+                "CAMPAIGN_ENTRY_CANCEL",
+            }
+            # A durable scoped PROTECTION_PENDING admission lease has already
+            # proved that only these risk-reducing operations may proceed. They
+            # must also be allowed to repair a campaign/symbol tagged for recovery;
+            # ordinary entries/exits remain blocked by this validation.
+            if (
+                state == "RECONCILE_REQUIRED" or symbol_state == "RECONCILE_REQUIRED"
+            ) and not repair_purpose:
                 return "RECONCILE_REQUIRED"
             campaign_state = str(
                 self.db.state_get(
@@ -184,7 +194,7 @@ class ExecutionBarrier:
                     "CLEAN"
                 )
             ) if intent.campaign_id else "CLEAN"
-            if campaign_state == "RECONCILE_REQUIRED":
+            if campaign_state == "RECONCILE_REQUIRED" and not repair_purpose:
                 return "campaign_reconcile_required"
 
         return ""
