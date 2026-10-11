@@ -80,25 +80,35 @@ class ExecutionRecoveryCoordinator:
 
     def _query_order(self, intent):
         client_id = str(intent.get("client_order_id") or "")
-        order_id = intent.get("order_id")
+        is_cancel = str(intent.get("order_type") or "").upper() == "CANCEL"
+        order_id = (
+            intent.get("target_order_id") if is_cancel
+            else intent.get("order_id")
+        ) or intent.get("order_id")
+        target_client_id = str(intent.get("target_client_order_id") or "")
+        if is_cancel and (not order_id or not target_client_id):
+            raise ExecutionRecoveryBlocked(
+                "cancel intent lacks durable target order ID/clientOrderId; cannot prove which exchange order was canceled"
+            )
         if not client_id and not order_id:
             raise ExecutionRecoveryBlocked("durable intent has neither clientOrderId nor orderId")
-        # Binance's order lookup should use one unambiguous identity. If orderId
-        # exists, clientOrderId is still compared against the returned payload below.
+        # A cancel operation's clientOrderId identifies the local cancel intent, not
+        # the target Binance order. Target identity is persisted before DELETE.
         order = self.client.get_order(
             str(intent["symbol"]).upper(),
             order_id=order_id if order_id else None,
-            orig_client_order_id=None if order_id else (client_id if client_id else None),
+            orig_client_order_id=None if order_id or is_cancel else (client_id if client_id else None),
         )
         if not isinstance(order, dict):
             raise ExecutionRecoveryBlocked("Binance order lookup did not return an object")
         if str(order.get("symbol", "")).upper() != str(intent["symbol"]).upper():
             raise ExecutionRecoveryBlocked("Binance order symbol conflicts with durable intent")
         returned_client_id = str(order.get("clientOrderId") or "")
-        if client_id and returned_client_id != client_id:
-            raise ExecutionRecoveryBlocked("Binance clientOrderId conflicts with durable intent")
+        expected_client_id = target_client_id if is_cancel else client_id
+        if expected_client_id and returned_client_id != expected_client_id:
+            raise ExecutionRecoveryBlocked("Binance clientOrderId conflicts with durable target identity")
         if order_id and str(order.get("orderId")) != str(order_id):
-            raise ExecutionRecoveryBlocked("Binance orderId conflicts with durable intent")
+            raise ExecutionRecoveryBlocked("Binance orderId conflicts with durable target identity")
         if order.get("orderId") is None:
             raise ExecutionRecoveryBlocked("Binance response lacks an authoritative orderId")
         if str(order.get("side", "")).upper() != str(intent.get("side", "")).upper():
