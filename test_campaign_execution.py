@@ -225,3 +225,55 @@ def test_exchange_fill_journal_is_idempotent_after_full_campaign_restart():
             and str(o.get("clientOrderId", "")).startswith(svc2.STOP_PREFIX)
         ]
         assert len(stops) == 1
+
+
+def test_campaign_exit_fill_commits_trade_pnl_and_position_once():
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "campaign-exit.sqlite3")
+        db = Database(path)
+        client = MockExchange()
+        svc = service(db, client)
+        result = svc.arm_initial_entry(
+            signal(trigger=101.0),
+            equity_quote=10_000,
+            candidate_risk_pct=0.004,
+        )
+        client.set_price("BTCUSDT", 101.5)
+        opened = svc.reconcile_pending_entries()
+        assert opened[0]["state"] == "OPEN", opened
+        campaign = svc.engine.load_campaign(result["campaign_id"])
+        assert campaign is not None
+        entry_qty = float(campaign.position_qty)
+        entry_price = float(campaign.average_entry_price)
+
+        closed = svc.exit_market(campaign, reason="TASK0093_E2E_EXIT")
+        assert closed["state"] == "CLOSED", closed
+        final_campaign = svc.engine.load_campaign(result["campaign_id"])
+        assert final_campaign is not None
+        assert final_campaign.state == CampaignState.CLOSED
+        assert final_campaign.position_qty == 0
+        assert final_campaign.realized_pnl_quote == (101.5 - entry_price) * entry_qty or abs(
+            final_campaign.realized_pnl_quote - (101.5 - entry_price) * entry_qty
+        ) < 1e-6
+
+        trade = db.conn.execute(
+            "SELECT quantity,entry_price,exit_price,pnl,fees,exit_time FROM trades WHERE id=?",
+            (int(final_campaign.tags["trade_id"]),),
+        ).fetchone()
+        assert trade is not None and trade["exit_time"] is not None
+        assert float(trade["quantity"]) > 0
+        assert float(trade["exit_price"]) > 0
+        fill_rows = db.conn.execute(
+            "SELECT trade_id,side FROM execution_fills ORDER BY trade_id"
+        ).fetchall()
+        assert len(fill_rows) == 2
+        assert {row["side"] for row in fill_rows} == {"BUY", "SELL"}
+        pnl_after_first_exit = float(trade["pnl"])
+        svc._ensure_recovered()
+        reread = db.conn.execute(
+            "SELECT pnl,fees,exit_time FROM trades WHERE id=?",
+            (int(final_campaign.tags["trade_id"]),),
+        ).fetchone()
+        assert float(reread["pnl"]) == pnl_after_first_exit
+        assert db.conn.execute("SELECT COUNT(*) FROM execution_fills").fetchone()[0] == 2
+        assert svc.recovery_coordinator.readiness()["ready"] is True
