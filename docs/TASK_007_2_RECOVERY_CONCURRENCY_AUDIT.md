@@ -377,3 +377,70 @@ Do not permit new entries while the canonical financial state, fee valuation, or
 - Production code/schema/financial records and Mainnet/real orders: **NOT CHANGED / NOT USED** by this documentation-only refresh.
 
 **TASK 007.2 status: BLOCKED — TRUSTED BASELINE PROVENANCE AND COMPLETE WRITER/CALL-GRAPH EVIDENCE INCOMPLETE.** The exact remote source commit was identified, but the acceptance criteria are not met. No PASS is claimed.
+
+
+---
+
+## 15. TASK 007.3 — Exactly-once / concurrency / crash-recovery checkpoint (2026-10-11)
+
+### 15.1 Baseline verification
+
+| Gate | Evidence | Result |
+|---|---|---|
+| Implementation source SHA | GitHub commit API: `b5d285f978a491f8eff8c09dce815a0f6d1e6afb` | REMOTE COMMIT IDENTIFIED |
+| Implementation parent | `c436742dd05ece72ec91f3d6196f582d965e0c11` | REMOTE METADATA IDENTIFIED |
+| Prior report commit | `f10cc8a64b1db7246d704e4e331949729e714fba` | IDENTIFIED |
+| Current target branch HEAD | GitHub ref API: `f10cc8a64b1db7246d704e4e331949729e714fba` | VERIFIED AT CHECK |
+| Relationship | `b5d285f` is an ancestor checkpoint; `f10cc8a` is the documentation-only follow-up | REMOTE HISTORY IDENTIFIED |
+| Clone / local checkout | `git clone --no-checkout https://github.com/19wolfalone92/Williams.git /tmp/Williams-task0073` | NOT RUN TO COMPLETION; exit 128, DNS error `Could not resolve host: github.com` |
+| Local worktree status | No checkout created | NOT AVAILABLE |
+| `git bundle verify` / `git fsck --full` | No local repository or bundle | NOT RUN |
+| Bundle SHA-256 | No bundle obtained | NOT AVAILABLE |
+| Commit provenance | Remote GitHub metadata available; no signed provenance established | NOT VERIFIED |
+| CI runs associated with `b5d285f` and `f10cc8a` | GitHub commit-workflow-run query returned empty lists for both SHAs | NO EXACT-SHA RUN EVIDENCE FROM THIS QUERY |
+
+The remote implementation source must be analyzed only at `b5d285f978a491f8eff8c09dce815a0f6d1e6afb`; the current branch head `f10cc8a64b1db7246d704e4e331949729e714fba` includes the prior documentation update. No source code from a different later branch revision was substituted into implementation findings.
+
+### 15.2 Executability and test boundary
+
+A local Git checkout could not be obtained in this environment because DNS resolution for `github.com` failed. Therefore the required fault injection cannot honestly be reported as executed against the exact implementation SHA in this run. Remote source reads and previous workflow records are not substitutes for running the 12 specified scenarios against an isolated temporary SQLite database.
+
+No production code, schema, financial data, workflow, branch history, or Mainnet/Testnet trade state was changed. No real orders were sent. This checkpoint adds documentation only.
+
+### 15.3 FILL-001 through FILL-012 execution results
+
+| Scenario | Required experiment | Result in TASK 007.3 run | Reason |
+|---|---|---|---|
+| FILL-001 | Identical fill replay | NOT RUN | No executable checkout/test harness |
+| FILL-002 | Same identity, conflicting payload | NOT RUN | No executable checkout/test harness |
+| FILL-003 | Concurrent application, two handlers | NOT RUN | No executable checkout/test harness |
+| FILL-004 | Crash after fill persistence | NOT RUN | No executable checkout/test harness |
+| FILL-005 | Crash after position update | NOT RUN | No executable checkout/test harness |
+| FILL-006 | Crash during fee application | NOT RUN | No executable checkout/test harness |
+| FILL-007 | Crash during PnL update | NOT RUN | No executable checkout/test harness |
+| FILL-008 | Commit outcome unknown to caller | NOT RUN | No executable checkout/test harness |
+| FILL-009 | Same fill through REST/WebSocket/recovery | NOT RUN | No executable checkout/test harness |
+| FILL-010 | Repeated recovery | NOT RUN | No executable checkout/test harness |
+| FILL-011 | Local/exchange state mismatch | NOT RUN | No controlled exchange fixture; no exchange access used |
+| FILL-012 | SQLite write/commit failure | NOT RUN | No executable checkout/test harness |
+
+No synthetic logs or simulated outcomes are represented as production-code results. This run has no FILL scenario that can be marked PASS or FAIL.
+
+### 15.4 Financial invariants and decision
+
+The following remain unproven by executed tests: unique application of position quantity; fee completeness and no duplication; PnL consistency; campaign/position consistency; reserve-release timing; ledger agreement; idempotent repeated recovery; global blocking of new entries while state is unknown; and correct distinction between absent, unknown and confirmed-zero financial values.
+
+The previous source audit remains relevant: `save_campaign_fill()` protects the fill journal row but is not proof of atomic application of all projections; financial writers use separate persistence paths; Python `Decimal` values pass through `float` / SQLite `REAL`; a repository-wide mandatory `CanonicalFillV1` effect owner has not been proven.
+
+### 15.5 TASK 007.3 status
+
+- Exact remote implementation and current report HEAD: **IDENTIFIED**.
+- Trusted local checkout / bundle integrity: **BLOCKED**.
+- Complete repository-wide source-to-sink graph: **NOT COMPLETE**.
+- Exactly-once financial effect: **NOT PROVEN**.
+- Concurrency safety across independent SQLite connections: **NOT PROVEN**.
+- Crash recovery at all financial boundaries: **NOT PROVEN**.
+- FILL-001…FILL-012: **ALL NOT RUN** in this execution.
+- Production code/schema/financial records/Mainnet: **NOT CHANGED / NOT USED**.
+
+**TASK 007.3 status: BLOCKED — EXECUTABLE BASELINE AND REQUIRED FAULT-INJECTION EVIDENCE UNAVAILABLE.** Do not infer PASS from existing general CI or from the unique fill index. New entries must remain blocked whenever the canonical financial state, fee status, commit outcome, or required reconciliation is UNKNOWN or incomplete.
