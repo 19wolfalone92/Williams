@@ -109,9 +109,10 @@ def accumulate_fills(fills, base_asset=None, asset_quote_values=None) -> Executi
             fee_quote_equivalent += commission * p
         elif asset in fee_values:
             fee_quote_equivalent += commission * fee_values[asset]
-        elif commission != 0:
-            # Third-asset valuation must be performed by a caller with a
-            # separately verified conversion price; never assume zero value.
+        else:
+            # An unrecognized fee asset is incomplete financial evidence even
+            # when the reported amount is zero. Do not infer that an unknown
+            # asset is economically interchangeable with a known quote asset.
             raise ExecutionDataIncomplete(f"unvalued_commission_asset:{asset}")
 
     avg = quote / qty if qty > 0 else Decimal("0")
