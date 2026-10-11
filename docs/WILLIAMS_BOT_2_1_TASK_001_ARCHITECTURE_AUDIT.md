@@ -1021,3 +1021,47 @@ These tests exercise the admission gate with offline callbacks; they do not prov
 The entry-gate correction is a fail-closed safety improvement, not completion of the requested applier. The next implementation must define a stable account-scoped fill/effect identity, migrate safely, implement the production applier inside the real financial write path, and then convert each legacy writer or disable its mutation capability. Exactly-once Position/Campaign/fees/PnL/risk, independent-process recovery and Decimal Integrity remain P0 blockers.
 
 PR #47 must remain Draft. No merge, Mainnet operation or Spot Testnet mutation is authorized by this task.
+
+
+---
+
+## TASK 001.10 — fresh baseline and pre-implementation writer audit
+
+**Audit timestamp:** 2026-10-11  
+**Audit phase:** mandatory re-verification completed; implementation phase not yet accepted.  
+**Working branch:** `audit/williams-2.1-task-001-architecture`  
+**Working HEAD at audit:** `70ff1da179eb41d359187b7dadc2bb4df8e05d01`  
+**Main HEAD at audit:** `04da5f9c09572e99ff310be3a1908179165e528c`  
+**PR #47:** OPEN, Draft, not merged; base remains the Main SHA above.  
+**No main changes, no merge, no exchange mutation.**
+
+### Same-SHA CI recheck
+
+The following current-head runs were re-read from GitHub Actions. Every run reports the exact audited HEAD `70ff1da179eb41d359187b7dadc2bb4df8e05d01` and success:
+
+- Python backend tests: [38120860608](https://github.com/19wolfalone92/Williams/actions/runs/38120860608) — success.
+- Williams Campaign CI: [38120860615](https://github.com/19wolfalone92/Williams/actions/runs/38120860615) — Python tests and Android build/static checks both success.
+- Build Android APK: [38120860590](https://github.com/19wolfalone92/Williams/actions/runs/38120860590) — APK job success.
+
+This proves only the existing tests/build on this SHA. It does not prove exactly-once financial application, process-level races, or crash consistency.
+
+### Fresh writer and sink findings
+
+| Component / path | Confirmed behavior | TASK 001.10 implication |
+|---|---|---|
+| `db.py::record_exchange_fill` | Persists exchange-fill facts and `financial_effect_journal` observation; confirmed fees lead to `READY_TO_APPLY`, not `APPLIED`. Identity is not account-scoped. | Journal ingestion is not the applier. |
+| `portfolio_trader.py::_authoritative_execution` | Obtains order fills or authoritative `myTrades`; normalizes facts and calls `record_exchange_fill`; then continues with a separate legacy fee summary and downstream position/trade/protection logic. | Best candidate production ingress for first integration, but currently not a single atomic projection transaction. |
+| `trader.py::_authoritative_execution` | Has a separate legacy authoritative execution path and may use an accumulator fallback when trade lookup fails. | Must be routed through canonical fill validation/applier or disabled when authoritative facts are incomplete; no fallback may imply accounting success. |
+| `campaign_execution.py` | Campaign entry/add-on/recovery mutates campaign state and protection; separate `save_campaign_fill` and `trades` update paths exist. Fee valuation includes a conversion-price request for third-asset fees. | Campaign, fill, fee and trade projections are not shown atomic with journal state; external pricing must be resolved before the local write transaction. |
+| `db.py::save_campaign_fill` | Inserts a campaign-fill row without a canonical exchange-fill unique key; schema uses SQLite REAL for quantity, price, quote quantity and fee values. | Duplicate financial projection and decimal integrity remain unproven. |
+| `db.py::save_campaign` | Writes position quantity, average entry, realized PnL and risk/capital reservations using float conversions into REAL columns. | Not suitable as the exact-decimal canonical ledger; any migration must preserve legacy uncertainty rather than pretending REAL history is exact. |
+| `execution_barrier.py::ExecutionBarrier._validate` | Non-risk-reducing BUY admission fails closed when the journal has any non-APPLIED or non-CONFIRMED-fee row, or journal inspection fails. Risk-reducing SELL/CANCEL returns before this gate. | Existing safety gate does not constitute a projection applier. Emergency exit/cancel exception is preserved in this path. |
+| Android `TradingAuditStore.kt`, `StandaloneRuntime.kt`, and related execution components | Separate Android database and mutation paths exist; financial storage contains REAL/Double and some numeric defaults. | No shared transaction with Python SQLite; cross-runtime exactly-once and Decimal contract remain NOT VERIFIED. |
+
+This is a fresh high-impact inventory from the current branch, not yet an exhaustive proof that every financial writer in every Python/Android module has been closed. Repository-wide writer enumeration, complete caller graph, and all migration entry points remain implementation prerequisites.
+
+### TASK 001.10 implementation gate
+
+No TASK 001.10 production code change is claimed by this baseline entry. The next code change must be designed against the verified schemas and caller paths, not implemented as an isolated class. In particular, do not mark an effect `APPLIED` until one SQLite transaction commits the application receipt and every required local financial projection; do not call external Binance/price endpoints inside that transaction; do not treat an unknown commission as zero; and do not block required protective SELL/CANCEL operations merely because an entry gate is closed.
+
+**Current TASK 001.10 status: BLOCKED — NOT ACCEPTED.** The production applier, account-scoped canonical identity, atomic Position/Campaign/fees/PnL/risk projection, independent-process concurrency proof, full crash fault injection, Decimal migration/parity, and complete bypass-writer closure are not established by the current code or green CI. PR #47 remains Draft.
