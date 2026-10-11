@@ -96,10 +96,14 @@ class MockExchange:
         return {"symbols": rows} if symbol is None else {"symbols": [x for x in rows if x["symbol"] == symbol]}
 
     def account(self):
-        return {"balances": [
-            {"asset": k, "free": str(v), "locked": "0.0"}
-            for k, v in self.balances.items()
-        ]}
+        return {
+            "canTrade": True,
+            "accountType": "SPOT",
+            "balances": [
+                {"asset": k, "free": str(v), "locked": "0.0"}
+                for k, v in self.balances.items()
+            ],
+        }
 
     def _partial_fill_qty(self, symbol, requested_qty):
         """Simulate exchange fills that obey the symbol's LOT_SIZE step."""
