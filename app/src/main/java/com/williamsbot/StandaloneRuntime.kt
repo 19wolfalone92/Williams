@@ -479,7 +479,7 @@ private class StandaloneServer(private val context: Context) {
             throw ApiHttpException(400, "Invalid query string")
         }
 
-        val x = e()
+        val x by lazy { e() }
 
         return when {
             method == "GET" && path == "/api/v1/health" ->
