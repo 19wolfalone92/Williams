@@ -141,3 +141,45 @@ This report distinguishes executed CI results from source inspection. Source ins
 ### Completion status
 
 **BLOCKED / NOT COMPLETE.** Isolated HTTP tests have not yet been added or executed against the actual Android socket handler and FastAPI app; requested unittest commands remain unexecuted; Android CI has no final result in the evidence collected. Do not mark this PR ready or merge it until these are resolved. PR should remain Draft.
+
+## P0 follow-up: implementation changes and remaining verification (2026-10-11)
+
+### Branch and scope
+
+- Branch: `audit/api-contract-parity`
+- HEAD at this report: `f5848d6f501345b206ceceb3f4c8e087d33f4e5d`
+- Compared with `main` at `04da5f9c09572e99ff310be3a1908179165e528c`: **16 commits ahead, 0 behind**.
+- Files changed relative to main: `StandaloneRuntime.kt`, new Android `ApiHttpContractTest.kt`, new Python `test_api_http_contract.py`, `test_api_route_contract.py`, and this matrix. No trade execution/state-machine code, DB schema, Gradle files, or workflow YAML was changed. The Android runtime edits are limited to HTTP framing/error mapping and the local trades response limit.
+
+### Expected vs implementation status
+
+The “after” column below is **source-level implementation status**, not runtime confirmation.
+
+| Behavior | Expected | Before | After in branch | Test evidence | Remaining difference / blocker |
+|---|---|---|---|---|---|
+| Unknown Android route | 404 JSON `{"detail":"Not Found"}`, matching FastAPI's status and detail envelope | Handler returned 200 with `{"error":"Not found"}` | Route fallback now throws a typed 404; response writer emits that status and a `detail` envelope | Android helper test for 404 mapping added; **NOT RUN**. No live socket handler test yet | Actual Android socket response still needs runtime assertion |
+| Request-body framing | Read exactly Content-Length bytes; tolerate partial reads; reject incomplete/oversized body | Single character-reader call could return partial body and counted characters, not UTF-8 bytes | Raw input stream reads exact bytes in a loop; 1 MiB cap; incomplete body -> 400; socket read timeout 10 seconds -> 408 | Kotlin tests added for partial reads with multibyte UTF-8, incomplete and oversized bodies, and timeout mapping; **NOT RUN** | Real socket fragmentation/timeout test still required; chunked transfer encoding is not implemented and should be documented/explicitly rejected |
+| Error status mapping | 4xx for request errors; 5xx for unexpected internal errors | All caught exceptions returned 500 | Typed request errors preserve status; unknown path -> 404; malformed JSON -> 422; invalid query encoding -> 400; unexpected exceptions -> generic 500 | Kotlin helper tests added; Python TestClient tests cover 404, auth 401, invalid limit 422; **NOT RUN** | Error envelope contents still differ: FastAPI validation `detail` is generally structured, Android uses a string; compare representative malformed-body responses at runtime |
+| Query duplicates | For scalar query keys, last occurrence wins | Android `associate` collapsed duplicates with last value; behavior not tested | Explicit ordered map preserves last-value-wins behavior | Python TestClient and Kotlin parser tests added; **NOT RUN** | Runtime parity test on actual Android HTTP handler remains |
+| `GET /api/v1/trades?limit=` | Default 50; integer values bounded to 1..200; newest-first results | Android ignored limit | Android parses limit, rejects non-integer with 422 and bounds numeric values to 1..200; `TradeJournal.trades` is newest-first, so bounded prefix is used | Python TestClient checks limit + duplicate query; Kotlin helper tests cover default/clamping/invalid values; **NOT RUN** | Actual route test on Android server remains |
+| Authorization | Sensitive Python endpoints reject missing/invalid token; equivalent protected operations should have an explicit policy | Python uses bearer-token dependency; Android loopback dispatcher has no equivalent token dependency | **Unchanged intentionally pending compatibility/security decision**; Android server binds to 127.0.0.1 only | Python auth test added; **NOT RUN**. No Android auth test because no Android auth behavior was introduced | Loopback binding reduces exposure but is not equivalent to bearer auth; product/security owner must decide whether local callers are trusted or auth parity is required |
+| Timeouts / retries / idempotency | Bounded request wait; no unsafe automatic replay of non-idempotent controls | Outbound OkHttp: 10s connect, 45s read, automatic connection retry disabled; incoming handler had no explicit read timeout | Incoming socket read timeout set to 10s; outbound settings unchanged | Timeout mapper test added; **NOT RUN** | Caller-level retries/idempotency were not exhaustively inspected; no fault-injection or replay test. No claim of idempotency |
+| Success response DTOs | Shared endpoints should agree on fields/types | Not compared over HTTP | No broad DTO normalization attempted to avoid changing consumers blindly | No cross-runtime response snapshot suite yet | Blocking for full contract parity; route-specific differences remain in the route matrix |
+
+### Test execution status
+
+- `python -m unittest tests.test_api_route_contract -v`: **NOT RUN in this environment**; exact exit code, test count, and traceback unavailable.
+- `python -m unittest discover -s tests -v`: **NOT RUN in this environment**; exact exit code, test count, and traceback unavailable.
+- New `tests/test_api_http_contract.py`: added, **NOT RUN**.
+- New Android `ApiHttpContractTest.kt`: added, **NOT RUN**.
+- These are tests committed to the branch, not evidence that the real Android socket handler has passed isolated HTTP tests.
+
+### CI and version gate
+
+- Earlier [Python backend tests #2624](https://github.com/19wolfalone92/Williams/actions/runs/38173817428) failed in `ci_release_gate.py` with exit code 1 and traceback `AssertionError: server.py: missing "VERSION = '4.24.0'"`. The gate has `EXPECTED_VERSION = '4.24.0'`; both `server.py` and `app/build.gradle.kts` declare `4.25.0`. Main contains commit `1d2fcba4d76b3380576a46f05caa0acdf8bc01c4`, titled “Digital Williams APK: bump Android version to 4.25.0”, which is evidence that 4.25.0 is the intended version. The release gate appears stale, but it has **not** been changed because that is a release-policy/CI decision outside this API patch.
+- Earlier [Williams Campaign CI #4921](https://github.com/19wolfalone92/Williams/actions/runs/38173817513): Python job passed `159 passed, 4 warnings`; Android job **FAILED** at `:app:lintDebug`, not at the unit-test task. Lint reported one error: `gradle/wrapper/gradle-wrapper.properties:3: A newer version of Gradle than 8.14.5 is available: 8.14.6 [AndroidGradlePluginVersion]`. Android unit tests were not reached.
+- Current HEAD `f5848d6f501345b206ceceb3f4c8e087d33f4e5d` has newly observed workflow runs: Python backend tests #2641 **QUEUED**, Build Android APK #2266 **QUEUED**, Williams Campaign CI #4956 **PENDING** at the time of this report. No final result is available yet. These runs must be rechecked before any completion claim.
+
+### Completion status
+
+**BLOCKED / NOT COMPLETE.** The implementation changes and isolated test files are committed, but neither requested unittest command nor either new test suite has been executed in this environment. Actual Android socket-level parity, full response DTO parity, Android authorization policy, and idempotency/caller retry behavior remain unverified. Do not mark ready or merge; keep PR in Draft until test output and final CI results are recorded.
