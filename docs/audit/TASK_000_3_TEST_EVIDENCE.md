@@ -100,3 +100,22 @@ Latest observed PR-triggered runs:
 - No local Python tests were executed in this environment. No isolated test run on the literal required SHA has been verified. Previously observed successful PR CI jobs checked out merge commits, not the immutable source SHA; those runs are not exact-source evidence.
 - The audit branch received documentation-only commits for the inventory and report. Its CI must be checked against the resulting head and the job logs must be inspected for the actual checkout SHA. That evidence is separate from exact-source validation.
 - **Decision remains BLOCKED:** P1-1 cancelReplace two-leg recovery and P1-2 whole-repository barrier reachability remain open. No real exchange orders, Testnet trading, or trading-strategy changes were used/performed.
+
+
+## TASK 000.5 revalidation — 2026-10-11
+
+Issue #52 is open. The immutable source remains `f6dd193f9147ba49ff7f11efc81b18e10c1e2c44`; the branch HEAD before this documentation update was `d0c3a4fe71025f69e3356fa0d397b5544898d240`.
+
+Latest observed PR workflows all completed successfully:
+- Backend run [38171251079](https://github.com/19wolfalone92/Williams/actions/runs/38171251079): 148 passed, 4 warnings.
+- Campaign CI run [38171251089](https://github.com/19wolfalone92/Williams/actions/runs/38171251089): 208 passed, 4 warnings; Android build/static-check job passed.
+- Mutation registry run [38171251083](https://github.com/19wolfalone92/Williams/actions/runs/38171251083): 14 passed; gate reports `PASS WITH BOUNDED MODEL`.
+- Android APK run [38171251094](https://github.com/19wolfalone92/Williams/actions/runs/38171251094): build, lint, unit tests, APK checks and provenance steps passed.
+
+**Checkout SHA verified from logs:** these latest jobs checked out merge commit `bc8d2a88da81dece541cb36bb2cd00646ae21150`, merging branch HEAD `d0c3a4...` into base `04da5f9c09572e99ff310be3a1908179165e528c`.
+
+The PR workflows associated with baseline SHA `f6dd193f9147ba49ff7f11efc81b18e10c1e2c44` (runs [38156886908](https://github.com/19wolfalone92/Williams/actions/runs/38156886908), [38156886916](https://github.com/19wolfalone92/Williams/actions/runs/38156886916), [38156886920](https://github.com/19wolfalone92/Williams/actions/runs/38156886920), and [38156886910](https://github.com/19wolfalone92/Williams/actions/runs/38156886910)) checked out merge commit `c24e28defc38e19baf20c777a069e80b87c7aecf`, not the literal source SHA. No isolated baseline test run is proven. No local tests were run, and no new cancelReplace fault-injection or complete bypass suite was run.
+
+The 123 baseline Python files were fetched and keyword/source-pattern scanned during TASK 000.5. This is broad static triage, not a complete line-by-line semantic review. See `TASK_000_5_EXECUTION_SAFETY_REMEDIATION.md`.
+
+**Disposition remains BLOCKED:** cancelReplace two-leg recovery, global mutation-barrier enforcement, exhaustive negative tests, and isolated baseline SHA testing remain unproven.
