@@ -7,7 +7,7 @@ from contextlib import contextmanager
 
 
 class Database:
-    SCHEMA_VERSION = 7
+    SCHEMA_VERSION = 8
 
     def __init__(self, path=None):
         path = path or os.getenv('WILLIAMS_DB_PATH') or 'data/trader.sqlite3'
@@ -136,7 +136,12 @@ class Database:
             invalidation_level REAL,
             status TEXT NOT NULL,
             reason TEXT,
-            client_order_id TEXT
+            client_order_id TEXT,
+            exchange TEXT NOT NULL DEFAULT 'BINANCE',
+            account_scope TEXT NOT NULL DEFAULT 'spot-default',
+            execution_scope TEXT NOT NULL DEFAULT 'spot',
+            campaign_id TEXT,
+            order_id TEXT
         );
         CREATE TABLE IF NOT EXISTS execution_events(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -285,8 +290,33 @@ class Database:
             ON campaign_events(campaign_id, id);
         ''')
         self._migrate_trade_columns()
+        self._migrate_execution_columns()
         self.state_set('schema_version', self.SCHEMA_VERSION)
         self.state_set('position_state', self.state_get('position_state', 'FLAT'))
+        self.conn.commit()
+
+    def _migrate_execution_columns(self):
+        """Add execution identity/scope columns without rewriting existing intent history."""
+        columns = {
+            row["name"]
+            for row in self.conn.execute("PRAGMA table_info(execution_intents)").fetchall()
+        }
+        additions = {
+            "exchange": "TEXT NOT NULL DEFAULT 'BINANCE'",
+            "account_scope": "TEXT NOT NULL DEFAULT 'spot-default'",
+            "execution_scope": "TEXT NOT NULL DEFAULT 'spot'",
+            "campaign_id": "TEXT",
+            "order_id": "TEXT",
+        }
+        for name, sql_type in additions.items():
+            if name not in columns:
+                self.conn.execute(f"ALTER TABLE execution_intents ADD COLUMN {name} {sql_type}")
+        # A missing/invalid historical scope is deliberately not inferred from another
+        # contour. Existing schema-v7 rows retain the conservative Spot default.
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_execution_intents_scope_status "
+            "ON execution_intents(execution_scope,account_scope,status)"
+        )
         self.conn.commit()
 
     def _migrate_trade_columns(self):
@@ -376,23 +406,57 @@ class Database:
             self.conn.commit()
 
     @staticmethod
-    def _execution_lock_key(scope):
-        return "execution_lock:" + str(scope or "spot").strip().lower()
+    def _default_account_scope(scope="spot", account_scope=None):
+        if account_scope is not None and str(account_scope).strip():
+            return str(account_scope).strip()
+        env_scope = os.getenv("WILLIAMS_ACCOUNT_SCOPE", "").strip()
+        if env_scope:
+            return env_scope
+        return str(scope or "spot").strip().lower() + "-default"
 
-    def claim_execution_intent(self, intent, scope="spot"):
-        """Atomically claim one immutable intent; conflicts never authorize submit."""
+    @staticmethod
+    def _execution_lock_key(scope, account_scope=None):
+        contour = str(scope or "spot").strip().lower()
+        if account_scope is None:
+            # Legacy key is read during migration/recovery only.
+            return "execution_lock:" + contour
+        return "execution_lock:" + contour + ":" + str(account_scope).strip()
+
+    def _intent_account_scope(self, intent_id, scope="spot"):
+        row = self.conn.execute(
+            "SELECT execution_scope,account_scope FROM execution_intents WHERE intent_id=?",
+            (str(intent_id),),
+        ).fetchone()
+        if row:
+            return str(row["execution_scope"] or scope), str(
+                row["account_scope"] or self._default_account_scope(scope)
+            )
+        return str(scope or "spot"), self._default_account_scope(scope)
+
+    def claim_execution_intent(self, intent, scope=None, account_scope=None):
+        """Atomically claim one immutable intent inside its exchange/account contour."""
+        scope = str(scope or getattr(intent, "execution_scope", "spot") or "spot").strip().lower()
+        account_scope = self._default_account_scope(scope, account_scope or getattr(intent, "account_scope", None))
         client_order_id = str(getattr(intent, "client_order_id", "") or "") or None
+        exchange = str(getattr(intent, "exchange", "BINANCE") or "BINANCE").upper()
+        campaign_id = str(getattr(intent, "campaign_id", "") or "") or None
         with self.transaction():
-            key = self._execution_lock_key(scope)
-            lock = self.conn.execute(
-                "SELECT value FROM bot_state WHERE key=?", (key,)
-            ).fetchone()
-            if lock:
-                return {"claimed": False, "reason": "EXECUTION_LOCKED", "existing": json.loads(lock["value"])}
+            lock_keys = (
+                self._execution_lock_key(scope, account_scope),
+                self._execution_lock_key(scope),
+            )
+            for key in lock_keys:
+                lock = self.conn.execute(
+                    "SELECT value FROM bot_state WHERE key=?", (key,)
+                ).fetchone()
+                if lock:
+                    return {"claimed": False, "reason": "EXECUTION_LOCKED", "existing": json.loads(lock["value"])}
             unresolved = self.conn.execute(
                 """SELECT intent_id,status FROM execution_intents
-                   WHERE status IN ('PENDING','SUBMITTING','UNKNOWN','AMBIGUOUS','RECONCILE_REQUIRED')
-                   LIMIT 1"""
+                   WHERE execution_scope=? AND account_scope=?
+                     AND status IN ('PENDING','SUBMITTING','UNKNOWN','AMBIGUOUS','RECONCILE_REQUIRED')
+                   LIMIT 1""",
+                (scope, account_scope),
             ).fetchone()
             if unresolved:
                 return {"claimed": False, "reason": "UNRESOLVED_INTENT", "existing": dict(unresolved)}
@@ -401,15 +465,17 @@ class Database:
                     """INSERT INTO execution_intents(
                         intent_id,symbol,side,order_type,purpose,
                         required_context_versions_json,hypothesis_id,invalidation_level,
-                        status,reason,client_order_id
-                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                        status,reason,client_order_id,exchange,account_scope,
+                        execution_scope,campaign_id,order_id
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (
-                        str(intent.intent_id), str(intent.symbol), str(intent.side),
-                        str(intent.order_type), str(intent.purpose),
+                        str(intent.intent_id), str(intent.symbol).upper(), str(intent.side).upper(),
+                        str(intent.order_type).upper(), str(intent.purpose),
                         json.dumps(dict(intent.required_context_versions), sort_keys=True),
                         str(getattr(intent, "hypothesis_id", "") or ""),
                         float(getattr(intent, "invalidation_level", 0.0) or 0.0),
-                        "PENDING", "", client_order_id,
+                        "PENDING", "", client_order_id, exchange, account_scope,
+                        scope, campaign_id, None,
                     ),
                 )
             except sqlite3.IntegrityError:
@@ -429,23 +495,34 @@ class Database:
                 }
             self.conn.execute(
                 "INSERT INTO execution_events(intent_id,event,payload_json) VALUES(?,?,?)",
-                (str(intent.intent_id), "INTENT_CLAIMED", json.dumps({"scope": scope})),
+                (str(intent.intent_id), "INTENT_CLAIMED", json.dumps({
+                    "scope": scope, "account_scope": account_scope, "exchange": exchange,
+                    "campaign_id": campaign_id, "client_order_id": client_order_id,
+                }, sort_keys=True)),
             )
             return {"claimed": True, "reason": "", "existing": None}
 
-    def execution_readiness(self, scope="spot"):
-        """Fail closed if a durable lock or any unresolved submission exists."""
+    def execution_readiness(self, scope="spot", account_scope=None):
+        """Fail closed for unresolved operations in this exact account/execution contour."""
         try:
-            key = self._execution_lock_key(scope)
-            lock = self.conn.execute(
-                "SELECT value FROM bot_state WHERE key=?", (key,)
-            ).fetchone()
-            if lock:
-                return {"ready": False, "reason": "EXECUTION_LOCKED", "detail": lock["value"]}
+            scope = str(scope or "spot").strip().lower()
+            account_scope = self._default_account_scope(scope, account_scope)
+            for key in (
+                self._execution_lock_key(scope, account_scope),
+                self._execution_lock_key(scope),
+            ):
+                lock = self.conn.execute(
+                    "SELECT value FROM bot_state WHERE key=?", (key,)
+                ).fetchone()
+                if lock:
+                    return {"ready": False, "reason": "EXECUTION_LOCKED", "detail": lock["value"]}
             unresolved = self.conn.execute(
-                """SELECT intent_id,status FROM execution_intents
-                   WHERE status IN ('PENDING','SUBMITTING','UNKNOWN','AMBIGUOUS','RECONCILE_REQUIRED')
-                   LIMIT 1"""
+                """SELECT intent_id,status,symbol,client_order_id,order_id
+                   FROM execution_intents
+                   WHERE execution_scope=? AND account_scope=?
+                     AND status IN ('PENDING','SUBMITTING','UNKNOWN','AMBIGUOUS','RECONCILE_REQUIRED')
+                   ORDER BY created_at,intent_id LIMIT 1""",
+                (scope, account_scope),
             ).fetchone()
             if unresolved:
                 return {"ready": False, "reason": "UNRESOLVED_INTENT", "detail": dict(unresolved)}
@@ -453,28 +530,43 @@ class Database:
         except Exception as exc:
             return {"ready": False, "reason": "READINESS_CHECK_FAILED", "detail": repr(exc)}
 
-    def list_unresolved_execution_intents(self):
-        rows = self.conn.execute(
-            """SELECT * FROM execution_intents
-               WHERE status IN ('PENDING','SUBMITTING','UNKNOWN','AMBIGUOUS','RECONCILE_REQUIRED')
-               ORDER BY created_at,intent_id"""
-        ).fetchall()
+    def list_unresolved_execution_intents(self, scope=None, account_scope=None):
+        query = """SELECT * FROM execution_intents
+                   WHERE status IN ('PENDING','SUBMITTING','UNKNOWN','AMBIGUOUS','RECONCILE_REQUIRED')"""
+        args = []
+        if scope is not None:
+            query += " AND execution_scope=?"
+            args.append(str(scope).strip().lower())
+        if account_scope is not None:
+            query += " AND account_scope=?"
+            args.append(str(account_scope))
+        query += " ORDER BY created_at,intent_id"
+        rows = self.conn.execute(query, tuple(args)).fetchall()
         return [dict(row) for row in rows]
 
-    def mark_execution_unknown(self, intent, reason, scope="spot"):
-        """Persist UNKNOWN and its scope lock atomically; failure leaves SUBMITTING unresolved."""
-        key = self._execution_lock_key(scope)
+    def mark_execution_unknown(self, intent, reason, scope=None, account_scope=None):
+        """Persist UNKNOWN and a per-account lock atomically; SUBMITTING survives lock-write failure."""
+        intent_id = str(intent.intent_id)
+        stored_scope, stored_account = self._intent_account_scope(
+            intent_id, scope or getattr(intent, "execution_scope", "spot")
+        )
+        scope = str(scope or stored_scope).strip().lower()
+        account_scope = self._default_account_scope(
+            scope, account_scope or stored_account or getattr(intent, "account_scope", None)
+        )
+        key = self._execution_lock_key(scope, account_scope)
         payload = json.dumps({
-            "scope": str(scope), "intent_id": str(intent.intent_id),
+            "scope": scope, "account_scope": account_scope, "intent_id": intent_id,
             "reason": str(reason), "state": "UNKNOWN",
         }, sort_keys=True)
         with self.transaction():
             cur = self.conn.execute(
-                "UPDATE execution_intents SET status='UNKNOWN',reason=? WHERE intent_id=?",
-                (str(reason), str(intent.intent_id)),
+                """UPDATE execution_intents SET status='UNKNOWN',reason=?
+                   WHERE intent_id=? AND execution_scope=? AND account_scope=?""",
+                (str(reason), intent_id, scope, account_scope),
             )
             if cur.rowcount != 1:
-                raise RuntimeError(f"cannot lock unknown intent: {intent.intent_id}")
+                raise RuntimeError(f"cannot lock unknown intent: {intent_id}")
             self.conn.execute(
                 """INSERT INTO bot_state(key,value) VALUES(?,?)
                    ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
@@ -482,53 +574,131 @@ class Database:
             )
             self.conn.execute(
                 "INSERT INTO execution_events(intent_id,event,payload_json) VALUES(?,?,?)",
-                (str(intent.intent_id), "UNKNOWN_LOCKED", payload),
+                (intent_id, "UNKNOWN_LOCKED", payload),
             )
 
     def save_execution_result(self, intent, response):
-        """Atomically persist the exchange response and its known-result status."""
+        """Atomically persist the exchange response and the matching order identity."""
         payload = json.dumps(response, default=str, sort_keys=True)
+        order_id = None
+        if isinstance(response, dict) and response.get("orderId") is not None:
+            order_id = str(response.get("orderId"))
         with self.transaction():
             cur = self.conn.execute(
                 "INSERT INTO execution_events(intent_id,event,payload_json) VALUES(?,?,?)",
                 (str(intent.intent_id), "BINANCE_RESULT", payload),
             )
             updated = self.conn.execute(
-                "UPDATE execution_intents SET status='SUBMITTED',reason='' WHERE intent_id=? AND status='SUBMITTING'",
-                (str(intent.intent_id),),
+                """UPDATE execution_intents SET status='SUBMITTED',reason='',
+                   order_id=COALESCE(?,order_id)
+                   WHERE intent_id=? AND status='SUBMITTING'""",
+                (order_id, str(intent.intent_id)),
             )
             if updated.rowcount != 1:
                 raise RuntimeError(f"intent not SUBMITTING while recording exchange result: {intent.intent_id}")
             return int(cur.lastrowid)
 
-    def resolve_execution_intent(self, intent_id, status, exchange_state, evidence_id, scope="spot"):
-        """Clear a scope lock only after an explicit authoritative reconciliation record."""
-        allowed = {"OPEN", "PARTIALLY_FILLED", "FILLED", "CANCELED", "EXPIRED", "REJECTED", "NOT_SENT_CONFIRMED"}
-        status = str(status).upper()
-        if status not in allowed or not str(exchange_state or "").strip() or not str(evidence_id or "").strip():
-            raise ValueError("authoritative exchange_state and evidence_id are required")
-        key = self._execution_lock_key(scope)
+    def resolve_execution_intent(self, intent_id, evidence, scope=None):
+        """Resolve only with a sealed, coordinator-issued verified reconciliation record."""
+        from execution_recovery_contract import is_verified_reconciliation_evidence
+
+        if not is_verified_reconciliation_evidence(evidence):
+            raise PermissionError("UNKNOWN can only be resolved with verified coordinator evidence")
+        status = str(evidence.status).upper()
+        allowed = {"OPEN", "PARTIALLY_FILLED", "FILLED", "CANCELED", "EXPIRED", "REJECTED"}
+        if status not in allowed:
+            raise ValueError("unsupported reconciled order status")
+        intent_id = str(intent_id)
         with self.transaction():
+            row = self.conn.execute(
+                "SELECT * FROM execution_intents WHERE intent_id=?",
+                (intent_id,),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError(f"execution intent not found: {intent_id}")
+            row = dict(row)
+            expected_scope = str(scope or row["execution_scope"] or "spot").strip().lower()
+            expected_account = str(row["account_scope"] or self._default_account_scope(expected_scope))
+            if (
+                str(evidence.exchange).upper() != str(row["exchange"]).upper()
+                or str(evidence.account_scope) != expected_account
+                or str(evidence.execution_scope).lower() != expected_scope
+                or str(evidence.symbol).upper() != str(row["symbol"]).upper()
+                or str(evidence.client_order_id) != str(row["client_order_id"] or "")
+                or str(evidence.order_id) != str(row["order_id"] or evidence.order_id)
+                or not bool(evidence.order_verified)
+                or not bool(evidence.history_complete)
+                or not bool(evidence.fill_totals_match)
+                or not str(evidence.evidence_id).strip()
+            ):
+                raise PermissionError("reconciliation evidence does not match the durable intent/account/order")
             cur = self.conn.execute(
-                "UPDATE execution_intents SET status=?,reason=? WHERE intent_id=? AND status IN ('PENDING','SUBMITTING','UNKNOWN','AMBIGUOUS','RECONCILE_REQUIRED')",
-                (status, "reconciled:" + str(evidence_id), str(intent_id)),
+                """UPDATE execution_intents SET status=?,reason=?,order_id=COALESCE(order_id,?)
+                   WHERE intent_id=? AND status IN ('PENDING','SUBMITTING','UNKNOWN','AMBIGUOUS','RECONCILE_REQUIRED')""",
+                (status, "reconciled:" + str(evidence.evidence_id), str(evidence.order_id), intent_id),
             )
             if cur.rowcount != 1:
+                # Idempotent restart is allowed only when the same evidence is already recorded.
+                prior = self.conn.execute(
+                    """SELECT 1 FROM execution_events
+                       WHERE intent_id=? AND event='RECONCILED'
+                         AND json_extract(payload_json,'$.evidence_id')=? LIMIT 1""",
+                    (intent_id, str(evidence.evidence_id)),
+                ).fetchone()
+                if prior:
+                    return True
                 raise RuntimeError(f"intent is not unresolved: {intent_id}")
+            proof = {
+                "evidence_id": str(evidence.evidence_id),
+                "exchange": str(evidence.exchange),
+                "account_scope": expected_account,
+                "execution_scope": expected_scope,
+                "symbol": str(evidence.symbol).upper(),
+                "client_order_id": str(evidence.client_order_id),
+                "order_id": str(evidence.order_id),
+                "status": status,
+                "executed_qty": str(evidence.executed_qty),
+                "history_qty": str(evidence.history_qty),
+                "trade_ids": list(evidence.trade_ids),
+                "observed_at": str(evidence.observed_at),
+                "history_complete": bool(evidence.history_complete),
+                "fill_totals_match": bool(evidence.fill_totals_match),
+                "order_verified": bool(evidence.order_verified),
+            }
             self.conn.execute(
                 "INSERT INTO execution_events(intent_id,event,payload_json) VALUES(?,?,?)",
-                (str(intent_id), "RECONCILED", json.dumps({
-                    "status": status, "exchange_state": exchange_state,
-                    "evidence_id": str(evidence_id), "scope": str(scope),
+                (intent_id, "RECONCILIATION_VERIFIED", json.dumps(proof, sort_keys=True)),
+            )
+            self.conn.execute(
+                "INSERT INTO execution_events(intent_id,event,payload_json) VALUES(?,?,?)",
+                (intent_id, "RECONCILED", json.dumps({
+                    "status": status, "exchange_state": status,
+                    "evidence_id": str(evidence.evidence_id), "scope": expected_scope,
+                    "account_scope": expected_account,
                 }, sort_keys=True)),
             )
             remaining = self.conn.execute(
                 """SELECT 1 FROM execution_intents
-                   WHERE status IN ('PENDING','SUBMITTING','UNKNOWN','AMBIGUOUS','RECONCILE_REQUIRED')
-                   LIMIT 1"""
+                   WHERE execution_scope=? AND account_scope=?
+                     AND status IN ('PENDING','SUBMITTING','UNKNOWN','AMBIGUOUS','RECONCILE_REQUIRED')
+                   LIMIT 1""",
+                (expected_scope, expected_account),
             ).fetchone()
             if not remaining:
-                self.conn.execute("DELETE FROM bot_state WHERE key=?", (key,))
+                self.conn.execute(
+                    "DELETE FROM bot_state WHERE key=?",
+                    (self._execution_lock_key(expected_scope, expected_account),),
+                )
+                # Clear a legacy scope-only lock only when that whole contour is clean.
+                any_scope_remaining = self.conn.execute(
+                    """SELECT 1 FROM execution_intents
+                       WHERE execution_scope=?
+                         AND status IN ('PENDING','SUBMITTING','UNKNOWN','AMBIGUOUS','RECONCILE_REQUIRED')
+                       LIMIT 1""",
+                    (expected_scope,),
+                ).fetchone()
+                if not any_scope_remaining:
+                    self.conn.execute("DELETE FROM bot_state WHERE key=?", (self._execution_lock_key(expected_scope),))
             return not bool(remaining)
 
     def apply_execution_fill(self, fill, apply_effects):
