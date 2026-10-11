@@ -82,3 +82,16 @@ Canonical campaign paths use `_submit` and `ExecutionBarrier.execute`; existing 
 No local tests were run, and no isolated test run on exact SHA `f6dd193f9147ba49ff7f11efc81b18e10c1e2c44` was verified. Earlier successful CI logs refer to PR merge checkouts and cannot satisfy the exact-source criterion. See `TASK_000_4_EXECUTION_SAFETY_AUDIT.md` and `TASK_000_4_PYTHON_FILE_INVENTORY.csv`.
 
 **Disposition: BLOCKED — DO NOT MERGE PR #51.**
+
+
+## TASK 000.5 — confirmed source gaps and current disposition (2026-10-11)
+
+At immutable baseline `f6dd193f9147ba49ff7f11efc81b18e10c1e2c44`, `CampaignExecutionService.replace_structural_stop` stores the replacement CID on the ordinary intent but passes the original order ID only inside the submit closure; it does not populate the intent's `target_order_id`/`target_client_order_id`. A cancelReplace HTTP 409/timeout is correctly treated as ambiguous, but generic intent recovery cannot independently reconcile both legs from durable intent identity. **P1-1 remains open; no code fix is claimed.**
+
+The repository-wide keyword scan also confirmed an OCO identity gap in `trader.py`: the durable `OrderIntent` is created before a separate OCO client/list CID is generated, and that CID is passed to the submission closure rather than stored in the intent. The legacy portfolio OCO/cancel path uses dynamic adapter selection, and the public `cancel_open_orders` mutator exists. All aliases, callbacks, adapters and dynamic reachability are not resolved. The registry gate remains a bounded model, not proof of whole-program containment. **P1-2 remains open; no bypass-free claim is made.**
+
+CI for branch HEAD `d0c3a4fe71025f69e3356fa0d397b5544898d240` passed on merge checkout `bc8d2a88da81dece541cb36bb2cd00646ae21150`: backend 148 passed/4 warnings (run 38171251079), campaign 208 passed/4 warnings (run 38171251089), mutation registry 14 passed (run 38171251083), and Android APK checks/build passed (run 38171251094). These are not isolated branch-head or baseline-SHA runs. Earlier baseline-associated PR workflows checked out merge commit `c24e28defc38e19baf20c777a069e80b87c7aecf`, not the required literal SHA. No local tests were run.
+
+The detailed all-123-file scan scope, mutation surfaces, checkout hashes and acceptance matrix are recorded in `TASK_000_5_EXECUTION_SAFETY_REMEDIATION.md`. Inventory count is 123 unique Python files, but 112 are still not line-by-line reviewed and 11 are targeted-review-only.
+
+**Decision: BLOCKED — DO NOT MERGE PR #51.** No production source changes or new tests were made because this environment could not clone the repository and no local execution was possible; an untested partial order-recovery change would be unsafe.
