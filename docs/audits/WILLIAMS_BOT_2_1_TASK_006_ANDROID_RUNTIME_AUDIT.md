@@ -340,3 +340,130 @@ Further changes after the first TASK 006.6 report section:
 ### Final production call-site caveat
 
 A static search across `portfolio_trader.py`, `trader.py`, `campaign_execution.py`, `execution_recovery.py`, `execution_barrier.py`, `binance_client.py`, `strategy.py`, `risk_engine.py` and `server.py` found no production call to `Database.save_campaign_fill()` or a production reader of `exchange_fill_ledger`; the current explicit call sites are regression tests and the new barrier/recovery pending-effect checks. `portfolio_trader.py` and `trader.py` validate authoritative fills for order execution, but do not yet persist every confirmed fill through the canonical ledger. Therefore the exact-decimal ledger is **implemented but not yet connected end-to-end to production fill ingestion**. This is an additional P0 blocker, not a completed acceptance criterion. The safe gate remains closed by default and no global completion producer is present.
+
+
+---
+
+# WILLIAMS BOT 2.1 — TASK 006.7 Production Fill Ingestion Audit
+
+**Status: BLOCKED — NOT ACCEPTED**  
+**Audit baseline HEAD:** `ef061c8b4e00ff2756013f8bf67118cf1e541e12`  
+**PR:** #46, open Draft, base `main`, base SHA `04da5f9c09572e99ff310be3a1908179165e528c`  
+**Scope:** source-to-sink audit and exact-SHA CI recheck before any risky integration changes.  
+**Safety:** no Mainnet was used, no order mutation was performed, and `main` was not changed.
+
+## 1. GitHub and CI evidence
+
+The PR metadata was re-read from GitHub. The PR head is `ef061c8b4e00ff2756013f8bf67118cf1e541e12`, the task branch is `audit/williams-2.1-task-006-android-runtime`, and the PR remains open, Draft, and unmerged.
+
+All three workflows below were fetched by that exact commit SHA and completed successfully:
+
+| Workflow | Run ID | Result | Scope / limitation |
+|---|---:|---|---|
+| Python backend tests | 38117131497 | CI-PROVEN: SUCCESS | Backend contract, compile, static safety audit and offline tests; this is not proof of unimplemented accounting invariants |
+| Build Android APK | 38117131525 | CI-PROVEN: SUCCESS | Required lint, Android unit tests, debug/release APK build, metadata/signature/checksum steps |
+| Williams Campaign CI | 38117131465 | CI-PROVEN: SUCCESS | Python deterministic safety/campaign tests and Android build/static checks |
+
+Run links:  
+- https://github.com/19wolfalone92/Williams/actions/runs/38117131497  
+- https://github.com/19wolfalone92/Williams/actions/runs/38117131525  
+- https://github.com/19wolfalone92/Williams/actions/runs/38117131465  
+
+These results establish only that the listed workflows passed on the audit baseline SHA. They do **not** establish production fill ingestion, atomic financial effects, cross-process exactly-once accounting, full fault-injection coverage, physical Android process-death recovery, or Spot Testnet observations.
+
+## 2. Source-to-sink inventory
+
+| Source | Ingestion / handling path | Canonical write | Effect applier | Projection sinks / transaction boundary | Idempotency / recovery | Evidence and status |
+|---|---|---|---|---|---|---|
+| Binance order response with inline fills | `portfolio_trader.py::_authoritative_execution` validates order/symbol and passes payload to `accumulate_order` | No production call to `Database.save_campaign_fill` observed in inspected runtime call paths | No production applier observed | Caller subsequently updates legacy `trades`, campaign and protection state through separate calls; no shared transaction proven | Summary is order-level aggregation; not an effect identity | CODE-CONFIRMED: source path exists. Canonical ingestion TEST-PROVEN: NOT VERIFIED |
+| Binance `my_trades` history for portfolio orders | `portfolio_trader.py::_authoritative_execution` loads per-order trade rows when inline fills lack trade identity | No canonical ledger write observed | None observed | Fee aggregation and later legacy trade updates are not shown to share a transaction | Trade IDs are read for aggregation, but no durable fill-effect claim in this path | CODE-CONFIRMED: authoritative-history lookup. End-to-end ledger path: NOT VERIFIED |
+| Binance order response / trade history in legacy single-symbol trader | `trader.py::_authoritative_execution` uses `my_trades` when inline fills are absent, then calls `accumulate_order` | No canonical ledger write observed | None observed | Existing trade records and OCO protection are managed separately | No canonical fill-level effect state in this method | CODE-CONFIRMED: lookup and aggregation. Canonical ingestion: NOT VERIFIED |
+| Conditional/campaign entry recovery | `campaign_execution.py::reconcile_pending_entries` fetches an order; optionally fetches `my_trades` only to reconstruct quote quantity | No canonical ledger write observed | None observed | Campaign transition, hard-stop placement, `record_initial_fill`/`record_add_on_fill`, trade save/update and state changes occur through separate operations; no encompassing SQLite transaction proven | Uses order/client ID for recovery, not canonical per-trade effect identity | CODE-CONFIRMED: recovery flow. Atomic fill application: NOT VERIFIED |
+| Campaign exits | `campaign_execution.py` exit path consumes order-level `executedQty` and `cummulativeQuoteQty` | No canonical ledger write observed in inspected path | None observed | Campaign closure, trade PnL update and position-state update are separate operations; fees are not established from a canonical fill ledger here | Ambiguous result and crash consistency for this entire chain not proven | CODE-CONFIRMED: exit path. Complete accounting: NOT VERIFIED |
+| Binance user-data stream on Android | `TradingAuditStore.recordUserEvent` stores `executionReport` rows in Android `executions` | No shared canonical decimal ledger integration observed | No effect applier observed | `executions` uses SQLite REAL columns; values are parsed through `toDoubleOrNull()`; absent commission becomes `0.0` in the current code path | Event key includes event time and is not the Python canonical key `(exchange, account_id, symbol, trade_id)` | CODE-CONFIRMED: audit-event storage. Decimal/fee integrity and shared accounting: NOT VERIFIED |
+| Canonical fill ledger API | `db.py::Database.save_campaign_fill` | Writes `exchange_fill_ledger` using decimal TEXT and primary key `(exchange,account_id,symbol,trade_id)`; also writes compatibility `campaign_fills` inside a SQLite transaction | No production applier that commits all dependent projections and changes `PENDING` to `APPLIED` was found in inspected production files | Compatibility row still converts quantity, price, quote and commission to REAL; therefore it is not a precision-preserving canonical sink | Duplicate payload mismatch blocks; matching duplicate returns without creating a second ledger row | CODE-CONFIRMED: isolated persistence method. Production caller and completed effect: NOT VERIFIED |
+| BUY execution admission | `execution_barrier.py` checks recovery status and `pending_exchange_fill_effects()` | Read-only gate | N/A | BUY is blocked if recovery is not complete or unresolved ledger effects exist; this is a useful fail-closed guard, not recovery proof | Status string alone is insufficient when pending effects exist | CODE-CONFIRMED; behavior exercised by existing CI only to the extent covered by its tests |
+
+**Completeness caveat:** this inventory is based on runtime method/call-path inspection of the named Python and Android files, not only a repository-wide text search. It does not certify that every indirect callback or every alternate order mutation path has been exhaustively exercised. The missing canonical writer calls and effect applier are themselves acceptance blockers.
+
+## 3. Canonical ledger and effect-state invariants
+
+**CODE-CONFIRMED**
+- Python schema version is 9.
+- `exchange_fill_ledger` stores quantity, price, quote quantity and commission as decimal text.
+- The primary key is `(exchange, account_id, symbol, trade_id)`.
+- `save_campaign_fill` rejects missing commission amount or commission asset, invalid identity, non-finite values and binary floats.
+- Conflicting duplicate identity/payload sets `recovery_status=RECOVERY_REQUIRED`; a matching duplicate does not insert a second ledger row.
+- New ledger rows start `PENDING`.
+- `execution_barrier.py` blocks BUY if the global recovery status is not complete or pending effects remain.
+
+**Not proven / blockers**
+- No production component was found that applies one canonical fill exactly once to every dependent position, campaign, fee, PnL, risk-reservation and protection projection, then marks the effect `APPLIED` in the same transaction.
+- `campaign_fills` compatibility projection converts exact Decimal values to Python float / SQLite REAL. It is not safe as a canonical financial projection.
+- Existing `campaigns`, `trades`, `orders`, `campaign_orders` and Android `orders`/`executions` schemas include REAL/Double financial fields. A downstream-wide Decimal audit and migration strategy remain incomplete.
+- `campaign_execution.py::reconcile_pending_entries` currently aggregates fallback fills with float arithmetic and has legacy paths that write `fees=0.0`; these cannot establish exact commission accounting.
+- Android `TradingAuditStore.recordUserEvent` converts absent or malformed commission `n` to `0.0`; that masks unknown commission and must be corrected before accounting can be trusted.
+- A row in `exchange_fill_ledger`, a FILLED order, or `recovery_status=RECOVERY_COMPLETE` does not prove all financial projections agree.
+
+## 4. Migration assessment
+
+**CODE-CONFIRMED:** schema version is 9; `_migrate_campaign_fill_identity` adds identity columns to `campaign_fills`, installs a partial unique index, preserves legacy rows, and sets `RECOVERY_REQUIRED` when legacy rows cannot be matched to canonical evidence. It fails closed on detected duplicate explicit identities.
+
+**NOT VERIFIED:** successful end-to-end migrations from populated v6, v7 and v8 databases, all legacy-value preservation invariants, proof that no fabricated canonical fill is created, and recovery of every migration-produced unresolved effect. Creating tables or passing isolated schema tests is not sufficient evidence for this criterion.
+
+## 5. Fault injection and independent-process proof
+
+| Required family | Status | Reason |
+|---|---|---|
+| Crash after exchange fill but before local ledger write | NOT VERIFIED | No end-to-end authoritative-history replay test proving the fill is re-ingested |
+| Crash after ledger write, before effect application | NOT VERIFIED | No production effect applier / resume protocol proven |
+| Crash after each financial projection update | NOT VERIFIED | No demonstrated single transaction spanning all projections |
+| Crash immediately before/after APPLIED commit | NOT VERIFIED | APPLIED invariant is not established by a production applier |
+| Duplicate and concurrent same-fill ingestion | NOT VERIFIED | Unique key exists at ledger level, but production path integration and independent OS-process proof are absent |
+| Two independent processes applying same effect | NOT VERIFIED | No verified OS-process test evidence for this task |
+| SQLite BUSY/LOCKED and compatibility-projection failure | NOT VERIFIED | Transaction helper exists, but required fault matrix is not demonstrated end-to-end |
+| Unknown/missing commission | PARTIALLY CODE-CONFIRMED / end-to-end NOT VERIFIED | Canonical writer rejects missing commission; Android audit path currently coerces missing commission to zero |
+| Balance/position mismatch or unconfirmed protection | NOT VERIFIED | Full global reconciliation proof not established |
+| Android mutation-spy with unresolved recovery | NOT VERIFIED | JVM contract test is not a complete mutation-sink spy and does not prove physical process death |
+| Physical Android process-death recovery | NOT VERIFIED | No device execution evidence |
+| Binance Spot Testnet read-only reconciliation | NOT VERIFIED | No Testnet observation recorded; no trading mutation was performed |
+
+No existing full fault-injection matrix was demonstrated by the checked CI runs. This report does not substitute a smaller invented matrix for the required project matrix.
+
+## 6. Acceptance matrix for TASK 006.7
+
+| Criterion | Status | Evidence / blocker |
+|---|---|---|
+| A1 Full production ingestion graph | BLOCKED | Paths inventoried; full graph coverage across all indirect handlers not proven |
+| A2 Every authoritative fill reaches canonical ledger | BLOCKED | Production writers not observed in portfolio, legacy trader, campaign recovery/exit or Android event paths |
+| A3 Duplicate fill has one financial effect | BLOCKED | Ledger uniqueness exists; effect-level and cross-process proof absent |
+| A4 Production effect applier integrated | BLOCKED | No complete applier observed |
+| A5 All projections atomic or covered by proven recovery protocol | BLOCKED | Existing state changes span separate operations |
+| A6 APPLIED means all effects complete | BLOCKED | No production transition contract proved |
+| A7 Downstream Decimal integrity | BLOCKED | REAL/float/Double and float-based fallback paths remain |
+| A8 Unknown fees/positions not masked | BLOCKED | Android missing fee currently defaults to zero; legacy campaign paths use zero fee |
+| A9 Global reconciliation of all required components | BLOCKED | No evidence covering orders, fills, fees, balances, positions, campaigns, PnL, risk and protection together |
+| A10 v6/v7/v8 migrations safe | BLOCKED | Complete populated-version migration evidence not verified |
+| A11 Independent OS-process exactly-once | BLOCKED | NOT VERIFIED |
+| A12 Full fault-injection matrix | BLOCKED | NOT VERIFIED |
+| A13 Android global gate/mutation-spy | BLOCKED | Gate contract exists; full mutation-spy/runtime proof absent |
+| A14 Android APK on baseline SHA | PASS for build only | CI-PROVEN run 38117131525 succeeded on audit baseline SHA |
+| A15 Required CI on one SHA | PASS for listed baseline workflows only | Runs 38117131497, 38117131525 and 38117131465 succeeded on `ef061c8b4e00ff2756013f8bf67118cf1e541e12`; task-specific missing tests remain |
+| A16 No secrets/Mainnet in tests | PARTIALLY VERIFIED | Audit reports no Mainnet or live order used; a separate full configuration/log artifact review for the requested Testnet scenario is NOT VERIFIED |
+| A17 PR/Git state checked | PASS | PR #46 open Draft, unmerged; base SHA unchanged |
+| A18 Evidence classifications and residual risks documented | PASS for this report | This report explicitly separates code, CI and unverified evidence |
+
+## 7. Required next implementation sequence
+
+1. Add one shared, strict authoritative-fill ingestion contract and route every Python fill source through it before any local fill-dependent financial projection is considered reconciled.
+2. Treat exchange-confirmed/local-write-failed and ambiguous network outcomes as durable recovery-required states; replay authoritative trade history without repeating already-applied effects.
+3. Implement one transactional effect applier only after enumerating the actual projection sinks. It must verify expected prior state and update all same-database projections plus effect state in one SQLite transaction. External protection cannot be included in that transaction and therefore requires a separate explicit protection/reconciliation protocol.
+4. Keep unknown commission amount/asset unknown; remove silent zero substitution in the accounting path. Preserve exact exchange decimals and keep REAL projections explicitly non-authoritative.
+5. Add cross-process tests and the complete project fault-injection matrix; demonstrate database state and gate behavior after each injected failure.
+6. Bring Android execution events under a compatible durable contract, add a mutating-sink spy, and perform physical process-death tests where available.
+7. Run the separate Spot Testnet read-only history/reconciliation workflow only after local P0 tests pass and its no-mutation contract is verified.
+
+## Final TASK 006.7 disposition
+
+**BLOCKED — NOT ACCEPTED.**  
+The exact-SHA CI results are green, but the essential production ledger integration, atomic effect application, downstream Decimal integrity, full global recovery proof, independent OS-process tests, fault-injection matrix, Android mutation-spy/physical-device evidence and Spot Testnet read-only evidence are not established. No entry gate may be opened on the strength of the current evidence. Keep PR #46 Draft and do not merge.
