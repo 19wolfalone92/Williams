@@ -100,9 +100,9 @@ def ledger_fill(**overrides):
     ({"commission": None}, "exchange_fill_commission_unknown"),
     ({"commission": ""}, "exchange_fill_commission_unknown"),
     ({"commission_asset": ""}, "exchange_fill_commission_asset_unknown"),
-    ({"commission": "NaN"}, "exchange_fill_financial_fields_invalid"),
-    ({"quantity": "Infinity"}, "exchange_fill_financial_fields_invalid"),
-    ({"quote_quantity": "0"}, "exchange_fill_financial_fields_invalid"),
+    ({"commission": "NaN"}, "exchange_fill_commission_invalid"),
+    ({"quantity": "Infinity"}, "exchange_fill_quantity_invalid"),
+    ({"quote_quantity": "0"}, "exchange_fill_quote_quantity_invalid"),
 ])
 def test_database_rejects_unknown_or_invalid_fee_rows(tmp_path, changes, error):
     db = Database(str(tmp_path / "invalid-fill.sqlite3"))
