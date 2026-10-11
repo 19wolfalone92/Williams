@@ -1065,3 +1065,51 @@ This is a fresh high-impact inventory from the current branch, not yet an exhaus
 No TASK 001.10 production code change is claimed by this baseline entry. The next code change must be designed against the verified schemas and caller paths, not implemented as an isolated class. In particular, do not mark an effect `APPLIED` until one SQLite transaction commits the application receipt and every required local financial projection; do not call external Binance/price endpoints inside that transaction; do not treat an unknown commission as zero; and do not block required protective SELL/CANCEL operations merely because an entry gate is closed.
 
 **Current TASK 001.10 status: BLOCKED — NOT ACCEPTED.** The production applier, account-scoped canonical identity, atomic Position/Campaign/fees/PnL/risk projection, independent-process concurrency proof, full crash fault injection, Decimal migration/parity, and complete bypass-writer closure are not established by the current code or green CI. PR #47 remains Draft.
+
+
+---
+
+## 10. TASK 001.10 — fresh pre-change financial-writer baseline
+
+**Audit timestamp:** 2026-10-11 09:15 UTC source snapshot  
+**Baseline source SHA:** `63a701564751bc1a82840bccdde8c7bc16758658`  
+**main SHA:** `04da5f9c09572e99ff310be3a1908179165e528c`  
+**PR #47:** open, Draft, unmerged; base `main`; head branch `audit/williams-2.1-task-001-architecture`.  
+**No code changes for TASK 001.10 were made before this inventory.**
+
+### 10.1 Exact-SHA CI snapshot
+
+All six latest listed workflow runs were attached to baseline SHA `63a701564751bc1a82840bccdde8c7bc16758658` and concluded success:
+
+- Python backend tests: [38127703099](https://github.com/19wolfalone92/Williams/actions/runs/38127703099) and [38127699475](https://github.com/19wolfalone92/Williams/actions/runs/38127699475).
+- Williams Campaign CI: [38127703065](https://github.com/19wolfalone92/Williams/actions/runs/38127703065) and [38127699460](https://github.com/19wolfalone92/Williams/actions/runs/38127699460).
+- Build Android APK: [38127703067](https://github.com/19wolfalone92/Williams/actions/runs/38127703067) and [38127699457](https://github.com/19wolfalone92/Williams/actions/runs/38127699457).
+
+These results prove CI/build only for this baseline SHA, not financial-effect correctness.
+
+### 10.2 Confirmed financial write surfaces
+
+| Surface | Observed behavior at baseline | TASK 001.10 consequence |
+|---|---|---|
+| `db.py:record_exchange_fill` | Persists `exchange_fill_ledger` and `financial_effect_journal`; journal status is `READY_TO_APPLY` after fee confirmation. No projection application occurs in this method. | Journal is evidence/observation, not an applier. |
+| `db.py:save_trade`, `update_trade_quantity`, `close_trade` | Mutate legacy `trades`; price, quantity, PnL and fees are stored in SQLite REAL columns and legacy float-compatible values. | Competing position/PnL writer remains. |
+| `db.py:save_campaign` | Upserts campaign projection; position quantity, average price, realized PnL, risk and reserve fields are SQLite REAL. | Not exact-decimal persistence and not linked atomically to journal status by a canonical applier. |
+| `db.py:save_campaign_fill` | Inserts campaign fill records with `float(...)` into REAL columns; no exchange trade ID uniqueness is visible in the method/table contract. | Duplicate fill/projection risk remains; float boundary remains. |
+| `campaign_execution.py:_executed_fee_quote` | Queries Binance `my_trades`, records each fill observation, validates fee evidence and computes a fee summary. Callers subsequently update campaign and legacy trade state in separate operations/commits. | Production fill path exists, but journal and financial projections are not one atomic unit. |
+| `campaign_execution.py` add-on fill handling | Calls `record_add_on_fill`, changes legacy trade quantity/entry price/fees, commits, then changes state and saves campaign. | Confirmed non-atomic multi-projection sequence; partial failure can split projections. |
+| `portfolio_trader.py:_authoritative_execution` | Obtains exchange fills and fee evidence, calls `record_exchange_fill`, then returns a compatibility summary to legacy lifecycle writers. | Observation is separated from downstream position/PnL mutation; no shared applier owns both. |
+| `portfolio_trader.py:_exit_fee_quote` / `_reconcile_trade` | Records exchange fill observations and derives exit metrics; legacy exit reconciliation uses float quantities/quotes and fee totals. | Another reconciliation/exit writer; exact end-to-end financial application is not established. |
+| `trader.py` recovery/lifecycle | Contains legacy state and order recovery; delegates multi-position recovery but also retains its own lifecycle state and execution summary paths. | Must be checked for all fill and exit callers before closing bypasses. |
+| Android `StandaloneRuntime.kt`, `ExecutionAccumulator.kt`, `TradeJournal.kt`, `TradingAuditStore.kt` | Android has its own exchange mutation journal, execution accumulator and trade journal; no evidence from this baseline establishes a shared versioned financial-effect contract with Python or atomic Position/Campaign/Fees/PnL/Risk projections. | Cross-platform contract and atomic financial projection equivalence remain unproven. |
+
+### 10.3 Concrete P0 gaps from the inspected source
+
+1. `financial_effect_journal` has no account identifier in its primary key/columns. Current key is `(venue, market_type, symbol, exchange_trade_id)`; it cannot prove account-scoped identity.
+2. The journal records `effect_status`, but the inspected production path does not apply Position/Campaign/Fees/PnL/Risk and set `APPLIED` in the same transaction.
+3. Existing `trades`, `campaigns`, and `campaign_fills` projections use SQLite REAL/float-compatible writes. The journal's decimal text fields do not remove those downstream conversions.
+4. Production code has separate writers and commits. In particular, campaign fill reconciliation and legacy trade updates are not enclosed with the journal status in one demonstrated transaction.
+5. `campaign_fills` writes are not shown as uniquely keyed by exchange trade identity; exactly-once projection is not proven.
+6. No reviewed evidence yet proves two independent OS processes race the same fill, injected crash at every projection boundary, commit-then-lost-ack recovery, or populated schema migration compatibility.
+7. Entry fail-closed guard on unresolved effects is a safety control, not a substitute for a production applier. Protective SELL/cancel behavior must remain independently available.
+
+**Baseline conclusion:** `BLOCKED — NOT ACCEPTED`. The code has durable exchange-fill observations and recovery latches, but not the required unified production financial-effect applier. This section is a source inventory, not an acceptance claim.
