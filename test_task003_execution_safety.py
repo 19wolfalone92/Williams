@@ -849,3 +849,170 @@ def test_os_process_death_after_submitting_blocks_second_process_retry(tmp_path)
         if first.is_alive():
             first.terminate()
             first.join(timeout=5)
+
+
+def _financial_fill_worker(db_path, queue, fill):
+    db = Database(str(db_path))
+    db.conn.execute(
+        "CREATE TABLE IF NOT EXISTS test_financial_projection("
+        "effect_id TEXT PRIMARY KEY, quantity_decimal TEXT NOT NULL)"
+    )
+    db.conn.commit()
+
+    def project(database, normalized):
+        database.conn.execute(
+            "INSERT INTO test_financial_projection(effect_id,quantity_decimal) VALUES(?,?)",
+            (
+                __import__("hashlib").sha256(
+                    "\\x1f".join((
+                        normalized["exchange"], normalized["environment"],
+                        normalized["account_scope"], normalized["symbol"],
+                        normalized["exchange_fill_id"],
+                    )).encode("utf-8")
+                ).hexdigest(),
+                normalized["quantity"],
+            ),
+        )
+
+    try:
+        result = db.apply_financial_fill_effect(fill, project)
+        queue.put(("ok", result))
+    except Exception as exc:
+        queue.put(("error", repr(exc)))
+    finally:
+        db.conn.close()
+
+
+def _financial_fill(fill_id="9001", **overrides):
+    fill = {
+        "exchange": "BINANCE",
+        "environment": "SPOT_TESTNET",
+        "account_scope": "test-account-A",
+        "symbol": "BTCUSDT",
+        "exchange_fill_id": fill_id,
+        "quantity": "0.01000000",
+        "price": "61234.12000000",
+        "quote_quantity": "612.3412000000",
+        "commission": "0.00001000",
+        "commission_asset": "BTC",
+    }
+    fill.update(overrides)
+    return fill
+
+
+def test_financial_fill_effect_is_idempotent_and_decimal_exact(tmp_path):
+    db = Database(str(tmp_path / "financial.sqlite3"))
+    db.conn.execute(
+        "CREATE TABLE test_financial_projection(effect_id TEXT PRIMARY KEY, quantity_decimal TEXT NOT NULL)"
+    )
+    db.conn.commit()
+    applied = []
+
+    def project(database, normalized):
+        applied.append(normalized)
+        database.conn.execute(
+            "INSERT INTO test_financial_projection(effect_id,quantity_decimal) VALUES(?,?)",
+            (normalized["exchange_fill_id"], normalized["quantity"]),
+        )
+
+    first = db.apply_financial_fill_effect(_financial_fill(), project)
+    duplicate = db.apply_financial_fill_effect(_financial_fill(), project)
+    assert first["status"] == "APPLIED" and not first["duplicate"]
+    assert duplicate["status"] == "APPLIED" and duplicate["duplicate"]
+    assert len(applied) == 1
+    assert applied[0]["quantity"] == "0.01000000"
+    assert applied[0]["price"] == "61234.12000000"
+    assert db.conn.execute("SELECT COUNT(*) FROM test_financial_projection").fetchone()[0] == 1
+    row = db.conn.execute("SELECT * FROM financial_effect_journal").fetchone()
+    assert row["commission_status"] == "KNOWN"
+    assert row["projection_status"] == "APPLIED"
+
+
+def test_unknown_commission_blocks_projection_until_explicit_resolution(tmp_path):
+    db = Database(str(tmp_path / "unknown-fee.sqlite3"))
+    db.conn.execute(
+        "CREATE TABLE test_financial_projection(effect_id TEXT PRIMARY KEY, quantity_decimal TEXT NOT NULL)"
+    )
+    db.conn.commit()
+    calls = []
+
+    def project(database, normalized):
+        calls.append(normalized)
+        database.conn.execute(
+            "INSERT INTO test_financial_projection(effect_id,quantity_decimal) VALUES(?,?)",
+            (normalized["exchange_fill_id"], normalized["quantity"]),
+        )
+
+    pending = db.apply_financial_fill_effect(
+        _financial_fill("9002", commission=None, commission_asset=None), project
+    )
+    assert pending["status"] == "PENDING_FEE"
+    assert calls == []
+    row = db.conn.execute("SELECT * FROM financial_effect_journal").fetchone()
+    assert row["commission_status"] == "UNKNOWN"
+    assert row["commission_decimal"] is None
+    assert row["projection_status"] == "PENDING_FEE"
+
+    resolved = db.resolve_financial_effect_fee(
+        row["effect_id"], "0.00001000", "BTC", project
+    )
+    assert resolved["status"] == "APPLIED"
+    assert len(calls) == 1
+    assert calls[0]["commission"] == "0.00001000"
+    assert db.conn.execute("SELECT COUNT(*) FROM test_financial_projection").fetchone()[0] == 1
+
+
+def test_projection_failure_rolls_back_journal_and_projection_atomically(tmp_path):
+    db = Database(str(tmp_path / "projection-failure.sqlite3"))
+    db.conn.execute(
+        "CREATE TABLE test_financial_projection(effect_id TEXT PRIMARY KEY, quantity_decimal TEXT NOT NULL)"
+    )
+    db.conn.commit()
+
+    def fail_projection(database, normalized):
+        database.conn.execute(
+            "INSERT INTO test_financial_projection(effect_id,quantity_decimal) VALUES(?,?)",
+            (normalized["exchange_fill_id"], normalized["quantity"]),
+        )
+        raise RuntimeError("injected projection failure")
+
+    with pytest.raises(RuntimeError, match="injected projection failure"):
+        db.apply_financial_fill_effect(_financial_fill("9003"), fail_projection)
+    assert db.conn.execute("SELECT COUNT(*) FROM financial_effect_journal").fetchone()[0] == 0
+    assert db.conn.execute("SELECT COUNT(*) FROM test_financial_projection").fetchone()[0] == 0
+
+
+def test_independent_processes_apply_one_financial_fill_effect(tmp_path):
+    import multiprocessing
+
+    db_path = tmp_path / "concurrent-financial.sqlite3"
+    db = Database(str(db_path))
+    db.conn.execute(
+        "CREATE TABLE test_financial_projection(effect_id TEXT PRIMARY KEY, quantity_decimal TEXT NOT NULL)"
+    )
+    db.conn.commit()
+    db.conn.close()
+
+    ctx = multiprocessing.get_context("spawn")
+    queue = ctx.Queue()
+    fill = _financial_fill("9004")
+    workers = [
+        ctx.Process(target=_financial_fill_worker, args=(str(db_path), queue, fill))
+        for _ in range(2)
+    ]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(timeout=15)
+        assert not worker.is_alive(), "financial fill worker timed out"
+        assert worker.exitcode == 0
+    results = [queue.get(timeout=3) for _ in workers]
+    assert all(result[0] == "ok" for result in results), results
+
+    db = Database(str(db_path))
+    journal = db.conn.execute("SELECT * FROM financial_effect_journal").fetchall()
+    projection = db.conn.execute("SELECT * FROM test_financial_projection").fetchall()
+    assert len(journal) == 1
+    assert journal[0]["projection_status"] == "APPLIED"
+    assert len(projection) == 1
+    assert projection[0]["quantity_decimal"] == "0.01000000"
