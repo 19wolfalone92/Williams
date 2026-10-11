@@ -346,6 +346,24 @@ class Database:
                ON campaign_fills(exchange,account_id,symbol,trade_id)
                WHERE trade_id IS NOT NULL"""
         )
+        # Preserve all pre-ledger rows. Rows without a matching canonical
+        # decimal ledger cannot be promoted from lossy REAL projections by
+        # guesswork; they force an explicit recovery/migration review.
+        legacy_unverified = self.conn.execute(
+            """SELECT COUNT(*) FROM campaign_fills cf
+               WHERE cf.trade_id IS NULL
+                  OR NOT EXISTS (
+                    SELECT 1 FROM exchange_fill_ledger l
+                    WHERE l.exchange=cf.exchange AND l.account_id=cf.account_id
+                      AND l.symbol=cf.symbol AND l.trade_id=cf.trade_id
+                  )"""
+        ).fetchone()[0]
+        if legacy_unverified:
+            self.state_set("recovery_status", "RECOVERY_REQUIRED")
+            self.state_set(
+                "legacy_fill_decimal_migration",
+                json.dumps({"status": "BLOCKED", "unverified_rows": int(legacy_unverified)}),
+            )
         # A legacy database without prior recovery metadata must not implicitly
         # become entry-admissible merely because the schema migration succeeded.
         if self.state_get("recovery_status") is None:
