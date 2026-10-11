@@ -136,3 +136,14 @@ For every incoming change, the integration review must classify it as:
 - Added fault-injection tests in `test_task0092_atomic_execution_persistence.py` and a concurrent/timeout barrier test in `test_task0091_execution_barrier_fail_closed.py`; Campaign CI now explicitly runs these files.
 - Details: `docs/WILLIAMS_BOT_2_1_TASK_009_2_ATOMIC_EXECUTION_PERSISTENCE.md`.
 - **Status remains BLOCKED** until exact-HEAD CI is confirmed and an exchange-backed startup reconciler plus production CampaignExecutionService/financial-ledger fill integration are implemented and proven. Direct Python/Android mutation paths remain.
+
+## TASK 009.3 — Exchange-backed recovery and campaign fills (2026-10-11)
+
+- Added `execution_recovery.py` and `execution_recovery_contract.py`: Binance Spot order/trade-history reconciliation, sealed in-process evidence and fail-closed behavior for missing/conflicting/incomplete exchange data.
+- Added scoped intent/account identity, persisted cancellation target ids, schema migration to version 9, legacy-unscoped blocking, stronger SQLite durability and repair-only `PROTECTION_PENDING` admission.
+- Connected campaign BUY/SELL per-trade fill IDs to `apply_execution_fill()`, including campaign position, fees, trade journal and realized-PnL changes in the same SQLite transaction. Aggregate `executedQty` is now used as an exchange consistency check, not a deduplication id.
+- Cancellation uses a durable target-bound intent; partial conditional-entry cancellation rereads exchange order/trade history. Current-format order reconciliation is not allowed to fall through to the legacy aggregate-replay path.
+- Added 20 offline recovery fault-injection tests and added full CampaignExecutionService restart/exit assertions to `test_campaign_execution.py`.
+- Detailed state/API/transaction contract and remaining blockers: `docs/WILLIAMS_BOT_2_1_TASK_009_3_EXCHANGE_BACKED_RECOVERY.md`.
+- **Status BLOCKED.** Exact-head CI still contains a partial-entry protection/recovery failure plus failures in the new E2E test assertions. The latest changes are being re-tested; do not treat earlier (194 passed / 3 failed) results as current proof. Add-on protective-stop resize, residual SELL protection, and the independent `portfolio_trader.py`/`trader.py` and Android mutation domains remain P0.
+- PR #51 stays Draft/open/unmerged, based on main `04da5f9c09572e99ff310be3a1908179165e528c`. No live trades or Android runtime tests were performed.
