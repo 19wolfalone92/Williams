@@ -72,6 +72,8 @@ jobs:
             test_testnet_release_gate.py \
             test_campaign_engine.py \
             test_campaign_execution.py \
+            test_task0091_execution_barrier_fail_closed.py \
+            test_task0092_atomic_execution_persistence.py \
             2>&1 | tee campaign-pytest-output.txt
 
   android:
