@@ -54,6 +54,28 @@ def _process_claim_same_symbol(path, client_id, start_gate, results):
         db.conn.close()
 
 
+def _process_claim_same_intent(path, client_id, start_gate, results):
+    """Two OS processes race the exact same intent identity and client ID."""
+    db = Database(path)
+    intent = OrderIntent(
+        intent_id="shared-cross-process-intent",
+        symbol="ADAUSDT",
+        side="BUY",
+        order_type="MARKET",
+        required_context_versions={},
+        client_order_id="shared-cross-process-client",
+        purpose="CAMPAIGN_ENTRY",
+    )
+    start_gate.wait(timeout=10)
+    try:
+        db.claim_execution_intent(intent)
+        results.put(("claimed", client_id))
+    except Exception as exc:
+        results.put(("blocked", type(exc).__name__, str(exc)))
+    finally:
+        db.conn.close()
+
+
 def test_new_database_starts_reconciliation_required_not_flat():
     with tempfile.TemporaryDirectory() as tmp:
         db = Database(os.path.join(tmp, "state.sqlite3"))
@@ -862,3 +884,67 @@ def test_portfolio_reconciliation_rejects_non_positive_third_asset_fee_conversio
             },
         )
     db.conn.close()
+
+
+def test_two_independent_processes_cannot_claim_the_same_intent_identity(tmp_path):
+    import multiprocessing
+
+    ctx = multiprocessing.get_context("fork")
+    path = str(tmp_path / "same-intent-processes.sqlite3")
+    parent_db = Database(path)
+    start_gate = ctx.Barrier(3)
+    results = ctx.Queue()
+    workers = [
+        ctx.Process(
+            target=_process_claim_same_intent,
+            args=(path, f"same-intent-process-{index}", start_gate, results),
+        )
+        for index in range(2)
+    ]
+    for worker in workers:
+        worker.start()
+    start_gate.wait(timeout=10)
+    outcomes = [results.get(timeout=15) for _ in workers]
+    for worker in workers:
+        worker.join(timeout=15)
+        assert not worker.is_alive(), "worker hung during same-intent SQLite claim"
+        assert worker.exitcode == 0
+
+    assert sum(item[0] == "claimed" for item in outcomes) == 1, outcomes
+    assert sum(item[0] == "blocked" for item in outcomes) == 1, outcomes
+    rows = parent_db.conn.execute(
+        "SELECT intent_id,client_order_id,status FROM execution_intents "
+        "WHERE intent_id='shared-cross-process-intent'"
+    ).fetchall()
+    assert len(rows) == 1
+    assert rows[0]["client_order_id"] == "shared-cross-process-client"
+    assert rows[0]["status"] == "PENDING"
+    parent_db.conn.close()
+
+
+def test_sqlite_busy_during_durable_claim_blocks_exchange_mutation(tmp_path):
+    path = str(tmp_path / "sqlite-busy-claim.sqlite3")
+    db_lock_holder = Database(path)
+    db_executor = Database(path)
+    db_lock_holder.mark_recovery_ready(evidence())
+    db_executor.conn.execute("PRAGMA busy_timeout=5")
+    db_lock_holder.conn.execute("BEGIN IMMEDIATE")
+    db_lock_holder.conn.execute(
+        "UPDATE bot_state SET value=value WHERE key='recovery_state'"
+    )
+
+    barrier = ExecutionBarrier(ContextCache(), db_executor)
+    intent = OrderIntent.new(
+        "XRPUSDT", "BUY", "MARKET", {},
+        client_order_id="sqlite-busy-client", purpose="CAMPAIGN_ENTRY",
+    )
+    external_mutations = []
+    try:
+        with pytest.raises(ExecutionPersistenceError, match="durable intent reservation"):
+            barrier.execute(intent, lambda: external_mutations.append("sent") or {"orderId": "must-not-exist"})
+        assert external_mutations == []
+        assert barrier._poisoned is True
+    finally:
+        db_lock_holder.conn.rollback()
+        db_lock_holder.conn.close()
+        db_executor.conn.close()
