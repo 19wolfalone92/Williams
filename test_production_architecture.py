@@ -126,3 +126,75 @@ def test_wise_men_state_machine_is_durable():
     assert restored.state.phase == WiseMenPhase.TREND_ACTIVE
     payload = json.loads(db.data[restored.key])
     assert payload["additions"] == 0
+
+
+def test_execution_barrier_required_intent_persistence_failure_never_calls_submit():
+    class FailingDB:
+        def save_execution_intent(self, intent, status, reason=""):
+            raise OSError("simulated sqlite write/commit failure")
+        def save_execution_event(self, intent_id, event, payload=None):
+            raise AssertionError("event write must not be reached after intent persistence failure")
+        def state_get(self, key, default=None):
+            return default
+
+    cache = ContextCache()
+    cache.publish(context())
+    barrier = ExecutionBarrier(cache, FailingDB())
+    now_ms = int(time.time() * 1000)
+    intent = OrderIntent.new(
+        "BTCUSDT", "BUY", "MARKET", {"1h": 1},
+        purpose="CAMPAIGN_ENTRY",
+        permission_interval="1h",
+        signal_timeframe="1h",
+        signal_bar_time_ms=(now_ms // 3_600_000 - 2) * 3_600_000,
+        confirmation_time_ms=(now_ms // 3_600_000 - 1) * 3_600_000,
+        expires_at_ms=now_ms + 60_000,
+        signal_id="persist-failure-signal",
+        campaign_id="persist-failure-campaign",
+    )
+    calls = []
+    try:
+        barrier.execute(intent, lambda: calls.append("network"), pre_submit_checks=lambda _s: None)
+    except RuntimeError as exc:
+        assert "persistence failed" in str(exc)
+    else:
+        raise AssertionError("required persistence failure must abort execution")
+    assert calls == []
+
+
+def test_execution_barrier_required_admission_event_failure_never_calls_submit():
+    class EventFailDB:
+        def __init__(self):
+            self.intent_statuses = []
+        def save_execution_intent(self, intent, status, reason=""):
+            self.intent_statuses.append(status)
+        def save_execution_event(self, intent_id, event, payload=None):
+            raise OSError("simulated sqlite event commit failure")
+        def state_get(self, key, default=None):
+            return default
+
+    cache = ContextCache()
+    cache.publish(context())
+    db = EventFailDB()
+    barrier = ExecutionBarrier(cache, db)
+    now_ms = int(time.time() * 1000)
+    intent = OrderIntent.new(
+        "BTCUSDT", "BUY", "MARKET", {"1h": 1},
+        purpose="CAMPAIGN_ENTRY",
+        permission_interval="1h",
+        signal_timeframe="1h",
+        signal_bar_time_ms=(now_ms // 3_600_000 - 2) * 3_600_000,
+        confirmation_time_ms=(now_ms // 3_600_000 - 1) * 3_600_000,
+        expires_at_ms=now_ms + 60_000,
+        signal_id="event-failure-signal",
+        campaign_id="event-failure-campaign",
+    )
+    calls = []
+    try:
+        barrier.execute(intent, lambda: calls.append("network"), pre_submit_checks=lambda _s: None)
+    except RuntimeError as exc:
+        assert "execution-event persistence failed" in str(exc)
+    else:
+        raise AssertionError("required admission event failure must abort execution")
+    assert db.intent_statuses == ["PENDING"]
+    assert calls == []
