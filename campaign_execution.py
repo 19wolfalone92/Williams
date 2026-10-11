@@ -7,6 +7,7 @@ from typing import Any
 import json
 import os
 import uuid
+from decimal import Decimal, InvalidOperation
 
 from binance_client import BinanceAPIError
 from campaign_engine import CampaignEngine
@@ -28,6 +29,12 @@ class CampaignExecutionService:
         self.client = client
         self.db = db
         self.barrier = execution_barrier
+        # Startup recovery is read-only: it queries exchange state for durable
+        # unresolved intents and never resubmits. Exposure stays blocked until
+        # the normal account/campaign reconciliation proves the resulting position.
+        self.startup_recovery_report = {"resolved": [], "unresolved": []}
+        if self.barrier is not None:
+            self.startup_recovery_report = self.barrier.reconcile_unresolved_intents(self.client)
         self.engine = CampaignEngine(
             db,
             portfolio_risk_limit_pct=float(os.getenv("MAX_TOTAL_RISK_PCT", "0.01")),
@@ -417,6 +424,90 @@ class CampaignExecutionService:
                 return self.engine.load_campaign(str(item["campaign_id"]))
         return None
 
+    def _executed_fee_quote(
+        self, symbol: str, order: dict[str, Any], executed_qty: float, average_price: float
+    ) -> float:
+        """Validate Binance Spot fills, persist trade identities, and sum fees exactly.
+
+        Unknown commission amount/asset remains durable UNKNOWN and blocks the
+        caller. Exchange trade id (scoped by symbol), not intent_id, is the
+        idempotency key in SQLite.
+        """
+        order_id = order.get("orderId")
+        if order_id in (None, ""):
+            raise CampaignExecutionError(f"{symbol}: filled order lacks orderId for commission lookup")
+        trade_reader = getattr(self.client, "my_trades", None)
+        if not callable(trade_reader):
+            raise CampaignExecutionError(f"{symbol}: exchange trade/commission lookup is unavailable")
+        trades = trade_reader(symbol, order_id=int(order_id))
+        if not isinstance(trades, list) or not trades:
+            raise CampaignExecutionError(f"{symbol}: no authoritative trade records for filled order {order_id}")
+        info = self.client.exchange_info(symbol)
+        rows = info.get("symbols", [])
+        if not rows:
+            raise CampaignExecutionError(f"{symbol}: exchange assets unavailable for commission conversion")
+        base_asset = str(rows[0].get("baseAsset", "")).upper()
+        quote_asset = str(rows[0].get("quoteAsset", "")).upper()
+        quantity_sum = Decimal("0")
+        fee_quote = Decimal("0")
+        for trade in trades:
+            if not isinstance(trade, dict):
+                raise CampaignExecutionError(f"{symbol}: malformed trade record for order {order_id}")
+            if str(trade.get("symbol", "")).upper() != symbol.upper():
+                raise CampaignExecutionError(f"{symbol}: trade lookup returned a different symbol")
+            if str(trade.get("orderId", "")) != str(order_id):
+                raise CampaignExecutionError(f"{symbol}: trade lookup returned a different orderId")
+            # Persist raw exchange evidence first. A missing fee remains UNKNOWN;
+            # it must never be normalized to a zero commission.
+            try:
+                self.db.record_exchange_fill(symbol, trade)
+            except Exception as exc:
+                raise CampaignExecutionError(f"{symbol}: cannot persist unique exchange fill evidence") from exc
+            if trade.get("id") in (None, ""):
+                raise CampaignExecutionError(f"{symbol}: exchange trade lacks stable trade id")
+            if trade.get("qty") in (None, "") or trade.get("price") in (None, ""):
+                raise CampaignExecutionError(f"{symbol}: exchange trade lacks quantity or price")
+            if trade.get("commission") in (None, "") or trade.get("commissionAsset") in (None, ""):
+                raise CampaignExecutionError(f"{symbol}: commission amount or asset is unknown")
+            try:
+                qty = Decimal(str(trade["qty"]))
+                price = Decimal(str(trade["price"]))
+                commission = Decimal(str(trade["commission"]))
+            except (InvalidOperation, ValueError) as exc:
+                raise CampaignExecutionError(f"{symbol}: invalid exact decimal in trade record") from exc
+            asset = str(trade["commissionAsset"]).upper()
+            if not qty.is_finite() or not price.is_finite() or not commission.is_finite() or qty <= 0 or price <= 0 or commission < 0 or not asset:
+                raise CampaignExecutionError(f"{symbol}: invalid quantity/price/commission trade fields")
+            quantity_sum += qty
+            if asset == quote_asset:
+                fee_quote += commission
+            elif asset == base_asset:
+                fee_quote += commission * price
+            else:
+                fee_pair = asset + quote_asset
+                try:
+                    price_payload = self.client.ticker_price(fee_pair)
+                    fee_price = Decimal(str(price_payload.get("price", "")))
+                except Exception as exc:
+                    raise CampaignExecutionError(
+                        f"{symbol}: cannot convert {asset} commission to {quote_asset}"
+                    ) from exc
+                if not fee_price.is_finite() or fee_price <= 0:
+                    raise CampaignExecutionError(
+                        f"{symbol}: invalid {fee_pair} commission conversion price"
+                    )
+                fee_quote += commission * fee_price
+        try:
+            expected_qty = Decimal(str(executed_qty))
+        except (InvalidOperation, ValueError) as exc:
+            raise CampaignExecutionError(f"{symbol}: invalid executed quantity") from exc
+        tolerance = max(Decimal("0.00000001"), abs(expected_qty) * Decimal("0.000001"))
+        if abs(quantity_sum - expected_qty) > tolerance:
+            raise CampaignExecutionError(
+                f"{symbol}: trade quantities {quantity_sum} do not match executedQty {expected_qty}"
+            )
+        return float(fee_quote)
+
     def reconcile_pending_entries(self) -> list[dict[str, Any]]:
         """Adopt conditional BUYs after triggers, partial fills, restart or crash."""
         rows = self.db.conn.execute(
@@ -553,13 +644,15 @@ class CampaignExecutionService:
                                 "order_id", ""
                             )
 
+                        # Protection must be verified/installed before fee reconciliation.
+                        fee_quote = self._executed_fee_quote(symbol, order, executed, avg)
                         self.engine.record_add_on_fill(
                             campaign,
                             quantity=executed,
                             average_entry_price=avg,
                             fill_order_id=str(order.get("orderId", "")),
                             risk_quote=float(campaign.pending_risk_quote),
-                            fee_quote=0.0,
+                            fee_quote=fee_quote,
                         )
                         self.db.set_campaign_signal_state(
                             signal_id,
@@ -573,7 +666,7 @@ class CampaignExecutionService:
                             )
                             self.db.conn.execute(
                                 "UPDATE trades SET entry_price=?, stop_price=?, "
-                                "risk_pct=?, updated_at=CURRENT_TIMESTAMP "
+                                "risk_pct=?, fees=COALESCE(fees,0)+?, updated_at=CURRENT_TIMESTAMP "
                                 "WHERE id=? AND exit_time IS NULL",
                                 (
                                     campaign.average_entry_price,
@@ -582,6 +675,7 @@ class CampaignExecutionService:
                                         campaign.open_risk_quote /
                                         max(self._current_equity_quote(), 1e-12)
                                     ) * 100.0,
+                                    fee_quote,
                                     int(trade["id"]),
                                 ),
                             )
@@ -643,6 +737,9 @@ class CampaignExecutionService:
                         "order_id", ""
                     )
 
+                    # Install the stop for the actual executed quantity before any
+                    # ancillary trade/commission lookup can fail.
+                    fee_quote = self._executed_fee_quote(symbol, order, executed, avg)
                     self.engine.record_initial_fill(
                         campaign,
                         quantity=executed,
@@ -650,7 +747,7 @@ class CampaignExecutionService:
                         initial_stop_price=stop,
                         fill_order_id=str(order.get("orderId", "")),
                         risk_quote=float(campaign.pending_risk_quote),
-                        fee_quote=0.0,
+                        fee_quote=fee_quote,
                     )
                     self.db.set_campaign_signal_state(
                         signal_id,
@@ -679,7 +776,7 @@ class CampaignExecutionService:
                             risk_pct=float(
                                 campaign.tags.get("initial_risk_pct", 0.0) or 0.0
                             ) * 100.0,
-                            fees=0.0,
+                            fees=fee_quote,
                         )
 
                     self.db.state_delete(f"entry_client_order_id:{symbol}")
@@ -1040,6 +1137,7 @@ class CampaignExecutionService:
             quantity=self.client.decimal_format(qty),
             client_order_id=cid,
             purpose="CAMPAIGN_ADD_ON",
+            permission_interval=signal.timeframe,
             campaign_id=campaign.campaign_id,
             signal_id=signal.signal_id,
             risk_quote=requested,
@@ -1373,6 +1471,22 @@ class CampaignExecutionService:
             campaign_id=campaign.campaign_id,
             signal_id=campaign.current_signal_id,
         )
+        # Persist both legs and the stable replacement identity before the
+        # ExecutionBarrier is allowed to perform the non-atomic exchange mutation.
+        old_client_row = self.db.conn.execute(
+            "SELECT client_order_id FROM campaign_orders "
+            "WHERE symbol=? AND order_id=? ORDER BY id DESC LIMIT 1",
+            (campaign.symbol, str(existing_order_id)),
+        ).fetchone()
+        old_client_id = old_client_row["client_order_id"] if old_client_row else None
+        self.db.create_cancel_replace_operation(
+            operation_id=intent.intent_id,
+            intent_id=intent.intent_id,
+            symbol=campaign.symbol,
+            old_order_id=existing_order_id,
+            old_client_order_id=old_client_id,
+            replacement_client_order_id=cid,
+        )
         result = self._submit(
             intent,
             lambda: self.client.cancel_replace(
@@ -1386,6 +1500,22 @@ class CampaignExecutionService:
             ),
             lambda _snapshot: self._check_algo_capacity(campaign.symbol, 0),
         )
+        # This write is deliberately not allowed to clear reconcile_required:
+        # financial exposure and actual protection still need independent proof.
+        try:
+            self.db.update_cancel_replace_operation(
+                intent.intent_id, result, reconcile_required=True,
+                reconciliation={"source": "cancelReplace_response", "confirmed": False},
+            )
+        except Exception as exc:
+            campaign.mark_reconcile_required(
+                f"cancelReplace response received but durable per-leg update failed: {type(exc).__name__}"
+            )
+            self.db.save_campaign(campaign)
+            self.db.state_set(f"position_state:{campaign.symbol}", "RECONCILE_REQUIRED")
+            raise CampaignExecutionError(
+                f"{campaign.symbol}: cancelReplace outcome persistence failed; reconciliation required"
+            ) from exc
 
         cancel_result = str(result.get("cancelResult", "")).upper()
         new_result = str(result.get("newOrderResult", "")).upper()

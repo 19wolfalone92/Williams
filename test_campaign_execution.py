@@ -1,5 +1,6 @@
 import os
 import tempfile
+import time
 from datetime import datetime, timezone
 
 from campaign_engine import CampaignEngine
@@ -13,6 +14,7 @@ from db import Database
 class FakeContext:
     def __init__(self, version=1):
         self.version = version
+        self.candle_close_time_ms = int(time.time() * 1000)
         self.allow_long = True
         self.allow_short = False
 
@@ -41,12 +43,15 @@ def signal(kind=SignalType.REVERSAL, role=SignalRole.ENTRY, bar=100, trigger=101
         signal_bar_time_ms=bar,
         trigger_price=trigger,
         protective_reference=97,
-        context_versions={},
+        context_versions={"5m": 1},
         htf_confirmed=True,
     )
 
 
 def service(db, client):
+    # These fixtures represent a completed successful exchange reconciliation.
+    db.state_set("position_state", "FLAT")
+    db.state_set("position_state:BTCUSDT", "FLAT")
     barrier = ExecutionBarrier(FakeCache(), db)
     return CampaignExecutionService(client, db, barrier)
 
@@ -122,6 +127,18 @@ def test_partial_conditional_entry_is_cancelled_and_residual_protected():
         assert order["status"] in {"PARTIALLY_FILLED", "CANCELED"}
         campaign = svc.engine.load_campaign(result["campaign_id"])
         assert campaign.position_qty > 0
+        assert abs(campaign.position_qty - float(order["executedQty"])) < 1e-9
+        stops = [
+            o for o in client.open_orders("BTCUSDT")
+            if str(o.get("side", "")).upper() == "SELL"
+            and str(o.get("clientOrderId", "")).startswith(svc.STOP_PREFIX)
+        ]
+        assert len(stops) == 1
+        assert abs(float(stops[0]["origQty"]) - campaign.position_qty) < 1e-9
+        trade = db.open_trade("BTCUSDT")
+        assert trade is not None
+        expected_fee = float(order["cummulativeQuoteQty"]) * client.commission_rate
+        assert abs(float(trade["fees"]) - expected_fee) < 1e-8
 
 
 def test_restart_adopts_pending_campaign_by_client_id():

@@ -12,6 +12,8 @@ def _legacy_campaign_mode(monkeypatch):
 
 from db import Database
 from portfolio_trader import MultiPositionTrader
+from execution_barrier import ExecutionBarrier
+from market_context import ContextCache
 from telegram_bot import Telegram
 from ws_hub import WebSocketHub
 
@@ -100,6 +102,28 @@ class FakeBinance:
             "transactTime": 1000,
         }
 
+    def my_trades(self, symbol, order_id=None, limit=1000):
+        order = next(
+            (row for row in self.all_orders(symbol)
+             if str(row.get("orderId")) == str(order_id)),
+            None,
+        )
+        if not order or str(order.get("executedQty", "0")) in {"", "0", "0.0"}:
+            return []
+        qty = str(order["executedQty"])
+        price = "98" if str(order.get("side", "")).upper() == "SELL" else "100"
+        quote_qty = str(order.get("cummulativeQuoteQty") or (float(qty) * float(price)))
+        return [{
+            "id": f"{order_id}-trade-1",
+            "orderId": order_id,
+            "symbol": symbol,
+            "qty": qty,
+            "price": price,
+            "quoteQty": quote_qty,
+            "commission": "0",
+            "commissionAsset": "USDT",
+        }]
+
     def exchange_info(self, symbol):
         return _filters()
 
@@ -178,6 +202,8 @@ class FakeBinance:
         return {
             "orderListId": "20",
             "listClientOrderId": list_client_order_id,
+            "listStatusType": "EXEC_STARTED",
+            "listOrderStatus": "EXECUTING",
             "orderReports": [
                 {
                     "symbol": symbol,
@@ -218,7 +244,7 @@ def test_terminal_partial_entry_is_materialized_and_protected(tmp_path):
             return []
 
     client = NoOpenOrdersFakeBinance(entry_status="CANCELED", entry_qty="0.4")
-    trader = MultiPositionTrader(client, db=db, symbols=[])
+    trader = MultiPositionTrader(client, db=db, execution_barrier=ExecutionBarrier(ContextCache(), db))
 
     db.state_set("entry_client_order_id:BTCUSDT", "WILLV4_ENTRY_TEST")
     db.state_set("position_state:BTCUSDT", "ENTRY_PENDING")
@@ -246,7 +272,7 @@ def test_terminal_partial_oco_is_counted_once_and_reprotected(tmp_path):
         entry_qty="1.0",
         exit_qty="0.3",
     )
-    trader = MultiPositionTrader(client, db=db, symbols=[])
+    trader = MultiPositionTrader(client, db=db, execution_barrier=ExecutionBarrier(ContextCache(), db))
 
     trade_id = db.save_trade(
         entry_time="1970-01-01T00:00:01+00:00",
@@ -282,7 +308,7 @@ def test_terminal_partial_oco_is_counted_once_and_reprotected(tmp_path):
 def test_pending_entry_is_a_durable_duplicate_entry_barrier(tmp_path):
     db = Database(str(tmp_path / "dedupe.sqlite3"))
     client = FakeBinance()
-    trader = MultiPositionTrader(client, db=db, symbols=[])
+    trader = MultiPositionTrader(client, db=db, execution_barrier=ExecutionBarrier(ContextCache(), db))
 
     db.state_set("entry_client_order_id:BTCUSDT", "WILLV4_ENTRY_TEST")
     db.state_set("position_state:BTCUSDT", "ENTRY_PENDING")
@@ -395,7 +421,7 @@ def test_active_oco_two_legs_represent_one_quantity(tmp_path):
             }]
 
     client = ActiveOcoBinance(entry_status="FILLED", entry_qty="1.0")
-    trader = MultiPositionTrader(client, db=db, symbols=[])
+    trader = MultiPositionTrader(client, db=db, execution_barrier=ExecutionBarrier(ContextCache(), db))
     trade_id = db.save_trade(
         entry_time="1970-01-01T00:00:01+00:00",
         symbol="BTCUSDT",
@@ -516,7 +542,7 @@ def test_active_oco_partial_fill_keeps_second_leg_as_shared_protection(tmp_path)
         entry_status="FILLED",
         entry_qty="1.0",
     )
-    trader = MultiPositionTrader(client, db=db, symbols=[])
+    trader = MultiPositionTrader(client, db=db, execution_barrier=ExecutionBarrier(ContextCache(), db))
 
     trade_id = db.save_trade(
         entry_time="1970-01-01T00:00:01+00:00",

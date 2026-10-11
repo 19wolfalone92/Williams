@@ -5,15 +5,17 @@ import time
 from execution_barrier import ExecutionBarrier, OrderIntent
 from market_context import ContextCache, TFMarketContext, WaveHypothesis
 from wise_men import WiseMenPhase, WiseMenStateMachine
+from db import Database
 
 
 def context(symbol="BTCUSDT", interval="1h", allow_long=True, allow_short=False):
+    close_ms = int(time.time() * 1000)
     return TFMarketContext(
         symbol=symbol,
         interval=interval,
         version=0,
-        candle_open_time_ms=1,
-        candle_close_time_ms=2,
+        candle_open_time_ms=close_ms - 3_600_000,
+        candle_close_time_ms=close_ms,
         price=100.0,
         atr=2.0,
         jaw=98.0,
@@ -38,15 +40,20 @@ def test_copy_on_write_versions_and_immutable_snapshot():
     assert first.context("BTCUSDT", "1h").version == 1
 
 
-def test_execution_barrier_rejects_stale_context():
+def test_execution_barrier_rejects_stale_context(tmp_path):
     cache = ContextCache()
     cache.publish(context())
-    barrier = ExecutionBarrier(cache)
+    db = Database(str(tmp_path / "stale-context.sqlite3"))
+    db.state_set("position_state", "FLAT")
+    db.state_set("position_state:BTCUSDT", "FLAT")
+    barrier = ExecutionBarrier(cache, db)
     snap = cache.snapshot()
     cache.publish(context())
     intent = OrderIntent.new(
         "BTCUSDT", "BUY", "MARKET",
         required_context_versions={"1h": snap.context("BTCUSDT", "1h").version},
+        purpose="ENTRY",
+        permission_interval="1h",
     )
     calls = []
     result = barrier.execute(intent, lambda: calls.append("sent"))
@@ -55,10 +62,13 @@ def test_execution_barrier_rejects_stale_context():
     assert "stale context" in result.reason
 
 
-def test_execution_barrier_serializes_publish_and_submit():
+def test_execution_barrier_serializes_publish_and_submit(tmp_path):
     cache = ContextCache()
     cache.publish(context())
-    barrier = ExecutionBarrier(cache)
+    db = Database(str(tmp_path / "serial-context.sqlite3"))
+    db.state_set("position_state", "FLAT")
+    db.state_set("position_state:BTCUSDT", "FLAT")
+    barrier = ExecutionBarrier(cache, db)
     version = cache.snapshot().context("BTCUSDT", "1h").version
     started = threading.Event()
     published = threading.Event()
@@ -81,6 +91,7 @@ def test_execution_barrier_serializes_publish_and_submit():
         "BUY",
         "MARKET",
         {"1h": version},
+        purpose="ENTRY",
         permission_interval="1h",
     )
     result = barrier.execute(intent, submit)

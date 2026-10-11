@@ -1,12 +1,13 @@
 import os
 import json, sqlite3
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from datetime import datetime, timezone
 from contextlib import contextmanager
 
 
 class Database:
-    SCHEMA_VERSION = 6
+    SCHEMA_VERSION = 8
 
     def __init__(self, path=None):
         path = path or os.getenv('WILLIAMS_DB_PATH') or 'data/trader.sqlite3'
@@ -142,6 +143,27 @@ class Database:
             event TEXT NOT NULL,
             payload_json TEXT
         );
+        CREATE TABLE IF NOT EXISTS cancel_replace_operations(
+            operation_id TEXT PRIMARY KEY,
+            intent_id TEXT NOT NULL UNIQUE,
+            contract_version INTEGER NOT NULL DEFAULT 1,
+            symbol TEXT NOT NULL,
+            old_exchange_order_id TEXT,
+            old_client_order_id TEXT,
+            replacement_exchange_order_id TEXT,
+            replacement_client_order_id TEXT NOT NULL,
+            cancel_state TEXT NOT NULL DEFAULT 'PENDING',
+            replacement_state TEXT NOT NULL DEFAULT 'PENDING',
+            old_executed_qty TEXT,
+            replacement_executed_qty TEXT,
+            reconcile_required INTEGER NOT NULL DEFAULT 1,
+            last_reconciled_at TEXT,
+            last_reconciliation_json TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_cancel_replace_recovery
+            ON cancel_replace_operations(reconcile_required, updated_at);
         CREATE TABLE IF NOT EXISTS campaigns(
             campaign_id TEXT PRIMARY KEY,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -232,6 +254,45 @@ class Database:
             commission_asset TEXT,
             raw_json TEXT
         );
+        CREATE TABLE IF NOT EXISTS exchange_fill_ledger(
+            symbol TEXT NOT NULL,
+            exchange_trade_id TEXT NOT NULL,
+            order_id TEXT NOT NULL,
+            quantity_text TEXT NOT NULL,
+            price_text TEXT NOT NULL,
+            quote_quantity_text TEXT,
+            commission_amount_text TEXT,
+            commission_asset TEXT,
+            financial_state TEXT NOT NULL DEFAULT 'UNKNOWN',
+            raw_json TEXT NOT NULL,
+            first_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY(symbol, exchange_trade_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_exchange_fill_order
+            ON exchange_fill_ledger(symbol, order_id);
+        CREATE TABLE IF NOT EXISTS financial_effect_journal(
+            venue TEXT NOT NULL,
+            market_type TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            exchange_trade_id TEXT NOT NULL,
+            exchange_order_id TEXT NOT NULL,
+            effect_type TEXT NOT NULL,
+            effect_status TEXT NOT NULL,
+            quantity_text TEXT NOT NULL,
+            price_text TEXT NOT NULL,
+            quote_quantity_text TEXT,
+            commission_amount_text TEXT,
+            commission_asset TEXT,
+            fee_state TEXT NOT NULL,
+            contract_version INTEGER NOT NULL DEFAULT 1,
+            raw_json TEXT NOT NULL,
+            first_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY(venue, market_type, symbol, exchange_trade_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_financial_effect_recovery
+            ON financial_effect_journal(effect_status, last_seen_at);
         CREATE TABLE IF NOT EXISTS campaign_events(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             campaign_id TEXT NOT NULL,
@@ -345,6 +406,98 @@ class Database:
         )
         if not self._transaction_active:
             self.conn.commit()
+
+    def create_cancel_replace_operation(
+        self, operation_id, intent_id, symbol, old_order_id,
+        old_client_order_id, replacement_client_order_id,
+    ):
+        """Durably journal both cancel/replace identities before any network mutation."""
+        values = (
+            str(operation_id), str(intent_id), str(symbol).upper(),
+            str(old_order_id) if old_order_id is not None else None,
+            str(old_client_order_id) if old_client_order_id else None,
+            str(replacement_client_order_id),
+        )
+        self.conn.execute(
+            """INSERT OR IGNORE INTO cancel_replace_operations(
+                operation_id,intent_id,symbol,old_exchange_order_id,
+                old_client_order_id,replacement_client_order_id
+            ) VALUES(?,?,?,?,?,?)""",
+            values,
+        )
+        row = self.conn.execute(
+            "SELECT operation_id,intent_id,symbol,old_exchange_order_id,"
+            "old_client_order_id,replacement_client_order_id "
+            "FROM cancel_replace_operations WHERE operation_id=?",
+            (str(operation_id),),
+        ).fetchone()
+        expected = values
+        actual = tuple(row[k] for k in (
+            "operation_id", "intent_id", "symbol", "old_exchange_order_id",
+            "old_client_order_id", "replacement_client_order_id",
+        )) if row else None
+        if actual != expected:
+            raise RuntimeError("cancel/replace operation identity collision")
+        if not self._transaction_active:
+            self.conn.commit()
+        return dict(row)
+
+    def update_cancel_replace_operation(self, operation_id, response=None, *,
+                                        cancel_state=None, replacement_state=None,
+                                        reconcile_required=True, reconciliation=None):
+        """Persist per-leg evidence independently; never marks financial recovery complete."""
+        payload = response if isinstance(response, dict) else {}
+        cancel = payload.get("cancelResponse") or {}
+        replacement = payload.get("newOrderResponse") or {}
+        cancel_result = str(payload.get("cancelResult", "") or "").upper()
+        replacement_result = str(payload.get("newOrderResult", "") or "").upper()
+        if cancel_state is None:
+            cancel_state = cancel_result if cancel_result else "UNKNOWN"
+        if replacement_state is None:
+            replacement_state = replacement_result if replacement_result else "UNKNOWN"
+        now = datetime.now(timezone.utc).isoformat()
+        self.conn.execute(
+            """UPDATE cancel_replace_operations SET
+                cancel_state=?,
+                replacement_state=?,
+                old_executed_qty=COALESCE(?,old_executed_qty),
+                replacement_executed_qty=COALESCE(?,replacement_executed_qty),
+                old_exchange_order_id=COALESCE(?,old_exchange_order_id),
+                replacement_exchange_order_id=COALESCE(?,replacement_exchange_order_id),
+                reconcile_required=?,
+                last_reconciled_at=CASE WHEN ? IS NOT NULL THEN ? ELSE last_reconciled_at END,
+                last_reconciliation_json=COALESCE(?,last_reconciliation_json),
+                updated_at=?
+               WHERE operation_id=?""",
+            (
+                str(cancel_state), str(replacement_state),
+                str(cancel.get("executedQty")) if cancel.get("executedQty") is not None else None,
+                str(replacement.get("executedQty")) if replacement.get("executedQty") is not None else None,
+                str(cancel.get("orderId")) if cancel.get("orderId") is not None else None,
+                str(replacement.get("orderId")) if replacement.get("orderId") is not None else None,
+                1 if reconcile_required else 0,
+                json.dumps(reconciliation, default=str, sort_keys=True) if reconciliation is not None else None,
+                now,
+                json.dumps(reconciliation, default=str, sort_keys=True) if reconciliation is not None else None,
+                now, str(operation_id),
+            ),
+        )
+        if not self._transaction_active:
+            self.conn.commit()
+
+    def get_cancel_replace_operation(self, operation_id):
+        row = self.conn.execute(
+            "SELECT * FROM cancel_replace_operations WHERE operation_id=?",
+            (str(operation_id),),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def pending_cancel_replace_operations(self):
+        rows = self.conn.execute(
+            "SELECT * FROM cancel_replace_operations WHERE reconcile_required=1 "
+            "ORDER BY created_at, operation_id"
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     def save_execution_event(self, intent_id, event, payload=None):
         self.conn.execute(
@@ -969,6 +1122,212 @@ class Database:
         )
         if not self._transaction_active:
             self.conn.commit()
+
+    def record_exchange_fill(self, symbol, trade):
+        """Persist a fill observation and durably latch identity conflicts.
+
+        The inner transaction is rolled back when immutable exchange facts
+        conflict. The reconciliation latch is deliberately committed in a
+        separate transaction after that rollback so it cannot be rolled back
+        together with the rejected fill mutation.
+        """
+        try:
+            return self._record_exchange_fill_transactional(symbol, trade)
+        except RuntimeError as exc:
+            message = str(exc)
+            if "identity collision" not in message and "journal identity conflict" not in message:
+                raise
+            normalized_symbol = str(symbol or "").upper()
+            trade_id = trade.get("id") if isinstance(trade, dict) else None
+            try:
+                with self.transaction():
+                    self.state_set("financial_recovery_state", "RECONCILE_REQUIRED")
+                    self.state_set(
+                        "financial_recovery_reason",
+                        "authoritative fill identity/content conflict",
+                    )
+                    self.state_set("position_state", "RECONCILE_REQUIRED")
+                    if normalized_symbol:
+                        self.state_set(f"position_state:{normalized_symbol}", "RECONCILE_REQUIRED")
+                    if normalized_symbol and trade_id not in (None, ""):
+                        self.conn.execute(
+                            """UPDATE financial_effect_journal
+                               SET effect_status='RECONCILE_REQUIRED',
+                                   last_seen_at=CURRENT_TIMESTAMP
+                               WHERE venue='BINANCE' AND market_type='SPOT'
+                                 AND symbol=? AND exchange_trade_id=?""",
+                            (normalized_symbol, str(trade_id)),
+                        )
+            except Exception as latch_exc:
+                raise RuntimeError(
+                    "fill identity conflict detected and durable recovery latch failed"
+                ) from latch_exc
+            raise
+
+    def _record_exchange_fill_transactional(self, symbol, trade):
+        """Persist one Binance Spot trade idempotently using exact decimal strings.
+
+        Trade identity is (symbol, exchange trade id), never the local intent id.
+        Re-delivery with different immutable financial fields is treated as a
+        reconciliation conflict, not silently overwritten.
+        """
+        if not isinstance(trade, dict):
+            raise ValueError("exchange trade must be an object")
+        symbol = str(symbol or "").upper()
+        trade_id = trade.get("id")
+        order_id = trade.get("orderId")
+        if not symbol or trade_id in (None, "") or order_id in (None, ""):
+            raise ValueError("exchange trade lacks symbol/trade id/order id")
+        def exact_decimal(name, required=True):
+            value = trade.get(name)
+            if value is None or value == "":
+                if required:
+                    raise ValueError(f"exchange trade lacks {name}")
+                return None
+            try:
+                number = Decimal(str(value))
+            except (InvalidOperation, ValueError) as exc:
+                raise ValueError(f"exchange trade has invalid {name}") from exc
+            if not number.is_finite() or number < 0:
+                raise ValueError(f"exchange trade has invalid {name}")
+            return format(number, "f")
+        qty = exact_decimal("qty")
+        price = exact_decimal("price")
+        quote_qty = exact_decimal("quoteQty", required=False)
+        commission = exact_decimal("commission", required=False)
+        asset_value = trade.get("commissionAsset")
+        asset = str(asset_value).upper() if asset_value not in (None, "") else None
+        state = "CONFIRMED" if commission is not None and asset else "UNKNOWN"
+        payload = json.dumps(trade, sort_keys=True, separators=(",", ":"), default=str)
+        values = (symbol, str(trade_id), str(order_id), qty, price, quote_qty,
+                  commission, asset, state, payload)
+        with self.transaction():
+            self.conn.execute(
+                """INSERT OR IGNORE INTO exchange_fill_ledger(
+                    symbol,exchange_trade_id,order_id,quantity_text,price_text,
+                    quote_quantity_text,commission_amount_text,commission_asset,
+                    financial_state,raw_json
+                ) VALUES(?,?,?,?,?,?,?,?,?,?)""", values)
+            row = self.conn.execute(
+                """SELECT order_id,quantity_text,price_text,quote_quantity_text,
+                          commission_amount_text,commission_asset
+                   FROM exchange_fill_ledger WHERE symbol=? AND exchange_trade_id=?""",
+                (symbol, str(trade_id))).fetchone()
+            inserted = self.conn.execute("SELECT changes()").fetchone()[0] == 1
+            if not row:
+                raise RuntimeError("exchange fill ledger insert could not be read back")
+            actual_core = tuple(row[k] for k in (
+                "order_id","quantity_text","price_text","quote_quantity_text"))
+            expected_core = values[2:6]
+            if actual_core != expected_core:
+                raise RuntimeError("exchange trade identity collision: execution fields differ")
+            existing_commission = row["commission_amount_text"]
+            existing_asset = row["commission_asset"]
+            incoming_commission = values[6]
+            incoming_asset = values[7]
+            if existing_commission is None and existing_asset is None and incoming_commission is not None and incoming_asset:
+                self.conn.execute(
+                    """UPDATE exchange_fill_ledger SET commission_amount_text=?,
+                       commission_asset=?,financial_state='CONFIRMED',raw_json=?,
+                       last_seen_at=CURRENT_TIMESTAMP
+                       WHERE symbol=? AND exchange_trade_id=?""",
+                    (incoming_commission, incoming_asset, payload, symbol, str(trade_id)))
+            elif incoming_commission is None or not incoming_asset:
+                # Do not downgrade previously confirmed fee evidence, but keep
+                # its raw observation and current timestamp for auditability.
+                self.conn.execute(
+                    """UPDATE exchange_fill_ledger SET last_seen_at=CURRENT_TIMESTAMP
+                       WHERE symbol=? AND exchange_trade_id=?""",
+                    (symbol, str(trade_id)))
+            elif (existing_commission, existing_asset) != (incoming_commission, incoming_asset):
+                raise RuntimeError("exchange trade identity collision: commission fields differ")
+
+            # Re-read the canonical ledger row after fee enrichment. A later
+            # delivery with missing fee fields must not downgrade previously
+            # confirmed fee evidence, and must not create a false identity conflict.
+            canonical = self.conn.execute(
+                """SELECT order_id,quantity_text,price_text,quote_quantity_text,
+                          commission_amount_text,commission_asset,financial_state
+                   FROM exchange_fill_ledger WHERE symbol=? AND exchange_trade_id=?""",
+                (symbol, str(trade_id)),
+            ).fetchone()
+            canonical_fee_state = canonical["financial_state"]
+            canonical_commission = canonical["commission_amount_text"]
+            canonical_asset = canonical["commission_asset"]
+            effect_status = ("READY_TO_APPLY" if canonical_fee_state == "CONFIRMED"
+                             else "RECONCILE_REQUIRED")
+            # Durable observation journal. This is deliberately NOT marked
+            # APPLIED: downstream position/Campaign/risk projections have not
+            # yet been proven to share this transaction. Unknown fees remain
+            # reconciliation-blocking rather than being interpreted as zero.
+            self.conn.execute(
+                """INSERT OR IGNORE INTO financial_effect_journal(
+                    venue,market_type,symbol,exchange_trade_id,exchange_order_id,
+                    effect_type,effect_status,quantity_text,price_text,
+                    quote_quantity_text,commission_amount_text,commission_asset,
+                    fee_state,contract_version,raw_json
+                ) VALUES('BINANCE','SPOT',?,?,?,?,?,?,?,?,?,?,?,1,?)""",
+                (symbol, str(trade_id), str(order_id), "SPOT_FILL", effect_status,
+                 qty, price, quote_qty, canonical_commission, canonical_asset, canonical_fee_state, payload),
+            )
+            self.conn.execute(
+                """UPDATE financial_effect_journal
+                   SET commission_amount_text=?, commission_asset=?,
+                       fee_state='CONFIRMED', effect_status='READY_TO_APPLY',
+                       raw_json=?, last_seen_at=CURRENT_TIMESTAMP
+                   WHERE venue='BINANCE' AND market_type='SPOT'
+                     AND symbol=? AND exchange_trade_id=?
+                     AND fee_state='UNKNOWN'
+                     AND ?='CONFIRMED'""",
+                (canonical_commission, canonical_asset, payload, symbol,
+                 str(trade_id), canonical_fee_state),
+            )
+            effect = self.conn.execute(
+                """SELECT exchange_order_id,quantity_text,price_text,
+                          quote_quantity_text,commission_amount_text,commission_asset,
+                          fee_state
+                   FROM financial_effect_journal
+                   WHERE venue='BINANCE' AND market_type='SPOT'
+                     AND symbol=? AND exchange_trade_id=?""",
+                (symbol, str(trade_id)),
+            ).fetchone()
+            if not effect:
+                raise RuntimeError("financial effect journal could not be read back")
+            effect_core = tuple(effect[k] for k in (
+                "exchange_order_id","quantity_text","price_text",
+                "quote_quantity_text","commission_amount_text","commission_asset",
+                "fee_state"))
+            expected_effect_core = (str(order_id), qty, price, quote_qty,
+                                    canonical_commission, canonical_asset, canonical_fee_state)
+            if effect_core != expected_effect_core:
+                self.conn.execute(
+                    """UPDATE financial_effect_journal
+                       SET effect_status='RECONCILE_REQUIRED',
+                           last_seen_at=CURRENT_TIMESTAMP
+                       WHERE venue='BINANCE' AND market_type='SPOT'
+                         AND symbol=? AND exchange_trade_id=?""",
+                    (symbol, str(trade_id)),
+                )
+                self.state_set("financial_recovery_state", "RECONCILE_REQUIRED")
+                self.state_set("financial_recovery_reason",
+                               "canonical fill identity conflicts with journal facts")
+                raise RuntimeError("financial effect journal identity conflict")
+            self.conn.execute(
+                """UPDATE financial_effect_journal
+                   SET last_seen_at=CURRENT_TIMESTAMP
+                   WHERE venue='BINANCE' AND market_type='SPOT'
+                     AND symbol=? AND exchange_trade_id=?""",
+                (symbol, str(trade_id)),
+            )
+        return {"inserted": bool(inserted), "financial_state": state,
+                "symbol": symbol, "exchange_trade_id": str(trade_id)}
+
+    def exchange_fills_for_order(self, symbol, order_id):
+        rows = self.conn.execute(
+            """SELECT * FROM exchange_fill_ledger
+               WHERE symbol=? AND order_id=? ORDER BY CAST(exchange_trade_id AS INTEGER), exchange_trade_id""",
+            (str(symbol).upper(), str(order_id))).fetchall()
+        return [dict(row) for row in rows]
 
     def save_campaign_fill(self, fill):
         data=fill if isinstance(fill,dict) else dict(fill)

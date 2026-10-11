@@ -21,6 +21,7 @@ class MockExchange:
         self.open_oco: dict[str, dict] = {}
         self.timeout_next = False
         self.partial_fill_ratio = 1.0
+        self.commission_rate = 0.001
         self.sequence_gap_next = False
 
     def ticker_price(self, symbol):
@@ -214,7 +215,9 @@ class MockExchange:
                 continue
 
             requested = float(order.get("origQty", 0) or 0)
-            executed = requested * float(self.partial_fill_ratio)
+            # Exchange fills respect the symbol LOT_SIZE step; do not create
+            # impossible fractional mock exposure that no valid order can protect.
+            executed = (int((requested * float(self.partial_fill_ratio)) * 1000 + 1e-9) / 1000.0)
             if side == "BUY":
                 cost = executed * self.prices[symbol]
                 self.balances["USDT"] -= cost
@@ -247,38 +250,84 @@ class MockExchange:
                        time_in_force=None, new_client_order_id=None):
         old = self.get_order(symbol, order_id=cancel_order_id)
         self.cancel_order(symbol, order_id=cancel_order_id)
+        old["status"] = "CANCELED"
+        replacement = self.order_safe(
+            symbol,
+            side,
+            type_,
+            quantity=quantity,
+            price=price,
+            stop_price=stop_price,
+            time_in_force=time_in_force,
+            new_client_order_id=new_client_order_id,
+        )
         return {
             "cancelResult": "SUCCESS",
+            "cancelResponse": old,
             "newOrderResult": "SUCCESS",
-            "newOrderResponse": self.order_safe(
-                symbol,
-                side,
-                type_,
-                quantity=quantity,
-                price=price,
-                stop_price=stop_price,
-                time_in_force=time_in_force,
-                new_client_order_id=new_client_order_id,
-            ),
+            "newOrderResponse": replacement,
         }
 
     def create_oco_sell(self, symbol, quantity, take_profit, stop_price, stop_limit, client_order_id):
         if self.timeout_next:
             self.timeout_next = False
             raise TimeoutError("mock 504 timeout")
+        list_id = str(len(self.open_oco) + 1)
         item = {
-            "orderListId": str(len(self.open_oco) + 1),
+            "orderListId": list_id,
             "symbol": symbol,
+            "listClientOrderId": client_order_id,
+            "listStatusType": "EXEC_STARTED",
+            "listOrderStatus": "EXECUTING",
             "status": "EXECUTING",
             "clientOrderId": client_order_id,
             "quantity": str(quantity),
             "takeProfit": str(take_profit),
             "stopPrice": str(stop_price),
             "stopLimitPrice": str(stop_limit),
-            "orderReports": [],
+            "orderReports": [
+                {
+                    "symbol": symbol, "side": "SELL", "type": "TAKE_PROFIT_LIMIT",
+                    "orderId": str(int(list_id) * 10 + 1),
+                    "orderListId": list_id, "clientOrderId": client_order_id + "_TP",
+                    "status": "NEW", "origQty": str(quantity), "executedQty": "0",
+                    "price": str(take_profit), "stopPrice": str(take_profit),
+                },
+                {
+                    "symbol": symbol, "side": "SELL", "type": "STOP_LOSS_LIMIT",
+                    "orderId": str(int(list_id) * 10 + 2),
+                    "orderListId": list_id, "clientOrderId": client_order_id + "_SL",
+                    "status": "NEW", "origQty": str(quantity), "executedQty": "0",
+                    "price": str(stop_limit), "stopPrice": str(stop_price),
+                },
+            ],
         }
         self.open_oco[symbol] = item
         return item
+
+    def my_trades(self, symbol, order_id=None, limit=1000):
+        """Deterministic synthetic trade ledger with explicit quote-asset fees."""
+        rows = []
+        for order in self.orders:
+            if order["symbol"] != symbol:
+                continue
+            if order_id is not None and str(order.get("orderId")) != str(order_id):
+                continue
+            qty = float(order.get("executedQty", 0) or 0)
+            if qty <= 0:
+                continue
+            quote_qty = float(order.get("cummulativeQuoteQty", 0) or 0)
+            price = quote_qty / qty if quote_qty > 0 else float(self.prices[symbol])
+            rows.append({
+                "symbol": symbol,
+                "orderId": int(order["orderId"]),
+                "id": int(order["orderId"]) * 1000,
+                "price": str(price),
+                "qty": str(qty),
+                "commission": str(quote_qty * float(self.commission_rate)),
+                "commissionAsset": "USDT",
+            })
+        return rows[-int(limit):]
 
     def all_orders(self, symbol, limit=1000):
         return [o for o in self.orders if o["symbol"] == symbol][-limit:]

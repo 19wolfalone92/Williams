@@ -2,18 +2,20 @@ name: Python backend tests
 
 on:
   push:
-    branches: [main, master]
+    branches: ["**"]
     paths:
       - "*.py"
       - "tests/**"
       - "requirements.txt"
       - ".github/workflows/**"
+      - "docs/**"
   pull_request:
     paths:
       - "*.py"
       - "tests/**"
       - "requirements.txt"
       - ".github/workflows/**"
+      - "docs/**"
   workflow_dispatch:
 
 concurrency:
@@ -86,6 +88,7 @@ jobs:
             tests/test_quant_models.py \
             test_preflight_gate.py \
             test_execution_architecture.py \
+            test_task001_architecture_contracts.py \
             test_integration_bindings.py \
             test_testnet_release_gate.py \
             2>&1 | tee pytest-output.txt

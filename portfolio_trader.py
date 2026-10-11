@@ -9,6 +9,7 @@ from equity_breaker import EquityCircuitBreaker
 from l2_slippage import L2SlippageGuard
 from execution_accumulator import ExecutionSummary, accumulate_order
 from campaign_execution import CampaignExecutionService, CampaignExecutionError
+from execution_barrier import OrderIntent
 from campaign_model import SignalSpec, SignalType, SignalRole
 from campaign_monitor import CampaignMonitor
 from order_identity import is_entry_id, is_exit_id, is_managed_order
@@ -21,6 +22,10 @@ POSITION_STATES = {
     "EXIT_PENDING",
     "RECONCILE_REQUIRED",
 }
+
+
+class ExecutionAdmissionRejected(RuntimeError):
+    """The common execution barrier rejected the intent before exchange I/O."""
 
 
 class MultiPositionTrader:
@@ -106,6 +111,45 @@ class MultiPositionTrader:
             self.campaign_execution,
         )
 
+    def _submit_via_execution_barrier(
+        self,
+        symbol,
+        side,
+        order_type,
+        purpose,
+        submit,
+        *,
+        client_order_id="",
+        required_context_versions=None,
+        permission_interval="",
+        campaign_id="",
+        signal_id="",
+        risk_quote=0.0,
+    ):
+        """Sole path for legacy Spot mutations; fail closed without the shared barrier."""
+        if self.execution_barrier is None:
+            raise RuntimeError(
+                "Spot order mutation blocked: canonical ExecutionBarrier was not injected"
+            )
+        intent = OrderIntent.new(
+            str(symbol).upper(),
+            str(side).upper(),
+            str(order_type).upper(),
+            required_context_versions=dict(required_context_versions or {}),
+            client_order_id=str(client_order_id or ""),
+            purpose=str(purpose).upper(),
+            permission_interval=str(permission_interval or ""),
+            campaign_id=str(campaign_id or ""),
+            signal_id=str(signal_id or ""),
+            risk_quote=float(risk_quote or 0.0),
+        )
+        result = self.execution_barrier.execute(intent, submit)
+        if not result.accepted:
+            raise ExecutionAdmissionRejected(
+                f"ExecutionBarrier blocked {purpose}: {result.reason}"
+            )
+        return result.response
+
     # ------------------------------------------------------------------
     # Durable state
     # ------------------------------------------------------------------
@@ -117,9 +161,11 @@ class MultiPositionTrader:
         return f"entry_client_order_id:{symbol.upper()}"
 
     def state(self, symbol):
+        # Absence is not evidence of FLAT. Recovery must establish the per-symbol
+        # exchange facts and then persist FLAT explicitly.
         state = self.db.state_get(
             self._state_key(symbol),
-            "FLAT",
+            "UNKNOWN",
         )
         return state if state in POSITION_STATES else "RECONCILE_REQUIRED"
 
@@ -190,6 +236,70 @@ class MultiPositionTrader:
 
         return False
 
+    def _ensure_symbol_clean_before_entry(self, symbol: str) -> bool:
+        """Set per-symbol FLAT only after clean exchange and inventory evidence."""
+        symbol = str(symbol).upper()
+        key = self._state_key(symbol)
+        stored_state = self.db.state_get(key, None)
+        normalized = str(stored_state or "").upper()
+
+        # Entries are only allowed for an explicitly FLAT symbol. Never erase an
+        # existing UNKNOWN/RECONCILE_REQUIRED barrier just because one query looks clean.
+        if normalized not in {"", "FLAT"}:
+            return False
+        if self.db.open_trade(symbol) is not None:
+            self.set_state(symbol, "RECONCILE_REQUIRED")
+            self.db.log_event(
+                "ERROR", "symbol_flat_preflight_conflict",
+                "Local open trade conflicts with entry admission",
+                {"symbol": symbol, "stored_state": normalized or "UNKNOWN"},
+            )
+            return False
+        if any(row_symbol == symbol for row_symbol, _ in self._pending_entries()):
+            self.set_state(symbol, "RECONCILE_REQUIRED")
+            return False
+        active_campaign = self.campaign_execution._active_campaign_for_symbol(symbol)
+        if active_campaign is not None:
+            self.set_state(symbol, "RECONCILE_REQUIRED")
+            return False
+
+        try:
+            # Any open order on a supposedly flat symbol is ambiguous until
+            # associated with a locally persisted campaign and reconciled.
+            open_orders = self.client.open_orders(symbol)
+            if open_orders:
+                raise RuntimeError("exchange reports open orders for an untracked/flat symbol")
+            if self._bot_entry_remaining(symbol):
+                raise RuntimeError("exchange history shows an unresolved Williams BUY")
+
+            account = self.client.account()
+            base_qty = self._asset_balance(symbol, account=account)
+            filters = self._filters(symbol)
+            qty_filter = filters.get("LOT_SIZE") or filters.get("MARKET_LOT_SIZE") or {}
+            min_qty = float(qty_filter.get("minQty", 0) or 0)
+            inventory_tolerance = max(min_qty, 1e-12)
+            if base_qty >= inventory_tolerance:
+                raise RuntimeError(
+                    f"exchange holds {base_qty:.12g} base units; cannot confirm FLAT"
+                )
+
+            # Persist a positive, evidence-backed FLAT assertion for this symbol.
+            self.db.state_set(key, "FLAT")
+            self.db.log_event(
+                "INFO", "symbol_flat_reconciled",
+                "Per-symbol FLAT established from exchange orders, history and inventory",
+                {"symbol": symbol, "base_qty": base_qty},
+            )
+            return True
+        except Exception as exc:
+            self.set_state(symbol, "RECONCILE_REQUIRED")
+            self.db.log_event(
+                "ERROR", "symbol_flat_preflight_failed",
+                str(exc),
+                {"symbol": symbol},
+            )
+            return False
+
     def _repair_stale_reconcile_states(self):
         """Clear a persisted recovery barrier only after clean exchange evidence.
 
@@ -241,6 +351,16 @@ class MultiPositionTrader:
                     continue
                 if self._bot_entry_remaining(symbol):
                     # A filled Williams BUY without a local trade is not safe to auto-clear.
+                    continue
+                account = self.client.account()
+                base_qty = self._asset_balance(symbol, account=account)
+                filters = self._filters(symbol)
+                qty_filter = filters.get("LOT_SIZE") or filters.get("MARKET_LOT_SIZE") or {}
+                min_qty = float(qty_filter.get("minQty", 0) or 0)
+                if base_qty >= max(min_qty, 1e-12):
+                    # Holdings cannot be called FLAT merely because local trade
+                    # bookkeeping is missing; keep the symbol blocked for manual/
+                    # deeper inventory reconciliation.
                     continue
 
                 self.set_state(symbol, "FLAT")
@@ -508,32 +628,96 @@ class MultiPositionTrader:
         return "BOT_OCO_EXIT"
 
     def _exit_fee_quote(self, symbol, exit_orders):
-        if not hasattr(self.client, "my_trades"):
-            return 0.0
-        total = 0.0
-        seen = set()
+        """Return quote-valued exit fees only when every executed fill is auditable.
+
+        Raw exchange trades are durably recorded before fee conversion. Missing
+        trade history, trade identity, commission amount, or commission asset is
+        UNKNOWN, never a zero fee. The float return is a legacy compatibility
+        boundary only; the fill ledger retains exact exchange decimal strings.
+        """
+        from decimal import Decimal, InvalidOperation
+
+        symbol = str(symbol or "").upper()
         base_asset = symbol[:-4] if symbol.endswith("USDT") else ""
-        for order in exit_orders or []:
+        trade_reader = getattr(self.client, "my_trades", None)
+        orders = list(exit_orders or [])
+        executed_orders = [
+            order for order in orders
+            if str(order.get("executedQty", "0") or "0") not in {"", "0", "0.0"}
+        ]
+        if executed_orders and not callable(trade_reader):
+            raise RuntimeError(f"{symbol}: exit commission history is unavailable")
+        total = Decimal("0")
+        seen = set()
+        for order in orders:
             order_id = str(order.get("orderId") or "").strip()
             if not order_id or order_id in seen:
                 continue
             seen.add(order_id)
             try:
-                rows = self.client.my_trades(symbol, order_id=order_id, limit=1000)
-            except Exception:
-                continue
-            for row in rows or []:
-                commission = float(row.get("commission", 0) or 0)
-                asset = str(row.get("commissionAsset", "")).upper()
-                if commission <= 0:
-                    continue
-                price = float(row.get("price", 0) or 0)
-                total += commission * self._fee_quote_for_asset(
-                    asset,
-                    base_asset,
-                    trade_price=price,
+                rows = trade_reader(symbol, order_id=order_id, limit=1000) if callable(trade_reader) else []
+            except Exception as exc:
+                raise RuntimeError(
+                    f"{symbol}: cannot reconcile exit commissions for order {order_id}"
+                ) from exc
+            if not rows and str(order.get("executedQty", "0") or "0") not in {"", "0", "0.0"}:
+                raise RuntimeError(
+                    f"{symbol}: order {order_id} has executed quantity but no authoritative trade records"
                 )
-        return total
+            for row in rows or []:
+                try:
+                    if not isinstance(row, dict):
+                        raise ValueError("trade row is not an object")
+                    if str(row.get("symbol", symbol)).upper() != symbol:
+                        raise ValueError("trade symbol mismatch")
+                    if str(row.get("orderId", "")) != order_id:
+                        raise ValueError("trade order ID mismatch")
+                    trade_id = row.get("id")
+                    if trade_id in (None, ""):
+                        raise ValueError("trade ID is missing")
+                    quantity = Decimal(str(row.get("qty", "")))
+                    price = Decimal(str(row.get("price", "")))
+                    if not quantity.is_finite() or quantity <= 0 or not price.is_finite() or price <= 0:
+                        raise ValueError("invalid trade quantity or price")
+                    # Persist the immutable execution even if its fee is still
+                    # unknown, so recovery can enrich this same exchange trade.
+                    self.db.record_exchange_fill(symbol, row)
+                    commission_value = row.get("commission")
+                    commission_asset_value = row.get("commissionAsset")
+                    if commission_value in (None, "") or commission_asset_value in (None, ""):
+                        raise ValueError("commission amount or asset is unknown")
+                    commission = Decimal(str(commission_value))
+                    asset = str(commission_asset_value).upper()
+                    if not commission.is_finite() or commission < 0 or not asset:
+                        raise ValueError("invalid trade commission")
+                    if asset in {"USDT", "USDC", "FDUSD", "BUSD"}:
+                        total += commission
+                    elif asset == base_asset:
+                        total += commission * price
+                    elif commission > 0:
+                        quote_rate = Decimal(str(self._fee_quote_for_asset(
+                            asset, base_asset, trade_price=float(price)
+                        )))
+                        if not quote_rate.is_finite() or quote_rate <= 0:
+                            raise ValueError(f"cannot value {asset} commission in quote asset")
+                        total += commission * quote_rate
+                except (InvalidOperation, ValueError, RuntimeError) as exc:
+                    # Persist the uncertainty as a hard recovery barrier. A later
+                    # authoritative fee response may enrich the same ledger row.
+                    try:
+                        self.db.state_set("position_state", "RECONCILE_REQUIRED")
+                        self.db.state_set(f"position_state:{symbol}", "RECONCILE_REQUIRED")
+                        self.db.log_event(
+                            "ERROR", "exit_financial_reconciliation_required",
+                            str(exc), {"symbol": symbol, "order_id": order_id},
+                        )
+                    except Exception:
+                        # A failed barrier write is itself fatal; propagate below.
+                        pass
+                    raise RuntimeError(
+                        f"{symbol}: exit fill/commission reconciliation is unresolved: {exc}"
+                    ) from exc
+        return float(total)
 
     def _sell_belongs_to_bot(self, order, all_orders):
         client_id = str(order.get("clientOrderId") or "").strip()
@@ -650,43 +834,121 @@ class MultiPositionTrader:
             raise RuntimeError(f"{asset}: cannot value Binance commission in USDT") from exc
 
     def _authoritative_execution(self, symbol, order):
+        """Build an execution summary only from fills with explicit fee evidence.
+
+        Fill rows are persisted before any legacy position/trade writer consumes
+        this summary. Missing trade identity or fee evidence is a reconciliation
+        failure; it must not be normalized to a zero commission.
+        """
         payload = dict(order or {})
-        fills = list(payload.get("fills") or [])
+        symbol = str(symbol or "").upper()
         order_id = payload.get("orderId")
-        if not fills and order_id is not None and hasattr(self.client, "my_trades"):
+        executed_qty = Decimal(str(payload.get("executedQty", "0") or "0"))
+        if not executed_qty.is_finite() or executed_qty < 0:
+            raise RuntimeError(f"{symbol}: invalid exchange executed quantity")
+
+        fills = list(payload.get("fills") or [])
+        trade_reader = getattr(self.client, "my_trades", None)
+        if not fills and executed_qty > 0:
+            if order_id in (None, "") or not callable(trade_reader):
+                self._latch_financial_reconciliation(symbol, order_id, "authoritative trade history unavailable")
+                raise RuntimeError(f"{symbol}: filled order has no authoritative trade history")
             try:
-                rows = self.client.my_trades(symbol, order_id=order_id, limit=1000)
-                fills = [
-                    {
-                        "price": row.get("price", "0"),
-                        "qty": row.get("qty", row.get("executedQty", "0")),
-                        "commission": row.get("commission", "0"),
-                        "commissionAsset": row.get("commissionAsset", ""),
-                    }
-                    for row in (rows or [])
-                ]
-                if fills:
-                    payload["fills"] = fills
+                rows = trade_reader(symbol, order_id=order_id, limit=1000)
             except Exception as exc:
-                self.db.log_event(
-                    "WARNING",
-                    "fill_commission_lookup_failed",
-                    f"{symbol}: myTrades lookup unavailable; using order-level fill data",
-                    {"order_id": order_id, "error": str(exc)},
-                )
-        base_asset = symbol[:-4] if symbol.endswith("USDT") else ""
-        summary = accumulate_order(payload, base_asset=base_asset)
+                self._latch_financial_reconciliation(symbol, order_id, f"myTrades lookup failed: {exc}")
+                raise RuntimeError(f"{symbol}: cannot reconcile filled order {order_id}") from exc
+            if not isinstance(rows, list) or not rows:
+                self._latch_financial_reconciliation(symbol, order_id, "myTrades returned no fills for executed order")
+                raise RuntimeError(f"{symbol}: executed order {order_id} has no authoritative trade records")
+            fills = []
+            for row in rows:
+                if not isinstance(row, dict):
+                    self._latch_financial_reconciliation(symbol, order_id, "malformed myTrades row")
+                    raise RuntimeError(f"{symbol}: malformed trade record for order {order_id}")
+                if str(row.get("symbol", symbol)).upper() != symbol or str(row.get("orderId", "")) != str(order_id):
+                    self._latch_financial_reconciliation(symbol, order_id, "myTrades identity mismatch")
+                    raise RuntimeError(f"{symbol}: trade identity mismatch for order {order_id}")
+                fills.append({
+                    "tradeId": row.get("id"),
+                    "orderId": row.get("orderId"),
+                    "symbol": row.get("symbol", symbol),
+                    "price": row.get("price"),
+                    "qty": row.get("qty"),
+                    "quoteQty": row.get("quoteQty"),
+                    "commission": row.get("commission"),
+                    "commissionAsset": row.get("commissionAsset"),
+                })
+            payload["fills"] = fills
+
+        normalized_fills = []
         extra_fee_quote = Decimal("0")
-        known_assets = {"USDT", "USDC", "FDUSD", "BUSD", base_asset}
-        for fill in payload.get("fills") or []:
-            commission = Decimal(str(fill.get("commission", "0") or "0"))
-            asset = str(fill.get("commissionAsset", "")).upper()
-            if commission <= 0 or asset in known_assets:
-                continue
-            price = float(fill.get("price", "0") or 0.0)
-            extra_fee_quote += commission * Decimal(str(
-                self._fee_quote_for_asset(asset, base_asset, trade_price=price)
-            ))
+        base_asset = symbol[:-4] if symbol.endswith("USDT") else ""
+        known_quote_assets = {"USDT", "USDC", "FDUSD", "BUSD"}
+        for fill in fills:
+            try:
+                if not isinstance(fill, dict):
+                    raise ValueError("fill row is not an object")
+                trade_id = fill.get("tradeId", fill.get("id"))
+                fee_value = fill.get("commission")
+                fee_asset_value = fill.get("commissionAsset")
+                if trade_id in (None, ""):
+                    raise ValueError("exchange trade ID is missing")
+                quantity = Decimal(str(fill.get("qty", "")))
+                price = Decimal(str(fill.get("price", "")))
+                if (not quantity.is_finite() or quantity <= 0 or
+                        not price.is_finite() or price <= 0):
+                    raise ValueError("invalid fill quantity or price")
+                commission = None
+                if fee_value not in (None, ""):
+                    commission = Decimal(str(fee_value))
+                    if not commission.is_finite() or commission < 0:
+                        raise ValueError("invalid fill commission")
+                fee_asset = str(fee_asset_value).upper() if fee_asset_value not in (None, "") else None
+                quote_value = fill.get("quoteQty")
+                quote_qty = Decimal(str(quote_value)) if quote_value not in (None, "") else quantity * price
+                if not quote_qty.is_finite() or quote_qty < 0:
+                    raise ValueError("invalid quote quantity")
+                raw_trade = {
+                    "id": str(trade_id),
+                    "orderId": str(fill.get("orderId", order_id or "")),
+                    "symbol": symbol,
+                    "qty": format(quantity, "f"),
+                    "price": format(price, "f"),
+                    "quoteQty": format(quote_qty, "f"),
+                    "commission": format(commission, "f") if commission is not None else None,
+                    "commissionAsset": fee_asset,
+                }
+                if not raw_trade["orderId"]:
+                    raise ValueError("exchange order ID is missing")
+                self.db.record_exchange_fill(symbol, raw_trade)
+                if commission is None or not fee_asset:
+                    raise ValueError("commission amount or asset is unknown")
+                normalized_fills.append({
+                    "tradeId": str(trade_id),
+                    "price": format(price, "f"),
+                    "qty": format(quantity, "f"),
+                    "commission": format(commission, "f"),
+                    "commissionAsset": fee_asset,
+                })
+                if commission > 0 and fee_asset not in known_quote_assets and fee_asset != base_asset:
+                    # This is a compatibility valuation only; the exact native
+                    # commission amount/asset remains canonical in the ledger.
+                    rate = Decimal(str(self._fee_quote_for_asset(
+                        fee_asset, base_asset, trade_price=float(price)
+                    )))
+                    if not rate.is_finite() or rate <= 0:
+                        raise ValueError(f"cannot value {fee_asset} commission in quote asset")
+                    extra_fee_quote += commission * rate
+            except Exception as exc:
+                self._latch_financial_reconciliation(symbol, order_id, str(exc))
+                raise RuntimeError(f"{symbol}: financial fill reconciliation failed: {exc}") from exc
+
+        if executed_qty > 0 and not normalized_fills:
+            self._latch_financial_reconciliation(symbol, order_id, "executed quantity has no fee-confirmed fills")
+            raise RuntimeError(f"{symbol}: executed order has no fee-confirmed fills")
+        payload["fills"] = normalized_fills
+        summary = accumulate_order(payload, base_asset=base_asset)
         if extra_fee_quote <= 0:
             return summary
         return ExecutionSummary(
@@ -697,6 +959,22 @@ class MultiPositionTrader:
             summary.commission_base,
             summary.fee_quote_equivalent + extra_fee_quote,
         )
+
+    def _latch_financial_reconciliation(self, symbol, order_id, reason):
+        """Durably block entries when an executed fill cannot be financially proved."""
+        detail = str(reason)[:1000]
+        try:
+            self.db.state_set("position_state", "RECONCILE_REQUIRED")
+            self.db.state_set(f"position_state:{str(symbol).upper()}", "RECONCILE_REQUIRED")
+            self.db.log_event(
+                "ERROR", "financial_fill_reconciliation_required",
+                f"{str(symbol).upper()}: {detail}",
+                {"order_id": order_id, "reason": detail},
+            )
+        except Exception:
+            # Failure to persist the latch is itself a hard failure. The caller
+            # raises and must not continue into legacy financial writers.
+            pass
 
     # ------------------------------------------------------------------
     # Protection
@@ -719,12 +997,19 @@ class MultiPositionTrader:
             )
 
         client_id = f"{self.EMERGENCY_PREFIX}{uuid.uuid4().hex[:16]}"
-        sell = self.client.order_safe(
+        sell = self._submit_via_execution_barrier(
             symbol,
             "SELL",
             "MARKET",
-            quantity=self.client.decimal_format(sell_qty),
-            new_client_order_id=client_id,
+            "EMERGENCY_EXIT",
+            lambda: self.client.order_safe(
+                symbol,
+                "SELL",
+                "MARKET",
+                quantity=self.client.decimal_format(sell_qty),
+                new_client_order_id=client_id,
+            ),
+            client_order_id=client_id,
         )
         self.db.save_order(sell)
 
@@ -933,13 +1218,20 @@ class MultiPositionTrader:
         self.set_state(symbol, "EXIT_PENDING")
 
         create_oco = getattr(self.client, "create_oco_sell_safe", None) or self.client.create_oco_sell
-        result = create_oco(
+        result = self._submit_via_execution_barrier(
             symbol,
-            self.client.decimal_format(qty),
-            self.client.decimal_format(tp),
-            self.client.decimal_format(sl),
-            self.client.decimal_format(sl_limit),
-            client_id,
+            "SELL",
+            "OCO",
+            "PROTECTION",
+            lambda: create_oco(
+                symbol,
+                self.client.decimal_format(qty),
+                self.client.decimal_format(tp),
+                self.client.decimal_format(sl),
+                self.client.decimal_format(sl_limit),
+                client_id,
+            ),
+            client_order_id=client_id,
         )
 
         for leg in result.get("orderReports", []):
@@ -1656,9 +1948,17 @@ class MultiPositionTrader:
                 cancel = getattr(self.client, "cancel_oco", None)
                 if cancel is not None:
                     if list_id:
-                        cancel(symbol, order_list_id=list_id)
+                        self._submit_via_execution_barrier(
+                            symbol, "SELL", "CANCEL", "CAMPAIGN_EXIT_CANCEL",
+                            lambda: cancel(symbol, order_list_id=list_id),
+                            client_order_id=list_client or list_id,
+                        )
                     else:
-                        cancel(symbol, list_client_order_id=list_client)
+                        self._submit_via_execution_barrier(
+                            symbol, "SELL", "CANCEL", "CAMPAIGN_EXIT_CANCEL",
+                            lambda: cancel(symbol, list_client_order_id=list_client),
+                            client_order_id=list_client,
+                        )
 
             account = self.client.account()
             free_qty = self._asset_balance(
@@ -1675,12 +1975,20 @@ class MultiPositionTrader:
                     f"{symbol}: managed quantity is no longer available"
                 )
 
-            sell = self.client.order_safe(
+            manual_client_id = f"{self.MANUAL_PREFIX}{uuid.uuid4().hex[:20]}"
+            sell = self._submit_via_execution_barrier(
                 symbol,
                 "SELL",
                 "MARKET",
-                quantity=self.client.decimal_format(sell_qty),
-                new_client_order_id=f"{self.MANUAL_PREFIX}{uuid.uuid4().hex[:20]}",
+                "MANUAL_EXIT",
+                lambda: self.client.order_safe(
+                    symbol,
+                    "SELL",
+                    "MARKET",
+                    quantity=self.client.decimal_format(sell_qty),
+                    new_client_order_id=manual_client_id,
+                ),
+                client_order_id=manual_client_id,
             )
             self.db.save_order(sell)
 
@@ -2031,6 +2339,14 @@ class MultiPositionTrader:
             signal = self.campaign_execution.engine.choose_initial_signal(specs)
             if signal is None:
                 continue
+            if not self._ensure_symbol_clean_before_entry(symbol):
+                results.append({
+                    "symbol": symbol,
+                    "campaign": True,
+                    "action": "BLOCKED_UNRECONCILED_SYMBOL",
+                    "state": self.state(symbol),
+                })
+                continue
 
             try:
                 result = self.campaign_execution.arm_initial_entry(
@@ -2214,12 +2530,24 @@ class MultiPositionTrader:
                     float(quote),
                 )
 
-                order = self.client.order_safe(
+                # Legacy score-only scanner has no SignalSpec/context version
+                # contract. Route it through the common barrier, which rejects it
+                # until a canonical Williams signal and fresh context are supplied.
+                order = self._submit_via_execution_barrier(
                     symbol,
                     "BUY",
                     "MARKET",
-                    quote_order_qty=self.client.decimal_format(quote),
-                    new_client_order_id=client_id,
+                    "ENTRY",
+                    lambda: self.client.order_safe(
+                        symbol,
+                        "BUY",
+                        "MARKET",
+                        quote_order_qty=self.client.decimal_format(quote),
+                        new_client_order_id=client_id,
+                    ),
+                    client_order_id=client_id,
+                    required_context_versions={},
+                    permission_interval="1h",
                 )
                 self.db.save_order(order)
 
@@ -2310,21 +2638,29 @@ class MultiPositionTrader:
                     }
                 )
             except Exception as exc:
-                # Do NOT issue an emergency SELL here. The durable entry
-                # intent remains on disk and startup/next cycle recovery
-                # will inspect the exact Binance clientOrderId.
-                self.set_state(
-                    symbol,
-                    "RECONCILE_REQUIRED",
-                )
+                if isinstance(exc, ExecutionAdmissionRejected):
+                    # The common barrier guarantees that this rejection occurred
+                    # before exchange I/O; release the reservation without
+                    # manufacturing an exchange order or position.
+                    self.db.state_delete(self._pending_key(symbol))
+                    self.set_state(symbol, "FLAT")
+                    self.db.log_event(
+                        "WARNING",
+                        "multi_position_entry_blocked",
+                        str(exc),
+                        {"symbol": symbol, "clientOrderId": client_id},
+                    )
+                    results.append(
+                        {"symbol": symbol, "status": "BLOCKED", "reason": str(exc)}
+                    )
+                    continue
+                # Any error after an exchange mutation may have begun is ambiguous.
+                self.set_state(symbol, "RECONCILE_REQUIRED")
                 self.db.log_event(
                     "ERROR",
                     "multi_position_entry_error",
                     str(exc),
-                    {
-                        "symbol": symbol,
-                        "clientOrderId": client_id,
-                    },
+                    {"symbol": symbol, "clientOrderId": client_id},
                 )
                 results.append(
                     {

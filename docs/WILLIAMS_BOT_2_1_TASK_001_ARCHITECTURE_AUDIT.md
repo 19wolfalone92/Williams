@@ -1,0 +1,1115 @@
+# WILLIAMS BOT 2.1 — TASK 001
+## Deep Architecture Audit & System Contracts
+
+**Baseline main SHA:** 04da5f9c09572e99ff310be3a1908179165e528c  
+**Working branch:** audit/williams-2.1-task-001-architecture  
+**Scope:** Binance Spot Testnet, Python service path and Android standalone runtime. Futures modules remain isolated.  
+**Safety:** no Mainnet request and no real order was submitted by this audit. Tests use fake/offline exchange responses.
+
+> TASK 001 completion is not a whole-bot release approval. The final section records the result on the exact tested branch commit. Spot Testnet execution and restart recovery remain separate release gates.
+
+## 1. Baseline and change control
+
+- At audit start, main resolved to 04da5f9c09572e99ff310be3a1908179165e528c.
+- Work was performed on audit/williams-2.1-task-001-architecture; main was not modified.
+- PR #43 remains open and unmerged. It contains potentially useful Task 007 risk changes, including execution_barrier.py, risk_engine.py, equity_breaker.py, db.py and campaign_execution.py. It was not blindly merged because its code overlaps with this task and must be reconciled by file/commit and retested together.
+- PR #44 remains open and unmerged; it targets audit/williams-2.1-futures-safety, not main. Its reported campaign CI run on head dbe755a942276ac3b369afd47d424fff48bbb608 failed. Its Williams indicator/stop fixes need a separate source/commit review; this architecture branch does not automatically absorb them.
+- The main-branch release contract was inconsistent: ci_release_gate.py expected 4.24.0, while server.py and Android app metadata use 4.25.0. The branch aligns the release gate to 4.25.0.
+- Baseline CI at main SHA 04da5f9c09572e99ff310be3a1908179165e528c reported Python checks successful but Android build/static validation failed (run 37966807562). Passing Python tests alone therefore did not establish a releasable Android APK.
+
+## 2. Actual module and state ownership map
+
+### Backend / Python
+
+~~~text
+Binance Spot REST / market stream
+    ├── candle/history adapters ──> market frames / persisted market history
+    └── account, order, order-list and fill queries ──> reconciliation
+
+MultiTimeframeContextService
+    └── computes TFMarketContext ──> shared ContextCache
+                                      ├── Trader
+                                      └── ExecutionBarrier snapshot
+Strategy / Williams signal calculation
+    └── digital_williams_core.py / williams_signals.py / strategy.py
+        └── SignalSpec / hypothesis + context versions
+            └── CampaignEngine / PendingSignal
+                └── CampaignExecutionService
+                    ├── persist campaign + entry reservation in SQLite
+                    └── ExecutionBarrier
+                        └── binance_client.py
+                            └── Binance Spot REST mutation endpoint
+
+Fills / user-stream events / REST order facts
+    └── execution accumulator + db.py
+        ├── durable execution intents/events
+        ├── order and fill records
+        ├── campaign/position projections
+        └── reconcile on recovery before new risk
+~~~
+
+The inspected server.py wiring creates the shared context_cache, injects it into MultiTimeframeContextService, and passes that same object into the Trader created by ControlState.ensure_trader. This branch adds an integration regression for object identity. Direct construction of Trader without dependency injection still creates a fallback cache, so production construction must continue to go through the injection path.
+
+**Canonical Python open path (campaign mode):**
+
+1. Scanner/controller creates candidate and risk proposal.
+2. MultiPositionTrader.execute_campaign chooses a canonical SignalSpec.
+3. Unknown symbols are reconciled against open orders, order history and base-asset inventory; a missing state is not converted to FLAT by default.
+4. CampaignExecutionService.arm_initial_entry or arm_add_on persists campaign/intent state and supplies context versions, timeframe, campaign ID and signal ID.
+5. ExecutionBarrier.execute takes the shared context lock, persists a PENDING intent, verifies context identity/version/freshness and state contracts, performs caller pre-submit checks, then allows the adapter callback.
+6. binance_client.py sends the Spot order.
+7. Order status/fills are confirmed by exchange queries and stored; only exchange facts may establish the live position.
+8. Protection, campaign trailing and exits use the same barrier; ambiguous outcomes remain in reconciliation.
+
+**Legacy Python path:** Trader still has a single-symbol execution path and MultiPositionTrader.execute still contains a legacy score-only route when campaign mode is disabled. Its entry is now forced through the same barrier with no canonical context versions, so it fails closed rather than falling back to a direct MARKET BUY. Exit/OCO methods are routed through the injected barrier. This is deliberately not treated as a replacement Williams entry system.
+
+### Android standalone path
+
+~~~text
+TradingForegroundService / StandaloneRuntime worker
+    └── REST + stream/history warmup and candidate scan
+        └── Williams CampaignSignalN / PendingEntry
+            └── savePersistedState + ExecutionGate reservation
+                └── signedPost / signedDelete
+                    └── signedRequest (single mutation boundary)
+                        ├── authorizeExchangeMutation
+                        ├── TradingAuditStore.beginMutationIntent (SQLite)
+                        ├── performSignedRequest
+                        └── persist exchange outcome or UNKNOWN
+                            └── recovery / reconcile before new BUY
+~~~
+
+The Android UI talks to the local runtime and is not an authoritative order/position store. The runtime's SharedPreferences projections are restart hints; Binance order/account facts, read back over REST/user stream, are authoritative. TradingAuditStore stores orders, executions, REST calls, state transitions and, on this branch, a durable mutation_intents journal.
+
+### Close / protection path
+
+- Python: campaign monitor proposes structural stop; CampaignExecutionService cancels/replaces protection or submits a campaign exit through ExecutionBarrier; Binance response/order history is reconciled before local campaign state is finalized.
+- Android: manageWilliamsStops, campaignExitMarket, manual sell, protection replacement and emergency unprotected exits call signedPost/signedDelete; these converge in signedRequest. The central gate allows explicitly risk-reducing SELL/cancel/protection mutations while refusing new BUY exposure under reconciliation.
+- A PendingSignal/campaign reservation is an intention, not an order or fill. An order acknowledgment is not a fill. A local position projection is not proof of Binance inventory.
+
+## 3. Write / mutation surface inventoried
+
+### Python Spot client
+
+The exchange adapter's write methods are concentrated in binance_client.py:
+
+| Mutation | Spot REST route | Required owner / control |
+|---|---|---|
+| Submit standard/conditional order | POST /api/v3/order | ExecutionBarrier caller; unique client order ID; persisted intent |
+| Cancel/replace | POST /api/v3/order/cancelReplace | execution/cancel contract; must reconcile non-atomic outcome |
+| Cancel order | DELETE /api/v3/order | managed order ID/client ID; barrier on active paths |
+| Cancel all symbol orders | DELETE /api/v3/openOrders | dangerous bulk primitive; no active path is approved to bypass managed-order reconciliation |
+| Create OCO protection | POST /api/v3/orderList/oco (adapter compatibility methods may wrap it) | protection path, durable IDs and exchange confirmation |
+| Cancel OCO | DELETE /api/v3/orderList | managed order-list ID/client ID and subsequent reconciliation |
+
+The client is Spot-specific: the inspected implementation uses /api/v3/*; this branch adds a regression preventing accidental introduction of /fapi/ or /dapi/ paths into that adapter. Futures code and its API base paths must remain a separately configured adapter, not a mode flag that can silently redirect the Spot order path.
+
+### Android REST writes
+
+At the HTTP transport level, performSignedRequest is the only location that constructs OkHttp POST/DELETE requests. signedRequest is now the mandatory gate above it; all unrecognized mutation routes or unsupported methods fail closed. No PUT writer was found in the inspected Android transport. Each accepted mutation must first insert a durable row into mutation_intents; inability to persist the intent prevents network I/O. Transport ambiguity or outcome-persistence failure sets RECONCILE_REQUIRED.
+
+## 4. Confirmed defects and branch changes
+
+| ID | Severity | Evidence before fix | Branch correction |
+|---|---|---|---|
+| A-01 | P0 | ExecutionBarrier._persist swallowed SQLite errors; execution could continue after a failed write of the intent/outcome. | Persistence is mandatory. PENDING failure blocks before submit; failure persisting the post-submit outcome raises an explicit reconciliation error. |
+| A-02 | P0 | _validate defaulted absent global position_state to FLAT and absent per-symbol state fell back to global FLAT. | Missing state means UNKNOWN. An explicit per-symbol state is mandatory; global FLAT does not prove a symbol is FLAT. |
+| A-03 | P0 | Validation only special-cased purpose ENTRY; CAMPAIGN_ENTRY/CAMPAIGN_ADD_ON could bypass required context and permission-version checks. | Every non-risk-reducing entry/add-on requires non-empty versioned context, an explicit permission timeframe, freshness, matching version and LONG permission. Campaign intents also require persisted campaign/signal identity and valid symbol/campaign states. |
+| A-04 | P0 | Context service assigned candle_close_time_ms=candle_open_time_ms, so the freshness contract used the wrong timestamp. | Publishes actual frame close time where available; known closed-bar intervals have a conservative fallback; unknown intervals remain unverifiable and block entries. |
+| A-05 | P0 | portfolio_trader.py contained emergency SELL, OCO create/cancel, manual SELL and legacy score-only BUY calls outside the canonical barrier. | Active direct call sites route through a common barrier wrapper; missing barrier blocks mutation. Score-only legacy BUY is rejected by absence of canonical context evidence rather than submitted as MARKET. |
+| A-06 | P0 | Android direct signedPost/signedDelete calls were not globally guarded by a single write policy; legacy order code remained behind guard clauses. | Central signedRequest authorizes route/side/type/IDs and journals each mutation. Dead legacy order-intent and direct MARKET-BUY bodies are removed. |
+| A-07 | P0 | Android had no durable per-mutation journal proving an attempted write before transport and preserving ambiguous outcomes. | SQLite mutation_intents table and mandatory pre-write/after-response writes added; unresolved mutation state blocks new entries and is surfaced in diagnostics. |
+| A-08 | P1 | CAMPAIGN_ADD_ON intent omitted permission_interval. | Add-on intent supplies signal.timeframe. |
+| A-09 | P1 | Explicit reconciliation barrier repair checked orders/history but not unexplained base-asset inventory before declaring FLAT. | Stale barriers remain in place when non-dust unmanaged base inventory exists; new-symbol preflight checks orders, bot order history and inventory before persisting FLAT. |
+| A-10 | P1 | Python release gate expected 4.24.0 while server/Android used 4.25.0. | Gate changed to 4.25.0; regression added. |
+| A-11 | P2 | Duplicate order-state import/transitions and duplicate response handling obscured FSM semantics. | Duplicate import, transition/assignment and duplicate response branch removed. |
+| A-12 | P1 | Risk-reducing protection/cancel actions and entry admission shared over-broad uncertainty blocking. | Explicit SELL/CANCEL/protection/exit intents do not use entry permission gates; new BUY/add-on stays blocked by UNKNOWN/RECONCILE_REQUIRED. This exception must remain limited to actual risk-reducing intents. |
+| A-13 | P0 | The generic Python barrier could treat a SELL with a permissive `allow_short` context as a new entry, despite this execution profile being Spot-only. | Any non-risk-reducing SELL is rejected at the barrier; explicit exit/protection SELL and cancel purposes use the separate reducing-risk contract. |
+| A-14 | P1 | Malformed context-version data could throw during validation after PENDING intent persistence without a normalized BLOCKED result. | Validation exceptions are converted to a durable BLOCKED result; if even that persistence fails, the function returns a no-submit failure and never invokes the exchange callback. |
+
+## 5. Contracts that the code now enforces
+
+1. **Market context identity:** server.mtf_service.cache is server.context_cache, and that exact cache is injected into Trader/execution. Market context is versioned and time-stamped from a closed candle.
+2. **Fresh context:** entry/add-on intent must include a version for every required interval and a permission interval present in that same map; the current cache must have those exact versions, close timestamp must be verifiable and within timeframe freshness bounds, and permission context must allow the requested direction.
+3. **Single mutation door:** Python Spot intents use ExecutionBarrier; Android mutating HTTP methods use signedRequest → authorizeExchangeMutation → durable journal → performSignedRequest. A bypass path is a blocker.
+4. **Durable intent before I/O:** failure to persist PENDING/mutation intent means no exchange request is made. Failure to persist an exchange outcome means UNKNOWN/reconciliation, never a retry invitation.
+5. **Exchange-confirmed state:** PENDING_SIGNAL, ENTRY_PENDING and order acknowledgments are not fills. Executed quantity/status and managed inventory are confirmed by exchange REST/user-stream/recovery.
+6. **UNKNOWN:** absent per-symbol/global/campaign facts are not FLAT/CLEAN. Entries are refused until authoritative reconciliation makes state explicit.
+7. **Risk-reducing exception:** cancellation, protection, trailing replacement and explicit SELL exits remain available under reconciliation, while they still require a durable intent and controlled route. This is not permission for arbitrary SELL orders or blind retries.
+8. **Restart:** local projections are reconciled against Binance orders, open order lists, order history and inventory. Any ambiguous write remains blocked until supported by authoritative evidence.
+9. **Spot/Futures separation:** Spot adapter contains only Spot endpoints. Futures adapter/configuration remains separate; no automatic conversion from Spot intent into Futures order is permitted.
+
+## 6. Regression coverage added or updated
+
+- test_task001_architecture_contracts.py: shared cache object identity; fresh/versioned context required; stale/missing context blocks before callback; UNKNOWN and RECONCILE_REQUIRED block new entries; risk-reducing exit remains admitted under reconciliation; missing global state and missing per-symbol state cannot be inferred as FLAT; failed pre-intent persistence prevents submit; malformed context versions become BLOCKED; unsupported non-risk-reducing Spot SELL blocks; PendingSignal is not an order/fill/position; AST checks for backend mutation call sites; Android mutation boundary/journal recovery check; Spot/Futures route isolation; missing campaign state blocks.
+- test_campaign_execution.py: fake context now provides a real current close timestamp and signal context versions; fixture explicitly models completed clean reconciliation.
+- test_production_architecture.py: stale-context and execution-lock tests now use a durable test DB and verifiable timestamps.
+- .github/workflows/python-ci.yml and .github/workflows/campaign-ci.yml: include the new architecture contracts test.
+
+The tests must be evaluated on the final commit after CI completes; source edits and workflow configuration do not themselves prove the suite passes.
+
+## 7. Evidence gaps / remaining blockers
+
+- Do not accept TASK 001 until campaign/Python tests, backend tests, Android build/lint and release-gate checks complete successfully on the **same exact final SHA**. A pending workflow is not a pass.
+- Android journal recovery now queries the exact Binance order, order-list, or both cancel/replace legs using persisted identifiers. It only marks a journal row RECONCILED when a matching exchange response contains authoritative IDs and a recognized state. Unsupported/malformed routes and failed lookups stay unresolved and keep entries blocked. The code-level query path is present; its Android build and crash/restart behavior still require successful CI and Testnet evidence.
+- Spot Testnet must separately exercise: initial conditional LONG, partial/final fill, protection creation, stop replacement, manual/emergency exit, commission/realized-result reconciliation, process kill/restart at each mutation boundary, and unknown-response recovery. This report does not claim those exchange E2E scenarios were run.
+- Verify each response type and cancellation outcome from Binance Testnet: cancelReplace and OCO operations are non-atomic, and an HTTP success alone is not proof the final order-list state is what the caller expects.
+- Run an exact scan of all repository call sites against the mutation inventory before merging; the wrapper tests enforce key paths but are not a proof from an arbitrary dynamically constructed call or external extension.
+- Re-review PR #43 and #44 at the file/commit level and reconcile any overlapping changes instead of merging either wholesale.
+- Confirm runtime config and APK default to Testnet and do not silently allow Mainnet; do not enable Mainnet in TASK 001.
+- Keep Williams strategy-canon audits (four books, figure captions, non-repainting fractals, Alligator timing, WM1/WM2/WM3 provenance) and live Testnet trading proofs separate from architecture-task completion.
+
+## 8. Acceptance record
+
+**Status at report creation:** PASS WITH BLOCKERS — architecture corrections and offline regressions are present on the task branch, but exact-final-SHA CI and Spot Testnet end-to-end recovery have not yet been proven.
+
+**Final tested commit SHA:** pending final CI result.  
+**Final task status:** must be updated to PASS, PASS WITH BLOCKERS or FAIL after checks finish.  
+**Whole-bot release status:** not approved by TASK 001 alone.
+
+
+---
+
+## 9. TASK 001 follow-up — exact-SHA CI and mutation-path review
+
+**Reviewed source SHA:** `6f6839c8419795f50bf99c71f5be3175d6895dcd`  
+**PR:** [#47](https://github.com/19wolfalone92/Williams/pull/47)  
+**Main remains:** `04da5f9c09572e99ff310be3a1908179165e528c`  
+**No PR was merged; no Mainnet request/order was sent.**
+
+### 9.1 CI evidence for the reviewed SHA
+
+All of these runs identify the exact head SHA above:
+
+| Workflow | Run | Result | Concrete evidence |
+|---|---|---|---|
+| Build Android APK | [38080627301](https://github.com/19wolfalone92/Williams/actions/runs/38080627301) | **SUCCESS** | Release contract gate PASS; Android unit-test task successful; debug and unsigned release APKs built; APK metadata and debug signature verified; checksums generated. |
+| Python backend tests | [38080627318](https://github.com/19wolfalone92/Williams/actions/runs/38080627318) | **SUCCESS** | Release gate, Python compile, static safety audit and offline tests all successful. Log: 165 passed, 4 warnings. |
+| Williams Campaign CI (push) | [38080625240](https://github.com/19wolfalone92/Williams/actions/runs/38080625240) | **SUCCESS** | Python tests 176 passed, 4 warnings; Android build, lint and debug unit-test task successful; debug APK artifact uploaded. |
+| Williams Campaign CI (PR) | [38080627398](https://github.com/19wolfalone92/Williams/actions/runs/38080627398) | **SUCCESS** | Python tests 176 passed, 4 warnings; Android build, lint and debug unit-test task successful; debug APK artifact uploaded. |
+
+APK metadata recorded by the Android workflow:
+- Debug: package `com.williamsbot.debug`, versionCode `1695`, versionName `4.25.0-debug`.
+- Release: package `com.williamsbot`, versionCode `1695`, versionName `4.25.0`; artifact is explicitly **unsigned**.
+- Debug APK SHA-256: `27c1f07f6d91d5607b3105e87726d82206f58eb1c1ebd2969a680854fadfb120`.
+- Unsigned release APK SHA-256: `abd1403bfd6d6836e244eb80d6121c7e7e8b557ec7a7af7397a838539bb3c92c`.
+- Installable debug artifact ID: `11680606330`. The separate campaign debug artifact ID is `11679723954`.
+
+The previous failures were specific and corrected before these successful runs: an OCO regression omitted the required `required_context_versions` argument; Android lint rejected Gradle 8.14.5 in favor of 8.14.6. These successes establish CI/build behavior for the reviewed SHA only; they do not establish live Testnet execution or restart safety on a device.
+
+### 9.2 Mutation-path inventory
+
+This is the reviewed call-path inventory for known repository-owned Spot mutation surfaces. Dynamically assembled requests, third-party extension code and every future call site still require repository-wide re-audit before merge.
+
+| Call path / mutation | Required checks before network mutation | Durable intent before I/O | Unknown/ambiguous result | Reconciliation | Contract evidence |
+|---|---|---|---|---|---|
+| Python campaign entry: scanner/signal → `CampaignExecutionService` → `ExecutionBarrier.execute` → `BinanceSpotClient.order_safe` → POST `/api/v3/order` | Signal/context versions, freshness, direction, expiry/trigger, symbol/global/campaign state, risk and exchange filters; serialized barrier | Campaign `ENTRY_PENDING`, client order ID and execution intent persisted before submit | Timeout/connection/5xx is not blindly retried; state remains unknown/reconcile-required | `reconcile_pending_entries()` looks up persisted client/order IDs and adopts only exchange evidence | `test_task001_architecture_contracts.py`; `test_campaign_execution.py`; `test_execution_architecture.py`; `test_binance_json_shapes.py` |
+| Python protection/OCO create: campaign execution → barrier → client OCO adapter → POST `/api/v3/orderList/oco` or compatible OCO route | Must be an explicit protection intent with managed campaign/symbol context; Spot-only side/order contract; validate list response and child IDs/states | Execution intent plus campaign/order identifiers | Missing/malformed list IDs or child states cannot be treated as a fill; outcome must remain unresolved | Query order list/children and confirm authoritative status before adopting protection | `test_task001_architecture_contracts.py::test_oco_list_response_is_validated_without_confusing_it_with_a_position_fill`; Testnet OCO response vectors still needed |
+| Python cancel order: campaign/protection lifecycle → barrier → client cancel → DELETE `/api/v3/order` | Managed order identity and explicit cancel/risk-reducing purpose; no untracked blind retry | Intent persisted before cancel | Timeout or contradictory cancel result remains unknown | Query order/client ID and reconcile actual status/fills | `test_execution_architecture.py`, `test_campaign_execution.py`; explicit cancel-timeout/restart test still needed |
+| Python cancel/replace: campaign protection → barrier/client → POST `/api/v3/order/cancelReplace` | Validate old order, replacement parameters, filters and risk; preserve both leg outcomes | Intent must identify old order and replacement client ID | Non-atomic two-leg response cannot be collapsed into one success boolean | Query both old and replacement order IDs; keep blocked if either leg unresolved | Static boundary and campaign tests; explicit matrix test for old-cancel success/new-order failure and inverse is still needed |
+| Python cancel all symbol orders: client primitive → DELETE `/api/v3/openOrders` | Must not be invoked as an untracked shortcut; active path must prove managed scope and account for all affected orders | Required for every approved mutation; if no per-order durable intent, path is not approved for production use | Ambiguous bulk cancellation remains unresolved | Re-query open orders and order history per managed order before clearing barriers | Inventory identifies this dangerous primitive; a dedicated allow/deny regression test and call-site proof are still required |
+| Python cancel OCO: managed campaign protection → barrier/client → DELETE `/api/v3/orderList` | Exact managed order-list ID/client ID; explicit cancel purpose | Durable intent before call | Timeout remains unknown | Query order list and child orders; confirm actual terminal state | Mutation-boundary regression plus required explicit OCO-cancel failure/restart vector |
+| Android order/OCO/cancel-replace: runtime campaign/protection/manual exit → `signedPost`/`signedDelete` → `signedRequest` → `authorizeExchangeMutation` → SQLite mutation journal → `performSignedRequest` | Testnet host guard, route/method allowlist, side/type/IDs, entry gate and reconciliation barrier; unknown route fails closed | `TradingAuditStore.beginMutationIntent` must commit before transport | Transport or result-persistence ambiguity writes UNKNOWN/RECONCILE_REQUIRED and blocks exposure increase | `reconcileUnresolvedMutationIntents()` looks up persisted order/order-list/replace identifiers and requires authoritative response evidence | `test_task001_architecture_contracts.py` checks one POST and one DELETE primitive, guarded transport and journal/reconcile symbols; Android CI passes. Crash/restart against Testnet remains untested |
+| Android configuration/control API POST/DELETE | Local API handler and config/control validation; these are not themselves Binance order writes | Config/control persistence is separate from exchange mutation intent | Runtime state changes must not be mistaken for Binance order outcomes | Runtime recovery must query Binance before clearing execution barriers | Route inventory and Android unit/static checks; device-level control/restart test remains needed |
+
+**Boundary interpretation:** Python's exchange adapter contains Spot `/api/v3/*` mutation endpoints; Android signed REST mutations converge on the guarded `signedRequest` transport. The AST/static checks are regression guards, not a formal proof against arbitrary dynamic calls. The bulk-cancel primitive and non-atomic cancel/replace deserve explicit deny/allow tests before this task can be accepted.
+
+### 9.3 Recovery tests: proven versus missing — follow-up
+
+Deterministic offline regressions added in this follow-up:
+
+1. **Post-submit SQLite outcome-write failure.** A fake exchange accepts one order, then the injected SUBMITTED SQLite write fails. The barrier best-effort persists AMBIGUOUS, sets global and symbol state to RECONCILE_REQUIRED, and raises a non-retryable execution error. A startup recovery path performs a read-only lookup by the stable client order ID; it does not submit a second POST. If the database is too broken even to persist the ambiguity, the durable PENDING row is treated as unresolved and blocks another mutation.
+2. **Cancel/replace response matrix.** Regression cases cover both legs succeeding, cancellation succeeding while replacement fails, replacement succeeding while cancellation fails, timeout, and malformed response. Only a response with authoritative identifiers/status for both legs is admitted as submitted; all other cases stay ambiguous and require reconciliation. **Restart resolution of campaign stop replacement remains blocked** because the Python durable intent schema does not yet store the old target order ID independently from the replacement client ID.
+3. **Bulk cancel.** BinanceSpotClient.cancel_open_orders is disabled and raises before network I/O. The Android mutation allowlist does not authorize DELETE /api/v3/openOrders; its openOrders usages reviewed here are reads. Static regression checks cover the known Python wrapper and Android route guard. This is a fail-closed restriction, not proof against every possible dynamically constructed request.
+4. **OCO timeout/restart.** Recovery now verifies the order-list identity/status and then queries both child orders by their exchange order IDs. Creation/cancel timeout tests prove read-only lookup of the list and both children, and the portfolio latch remains RECONCILE_REQUIRED after the lookup. Missing or malformed child evidence leaves the intent unresolved; no duplicate protection is sent by recovery.
+5. **Partial fill, protection, and fees.** Campaign fill materialization reads actual exchange trade records, validates their total quantity against executedQty, converts commission assets to quote value, and no longer assumes fees are zero. Protection is installed for the actual executed quantity before the ancillary commission lookup. The fake-exchange partial-fill regression checks executed quantity, protective-stop quantity, and the known synthetic commission. **A combined partial-fill + process restart + real exchange fee reconciliation scenario is not yet proven end-to-end.**
+6. **Android process death.** The runtime recovery path now queries OCO child orders as well as the list. Source/static tests and CI are not hardware evidence. Killing the Android process at journal-commit, response-before-outcome-commit, and in-reconciliation points on a physical device remains NOT VERIFIED.
+7. **Spot Testnet.** No bounded Spot Testnet order-create/cancel/protection/restart run is claimed. All new recovery regressions are offline fake-exchange tests; no Mainnet requests or real orders were sent.
+
+The full mutation inventory remains code/static evidence, not a formal proof against dynamically generated routes or every production runtime state. CI on the final report SHA is tracked separately from the earlier successful source-SHA runs in §9.1; earlier green CI is not evidence of complete recovery safety.
+
+### 9.4 PR #43 / #44 overlap reconciliation
+
+Neither PR was merged. The overlap review is contract-based; do not cherry-pick whole PRs.
+
+- **PR #43 (risk and execution safety):** overlaps on `execution_barrier.py`, `campaign_execution.py`, `db.py`, `ci_release_gate.py`, `risk_engine.py`, `equity_breaker.py`. Preserve its numeric-input validation, exchange-filter fail-closed behavior, daily-loss breaker and reserved-risk accounting only after confirming they coexist with Task 001's mandatory durable intent, UNKNOWN semantics and single execution door. PR #43's older barrier changes must not overwrite the current Task 001 fail-closed persistence and context-version checks.
+- **PR #44 (Williams/Futures parity):** overlaps on `StandaloneRuntime.kt`, `campaign_execution.py`, `campaign_engine.py`, `campaign_model.py`, `execution_barrier.py`, `db.py`, `risk_engine.py`, `market_context.py`, `mtf_context_service.py`, `portfolio_trader.py`, `server.py`, `strategy.py` and tests. Its Futures-specific engine/policies must remain isolated. Strategy/indicator/WM1/WM2/WM3 changes and source-book parity belong to TASK 004, not duplicated here. Only shared execution-contract changes should be reconciled into this branch after per-file diff and test review.
+- PR #44's current reported head in its PR metadata is `dbe755a942276ac3b369afd47d424fff48bbb608`; its earlier Campaign CI was reported failed. That is not evidence that its current code should be merged or rejected wholesale; rerun its checks at the current head before considering any transfer.
+
+### 9.5 Acceptance decision
+
+**TASK 001 status: FAIL — NOT ACCEPTED.**
+
+The prior four required CI runs on 6f6839c8419795f50bf99c71f5be3175d6895dcd succeeded (links and counts are preserved in §9.1). They do not establish recovery safety. The follow-up introduced code and deterministic tests, and the exact final report SHA must have its own Python backend, Williams Campaign CI, and Android APK results recorded before treating the branch CI as green.
+
+Acceptance remains blocked because:
+
+- campaign stop cancel/replace restart recovery cannot prove both legs until the old order ID is durably stored alongside the replacement client order ID;
+- a combined partial-fill + restart + protection + actual commission-reconciliation scenario is not yet demonstrated end-to-end;
+- OCO partial execution followed by restart and exposure/fee accounting still needs a full lifecycle regression, beyond list/child-state lookup;
+- Android physical-device process-death tests are NOT VERIFIED;
+- bounded Spot Testnet recovery tests with dedicated test credentials have not been run;
+- static route inventory is not a complete dynamic proof of every possible mutation path.
+
+**Next acceptance gate:** close the cancel/replace durable-identity gap, add the remaining OCO/partial-fill restart cases, obtain the exact-SHA CI results, then run the bounded Spot Testnet matrix and physical-device Android crash/restart matrix. Keep PR #47 open and do not merge. main remains unchanged.
+
+
+---
+
+## 9.6 TASK 001 deterministic recovery follow-up — 2026-10-11
+
+**Test-source parent SHA:** `0fec5080aff5f2fd34dc29b6cb6bf6fd8537269c`  
+**Recovery regression test commit:** `442c6d7668ccce13ab86d1d012b1a7e389f91f5d`  
+**Branch:** `audit/williams-2.1-task-001-architecture`  
+**PR:** [#47](https://github.com/19wolfalone92/Williams/pull/47), open, draft, not merged.  
+**main:** remains `04da5f9c09572e99ff310be3a1908179165e528c`.
+
+### Added deterministic cases
+
+- Added parameterized recovery tests for OCO child descriptors with an unknown state, missing state, or missing child ID. These assert the unresolved intent remains ambiguous, both child lookups are attempted where possible, the reconciliation latch remains set, and recovery never creates duplicate protection.
+- Added a cancel/replace restart test proving the current durable schema cannot infer the old leg from a replacement-only client ID. Recovery must leave the intent unresolved and must not POST another cancel/replace.
+- Tests use fake exchange implementations and local SQLite. They submit no real exchange orders and do not call Binance Mainnet.
+
+### Current evidence and CI
+
+The prior verified CI results on SHA `e7017ed27b2167f6fd8feaf428cf1f7255ee9d13` are preserved:
+- [Python backend tests — run 38081059348](https://github.com/19wolfalone92/Williams/actions/runs/38081059348) — SUCCESS.
+- [Williams Campaign CI — run 38081059304](https://github.com/19wolfalone92/Williams/actions/runs/38081059304) — SUCCESS.
+- [Build Android APK — run 38081059292](https://github.com/19wolfalone92/Williams/actions/runs/38081059292) — SUCCESS.
+
+These are historical CI evidence only and are not proof of recovery safety. On regression-test SHA `442c6d7668ccce13ab86d1d012b1a7e389f91f5d`, the current runs were started and are pending at the time of this report update:
+- [Python backend tests — run 38088218639](https://github.com/19wolfalone92/Williams/actions/runs/38088218639).
+- [Williams Campaign CI — run 38088218627](https://github.com/19wolfalone92/Williams/actions/runs/38088218627).
+- [Build Android APK — run 38088218651](https://github.com/19wolfalone92/Williams/actions/runs/38088218651).
+
+The final report-only commit will have a different SHA; CI must be checked again against that exact final SHA before reporting final CI status. Do not transfer green results across SHAs.
+
+### Acceptance remains blocked
+
+**TASK 001 status: FAIL — NOT ACCEPTED.**
+
+Still not proven:
+1. End-to-end cancel/replace recovery with both old and replacement order identities durably persisted and independently reconciled.
+2. Full OCO partial-fill → restart → real exposure/protection/commission reconciliation lifecycle.
+3. Combined partial fill + process restart + protection quantity + actual fee reconciliation end-to-end.
+4. Physical Android process-death tests. Hardware evidence: **NOT VERIFIED**.
+5. Bounded Spot Testnet mutation/restart matrix with dedicated Testnet credentials. **NOT RUN / NOT VERIFIED**.
+6. Complete dynamic proof of every possible production mutation route. Bulk `DELETE /api/v3/openOrders` remains disabled in Python and unapproved in Android production transport.
+
+No Mainnet requests or orders were used. Do not merge PR #47.
+
+
+---
+
+## 10. TASK 001.1 — Cancel/Replace, OCO & Crash-Recovery Closure (2026-10-11)
+
+**Review baseline SHA:** `e96f5a0f47b1aea0460140041adbd04c8c45f6a0`  
+**PR:** [#47](https://github.com/19wolfalone92/Williams/pull/47) — remains open Draft, not merged.  
+**Base/main SHA:** `04da5f9c09572e99ff310be3a1908179165e528c`  
+**Review result:** **FAIL — NOT ACCEPTED.** This review did not claim closure or change the production recovery contract.
+
+### 10.1 Pre-change verification
+
+- PR metadata confirms head `e96f5a0f47b1aea0460140041adbd04c8c45f6a0`, base `main` at `04da5f9c09572e99ff310be3a1908179165e528c`, state open, draft=true, merged=false.
+- Reviewed current branch source for `campaign_execution.py`, `execution_barrier.py`, `db.py`, `binance_client.py`, and `test_task001_recovery_regressions.py`.
+- The existing SQLite `execution_intents` schema stores the generic `client_order_id`, but does not independently store a cancel/replace operation ID, old target order ID, replacement client ID as a distinct field, or per-leg result states.
+- `CampaignExecutionService.replace_structural_stop` passes `existing_order_id` to the adapter and creates a replacement client ID, but the durable generic intent does not retain the old order identity. It accepts `NOT_FOUND` in its post-call branch even though the barrier's authoritative cancel/replace response validator requires both result values to be `SUCCESS`; this path requires reconciliation and must not be interpreted as proof that both legs succeeded.
+- `ExecutionBarrier.reconcile_unresolved_intents` intentionally leaves cancel/replace and standalone cancel intents unresolved because it cannot independently query both legs from the current durable schema. This is fail-closed, but not closure.
+- OCO recovery validates list identity/status and queries children. That alone does not prove financial and position reconciliation or that the remaining protective quantity matches current exposure.
+
+### 10.2 Existing deterministic regression coverage
+
+The branch's `test_task001_recovery_regressions.py` includes:
+- injected SQLite failure after a fake exchange accepted a POST, with assertions against a blind second POST and with reconciliation required;
+- cancel/replace response authority checks and a response matrix;
+- cancel/replace timeout remains ambiguous;
+- OCO recovery checks list/child states and malformed/unknown child evidence;
+- restart recovery refuses to infer the old cancel/replace leg from replacement-only identity.
+
+These are offline fake-exchange tests. This report does **not** claim that every requested SQLite fault point, two-process race, or complete OCO/partial-fill/fee/restart lifecycle has been covered.
+
+### 10.3 Required matrix — current evidence, not an acceptance claim
+
+| Scenario | Expected safe result | Evidence on reviewed SHA | Status |
+|---|---|---|---|
+| Cancel succeeds + replacement succeeds | Persist both leg identities/results; reconcile both | Response authority tests exist; durable old-leg identity is missing | BLOCKED |
+| Cancel succeeds + replacement rejected | Preserve old canceled/new rejected; reconcile exposure/protection | Matrix logic is covered at response-validation level | PARTIAL |
+| Cancel fails + replacement succeeds | Keep unresolved; query both legs | Matrix logic is covered at response-validation level | PARTIAL |
+| Old order filled during cancel | Preserve fills and resulting exposure; do not infer canceled | No complete two-leg/fill-reconciliation proof | NOT VERIFIED |
+| Old order partially filled | Reconcile executions/fees/remaining exposure and protection | Existing partial-fill tests do not prove the combined crash lifecycle | NOT VERIFIED |
+| Timeout or lost response after exchange acceptance | No blind mutation retry; query exchange by durable identifiers | Timeout/ambiguous regression exists | PARTIAL |
+| Malformed response | Keep UNKNOWN/RECONCILE_REQUIRED | Authority validation tests exist | PARTIAL |
+| Process death between operations or after response before DB write | Recover each leg independently | Old leg identity is not durable | BLOCKED |
+| Repeat recovery after saved result | Idempotent facts/events and no duplicate mutation | Some idempotency assertions exist; concurrent two-process proof absent | NOT VERIFIED |
+| OCO list and both children found | Validate list + both children + fills + fees + exposure/protection | List/child state lookup exists | PARTIAL |
+| OCO child missing/unknown ID or status | Remain unresolved; never recreate protection blindly | Parameterized regression exists | PARTIAL |
+| OCO partial fill / sibling auto-cancel / restart | Reconcile executions, fees, actual remaining exposure and protection | No complete end-to-end test | NOT VERIFIED |
+| SQLite failures at every persistence boundary | Durable unresolved state or fail closed; no blind retry | One post-submit outcome-write failure is covered | PARTIAL |
+| Two concurrent recovery instances | One idempotent reconciliation; no duplicate event/mutation | No dedicated two-connection/two-process regression verified | NOT VERIFIED |
+
+### 10.4 Financial and position reconciliation contracts
+
+The existing source uses the campaign fill/commission paths and durable execution records; no separate reconciliation subsystem was introduced here. The current evidence is insufficient to certify the requested independent dimensions:
+- order state;
+- financial state (all trade IDs, executed quantities, prices, quote amounts, commission amount and commission asset);
+- position state (exchange balances and net base-asset delta);
+- protection state (live OCO/list children and quantity matching actual remaining exposure);
+- recovery complete only after all required dimensions agree.
+
+Missing commission data must remain unknown, not be converted into zero. A reconciled single intent is not authority to clear the global or symbol reconciliation latch. The full integration assertion across these dimensions remains a required test.
+
+### 10.5 Exact-SHA CI evidence available at review time
+
+For SHA `e96f5a0f47b1aea0460140041adbd04c8c45f6a0`:
+- [Python backend tests — run 38088280886](https://github.com/19wolfalone92/Williams/actions/runs/38088280886): **SUCCESS**, all job steps passed including release gate, compile, full static safety audit and offline tests.
+- [Williams Campaign CI — run 38088280869](https://github.com/19wolfalone92/Williams/actions/runs/38088280869): **SUCCESS**, Python tests and Android build/static-check jobs passed.
+- [Build Android APK — run 38088280868](https://github.com/19wolfalone92/Williams/actions/runs/38088280868): **IN PROGRESS** at the latest job inspection. Required Android lint and unit-test steps and debug APK build had passed, but release APK, final artifact verification and upload steps had not yet completed. This is not a successful completed workflow.
+
+Any subsequent report commit has a new SHA and requires new exact-SHA checks. Do not transfer these results to a later commit.
+
+### 10.6 External test status and acceptance
+
+- Physical Android process-death/restart: **NOT VERIFIED**.
+- Dedicated-credential Spot Testnet cancel/replace + OCO + partial-fill + restart matrix: **NOT RUN / NOT VERIFIED**.
+- Mainnet and real order use: **NOT USED**.
+- `main`: unchanged.
+- PR #47: open Draft, not merged.
+
+**TASK 001.1 status: FAIL — NOT ACCEPTED.** The most important remaining code defect is the lack of durable independent old-order identity and per-leg outcome records for cancel/replace recovery. Do not remove the reconciliation latch or automatically retry mutations to work around this gap. Next implementation work must add a migration-safe durable operation record, write it before network I/O through the existing ExecutionBarrier, independently query old and replacement orders on recovery, and prove idempotency with SQLite fault injection and concurrent recovery tests. Then close the OCO/partial-fill/fee/protection lifecycle and rerun all mandatory workflows on one final SHA.
+
+---
+
+## 11. TASK 001.2 — Durable Cancel/Replace State & Crash-Recovery Closure (2026-10-11)
+
+**Baseline checked before edits:** 216c95dc0cb001a434f525b7ee1241690b5f522a  
+**Implementation/test commit before this report update:** 8052953fe8a1b5fbdbd2f30af33038de887232c5  
+**Base/main:** 04da5f9c09572e99ff310be3a1908179165e528c  
+**PR #47:** open Draft, not merged. **Decision: FAIL — NOT ACCEPTED.**
+
+### 11.1 Pre-change verification
+
+- PR metadata was read live before changes: head was 216c95dc0cb001a434f525b7ee1241690b5f522a, base was main at 04da5f9c09572e99ff310be3a1908179165e528c, state open, draft=true, merged=false.
+- Exact-SHA CI for the pre-change head 216c95dc0cb001a434f525b7ee1241690b5f522a completed successfully for Python backend tests, Williams Campaign CI, and Build Android APK. These are baseline-only results and do not apply to the implementation commits.
+- Code inspection confirmed the concrete loss: schema v6 execution_intents held one generic client_order_id; it did not durably link the cancel target order ID and replacement client ID or store per-leg states. Startup recovery therefore refused to reconcile either leg.
+
+### 11.2 Changes made
+
+1. **db.py** — schema version raised from 6 to 7; migration-safe CREATE TABLE IF NOT EXISTS cancel_replace_operations added with stable operation/intent IDs, symbol, old exchange order ID, old client ID where known, replacement client ID, separate cancel/replacement states, exchange IDs as learned, executed-quantity fields, contract version, timestamps, reconciliation latch and last reconciliation evidence. Added create/read/list/update methods. Creation is identity-immutable and rejects an operation-ID collision rather than overwriting it.
+2. **campaign_execution.py** — replace_structural_stop() now writes the durable two-leg operation record before calling the existing _submit()/ExecutionBarrier path. It records the returned per-leg response separately from the generic intent. If the result write fails after a response, the campaign and symbol remain reconciliation-required and the code raises instead of attempting a second mutation.
+3. **execution_barrier.py** — startup recovery loads the durable cancel/replace record and queries the old order by exchange order ID and replacement by stable client order ID independently. It validates symbol, identity and authoritative status. It records observed leg states but deliberately keeps the operation and global/symbol reconciliation latch unresolved until financial, exposure and live-protection reconciliation is separately proven. Legacy ambiguous intents without the new operation record remain fail-closed and are not mutated.
+4. **test_task001_recovery_regressions.py** — added deterministic SQLite/fake-exchange coverage for durable two-leg identity, independent restart lookups, no mutation replay, persistent reconciliation latch, and rejection of an operation-identity collision.
+
+### 11.3 Durable contract and state interpretation
+
+| Dimension | Durable field(s) | Meaning |
+|---|---|---|
+| Operation identity | operation_id, intent_id, contract_version | Stable link to generic ExecutionBarrier intent |
+| Original leg | old_exchange_order_id, old_client_order_id, cancel_state, old_executed_qty | Target and last observed cancel/order state |
+| Replacement leg | replacement_client_order_id, replacement_exchange_order_id, replacement_state, replacement_executed_qty | Stable replacement identity and last observed state |
+| Recovery | reconcile_required, last_reconciled_at, last_reconciliation_json, timestamps | Recovery evidence and explicit unresolved state |
+
+**Safety rule:** a response with two leg statuses is not an atomic exchange transaction. A restart lookup of both orders proves only observed order state. It does not prove unique fills, fee conversion, net base-asset delta, exchange balance agreement, campaign quantity, or current protective quantity. The operation therefore remains reconcile_required=1; this implementation does not clear the global latch based on order lookups alone.
+
+### 11.4 Scenario evidence at this report update
+
+| Scenario | Code/test evidence now available | Status |
+|---|---|---|
+| Migration from prior DB schema | Table created with IF NOT EXISTS; existing tables are not dropped | PARTIAL — no dedicated populated-v6 migration test confirmed yet |
+| Durable old/new identities before mutation | Added in replace_structural_stop() | IMPLEMENTED; needs exact-SHA test confirmation |
+| Both legs independently looked up after restart | Added to barrier recovery; new fake-exchange test | IMPLEMENTED; needs exact-SHA test confirmation |
+| Missing/legacy operation record | Recovery stays unresolved; no retry | FAIL-CLOSED |
+| Lost response / ambiguous mutation | Durable record remains pending; restart is read-only | PARTIAL — no full matrix for every failure point |
+| SQLite error at every critical write boundary | Response-persistence failure path explicitly blocks | PARTIAL — not every write boundary has injected-failure coverage |
+| Partial/full old-order fill, unique fills and fees | Executed quantity is recorded as evidence, but no complete end-to-end recovery/accounting chain added here | NOT VERIFIED |
+| Actual exchange balances vs local position | Not completed by this patch | NOT VERIFIED |
+| Live protection quantity and protection repair | Reconciliation latch stays set; full protection proof/repair lifecycle not added | NOT VERIFIED |
+| OCO list + child persistence/restart/partial execution | Existing list/child lookup remains; full OCO financial lifecycle not closed | NOT VERIFIED |
+| Two independent SQLite connections/processes racing recovery | Read-only exchange recovery repeats lookups safely, but no dedicated cross-process race test added | NOT VERIFIED |
+| Exit allowed while entries blocked | Existing gate behavior not re-proven by this patch's new tests | NOT VERIFIED |
+| Android physical process death | No device test run | NOT VERIFIED |
+| Bounded Binance Spot Testnet | No exchange mutation/restart test run | NOT RUN / NOT VERIFIED |
+
+### 11.5 CI for implementation commits
+
+The implementation/test commit 8052953fe8a1b5fbdbd2f30af33038de887232c5 triggered:
+- [Python backend tests — run 38088852965](https://github.com/19wolfalone92/Williams/actions/runs/38088852965)
+- [Williams Campaign CI — run 38088852944](https://github.com/19wolfalone92/Williams/actions/runs/38088852944)
+- [Build Android APK — run 38088852948](https://github.com/19wolfalone92/Williams/actions/runs/38088852948)
+
+At the time of this report edit, all three were queued; no result is claimed. The report update itself creates another SHA and must trigger/receive its own exact-SHA CI. No earlier green result is transferable to the final SHA.
+
+### 11.6 Acceptance decision and remaining blockers
+
+**TASK 001.2: FAIL — NOT ACCEPTED.**
+
+The primary durability gap has been addressed in code, but this is not full crash-recovery closure. Outstanding blockers:
+- no demonstrated complete financial reconciliation over unique fills, commissions (including unknown commission asset/amount), net base-asset change, exchange balances and campaign position;
+- no confirmed protective-order/OCO lifecycle reconciliation and repair after cancel succeeds while replacement is rejected or unknown;
+- no exhaustive SQLite fault-injection matrix across each persistence boundary;
+- no dedicated two-connection/two-process recovery race test;
+- no proven populated legacy-schema migration test;
+- exact-SHA CI for the implementation and final report SHA still pending at the time of writing;
+- physical Android process-death test NOT VERIFIED;
+- bounded Spot Testnet cancel/replace/OCO/restart test NOT RUN / NOT VERIFIED.
+
+No Binance Mainnet requests or real trading operations were used. main was not modified. PR #47 remains open Draft and must not be merged.
+
+
+---
+
+## 12. TASK 001.3 — Financial Integrity / Protection Recovery / Crash Consistency (2026-10-11)
+
+**Starting SHA:** `6bc32bf21cb437b60c2878781000800c6979cd6b`  
+**Code SHA before this report update:** `ee559838c9897d4efa68af079cdbe8c6e4ac9a63`  
+**Base SHA:** `04da5f9c09572e99ff310be3a1908179165e528c`  
+**PR #47:** open Draft, not merged. **Decision: FAIL — NOT ACCEPTED.**
+
+### 12.1 P0-A — prior SHA CI verified
+
+All three requested runs are completed and refer exactly to starting SHA `6bc32bf21cb437b60c2878781000800c6979cd6b`:
+
+| Workflow | Run | Conclusion | Jobs |
+|---|---:|---|---|
+| Python backend tests | [38088901337](https://github.com/19wolfalone92/Williams/actions/runs/38088901337) | SUCCESS | backend-test: success |
+| Williams Campaign CI | [38088901377](https://github.com/19wolfalone92/Williams/actions/runs/38088901377) | SUCCESS | Android build and static checks: success; Python tests: success |
+| Build Android APK | [38088901391](https://github.com/19wolfalone92/Williams/actions/runs/38088901391) | SUCCESS | Build APKs: success |
+
+No failing job was reported in those runs. These successes establish the starting revision's CI status only; they do not prove the new changes or financial/protection requirements.
+
+### 12.2 Concrete code findings before TASK 001.3 edits
+
+- `campaign_fills` has no exchange trade ID and no uniqueness constraint; its quantity, price and fee columns are SQLite REAL. It cannot independently guarantee exactly-once exchange-fill accounting.
+- `_executed_fee_quote()` previously converted quantity, price and commission to float and used `trade.get("commission", 0)`; a missing commission field could be treated as zero.
+- `/api/v3/myTrades` is the available Spot trade-record source in this client. The code path must require the response's stable per-symbol trade `id`, order ID, quantity/price, and explicit commission amount and asset before declaring fee reconciliation complete.
+- Current cancel/replace recovery observes two orders but intentionally leaves the global/symbol reconciliation latch unresolved. There is still no unified end-to-end reconciler proving unique fills, fee completeness, net base-asset delta, available balances, Campaign quantity and actual protective coverage.
+- The previous three CI runs succeeded; no failure from P0-A required a fix.
+
+### 12.3 Changes in TASK 001.3
+
+1. **`db.py` — schema v8:** added `exchange_fill_ledger`, keyed by `(symbol, exchange_trade_id)`, storing exact decimal text for quantity, price, quote quantity and commission, plus commission asset, raw evidence and explicit `CONFIRMED` / `UNKNOWN` financial state. Re-delivery is idempotent; immutable execution-field conflicts are rejected. An initially unknown fee can be enriched when the same trade is re-read with explicit fee evidence, but confirmed fee fields cannot silently change.
+2. **`campaign_execution.py` — fee lookup:** `_executed_fee_quote()` persists each Spot trade's exchange identity before aggregation, uses Decimal arithmetic for quantity/price/commission aggregation and rejects missing trade IDs, missing fee amount, missing fee asset, malformed numbers or quantity mismatch. It no longer defaults absent commission to zero. The legacy return contract remains float because existing Campaign APIs consume float; the exact exchange evidence is retained separately in the ledger.
+3. **`test_task001_recovery_regressions.py` — new regression coverage:** exact decimal persistence and deduplication; missing-fee UNKNOWN state and enrichment; conflicting trade-ID rejection; missing commission blocks fee reconciliation; populated legacy-shaped SQLite migration; and two independent SQLite connections racing to record the same exchange trade.
+
+### 12.4 Evidence and limits
+
+| Area | Current evidence | Status |
+|---|---|---|
+| P0-A starting SHA CI | All three named runs SUCCESS on exact starting SHA | PASS |
+| Exchange trade identity | Ledger primary key uses (symbol, exchange trade ID) | IMPLEMENTED; CI pending for current changes |
+| Duplicate fill delivery | SQLite uniqueness + independent-connection regression added | TEST ADDED; execution pending |
+| Unknown fee amount/asset | Stored as UNKNOWN and fee path raises | IMPLEMENTED; CI pending |
+| Exact numeric storage | Decimal strings in new evidence ledger; Decimal aggregation in fee path | PARTIAL — existing Campaign/trade tables and downstream API still use REAL/float |
+| Position/available-balance reconciliation | No complete unified contract added | NOT VERIFIED |
+| Fee conversion to quote for non-base/non-quote assets | Uses current ticker price in existing contract, not a proven historical conversion source | NOT VERIFIED for accounting valuation |
+| Protection status, side, quantity and actual coverage | Existing order lookup is not enough; no complete repair/coverage reconciler added | NOT VERIFIED |
+| OCO full lifecycle and partial-fill protection | Not closed by this patch | NOT VERIFIED |
+| Fault injection across all 12 required boundaries | Only existing targeted SQLite failure test plus new ledger tests; not exhaustive | NOT VERIFIED |
+| Populated v6→v8 migration | Populated legacy-shaped test added, but CI execution pending and no production DB supplied | PENDING / NOT VERIFIED |
+| Two independent processes recovering same operation | New concurrent fill-ledger test uses two DB connections in threads, not two separate OS processes or two recovery services | NOT VERIFIED |
+| Entry block vs safe exit permission matrix | Not closed by this patch | NOT VERIFIED |
+| Android process-death test | Not run | NOT VERIFIED |
+| Spot Testnet lifecycle test | Not run | NOT RUN / NOT VERIFIED |
+
+### 12.5 CI for implementation
+
+At the time of writing, the latest implementation SHA `ee559838c9897d4efa68af079cdbe8c6e4ac9a63` had these runs in progress:
+- [Python backend tests — 38090072263](https://github.com/19wolfalone92/Williams/actions/runs/38090072263)
+- [Williams Campaign CI — 38090072261](https://github.com/19wolfalone92/Williams/actions/runs/38090072261)
+- [Build Android APK — 38090072254](https://github.com/19wolfalone92/Williams/actions/runs/38090072254)
+
+The report update itself will produce a later SHA; all required workflows must be checked again against that final SHA. No result from a prior SHA is transferable.
+
+### 12.6 Decision
+
+**TASK 001.3: FAIL — NOT ACCEPTED.**
+
+The newly added ledger improves idempotent fill evidence and closes the specific missing-commission-to-zero defect in the fee lookup path. It does **not** establish the requested complete cycle. The remaining P0 blockers are:
+- unify exchange-fill ledger entries with Campaign/position accounting in one idempotent transaction or equivalent durable state machine;
+- reconcile exchange account balances and net base-asset exposure against fills and local Campaign without automatic masking;
+- independently validate actual protective order/OCO parameters and coverage, then define controlled repair via ExecutionBarrier;
+- close the complete OCO partial-fill/cancel/restart lifecycle;
+- exhaustively inject SQLite/process failures at every required boundary;
+- test populated real v6 schema migration and two independent OS processes racing recovery;
+- prove the separate entry-block / safe-exit permission contract;
+- run and inspect all required CI on the final report SHA;
+- physical Android process-death and Spot Testnet remain NOT VERIFIED.
+
+No Binance Mainnet or real trading operation was used. `main` remains untouched. PR #47 must remain open Draft and must not be merged.
+
+
+## 11. TASK 001.4 — Exactly-Once Financial Effects & Position Reconciliation (2026-10-11)
+
+**Status: FAIL / NOT ACCEPTED — source audit established material gaps; no claim of exactly-once financial application.**
+
+### 11.1 Baseline and prior-SHA CI
+
+- Branch: `audit/williams-2.1-task-001-architecture`
+- Existing PR: #47, still open and Draft; base `main` remains `04da5f9c09572e99ff310be3a1908179165e528c`.
+- TASK 001.4 starting SHA: `07bf7673d9f9294124e0dc32026d2cb64e436565`.
+- The branch/PR metadata reports this same head SHA. No merge or Mainnet/real order activity was performed in this audit.
+- Python backend tests, run [38090130874](https://github.com/19wolfalone92/Williams/actions/runs/38090130874): **SUCCESS**, head SHA `07bf7673d9f9294124e0dc32026d2cb64e436565`; job `backend-test` completed successfully.
+- Williams Campaign CI, run [38090130877](https://github.com/19wolfalone92/Williams/actions/runs/38090130877): **SUCCESS**, same head SHA; both `Android build and static checks` and `Python tests` completed successfully.
+- Build Android APK, run [38090130946](https://github.com/19wolfalone92/Williams/actions/runs/38090130946): **SUCCESS**, same head SHA; `Build APKs` completed successfully.
+- These CI results establish regression/build status only. They do not prove the financial/recovery acceptance criteria below.
+
+### 11.2 Verified financial data paths and split state
+
+The source audit found that `exchange_fill_ledger` is currently an evidence ledger, not the canonical financial-effect ledger:
+
+1. `Database.record_exchange_fill()` in `db.py` inserts a unique `(symbol, exchange_trade_id)` record and stores quantity, price, quote quantity and commission as text. It rejects conflicting core trade fields and conflicting confirmed fee fields; an unknown fee can be enriched. This is useful durable evidence, but there is no durable per-fill application state tying the fill to an atomic position/Campaign update.
+2. `CampaignExecutionService._executed_fee_quote()` in `campaign_execution.py` reads exchange trades, writes the fill evidence, sums quantities and fees using `Decimal`, then returns `float(fee_quote)`. The conversion is an explicit precision boundary; its result is passed into Campaign APIs.
+3. The initial-entry and add-on paths call `engine.record_initial_fill()` / `engine.record_add_on_fill()`, then separately mutate signal state, legacy `trades` rows and Campaign persistence. These steps do not share one transaction keyed by exchange trade identity. A crash/retry between those effects can therefore leave the ledger populated while downstream state is incomplete, or repeat downstream effects.
+4. `campaign_fills` is a separate table with an auto-increment row ID and no unique exchange trade ID constraint. `Database.save_campaign_fill()` inserts a new row and stores quantity, price, quote quantity, fee and base commission in SQLite `REAL` columns via Python `float`; it is not intrinsically idempotent against `exchange_fill_ledger`.
+5. The Campaign persistence table stores `position_qty`, `average_entry_price`, realized/unrealized PnL, risk and capital fields as SQLite `REAL`; `Database.save_campaign()` explicitly converts these values to `float`. This is a separate representation from the exact-string fill ledger.
+6. The legacy/portfolio execution path is independent of the Campaign fill materialization path. `PortfolioTrader._authoritative_execution()`, manual sell handling and trade close/update paths use float-based aggregates and legacy `trades` records. The TASK 001.4 follow-up changed `_exit_fee_quote()` to persist each identified raw trade into `exchange_fill_ledger`, retain unknown-fee evidence, reject missing/conflicting commission data, and latch global plus symbol `RECONCILE_REQUIRED`. However, `_authoritative_execution()` still constructs compatibility fill rows with default-zero commission fields when raw trade lookup fails or omits fee values; this remains a separate unresolved financial path.
+7. Position reconstruction helpers in `portfolio_trader.py` use exchange order history, order executed quantities and account base-asset balance as separate evidence. They do not yet establish a single persisted reconciliation result joining trade IDs, commissions, net base inventory, Campaign state and verified protection.
+8. Existing OCO recovery in `ExecutionBarrier` can reconcile list and child order identities/statuses, but the evidence does not establish that fills/fees have been applied exactly once or that remaining protection quantity matches the authoritative residual exposure.
+
+### 11.3 Current conclusion by requested gate
+
+| Gate | Finding on starting SHA | Status |
+| --- | --- | --- |
+| P0-B exactly-once financial effect | Unique fill evidence exists; atomic/idempotent financial effect + Campaign/position update does not. | **BLOCKED** |
+| P0-C Decimal/float contract | Decimal is used in part of fee aggregation, but downstream Campaign/legacy accounting persists and aggregates floats/REAL. | **BLOCKED** |
+| P0-D fee completion | Campaign entry fee path blocks on missing fee; legacy exit fee path can normalize missing commission to zero. Unknown fee is not a universal account-wide completion gate. | **BLOCKED** |
+| P0-E authoritative position reconciliation | No single durable reconciler proves agreement among order history, fill IDs, fee assets, account inventory, local exposure, Campaign and protection. | **BLOCKED** |
+| P0-F protection coverage | Order existence/recovery is not yet a proof of exact live protective quantity against reconciled exposure after partial fills/cancel-replace. | **BLOCKED** |
+| P0-G OCO lifecycle | List/child status tests exist; end-to-end OCO partial fill → fee accounting → residual position → protection → restart is not established. | **BLOCKED** |
+| P0-H crash consistency | Existing tests cover selected failure boundaries and two SQLite connections in threads, not the complete requested matrix or two independent OS processes. | **BLOCKED** |
+| P0-I global recovery gate | Per-intent and per-symbol barriers exist, but a single gate whose predicate proves every financial and protection dimension is not demonstrated by current source/tests. | **BLOCKED** |
+
+### 11.4 Required next implementation boundary
+
+The safe next step is not to mark `exchange_fill_ledger` rows as applied from a sequence of Python calls. The application must introduce a durable financial-effect identity and transaction contract, then route every relevant Campaign and legacy entry/exit/recovery path through it. The effect transaction must bind the fill identity, exact amounts, commission asset/state, campaign/position association and the resulting canonical state; retries must read the committed effect rather than replay arithmetic. A partially known commission, missing association, or mismatch must remain unresolved and hold the global entry gate.
+
+The current schema's `REAL` Campaign/legacy financial fields and non-unique `campaign_fills` rows mean this requires a coordinated data-model migration and a complete call-site inventory. Adding an isolated idempotency table without migrating callers would create a false assurance, so this pass deliberately does not claim that the financial-effect problem has been fixed.
+
+### 11.5 External validation boundary
+
+- Fake-exchange/local SQLite evidence is not a physical Android process-death/restart test.
+- A dedicated Binance Spot Testnet lifecycle matrix was **not run** in this audit.
+- No Binance Mainnet or real trade was used.
+- Final TASK 001.4 status remains **FAIL / NOT ACCEPTED** until all P0s above are implemented and verified on one exact final SHA.
+
+
+### 11.6 TASK 001.4 limited code follow-up
+
+After the source audit, a narrow fail-closed correction was committed in the same branch:
+
+- `portfolio_trader.py`: `_exit_fee_quote()` now persists stable exchange trade evidence through `record_exchange_fill()` before fee validation, uses `Decimal` for the commission aggregation path, refuses missing trade history / trade ID / commission amount / commission asset, rejects conflicting ledger evidence, and sets global plus per-symbol `RECONCILE_REQUIRED` on reconciliation errors. It does not resubmit exchange mutations.
+- `test_task001_recovery_regressions.py`: added fake-exchange regressions for unknown exit commission (durable UNKNOWN row + recovery latch) and exact fractional trade values with a confirmed zero commission.
+- This correction closes one unsafe fee-default path only. It does **not** make campaign/legacy position updates atomic with the fill ledger, does not eliminate all Decimal/float conversions, and does not complete position/protection/OCO recovery.
+
+
+---
+
+## 13. TASK 001.5 — Exactly-Once Financial Effects, Decimal Integrity & Recovery Closure (2026-10-11)
+
+**Decision: FAIL / NOT ACCEPTED.** This pass closes one concrete legacy fee-default path and adds focused regressions. It does not prove exactly-once application to position/Campaign/risk, and it does not claim the complete TASK 001.5 acceptance criteria.
+
+### 13.1 Baseline and CI evidence
+
+- Base SHA: `04da5f9c09572e99ff310be3a1908179165e528c`.
+- Starting HEAD requested by task: `b1a93bc166fcab2629a37bc10cf5afea46e1ffcb`; the existing PR metadata was re-read before changes and confirmed this SHA was the actual PR head.
+- PR #47 remains open, Draft, based on `main`; no merge was performed.
+- All required CI runs on starting SHA `b1a93bc166fcab2629a37bc10cf5afea46e1ffcb` completed successfully, with all jobs successful:
+  - Python backend tests — [run 38090927007](https://github.com/19wolfalone92/Williams/actions/runs/38090927007), `backend-test: success`.
+  - Williams Campaign CI — [run 38090927002](https://github.com/19wolfalone92/Williams/actions/runs/38090927002), `Android build and static checks: success`, `Python tests: success`.
+  - Build Android APK — [run 38090927068](https://github.com/19wolfalone92/Williams/actions/runs/38090927068), `Build APKs: success`.
+- These runs verify the starting revision only. They are not evidence for the new TASK 001.5 edits. CI must be inspected again on the final report SHA.
+
+### 13.2 Confirmed data-flow map
+
+| Stage | Current source / boundary | Idempotency / transaction finding | Error behavior |
+|---|---|---|---|
+| Exchange fill identity | Spot `myTrades` rows; symbol + exchange trade ID | `exchange_fill_ledger` primary key is `(symbol, exchange_trade_id)`; `record_exchange_fill` uses a SQLite transaction for evidence insertion/enrichment | Conflicting immutable fields raise; caller must latch reconciliation |
+| Fee resolution | Explicit `commission` + `commissionAsset` from exchange | Stored as exact decimal text; unknown fee is `UNKNOWN` | Must block financial completion |
+| Financial effect | `campaign_execution.py` and legacy `portfolio_trader.py` | **No unified per-fill effect key/transaction binds fill, position, Campaign and risk reservation** | Crash/retry can still leave split state; global closure not proven |
+| Campaign fill | `campaign_fills` | Auto-increment row, REAL amounts, no exchange trade ID uniqueness; `save_campaign_fill` inserts independently | Duplicate downstream effect remains possible |
+| Campaign position | `campaigns.position_qty`, average price, PnL/risk columns | SQLite REAL and Python float; writes are not universally in the same transaction as the fill ledger | Requires recovery/reconciliation |
+| Legacy position/trade | `trades`, `orders`, portfolio execution helpers | Separate writer path; several numeric values remain float/REAL | Now blocks one missing-fee path, but not unified |
+| Risk reservation | Campaign risk fields and state aggregates | Float-backed Campaign fields; no atomic per-fill coupling established | Not proven exactly-once |
+| Protection/OCO | Exchange orders/list/child records plus local intents | Order-state recovery does not prove fill effects or exact residual protection coverage | Keep recovery unresolved if evidence is insufficient |
+| Global recovery | global/per-symbol `position_state`, intent state and other gates | No single predicate proven to join all financial, position, risk and protection conditions across every entry path | Acceptance remains blocked |
+
+### 13.3 TASK 001.5 code change
+
+Implementation SHA immediately before this report refresh: `84e4785f268129b56add3cc6214a115e1c4336af`. The report refresh itself creates a new commit; mandatory CI must therefore be checked against the resulting exact report SHA.
+
+Changed files:
+1. `portfolio_trader.py`
+2. `test_task001_recovery_regressions.py`
+3. `test_multi_position_lifecycle.py` — fake exchange now returns trade-history rows for synthetic manual/emergency fills.
+4. `test_integration_bindings.py` — recovery fake now returns explicit authoritative trade/fee evidence.
+5. `.github/workflows/android-apk.yml` — Android APK CI now also runs for root Python/tests and audit-report changes, so backend financial changes can be checked on the same SHA.
+6. `.github/workflows/python-ci.yml` — backend CI now runs on audit branches and for audit-report changes, allowing the exact feature-branch SHA to be tested.
+7. `.github/workflows/android-apk.yml` — APK CI now runs on audit branches as well as backend/test/report changes.
+8. This existing report.
+
+In `MultiPositionTrader._authoritative_execution()` (exposed through the legacy PortfolioTrader compatibility import), a filled order without local fill details now requires authoritative `myTrades` evidence. Lookup failure, empty history, malformed identity, missing trade ID, missing fee amount/asset, invalid numeric data, or a ledger conflict latches global and symbol `RECONCILE_REQUIRED` and raises instead of silently falling back to order-level quantity data or treating missing commission as zero.
+
+Each validated fill is recorded through `record_exchange_fill()` before a legacy execution summary is returned. Missing fee evidence is first retained in the ledger as `UNKNOWN` when the stable trade identity and execution fields are available; the method then blocks financial continuation. An explicitly confirmed zero commission with a named asset remains valid. Re-delivery of the same stable fill identity is ledger-idempotent.
+
+The new tests exercise:
+- missing commission → durable `UNKNOWN` ledger evidence, both recovery latches set, exception raised;
+- explicitly confirmed zero commission → one ledger row after two deliveries, exact decimal quantity/price strings preserved.
+
+### 13.3.1 CI regression and correction
+
+The first CI candidate SHA `d942b5abfaed69637c3dd573a056615b54b49191` exposed three regressions in tests whose fake exchanges returned executed order quantities but no authoritative `myTrades` rows:
+- Python backend tests — [run 38115592076](https://github.com/19wolfalone92/Williams/actions/runs/38115592076): **FAIL**, 3 failed / 162 passed.
+- Williams Campaign CI — [run 38115592068](https://github.com/19wolfalone92/Williams/actions/runs/38115592068): Python job failed with the same fake-exchange contract issue; Android job was still running at the time of the log inspection.
+- The failing cases were partial manual sell, partial emergency sell, and terminal partial-entry recovery. The production path correctly refused to infer fee-complete financial evidence from order status/quantity alone.
+- Corrective change: the test doubles in `test_multi_position_lifecycle.py` and `test_integration_bindings.py` now return explicit stable trade IDs, quantities, prices, quote quantities, and confirmed zero commission/asset evidence for their synthetic fills. Production checks were not relaxed.
+- These corrections are on the next candidate SHA and must be re-tested; no success is claimed until final-SHA CI completes.
+
+### 13.4 Exactness and fee matrix: remaining limits
+
+- The new ledger stores exact decimal strings, but `campaign_fills`, `campaigns`, and legacy `trades` continue to store financial fields in SQLite REAL and/or consume Python floats.
+- Third-asset fee valuation still has a compatibility path that crosses through float price/ticker interfaces; exact native commission amount and asset remain in the ledger, but a fully specified historical conversion contract is not established.
+- The code does not yet model exact net base inventory across base-asset commission, quote commission, and third-asset commission as one canonical financial state.
+- This change does not add a financial-effect journal or prove atomic fill→position→Campaign→risk application. A ledger row's existence is not proof that its financial effect was applied.
+- No legacy data has been deleted or rounded by this change.
+
+### 13.5 Required gates still open
+
+| Requirement | Evidence in this pass | Status |
+|---|---|---|
+| Exactly-once financial effect bound to position/Campaign/risk | No unified application transaction or equivalent durable state machine | **BLOCKED** |
+| Decimal canonical position, PnL, balance and risk contract | Existing REAL/float writers remain | **BLOCKED** |
+| All commission assets, conversion time/rate, and net base delta | Partial strict fee evidence only | **BLOCKED** |
+| Authoritative balance/order/fill/Campaign reconciliation | No complete reconciler demonstrated | **BLOCKED** |
+| Actual protection quantity and cancel/replace/OCO lifecycle | No complete end-to-end residual exposure proof | **BLOCKED** |
+| Fault injection at every requested transaction/network boundary | Focused regressions only | **NOT VERIFIED** |
+| Two independent OS processes racing one fill/effect/Campaign/recovery | Not performed | **NOT VERIFIED** |
+| Populated real-schema v6/v7/v8 migration and interrupted migration | Not fully performed | **NOT VERIFIED** |
+| One global recovery gate across every production entry path | Not demonstrated | **BLOCKED** |
+| Android physical process death/restart | Not run | **NOT VERIFIED** |
+| Binance Spot Testnet full lifecycle | Not run | **NOT RUN / NOT VERIFIED** |
+
+### 13.6 External safety and final decision
+
+No Binance Mainnet or real trading operations were used. No physical Android process-death test or Binance Spot Testnet lifecycle was performed. `main` was not modified; PR #47 remains open Draft.
+
+**TASK 001.5 remains FAIL / NOT ACCEPTED.** The legacy missing-fee fallback is now fail-closed and focused tests were added, but exactly-once financial application, Decimal canonicalization, position/risk reconciliation, protection/OCO closure, complete fault injection, inter-process proof, and a universal recovery gate remain unproven.
+
+
+---
+
+## 14. TASK 001.6 — Atomic Financial Effects, Exactly-Once Application & Crash-Recovery Proof (2026-10-11)
+
+**Decision: BLOCKED — NOT ACCEPTED.** This section records a fresh evidence-based baseline and the blockers established by source inspection. It does not claim that TASK 001.6 implementation or its acceptance tests are complete. No production financial schema or execution behavior was changed as part of this baseline pass because a partial journal disconnected from the actual position/Campaign/risk writers would create false assurance rather than prove atomicity.
+
+### 14.1 Exact baseline, PR and CI
+
+- Requested prior SHA: `263def49da38231b5ba1ac4735dba757a1ecf1ec`.
+- Verified working branch HEAD before this report update: `263def49da38231b5ba1ac4735dba757a1ecf1ec`.
+- Verified `main` HEAD: `04da5f9c09572e99ff310be3a1908179165e528c` (unchanged).
+- PR #47 is still open, Draft, targets `main`, and is not merged. No merge was performed.
+- The three required workflows completed successfully on baseline HEAD `263def49da38231b5ba1ac4735dba757a1ecf1ec`:
+  - [Python backend tests — run 38115681555](https://github.com/19wolfalone92/Williams/actions/runs/38115681555): `backend-test: success`.
+  - [Williams Campaign CI — run 38115681574](https://github.com/19wolfalone92/Williams/actions/runs/38115681574): `Android build and static checks: success`; `Python tests: success`.
+  - [Build Android APK — run 38115681575](https://github.com/19wolfalone92/Williams/actions/runs/38115681575): `Build APKs: success`.
+- These runs validate only the baseline source tree. They do not validate a TASK 001.6 implementation. The report update creates a new SHA, which must be checked separately.
+
+### 14.2 Source-confirmed financial-effect path and blockers
+
+The inspected path is not a single atomic financial transaction:
+
+```text
+Binance Spot myTrades / order evidence
+  -> MultiPositionTrader._authoritative_execution()
+  -> Database.record_exchange_fill()
+       -> exchange_fill_ledger (unique key: symbol + exchange_trade_id;
+          exact decimal text; transaction around ledger insert/enrichment)
+  -> legacy execution summary / campaign execution path
+  -> save_campaign_fill() / save_campaign()
+       -> campaign_fills / campaigns financial columns (SQLite REAL,
+          Python float conversions; independently committed when outside
+          an explicit enclosing Database.transaction())
+  -> position/trades state, aggregate risk and protection state
+       -> separate writers / recovery and reconciliation paths
+```
+
+Confirmed source facts:
+
+1. `record_exchange_fill()` is idempotent for its ledger identity and validates immutable fill fields. Its key is `(symbol, exchange_trade_id)`, but the current schema does not include venue/market identity or a durable local intent/campaign association in that ledger row. A Binance Spot trade ID must not be assumed globally unique across every venue and market.
+2. Ledger insertion/enrichment is transactional locally. This does **not** make downstream position, Campaign, PnL/fee, risk reservation, or protection updates atomic with it.
+3. `campaign_fills` has an auto-increment row ID and no exchange-fill uniqueness constraint. `Database.save_campaign_fill()` converts quantity, price, quote quantity and fee fields through `float(...)`; duplicate delivery can therefore produce another downstream row unless every caller separately prevents it.
+4. `campaigns` stores position quantity, average entry price, realized/unrealized PnL, open/pending risk and capital reservation as SQLite REAL columns. `Database.save_campaign()` converts these values to Python floats. Exact canonical Decimal integrity is therefore not established end-to-end.
+5. Legacy `trades` and `orders` also retain REAL-backed financial values. Existing display/reporting aggregations intentionally use float, but the code does not yet prove that all those values are non-authoritative projections derived from an exact canonical ledger.
+6. The existing `exchange_fill_ledger.financial_state` records fee-evidence state (`UNKNOWN` / `CONFIRMED`), not a complete exactly-once application state machine spanning each financial entity.
+7. Existing transaction support in `Database.transaction()` does not by itself establish a transaction boundary across every production writer. A same-connection nested transaction context yields into the current transaction, but no source proof establishes that all fill, position, Campaign, risk and protection mutations use that shared boundary.
+8. Spot uses the `/api/v3/*` adapter; this does not prove Futures lifecycle behavior. Futures position mode, margin, leverage, commission and exposure contracts remain a separate verification task.
+
+### 14.3 TASK 001.6 acceptance matrix
+
+| Acceptance item | Baseline evidence | Status |
+|---|---|---|
+| Stable identity includes venue/market/symbol/trade and intent linkage | Ledger key currently `(symbol, exchange_trade_id)`; no complete per-effect identity contract | **BLOCKED** |
+| Atomic exactly-once application to fill, position, Campaign and risk | Ledger transaction exists; downstream writes are separate paths | **BLOCKED** |
+| Durable replayable financial-effect journal | No proven journal that tracks per-entity application and safely resumes missing projections | **BLOCKED** |
+| Decimal canonical quantity/price/commission/PnL/risk | Ledger fields are text, but Campaign/legacy writes still convert through float and REAL | **BLOCKED** |
+| Unknown commission and conflicting exchange evidence fail closed | TASK 001.5 strict fee evidence and reconciliation behavior exists on the inspected path; complete coverage of all execution paths not proven | **PARTIAL / NOT ACCEPTED** |
+| Crash injection at all transaction and recovery boundaries | No complete fault-injection suite for all 14 requested points was verified | **NOT VERIFIED** |
+| Two independent OS processes racing one fill | No inter-process exactly-once proof verified | **NOT VERIFIED** |
+| Complete exchange-to-local reconciliation including balance, PnL, risk and protection | No complete end-to-end reconciler proof | **BLOCKED** |
+| Global recovery gate covers every entry path | Not proven across campaign, legacy, manual and alternate entry paths | **BLOCKED** |
+| Spot residual exposure and protection quantity | Not proven through partial fills, pending sells, cancel/replace and restart as one contract | **NOT VERIFIED** |
+| Futures one-way and hedge mode | Separate complete lifecycle evidence not available | **NOT VERIFIED — keep production path blocked** |
+| Populated v6/v7/v8 migrations and interrupted migration recovery | No evidence of populated fixtures, exact-value preservation and interruption/retry proof | **NOT VERIFIED** |
+| Physical Android process death/restart | Not run | **NOT VERIFIED** |
+| Binance Spot Testnet full lifecycle | Not run during this pass | **NOT RUN / NOT VERIFIED** |
+| Three mandatory CI workflows on the final report SHA | Baseline SHA passed; report-update SHA must be checked separately | **PENDING until final-SHA runs finish** |
+
+### 14.4 Required implementation sequence before acceptance
+
+1. Define one canonical fill/effect identity scoped to venue, market, symbol and exchange trade ID, plus order and durable local intent linkage. Reject identity collisions whose immutable financial facts differ.
+2. Introduce a durable financial-effect journal with explicit states such as `OBSERVED`, `READY_TO_APPLY`, `APPLIED`, and `RECONCILE_REQUIRED`; make its uniqueness and per-entity application markers durable.
+3. Refactor the real production write path so exact decimal facts and all local effects that can share SQLite commit in one `BEGIN IMMEDIATE` transaction. Where a projection cannot be updated in that transaction, use an outbox/replayable journal with idempotent per-entity application keys and verified read-back. Do not mark an effect complete until all required projections are reconciled.
+4. Migrate canonical financial quantities from REAL to exact decimal text or scaled integers under a versioned, restart-safe migration. Keep REAL only for explicitly non-authoritative analytics/display projections.
+5. Add deterministic fault injection at each requested boundary and a separate-process race test using two independent SQLite connections/processes. Assert final position, Campaign, fees, PnL, risk reservation and protection quantity—not just ledger row counts.
+6. Prove one recovery gate on every production entry route. Unresolved fees, migrations, identity conflicts, unknown orders or exposure/protection mismatches must block new entries and prevent blind retries.
+7. Verify Spot separately from Futures. Keep untested Futures position modes blocked. Test populated v6/v7/v8 fixtures and interrupted migration recovery.
+8. Run the three required workflows plus all new financial-effect, fault-injection, multi-process, migration, release-gate and execution-safety tests on one exact final SHA.
+
+### 14.5 Scope and final decision
+
+- **Corrected in the prior TASK 001.5 pass:** missing/invalid commission evidence on the inspected legacy fill path no longer silently becomes zero; focused regressions and recovery fake-exchange evidence were added.
+- **Proven by current baseline CI:** Python backend suite, Williams Campaign CI (Python and Android/static jobs), and Android APK build pass on baseline SHA `263def49da38231b5ba1ac4735dba757a1ecf1ec`.
+- **Static inspection only:** exact-text ledger storage, composite symbol/trade uniqueness, REAL/float downstream persistence, and separation between ledger and financial projections.
+- **Not proven:** exactly-once financial effects, end-to-end Decimal integrity, independent-process concurrency, complete crash recovery/reconciliation, complete protection/OCO coverage, populated legacy migrations, physical Android process restart, Spot Testnet lifecycle, and Futures lifecycle.
+- **No Mainnet calls or real trading were performed. `main` remains unchanged and PR #47 remains open Draft.**
+
+**TASK 001.6 remains BLOCKED — NOT ACCEPTED. Do not resume trading and do not advance to a dependent task as if financial integrity were closed.** A green baseline CI or APK build is not proof of exactly-once financial effects.
+
+
+---
+
+## 15. TASK 001.7 — Financial Effect Journal Integration (2026-10-11)
+
+**Decision: BLOCKED — NOT ACCEPTED.** This pass introduces a durable, exact-text observation journal for authoritative Binance Spot fills and focused tests for its identity and fee-enrichment behavior. It is a first integration step, not a complete exactly-once financial projection implementation.
+
+### 15.1 Baseline and repository controls
+
+- Baseline HEAD confirmed before edits: `76dd678afd9761d1f02ed4a7ad5fcdf48bb58b31`.
+- Base / `main`: `04da5f9c09572e99ff310be3a1908179165e528c`; unchanged.
+- PR #47: open, Draft, not merged.
+- Baseline required CI for SHA `76dd678afd9761d1f02ed4a7ad5fcdf48bb58b31` completed successfully:
+  - [Python backend tests — run 38116507752](https://github.com/19wolfalone92/Williams/actions/runs/38116507752): success.
+  - [Williams Campaign CI — run 38116507753](https://github.com/19wolfalone92/Williams/actions/runs/38116507753): both Python and Android/static jobs success.
+  - [Build Android APK — run 38116507766](https://github.com/19wolfalone92/Williams/actions/runs/38116507766): success.
+- These baseline results do not certify TASK 001.7 changes.
+
+### 15.2 Changes made
+
+1. `db.py`
+   - Added `financial_effect_journal`, with canonical identity columns `venue`, `market_type`, `symbol`, and `exchange_trade_id`; the composite primary key prevents a trade ID reused by another symbol/market/venue from colliding.
+   - Stores exchange order ID, effect type/status, exact decimal strings for quantity/price/quote quantity/commission, commission asset/state, contract version and raw exchange evidence.
+   - `record_exchange_fill()` now writes the journal observation inside the same SQLite transaction as `exchange_fill_ledger` insertion/enrichment, and performs a journal read-back.
+   - Unknown commission is recorded as `RECONCILE_REQUIRED`, not as zero. When authoritative fee evidence arrives later, an unknown journal fee can be enriched to the confirmed amount/asset; later fee-less redelivery must not downgrade the confirmed evidence.
+   - The journal intentionally does **not** claim `APPLIED`: downstream position/Campaign/PnL/risk/protection projections are not yet atomically connected to this journal. `READY_TO_APPLY` means eligible for the future projection worker, not proof that those projections have been applied.
+2. `test_task001_recovery_regressions.py`
+   - Added tests for duplicate delivery, unknown-to-confirmed fee enrichment, exact decimal text preservation, replay after fee confirmation, and same trade ID across different Spot symbols.
+
+### 15.3 What these changes prove — and what they do not
+
+The new focused tests are designed to establish:
+- one journal row for repeated delivery under the same `BINANCE / SPOT / symbol / trade ID` key;
+- unknown fee stays unknown until authoritative fee evidence is present;
+- a confirmed zero fee remains explicitly confirmed with its asset;
+- later fee-less observations do not downgrade known commission data;
+- quantities and prices remain stored as decimal text in this journal;
+- the same numeric trade ID for two symbols is represented by two distinct canonical keys.
+
+They do **not** prove exactly-once financial effects for position, Campaign, commission/PnL projections, risk reservation or protection state. No projection writer has been migrated to consume and atomically acknowledge journal effects in this pass. No two-process race, full crash matrix, populated migration matrix, full Spot/Futures reconciliation, or physical Android process-death test is claimed.
+
+### 15.4 Remaining P0 blockers
+
+| Requirement | Current status |
+|---|---|
+| All production financial writers inventoried and routed through one contract | **BLOCKED** — legacy and Campaign writers remain |
+| Journal-to-position/Campaign/PnL/risk/protection exactly-once application | **BLOCKED** — not yet wired as one effect protocol |
+| Durable conflict record surviving transaction rollback | **NOT VERIFIED** — ledger conflict still relies on caller reconciliation latch |
+| End-to-end Decimal Integrity / removal of canonical REAL and float | **BLOCKED** |
+| Net base inventory for base-asset commission and all fee assets | **BLOCKED** |
+| Global recovery gate across every entry path | **BLOCKED** |
+| Fault injection at all required financial boundaries | **NOT VERIFIED** |
+| Two independent OS processes applying/recovering one fill | **NOT VERIFIED** |
+| Populated v6/v7/v8 migrations and interrupted migration recovery | **NOT VERIFIED** |
+| Complete Spot exposure and protection/OCO reconciliation | **NOT VERIFIED** |
+| Futures position modes, margin, leverage and fee semantics | **NOT VERIFIED — keep unsupported scenarios blocked** |
+| Android physical process death/restart | **NOT VERIFIED** |
+| Spot Testnet end-to-end lifecycle | **NOT RUN / NOT VERIFIED** |
+| All required workflows on final report SHA | **PENDING until exact-SHA runs complete** |
+
+### 15.5 Required next implementation step
+
+The next change must not merely add more journal fields. It must route the actual fill-to-position/Campaign/PnL/risk writers through a single transactional application function or a durable per-projection replay protocol. The application must record per-entity idempotency, use exact canonical decimal values, and only mark the effect complete after all required projections are read back and reconciled. Then add process-level race tests and fault injection with final-state assertions. Until that exists, journal presence is evidence of observation only.
+
+No Binance Mainnet or real trading operations were used. `main` was not modified, and PR #47 remains open Draft.
+
+**TASK 001.7 remains BLOCKED — NOT ACCEPTED. Do not resume trading.**
+
+
+# TASK 001.8 — Atomic Financial Effect Application, Exactly-Once Projection & Recovery Proof
+
+**Status: BLOCKED — NOT ACCEPTED**  
+**Audit baseline SHA:** `d0a7020ba5ead0514f0c6ed9caa56db95540caa4`  
+**Base SHA:** `04da5f9c09572e99ff310be3a1908179165e528c`  
+**Branch:** `audit/williams-2.1-task-001-architecture`  
+**PR:** [#47](https://github.com/19wolfalone92/Williams/pull/47), open Draft, base `main`. No merge or main-branch mutation performed.
+
+## Current-state verification
+
+- **CODE-CONFIRMED:** Branch head at audit start was `d0a7020ba5ead0514f0c6ed9caa56db95540caa4`.
+- **CODE-CONFIRMED:** PR #47 head matched that SHA; PR remained open and Draft.
+- **CI-PROVEN (baseline only, not this task's eventual SHA):**
+  - Python backend tests, run [38117723560](https://github.com/19wolfalone92/Williams/actions/runs/38117723560), SHA `d0a7020ba5ead0514f0c6ed9caa56db95540caa4`: success.
+  - Williams Campaign CI, run [38117723550](https://github.com/19wolfalone92/Williams/actions/runs/38117723550), SHA `d0a7020ba5ead0514f0c6ed9caa56db95540caa4`: success.
+  - Build Android APK, run [38117723672](https://github.com/19wolfalone92/Williams/actions/runs/38117723672), SHA `d0a7020ba5ead0514f0c6ed9caa56db95540caa4`: success.
+- These runs validate only the baseline commit. They are not evidence for changes made for TASK 001.8.
+- **CODE-CONFIRMED:** The requested `execution_recovery.py` path does not exist at this branch head. A similarly named runtime or recovery path must not be assumed without tracing actual callers.
+- **NOT VERIFIED:** Binance Spot Testnet lifecycle, physical Android process death/restart, Futures financial lifecycle, and independent-process crash recovery.
+
+## Production source-to-sink inventory (baseline)
+
+| Source/path | Observed production behavior | Persistence / transaction evidence | Status |
+|---|---|---|---|
+| `portfolio_trader.py::_exit_fee_quote` | Reads authoritative `my_trades`; calls `db.record_exchange_fill(symbol, row)`; fee conversion returns a legacy float | Fill observation is recorded, but the method does not call a canonical effect applier; fee valuation is a separate path | CODE-CONFIRMED |
+| `portfolio_trader.py` filled-order normalization (around lines 840+) | Retrieves authoritative trade history when order payload has no fills; records each fill; rejects unknown commission | Journal ingestion is present, but this path still calculates a compatibility fee summary separately | CODE-CONFIRMED |
+| `campaign_execution.py::_executed_fee_quote` | Reads trade history and calls `record_exchange_fill`; requires known fee for fee valuation | Campaign state, fill effects, protection, and trade-row writes occur in separate code paths; one shared effect transaction was not found in the inspected path | CODE-CONFIRMED |
+| `db.py::record_exchange_fill` | Stores exact decimal text in `exchange_fill_ledger` and `financial_effect_journal`; fee can be enriched later | Journal state is `READY_TO_APPLY` or `RECONCILE_REQUIRED`; no projection-application receipt is recorded by this method | CODE-CONFIRMED |
+| `db.py::save_campaign_fill` | Inserts a new `campaign_fills` row | Uses SQLite `REAL` and Python `float`; no exchange-fill idempotency key exists in this table | CODE-CONFIRMED |
+| `campaigns` schema in `db.py` | Persists position quantity, average entry, realized PnL, open/pending risk, and capital reservation | These financial columns are SQLite `REAL`; not in the same demonstrated transaction as journal status and all other projections | CODE-CONFIRMED |
+| `trades` and legacy trade update methods in `db.py` / `campaign_execution.py` | Open/closed trade rows and fees are mutated through separate methods/SQL | Canonical exact-decimal representation and exactly-once effect identity are not demonstrated | CODE-CONFIRMED |
+| `risk_engine.py`, `campaign_execution.py`, `portfolio_trader.py` | Risk and sizing calculations use float conversions | Decimal Integrity is not satisfied for the full financial path | CODE-CONFIRMED |
+| `server.py` | Read-side summaries convert values to float and include `CAST(pnl AS REAL)` | Presentation/read-side paths are not canonical accounting, but still require explicit classification | CODE-CONFIRMED |
+| Android `StandaloneRuntime.kt`, `ExecutionGate.kt`, `TradeJournal.kt`, `TradingAuditStore.kt` | Separate Android execution/persistence components exist | No proof that Android fill application shares the backend's journal or a cross-runtime idempotent projection protocol | NOT VERIFIED |
+
+This is a source inventory of confirmed high-impact paths, **not yet a complete proof that every writer has been enumerated**. A complete writer/sink search and caller-level graph remains an acceptance requirement.
+
+## Critical blockers identified
+
+1. **No production Effect Applier has been established.** Journal ingestion is not atomic application to Position, Campaign, `campaign_fills`, Fees, PnL/cost basis, risk reservation, and protection state.
+2. **Exactly-once projections are not proven.** `campaign_fills` has no canonical exchange-fill identity constraint; `save_campaign_fill` inserts rows and uses `REAL`/float. Recovery and ordinary processing can reach overlapping fill-handling logic.
+3. **Decimal Integrity fails for canonical projections.** Campaign and campaign-fill financial columns are SQLite `REAL`; multiple production calculations convert to float. A journal with decimal text does not make downstream projections exact.
+4. **Durable conflict latching needs proof/fix.** In `record_exchange_fill`, a detected identity conflict raises from within the transaction. The surrounding transaction manager rolls back on exceptions; therefore any reconciliation flag written earlier in that same transaction must not be assumed durable after the exception. This needs a regression test and a conflict-persistence design that commits the diagnostic independently of the rejected fill mutation.
+5. **Account identity is absent from the observed journal primary key.** Current key is `venue + market_type + symbol + exchange_trade_id`; account scoping must be resolved from actual account configuration and supported deployment model before claiming cross-account identity safety.
+6. **Global Recovery Gate is not proven to query all unfinished effects and compare all financial projections before permitting entry.**
+7. **Crash/concurrency/migration proof is incomplete.** No full fault-injection matrix, two-independent-OS-process proof, populated v6/v7/v8 migration recovery evidence, or full cross-process SQLite BUSY/LOCKED proof is recorded here.
+8. **Spot residual protection is not proven against actual free/locked base quantity after base-asset commission and partially filled orders.**
+9. **Android parity is not proven.** Separate Android persistence/mutation paths exist; no complete mutation-spy evidence or physical process-death/restart result is available.
+10. **Futures remain NOT VERIFIED.** Spot evidence, even if later obtained, cannot be reused as Futures proof.
+
+## Acceptance matrix
+
+| Criterion | Status | Reason |
+|---|---|---|
+| P0-01 All production fill paths journaled | BLOCKED | Inventory is incomplete; multiple direct legacy projection writers remain |
+| P0-02 Production Effect Applier | BLOCKED | No single integrated applier proven |
+| P0-03 Position exactly-once | BLOCKED | Atomic projection receipt/idempotency not proven |
+| P0-04 Campaign exactly-once | BLOCKED | `campaign_fills` insert path is not keyed to journal effect |
+| P0-05 Fees/PnL exactly-once | BLOCKED | Late fee correction and PnL/cost-basis update protocol absent |
+| P0-06 Risk reservation exactly-once | BLOCKED | Shared atomic transaction/recovery proof absent |
+| P0-07 Decimal Integrity | BLOCKED | Canonical financial projections include `REAL` and float |
+| P0-08 Crash consistency | BLOCKED | Required fault-injection matrix not run |
+| P0-09 Independent OS processes | BLOCKED | No process-level concurrency evidence |
+| P0-10 Migrations v6/v7/v8 | BLOCKED | Populated migration/restart evidence absent |
+| P0-11 Global Recovery Gate | BLOCKED | Full cross-projection reconciliation gate not proven |
+| P0-12 Spot residual protection | BLOCKED | Actual available quantity/protection invariant not proven |
+| P0-13 Android mutation safety | BLOCKED | Complete sink-spy and restart evidence absent |
+| P0-14 APK | BASELINE ONLY | APK workflow passed on baseline SHA only |
+| P0-15 CI | BASELINE ONLY | Listed runs are on baseline SHA; every changed SHA needs its own required runs |
+| P0-16 Git/PR integrity | PASS FOR BASELINE | Existing branch/PR/base confirmed; PR open Draft, no merge |
+| P0-17 Audit report | IN PROGRESS | This section records the baseline findings; implementation evidence still missing |
+
+## Required next implementation sequence
+
+1. Finish repository-wide writer and reader inventory, including all SQLite update/insert sites, recovery loops, and Android mutating sinks.
+2. Define account-scoped canonical fill/effect identity and immutable-payload conflict handling. Persist conflict diagnostics after rolling back rejected financial writes.
+3. Implement a production Effect Applier with one real SQLite transaction for every compatible local projection, including an effect application receipt and unique fill identity on `campaign_fills`. Do not mark `APPLIED` unless every required projection is committed.
+4. Integrate all ordinary and recovery fill paths with that applier; remove or block bypass writers.
+5. Migrate canonical accounting fields to exact decimal-text/integer-scaled representation only with explicit legacy uncertainty handling; do not reinterpret historical REAL values as exact.
+6. Add duplicate/conflicting delivery, late-fee correction, fault-injection, multiprocess, and populated migration tests; verify real projection values, not only row counts.
+7. Prove the global recovery gate, Spot residual protection, and Android mutation-path behavior.
+8. Run all required workflows on the final exact SHA and update this report with run IDs. Keep PR #47 Draft and all new entries blocked until every P0 criterion is proven.
+
+**Final decision: TASK 001.8 — BLOCKED — NOT ACCEPTED.** This report does not claim that the production Effect Applier, exactly-once accounting, Decimal Integrity, crash recovery, physical Android restart, Spot Testnet lifecycle, or Futures behavior has been implemented or verified. New trade entries must remain blocked while any required financial reconciliation is unresolved.
+
+
+## TASK 001.8 implementation delta — follow-up
+
+**Implementation commit:** `cf47f92aac616417051c9e4dc1f000c35588af7b`  
+**Regression-test commit / code head before this report update:** `eb41caea60c661e1cfe5fc5c233cc3b6629f701b`
+
+- **CODE-CONFIRMED:** `Database.record_exchange_fill()` now delegates to a transactional ingestion method and catches immutable fill identity/content conflicts after the inner transaction has rolled back. It attempts to commit a separate durable recovery latch: `financial_recovery_state=RECONCILE_REQUIRED`, global and symbol `position_state=RECONCILE_REQUIRED`, and the existing journal row's `effect_status=RECONCILE_REQUIRED`. If persisting the latch fails, it raises a distinct fatal error rather than treating the conflict as handled.
+- **CODE-CONFIRMED:** Added `test_fill_identity_conflict_durably_latches_recovery_after_rejected_transaction` to `test_task001_recovery_regressions.py`. It checks that conflicting quantity/quote values do not replace the original ledger facts and that the reconciliation latch survives closing and reopening the SQLite database.
+- **TEST-PROVEN:** Python backend tests passed on SHA `eb41caea60c661e1cfe5fc5c233cc3b6629f701b`, run [38119208650](https://github.com/19wolfalone92/Williams/actions/runs/38119208650).
+- **CI-PROVEN:** Williams Campaign CI passed on SHA `eb41caea60c661e1cfe5fc5c233cc3b6629f701b`, run [38119208649](https://github.com/19wolfalone92/Williams/actions/runs/38119208649).
+- **PENDING at report preparation:** Build Android APK run [38119208644](https://github.com/19wolfalone92/Williams/actions/runs/38119208644) on SHA `eb41caea60c661e1cfe5fc5c233cc3b6629f701b` was still running. These results do not apply to a later report-only commit.
+- **NOT VERIFIED:** The durable-latch regression currently proves a single-process reopen path only; it does not establish two-process races, the complete applier, or the entire crash matrix.
+
+This narrow fix addresses one durable-diagnostics defect only. It does not close P0-01 through P0-13, and TASK 001.8 remains **BLOCKED — NOT ACCEPTED**. The report-only commit below must receive its own exact-SHA CI runs.
+
+
+---
+
+## TASK 001.9 — unified financial effect applier review
+
+**Review baseline:** `5cb969de0a10b69c40842701d0c8f118d82aabdb`  
+**Base SHA:** `04da5f9c09572e99ff310be3a1908179165e528c`  
+**Current implementation commits before this report update:**  
+- `7143b99921a4e8b64d6b0fa2988e13aa7fdc68e4` — block BUY admission while financial effects are unapplied or fee evidence is not confirmed.
+- `37d729a27e626f4ed755d188b49c8acb435f69a9` — regression tests for the effect gate and journal inspection failure.
+
+### A. Baseline CI for TASK 001.8 SHA
+
+All three originally specified runs have completed successfully on the same SHA `5cb969de0a10b69c40842701d0c8f118d82aabdb`:
+- Python backend tests: [38119383949](https://github.com/19wolfalone92/Williams/actions/runs/38119383949) — success.
+- Williams Campaign CI: [38119383882](https://github.com/19wolfalone92/Williams/actions/runs/38119383882) — success; Python and Android build/static-check jobs passed.
+- Build Android APK: [38119383903](https://github.com/19wolfalone92/Williams/actions/runs/38119383903) — success.
+
+These runs validate only that baseline SHA. They do not validate TASK 001.9 changes.
+
+### B. Source-to-sink inventory — current code evidence
+
+| Source / writer | Current behavior and sinks | Transaction / idempotency evidence | Status |
+|---|---|---|---|
+| `db.py::record_exchange_fill` / `_record_exchange_fill_transactional` | Writes `exchange_fill_ledger` and observation row in `financial_effect_journal`; unknown fee remains UNKNOWN; conflicting immutable facts raise and trigger durable recovery latch after rollback. | Ledger key is `(symbol, exchange_trade_id)`; journal key is `(venue, market_type, symbol, exchange_trade_id)`; one SQLite transaction for ingestion; separate transaction for conflict latch. | CODE-CONFIRMED; targeted conflict test exists. |
+| `portfolio_trader.py::_authoritative_execution` | Queries authoritative order/trade evidence, calls `record_exchange_fill`, then continues with legacy fill aggregation / commission handling and downstream trade/position/protection paths. | Ingestion ledger is idempotent; downstream financial projections are not yet proven to share the same transaction or effect identity. | CODE-CONFIRMED; unified application NOT VERIFIED. |
+| `trader.py::_authoritative_execution` | Legacy single-position execution/recovery path persists and consumes exchange facts; file includes float-based quantity/price/accounting paths. | No evidence that all downstream writes are delegated to one financial applier. | CODE-CONFIRMED; exactly-once projection BLOCKED. |
+| `campaign_execution.py` fill/exit paths | Records exchange trades through `record_exchange_fill`, computes fee quote values, and mutates Campaign position/state; `save_campaign_fill` is a separate insertion path. | Campaign state and fill writes are not proven atomic with journal status. `campaign_fills` has an autoincrement row ID and no unique canonical fill/effect key in the inspected schema. | CODE-CONFIRMED; bypass/duplicate risk BLOCKED. |
+| `db.py::save_campaign_fill` | Inserts `campaign_fills` using Python float conversion for quantity, price, quote quantity and fees. | No canonical effect key or dedupe constraint; commit depends on caller transaction state. | CODE-CONFIRMED; Decimal Integrity BLOCKED. |
+| `db.py::save_campaign` and direct Campaign mutation callers | Persist Campaign fields including `position_qty`, average entry, realized PnL and risk/capital reservations. | Schema uses SQLite REAL for multiple financial columns; no unified fill-effect transaction demonstrated. | CODE-CONFIRMED; atomic projection BLOCKED. |
+| `execution_barrier.py::ExecutionBarrier.execute` | Persists execution intent before external mutation and gates BUY admission. | Before TASK 001.9 it checked unresolved intents and position states, but not pending financial effects. | CODE-CONFIRMED; gate hardened in this task. |
+| Android `TradingAuditStore.kt` | Stores executions/orders and audit fields; financial fields include SQLite REAL and Kotlin Double; several missing numeric event fields are parsed with `?: 0.0`. | Separate Android database/runtime; no shared atomic transaction with Python SQLite or Binance financial projections demonstrated. | CODE-CONFIRMED; Decimal and cross-runtime exactly-once BLOCKED. |
+| `execution_recovery.py` | File is not present at the inspected branch path. Recovery functions exist in other modules, including `portfolio_trader.py` and `execution_barrier.py`. | No standalone module could be audited under this name. | NOT VERIFIED as a file; search other recovery call paths before acceptance. |
+
+This is a high-signal inventory of discovered paths, not proof that every repository writer has been exhaustively enumerated. Production writers remain outside a common applier; P0-01/P0-02 are not satisfied.
+
+### C. TASK 001.9 safety change
+
+**Root cause:** `financial_effect_journal` is an observation journal. Ingestion intentionally sets confirmed-fee rows to `READY_TO_APPLY`, not `APPLIED`; before this change, `ExecutionBarrier` did not inspect the journal during BUY admission. A durable but unapplied fill could therefore be absent from the execution-intent checks while still requiring financial projection work.
+
+**Change:** `ExecutionBarrier._validate()` now queries `financial_effect_journal` before admitting a non-risk-reducing BUY. If any row has `effect_status != 'APPLIED'` or `fee_state != 'CONFIRMED'`, the BUY is rejected with a diagnostic containing the fill identity and states. If journal inspection fails, admission fails closed. The risk-reducing SELL/CANCEL exception remains ahead of this entry-only check and is not routed around ExecutionBarrier.
+
+**Regression tests added:**
+- `test_unapplied_financial_effect_blocks_buy_before_exchange_mutation`
+- `test_financial_effect_journal_inspection_failure_blocks_buy`
+
+These tests exercise the admission gate with offline callbacks; they do not prove full effect application or exchange behavior. The gate intentionally remains closed for existing `READY_TO_APPLY` effects until a real applier/reconciliation path marks them APPLIED.
+
+### D. Financial correctness gaps still open
+
+- **No unified production Effect Applier:** no production component currently atomically updates the journal status and all applicable Position, Campaign/`campaign_fills`, fees, PnL and risk projections.
+- **Fill identity is incomplete for the requested contract:** current journal identity lacks an explicit account identifier and effect type is not part of the primary key. The separate ledger identity is narrower still. Account-scoped identity and effect-kind semantics require a backward-compatible design before schema changes.
+- **Conflict latch limitation:** current wrapper commits a separate latch after rollback for the known identity-conflict exceptions. This does not prove persistence under disk-full/corruption/second-transaction failure; such failure raises a fatal error and remains a recovery blocker.
+- **Decimal Integrity fails:** `campaigns`, `campaign_fills`, and other trading tables include SQLite REAL; `save_campaign_fill` converts canonical values to float; `risk_engine.py` uses float; Android `TradingAuditStore.kt` uses REAL/Double. No full cross-runtime exact-decimal contract exists.
+- **Fees/PnL:** late fee enrichment updates journal/ledger evidence but is not proven to apply an idempotent financial correction to cost basis, realized PnL, campaign fee totals and risk.
+- **Cross-process proof:** existing tests include multiple SQLite connections for ingestion identity, but do not prove two independent OS processes racing on the complete projection application.
+- **Crash/fault injection:** no complete transaction-boundary matrix for all financial projections has been proven.
+- **Migrations:** v6 coverage exists in tests; populated v7/v8, interrupted migration recovery and financial projection reconciliation are not proven for this task.
+- **Spot protection:** exact remaining base quantity, base-asset commission, open-order reservation and protective quantity are not proven by the new gate.
+- **Android:** no shared applier contract or physical process-death evidence. The Android audit store remains a separate store with inexact numeric representations.
+- **Testnet/Futures:** no Spot Testnet mutation was performed for this task. Futures and physical Android process-death remain NOT VERIFIED.
+
+### E. Acceptance
+
+**TASK 001.9 status: BLOCKED — NOT ACCEPTED.**
+
+The entry-gate correction is a fail-closed safety improvement, not completion of the requested applier. The next implementation must define a stable account-scoped fill/effect identity, migrate safely, implement the production applier inside the real financial write path, and then convert each legacy writer or disable its mutation capability. Exactly-once Position/Campaign/fees/PnL/risk, independent-process recovery and Decimal Integrity remain P0 blockers.
+
+PR #47 must remain Draft. No merge, Mainnet operation or Spot Testnet mutation is authorized by this task.
+
+
+---
+
+## TASK 001.10 — fresh baseline and pre-implementation writer audit
+
+**Audit timestamp:** 2026-10-11  
+**Audit phase:** mandatory re-verification completed; implementation phase not yet accepted.  
+**Working branch:** `audit/williams-2.1-task-001-architecture`  
+**Working HEAD at audit:** `70ff1da179eb41d359187b7dadc2bb4df8e05d01`  
+**Main HEAD at audit:** `04da5f9c09572e99ff310be3a1908179165e528c`  
+**PR #47:** OPEN, Draft, not merged; base remains the Main SHA above.  
+**No main changes, no merge, no exchange mutation.**
+
+### Same-SHA CI recheck
+
+The following current-head runs were re-read from GitHub Actions. Every run reports the exact audited HEAD `70ff1da179eb41d359187b7dadc2bb4df8e05d01` and success:
+
+- Python backend tests: [38120860608](https://github.com/19wolfalone92/Williams/actions/runs/38120860608) — success.
+- Williams Campaign CI: [38120860615](https://github.com/19wolfalone92/Williams/actions/runs/38120860615) — Python tests and Android build/static checks both success.
+- Build Android APK: [38120860590](https://github.com/19wolfalone92/Williams/actions/runs/38120860590) — APK job success.
+
+This proves only the existing tests/build on this SHA. It does not prove exactly-once financial application, process-level races, or crash consistency.
+
+### Fresh writer and sink findings
+
+| Component / path | Confirmed behavior | TASK 001.10 implication |
+|---|---|---|
+| `db.py::record_exchange_fill` | Persists exchange-fill facts and `financial_effect_journal` observation; confirmed fees lead to `READY_TO_APPLY`, not `APPLIED`. Identity is not account-scoped. | Journal ingestion is not the applier. |
+| `portfolio_trader.py::_authoritative_execution` | Obtains order fills or authoritative `myTrades`; normalizes facts and calls `record_exchange_fill`; then continues with a separate legacy fee summary and downstream position/trade/protection logic. | Best candidate production ingress for first integration, but currently not a single atomic projection transaction. |
+| `trader.py::_authoritative_execution` | Has a separate legacy authoritative execution path and may use an accumulator fallback when trade lookup fails. | Must be routed through canonical fill validation/applier or disabled when authoritative facts are incomplete; no fallback may imply accounting success. |
+| `campaign_execution.py` | Campaign entry/add-on/recovery mutates campaign state and protection; separate `save_campaign_fill` and `trades` update paths exist. Fee valuation includes a conversion-price request for third-asset fees. | Campaign, fill, fee and trade projections are not shown atomic with journal state; external pricing must be resolved before the local write transaction. |
+| `db.py::save_campaign_fill` | Inserts a campaign-fill row without a canonical exchange-fill unique key; schema uses SQLite REAL for quantity, price, quote quantity and fee values. | Duplicate financial projection and decimal integrity remain unproven. |
+| `db.py::save_campaign` | Writes position quantity, average entry, realized PnL and risk/capital reservations using float conversions into REAL columns. | Not suitable as the exact-decimal canonical ledger; any migration must preserve legacy uncertainty rather than pretending REAL history is exact. |
+| `execution_barrier.py::ExecutionBarrier._validate` | Non-risk-reducing BUY admission fails closed when the journal has any non-APPLIED or non-CONFIRMED-fee row, or journal inspection fails. Risk-reducing SELL/CANCEL returns before this gate. | Existing safety gate does not constitute a projection applier. Emergency exit/cancel exception is preserved in this path. |
+| Android `TradingAuditStore.kt`, `StandaloneRuntime.kt`, and related execution components | Separate Android database and mutation paths exist; financial storage contains REAL/Double and some numeric defaults. | No shared transaction with Python SQLite; cross-runtime exactly-once and Decimal contract remain NOT VERIFIED. |
+
+This is a fresh high-impact inventory from the current branch, not yet an exhaustive proof that every financial writer in every Python/Android module has been closed. Repository-wide writer enumeration, complete caller graph, and all migration entry points remain implementation prerequisites.
+
+### TASK 001.10 implementation gate
+
+No TASK 001.10 production code change is claimed by this baseline entry. The next code change must be designed against the verified schemas and caller paths, not implemented as an isolated class. In particular, do not mark an effect `APPLIED` until one SQLite transaction commits the application receipt and every required local financial projection; do not call external Binance/price endpoints inside that transaction; do not treat an unknown commission as zero; and do not block required protective SELL/CANCEL operations merely because an entry gate is closed.
+
+**Current TASK 001.10 status: BLOCKED — NOT ACCEPTED.** The production applier, account-scoped canonical identity, atomic Position/Campaign/fees/PnL/risk projection, independent-process concurrency proof, full crash fault injection, Decimal migration/parity, and complete bypass-writer closure are not established by the current code or green CI. PR #47 remains Draft.
+
+
+---
+
+## 10. TASK 001.10 — fresh pre-change financial-writer baseline
+
+**Audit timestamp:** 2026-10-11 09:15 UTC source snapshot  
+**Baseline source SHA:** `63a701564751bc1a82840bccdde8c7bc16758658`  
+**main SHA:** `04da5f9c09572e99ff310be3a1908179165e528c`  
+**PR #47:** open, Draft, unmerged; base `main`; head branch `audit/williams-2.1-task-001-architecture`.  
+**No code changes for TASK 001.10 were made before this inventory.**
+
+### 10.1 Exact-SHA CI snapshot
+
+All six latest listed workflow runs were attached to baseline SHA `63a701564751bc1a82840bccdde8c7bc16758658` and concluded success:
+
+- Python backend tests: [38127703099](https://github.com/19wolfalone92/Williams/actions/runs/38127703099) and [38127699475](https://github.com/19wolfalone92/Williams/actions/runs/38127699475).
+- Williams Campaign CI: [38127703065](https://github.com/19wolfalone92/Williams/actions/runs/38127703065) and [38127699460](https://github.com/19wolfalone92/Williams/actions/runs/38127699460).
+- Build Android APK: [38127703067](https://github.com/19wolfalone92/Williams/actions/runs/38127703067) and [38127699457](https://github.com/19wolfalone92/Williams/actions/runs/38127699457).
+
+These results prove CI/build only for this baseline SHA, not financial-effect correctness.
+
+### 10.2 Confirmed financial write surfaces
+
+| Surface | Observed behavior at baseline | TASK 001.10 consequence |
+|---|---|---|
+| `db.py:record_exchange_fill` | Persists `exchange_fill_ledger` and `financial_effect_journal`; journal status is `READY_TO_APPLY` after fee confirmation. No projection application occurs in this method. | Journal is evidence/observation, not an applier. |
+| `db.py:save_trade`, `update_trade_quantity`, `close_trade` | Mutate legacy `trades`; price, quantity, PnL and fees are stored in SQLite REAL columns and legacy float-compatible values. | Competing position/PnL writer remains. |
+| `db.py:save_campaign` | Upserts campaign projection; position quantity, average price, realized PnL, risk and reserve fields are SQLite REAL. | Not exact-decimal persistence and not linked atomically to journal status by a canonical applier. |
+| `db.py:save_campaign_fill` | Inserts campaign fill records with `float(...)` into REAL columns; no exchange trade ID uniqueness is visible in the method/table contract. | Duplicate fill/projection risk remains; float boundary remains. |
+| `campaign_execution.py:_executed_fee_quote` | Queries Binance `my_trades`, records each fill observation, validates fee evidence and computes a fee summary. Callers subsequently update campaign and legacy trade state in separate operations/commits. | Production fill path exists, but journal and financial projections are not one atomic unit. |
+| `campaign_execution.py` add-on fill handling | Calls `record_add_on_fill`, changes legacy trade quantity/entry price/fees, commits, then changes state and saves campaign. | Confirmed non-atomic multi-projection sequence; partial failure can split projections. |
+| `portfolio_trader.py:_authoritative_execution` | Obtains exchange fills and fee evidence, calls `record_exchange_fill`, then returns a compatibility summary to legacy lifecycle writers. | Observation is separated from downstream position/PnL mutation; no shared applier owns both. |
+| `portfolio_trader.py:_exit_fee_quote` / `_reconcile_trade` | Records exchange fill observations and derives exit metrics; legacy exit reconciliation uses float quantities/quotes and fee totals. | Another reconciliation/exit writer; exact end-to-end financial application is not established. |
+| `trader.py` recovery/lifecycle | Contains legacy state and order recovery; delegates multi-position recovery but also retains its own lifecycle state and execution summary paths. | Must be checked for all fill and exit callers before closing bypasses. |
+| Android `StandaloneRuntime.kt`, `ExecutionAccumulator.kt`, `TradeJournal.kt`, `TradingAuditStore.kt` | Android has its own exchange mutation journal, execution accumulator and trade journal; no evidence from this baseline establishes a shared versioned financial-effect contract with Python or atomic Position/Campaign/Fees/PnL/Risk projections. | Cross-platform contract and atomic financial projection equivalence remain unproven. |
+
+### 10.3 Concrete P0 gaps from the inspected source
+
+1. `financial_effect_journal` has no account identifier in its primary key/columns. Current key is `(venue, market_type, symbol, exchange_trade_id)`; it cannot prove account-scoped identity.
+2. The journal records `effect_status`, but the inspected production path does not apply Position/Campaign/Fees/PnL/Risk and set `APPLIED` in the same transaction.
+3. Existing `trades`, `campaigns`, and `campaign_fills` projections use SQLite REAL/float-compatible writes. The journal's decimal text fields do not remove those downstream conversions.
+4. Production code has separate writers and commits. In particular, campaign fill reconciliation and legacy trade updates are not enclosed with the journal status in one demonstrated transaction.
+5. `campaign_fills` writes are not shown as uniquely keyed by exchange trade identity; exactly-once projection is not proven.
+6. No reviewed evidence yet proves two independent OS processes race the same fill, injected crash at every projection boundary, commit-then-lost-ack recovery, or populated schema migration compatibility.
+7. Entry fail-closed guard on unresolved effects is a safety control, not a substitute for a production applier. Protective SELL/cancel behavior must remain independently available.
+
+**Baseline conclusion:** `BLOCKED — NOT ACCEPTED`. The code has durable exchange-fill observations and recovery latches, but not the required unified production financial-effect applier. This section is a source inventory, not an acceptance claim.

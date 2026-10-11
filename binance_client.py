@@ -462,7 +462,16 @@ class BinanceSpotClient:
         if order_id is not None:p['orderId']=order_id
         if orig_client_order_id is not None:p['origClientOrderId']=orig_client_order_id
         return self._request('DELETE','/api/v3/order',p,signed=True)
-    def cancel_open_orders(self,symbol): return self._request('DELETE','/api/v3/openOrders',{'symbol':symbol},signed=True)
+    def cancel_open_orders(self, symbol):
+        """Disabled: bulk cancellation cannot prove its complete managed-order scope.
+
+        Use explicit, persisted single-order or order-list cancellation intents.
+        This method deliberately never sends DELETE /api/v3/openOrders.
+        """
+        raise BinanceAPIError(
+            "Bulk cancel is disabled for production use; reconcile and cancel "
+            "each explicitly managed order/order-list by its identifier."
+        )
     def _symbol_tick_size(self, symbol):
         info = self.exchange_info(symbol)
         for row in info.get('symbols', []) or []:

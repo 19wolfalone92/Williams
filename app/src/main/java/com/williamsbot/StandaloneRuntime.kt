@@ -537,6 +537,7 @@ private class NativeEngine(
     )
     private val tradingEventLoop = TradingEventLoop()
     private val executionGate = ExecutionGate()
+    private val exchangeMutationLock = Any()
     private val executionExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "williams-execution-io").apply { isDaemon = true }
     }
@@ -776,7 +777,8 @@ private class NativeEngine(
             restAccountReady &&
             historyReady &&
             stateMachine.executionAllowed() &&
-            !equityCircuitBreaker.isTripped()
+            !equityCircuitBreaker.isTripped() &&
+            !auditStore.hasUnresolvedMutationIntents()
 
     private fun executionBlockers(): List<String> =
         buildList {
@@ -789,6 +791,7 @@ private class NativeEngine(
             if (!historyReady) add("history_not_ready")
             if (!stateMachine.executionAllowed()) add("fsm_not_execution_allowed")
             if (equityCircuitBreaker.isTripped()) add("equity_circuit_breaker")
+            if (auditStore.hasUnresolvedMutationIntents()) add("unresolved_exchange_mutation_journal")
         }
 
     private fun stateName(): String =
@@ -1177,6 +1180,15 @@ private class NativeEngine(
                         ?: 0.0
                 }
             equityCircuitBreaker.reset(estimateManagedEquity())
+            // A process may die after an exchange request was sent but before
+            // its outcome row was committed. Resolve only after the full REST
+            // recovery/audit sequence above succeeds.
+            if (!reconcileUnresolvedMutationIntents()) {
+                error(
+                    "RECONCILE_REQUIRED: one or more exchange mutations could not be " +
+                        "verified by exact Binance order/order-list lookup"
+                )
+            }
         } catch (x: Exception) {
             setReconcileRequired(
                 "startup exchange synchronization failed: " +
@@ -1414,6 +1426,13 @@ private class NativeEngine(
             clearReconcileRequired()
             recoverPendingEntries()
             reconcilePositionsWithExchange()
+            auditManagedOpenOrders()
+            if (!reconcileUnresolvedMutationIntents()) {
+                error(
+                    "RECONCILE_REQUIRED: unresolved exchange mutation journal entries " +
+                        "remain after exact Binance lookups"
+                )
+            }
 
             JSONObject()
                 .put("recovered", !reconcileRequired)
@@ -1443,6 +1462,198 @@ private class NativeEngine(
                     x.message ?: x.javaClass.simpleName
                 )
         }
+    }
+
+    /**
+     * Resolve persisted ambiguous writes by querying the exact exchange order or
+     * order-list identifiers. Missing/unknown exchange evidence never clears the
+     * journal and never authorizes a new BUY.
+     */
+    private fun reconcileUnresolvedMutationIntents(): Boolean {
+        val pending = try {
+            auditStore.unresolvedMutationIntents()
+        } catch (failure: Throwable) {
+            lastError = "Cannot read mutation journal: " +
+                (failure.message ?: failure.javaClass.simpleName)
+            return false
+        }
+        if (pending.isEmpty()) return true
+
+        val orderStatuses = setOf(
+            "NEW", "PARTIALLY_FILLED", "FILLED", "CANCELED",
+            "REJECTED", "EXPIRED", "EXPIRED_IN_MATCH"
+        )
+        val listStatuses = setOf(
+            "EXEC_STARTED", "EXECUTING", "ALL_DONE", "REJECT"
+        )
+        var allResolved = true
+
+        for (row in pending) {
+            val intentId = row.optString("intent_id")
+            val method = row.optString("method").uppercase(Locale.US)
+            val path = row.optString("path")
+            val symbol = row.optString("symbol").uppercase(Locale.US)
+            try {
+                require(intentId.isNotBlank() && symbol.isNotBlank()) {
+                    "mutation journal row lacks intent ID or symbol"
+                }
+                val request = JSONObject(row.optString("request_json"))
+                val rawParams = request.optString("params")
+                val fields = rawParams.split("&").mapNotNull { item ->
+                    val splitAt = item.indexOf('=')
+                    if (splitAt <= 0) null
+                    else item.substring(0, splitAt) to item.substring(splitAt + 1)
+                }.toMap()
+
+                val evidence: JSONObject = when (path) {
+                    "/api/v3/order" -> {
+                        val originalClientId = fields["newClientOrderId"]
+                            ?: fields["origClientOrderId"]
+                        val orderId = fields["orderId"]
+                        require(!originalClientId.isNullOrBlank() || !orderId.isNullOrBlank()) {
+                            "order mutation journal has no queryable exchange identifier"
+                        }
+                        val query = if (!originalClientId.isNullOrBlank()) {
+                            "symbol=" + symbol + "&origClientOrderId=" + originalClientId
+                        } else {
+                            "symbol=" + symbol + "&orderId=" + orderId
+                        }
+                        val order = signedGet("/api/v3/order", query)
+                        val status = order.optString("status").uppercase(Locale.US)
+                        require(
+                            order.optString("symbol").equals(symbol, ignoreCase = true) &&
+                                order.optLong("orderId", 0L) > 0L &&
+                                status in orderStatuses
+                        ) {
+                            "Binance order lookup did not return authoritative order state"
+                        }
+                        if (!originalClientId.isNullOrBlank()) {
+                            require(order.optString("clientOrderId") == originalClientId) {
+                                "Binance order lookup returned a different clientOrderId"
+                            }
+                        }
+                        JSONObject()
+                            .put("lookup", "order")
+                            .put("method", method)
+                            .put("path", path)
+                            .put("query_order", order)
+                    }
+
+                    "/api/v3/orderList/oco", "/api/v3/orderList" -> {
+                        val listId = fields["orderListId"]
+                        val listClientId = fields["listClientOrderId"]
+                            ?: fields["origClientOrderId"]
+                        require(!listId.isNullOrBlank() || !listClientId.isNullOrBlank()) {
+                            "order-list mutation journal has no queryable exchange identifier"
+                        }
+                        val query = if (!listId.isNullOrBlank()) {
+                            "orderListId=" + listId
+                        } else {
+                            "origClientOrderId=" + listClientId
+                        }
+                        val orderList = signedGet("/api/v3/orderList", query)
+                        val status = orderList.optString("listStatusType").uppercase(Locale.US)
+                        val orderStatus = orderList.optString("listOrderStatus").uppercase(Locale.US)
+                        require(
+                            orderList.optString("symbol").equals(symbol, ignoreCase = true) &&
+                                orderList.optLong("orderListId", -1L) >= 0L &&
+                                (status in listStatuses || orderStatus in listStatuses)
+                        ) {
+                            "Binance order-list lookup did not return authoritative state"
+                        }
+                        if (!listClientId.isNullOrBlank()) {
+                            require(orderList.optString("listClientOrderId") == listClientId) {
+                                "Binance order-list lookup returned a different listClientOrderId"
+                            }
+                        }
+                        val children = orderList.optJSONArray("orders")
+                            ?: orderList.optJSONArray("orderReports")
+                        require(children != null && children.length() >= 2) {
+                            "Binance order-list lookup did not identify both child orders"
+                        }
+                        val childEvidence = JSONArray()
+                        val seenChildIds = mutableSetOf<Long>()
+                        for (childIndex in 0 until children!!.length()) {
+                            val child = children.optJSONObject(childIndex)
+                                ?: error("Malformed order-list child descriptor")
+                            val childId = child.optLong("orderId", 0L)
+                            require(childId > 0L && seenChildIds.add(childId)) {
+                                "Order-list child order ID is missing or duplicated"
+                            }
+                            val childOrder = signedGet(
+                                "/api/v3/order",
+                                "symbol=" + symbol + "&orderId=" + childId
+                            )
+                            val childStatus = childOrder.optString("status").uppercase(Locale.US)
+                            require(
+                                childOrder.optString("symbol").equals(symbol, ignoreCase = true) &&
+                                    childOrder.optLong("orderId", 0L) == childId &&
+                                    childStatus in orderStatuses
+                            ) {
+                                "Binance OCO child order state is not authoritative"
+                            }
+                            childEvidence.put(childOrder)
+                        }
+                        JSONObject()
+                            .put("lookup", "orderList")
+                            .put("method", method)
+                            .put("path", path)
+                            .put("query_order_list", orderList)
+                            .put("child_orders", childEvidence)
+                    }
+
+                    "/api/v3/order/cancelReplace" -> {
+                        val cancelOrderId = fields["cancelOrderId"]
+                        val newClientId = fields["newClientOrderId"]
+                        require(!cancelOrderId.isNullOrBlank() && !newClientId.isNullOrBlank()) {
+                            "cancelReplace journal lacks old and new order identifiers"
+                        }
+                        val oldOrder = signedGet(
+                            "/api/v3/order",
+                            "symbol=" + symbol + "&orderId=" + cancelOrderId
+                        )
+                        val newOrder = signedGet(
+                            "/api/v3/order",
+                            "symbol=" + symbol + "&origClientOrderId=" + newClientId
+                        )
+                        val oldStatus = oldOrder.optString("status").uppercase(Locale.US)
+                        val newStatus = newOrder.optString("status").uppercase(Locale.US)
+                        require(
+                            oldOrder.optString("symbol").equals(symbol, ignoreCase = true) &&
+                                oldOrder.optLong("orderId", 0L) > 0L &&
+                                oldStatus in orderStatuses &&
+                                newOrder.optString("symbol").equals(symbol, ignoreCase = true) &&
+                                newOrder.optLong("orderId", 0L) > 0L &&
+                                newOrder.optString("clientOrderId") == newClientId &&
+                                newStatus in orderStatuses
+                        ) {
+                            "Binance has not proved both sides of cancelReplace"
+                        }
+                        JSONObject()
+                            .put("lookup", "cancelReplace")
+                            .put("method", method)
+                            .put("path", path)
+                            .put("old_order", oldOrder)
+                            .put("new_order", newOrder)
+                    }
+
+                    else -> error("No safe recovery lookup for mutation route " + method + " " + path)
+                }
+
+                auditStore.confirmMutationIntent(intentId, evidence)
+            } catch (failure: Throwable) {
+                allResolved = false
+                lastError = "Mutation remains unresolved (" + intentId + "): " +
+                    (failure.message ?: failure.javaClass.simpleName)
+            }
+        }
+
+        val stillPending = try {
+            auditStore.hasUnresolvedMutationIntents()
+        } catch (failure: Throwable) {
+            true
+        }
+        return allResolved && !stillPending
     }
 
     private fun signedTimestamp(): Long {
@@ -1525,6 +1736,218 @@ private class NativeEngine(
         )
 
     private fun signedRequest(
+        method: String,
+        path: String,
+        params: String
+    ): JSONObject {
+        val normalizedMethod = method.uppercase(Locale.US)
+        if (normalizedMethod == "GET") {
+            return performSignedRequest(normalizedMethod, path, params)
+        }
+        return synchronized(exchangeMutationLock) {
+            authorizeExchangeMutation(normalizedMethod, path, params)
+            val fields = params.split("&").mapNotNull { part ->
+                val splitAt = part.indexOf('=')
+                if (splitAt <= 0) null else part.substring(0, splitAt) to part.substring(splitAt + 1)
+            }.toMap()
+            val symbol = fields["symbol"].orEmpty().uppercase(Locale.US)
+            val side = fields["side"]?.uppercase(Locale.US)
+            val clientOrderId = fields["newClientOrderId"]
+                ?: fields["origClientOrderId"]
+                ?: fields["listClientOrderId"]
+                ?: ""
+            val mutationId = java.util.UUID.randomUUID().toString()
+            // Persist before network I/O; SQLite failures prevent the request.
+            auditStore.beginMutationIntent(
+                intentId = mutationId,
+                method = normalizedMethod,
+                path = path,
+                symbol = symbol,
+                side = side,
+                clientOrderId = clientOrderId.ifBlank { null },
+                requestJson = JSONObject()
+                    .put("params", params)
+                    .put("client_order_id", clientOrderId)
+                    .toString()
+            )
+            try {
+                val response = performSignedRequest(normalizedMethod, path, params)
+                try {
+                    auditStore.finishMutationIntent(
+                        mutationId,
+                        "EXCHANGE_CONFIRMED",
+                        response.toString(),
+                        null
+                    )
+                } catch (persistError: Throwable) {
+                    setReconcileRequired(
+                        "Binance response received but mutation outcome persistence failed: " +
+                            (persistError.message ?: persistError.javaClass.simpleName)
+                    )
+                    throw IllegalStateException(
+                        "Exchange outcome persistence failed; reconciliation required",
+                        persistError
+                    )
+                }
+                response
+            } catch (failure: Throwable) {
+                runCatching {
+                    auditStore.finishMutationIntent(
+                        mutationId,
+                        "UNKNOWN",
+                        null,
+                        failure.message ?: failure.javaClass.simpleName
+                    )
+                }
+                runCatching {
+                    setReconcileRequired(
+                        "Binance mutation outcome is UNKNOWN for " + symbol + ": " +
+                            (failure.message ?: failure.javaClass.simpleName)
+                    )
+                }
+                throw failure
+            }
+        }
+    }
+
+    private fun authorizeExchangeMutation(
+        method: String,
+        path: String,
+        params: String
+    ) {
+        // TASK 001 is Testnet-only. Even a future accidental baseUrl edit must
+        // not silently turn this runtime's centralized writer into Mainnet.
+        require(baseUrl.contains("testnet.binance.vision", ignoreCase = true)) {
+            "Mainnet trading is disabled by the WILLIAMS BOT 2.1 architecture gate"
+        }
+        require(method == "POST" || method == "DELETE") {
+            "Unapproved Binance mutation method: " + method
+        }
+        val fields = params.split("&").mapNotNull { part ->
+            val splitAt = part.indexOf('=')
+            if (splitAt <= 0) null else part.substring(0, splitAt) to part.substring(splitAt + 1)
+        }.toMap()
+        val symbol = fields["symbol"].orEmpty().uppercase(Locale.US)
+        require(symbol.isNotBlank()) { "Binance mutation is missing symbol" }
+
+        when {
+            method == "POST" && path == "/api/v3/order" -> {
+                val side = fields["side"].orEmpty().uppercase(Locale.US)
+                val type = fields["type"].orEmpty().uppercase(Locale.US)
+                val clientOrderId = fields["newClientOrderId"].orEmpty()
+                require(clientOrderId.isNotBlank()) {
+                    "Order mutation requires a clientOrderId for recovery"
+                }
+                when (side) {
+                    "BUY" -> {
+                        require(type == "STOP_LOSS") {
+                            "Spot entry must be conditional STOP_LOSS; market substitution is blocked"
+                        }
+                        require(running && !paused && !reconcileRequired && !killLatched) {
+                            "Spot entry blocked by runtime/reconciliation state"
+                        }
+                        require(marketDataFresh() && restAccountReady && historyReady &&
+                            !equityCircuitBreaker.isTripped() &&
+                            !auditStore.hasUnresolvedMutationIntents()) {
+                            "Spot entry blocked: market/account/history/risk/journal readiness failed"
+                        }
+                        require(executionGate.isReserved(symbol)) {
+                            "Spot entry bypassed ExecutionGate reservation"
+                        }
+                        val pending = synchronized(pendingEntries) { pendingEntries[symbol] }
+                        require(pending != null && pending.clientOrderId == clientOrderId &&
+                            pending.signalId.isNotBlank() && pending.signalType.isNotBlank() &&
+                            pending.campaignId.isNotBlank()) {
+                            "Spot entry has no matching persisted Williams PendingSignal"
+                        }
+                        if (clientOrderId.startsWith("W5E_ADD_")) {
+                            require(positionList().any {
+                                it.symbol == symbol &&
+                                    it.campaignId.isNotBlank() &&
+                                    it.campaignId == pending.campaignId
+                            }) {
+                                "Campaign add-on does not belong to a confirmed open campaign"
+                            }
+                        } else {
+                            require(clientOrderId.startsWith("W5E_") &&
+                                stateMachine.state == TradingState.ENTRY_PENDING) {
+                                "Spot initial entry is not a canonical ENTRY_PENDING Williams intent"
+                            }
+                        }
+                        val signalParts = pending.signalId.split(":")
+                        require(signalParts.size >= 4) {
+                            "Spot entry signal lacks symbol/timeframe/type/bar provenance"
+                        }
+                        val signalFrame = signalParts[signalParts.size - 3].lowercase(Locale.US)
+                        val signalBarTime = signalParts.last().toLongOrNull() ?: 0L
+                        val timeframeMs = when (signalFrame) {
+                            "1m" -> 60_000L
+                            "3m" -> 180_000L
+                            "5m" -> 300_000L
+                            "15m" -> 900_000L
+                            "30m" -> 1_800_000L
+                            "1h" -> 3_600_000L
+                            "2h" -> 7_200_000L
+                            "4h" -> 14_400_000L
+                            "6h" -> 21_600_000L
+                            "8h" -> 28_800_000L
+                            "12h" -> 43_200_000L
+                            "1d" -> 86_400_000L
+                            "3d" -> 259_200_000L
+                            "1w" -> 604_800_000L
+                            else -> 0L
+                        }
+                        val signalAge = System.currentTimeMillis() - signalBarTime
+                        require(signalBarTime > 0L && timeframeMs > 0L &&
+                            signalAge >= -5_000L && signalAge <= timeframeMs + 30_000L) {
+                            "Spot entry blocked: Williams signal context is stale or unverifiable"
+                        }
+                    }
+                    "SELL" -> {
+                        require(type in setOf("MARKET", "STOP_LOSS", "LIMIT")) {
+                            "Unapproved Spot SELL order type: " + type
+                        }
+                        // SELL is only exposed to this boundary from explicit
+                        // protection/exit code; unlike BUY it is not blocked by
+                        // RECONCILE_REQUIRED so protective exits can still run.
+                    }
+                    else -> error("Unapproved Binance order side: " + side)
+                }
+            }
+            method == "POST" && path == "/api/v3/orderList/oco" -> {
+                require(fields["side"].orEmpty().equals("SELL", ignoreCase = true)) {
+                    "Only Spot SELL OCO protection is admitted"
+                }
+                require(fields["listClientOrderId"].orEmpty().isNotBlank()) {
+                    "OCO mutation requires listClientOrderId"
+                }
+            }
+            method == "POST" && path == "/api/v3/order/cancelReplace" -> {
+                require(fields["side"].orEmpty().equals("SELL", ignoreCase = true)) {
+                    "Only Spot SELL protection replacement is admitted"
+                }
+                require(fields["cancelOrderId"].orEmpty().isNotBlank() &&
+                    fields["newClientOrderId"].orEmpty().isNotBlank()) {
+                    "Protection replacement requires old and new client/order identifiers"
+                }
+            }
+            method == "DELETE" && path == "/api/v3/order" -> {
+                require(fields["orderId"].orEmpty().isNotBlank() ||
+                    fields["origClientOrderId"].orEmpty().isNotBlank()) {
+                    "Single-order cancellation requires an order identifier"
+                }
+            }
+            method == "DELETE" && path == "/api/v3/orderList" -> {
+                require(fields["orderListId"].orEmpty().isNotBlank() ||
+                    fields["listClientOrderId"].orEmpty().isNotBlank()) {
+                    "OCO cancellation requires a managed order-list identifier"
+                }
+            }
+            else -> error("Unapproved Binance mutation route: " + method + " " + path)
+        }
+    }
+
+    private fun performSignedRequest(
         method: String,
         path: String,
         params: String
@@ -3879,86 +4302,9 @@ private class NativeEngine(
      * runs on a separate executor and never blocks the event loop.
      */
     private fun submitOrderIntent(candidate: BaseAnalysis) {
+        // Deliberately no alternate scanner -> order route. CampaignEngine is
+        // the only enabled Spot entry path and must create a durable PendingEntry.
         error("Legacy order-intent execution is disabled; CampaignEngine is canonical")
-
-        tradingEventLoop.post {
-            val accepted =
-                running &&
-                    !paused &&
-                    !reconcileRequired &&
-                    !killLatched &&
-                    stateMachine.canAdmitEntry(
-                        openPositions = positionList().size,
-                        maxOpenPositions = maxOpenPositions,
-                        hasPendingEntry = synchronized(pendingEntries) {
-                            pendingEntries.isNotEmpty()
-                        },
-                        reconciliationRequired = reconcileRequired,
-                        killLatched = killLatched
-                    ) &&
-                    candidate.signal &&
-                    candidate.score >= 70.0 &&
-                    executionGate.tryReserve(candidate.symbol)
-
-            if (!accepted) return@post
-
-            if (!stateMachine.transition(
-                    TradingState.ENTRY_PENDING,
-                    "BUY intent admitted by ExecutionGate"
-                )) {
-                executionGate.release(candidate.symbol)
-                return@post
-            }
-
-            prefs.edit()
-                .putString("execution_gate_symbol", candidate.symbol)
-                .apply()
-
-            executionExecutor.execute {
-                val result = try {
-                    executeBuyWithProtection(candidate, gated = true)
-                    ExecutionResult(candidate.symbol, true)
-                } catch (x: Throwable) {
-                    ExecutionResult(
-                        candidate.symbol,
-                        false,
-                        x.message ?: x.javaClass.simpleName
-                    )
-                }
-
-                tradingEventLoop.post {
-                    executionGate.release(result.symbol)
-                    prefs.edit()
-                        .remove("execution_gate_symbol")
-                        .apply()
-
-                    if (
-                        !result.success &&
-                        !reconcileRequired &&
-                        positionList().none { it.symbol == result.symbol } &&
-                        synchronized(pendingEntries) {
-                            !pendingEntries.containsKey(result.symbol)
-                        } &&
-                        stateMachine.state == TradingState.ENTRY_PENDING
-                    ) {
-                        stateMachine.transition(
-                            if (positionList().isEmpty()) {
-                                TradingState.READY_FLAT
-                            } else {
-                                TradingState.PROTECTED
-                            },
-                            "ExecutionResult failure: " +
-                                (result.error ?: "unknown execution failure")
-                        )
-                    }
-                    if (!result.success) {
-                        lastError =
-                            "ORDER " + result.symbol + ": " +
-                                (result.error ?: "unknown execution failure")
-                    }
-                }
-            }
-        }
     }
 
     private fun manageWilliamsStops() {
@@ -4143,11 +4489,13 @@ private class NativeEngine(
                         require(qty >= rules.minQty) {
                             "Emergency SELL quantity below Binance minimum"
                         }
+                        val emergencyClientOrderId = "W5EM_" + System.nanoTime().toString(16)
                         val sell = signedPost(
                             "/api/v3/order",
                             "symbol=" + stored.symbol +
                                 "&side=SELL&type=MARKET&quantity=" +
-                                fmtQty(qty, rules.decimals)
+                                fmtQty(qty, rules.decimals) +
+                                "&newClientOrderId=" + emergencyClientOrderId
                         )
                         val exitPrice = sell.optString("cummulativeQuoteQty")
                             .toDoubleOrNull()
@@ -5538,510 +5886,10 @@ private class NativeEngine(
         candidate: BaseAnalysis,
         gated: Boolean = false
     ) {
+        // Kept as an explicit tombstone for old internal callers. Do not add a
+        // direct MARKET BUY fallback here; entries must use conditional
+        // CampaignEngine intents and the centralized signed REST gate.
         error("Legacy direct BUY execution is disabled; CampaignEngine is canonical")
-
-        if (positions.containsKey(candidate.symbol)) {
-            return
-        }
-        if (positionList().size >= maxOpenPositions) {
-            error("Maximum open positions reached")
-        }
-        if (reconcileRequired) {
-            error("RECONCILE_REQUIRED")
-        }
-        if (killLatched) {
-            error("KILL_SWITCH_LATCHED")
-        }
-        require(marketDataFresh()) {
-            "REST market data is not fresh enough for execution"
-        }
-        // WebSockets are accelerators. REST + exchange-side OCO remain the
-        // authoritative safety path when a stream is degraded. The worker
-        // performs periodic REST reconciliation while user WS is unavailable.
-        require(
-            if (gated) {
-                stateMachine.state == TradingState.ENTRY_PENDING
-            } else {
-                stateMachine.state == TradingState.READY_FLAT
-            }
-        ) {
-            "FSM forbids BUY from state " + stateMachine.state.name
-        }
-        if (
-            reservedRiskPct() >=
-                maxTotalRiskPct - 0.000001
-        ) {
-            error("Portfolio risk budget exhausted")
-        }
-        if (!candidate.signal) {
-            error("signal not confirmed")
-        }
-        if (candidate.score < 70.0) {
-            error("score below entry threshold")
-        }
-        if (candidate.spreadPct > maxSpreadPct) {
-            error("spread too wide")
-        }
-        if (
-            candidate.atrPct <= 0.0 ||
-            candidate.atrPct > 0.08
-        ) {
-            error("ATR outside safety range")
-        }
-
-        val rules =
-            symbolFilters(candidate.symbol)
-
-        if (!rules.ocoAllowed) {
-            error(
-                "OCO is not supported for " +
-                    candidate.symbol
-            )
-        }
-
-        val account = signedAccount()
-        var usdtFree = 0.0
-        val balances =
-            account.getJSONArray("balances")
-
-        for (i in 0 until balances.length()) {
-            val b = balances.getJSONObject(i)
-            if (b.optString("asset") == "USDT") {
-                usdtFree =
-                    b.optString("free")
-                        .toDoubleOrNull() ?: 0.0
-                break
-            }
-        }
-
-        if (usdtFree < 25.0) {
-            error("USDT balance too low")
-        }
-
-        val remainingRiskPct =
-            (maxTotalRiskPct -
-                reservedRiskPct())
-                .coerceAtLeast(0.0)
-
-        val allocationRiskPct =
-            min(
-                maxRiskPerTradePct,
-                remainingRiskPct
-            )
-
-        if (allocationRiskPct < 0.001) {
-            error(
-                "Remaining portfolio risk budget is too small"
-            )
-        }
-
-        // Williams-style initial protection: structure/Teeth first, ATR as guard.
-        val stopDistance = initialWilliamsStopDistance(candidate)
-
-        val effectiveRiskDistance =
-            stopDistance +
-                feeBufferPerSidePct * 2.0 +
-                maxSlippagePct
-
-        val riskQuote =
-            usdtFree * allocationRiskPct
-
-        val notional =
-            min(
-                usdtFree * 0.25,
-                riskQuote / effectiveRiskDistance
-            )
-
-        if (
-            rules.minNotional > 0.0 &&
-            notional < rules.minNotional
-        ) {
-            error(
-                "Notional below Binance minimum: " +
-                    rules.minNotional
-            )
-        }
-
-        if (notional < 10.0) {
-            error("order notional too small")
-        }
-
-        val (bookVwap, bookSlippage) =
-            estimateMarketBuySlippage(
-                candidate.symbol,
-                notional
-            )
-        require(bookSlippage <= maxSlippagePct) {
-            "Order-book slippage " +
-                "%.4f".format(Locale.US, bookSlippage * 100.0) +
-                "% exceeds configured " +
-                "%.4f".format(Locale.US, maxSlippagePct * 100.0) +
-                "% for " + candidate.symbol
-        }
-
-        val clientOrderId =
-            "W4B_" +
-                java.util.UUID.randomUUID()
-                    .toString()
-                    .replace("-", "")
-                    .take(28)
-
-        if (!gated) {
-            if (!stateMachine.transition(
-                TradingState.ENTRY_PENDING,
-                "BUY intent created"
-            )) {
-                error("FSM rejected BUY intent")
-            }
-        }
-
-        synchronized(pendingEntries) {
-            pendingEntries[candidate.symbol] =
-                PendingEntry(
-                    symbol = candidate.symbol,
-                    clientOrderId = clientOrderId,
-                    notional = notional,
-                    stopDistance = stopDistance
-                )
-        }
-        savePersistedState()
-
-        val baseAsset = candidate.symbol.removeSuffix("USDT")
-        val currentBaseQty = run {
-            var amount = 0.0
-            for (i in 0 until balances.length()) {
-                val row = balances.getJSONObject(i)
-                if (row.optString("asset") == baseAsset) {
-                    amount =
-                        (row.optString("free").toDoubleOrNull() ?: 0.0) +
-                        (row.optString("locked").toDoubleOrNull() ?: 0.0)
-                    break
-                }
-            }
-            amount
-        }
-
-        if (rules.maxPosition.isFinite()) {
-            val referencePrice = runCatching {
-                JSONObject(
-                    getBody("/api/v3/ticker/price?symbol=" + candidate.symbol)
-                ).optString("price").toDoubleOrNull()
-            }.getOrNull() ?: 0.0
-
-            if (referencePrice > 0.0) {
-                val estimatedQty = notional / referencePrice
-                require(
-                    currentBaseQty + estimatedQty <=
-                        rules.maxPosition + rules.step
-                ) {
-                    "Binance MAX_POSITION would be exceeded"
-                }
-            }
-        }
-
-        val buyParams =
-            if (rules.quoteOrderQtyMarketAllowed) {
-                "symbol=" + candidate.symbol +
-                    "&side=BUY&type=MARKET" +
-                    "&quoteOrderQty=" +
-                    ExecutionMath.plain(
-                        ExecutionMath.decimal(notional),
-                        2
-                    ) +
-                    "&newClientOrderId=" +
-                    clientOrderId
-            } else {
-                val ticker =
-                    JSONObject(
-                        getBody(
-                            "/api/v3/ticker/price?symbol=" +
-                                candidate.symbol
-                        )
-                    )
-                val price =
-                    ticker.optString("price")
-                        .toDoubleOrNull()
-                        ?: error(
-                            "No market price for " +
-                                candidate.symbol
-                        )
-                val qty =
-                    floorStep(
-                        notional / price,
-                        rules.step
-                    )
-
-                if (
-                    qty < rules.minQty ||
-                    qty * price < rules.minNotional
-                ) {
-                    error(
-                        "Calculated quantity is below Binance filters"
-                    )
-                }
-
-                "symbol=" + candidate.symbol +
-                    "&side=BUY&type=MARKET" +
-                    "&quantity=" +
-                    fmtQty(
-                        qty,
-                        rules.decimals
-                    ) +
-                    "&newClientOrderId=" +
-                    clientOrderId
-            }
-
-        try {
-            val buy =
-                signedPost(
-                    "/api/v3/order",
-                    buyParams
-                )
-
-            val qty =
-                buy.optString("executedQty")
-                    .toDoubleOrNull() ?: 0.0
-            val quote =
-                buy.optString(
-                    "cummulativeQuoteQty"
-                ).toDoubleOrNull() ?: 0.0
-
-            if (qty <= 0.0 || quote <= 0.0) {
-                error("BUY returned no fill")
-            }
-
-            val entry = quote / qty
-
-            val ask =
-                runCatching {
-                    JSONObject(
-                        getBody(
-                            "/api/v3/ticker/bookTicker?symbol=" +
-                                candidate.symbol
-                        )
-                    )
-                }.getOrNull()
-                    ?.optString("askPrice")
-                    ?.toDoubleOrNull()
-                    ?: 0.0
-
-            if (
-                ask > 0.0 &&
-                entry >
-                    ask * (1.0 + maxSlippagePct)
-            ) {
-                error(
-                    "Slippage exceeds " +
-                        (maxSlippagePct * 100.0) +
-                        "% for " +
-                        candidate.symbol
-                )
-            }
-
-            val protection =
-                createProtection(
-                    symbol = candidate.symbol,
-                    qty = qty,
-                    entry = entry,
-                    stopDistance = stopDistance
-                )
-
-            val journalSnapshot =
-                JSONObject()
-                    .put("symbol", candidate.symbol)
-                    .put("score", candidate.score)
-                    .put("signal", candidate.signal)
-                    .put("breakout_distance_pct", candidate.breakoutDistancePct)
-                    .put("risk_pct", candidate.riskPct)
-                    .put("risk_reward", candidate.riskReward)
-                    .put("atr_pct", candidate.atrPct)
-                    .put("spread_pct", candidate.spreadPct)
-                    .put("htf_confirmed", candidate.htfCandidate)
-                    .put("reason", candidate.reason)
-                    .put("wave_position", candidate.wave.position)
-                    .put("wave_phase", candidate.wave.phase)
-                    .put("wave_confidence", candidate.wave.confidence)
-                    .put("wave_exhaustion_risk", candidate.wave.exhaustionRisk)
-                    .put("wave_path", candidate.wave.path)
-                    .put("entry_timeframe", candidate.wave.entryFrame)
-                    .put("entry_wave", candidate.wave.entryWave)
-                    .put("parent_timeframe", candidate.wave.parentFrame)
-                    .put("parent_wave", candidate.wave.parentWave)
-                    .put("entry_wave_confidence", candidate.wave.entryConfidence)
-                    .put("nested_w3_parent_w5", candidate.wave.nestedW3ParentW5)
-                    .put("wave_alligator_bullish", candidate.wave.alligatorBullish)
-                    .put("wave_ao_positive", candidate.wave.aoPositive)
-                    .put("obi", candidate.obi)
-                    .put("trade_flow_imbalance", candidate.tradeFlowImbalance)
-            TradeJournal.recordEntry(
-                prefs = prefs,
-                symbol = candidate.symbol,
-                entry = entry,
-                qty = protection.qty,
-                stop = protection.stop,
-                take = protection.take,
-                riskPct = protection.riskPct,
-                notional = notional,
-                candidate = journalSnapshot
-            )
-
-            synchronized(positions) {
-                positions[candidate.symbol] =
-                    PositionState(
-                        symbol = candidate.symbol,
-                        qty = protection.qty,
-                        entry = entry,
-                        stop = protection.stop,
-                        take = protection.take,
-                        riskPct = protection.riskPct,
-                        ocoListClientId =
-                            protection.ocoClientId,
-                        ocoListId = protection.ocoListId,
-                        entryOrderId = buy.optString(
-                            "orderId"
-                        ),
-                        entryClientOrderId = clientOrderId,
-                        openedAt = buy.optLong(
-                            "transactTime",
-                            System.currentTimeMillis()
-                        )
-                    )
-            }
-
-            synchronized(pendingEntries) {
-                pendingEntries.remove(
-                    candidate.symbol
-                )
-            }
-            stateMachine.force(
-                TradingState.PROTECTED,
-                "BUY filled and OCO created"
-            )
-            savePersistedState()
-
-            lastOrder =
-                JSONObject()
-                    .put("buy", buy)
-                    .put(
-                        "risk_pct",
-                        protection.riskPct
-                    )
-                    .put(
-                        "notional_usdt",
-                        notional
-                    )
-                    .put(
-                        "stop_price",
-                        protection.stop
-                    )
-                    .put(
-                        "take_profit",
-                        protection.take
-                    )
-                    .put(
-                        "oco_list_client_id",
-                        protection.ocoClientId
-                    )
-        } catch (x: Exception) {
-            val pending =
-                synchronized(pendingEntries) {
-                    pendingEntries[candidate.symbol]
-                }
-
-            val order = runCatching {
-                signedGet(
-                    "/api/v3/order",
-                    "symbol=" + candidate.symbol +
-                        "&origClientOrderId=" +
-                        (pending?.clientOrderId ?: clientOrderId)
-                )
-            }.getOrNull()
-
-            if (order?.optString("status") == "FILLED") {
-                val filled =
-                    order.optString("executedQty").toDoubleOrNull() ?: 0.0
-                val quote =
-                    order.optString("cummulativeQuoteQty").toDoubleOrNull() ?: 0.0
-
-                if (filled > 0.0) {
-                    val entryPrice =
-                        if (quote > 0.0) quote / filled
-                        else candidate.candles.lastOrNull()?.c ?: 0.0
-
-                    synchronized(positions) {
-                        positions[candidate.symbol] =
-                            PositionState(
-                                symbol = candidate.symbol,
-                                qty = filled,
-                                entry = entryPrice,
-                                stop = entryPrice * (1.0 - (pending?.stopDistance ?: 0.02)),
-                                take = entryPrice * (1.0 + (pending?.stopDistance ?: 0.02) * 4.0),
-                                riskPct = pending?.stopDistance ?: 0.02,
-                                entryOrderId = order.optString("orderId"),
-                                entryClientOrderId =
-                                    pending?.clientOrderId ?: clientOrderId,
-                                openedAt = order.optLong(
-                                    "transactTime",
-                                    System.currentTimeMillis()
-                                )
-                            )
-                    }
-
-                    stateMachine.force(
-                        TradingState.OPEN_UNPROTECTED,
-                        "BUY transport outcome unknown; REST proved FILLED"
-                    )
-                    synchronized(pendingEntries) {
-                        pendingEntries.remove(candidate.symbol)
-                    }
-                    savePersistedState()
-
-                    val protectionResult = runCatching {
-                        reconcilePositionsWithExchange()
-                    }
-
-                    if (protectionResult.isFailure) {
-                        // Never assume the failed protection request was harmless.
-                        // Reconcile again immediately; only emergency-close if the
-                        // exchange still cannot prove protection.
-                        val emergency = runCatching {
-                            reconcilePositionsWithExchange()
-                        }
-
-                        if (emergency.isFailure) {
-                            runCatching {
-                                signedPost(
-                                    "/api/v3/order",
-                                    "symbol=" + candidate.symbol +
-                                        "&side=SELL&type=MARKET" +
-                                        "&quantity=" +
-                                        fmtQty(filled, rules.decimals)
-                                )
-                            }.onFailure {
-                                setReconcileRequired(
-                                    "BUY filled without verifiable protection; emergency SELL failed: " +
-                                        (it.message ?: it.javaClass.simpleName)
-                                )
-                            }
-                        }
-                    }
-                }
-            } else {
-                synchronized(pendingEntries) {
-                    pendingEntries.remove(candidate.symbol)
-                }
-                stateMachine.transition(
-                    TradingState.READY_FLAT,
-                    "BUY not filled / terminal after transport error"
-                )
-                savePersistedState()
-            }
-
-            throw IllegalStateException(
-                "Protected BUY failed: " +
-                    (x.message ?: x.javaClass.simpleName)
-            )
-        }
     }
 
     private fun createProtection(
@@ -6298,6 +6146,7 @@ private class NativeEngine(
                     .put("state", stateName())
             }
 
+            val manualClientOrderId = "W5X_" + System.nanoTime().toString(16)
             val sell =
                 signedPost(
                     "/api/v3/order",
@@ -6307,7 +6156,8 @@ private class NativeEngine(
                         fmtQty(
                             qty,
                             rules.decimals
-                        )
+                        ) +
+                        "&newClientOrderId=" + manualClientOrderId
                 )
 
             val exitPrice =

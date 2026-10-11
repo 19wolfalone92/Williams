@@ -10,6 +10,8 @@ def _legacy_campaign_mode(monkeypatch):
 
 from db import Database
 from portfolio_trader import MultiPositionTrader
+from execution_barrier import ExecutionBarrier
+from market_context import ContextCache
 
 
 class FakeClient:
@@ -97,6 +99,46 @@ class FakeClient:
                 return order
         raise RuntimeError("order not found")
 
+    def my_trades(self, symbol, order_id=None, limit=1000):
+        """Authoritative-looking offline trade records for completed fake orders."""
+        order = next(
+            (
+                row for row in self.orders_by_symbol.get(symbol.upper(), [])
+                if str(row.get("orderId")) == str(order_id)
+            ),
+            None,
+        )
+        if order is None:
+            order = next(
+                (
+                    row for row in self.all_orders(symbol)
+                    if str(row.get("orderId")) == str(order_id)
+                ),
+                None,
+            )
+        if order is None:
+            try:
+                order = self.get_order(symbol, order_id=order_id)
+            except Exception:
+                order = None
+        if not order or str(order.get("executedQty", "0")) in {"", "0", "0.0"}:
+            return []
+        quantity = str(order.get("executedQty"))
+        quote_quantity = str(order.get("cummulativeQuoteQty", ""))
+        price = str(order.get("price") or (
+            float(quote_quantity) / float(quantity) if quote_quantity and float(quantity) else "0"
+        ))
+        return [{
+            "id": str(order_id) + "-trade-1",
+            "orderId": order.get("orderId"),
+            "symbol": symbol.upper(),
+            "qty": quantity,
+            "price": price,
+            "quoteQty": quote_quantity or str(float(quantity) * float(price)),
+            "commission": "0",
+            "commissionAsset": "USDT",
+        }]
+
     def order(self, symbol, *args, **kwargs):
         raise AssertionError("unexpected new order in lifecycle recovery test")
 
@@ -126,6 +168,8 @@ class FakeClient:
         return {
             "orderListId": order_list_id,
             "listClientOrderId": list_client_order_id,
+            "listStatusType": "EXEC_STARTED",
+            "listOrderStatus": "EXECUTING",
             "orderReports": [
                 {
                     "symbol": symbol,
@@ -287,7 +331,7 @@ def test_multiple_positions_are_independent_and_exit_is_mapped_to_one_symbol(tmp
         },
     ]
 
-    multi = MultiPositionTrader(client, db=db)
+    multi = MultiPositionTrader(client, db=db, execution_barrier=ExecutionBarrier(ContextCache(), db))
     result = multi.reconcile_open_positions()
 
     assert any(x.get("closed") and x.get("symbol") == "BTCUSDT" for x in result)
@@ -330,7 +374,7 @@ def test_missing_oco_is_restored_from_persisted_position(tmp_path: Path):
         "time": 100,
     }]
 
-    multi = MultiPositionTrader(client, db=db)
+    multi = MultiPositionTrader(client, db=db, execution_barrier=ExecutionBarrier(ContextCache(), db))
     result = multi.reconcile_open_positions()
 
     assert result[0]["trade_id"] == trade_id
@@ -371,7 +415,7 @@ def test_filled_pending_buy_is_recovered_into_its_own_position(tmp_path: Path):
         "ENTRY_PENDING",
     )
 
-    multi = MultiPositionTrader(client, db=db)
+    multi = MultiPositionTrader(client, db=db, execution_barrier=ExecutionBarrier(ContextCache(), db))
     result = multi.recover_pending_entries()
 
     assert result[0]["symbol"] == "SOLUSDT"
@@ -443,7 +487,7 @@ def test_recover_keeps_reconcile_barrier_for_unresolved_exchange_position(tmp_pa
     }
     db.state_set("position_state:SOLUSDT", "RECONCILE_REQUIRED")
 
-    multi = MultiPositionTrader(client, db=db, symbols=["SOLUSDT"])
+    multi = MultiPositionTrader(client, db=db, execution_barrier=ExecutionBarrier(ContextCache(), db))
     result = multi.recover()
 
     assert result["ok"] is False
@@ -524,7 +568,7 @@ def test_partial_manual_sell_keeps_residual_position_protected(tmp_path: Path):
         risk_pct=0.5,
     )
     db.state_set("position_state:BTCUSDT", "OPEN")
-    trader = MultiPositionTrader(client, db=db, symbols=["BTCUSDT"])
+    trader = MultiPositionTrader(client, db=db, execution_barrier=ExecutionBarrier(ContextCache(), db))
     result = trader.manual_sell("BTCUSDT")
 
     assert result["sold"] is True
@@ -591,7 +635,7 @@ def test_partial_emergency_sell_never_closes_trade_as_flat(tmp_path: Path):
         risk_pct=0.5,
     )
     db.state_set("position_state:BTCUSDT", "OPEN")
-    trader = MultiPositionTrader(client, db=db, symbols=["BTCUSDT"])
+    trader = MultiPositionTrader(client, db=db, execution_barrier=ExecutionBarrier(ContextCache(), db))
     trader.dry_run = False
     result = trader._emergency_market_sell("BTCUSDT", 1.0, trade_id, "TEST_PARTIAL")
 
