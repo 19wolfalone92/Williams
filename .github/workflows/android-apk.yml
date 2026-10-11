@@ -10,6 +10,8 @@ on:
       - 'gradle/**'
       - 'settings.gradle.kts'
       - '.github/workflows/**'
+      - '*.py'
+      - 'tests/**'
   pull_request:
     paths:
       - 'app/**'
