@@ -46,11 +46,14 @@ def verify_execution_account_identity(
     api_key = str(getattr(client, "api_key", "") or "")
     fingerprint = credential_fingerprint(api_key)
     expected = os.getenv("WILLIAMS_EXPECTED_API_KEY_SHA256", "").strip().lower()
-    if expected:
-        if len(expected) != 64 or not hmac.compare_digest(expected, fingerprint):
-            raise AccountIdentityBlocked(
-                "configured Binance API key fingerprint does not match WILLIAMS_EXPECTED_API_KEY_SHA256"
-            )
+    if len(expected) != 64 or any(ch not in "0123456789abcdef" for ch in expected):
+        raise AccountIdentityBlocked(
+            "WILLIAMS_EXPECTED_API_KEY_SHA256 must be explicitly configured before execution"
+        )
+    if not hmac.compare_digest(expected, fingerprint):
+        raise AccountIdentityBlocked(
+            "configured Binance API key fingerprint does not match WILLIAMS_EXPECTED_API_KEY_SHA256"
+        )
 
     account_method = getattr(client, "account", None)
     if not callable(account_method):
