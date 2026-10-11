@@ -850,3 +850,89 @@ The next change must not merely add more journal fields. It must route the actua
 No Binance Mainnet or real trading operations were used. `main` was not modified, and PR #47 remains open Draft.
 
 **TASK 001.7 remains BLOCKED — NOT ACCEPTED. Do not resume trading.**
+
+
+# TASK 001.8 — Atomic Financial Effect Application, Exactly-Once Projection & Recovery Proof
+
+**Status: BLOCKED — NOT ACCEPTED**  
+**Audit baseline SHA:** `d0a7020ba5ead0514f0c6ed9caa56db95540caa4`  
+**Base SHA:** `04da5f9c09572e99ff310be3a1908179165e528c`  
+**Branch:** `audit/williams-2.1-task-001-architecture`  
+**PR:** [#47](https://github.com/19wolfalone92/Williams/pull/47), open Draft, base `main`. No merge or main-branch mutation performed.
+
+## Current-state verification
+
+- **CODE-CONFIRMED:** Branch head at audit start was `d0a7020ba5ead0514f0c6ed9caa56db95540caa4`.
+- **CODE-CONFIRMED:** PR #47 head matched that SHA; PR remained open and Draft.
+- **CI-PROVEN (baseline only, not this task's eventual SHA):**
+  - Python backend tests, run [38117723560](https://github.com/19wolfalone92/Williams/actions/runs/38117723560), SHA `d0a7020ba5ead0514f0c6ed9caa56db95540caa4`: success.
+  - Williams Campaign CI, run [38117723550](https://github.com/19wolfalone92/Williams/actions/runs/38117723550), SHA `d0a7020ba5ead0514f0c6ed9caa56db95540caa4`: success.
+  - Build Android APK, run [38117723672](https://github.com/19wolfalone92/Williams/actions/runs/38117723672), SHA `d0a7020ba5ead0514f0c6ed9caa56db95540caa4`: success.
+- These runs validate only the baseline commit. They are not evidence for changes made for TASK 001.8.
+- **CODE-CONFIRMED:** The requested `execution_recovery.py` path does not exist at this branch head. A similarly named runtime or recovery path must not be assumed without tracing actual callers.
+- **NOT VERIFIED:** Binance Spot Testnet lifecycle, physical Android process death/restart, Futures financial lifecycle, and independent-process crash recovery.
+
+## Production source-to-sink inventory (baseline)
+
+| Source/path | Observed production behavior | Persistence / transaction evidence | Status |
+|---|---|---|---|
+| `portfolio_trader.py::_exit_fee_quote` | Reads authoritative `my_trades`; calls `db.record_exchange_fill(symbol, row)`; fee conversion returns a legacy float | Fill observation is recorded, but the method does not call a canonical effect applier; fee valuation is a separate path | CODE-CONFIRMED |
+| `portfolio_trader.py` filled-order normalization (around lines 840+) | Retrieves authoritative trade history when order payload has no fills; records each fill; rejects unknown commission | Journal ingestion is present, but this path still calculates a compatibility fee summary separately | CODE-CONFIRMED |
+| `campaign_execution.py::_executed_fee_quote` | Reads trade history and calls `record_exchange_fill`; requires known fee for fee valuation | Campaign state, fill effects, protection, and trade-row writes occur in separate code paths; one shared effect transaction was not found in the inspected path | CODE-CONFIRMED |
+| `db.py::record_exchange_fill` | Stores exact decimal text in `exchange_fill_ledger` and `financial_effect_journal`; fee can be enriched later | Journal state is `READY_TO_APPLY` or `RECONCILE_REQUIRED`; no projection-application receipt is recorded by this method | CODE-CONFIRMED |
+| `db.py::save_campaign_fill` | Inserts a new `campaign_fills` row | Uses SQLite `REAL` and Python `float`; no exchange-fill idempotency key exists in this table | CODE-CONFIRMED |
+| `campaigns` schema in `db.py` | Persists position quantity, average entry, realized PnL, open/pending risk, and capital reservation | These financial columns are SQLite `REAL`; not in the same demonstrated transaction as journal status and all other projections | CODE-CONFIRMED |
+| `trades` and legacy trade update methods in `db.py` / `campaign_execution.py` | Open/closed trade rows and fees are mutated through separate methods/SQL | Canonical exact-decimal representation and exactly-once effect identity are not demonstrated | CODE-CONFIRMED |
+| `risk_engine.py`, `campaign_execution.py`, `portfolio_trader.py` | Risk and sizing calculations use float conversions | Decimal Integrity is not satisfied for the full financial path | CODE-CONFIRMED |
+| `server.py` | Read-side summaries convert values to float and include `CAST(pnl AS REAL)` | Presentation/read-side paths are not canonical accounting, but still require explicit classification | CODE-CONFIRMED |
+| Android `StandaloneRuntime.kt`, `ExecutionGate.kt`, `TradeJournal.kt`, `TradingAuditStore.kt` | Separate Android execution/persistence components exist | No proof that Android fill application shares the backend's journal or a cross-runtime idempotent projection protocol | NOT VERIFIED |
+
+This is a source inventory of confirmed high-impact paths, **not yet a complete proof that every writer has been enumerated**. A complete writer/sink search and caller-level graph remains an acceptance requirement.
+
+## Critical blockers identified
+
+1. **No production Effect Applier has been established.** Journal ingestion is not atomic application to Position, Campaign, `campaign_fills`, Fees, PnL/cost basis, risk reservation, and protection state.
+2. **Exactly-once projections are not proven.** `campaign_fills` has no canonical exchange-fill identity constraint; `save_campaign_fill` inserts rows and uses `REAL`/float. Recovery and ordinary processing can reach overlapping fill-handling logic.
+3. **Decimal Integrity fails for canonical projections.** Campaign and campaign-fill financial columns are SQLite `REAL`; multiple production calculations convert to float. A journal with decimal text does not make downstream projections exact.
+4. **Durable conflict latching needs proof/fix.** In `record_exchange_fill`, a detected identity conflict raises from within the transaction. The surrounding transaction manager rolls back on exceptions; therefore any reconciliation flag written earlier in that same transaction must not be assumed durable after the exception. This needs a regression test and a conflict-persistence design that commits the diagnostic independently of the rejected fill mutation.
+5. **Account identity is absent from the observed journal primary key.** Current key is `venue + market_type + symbol + exchange_trade_id`; account scoping must be resolved from actual account configuration and supported deployment model before claiming cross-account identity safety.
+6. **Global Recovery Gate is not proven to query all unfinished effects and compare all financial projections before permitting entry.**
+7. **Crash/concurrency/migration proof is incomplete.** No full fault-injection matrix, two-independent-OS-process proof, populated v6/v7/v8 migration recovery evidence, or full cross-process SQLite BUSY/LOCKED proof is recorded here.
+8. **Spot residual protection is not proven against actual free/locked base quantity after base-asset commission and partially filled orders.**
+9. **Android parity is not proven.** Separate Android persistence/mutation paths exist; no complete mutation-spy evidence or physical process-death/restart result is available.
+10. **Futures remain NOT VERIFIED.** Spot evidence, even if later obtained, cannot be reused as Futures proof.
+
+## Acceptance matrix
+
+| Criterion | Status | Reason |
+|---|---|---|
+| P0-01 All production fill paths journaled | BLOCKED | Inventory is incomplete; multiple direct legacy projection writers remain |
+| P0-02 Production Effect Applier | BLOCKED | No single integrated applier proven |
+| P0-03 Position exactly-once | BLOCKED | Atomic projection receipt/idempotency not proven |
+| P0-04 Campaign exactly-once | BLOCKED | `campaign_fills` insert path is not keyed to journal effect |
+| P0-05 Fees/PnL exactly-once | BLOCKED | Late fee correction and PnL/cost-basis update protocol absent |
+| P0-06 Risk reservation exactly-once | BLOCKED | Shared atomic transaction/recovery proof absent |
+| P0-07 Decimal Integrity | BLOCKED | Canonical financial projections include `REAL` and float |
+| P0-08 Crash consistency | BLOCKED | Required fault-injection matrix not run |
+| P0-09 Independent OS processes | BLOCKED | No process-level concurrency evidence |
+| P0-10 Migrations v6/v7/v8 | BLOCKED | Populated migration/restart evidence absent |
+| P0-11 Global Recovery Gate | BLOCKED | Full cross-projection reconciliation gate not proven |
+| P0-12 Spot residual protection | BLOCKED | Actual available quantity/protection invariant not proven |
+| P0-13 Android mutation safety | BLOCKED | Complete sink-spy and restart evidence absent |
+| P0-14 APK | BASELINE ONLY | APK workflow passed on baseline SHA only |
+| P0-15 CI | BASELINE ONLY | Listed runs are on baseline SHA; every changed SHA needs its own required runs |
+| P0-16 Git/PR integrity | PASS FOR BASELINE | Existing branch/PR/base confirmed; PR open Draft, no merge |
+| P0-17 Audit report | IN PROGRESS | This section records the baseline findings; implementation evidence still missing |
+
+## Required next implementation sequence
+
+1. Finish repository-wide writer and reader inventory, including all SQLite update/insert sites, recovery loops, and Android mutating sinks.
+2. Define account-scoped canonical fill/effect identity and immutable-payload conflict handling. Persist conflict diagnostics after rolling back rejected financial writes.
+3. Implement a production Effect Applier with one real SQLite transaction for every compatible local projection, including an effect application receipt and unique fill identity on `campaign_fills`. Do not mark `APPLIED` unless every required projection is committed.
+4. Integrate all ordinary and recovery fill paths with that applier; remove or block bypass writers.
+5. Migrate canonical accounting fields to exact decimal-text/integer-scaled representation only with explicit legacy uncertainty handling; do not reinterpret historical REAL values as exact.
+6. Add duplicate/conflicting delivery, late-fee correction, fault-injection, multiprocess, and populated migration tests; verify real projection values, not only row counts.
+7. Prove the global recovery gate, Spot residual protection, and Android mutation-path behavior.
+8. Run all required workflows on the final exact SHA and update this report with run IDs. Keep PR #47 Draft and all new entries blocked until every P0 criterion is proven.
+
+**Final decision: TASK 001.8 — BLOCKED — NOT ACCEPTED.** This report does not claim that the production Effect Applier, exactly-once accounting, Decimal Integrity, crash recovery, physical Android restart, Spot Testnet lifecycle, or Futures behavior has been implemented or verified. New trade entries must remain blocked while any required financial reconciliation is unresolved.
