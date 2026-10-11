@@ -614,3 +614,76 @@ These run IDs are tied to `2d056caa...`, not to this later report commit. Final-
 9. Check required workflows and individual jobs on the final report-bearing SHA; do not reuse results from an earlier commit.
 
 Do not resume trading. Status remains **BLOCKED — NOT ACCEPTED** until every P0 has executable evidence.
+
+
+### TASK 003.4 — atomic fill-effect journal checkpoint (2026-10-11)
+
+**Status: BLOCKED — NOT ACCEPTED.** This checkpoint adds a narrowly scoped durable journal primitive and regression tests; it does not establish end-to-end production financial accounting or authorize trading.
+
+#### Exact refs
+
+- Starting PR head: `2668ad2f2873be141055b4ee726e25e1b63a56cb`.
+- Current branch head after implementation/tests: `888cf25129148a3533265e1702343506a3db53fd`.
+- PR #48: Open / Draft / unmerged.
+- Base and live `main` SHA observed via compare: `04da5f9c09572e99ff310be3a1908179165e528c`; branch is 146 commits ahead, 0 behind at this checkpoint.
+- Changes were limited to `db.py` and `test_task003_execution_safety.py` so far. No main write or merge was performed.
+
+#### Root cause observed in current Python persistence model
+
+- `campaign_fills` uses an auto-increment local row ID and has no uniqueness constraint for exchange/account/environment/symbol/fill identity. Re-delivery therefore has no demonstrated exchange-fill exactly-once constraint at this table boundary.
+- `campaign_fills.quantity`, `price`, `quote_quantity`, `fee_quote`, and `commission_base` are SQLite REAL; writer `save_campaign_fill()` converts values to `float`, and commission/fee defaults can become zero. This is not acceptable as a canonical exact financial ledger.
+- Existing `trades.fees` is also REAL with a default of zero. The current production callers have not yet been proven to route all fill effects through the new journal.
+- Android production storage and network mutation paths are not changed by this checkpoint.
+
+#### Primitive added
+
+`financial_effect_journal` stores a durable composite identity:
+`exchange + environment + account_scope + symbol + exchange_fill_id`.
+It stores quantity, price, quote quantity and commission as decimal strings, with explicit `KNOWN/UNKNOWN` commission state and `PENDING_FEE/PENDING/APPLIED` projection state.
+
+- `Database.apply_financial_fill_effect(fill, projection_writer)` inserts the journal row and applies a supplied same-connection SQLite projection callback inside one `BEGIN IMMEDIATE` transaction. Repeated identical fill delivery observes the existing effect and does not invoke the callback again.
+- If commission or commission asset is unknown, the journal is persisted as `PENDING_FEE`; projection callback is not called.
+- `Database.resolve_financial_effect_fee(...)` supports later fee resolution and applies the still-pending projection inside the same transaction.
+- A projection exception rolls back both projection writes and journal changes in that SQLite transaction.
+- The callback contract is restricted to writes through the same `Database` connection. External calls, a second database, and non-transactional side effects are outside this primitive's atomicity guarantee.
+- Existing `campaign_fills` and its writers are not yet migrated/routed through this API. Therefore this is a testable primitive, not proof that production financial effects are exactly-once.
+
+#### Tests added
+
+- `test_financial_fill_effect_is_idempotent_and_decimal_exact`
+- `test_unknown_commission_blocks_projection_until_explicit_resolution`
+- `test_projection_failure_rolls_back_journal_and_projection_atomically`
+- `test_independent_processes_apply_one_financial_fill_effect`
+
+These assert decimal-string preservation, one projection for repeated delivery, explicit unknown-fee blocking/resolution, transaction rollback, and one shared-file SQLite projection when two independent OS processes race the same fill. Results must be read from CI tied to the exact commit; the tests have not yet been reported as passing at the time of this report update.
+
+#### Acceptance matrix at this checkpoint
+
+| Area | Status | Evidence / remaining gap |
+|---|---|---|
+| Refs / PR / main unchanged | PASS | PR queried live; base/main SHA unchanged; no merge |
+| Existing required CI on prior report SHA `2668ad2...` | PASS | Runs 38117133497, 38117133475, 38117133512 all completed success; job summaries successful; artifacts exist. These results do not apply to `888cf251...`. |
+| New journal primitive | IMPLEMENTED — CI PENDING | Added in `db.py`; must pass exact-SHA tests |
+| Duplicate fill identity | PARTIALLY VERIFIED — CI PENDING | Composite identity and concurrent test added; no full production caller integration yet |
+| Atomic projection application | PARTIALLY VERIFIED — CI PENDING | Same-connection SQLite callback and rollback test; not every existing position/campaign/risk writer is wired into it |
+| Unknown fee | PARTIALLY VERIFIED — CI PENDING | Journal preserves UNKNOWN and blocks callback; end-to-end fee asset valuation/PnL gating not integrated |
+| Decimal integrity | PARTIAL | Journal uses Decimal validation and text serialization; existing campaign/trade REAL schema and float writers remain |
+| Runtime mutation spy / all production sink chains | NOT VERIFIED | No transport-spy proof covering all Python/Android callers and bypasses |
+| SQLite BUSY/LOCKED/commit failure and recovery races | NOT VERIFIED | Broader deterministic matrix still missing |
+| Full 18-point fault injection | NOT VERIFIED | Not completed |
+| Global recovery gate and authoritative Orders→Fills→Fees→Balances→Positions/Campaigns→Risk→Protection | NOT VERIFIED | No end-to-end release proof |
+| OCO / cancel-replace / bulk cancel | NOT VERIFIED | No complete authoritative race matrix |
+| Android mutation enforcement/process death | NOT VERIFIED | No injected transport or instrumentation/process-death proof added |
+| Spot SELL oversell | NOT VERIFIED | No full concurrent balance/residual exposure proof |
+| Futures | NOT VERIFIED | Must remain blocked unless a separate Futures audit proves safety |
+| Physical Android device / Spot Testnet | NOT RUN | No physical-device or exchange mutation testing performed |
+
+#### Required next minimum step
+
+1. Confirm exact-SHA CI for `888cf25129148a3533265e1702343506a3db53fd`; diagnose any failure from logs before changes.
+2. Add deterministic crash/recovery and SQLite BUSY/LOCKED/commit tests for the new journal, including process death after journal commit and after projection commit but before caller acknowledgement.
+3. Integrate the journal with actual fill ingestion and all same-database financial projections, or explicitly leave those production routes blocked.
+4. Add runtime mutation-spy coverage for the Python and Android sinks, then finish the 18-point fault matrix and global recovery-gate proof.
+5. Re-run all required CI on the final report-bearing SHA.
+
+Do not resume trading. Overall status remains **BLOCKED — NOT ACCEPTED**.
