@@ -7,12 +7,14 @@ from typing import Any
 import json
 import os
 import uuid
+from decimal import Decimal
 
 from binance_client import BinanceAPIError
 from campaign_engine import CampaignEngine
 from campaign_model import CampaignState, PendingOrderRecord, SignalSpec, SignalState, SignalType
 from decision_trace import DecisionTrace
 from execution_barrier import ExecutionBarrier, OrderIntent
+from execution_recovery import ExecutionRecoveryCoordinator
 
 
 class CampaignExecutionError(RuntimeError):
@@ -36,6 +38,207 @@ class CampaignExecutionService:
                 os.getenv("CAMPAIGN_INITIAL_RISK_FRACTION", "0.40")
             ),
         )
+        self.recovery_coordinator = ExecutionRecoveryCoordinator(
+            client,
+            db,
+            fill_handler=self._apply_recovered_campaign_fill,
+            exchange="BINANCE",
+            account_scope=os.getenv("WILLIAMS_ACCOUNT_SCOPE") or None,
+            execution_scope="spot",
+        )
+
+    def _ensure_recovered(self) -> list[dict[str, Any]]:
+        outcomes = self.recovery_coordinator.recover()
+        readiness = self.recovery_coordinator.readiness()
+        if not readiness.get("ready"):
+            raise CampaignExecutionError(
+                "execution recovery is incomplete; no new mutation allowed: "
+                + str(readiness.get("reason", "UNKNOWN"))
+            )
+        return outcomes
+
+    def _fee_in_quote(self, symbol: str, commission: Decimal, asset: str, price: Decimal) -> tuple[Decimal, Decimal]:
+        if commission < 0 or price <= 0:
+            raise CampaignExecutionError("invalid commission/price from exchange trade")
+        info = self.client.exchange_info(symbol)
+        row = self._symbols_rows(info).get(symbol.upper())
+        if row is None:
+            raise CampaignExecutionError("cannot verify quote/base assets for commission")
+        base_asset = str(row.get("baseAsset", "")).upper()
+        quote_asset = str(row.get("quoteAsset", "")).upper()
+        asset = str(asset or "").upper()
+        if commission == 0:
+            return Decimal("0"), Decimal("0")
+        if asset == quote_asset:
+            return commission, Decimal("0")
+        if asset == base_asset:
+            return commission * price, commission
+        raise CampaignExecutionError(
+            f"commission asset {asset!r} cannot be converted to quote asset {quote_asset!r}; fill remains unresolved"
+        )
+
+    def _apply_recovered_campaign_fill(
+        self, intent: dict[str, Any], order: dict[str, Any], fill: dict[str, Any]
+    ) -> None:
+        """Apply one BUY trade to fills, position/campaign, fees and trade row atomically."""
+        if str(fill.get("side", intent.get("side", ""))).upper() != "BUY":
+            raise CampaignExecutionError(
+                "sell-side campaign fill accounting is not yet integrated; keep execution UNKNOWN"
+            )
+        campaign_id = str(fill.get("campaign_id") or intent.get("campaign_id") or "")
+        if not campaign_id:
+            raise CampaignExecutionError("fill has no durable campaign_id")
+        campaign = self.engine.load_campaign(campaign_id)
+        if campaign is None:
+            raise CampaignExecutionError("fill's campaign is missing from durable storage")
+        symbol = str(fill["symbol"]).upper()
+        order_id = str(fill["order_id"])
+        qty = Decimal(str(fill["quantity"]))
+        price = Decimal(str(fill["price"]))
+        commission = Decimal(str(fill.get("commission") or "0"))
+        commission_asset = str(fill.get("commission_asset") or "")
+        fee_quote, base_fee_qty = self._fee_in_quote(
+            symbol, commission, commission_asset, price
+        )
+        net_qty = qty - base_fee_qty
+        if qty <= 0 or price <= 0 or net_qty <= 0:
+            raise CampaignExecutionError("fill quantity/price is invalid after commission")
+        purpose = str(fill.get("purpose") or intent.get("purpose") or "").upper()
+        initial_stop = float(
+            campaign.initial_stop_price
+            or campaign.tags.get("initial_stop_price", 0.0)
+            or 0.0
+        )
+        if purpose == "ADD_ON" or campaign.state == CampaignState.ADD_ON_PENDING:
+            if campaign.state == CampaignState.ADD_ON_PENDING:
+                campaign.transition(
+                    CampaignState.POSITION_EXPANDING,
+                    reason="exchange-confirmed add-on fill",
+                )
+            if campaign.state == CampaignState.POSITION_EXPANDING:
+                self.engine.record_add_on_fill(
+                    campaign,
+                    quantity=float(net_qty),
+                    average_entry_price=float(price),
+                    fill_order_id=order_id,
+                    risk_quote=float(campaign.pending_risk_quote),
+                    fee_quote=float(fee_quote),
+                )
+            elif campaign.state in {
+                CampaignState.TREND_ACTIVE, CampaignState.TRAILING,
+                CampaignState.EXHAUSTION_WATCH, CampaignState.OPEN_INITIAL,
+            }:
+                old_qty = Decimal(str(campaign.position_qty))
+                old_entry = Decimal(str(campaign.average_entry_price))
+                new_qty = old_qty + net_qty
+                campaign.average_entry_price = float(
+                    (old_qty * old_entry + net_qty * price) / new_qty
+                )
+                campaign.position_qty = float(new_qty)
+                campaign.tags["add_on_fee_quote"] = float(
+                    Decimal(str(campaign.tags.get("add_on_fee_quote", 0) or 0)) + fee_quote
+                )
+                campaign.next_action = "MONITOR_CAMPAIGN"
+                self.db.save_campaign(campaign)
+            else:
+                raise CampaignExecutionError(
+                    f"add-on fill conflicts with campaign state {campaign.state.value}"
+                )
+        else:
+            if campaign.state == CampaignState.SIGNAL_DETECTED:
+                campaign.transition(
+                    CampaignState.ENTRY_PENDING,
+                    reason="recovery found exchange-accepted entry",
+                )
+            if campaign.state == CampaignState.ENTRY_PENDING:
+                self.engine.mark_triggered(
+                    campaign,
+                    str(intent.get("signal_id") or campaign.current_signal_id),
+                    order_id,
+                )
+            if campaign.state == CampaignState.ENTRY_TRIGGERED:
+                if initial_stop <= 0:
+                    raise CampaignExecutionError("initial structural stop missing during fill recovery")
+                self.engine.record_initial_fill(
+                    campaign,
+                    quantity=float(net_qty),
+                    average_entry_price=float(price),
+                    initial_stop_price=initial_stop,
+                    fill_order_id=order_id,
+                    risk_quote=float(campaign.pending_risk_quote),
+                    fee_quote=float(fee_quote),
+                )
+            elif campaign.state in {
+                CampaignState.OPEN_INITIAL, CampaignState.TREND_ACTIVE,
+                CampaignState.TRAILING, CampaignState.EXHAUSTION_WATCH,
+            }:
+                old_qty = Decimal(str(campaign.position_qty))
+                old_entry = Decimal(str(campaign.average_entry_price))
+                new_qty = old_qty + net_qty
+                campaign.average_entry_price = float(
+                    (old_qty * old_entry + net_qty * price) / new_qty
+                )
+                campaign.position_qty = float(new_qty)
+                campaign.tags["entry_fee_quote"] = float(
+                    Decimal(str(campaign.tags.get("entry_fee_quote", 0) or 0)) + fee_quote
+                )
+                self.db.save_campaign(campaign)
+            else:
+                raise CampaignExecutionError(
+                    f"entry fill conflicts with campaign state {campaign.state.value}"
+                )
+
+        quote_qty = qty * price
+        self.db.conn.execute(
+            """INSERT INTO campaign_fills(
+                campaign_id,order_id,symbol,side,quantity,price,quote_quantity,
+                fee_quote,commission_base,commission_asset,raw_json
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                campaign_id, order_id, symbol, "BUY", str(qty), str(price),
+                str(quote_qty), str(fee_quote), str(base_fee_qty),
+                commission_asset, json.dumps(fill.get("raw", fill), default=str, sort_keys=True),
+            ),
+        )
+        trade = self.db.open_trade(symbol)
+        if trade is None:
+            order_time_ms = int(
+                fill.get("raw", {}).get("time", order.get("transactTime", order.get("time", 0))) or 0
+            )
+            entry_time = (
+                datetime.fromtimestamp(order_time_ms / 1000, tz=timezone.utc).isoformat()
+                if order_time_ms > 0 else datetime.now(timezone.utc).isoformat()
+            )
+            self.db.save_trade(
+                entry_time=entry_time,
+                symbol=symbol,
+                side="LONG",
+                entry_price=float(price),
+                quantity=float(net_qty),
+                entry_order_id=order_id,
+                entry_client_order_id=str(fill.get("client_order_id") or order.get("clientOrderId") or ""),
+                stop_price=initial_stop or None,
+                take_profit_price=None,
+                risk_pct=float(campaign.tags.get("initial_risk_pct", 0.0) or 0.0) * 100.0,
+                fees=float(fee_quote),
+                pnl=0.0,
+            )
+        else:
+            old_trade_qty = Decimal(str(trade.get("quantity") or "0"))
+            old_trade_price = Decimal(str(trade.get("entry_price") or "0"))
+            total_trade_qty = old_trade_qty + net_qty
+            total_trade_price = (
+                (old_trade_qty * old_trade_price + net_qty * price) / total_trade_qty
+                if total_trade_qty > 0 else price
+            )
+            self.db.conn.execute(
+                """UPDATE trades SET quantity=?,entry_price=?,fees=COALESCE(fees,0)+?,
+                   updated_at=? WHERE id=? AND exit_time IS NULL""",
+                (
+                    float(total_trade_qty), float(total_trade_price), float(fee_quote),
+                    datetime.now(timezone.utc).isoformat(), int(trade["id"]),
+                ),
+            )
 
     @staticmethod
     def _symbols_rows(info: dict[str, Any]) -> dict[str, dict]:
@@ -198,6 +401,8 @@ class CampaignExecutionService:
         candidate_risk_pct: float,
         capital_fraction: float = 0.25,
     ) -> dict[str, Any]:
+        # Recovery admission precedes every new entry-side decision/mutation.
+        self._ensure_recovered()
         if signal.side != "BUY":
             raise CampaignExecutionError("Current Spot campaign executor only arms LONG entries")
 
@@ -418,7 +623,11 @@ class CampaignExecutionService:
         return None
 
     def reconcile_pending_entries(self) -> list[dict[str, Any]]:
-        """Adopt conditional BUYs after triggers, partial fills, restart or crash."""
+        """Adopt conditional BUYs only after unresolved execution intents are reconciled."""
+        try:
+            self._ensure_recovered()
+        except CampaignExecutionError as exc:
+            return [{"state": "RECONCILE_REQUIRED", "reason": str(exc)}]
         rows = self.db.conn.execute(
             "SELECT key,value FROM bot_state "
             "WHERE key LIKE 'entry_client_order_id:%' "
