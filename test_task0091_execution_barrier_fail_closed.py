@@ -3,6 +3,7 @@
 These tests use a fake cache and fake store only; they never contact Binance.
 """
 import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -158,3 +159,25 @@ def test_timeout_after_possible_submit_persists_unknown_and_blocks_second_mutati
     result = barrier.execute(_intent(), lambda: second_calls.append("sent"))
     assert result.accepted is False
     assert second_calls == []
+
+
+def test_concurrent_barrier_requests_with_same_client_order_id_submit_once(tmp_path):
+    db = Database(str(tmp_path / "same-client-id.sqlite3"))
+    barrier = ExecutionBarrier(_Cache(), db)
+    item = _intent()
+    calls = []
+
+    def submit():
+        calls.append("sent")
+        return {"status": "FILLED", "executedQty": "0.01", "orderId": 9001}
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(barrier.execute, item, submit) for _ in range(2)]
+        results = [future.result(timeout=5) for future in futures]
+
+    assert sum(result.accepted for result in results) == 1
+    assert calls == ["sent"]
+    assert db.conn.execute(
+        "SELECT COUNT(*) FROM execution_intents WHERE client_order_id=?",
+        (item.client_order_id,),
+    ).fetchone()[0] == 1
