@@ -809,3 +809,75 @@ Before wiring a production callback, complete the caller and projection inventor
 - All mandatory workflows green on one final post-change SHA.
 
 No Binance Mainnet or Spot Testnet trading mutations were performed for this audit.
+
+
+## TASK 003.8 — Unified production fill ingestion checkpoint
+
+**Checkpoint date:** 2026-10-11  
+**Review baseline SHA:** `4374ac6bfc1c98e2f17780d3b21d2d11f126931b`  
+**Status:** **BLOCKED — NOT ACCEPTED**. This section records the source-to-sink findings that are confirmed at this checkpoint. It does not claim that the complete repository inventory or production integration is finished.
+
+### GitHub baseline
+
+- Repository: `19wolfalone92/Williams`
+- Branch: `audit/williams-2.1-task-003-execution-safety`
+- PR #48: open, draft, not merged; head SHA `4374ac6bfc1c98e2f17780d3b21d2d11f126931b`; base SHA `04da5f9c09572e99ff310be3a1908179165e528c`.
+- `main` remains at `04da5f9c09572e99ff310be3a1908179165e528c`.
+- No Binance Mainnet or Spot Testnet trading mutation was performed.
+- The branch SHA was re-read from GitHub before this checkpoint. No production-code change is included in this checkpoint.
+
+### CI evidence for the baseline SHA
+
+| Workflow | Run ID | SHA | Status at checkpoint | Link |
+|---|---:|---|---|---|
+| Python backend tests | 38121438598 | `4374ac6bfc1c98e2f17780d3b21d2d11f126931b` | SUCCESS | https://github.com/19wolfalone92/Williams/actions/runs/38121438598 |
+| Build Android APK | 38121438586 | `4374ac6bfc1c98e2f17780d3b21d2d11f126931b` | IN PROGRESS | https://github.com/19wolfalone92/Williams/actions/runs/38121438586 |
+| Williams Campaign CI — PR | 38121438587 | `4374ac6bfc1c98e2f17780d3b21d2d11f126931b` | IN PROGRESS | https://github.com/19wolfalone92/Williams/actions/runs/38121438587 |
+| Williams Campaign CI — push | 38121434810 | `4374ac6bfc1c98e2f17780d3b21d2d11f126931b` | IN PROGRESS | https://github.com/19wolfalone92/Williams/actions/runs/38121434810 |
+
+The Python backend run's job steps include the release contract gate, Python compilation, full static safety audit and offline tests, all successful. The APK and Campaign workflows were not terminal at the last GitHub poll; their results must not be inferred from the completed Python workflow or from previous SHAs.
+
+### Confirmed source-to-sink inventory (partial; repository-wide completeness NOT VERIFIED)
+
+| Production path | Source | Writer / mutation | Financial projections | Recovery | Transaction boundary | Status |
+|---|---|---|---|---|---|---|
+| Existing journal API | Caller-supplied fill mapping | `Database.apply_financial_fill_effect()` in `db.py` | Invokes callback-provided writes on the same `Database` connection; marks journal `APPLIED` in the same transaction | Pending fee is durable; caller must explicitly reconcile it | `Database.transaction()`; callback contract forbids external DB/network writes | CODE-CONFIRMED API; production callers NOT VERIFIED |
+| Fee resolution API | Caller-supplied commission and asset | `Database.resolve_financial_effect_fee()` | Applies callback projections and journal state in one local transaction | Rejects missing fee asset and fee changes after applied effect | Same SQLite transaction, subject to callback obeying the single-connection contract | CODE-CONFIRMED API; production callers NOT VERIFIED |
+| Campaign entry recovery | Binance order status plus `executedQty` / cumulative quote aggregate | `campaign_execution.py` calls `CampaignEngine.record_initial_fill()`, then protection/campaign/trade writers | Campaign quantity/average/risk/tags, protective-order state, `trades` | Campaign/order-intent recovery exists, but per-fill financial ledger replay is not proven | Multiple method calls and commits; not one demonstrated financial-effect transaction | CODE-CONFIRMED; BLOCKED for canonical fill ingestion |
+| Campaign add-on recovery | Binance order status plus aggregate execution fields | `campaign_execution.py` calls `record_add_on_fill()` and later updates campaign/trade state | Campaign quantity/average/risk/events and trade quantity/entry/stop/risk | Order intent reconciliation exists; per-fill fee/ledger recovery is not proven | Multiple writes/commits; atomic financial projection boundary not proven | CODE-CONFIRMED; BLOCKED |
+| Campaign fee input | Recovery path does not prove authoritative per-fill commission in inspected call | `fee_quote=0.0` passed to `record_initial_fill()` and `record_add_on_fill()` | Campaign fee tags and any derived campaign accounting | No proof that unknown is preserved as unknown at this boundary | Not an authoritative fee-resolution transaction | CODE-CONFIRMED defect/risk; BLOCKED |
+| Legacy campaign-fill store | Caller-supplied mapping | `Database.save_campaign_fill()` | `campaign_fills` | No complete canonical journal coupling shown | Uses Python `float` conversion; table stores numeric fields as SQLite `REAL`; commits outside an active transaction | CODE-CONFIRMED; BLOCKED for decimal-exact ledger |
+| Portfolio entry/recovery | Exchange order lookup and `ExecutionSummary` | `portfolio_trader.py` calls `save_trade()` with float fee-equivalent; updates trade/position/state | `trades`, position state, residual quantity, realized PnL/fees | Reconciliation and OCO/protection recovery exist; canonical per-fill journal coupling not proven | Multiple DB operations; no unified fill-effect transaction proven | CODE-CONFIRMED; BLOCKED |
+| Legacy trader paths | Order/fill accumulation and legacy execution functions | `trader.py` uses `ExecutionBarrier`, `save_trade()`, and execution accumulator paths | Trade rows, state, risk/campaign state depending on path | Execution intent barrier exists; all financial outcomes routed through canonical fill applier is NOT VERIFIED | Depends on caller; global projection atomicity not proven | PARTIALLY CODE-CONFIRMED; BLOCKED |
+| Execution aggregation | Order response and optional trade rows | `execution_accumulator.py` | Produces aggregate quantity/VWAP/fee summary consumed by callers | Aggregated recovery is not equivalent to individual immutable exchange fill identity | No journal transaction by itself | CODE-CONFIRMED role; NOT VERIFIED as canonical ingestion |
+| Python direct trade persistence | Caller-supplied trade kwargs | `Database.save_trade()` and related update methods | `trades` | Callers recover from order state, but not every write is tied to a journal effect | Direct commits visible in DB implementation | CODE-CONFIRMED; BLOCKED pending writer census and caller migration |
+| Android order/execution audit | Binance REST / execution events | `TradingAuditStore` `orders` and `executions` tables | Order/event audit; Android runtime also maintains execution/campaign state elsewhere | Durable order mutation intents exist; unified per-fill financial applier/replay is NOT VERIFIED | Android SQLite store; no shared transaction with Python DB | CODE-CONFIRMED audit store; BLOCKED for cross-platform financial authority |
+| Android fee representation | Execution event JSON and commission fields | `executions.commission REAL DEFAULT 0`, nullable `commission_asset`; trade schema has `fee_known` in newer schema | Android audit/trade records | Exact migration and all consumers' treatment of absent commission NOT VERIFIED | SQLite REAL representation; not decimal-exact | CODE-CONFIRMED schema risk; BLOCKED |
+
+### Why production integration is not being wired blindly
+
+1. The journal key is derived from `exchange + environment + account_scope + symbol + exchange_fill_id`. This requires each ingestion source to supply a real per-fill identifier. An order ID or cumulative order quantity cannot safely stand in for individual trade IDs.
+2. The journal's callback can make local writes atomic only when every projection writer uses the same SQLite connection and transaction. Campaign, trade, position, protection and Android state currently cross multiple method/commit boundaries; no global atomicity claim is justified.
+3. Existing campaign recovery call sites explicitly pass `fee_quote=0.0`. Connecting them to the journal without authoritative per-fill commission and asset conversion would convert an unknown fee into a false zero.
+4. The inspected `save_campaign_fill()` converts financial values to `float` and stores them in SQLite `REAL`; that path is not a decimal-exact ledger.
+5. Android `TradingAuditStore` is a separate SQLite database from Python `db.py`. Python's journal cannot be assumed to cover Android mutations or provide cross-database atomicity.
+6. The available evidence does not yet enumerate every writer/caller, every SQLite repository/migration, every Python/Android mutation sink, or prove that all risk-increasing entry points consult durable pending financial-effect state.
+
+Accordingly, no production writer was mass-rerouted in this checkpoint. The safe next implementation step is to finish the writer/caller census and define the canonical exchange-fill/commission contract from actual exchange responses, then wire one path at a time with transaction-level and restart/concurrency tests. Until that exists, the affected paths must remain fail-closed; green offline CI is necessary but not sufficient.
+
+### Outstanding P0 acceptance evidence
+
+- Exhaustive writer/reader/migration/recovery/mutation-sink inventory.
+- Actual production callers of the financial journal, not only its method definitions.
+- Canonical per-fill IDs and commission evidence from every production source.
+- Same-DB atomic projection writer or a durable cross-store recovery protocol.
+- Unknown-commission reconciliation without default-to-zero behavior.
+- Decimal-exact calculations and persistence across Python and Android.
+- Independent-process duplicate-fill and commit-crash tests against persistent storage.
+- Fault injection for transaction failures, `SQLITE_BUSY/LOCKED`, process death and repeat recovery.
+- Durable global entry gate covering every BUY/risk-increasing route.
+- Spot SELL net inventory, partial fill, OCO and cancel/replace recovery evidence.
+- Proof that unverified Futures mutation routes are blocked.
+- Final successful mandatory CI on one terminal SHA, plus Android runtime/process-death evidence.
+
+**TASK 003.8 result at this checkpoint: BLOCKED — NOT ACCEPTED.** PR #48 remains open/draft/unmerged. No Mainnet or Spot Testnet trading mutation was performed.
