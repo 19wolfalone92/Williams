@@ -90,22 +90,23 @@ class ApiRouteContractTests(unittest.TestCase):
         self.assertNotIn(("POST", "/api/v1/order"), routes)
 
     def test_auth_contract_is_declared_for_sensitive_python_routes(self):
-        # Check decorators include auth dependency; this is a source-level guard.
+        # Slice each decorator by the next function definition rather than
+        # stopping at the first ')' (Depends(auth) contains nested parens).
         for path in (
             "/api/v1/orders",
             "/api/v1/control/panic",
             "/api/v1/config/binance",
             "/api/v1/control/sell",
         ):
-            match = re.search(
-                r"@app\.(?:get|post|delete)\s*\(\s*['\"]"
-                + re.escape(path)
-                + r"['\"]((?:(?!@app\.).*?))\)\s*def\s+",
-                PYTHON_SOURCE,
-                re.IGNORECASE | re.DOTALL,
-            )
-            self.assertIsNotNone(match, f"Route decorator missing for {path}")
-            self.assertIn("Depends(auth)", match.group(1), f"Auth missing for {path}")
+            path_index = PYTHON_SOURCE.find(path)
+            self.assertNotEqual(path_index, -1, f"Route path missing: {path}")
+            decorator_start = PYTHON_SOURCE.rfind("@app.", 0, path_index)
+            function_start = PYTHON_SOURCE.find("\ndef ", path_index)
+            self.assertNotEqual(decorator_start, -1, f"Route decorator missing: {path}")
+            self.assertNotEqual(function_start, -1, f"Route function missing: {path}")
+            decorator = PYTHON_SOURCE[decorator_start:function_start]
+            self.assertIn("Depends(auth)", decorator, f"Auth missing for {path}")
+
 
 
 if __name__ == "__main__":
