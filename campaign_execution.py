@@ -73,9 +73,19 @@ class CampaignExecutionService:
                         break
                 readiness = self.recovery_coordinator.readiness()
                 if not readiness.get("ready"):
+                    blocked_details = [
+                        {
+                            "intent_id": row.get("intent_id"),
+                            "state": row.get("state"),
+                            "reason": row.get("reason"),
+                        }
+                        for row in outcomes
+                        if row.get("state") in {"RECONCILE_REQUIRED", "UNKNOWN", "AMBIGUOUS"}
+                    ]
                     raise CampaignExecutionError(
                         "execution recovery/protection repair is incomplete; no new mutation allowed: "
                         + str(readiness.get("reason", "UNKNOWN"))
+                        + "; recovery_details=" + repr(blocked_details[-5:])
                     )
                 return outcomes
             finally:
