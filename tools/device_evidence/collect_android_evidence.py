@@ -153,7 +153,7 @@ def collect(args: argparse.Namespace) -> int:
         "installed_package": {"package": EXPECTED_PACKAGE, **metadata,
                               "installed_base_apk_sha256": installed_hash,
                               "installed_hash_status": installed_hash_status},
-        "launch": {"exit_code": launch.returncode, "output": launch.stdout[-2000:]},
+        "launch": {"exit_code": launch.returncode, "output_export_status": "REDACTED" if not launch_sensitive else "BLOCKED_SENSITIVE"},
         "logcat": {"exit_code": log_result.returncode, "lines_requested": 2500,
                    "export_status": "REDACTED" if not unresolved and log_result.returncode == 0 else "BLOCKED_SENSITIVE_OR_UNAVAILABLE"},
         "runtime_snapshot": {"status": "NOT EXPOSED BY GENERIC ADB COLLECTOR",
