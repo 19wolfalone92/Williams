@@ -91,3 +91,74 @@ There are two API surfaces in the repository: (A) the Python FastAPI service in 
 - No exchange/network tests or order placement performed.
 - Offline tests are added in this branch but cannot be reported as executed from the repository connector; run the commands in the test file in a checked-out workspace and attach output.
 - **Final status: BLOCKED** — incomplete DTO parity, no execution evidence for offline tests, unresolved P0/P1 blockers from #41, and no owner sign-off.
+
+
+## Follow-up verification (2026-10-11)
+
+### Fresh branch / PR state
+
+- Re-read PR #55 metadata after the earlier audit. The remote PR still reports:
+  - base: `main`, base SHA `04da5f9c09572e99ff310be3a1908179165e528c`
+  - head branch: `audit/task-0007-api-contract`
+  - head SHA: `473483aeb08ce9cecf2e482e3fe78ee1bc400991`
+  - draft: true, merged: false
+- Re-fetched both audit artifacts from that branch; the report and `tests/test_task_0007_api_contract.py` are present.
+- This connector does not expose a local working tree/status operation. Therefore a local `git status` could not be obtained; do not infer a clean checkout from remote PR metadata.
+- Attempted `git ls-remote https://github.com/19wolfalone92/Williams.git refs/heads/audit/task-0007-api-contract` in the execution container. It failed with `Could not resolve host: github.com`; a repository checkout could not be fetched into this environment.
+
+### Requested test command — actual result
+
+Command executed in the available execution container:
+
+```text
+python -m pytest -q tests/test_task_0007_api_contract.py
+```
+
+Actual result:
+
+```text
+no tests ran in 0.00s
+ERROR: file or directory not found: tests/test_task_0007_api_contract.py
+process exit code: 4
+```
+
+Cause: the execution container is not a checkout of `19wolfalone92/Williams`; the repository test path is absent in the container. Network DNS also prevented cloning the repository. This is an environment/repository-availability failure, not a pass or a demonstrated test assertion failure. **0 passed, 0 failed, 0 collected; exit code 4.** The test file exists in the remote audit branch, but its tests have not been executed.
+
+The current test file contains static source guards. These checks do not simulate timeouts, duplicate commands, HTTP 409 recovery, WebSocket gaps, REST reconciliation or actual Kotlin/Python serialization. They must not be described as behavioral contract tests. Such behavior remains unverified until deterministic offline fixtures exercise production logic on both sides.
+
+### Version source and CI implications
+
+Confirmed values remain:
+
+| Source | Value | Meaning |
+|---|---|---|
+| `ci_release_gate.py` | `EXPECTED_VERSION = '4.24.0'` | Explicit release-gate expectation |
+| `server.py` | `VERSION = '4.25.0'` | Python FastAPI application version |
+| `app/build.gradle.kts` | `versionName = "4.25.0"` | Android application version |
+| `MainActivity.kt` | UI version string check in the static test | Must agree with the release expectation for the test to pass |
+
+No source-of-truth decision was found in the inspected files. The gate is authoritative for what the current gate *expects*, but that does not prove that 4.24.0 is the intended product release. Python and Android independently declare 4.25.0. Therefore do not change either side or weaken the gate without a version-owner decision.
+
+Impact:
+- The current static test `test_python_and_android_version_contract_is_aligned` will fail at the first version assertion when run against the inspected source: `server.py=4.25.0, release gate=4.24.0`. This is a source-derived predicted assertion failure, **not an executed test result**.
+- Because the test asserts sequentially, it will not report the Android mismatch in the same test invocation until the first mismatch is resolved; source inspection independently confirms Gradle also declares 4.25.0.
+- `ci_release_gate.py` is a standalone stdlib-only Python gate; its source contains static safety/configuration checks and version expectation. Android Gradle separately sets APK `versionName`. Exact CI workflow job wiring was not established from the accessible evidence, so this report does not claim a verified Python-CI/Android-CI execution or causal build failure. Inspect workflow files and their logs in a checkout before making that claim.
+- No version was changed, and the release gate was not weakened.
+
+### Contract evidence boundary
+
+The existing matrix is a source-level inventory, not full DTO parity evidence. In particular:
+- Exact Python response DTOs and Android JSON output for all listed commands have not been mechanically compared field-by-field.
+- The Android local dispatcher and Python FastAPI are separate implementations; path similarity is insufficient proof of wire compatibility.
+- No offline behavioral fixture currently demonstrates exactly-once behavior or safe resolution of ambiguous mutation timeouts.
+- No executed test demonstrates that a WebSocket reconnect/gap is followed by authoritative REST reconciliation before execution resumes.
+- No live/Testnet request, real order, or trading automation was used.
+
+## Updated verdict
+
+- Source inventory/report present on remote audit branch: **PASS**
+- Remote PR remains Draft and unmerged: **PASS**
+- Requested pytest command: **BLOCKED**, exit code 4, 0 collected due to missing local checkout
+- Version consistency: **BLOCKED**, 4.24.0 vs 4.25.0
+- Behavioral DTO, idempotency, timeout, HTTP 409 and WebSocket recovery parity: **BLOCKED**
+- Release readiness considering Issues #41 and #52: **BLOCKED**
