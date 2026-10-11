@@ -19,6 +19,7 @@ from execution_accumulator import accumulate_order, accumulate_fills
 from l2_slippage import L2SlippageGuard
 from equity_breaker import EquityCircuitBreaker
 from wise_men import WiseMenStateMachine
+from execution_account_identity import verify_execution_account_identity
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(message)s')
@@ -996,6 +997,12 @@ class Trader:
         return order, summary
 
     def market_buy(self, quote):
+        # This legacy single-symbol mutation path is not the canonical campaign
+        # ledger/recovery path. Keep it fail-closed rather than treating the
+        # presence of ExecutionBarrier alone as full campaign safety.
+        raise RuntimeError(
+            "Legacy Trader.market_buy is disabled; use CampaignExecutionService"
+        )
         if self.dry_run:
             raise RuntimeError(
                 'BUY blocked: DRY_RUN=true. No live order execution is permitted.'
@@ -1146,6 +1153,11 @@ class Trader:
             raise RuntimeError(reason)
 
     def place_oco(self, qty, entry_price, trade_id=None):
+        # OCO mutations from the legacy single-symbol path do not share the
+        # campaign fill ledger and recovery coordinator.
+        raise RuntimeError(
+            "Legacy Trader.place_oco is disabled; use CampaignExecutionService"
+        )
         if self.symbol_rules is None:
             raise RuntimeError('Symbol rules are not loaded')
 
