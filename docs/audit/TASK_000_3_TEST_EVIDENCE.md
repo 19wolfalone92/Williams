@@ -75,3 +75,18 @@ The current PR metadata reports head SHA `6a6e47c798e4a2cc6e2d2a5245911a22788170
 These newer results improve evidence for the current PR head, but they do not replace the required immutable-source test requirement. For example, the inspected backend and campaign logs for earlier run IDs `38156886908` and `38156886916` explicitly checked out merge ref `c24e28defc38e19baf20c777a069e80b87c7aecf` (merge of source `f6dd193f9147ba49ff7f11efc81b18e10c1e2c44` into base `04da5f9c09572e99ff310be3a1908179165e528c`). Therefore those test results are merge-ref evidence, not an isolated checkout of the immutable source SHA. No local test run is claimed.
 
 **Disposition unchanged:** exact-source validation remains unproven; cancelReplace two-leg recovery and complete mutation-caller reachability remain blockers.
+
+
+## Follow-up verification — PR head 2518a69 (2026-10-11)
+
+The current PR metadata reports head `2518a69f96a41f74a18445017c666855b420b4f1`; required immutable source SHA remains `f6dd193f9147ba49ff7f11efc81b18e10c1e2c44`. PR #51 is open, Draft, and unmerged.
+
+Latest observed PR-triggered runs:
+- Mutation Registry run `38170850953`, job `114562958921`: **14 passed in 0.04s**; gate output reports six registered endpoint records, no unregistered raw Python HTTP mutation transport, Android autonomous execution lock present, and `PASS WITH BOUNDED MODEL — independent review still required`.
+- Python backend run `38170851141`, job `114562959875`: **148 passed, 4 warnings in 5.10s**.
+- Williams Campaign CI run `38170850975`, Python job `114562958576`: **208 passed, 4 warnings in 6.66s**. At the time of this check, its Android build/static-check job `114562958893` was still in progress.
+- Build Android APK run `38170851029`, job `114562959022`: still in progress at the time of this check; lint was running and APK/provenance steps had not completed.
+
+**Checkout SHA verified from job logs:** the mutation-registry, backend and campaign Python jobs checked out merge commit `e5bf8466760c4583e272d339036f59a4dfae03ef`, with log text: `Merge 2518a69f96a41f74a18445017c666855b420b4f1 into 04da5f9c09572e99ff310be3a1908179165e528c`. Therefore these successful tests are evidence for the PR merge checkout, not an isolated test of required SHA `f6dd193f9147ba49ff7f11efc81b18e10c1e2c44`. The exact-source test requirement remains unmet. No local tests were run.
+
+**Disposition remains BLOCKED:** green CI does not resolve cancelReplace two-leg recovery or prove complete production mutation-caller reachability. Do not merge PR #51.
