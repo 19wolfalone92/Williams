@@ -8,7 +8,6 @@ from typing import Any, Callable, Mapping
 
 from market_context import ContextCache, MarketStateSnapshot
 from order_state_machine import OrderState, OrderStateMachine
-from order_state_machine import OrderState, OrderStateMachine
 
 
 @dataclass(frozen=True)
@@ -188,7 +187,6 @@ class ExecutionBarrier:
                     return ExecutionResult(intent.intent_id, False, reason=reason)
 
             order_fsm.transition(OrderState.SUBMITTING)
-            order_fsm.transition(OrderState.SUBMITTING)
             self._record(
                 "INFO",
                 "execution_admitted",
@@ -208,7 +206,6 @@ class ExecutionBarrier:
                 response = submit()
             except Exception as exc:
                 order_fsm.state = OrderState.AMBIGUOUS
-                order_fsm.state = OrderState.AMBIGUOUS
                 self._persist(intent, "AMBIGUOUS", f"{type(exc).__name__}: {exc}")
                 self._record(
                     "ERROR",
@@ -219,43 +216,6 @@ class ExecutionBarrier:
                 )
                 raise
 
-            if intent.order_type != "CANCEL":
-                status = str(
-                    response.get("status", "")
-                    if isinstance(response, dict)
-                    else ""
-                ).upper()
-                if status:
-                    order_fsm.observe_exchange_status(
-                        status,
-                        float(
-                            response.get("executedQty", 0) or 0
-                            if isinstance(response, dict)
-                            else 0
-                        ),
-                    )
-                elif (
-                    isinstance(response, dict)
-                    and str(response.get("newOrderResult", "")).upper() == "SUCCESS"
-                ):
-                    order_fsm.state = OrderState.OPEN
-                else:
-                    order_fsm.state = OrderState.RECONCILE_REQUIRED
-                    self._persist(
-                        intent,
-                        "AMBIGUOUS",
-                        "exchange response did not contain authoritative order state",
-                    )
-                    self._record(
-                        "ERROR",
-                        "execution_ambiguous",
-                        intent,
-                        "Exchange accepted an operation without authoritative state",
-                        {"response_keys": list(response.keys()) if isinstance(response, dict) else []},
-                    )
-                    raise RuntimeError(
-                        "ExecutionBarrier: exchange response lacks authoritative order state"
-                    )
             if intent.order_type != "CANCEL":
                 status = str(
                     response.get("status", "")
@@ -305,8 +265,12 @@ class ExecutionBarrier:
                 )
                 try:
                     self._persist(intent, "AMBIGUOUS", reason)
-                except Exception:
-                    pass
+                except Exception as ambiguous_exc:
+                    reason += (
+                        "; reconciliation_state_persistence_failed: "
+                        f"{type(ambiguous_exc).__name__}: {ambiguous_exc}; "
+                        "exchange reconciliation is mandatory before any retry"
+                    )
                 self._record(
                     "ERROR",
                     "execution_reconcile_required",
