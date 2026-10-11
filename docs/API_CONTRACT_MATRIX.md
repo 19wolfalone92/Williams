@@ -185,3 +185,23 @@ The “after” column below is **source-level implementation status**, not runt
 ### Completion status
 
 **BLOCKED / NOT COMPLETE.** The implementation changes and isolated test files are committed, but neither requested unittest command nor either new test suite has been executed in this environment. Actual Android socket-level parity, full response DTO parity, Android authorization policy, and idempotency/caller retry behavior remain unverified. Do not mark ready or merge; keep PR in Draft until test output and final CI results are recorded.
+
+
+## Final P0 status refresh (source commit `a6a661198d2796f6e6a77d7f2f446b016c5cb0d0`)
+
+The latest source-changing commit at this review adds lazy engine initialization for unknown paths so a 404 does not depend on engine startup. No release version, CI workflow, Gradle file, trade execution path, or DB schema was changed.
+
+### Latest CI evidence observed
+
+- [Python backend tests #2642](https://github.com/19wolfalone92/Williams/actions/runs/38174515464): **FAIL** at the release contract gate. Compile, static safety audit, and offline tests were skipped.
+- [Build Android APK #2267](https://github.com/19wolfalone92/Williams/actions/runs/38174515470): **FAIL** at the same release contract gate. Android lint and unit tests were skipped.
+- [Williams Campaign CI #4958](https://github.com/19wolfalone92/Williams/actions/runs/38174515473): **CANCELLED**. Its predecessor #4956 had Python tests **PASS** and Android job **CANCELLED** when superseded; the Python workflow result was 159 passed / 4 warnings, but it does not exercise either requested unittest command or the new Android contract tests.
+- No workflow run was returned for source HEAD `a6a661198d2796f6e6a77d7f2f446b016c5cb0d0` itself. Thus there is **no final CI result for the latest source HEAD**.
+
+### Version gate decision
+
+Repository history contains commit `1d2fcba4d76b3380576a46f05caa0acdf8bc01c4` titled “Digital Williams APK: bump Android version to 4.25.0”; both `server.py` and `app/build.gradle.kts` currently use 4.25.0. This is strong evidence that 4.25.0 is the intended application version and that `ci_release_gate.py`'s 4.24.0 expectation is stale. The gate was not changed automatically because release-policy/CI changes require explicit approval.
+
+### Acceptance status
+
+**Still BLOCKED.** Source fixes and test files are present, but the requested unittest commands, Python HTTP tests, Android unit tests, and actual Android socket-level tests have not been run in this environment. Current CI failed before relevant tests. Android bearer-auth parity and application-level retry/idempotency remain unresolved. Keep PR #64 Draft; no merge.
