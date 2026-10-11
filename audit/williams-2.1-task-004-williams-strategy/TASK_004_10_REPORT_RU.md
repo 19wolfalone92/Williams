@@ -7,8 +7,7 @@
 **PR:** #49 — OPEN, Draft, not merged  
 **Base/main SHA observed:** `04da5f9c09572e99ff310be3a1908179165e528c`  
 **Production code audited:** `e8a741a8799dcd13b467557dfb6cbe0f5ffc9ad7`  
-**Current branch HEAD after this report-only commit:** `f9f411587cfb3c04bbe05fc8038c729bf1c8b9ad`  
-The latter commit changes only this report; it does not contain implementation changes and has no CI runs. The three listed CI runs belong to the audited code SHA above, not to the report-only HEAD.  
+**Report-only follow-up commits:** `f9f411587cfb3c04bbe05fc8038c729bf1c8b9ad` and `9750327cf7aef2c2edcce4ce861153bc9d9fd8c1`. These commits update audit documentation only; they do not contain production implementation changes. The three listed CI runs belong to the audited code SHA above, not to the report-only commits.  
 **Scope of this report:** live GitHub baseline, targeted source inspection, CI evidence and explicit blockers. This report does not claim implementation or exhaustive mutation-sink closure.
 
 ## 1. Baseline recheck
