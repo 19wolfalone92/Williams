@@ -599,3 +599,80 @@ After the source audit, a narrow fail-closed correction was committed in the sam
 - `portfolio_trader.py`: `_exit_fee_quote()` now persists stable exchange trade evidence through `record_exchange_fill()` before fee validation, uses `Decimal` for the commission aggregation path, refuses missing trade history / trade ID / commission amount / commission asset, rejects conflicting ledger evidence, and sets global plus per-symbol `RECONCILE_REQUIRED` on reconciliation errors. It does not resubmit exchange mutations.
 - `test_task001_recovery_regressions.py`: added fake-exchange regressions for unknown exit commission (durable UNKNOWN row + recovery latch) and exact fractional trade values with a confirmed zero commission.
 - This correction closes one unsafe fee-default path only. It does **not** make campaign/legacy position updates atomic with the fill ledger, does not eliminate all Decimal/float conversions, and does not complete position/protection/OCO recovery.
+
+
+---
+
+## 13. TASK 001.5 — Exactly-Once Financial Effects, Decimal Integrity & Recovery Closure (2026-10-11)
+
+**Decision: FAIL / NOT ACCEPTED.** This pass closes one concrete legacy fee-default path and adds focused regressions. It does not prove exactly-once application to position/Campaign/risk, and it does not claim the complete TASK 001.5 acceptance criteria.
+
+### 13.1 Baseline and CI evidence
+
+- Base SHA: `04da5f9c09572e99ff310be3a1908179165e528c`.
+- Starting HEAD requested by task: `b1a93bc166fcab2629a37bc10cf5afea46e1ffcb`; the existing PR metadata was re-read before changes and confirmed this SHA was the actual PR head.
+- PR #47 remains open, Draft, based on `main`; no merge was performed.
+- All required CI runs on starting SHA `b1a93bc166fcab2629a37bc10cf5afea46e1ffcb` completed successfully, with all jobs successful:
+  - Python backend tests — [run 38090927007](https://github.com/19wolfalone92/Williams/actions/runs/38090927007), `backend-test: success`.
+  - Williams Campaign CI — [run 38090927002](https://github.com/19wolfalone92/Williams/actions/runs/38090927002), `Android build and static checks: success`, `Python tests: success`.
+  - Build Android APK — [run 38090927068](https://github.com/19wolfalone92/Williams/actions/runs/38090927068), `Build APKs: success`.
+- These runs verify the starting revision only. They are not evidence for the new TASK 001.5 edits. CI must be inspected again on the final report SHA.
+
+### 13.2 Confirmed data-flow map
+
+| Stage | Current source / boundary | Idempotency / transaction finding | Error behavior |
+|---|---|---|---|
+| Exchange fill identity | Spot `myTrades` rows; symbol + exchange trade ID | `exchange_fill_ledger` primary key is `(symbol, exchange_trade_id)`; `record_exchange_fill` uses a SQLite transaction for evidence insertion/enrichment | Conflicting immutable fields raise; caller must latch reconciliation |
+| Fee resolution | Explicit `commission` + `commissionAsset` from exchange | Stored as exact decimal text; unknown fee is `UNKNOWN` | Must block financial completion |
+| Financial effect | `campaign_execution.py` and legacy `portfolio_trader.py` | **No unified per-fill effect key/transaction binds fill, position, Campaign and risk reservation** | Crash/retry can still leave split state; global closure not proven |
+| Campaign fill | `campaign_fills` | Auto-increment row, REAL amounts, no exchange trade ID uniqueness; `save_campaign_fill` inserts independently | Duplicate downstream effect remains possible |
+| Campaign position | `campaigns.position_qty`, average price, PnL/risk columns | SQLite REAL and Python float; writes are not universally in the same transaction as the fill ledger | Requires recovery/reconciliation |
+| Legacy position/trade | `trades`, `orders`, portfolio execution helpers | Separate writer path; several numeric values remain float/REAL | Now blocks one missing-fee path, but not unified |
+| Risk reservation | Campaign risk fields and state aggregates | Float-backed Campaign fields; no atomic per-fill coupling established | Not proven exactly-once |
+| Protection/OCO | Exchange orders/list/child records plus local intents | Order-state recovery does not prove fill effects or exact residual protection coverage | Keep recovery unresolved if evidence is insufficient |
+| Global recovery | global/per-symbol `position_state`, intent state and other gates | No single predicate proven to join all financial, position, risk and protection conditions across every entry path | Acceptance remains blocked |
+
+### 13.3 TASK 001.5 code change
+
+Changed files:
+1. `portfolio_trader.py`
+2. `test_task001_recovery_regressions.py`
+3. This existing report.
+
+In `MultiPositionTrader._authoritative_execution()` (exposed through the legacy PortfolioTrader compatibility import), a filled order without local fill details now requires authoritative `myTrades` evidence. Lookup failure, empty history, malformed identity, missing trade ID, missing fee amount/asset, invalid numeric data, or a ledger conflict latches global and symbol `RECONCILE_REQUIRED` and raises instead of silently falling back to order-level quantity data or treating missing commission as zero.
+
+Each validated fill is recorded through `record_exchange_fill()` before a legacy execution summary is returned. Missing fee evidence is first retained in the ledger as `UNKNOWN` when the stable trade identity and execution fields are available; the method then blocks financial continuation. An explicitly confirmed zero commission with a named asset remains valid. Re-delivery of the same stable fill identity is ledger-idempotent.
+
+The new tests exercise:
+- missing commission → durable `UNKNOWN` ledger evidence, both recovery latches set, exception raised;
+- explicitly confirmed zero commission → one ledger row after two deliveries, exact decimal quantity/price strings preserved.
+
+### 13.4 Exactness and fee matrix: remaining limits
+
+- The new ledger stores exact decimal strings, but `campaign_fills`, `campaigns`, and legacy `trades` continue to store financial fields in SQLite REAL and/or consume Python floats.
+- Third-asset fee valuation still has a compatibility path that crosses through float price/ticker interfaces; exact native commission amount and asset remain in the ledger, but a fully specified historical conversion contract is not established.
+- The code does not yet model exact net base inventory across base-asset commission, quote commission, and third-asset commission as one canonical financial state.
+- This change does not add a financial-effect journal or prove atomic fill→position→Campaign→risk application. A ledger row's existence is not proof that its financial effect was applied.
+- No legacy data has been deleted or rounded by this change.
+
+### 13.5 Required gates still open
+
+| Requirement | Evidence in this pass | Status |
+|---|---|---|
+| Exactly-once financial effect bound to position/Campaign/risk | No unified application transaction or equivalent durable state machine | **BLOCKED** |
+| Decimal canonical position, PnL, balance and risk contract | Existing REAL/float writers remain | **BLOCKED** |
+| All commission assets, conversion time/rate, and net base delta | Partial strict fee evidence only | **BLOCKED** |
+| Authoritative balance/order/fill/Campaign reconciliation | No complete reconciler demonstrated | **BLOCKED** |
+| Actual protection quantity and cancel/replace/OCO lifecycle | No complete end-to-end residual exposure proof | **BLOCKED** |
+| Fault injection at every requested transaction/network boundary | Focused regressions only | **NOT VERIFIED** |
+| Two independent OS processes racing one fill/effect/Campaign/recovery | Not performed | **NOT VERIFIED** |
+| Populated real-schema v6/v7/v8 migration and interrupted migration | Not fully performed | **NOT VERIFIED** |
+| One global recovery gate across every production entry path | Not demonstrated | **BLOCKED** |
+| Android physical process death/restart | Not run | **NOT VERIFIED** |
+| Binance Spot Testnet full lifecycle | Not run | **NOT RUN / NOT VERIFIED** |
+
+### 13.6 External safety and final decision
+
+No Binance Mainnet or real trading operations were used. No physical Android process-death test or Binance Spot Testnet lifecycle was performed. `main` was not modified; PR #47 remains open Draft.
+
+**TASK 001.5 remains FAIL / NOT ACCEPTED.** The legacy missing-fee fallback is now fail-closed and focused tests were added, but exactly-once financial application, Decimal canonicalization, position/risk reconciliation, protection/OCO closure, complete fault injection, inter-process proof, and a universal recovery gate remain unproven.
