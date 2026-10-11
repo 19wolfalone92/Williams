@@ -185,7 +185,10 @@ class CampaignExecutionService:
                     ):
                         return
                     raise CampaignExecutionError(
-                        "existing live protective order does not cover the recovered position exactly; safe resize required"
+                        "existing live protective order mismatch: "
+                        f"status={status}, order_id={protective_id}, "
+                        f"existing_qty={existing_qty}, position_qty={position_qty}, "
+                        f"existing_stop={existing_stop}, desired_stop={stop_price}; safe resize required"
                     )
                 if status not in {"CANCELED", "EXPIRED", "FILLED", "REJECTED"}:
                     raise CampaignExecutionError(
