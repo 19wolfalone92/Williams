@@ -2699,6 +2699,27 @@ private class NativeEngine(
                 .thenBy { it.type }
         )
 
+    private fun claimCampaignSignalOnce(
+        symbol: String,
+        signal: CampaignSignalN
+    ) {
+        require(signal.signalId.isNotBlank()) { "Campaign signal id is missing" }
+        val canonical = JSONObject()
+            .put("symbol", symbol.trim().uppercase(Locale.US))
+            .put("side", "BUY")
+            .put("timeframe", signal.timeframe.trim().lowercase(Locale.US))
+            .put("signal_bar_time_ms", signal.signalBarTimeMs)
+            .put("confirmation_time_ms", signal.confirmationTimeMs)
+            .put("signal_type", signal.type)
+            .put("strategy_version", BuildConfig.VERSION_NAME)
+            .toString()
+        when (auditStore.claimSignalOnce(signal.signalId, canonical)) {
+            "CLAIMED" -> Unit
+            "DUPLICATE" -> error("DUPLICATE_SIGNAL_BLOCKED: " + signal.signalId)
+            "CONFLICT" -> error("SIGNAL_IDENTITY_CONFLICT: " + signal.signalId)
+            else -> error("SIGNAL_CLAIM_UNKNOWN_RESULT: " + signal.signalId)
+        }
+    }
     private fun submitCampaignEntry(candidate: BaseAnalysis) {
         if (!campaignEngineEnabled || !candidate.campaignReady) return
         if (reconcileRequired || paused || killLatched) return
@@ -2798,6 +2819,8 @@ private class NativeEngine(
                     ) {
                         error("Binance MAX_POSITION would be exceeded")
                     }
+                    // Durable signal claim must commit before the signed POST.
+                    claimCampaignSignalOnce(candidate.symbol, signal)
                     signedPost(
                         "/api/v3/order",
                         "symbol=" + candidate.symbol +
@@ -3831,6 +3854,9 @@ private class NativeEngine(
                         "Add-on trigger already crossed"
                     }
                     checkCampaignOrderCapacity(candidate.symbol, 1)
+                    // The stable signal ID, not the per-attempt client order ID,
+                    // owns the durable replay guard for add-on entries as well.
+                    claimCampaignSignalOnce(candidate.symbol, signal)
                     signedPost(
                         "/api/v3/order",
                         "symbol=" + candidate.symbol +
