@@ -819,7 +819,7 @@ class CampaignExecutionService:
         # Avoid recursive recovery when a coordinator is repairing protection;
         # only the explicitly admitted CAMPAIGN_PROTECTION mutation may nest.
         if self._recovery_depth > 0:
-            if str(intent.purpose).upper() != "CAMPAIGN_PROTECTION":
+            if str(intent.purpose).upper() not in {"CAMPAIGN_PROTECTION", "CAMPAIGN_ENTRY_CANCEL"}:
                 raise CampaignExecutionError(
                     "nested exchange mutation is forbidden during recovery"
                 )
