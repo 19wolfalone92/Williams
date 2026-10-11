@@ -678,3 +678,55 @@ The existing Campaign CI has Python and Android test stages, but no evidence in 
 11. Keep PR #49 Draft and do not merge. No Mainnet or Spot Testnet mutation is authorized.
 
 **Acceptance remains: BLOCKED — NOT ACCEPTED.** The baseline workflows passed on `5a217774cd00e21d83a1c7274c16eef5e468ebda`, but the mandatory safety architecture and cross-platform proof criteria above remain unresolved.
+
+
+---
+
+## TASK 004.13 — Causal replay, fractal confirmation & Python–Android parity
+
+**Checkpoint checked:** 2026-10-11  
+**Observed branch HEAD before this documentation update:** `dd1eb3d462f3a8641bf2df00ad2086192ea9b88c`  
+**Implementation/test SHA under examination:** `82ecc9e8f899b1128892e66c773d12763986425f`  
+**PR #49:** Open / Draft; base `main` at `04da5f9c09572e99ff310be3a1908179165e528c`.  
+**Decision:** **BLOCKED — NOT ACCEPTED.** No strategy-code changes or trading mutations were made in this task checkpoint.
+
+### Evidence verified at the implementation SHA
+
+- Shared fixture: `app/src/test/resources/williams_strategy_golden_vectors.json`, blob `d0a6e221c4382150339ece9bc68540b08e8b9a1c`. It contains deterministic median-price, Alligator, AO/AC, fractal tie/cancellation, conditional-trigger, timeframe and Spot-side cases.
+- Python test: `tests/test_williams_strategy_golden_vectors.py`, blob `d0e136c5298d971df35a5a05e1bb00915f4e8f7b`. It checks SMMA invalid seed/gap behavior, indicator vectors, prefix-before-confirmation for selected fractals, WM2 independence from WM3, trigger/invalidation and timeframe constraints.
+- Android test: `app/src/test/java/com/williamsbot/WilliamsStrategyGoldenVectorsTest.kt`, blob `893946b46ba25d3c2b2120455cfbf4071eec6531`. It reads the same JSON resource and tests Alligator/AO/AC vectors, fractal timing/ties/cancellation, pending trigger and H1-only provenance.
+- Android fractal helper: `WilliamsFractalMath.kt`, blob `b9830e6f9bca360dcf1b73d399fc450266d1b0dd`. It returns center index separately from confirmation index; equal right-side extremes do not qualify as lower highs/higher lows, while a stricter new extreme cancels the candidate.
+- Timeframe contract: `WilliamsTimeframeContract.kt`, blob `ceacc115d53396836f6fdc745cecb3fb98c0ecdd`. H1 is canonical; D1/H4 are context; M15 is execution/fill monitoring; M5 is diagnostics/replay only. This is a bot policy, not a claim about a rule stated in Williams's books.
+- The current branch HEAD is one documentation-only commit ahead of the implementation SHA: comparison `82ecc9e8f899b1128892e66c773d12763986425f..dd1eb3d462f3a8641bf2df00ad2086192ea9b88c` adds only `TASK_004_11_REPORT_RU.md`.
+
+### CI evidence (do not over-interpret)
+
+On `82ecc9e8f899b1128892e66c773d12763986425f`, Python backend workflow `38129894739` completed SUCCESS, Android APK workflow `38129894745` completed SUCCESS, and Campaign CI `38129894732` was CANCELLED. On observed branch HEAD `dd1eb3d462f3a8641bf2df00ad2086192ea9b88c`, the three latest workflows were reported SUCCESS (Python `38129954698`, Campaign `38129954685`, APK `38129954731`). These CI outcomes establish only that configured jobs passed; they do not establish comprehensive causal replay or full strategy parity.
+
+The Python backend workflow includes `tests/test_williams_strategy_golden_vectors.py`; Campaign CI runs Android `testDebugUnitTest`. The fixtures therefore have test-consumer coverage in both environments. This is **partial formula/vector parity**, not a proof that every live strategy path consumes the helpers or that all signal states match.
+
+### Acceptance matrix
+
+| Requirement | Evidence at inspected SHA | Status |
+|---|---|---|
+| AO = SMA(5, median) − SMA(34, median); AC = AO − SMA(5, AO) | Shared vectors consumed by Python and Android unit tests | PARTIAL PASS; not full runtime-path parity |
+| Alligator periods 13/8/5, display shifts 8/5/3 and SMA-seeded SMMA | Shared formula vectors and Android/Python unit assertions | PARTIAL PASS; seed convergence/warm-up policy still needs explicit proof |
+| Fractal not available before required right-side bars; ties extend confirmation; stronger extreme cancels | Selected prefix and full-vector assertions on both platforms | PARTIAL PASS; full live/restart/replay matrix not proven |
+| WM2 is independent of prior WM3 | Python test checks candidate without strict price fractal; shared AO colour vector | PARTIAL PASS; Android end-to-end WM2 candidate path not fully demonstrated |
+| Prefix replay for every indicator and all strategy/campaign/exit states | No exhaustive all-prefix replay harness/result found in reviewed evidence | BLOCKED |
+| Open-vs-closed candle semantics and exchange timestamp ordering | Not fully demonstrated by the cited fixtures | BLOCKED |
+| Same complete signals, setup/confirmation and availability timestamps in Python and Android | Shared indicator fixtures exist; full decision-output differential suite not proven | BLOCKED |
+| D1/H4/H1/M15/M5 enforcement in every signal entry point | Helper-level tests exist; exhaustive runtime call-path test not proven | BLOCKED |
+| Campaign, trailing, exit, repeat signal and process restart parity | Not covered end-to-end by cited golden fixture tests | BLOCKED |
+| All six requested audit matrices maintained | See the task-scoped matrices added alongside this section | DOCUMENTATION ADDED; behavior remains BLOCKED |
+
+### Rule classification
+
+- **WILLIAMS RULE:** AO formula; Alligator median-price periods and displayed offsets; TC2 WM2's third same-direction AO bar; fractal formation/confirmation requirements as supported by the source profile.
+- **SYSTEM SAFETY RULE:** never trade a not-yet-confirmed fractal; never use future bars; unknown/missing data blocks entry; Spot SELL reduces/closes inventory and does not open a short.
+- **IMPLEMENTATION RULE:** SMA seed for SMMA, shared JSON fixture format, TTL/expiry, exact event timestamp representation, numerical tolerance. These conventions must be explicit and deterministic.
+- **RESEARCH REQUIRED / UNRESOLVED = BLOCKED:** exact numeric WM1 angulation; complete seed-convergence requirement; universal source-defined signal TTL; any ambiguous tie semantics beyond the inspected source examples; all live path and restart parity not demonstrated by tests.
+
+### Required next proof
+
+Add and execute an all-prefix causal replay harness against the exact same timestamped OHLCV dataset in Python and Android/JVM. At every prefix, compare all previously emitted events and state transitions, allowing only documented forward state transitions. Include closed-bar boundary tests, equal-extreme and stricter-extreme fractal cases, restart between pivot and confirmation, WM2 without WM3, and full PendingSignal → trigger → campaign → trail/exit sequences. Record input fixture hash, implementation SHA, test command, test count and CI run IDs. Until those artifacts exist, **TASK 004.13 remains BLOCKED**.
