@@ -687,3 +687,77 @@ These assert decimal-string preservation, one projection for repeated delivery, 
 5. Re-run all required CI on the final report-bearing SHA.
 
 Do not resume trading. Overall status remains **BLOCKED — NOT ACCEPTED**.
+
+
+### TASK 003.5 — production fill integration audit checkpoint (2026-10-11)
+
+**Status: BLOCKED — NOT ACCEPTED.** This checkpoint fixes canonical Decimal identity handling in the journal primitive and adds conflict/duplicate regression tests. It deliberately does not claim production fill integration: source-to-sink inspection found existing writers still bypass the journal.
+
+#### Exact refs and baseline
+
+- Task starting HEAD verified from PR #48: `0794f918ceb82bbbb19b4f6e24f73f0f50125627`.
+- Base / `main`: `04da5f9c09572e99ff310be3a1908179165e528c`.
+- Existing PR #48 remains Open / Draft / unmerged.
+- Existing required CI on starting SHA `0794f918...`: Python backend tests run `38118044987`, Build Android APK run `38118045001`, Williams Campaign CI run `38118044998` all completed Success. Jobs `114406851606`, `114406851800`, `114406894423`, `114406894642` completed successfully. These runs do not apply to later commits.
+- Current implementation/test commits in this checkpoint: `a4dd3d9fbebbb0ce3cfbedf0498022215a5dd198` (Decimal canonicalization and accurate first-vs-duplicate status) and `4486eeb6b286c7849db1e3808aa3f8fc62a8faed` (regression tests).
+- No main write or merge performed. No exchange mutation was performed.
+
+#### Source-to-sink findings (CODE-CONFIRMED; integration NOT VERIFIED)
+
+| Fill source / entry point | Normalization | Ledger / effect | Existing projections | Recovery / test status |
+|---|---|---|---|---|
+| `campaign_execution.py` conditional order adoption / recovery, including lines around 653–665 and 697–698 | Aggregates order `executedQty`, `cummulativeQuoteQty`; may query `my_trades` for totals | Does not call `apply_financial_fill_effect`; passes order-level totals to campaign engine | `CampaignEngine.record_initial_fill` / `record_add_on_fill`, then campaign persistence and `save_trade`; fee is explicitly passed as `0.0` at the inspected callsites | Existing campaign recovery tests exist, but journal-linked per-fill recovery NOT VERIFIED |
+| `portfolio_trader.py::_authoritative_execution` | Calls `my_trades` if order payload lacks fills; computes aggregate `ExecutionSummary` | Does not call journal | `save_trade(... fees=float(...))`; position and PnL readers consume trade values | Existing tests do not prove journal integration or unknown-fee fail-closed behavior |
+| `trader.py` legacy execution/recovery | Uses order history, executed quantities, fill accumulator in some paths | No journal call identified in inspected file | Direct `save_trade` writers, fee values may default to zero | Legacy route remains NOT VERIFIED / not proven blocked |
+| `Database.save_campaign_fill` | Converts quantity, price, quote quantity and fee fields through `float` | Writes only `campaign_fills`; no journal call | SQLite REAL columns | No caller found in the inspected execution modules; full-repository caller inventory remains incomplete |
+| Android `StandaloneRuntime.kt` | Order response / fill accumulation paths found, with `feeKnown` in some local accumulator data | No integration with Python SQLite journal; no equivalent end-to-end durable per-fill journal established in this task | Local runtime state / order and campaign accounting | Android financial-effect exactly-once NOT VERIFIED |
+
+This table is a partial source map, not a claim that every production caller and adapter has been exhausted. In particular, aggregated order quantities are not equivalent to individual authoritative fill identity, and order-level totals cannot safely replace per-trade commission records.
+
+#### Primitive correction
+
+- `Database._canonical_decimal()` now normalizes Decimal-equivalent values to a canonical string (including trailing-zero variants) without binary float arithmetic. Zero is serialized as `"0"`.
+- `apply_financial_fill_effect()` now reports first insertion versus duplicate correctly for the `PENDING_FEE` path instead of inferring duplication from a timestamp that exists for both new and existing rows.
+- Tests added: `test_fill_identity_conflict_is_fail_closed_and_does_not_reapply`, `test_decimal_equivalent_fill_payload_is_canonical_duplicate`, and `test_unknown_fee_first_delivery_and_duplicate_are_distinguished`.
+- Expected invariant: the same identity with conflicting immutable quantity/price/quote/fee data raises a conflict and does not invoke the projection callback again. Decimal-equivalent string representations map to the same canonical payload.
+
+#### Financial bypasses still open (CODE-CONFIRMED)
+
+- `campaign_fills.quantity/price/quote_quantity/fee_quote/commission_base` remain SQLite REAL.
+- `Database.save_campaign_fill()` still writes through `float` and defaults missing fee fields to zero.
+- `trades.fees` remains REAL with a zero default; `Database.save_trade()` accepts direct writers.
+- `campaign_execution.py` passes `fee_quote=0.0` to campaign initial/add-on fill methods at inspected callsites.
+- `portfolio_trader.py` aggregates fill commissions but ultimately writes trade fees via `float`; unknown/failed fee lookup does not establish a durable pending fee effect.
+- `trader.py` has direct `save_trade` paths.
+- `campaign_engine.py` updates position quantity, average entry, open risk, campaign state and events through multiple writes. These operations are not currently wrapped in the new financial-effect transaction.
+- A same-connection callback primitive is not production integration. No production caller was changed to call it in this checkpoint because safely mapping per-trade identities, fee-asset valuation, campaign ownership and all same-database projections requires the real caller contract; wiring aggregated order data into a per-fill journal would be unsafe.
+
+#### Acceptance matrix
+
+| Requirement | Status | Evidence / gap |
+|---|---|---|
+| Starting refs and previous CI | PASS | Verified live; all three previous-SHA workflows successful |
+| Canonical Decimal duplicate identity | IMPLEMENTED — CI PENDING | Code changed; regression tests added; new-SHA CI not yet proven |
+| Conflicting fill identity | TEST ADDED — CI PENDING | Asserts conflict and no second projection |
+| Unknown-fee duplicate status | TEST ADDED — CI PENDING | Asserts first receipt differs from redelivery |
+| Production fill ingestion connected to journal | NOT VERIFIED | Existing production paths aggregate order fills and bypass journal |
+| All writers/readers inventoried | NOT VERIFIED | Initial source map only; complete repo-wide reference search not yet evidenced |
+| REAL/float financial paths eliminated | BLOCKED | Existing REAL schema, float writers/readers, and zero fee defaults remain |
+| Crash injection / process-death recovery for financial projections | NOT VERIFIED | Earlier two-process journal tests do not cover production projection recovery or all required crash points |
+| SQLite BUSY/LOCKED/commit/read-back failures | NOT VERIFIED | Full deterministic tests not implemented |
+| Global recovery gate across every entry point | NOT VERIFIED | No proof every risk-increasing entry point checks pending financial effects |
+| Mutation sinks and negative runtime spy | NOT VERIFIED | Full Python/Android runtime transport spy not completed |
+| Android financial ledger and process death | NOT VERIFIED | No Android financial-journal integration or process-death evidence |
+| Spot SELL / OCO / cancel-replace exposure | NOT VERIFIED | Not fully proven against authoritative per-fill ledger |
+| Futures fail-closed | NOT VERIFIED | No separate proof that every Futures mutation path is blocked |
+| Physical device / Spot Testnet | NOT RUN | No device or exchange mutation testing |
+
+#### Required next minimum step
+
+1. Wait for and inspect all required CI on the new report-bearing SHA. Diagnose failures before changing code.
+2. Complete a repository-wide writer/reader inventory, including all `save_trade`, `save_campaign_fill`, campaign-state, risk and protection writers.
+3. Design a production adapter from individual authoritative exchange fills (with actual trade IDs and commission assets) to the journal; do not use order IDs as a substitute for trade IDs.
+4. Integrate journal application and campaign/position/risk projections under a single SQLite transaction where they share the DB, or use an explicitly durable recovery protocol where they do not.
+5. Until that integration and global gate are proven, keep risk-increasing trading blocked.
+
+Overall status remains **BLOCKED — NOT ACCEPTED**. Do not resume trading.
