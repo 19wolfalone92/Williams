@@ -8,12 +8,14 @@ on:
       - "tests/**"
       - "requirements.txt"
       - ".github/workflows/**"
+      - "docs/**"
   pull_request:
     paths:
       - "*.py"
       - "tests/**"
       - "requirements.txt"
       - ".github/workflows/**"
+      - "docs/**"
   workflow_dispatch:
 
 concurrency:
