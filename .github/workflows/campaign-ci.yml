@@ -92,7 +92,7 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v5
         with:
-          gradle-version: "8.14.5"
+          gradle-version: "8.14.6"
           validate-wrappers: false
       - name: Make Gradle wrapper executable
         run: chmod +x ./gradlew
