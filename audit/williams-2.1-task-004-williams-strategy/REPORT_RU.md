@@ -304,3 +304,66 @@ Passing CI on this SHA verifies the configured jobs only; it does **not** close 
 6. Dynamic order-mutation callsites have source-level inventory, but exhaustive runtime instrumentation evidence for every production route is not available.
 
 This section records the passing CI for SHA `154bff8` specifically. If this report is edited again, the resulting new HEAD requires its own fresh CI run; success on `154bff8` must not be attributed to a later SHA.
+
+
+---
+
+# TASK 004.5 — H1 mutation-path and durable-idempotency audit (initial evidence, 2026-10-11)
+
+## Repository guard verification
+
+- Actual branch HEAD at start of TASK 004.5: `78e713140acf28b90077df87976de530e279c14c`.
+- PR #49 head: `78e713140acf28b90077df87976de530e279c14c`; PR remains OPEN, Draft, unmerged.
+- Actual PR base and `main`: `04da5f9c09572e99ff310be3a1908179165e528c`.
+- No write to `main`, no PR merge, and no exchange order was submitted as part of this audit.
+- Required workflows on the starting SHA were successful: Python backend tests run 38090876313; Williams Campaign CI run 38090876307; Build Android APK run 38090876283. These are baseline runs only and do not verify any future commit.
+
+## Findings from direct source inspection
+
+### Python mutation path inventory (source-level; not yet complete behavioural proof)
+
+| Path | Source / validation | Last-mile barrier and mutation sink | Current assessment |
+|---|---|---|---|
+| Initial conditional campaign entry | `CampaignExecutionService.arm_initial_entry` in `campaign_execution.py`; H1 history/source candle/freshness/trigger/invalidation checks in `_validate_h1_signal_market_state`; pending campaign and order intent are persisted before submit | `_submit` → `ExecutionBarrier.execute` → supplied callback to `client.order_safe`; database claim currently uses `entry_client_order_id:<symbol>`, not a durable consumed-signal key | H1 path exists; durable per-signal idempotency UNRESOLVED |
+| Add-on | Add-on arm/validation path in `campaign_execution.py`; checks existing campaign signal state and calls `try_claim_state(entry_client_order_id:<symbol>, cid)` | `_submit` → `ExecutionBarrier.execute` → `client.order_safe` | Per-symbol pending-order exclusion exists; proof that one signal cannot be reused across campaign/initial/add-on/restart is UNRESOLVED |
+| Generic/legacy trader entry | `trader.py:1057-1073` includes a pre-submit callback and `client.order(...)` submit callback; barrier is instantiated at `trader.py:47` | Must be traced through all caller aliases and purpose values; this path is not yet proven to require immutable campaign signal provenance in every invocation | UNRESOLVED |
+| Campaign cancel/exit/stop replacement/protection | `campaign_execution.py` uses `_submit` at source lines 1423, 1469-1471, 1561, 1675 (cancel callback includes `client.cancel_order`) | Canonical barrier is invoked, but full purpose-by-purpose contract proof is outstanding | UNRESOLVED until action-specific integration tests prove safe exits/protection remain available |
+| Durable database primitives | `db.py` has SQLite `try_claim_state` (atomic `INSERT OR IGNORE`) and campaign-signal table primary key `signal_id` | Existing initial/add-on code claims a per-symbol pending key; `ExecutionBarrier._persist` catches and ignores persistence exceptions, and `execute` also swallows execution-event write failures | **P0 risk**: barrier persistence failure is not a fail-closed admission condition; must fix and test before approval |
+
+### Android mutation sink inventory (source-level; direct mutation-spy proof not yet implemented)
+
+| Path | Source / validation | Mutation sink | Current assessment |
+|---|---|---|---|
+| Canonical initial campaign entry | `StandaloneRuntime.kt` `submitCampaignEntry`; `validateNewCampaignEntryAtMutation` checks H1 provenance, source candle, freshness and structural invalidation; `withCampaignMutation` checks runtime/recovery/kill state and reserves `ExecutionGate` | `signedPost("/api/v3/order", ... STOP_LOSS ...)` at approximately line 2801 | Gate exists, but no mutation-spy integration test proves every rejection leaves the sink untouched |
+| Add-on | `submitCampaignAddOn`; persisted `PendingEntry`, same H1 mutation validation and campaign mutation gate | `signedPost("/api/v3/order", ... STOP_LOSS ...)` around lines 3834-3835 | **P0 idempotency gap**: generated client order ID contains `System.nanoTime()`; no durable consumed-signal uniqueness was proven across process restart/requeue |
+| Campaign protective stop | `createCampaignStop` through `withCampaignMutation` | `signedPost("/api/v3/order", ... STOP_LOSS ...)` | Must remain available when new-entry H1 contract blocks entries; integration proof outstanding |
+| Emergency exit after protection failure | Campaign fill/protection recovery path; `withCampaignMutation(..., "CAMPAIGN_EMERGENCY_EXIT")` | `signedPost("/api/v3/order", ... MARKET SELL ...)` around lines 3494-3495 | Safety-critical exception path; must be tested against explicit exit contract and unknown exchange state |
+| Legacy/manual sell | `sell(symbol)`; managed campaign exits use `campaignExitMarket`; non-campaign path validates managed OCO identifiers and reconciles balances | `signedDelete("/api/v3/orderList")` and `signedPost("/api/v3/order", ... MARKET SELL ...)` around lines 6475-6536 | H1 entry block is not meant to disable exits; actual path still needs mutation-spy and duplicate-exit tests |
+| Pending order cancellation / restart recovery | `kill`, `recover`, `recoverPendingEntries`, and campaign pending-entry recovery | `signedDelete("/api/v3/order")`, `signedDelete("/api/v3/orderList")`, and order lookup/reconciliation; cancel-replace funnels through `signedPost("/api/v3/order/cancelReplace")` | Full call graph and sink interception not yet complete |
+| Shared network mutation layer | `signedPost` delegates to `signedRequest("POST", ...)`; `signedDelete` delegates to the same signed request mechanism | This is the common HTTP mutation sink family, but a test-injectable transport/mutation observer is not currently proven | UNRESOLVED |
+
+### Cross-platform idempotency and recovery assessment
+
+- Python SQLite already has durable primitives, but current claims are primarily per-symbol pending-entry reservations, not a demonstrated, stable, globally consumed signal identity across all initial/add-on/legacy/recovery paths. A per-symbol lock is not equivalent to signal idempotency.
+- Android `ExecutionGate` uses an in-memory synchronized set. It prevents concurrent reservations in one runtime instance, but by itself cannot prove exclusivity across runtime restart or independent processes. Persisted `PendingEntry` state is useful recovery evidence, not proof that a signal remains valid.
+- Android client IDs containing `System.nanoTime()` are unique per attempt but are not stable identity for replaying the same signal. On an ambiguous POST result, the code does query by the attempt's client ID and requests reconciliation if no order is observed; cross-restart re-presentation still needs a durable signal-level guard.
+- Python `ExecutionBarrier._persist` currently catches all exceptions from `save_execution_intent` and ignores them. It also swallows `save_execution_event` failures. Thus the implementation does not yet prove the required invariant “persistence failure cannot authorize mutation.”
+- These findings are source-inspection results, not claims that the listed negative scenarios have passed integration tests.
+
+## TASK 004.5 acceptance matrix at this checkpoint
+
+| Requirement | Status | Evidence / remaining work |
+|---|---|---|
+| Complete Python production mutation path inventory | UNRESOLVED | Initial entry/add-on/generic trader/cancel paths identified; every caller and legacy alias still needs exhaustive tracing |
+| Complete Android production mutation path inventory | UNRESOLVED | Major order, cancel, cancel-replace, OCO, stop and sell sinks located; exhaustive dynamic call-path trace remains |
+| Android mutation-spy negative and positive integration tests | UNRESOLVED | No sink-count integration suite has yet been run/evidenced |
+| Durable signal idempotency and two-connection/process race | UNRESOLVED | Existing per-symbol SQLite claim does not establish all requested per-signal invariants; Android guard is process-local |
+| Persisted preferences/restart matrix | UNRESOLVED | Malformed/missing fields and unknown previous POST outcomes require systematic matrix tests |
+| Shared Python↔Android golden replay | UNRESOLVED | Existing strategy golden vectors do not yet prove all requested execution decisions/reasons/actions from one shared fixture |
+| Future-candle causal replay | UNRESOLVED | Not yet evidenced for signal formation, fractal confirmation, Alligator indexing, or restored signals |
+| Exit/protection/recovery under entry block | UNRESOLVED | Source paths found; sink-spy integration proof still required |
+| Migration/concurrency tests | UNRESOLVED | Existing SQLite schema has campaign tables and unique IDs, but migration preservation and two independent connection/process race tests for signal consumption are not yet evidenced |
+| Physical Android device | NOT VERIFIED | No device-run evidence supplied or collected |
+| Binance Spot Testnet | NOT VERIFIED | No Testnet execution performed as part of this audit |
+
+**Decision: IN PROGRESS — NOT APPROVED.** The present evidence is intentionally an initial TASK 004.5 audit checkpoint. Green baseline CI does not close any of the outstanding behavioural or concurrency blockers. No claim is made that the full Bill Williams strategy is implemented or that this branch is ready for live trading.
