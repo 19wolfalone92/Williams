@@ -1229,6 +1229,18 @@ class Database:
                 (symbol, str(trade_id), str(order_id), "SPOT_FILL", effect_status,
                  qty, price, quote_qty, canonical_commission, canonical_asset, canonical_fee_state, payload),
             )
+            self.conn.execute(
+                """UPDATE financial_effect_journal
+                   SET commission_amount_text=?, commission_asset=?,
+                       fee_state='CONFIRMED', effect_status='READY_TO_APPLY',
+                       raw_json=?, last_seen_at=CURRENT_TIMESTAMP
+                   WHERE venue='BINANCE' AND market_type='SPOT'
+                     AND symbol=? AND exchange_trade_id=?
+                     AND fee_state='UNKNOWN'
+                     AND ?='CONFIRMED'""",
+                (canonical_commission, canonical_asset, payload, symbol,
+                 str(trade_id), canonical_fee_state),
+            )
             effect = self.conn.execute(
                 """SELECT exchange_order_id,quantity_text,price_text,
                           quote_quantity_text,commission_amount_text,commission_asset,
