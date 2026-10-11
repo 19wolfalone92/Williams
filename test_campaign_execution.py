@@ -119,9 +119,16 @@ def test_partial_conditional_entry_is_cancelled_and_residual_protected():
         recovered = svc.reconcile_pending_entries()
         assert recovered[0]["state"] == "OPEN", recovered
         order = client.get_order("BTCUSDT", orig_client_order_id=result["client_order_id"])
-        assert order["status"] in {"PARTIALLY_FILLED", "CANCELED"}
+        assert order["status"] == "CANCELED"
         campaign = svc.engine.load_campaign(result["campaign_id"])
         assert campaign.position_qty > 0
+        stop = client.get_order("BTCUSDT", order_id=int(campaign.tags["protective_order_id"]))
+        assert stop["status"] == "NEW"
+        assert float(stop["origQty"]) >= campaign.position_qty
+        fill_count = db.conn.execute("SELECT COUNT(*) FROM execution_fills").fetchone()[0]
+        trade_count = len(client.my_trades("BTCUSDT", order_id=order["orderId"]))
+        assert fill_count == trade_count == 1
+        assert svc.recovery_coordinator.readiness()["ready"] is True
 
 
 def test_restart_adopts_pending_campaign_by_client_id():
@@ -162,3 +169,59 @@ def test_stop_replacement_never_lowers_stop():
         assert current > 0
         assert not svc.engine.propose_stop(campaign, current - 1.0, "BAD")
         assert campaign.current_stop_price == current
+
+
+def test_exchange_fill_journal_is_idempotent_after_full_campaign_restart():
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "campaign-restart.sqlite3")
+        db = Database(path)
+        client = MockExchange()
+        svc = service(db, client)
+        result = svc.arm_initial_entry(
+            signal(trigger=101.0),
+            equity_quote=10_000,
+            candidate_risk_pct=0.004,
+        )
+        client.set_price("BTCUSDT", 101.5)
+        first = svc.reconcile_pending_entries()
+        assert first[0]["state"] == "OPEN", first
+        campaign = svc.engine.load_campaign(result["campaign_id"])
+        assert campaign is not None
+        assert campaign.position_qty > 0
+        before_position = campaign.position_qty
+        before_fill_count = db.conn.execute(
+            "SELECT COUNT(*) FROM execution_fills"
+        ).fetchone()[0]
+        before_campaign_fills = db.conn.execute(
+            "SELECT COUNT(*) FROM campaign_fills WHERE campaign_id=?",
+            (campaign.campaign_id,),
+        ).fetchone()[0]
+        before_trade = db.conn.execute(
+            "SELECT quantity,fees,pnl FROM trades WHERE id=?",
+            (int(campaign.tags["trade_id"]),),
+        ).fetchone()
+
+        # Process restart: new DB instance, same durable SQLite and exchange state.
+        db2 = Database(path)
+        svc2 = service(db2, client)
+        second = svc2.reconcile_pending_entries()
+        assert second[0]["state"] == "OPEN", second
+        after = svc2.engine.load_campaign(campaign.campaign_id)
+        after_trade = db2.conn.execute(
+            "SELECT quantity,fees,pnl FROM trades WHERE id=?",
+            (int(after.tags["trade_id"]),),
+        ).fetchone()
+        assert after.position_qty == before_position
+        assert db2.conn.execute("SELECT COUNT(*) FROM execution_fills").fetchone()[0] == before_fill_count
+        assert db2.conn.execute(
+            "SELECT COUNT(*) FROM campaign_fills WHERE campaign_id=?",
+            (campaign.campaign_id,),
+        ).fetchone()[0] == before_campaign_fills
+        assert dict(after_trade) == dict(before_trade)
+        assert svc2.recovery_coordinator.readiness()["ready"] is True
+        stops = [
+            o for o in client.open_orders("BTCUSDT")
+            if str(o.get("side")).upper() == "SELL"
+            and str(o.get("clientOrderId", "")).startswith(svc2.STOP_PREFIX)
+        ]
+        assert len(stops) == 1
