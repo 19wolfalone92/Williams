@@ -48,6 +48,11 @@ class MultiPositionTrader:
     def __init__(self, client, db=None, symbols=None, execution_barrier=None):
         self.client = client
         self.db = db or Database()
+        # Install the durable one-shot permit verifier at the Binance REST
+        # mutation boundary. The client denies emergency SELL if this binding
+        # is missing or if the durable intent cannot be claimed exactly once.
+        if hasattr(self.client, "emergency_sell_authorizer"):
+            self.client.emergency_sell_authorizer = self.db.authorize_emergency_sell_mutation
         if symbols is not None:
             self.symbols = [str(x).strip().upper() for x in symbols if str(x).strip()]
         else:
