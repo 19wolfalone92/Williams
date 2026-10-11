@@ -117,6 +117,42 @@ class ExecutionBarrier:
             except Exception:
                 pass
 
+    def _claim_signal_once(self, intent: OrderIntent) -> None:
+        """Durably reserve one logical entry signal before any network mutation."""
+        purpose = str(intent.purpose or "").strip().upper()
+        if purpose not in {"ENTRY", "CAMPAIGN_ENTRY", "ADD_ON", "CAMPAIGN_ADD_ON"}:
+            return
+        if self.db is None:
+            # A DB-less barrier is useful for validation-only callers, but must not
+            # be mistaken for a durable production execution authority.
+            return
+        signal_id = str(intent.signal_id or "").strip()
+        if not signal_id:
+            raise RuntimeError("durable signal idempotency blocked: missing signal_id")
+        claim = getattr(self.db, "try_claim_state", None)
+        if not callable(claim):
+            raise RuntimeError("durable signal idempotency unavailable; refusing entry mutation")
+        # The key is derived from the stable signal identity, not intent/client-order
+        # IDs. Store provenance for audit; an existing claim blocks all retries,
+        # including across initial-entry/add-on and process restart.
+        provenance = "|".join((
+            str(intent.symbol).upper(),
+            str(intent.side).upper(),
+            str(intent.signal_timeframe).strip().lower(),
+            str(int(intent.signal_bar_time_ms or 0)),
+            str(int(intent.confirmation_time_ms or 0)),
+            str(intent.campaign_id or ""),
+            purpose,
+        ))
+        try:
+            claimed = claim(f"consumed_signal:{signal_id}", provenance)
+        except Exception as exc:
+            raise RuntimeError(
+                f"durable signal idempotency reservation failed: {type(exc).__name__}"
+            ) from exc
+        if not claimed:
+            raise RuntimeError("duplicate signal blocked: durable signal was already claimed")
+
     def _validate(self, intent: OrderIntent, snapshot: MarketStateSnapshot) -> str:
         # H1 is an owner-approved execution contract, not a Williams book rule.
         # Enforce it at the last admission boundary for campaign entries so
@@ -249,6 +285,9 @@ class ExecutionBarrier:
                     self._record("WARNING", "execution_blocked", intent, reason)
                     return ExecutionResult(intent.intent_id, False, reason=reason)
 
+            # Atomic, durable one-time signal reservation follows all read-only
+            # validation and precedes the irreversible network boundary.
+            self._claim_signal_once(intent)
             order_fsm.transition(OrderState.SUBMITTING)
             # Record the irreversible boundary before touching the network.
             # A restart seeing SUBMITTING without an authoritative result must reconcile,
