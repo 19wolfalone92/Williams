@@ -461,3 +461,51 @@ def test_reconcile_state_and_pending_intent_survive_database_restart(tmp_path):
     assert result.accepted is False
     assert result.reason == "RECONCILE_REQUIRED"
     assert called == []
+
+
+def test_unapplied_financial_effect_blocks_buy_before_exchange_mutation(tmp_path):
+    cache = _context_cache()
+    db = _ready_db(tmp_path)
+    db.record_exchange_fill(
+        "BTCUSDT",
+        {
+            "id": "effect-gate-1",
+            "orderId": "effect-gate-order",
+            "qty": "0.10",
+            "price": "100.00",
+            "quoteQty": "10.00",
+            "commission": "0.001",
+            "commissionAsset": "BTC",
+        },
+    )
+    effect = db.conn.execute(
+        """SELECT effect_status, fee_state FROM financial_effect_journal
+           WHERE symbol='BTCUSDT' AND exchange_trade_id='effect-gate-1'"""
+    ).fetchone()
+    assert effect["effect_status"] == "READY_TO_APPLY"
+    assert effect["fee_state"] == "CONFIRMED"
+
+    called = []
+    result = ExecutionBarrier(cache, db).execute(
+        _entry_intent(cache),
+        lambda: called.append("BUY") or {"status": "NEW"},
+    )
+    assert result.accepted is False
+    assert "unapplied financial effect" in result.reason
+    assert called == []
+    assert db.state_get("position_state") == "FLAT"
+
+
+def test_financial_effect_journal_inspection_failure_blocks_buy(tmp_path):
+    cache = _context_cache()
+    db = _ready_db(tmp_path)
+    db.conn.execute("DROP TABLE financial_effect_journal")
+    db.conn.commit()
+    called = []
+    result = ExecutionBarrier(cache, db).execute(
+        _entry_intent(cache),
+        lambda: called.append("BUY") or {"status": "NEW"},
+    )
+    assert result.accepted is False
+    assert "cannot inspect financial effect journal" in result.reason
+    assert called == []
