@@ -91,16 +91,16 @@ The zero commission above exists only in test fixtures as an explicit exchange-t
 
 ## A. GitHub state and CI SHA mapping
 
-The run metadata from GitHub's Actions API records the PR head as `e7afee404920abef6891a081e7b323df208569d7` for runs 38115006581, 38115006603 and 38115006580. The PR event metadata says the same head SHA and base SHA as above. The job logs for the Python failures contain the failing emergency-SELL test and fee-unknown traceback. Prior job output reported checkout commit `c3d12f3313a95f25162a1503be624f3b0617f8c0`; that is not the PR head SHA and must be treated as a synthetic/merge checkout until parent/ref evidence is conclusively mapped. Do not transfer any result from that checkout to the branch head.
+The run metadata from GitHub's Actions API records PR head `e7afee404920abef6891a081e7b323df208569d7` and base `04da5f9c09572e99ff310be3a1908179165e528c` for runs 38115006581 and 38115006603. The Python job checkout log explicitly fetches and checks out `be82e7467a27f0797d0f312c60a4da7170a975cf` as `refs/remotes/pull/50/merge`, with the message “Merge e7afee... into 04da5f...”. Thus those PR-triggered jobs tested the synthetic merge tree `be82...`, not the head commit alone. The string `c3d12f3313a95f25162a1503be624f3b0617f8c0` appears in the log under “Runner Image Provisioner” as the GitHub-hosted runner image build commit, not as the repository checkout SHA. This resolves the apparent `c3d12` discrepancy; it must not be recorded as source SHA. The Android Build APK run's exact checkout SHA still requires the same explicit log-level check.
 
-| Workflow | Run | Job | PR head in run metadata | Result | Evidence |
+| Workflow | Run | Job | PR head / tested checkout | Result | Evidence |
 |---|---:|---|---|---|---|
-| Python backend tests | [38115006581](https://github.com/19wolfalone92/Williams/actions/runs/38115006581) | backend-test, job 114398048523 | `e7afee404920abef6891a081e7b323df208569d7` | FAILURE; 1 failed, 150 passed | [full job log](https://github.com/19wolfalone92/Williams/actions/runs/38115006581) |
-| Williams Campaign CI | [38115006603](https://github.com/19wolfalone92/Williams/actions/runs/38115006603) | Python tests, job 114398092299 | `e7afee404920abef6891a081e7b323df208569d7` | FAILURE; 1 failed, 167 passed | [full job log](https://github.com/19wolfalone92/Williams/actions/runs/38115006603) |
-| Williams Campaign CI | [38115006603](https://github.com/19wolfalone92/Williams/actions/runs/38115006603) | Android build and static checks, job 114398092238 | `e7afee404920abef6891a081e7b323df208569d7` | SUCCESS | job steps show unit tests, lint and debug APK completed |
-| Build Android APK | [38115006580](https://github.com/19wolfalone92/Williams/actions/runs/38115006580) | Build APKs, job 114398048576 | `e7afee404920abef6891a081e7b323df208569d7` | SUCCESS | job steps show Android unit tests, lint, debug/release APK and artifact checks completed |
+| Python backend tests | [38115006581](https://github.com/19wolfalone92/Williams/actions/runs/38115006581) | backend-test, job 114398048523 | head `e7afee...`; checkout merge `be82e7467a27f0797d0f312c60a4da7170a975cf` | FAILURE; 1 failed, 150 passed | [full job log](https://github.com/19wolfalone92/Williams/actions/runs/38115006581) |
+| Williams Campaign CI | [38115006603](https://github.com/19wolfalone92/Williams/actions/runs/38115006603) | Python tests, job 114398092299 | head `e7afee...`; merge checkout SHA must be confirmed from that job log | FAILURE; 1 failed, 167 passed | [full job log](https://github.com/19wolfalone92/Williams/actions/runs/38115006603) |
+| Williams Campaign CI | [38115006603](https://github.com/19wolfalone92/Williams/actions/runs/38115006603) | Android build and static checks, job 114398092238 | head `e7afee...`; merge checkout SHA must be confirmed from that job log | SUCCESS | job steps show unit tests, lint and debug APK completed |
+| Build Android APK | [38115006580](https://github.com/19wolfalone92/Williams/actions/runs/38115006580) | Build APKs, job 114398048576 | head `e7afee...`; checkout merge SHA NOT VERIFIED | SUCCESS | job steps show Android unit tests, lint, debug/release APK and artifact checks completed |
 
-These are historical results for `e7afee...`, not evidence for the newer commits in TASK 005.5. Exact-SHA CI on the eventual final HEAD remains **NOT VERIFIED**.
+These are historical results for the `e7afee...` PR event, with the backend job demonstrably testing merge tree `be82...`; they are not evidence for the newer commits in TASK 005.5. Exact checkout SHAs for every other job must be read from each checkout log. Exact-SHA CI on the eventual final HEAD remains **NOT VERIFIED**.
 
 ## B. Python failure — established root cause for the currently failing test
 
