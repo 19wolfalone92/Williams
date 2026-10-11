@@ -21,7 +21,7 @@ class ExecutionRecoveryBlocked(RuntimeError):
 
 
 class ExecutionRecoveryCoordinator:
-    UNRESOLVED = {"PENDING", "SUBMITTING", "UNKNOWN", "AMBIGUOUS", "RECONCILE_REQUIRED"}
+    UNRESOLVED = {"PENDING", "SUBMITTING", "SUBMITTED", "UNKNOWN", "AMBIGUOUS", "RECONCILE_REQUIRED"}
     ACCEPTED_EXCHANGE_STATUSES = {
         "NEW": "OPEN",
         "PENDING_NEW": "OPEN",
