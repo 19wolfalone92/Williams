@@ -221,6 +221,23 @@ class ExecutionRecoveryCoordinator:
             if order_status not in self.ACCEPTED_EXCHANGE_STATUSES:
                 raise ExecutionRecoveryBlocked(f"unsupported order status {order_status!r}")
             trades, history_qty = self._query_trades(intent, order)
+            base_asset = ""
+            quote_asset = ""
+            if trades and self.fill_handler is not None:
+                # Fetch immutable symbol metadata before entering the financial transaction.
+                info = self.client.exchange_info(str(intent["symbol"]).upper())
+                symbols = info.get("symbols", []) if isinstance(info, dict) else []
+                matching = [
+                    row for row in symbols
+                    if isinstance(row, dict)
+                    and str(row.get("symbol", "")).upper() == str(intent["symbol"]).upper()
+                ]
+                if len(matching) != 1:
+                    raise ExecutionRecoveryBlocked("exchangeInfo cannot uniquely identify base/quote assets")
+                base_asset = str(matching[0].get("baseAsset", "")).upper()
+                quote_asset = str(matching[0].get("quoteAsset", "")).upper()
+                if not base_asset or not quote_asset:
+                    raise ExecutionRecoveryBlocked("exchangeInfo has incomplete base/quote assets")
 
             # The position/campaign/fees/PnL callback runs inside the same SQLite
             # transaction as the unique execution_fills insert. A callback error
@@ -246,6 +263,8 @@ class ExecutionRecoveryCoordinator:
                     "commission": str(commission),
                     "commission_asset": str(commission_asset or ""),
                     "raw": trade,
+                    "base_asset": base_asset,
+                    "quote_asset": quote_asset,
                 }
                 self.db.apply_execution_fill(
                     fill,
