@@ -52,6 +52,7 @@ jobs:
             test_strategy_diagnostics.py \
             test_db_guard.py \
             test_db_isolation.py \
+            test_signal_claim_processes.py \
             test_atomic_real_db.py \
             test_atomic_switch_db_failure.py \
             test_atomic_switch_rollback.py \
