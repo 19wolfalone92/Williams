@@ -327,3 +327,103 @@ The permit is a process-level guard for code using the client wrapper, not by it
 10. Only after P0 closure, prove read-only Spot Testnet access technically and run read-only requests.
 
 **TASK 008.8 final status: BLOCKED / NOT ACCEPTED.** No new production integration or test pass is claimed by this addendum.
+
+
+## 15. TASK 008.9 — Production Preflight Closure, Spot SELL Safety & Recovery Proof
+
+**Decision: BLOCKED — NOT ACCEPTED.** This pass verifies repository state and performs source-level inspection. It does not claim the requested P0 implementation or test closure. No production code was changed in this pass: approved freshness budgets and authoritative producer contracts are still missing, and guessing those contracts or injecting synthetic production evidence would be unsafe.
+
+### 15.1 Actual branch state
+
+- Repository: `19wolfalone92/Williams`.
+- Existing branch resolved: `audit/williams-2.1-task-008-spot-testnet`.
+- Actual HEAD before this pass: `579ddf76d0c9c34852bc5f9bcbf1f86e39fcc483`, matching the previously reported SHA.
+- Base: `d7634adc1f6a1d25ef334294a4903f7c9134e06b`.
+- Comparison before this pass: 41 commits ahead, 0 behind.
+- The branch exists. Exact-head PR search returned no matching PR; none was created.
+- Combined status query returned no status entries. Workflow-run connector returned no runs and is limited to PR-triggered runs. CI status remains UNKNOWN, not PASS.
+- Existing workflow `.github/workflows/campaign-ci.yml` defines a push/pull_request/workflow_dispatch trigger and includes Python tests, `full_safety_audit.py`, safety tests, and Android unit tests/lint/debug APK build. No verified run ID or job logs for this SHA were available.
+- No test suite was executed in this pass. No Mainnet or exchange mutation was used.
+
+### 15.2 Code vs documentation: key source findings
+
+| Requirement | Code evidence inspected | Assessment |
+|---|---|---|
+| Freshness validator | `runtime_freshness.py`: `FreshnessEvidence`, source allowlist, generation, wall-clock timestamp and optional monotonic session fields; `DEFAULT_MAX_AGE_MS = {}` | Validator exists; no approved default budgets |
+| Mandatory Preflight integration | `preflight_gate.py`: checks server time, account, symbols/filters, orders and required checks; `as_dict()` generates `checked_at_ms` at serialization | No demonstrated producer-bound evidence set is passed through the real measurement graph into the final report |
+| Preflight report age | `execution_barrier.py` compares `checked_at_ms` against `max_preflight_age_ms` | This is report-age validation, not proof of age of source measurements |
+| Entry gate | `ExecutionBarrier._verify_preflight()` requires concrete `PreflightCheckService`, matching client identity, TESTNET Spot pinning, required checks PASS and no reconciliation flag | Fail-closed checks exist, but full current-source evidence and exhaustive mutation sink coverage remain unproven |
+| Durable intent | `execution_barrier.py` persists intent and issues a one-use context-local permit | Useful control; not proof of all network calls passing through the barrier or cross-process exactly-once behavior |
+| Spot SELL purpose | `OrderIntent` has a generic `purpose` field; no verified complete operation-purpose contract was established for all callers | Spot reduction/exit remains insufficiently distinguished from Futures short semantics |
+| Database | `db.py` uses SQLite WAL, `synchronous=NORMAL`, transaction helpers and schema versioning | No completed two-connection/process recovery race results available |
+| WebSocket | `ws_hub.py` tracks connection/message/reconnect state | No proof that all actual producer observations are generation-bound and consumed by mandatory Preflight |
+| Scanner | No trusted, completed-cycle evidence producer and mandatory Preflight handoff were established by inspected materials | UNKNOWN must block entry |
+| Recovery matrix | Existing reports preserve a 22-case matrix; no full execution results are available | All cases remain NOT RUN or NOT VERIFIED for this task |
+
+### 15.3 Required budgets: no approved values established
+
+No explicit reviewed policy source with approved per-component freshness budgets was established in the inspected files. Consequently, this pass does not assign TTLs or heartbeat intervals.
+
+| Component | Approved budget/source | Gate result until approval and integration |
+|---|---|---|
+| REST / server time | No authoritative budget contract established | BLOCKED |
+| Account and balances | No authoritative budget contract established | BLOCKED |
+| Closed H1 candle | No authoritative budget contract established | BLOCKED |
+| Market WebSocket / User Data Stream | No authoritative budget contract established | BLOCKED |
+| Completed scanner cycle | Producer and budget contract not established | BLOCKED |
+| Market Context generation | Generation exists, approved age budget and complete evidence binding not established | BLOCKED |
+| SQLite integrity / reconciliation | No approved freshness contract and complete evidence handoff established | BLOCKED |
+| Android runtime | Must only be required when the selected execution architecture actually depends on it; no universal dependency is inferred here | UNKNOWN unless required by selected mode |
+
+A measurement must be source-bound, successful, non-future, generation-consistent, and evaluated with a valid budget. If monotonic evidence is used, it must be evaluated in the same monotonic session. Process restart cannot make old process-local monotonic evidence fresh.
+
+### 15.4 Entry and mutation-path status
+
+The barrier code inspected requires a concrete Preflight service and a Testnet Spot client, checks the required check names and PASS statuses, and issues a mutation permit. However, these controls alone do not prove that every production route reaches that barrier or that every callback performs only its intended single mutation.
+
+| Route / invariant | Status |
+|---|---|
+| Initial Spot entry and add-on | BLOCKED — no complete source-to-sink inventory plus executed mutation-spy proof |
+| Delayed/replayed intent and restart recovery | BLOCKED — no executed exactly-once proof |
+| Timeout / unknown POST result | PARTIAL — barrier-level ambiguity handling exists; all caller retry paths not proven |
+| Cancel / replace | BLOCKED — full sink and callback inventory not proven |
+| Protection recovery | BLOCKED — protection state and recovery admissibility not proven end-to-end |
+| Safe close/reduction | BLOCKED — separate risk-reduction admission contract and confirmed quantity invariants not proven |
+| Direct REST / Android signed mutation routes | NOT VERIFIED exhaustively |
+| New entry when required evidence or financial reconciliation is UNKNOWN | Must remain BLOCKED; complete producer-to-gate integration not proven |
+
+### 15.5 Spot SELL and financial invariants
+
+**Spot SELL safety: BLOCKED.** The generic `OrderIntent.purpose` field is not, by itself, evidence that every caller enforces the distinctions between `SPOT_ENTRY_BUY`, `SPOT_REDUCTION_SELL`, `SPOT_EXIT_SELL`, `PROTECTION_RECOVERY`, `ORDER_CANCEL`, `ORDER_REPLACE`, `FUTURES_LONG`, and `FUTURES_SHORT`.
+
+Before enabling reduction/exit, the implementation must prove from authoritative exchange and durable local state: free base quantity minus reservations and outstanding sells; confirmed fills and fee asset; symbol filters; campaign/position identity; unresolved prior mutations; stable intent/client order identity; and no increase in exposure. Unknown state must trigger reconciliation or block the mutation. Ordinary Spot SELL must never be interpreted as opening a Futures short.
+
+### 15.6 Recovery matrix and SQLite concurrency
+
+The existing TASK 008.5–008.7 reports retain the 22 scenarios; they are not replaced with a shorter set. For TASK 008.9, **all 22 remain NOT RUN / NOT VERIFIED** because no complete test execution with financial and mutation-count assertions was available. No individual scenario is promoted to PASS.
+
+SQLite concurrency and crash recovery remain NOT RUN. No evidence is available from two independent connections/processes for intent reservation, tradeId/fill deduplication, commission uniqueness, simultaneous recovery, failed commit, SQLITE_BUSY, migration interruption, or restart after partial processing. Exactly-once financial effects are therefore NOT VERIFIED.
+
+### 15.7 Secret audit, CI and Spot Testnet
+
+- **Synthetic-secret audit:** NOT COMPLETE. This pass did not execute a repository-wide marker scan or redaction tests over code, config, fixtures, reports, CI logs, Android assets and serialized state. No real secrets were extracted or printed.
+- **CI:** UNKNOWN. No verified run ID, terminal status, or failed/incomplete job logs tied to this final SHA were available. Empty status/run results are not success.
+- **Read-only Spot Testnet:** NOT VERIFIED. No request was made because the local P0/CI prerequisites are not proven closed.
+- **Execution modes:** Spot LONG remains not verified end-to-end; Spot reduction/exit blocked; ordinary Spot SELL does not establish SHORT; Futures LONG/SHORT remain UNKNOWN without proof of a complete mode-specific execution path.
+
+### 15.8 TASK 008.9 acceptance checklist
+
+- [ ] Real producer measurements passed into mandatory Preflight.
+- [ ] Approved freshness budgets and source provenance established.
+- [ ] All new-entry paths gated immediately before mutation.
+- [ ] Exhaustive mutation sink bypass audit and mutation-spy tests.
+- [ ] Explicit Spot/Futures operation purpose and safe Spot SELL invariants.
+- [ ] Global recovery gate tied to authoritative reconciliation.
+- [ ] All 22 recovery scenarios executed with financial assertions.
+- [ ] SQLite concurrency and crash-recovery tests executed.
+- [ ] Protection state verified from exchange and local evidence.
+- [ ] Synthetic-secret and redaction audit completed for available channels.
+- [ ] All required CI workflows passed on one final SHA.
+- [ ] Read-only Spot Testnet checked after local closure, or marked NOT VERIFIED.
+
+**Final status: BLOCKED — NOT ACCEPTED.** This section records the inspected evidence and outstanding work; it is not a substitute for production implementation, automated test results, or CI evidence.
