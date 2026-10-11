@@ -379,3 +379,42 @@ APK artifacts from Build Android APK run `38090340317`:
 The release-gate regression now checks the app version `4.25.0` across server/UI/Gradle and compares both CI Gradle pins against the wrapper version. The test initially exposed an over-escaped regex; the regex was corrected, and the above Campaign/backend workflows passed on the exact SHA after correction.
 
 **This SHA's CI is necessary evidence, not acceptance.** The report update that follows changes the branch SHA; the three workflows have been configured to run when `docs/**` changes so the report-bearing commit can also be checked. The conservative Android same-symbol unresolved-mutation gate and the unverified recovery scenarios listed above remain blockers. Final status remains **BLOCKED — NOT ACCEPTED**.
+
+
+### Exact-SHA verification — report-bearing source SHA `8534f5e306c672c650feccebe45d67ae28792fe4`
+
+Live GitHub state was re-read for this snapshot:
+- `main`: `04da5f9c09572e99ff310be3a1908179165e528c` (unchanged).
+- Working branch HEAD and PR #48 head: `8534f5e306c672c650feccebe45d67ae28792fe4`.
+- PR #48: open, draft, unmerged; base is `main`.
+- All three required workflow runs below report this exact head SHA.
+
+| Workflow | Run ID | Job ID(s) | Observed result |
+|---|---:|---|---|
+| Python backend tests | [38090701126](https://github.com/19wolfalone92/Williams/actions/runs/38090701126) | 114326353144 | PASS — release contract gate and static audit passed; pytest `148 passed, 4 warnings`. |
+| Williams Campaign CI | [38090701118](https://github.com/19wolfalone92/Williams/actions/runs/38090701118) | 114326353125, 114326353314 | PASS — Campaign/Python suite `181 passed, 4 warnings`; Android `:app:testDebugUnitTest`, `:app:lintDebug`, and `:app:assembleDebug` succeeded. |
+| Build Android APK | [38090701220](https://github.com/19wolfalone92/Williams/actions/runs/38090701220) | 114326353726 | PASS — release gate, lint, Android unit tests, debug and unsigned release APK assembly, APK metadata checks and persistent debug-signature verification succeeded. |
+
+APK evidence from run `38090701220`:
+- Debug APK: package `com.williamsbot.debug`, version `4.25.0-debug`, versionCode `1893`, SHA-256 `4fc376b0e3f0f36e161469771e3ef7bd19ce5791092ceb2dade8314efcfcad0d`.
+- Unsigned release APK: package `com.williamsbot`, version `4.25.0`, versionCode `1893`, SHA-256 `507386f60dd5a86951c3499a946c116dd640aa9d60bb5f8a4c5ae1a9c05a0d5e`.
+- Artifact IDs: debug APK `11684570193`; unsigned release APK `11684415413`; Android unit-test diagnostics `11683353494`; Campaign CI debug APK `11683693458`; lint report `11683858044`; Python pytest report `11683524761`.
+
+The original failing snapshot `953d2c4e2831d1685f5531c76ac03fcedd42d00a` remains historical baseline evidence only. Its recorded failures were: release gate expected server version `4.24.0`; Kotlin compilation reported a non-repeatable annotation at `TradingAuditStore.kt:609`; Campaign tests observed `RECONCILE_REQUIRED` instead of `OPEN` in two deterministic MockExchange cases; restart adoption returned no `campaign_id`; native sender inventory detected three HTTP senders; and the telemetry-order static assertion failed. The later code snapshots fixed the build/test regressions without removing the release gate or lowering the sender inventory assertion. The canonical version contract now consistently uses `4.25.0` in `server.py`, UI, Gradle and `ci_release_gate.py`; wrapper/CI Gradle pins are `8.14.6`.
+
+#### HTTP sender inventory at this snapshot
+
+1. `StandaloneRuntime.kt:getBody(path)` — unsigned GET-only fetch to `baseUrl + path` (market/data reads); no order mutation verb is exposed. No write-ahead order intent is applicable to this read-only path.
+2. `StandaloneRuntime.kt:signedRequest(method, path, params)` — signed Binance REST boundary used for modeled POST/DELETE mutations and signed GETs. Unsupported order-like writes fail before network. Modeled mutations call `validateAndPersistMutationIntent` before the HTTP request and durably record/read back the result afterward; failure latches reconciliation and forbids blind retry.
+3. `StandaloneRuntime.kt:signedRawGet(path, params)` — signed GET-only Binance reads used for exchange lookups/reconciliation; the function builds only GET requests and records REST diagnostics best-effort. It does not submit/cancel/replace orders.
+
+The test now expects three senders only after this inventory was performed; it still asserts the third helper is GET-only and checks that the signed mutation helper persists intent and execution result. This static inventory is not proof that every high-level call path carries every strategy/risk/ownership invariant.
+
+#### Current limitations — do not accept the task
+
+- Campaign deterministic recovery, restart-by-clientOrderId regression, native mutation fence static tests, result-write fail-closed tests, release contract gate, Python/Campaign suites, Android unit tests, lint and APK builds are green on the SHA above.
+- **NOT VERIFIED:** physical Android process death at each intent/result durability boundary; live Binance Spot Testnet accepted-request/lost-response reconciliation; complete authoritative position and fee reconciliation after result persistence failure; live OCO sibling-fill races and exact residual protection; every mass-cancel variant; and exhaustive proof that no legacy/external call path bypasses the mutation boundary.
+- The low-level native mutation gate remains conservative: unresolved mutations block same-symbol mutations generally. Safe exact-target cancellation and reducing exits need separate evidence-based admission rules; do not loosen the gate to allow all SELL/DELETE operations.
+- High-level signal freshness, campaign ownership, risk budget, and confirmed position quantity must still be proven for every entry, replace, cancel, emergency exit and protective-order path. CI/static tests alone do not establish this end-to-end property.
+
+These successful runs are evidence for this exact code SHA, not final acceptance. This documentation-only update changes the branch SHA; the three workflows must complete again on the resulting SHA before claiming exact-final-SHA CI evidence. Final status: **BLOCKED — NOT ACCEPTED**. No Binance Mainnet or real trade was used.
