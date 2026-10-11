@@ -170,22 +170,43 @@ jobs:
           sha256sum app/build/outputs/apk/release/app-release-unsigned.apk > app/build/outputs/apk/release/app-release-unsigned.apk.sha256
           cat app/build/outputs/apk/debug/app-debug.apk.sha256
           cat app/build/outputs/apk/release/app-release-unsigned.apk.sha256
+
+      - name: Write exact-source build provenance
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          {
+            echo "source_commit_sha=${GITHUB_SHA}"
+            echo "source_ref=${GITHUB_REF}"
+            echo "workflow_run_id=${GITHUB_RUN_ID}"
+            echo "workflow_run_number=${GITHUB_RUN_NUMBER}"
+            echo "gradle_version=8.14.6"
+            echo "android_gradle_plugin_version=8.13.2"
+            echo "release_contract_gate=passed"
+            echo "android_lint=passed"
+            echo "android_unit_tests=passed"
+            echo "debug_apk_sha256=$(sha256sum app/build/outputs/apk/debug/app-debug.apk | awk '{print $1}')"
+            echo "release_apk_sha256=$(sha256sum app/build/outputs/apk/release/app-release-unsigned.apk | awk '{print $1}')"
+          } > build/williams-build-provenance.txt
+          cat build/williams-build-provenance.txt
       - name: Upload installable debug APK
         uses: actions/upload-artifact@v7
         with:
-          name: williams-bot-debug-apk-${{ github.run_number }}
+          name: williams-bot-debug-apk-${{ github.run_number }}-${{ github.sha }}
           path: |
             app/build/outputs/apk/debug/app-debug.apk
             app/build/outputs/apk/debug/app-debug.apk.sha256
+            build/williams-build-provenance.txt
           if-no-files-found: error
           retention-days: 14
       - name: Upload release APK
         uses: actions/upload-artifact@v7
         with:
-          name: williams-bot-release-unsigned-${{ github.run_number }}
+          name: williams-bot-release-unsigned-${{ github.run_number }}-${{ github.sha }}
           path: |
             app/build/outputs/apk/release/app-release-unsigned.apk
             app/build/outputs/apk/release/app-release-unsigned.apk.sha256
+            build/williams-build-provenance.txt
           if-no-files-found: error
           retention-days: 14
       - name: Build summary
