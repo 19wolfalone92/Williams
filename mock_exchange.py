@@ -18,6 +18,7 @@ class MockExchange:
             "ETHUSDT": {"bids": [["9.99", "100"]], "asks": [["10.01", "100"]], "lastUpdateId": 1},
         }
         self.orders: list[dict] = []
+        self.trades: list[dict] = []
         self.open_oco: dict[str, dict] = {}
         self.timeout_next = False
         self.partial_fill_ratio = 1.0
@@ -120,6 +121,18 @@ class MockExchange:
             "time": int(time.time() * 1000),
         }
         self.orders.append(order)
+        if executed > 0:
+            self.trades.append({
+                "symbol": symbol,
+                "id": len(self.trades) + 1,
+                "orderId": oid,
+                "price": str(self.prices[symbol]),
+                "qty": str(executed),
+                "commission": "0",
+                "commissionAsset": "USDT",
+                "isBuyer": str(side).upper() == "BUY",
+                "time": order["transactTime"],
+            })
         return order
 
     def market_buy(self, symbol, quote_order_qty=None, quantity=None, client_order_id=None):
@@ -187,6 +200,14 @@ class MockExchange:
                 return copy.deepcopy(order)
         raise RuntimeError("mock order not found")
 
+    def my_trades(self, symbol, order_id=None, limit=1000):
+        rows = [
+            copy.deepcopy(row) for row in self.trades
+            if row["symbol"] == symbol
+            and (order_id is None or str(row["orderId"]) == str(order_id))
+        ]
+        return rows[:int(limit)]
+
     def cancel_order(self, symbol, order_id=None, orig_client_order_id=None):
         order = self.get_order(symbol, order_id=order_id, orig_client_order_id=orig_client_order_id)
         for row in self.orders:
@@ -230,6 +251,18 @@ class MockExchange:
             order["transactTime"] = int(time.time() * 1000)
             order["time"] = order["transactTime"]
             order["status"] = "FILLED" if executed + 1e-12 >= requested else "PARTIALLY_FILLED"
+            if executed > 0:
+                self.trades.append({
+                    "symbol": symbol,
+                    "id": len(self.trades) + 1,
+                    "orderId": str(order["orderId"]),
+                    "price": str(self.prices[symbol]),
+                    "qty": str(executed),
+                    "commission": "0",
+                    "commissionAsset": "USDT",
+                    "isBuyer": side == "BUY",
+                    "time": order["transactTime"],
+                })
 
     def open_order_lists(self):
         return [copy.deepcopy(x) for x in self.open_oco.values()]
