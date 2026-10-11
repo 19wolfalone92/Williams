@@ -566,6 +566,93 @@ class Database:
         except Exception as exc:
             return {"ready": False, "reason": "READINESS_CHECK_FAILED", "detail": repr(exc)}
 
+    def list_monitor_execution_intents(self, scope="spot", account_scope=None, days=30):
+        """Return recently resolved campaign entry intents that can still reveal late fills."""
+        scope = str(scope or "spot").strip().lower()
+        account_scope = self._default_account_scope(scope, account_scope)
+        rows = self.conn.execute(
+            """SELECT * FROM execution_intents
+               WHERE execution_scope=? AND account_scope=?
+                 AND created_at >= datetime('now', ?)
+                 AND status IN ('OPEN','PARTIALLY_FILLED','CANCELED','EXPIRED')
+                 AND (
+                     purpose LIKE '%ENTRY%'
+                     OR purpose LIKE '%ADD_ON%'
+                     OR purpose='ADD_ON'
+                 )
+               ORDER BY created_at,intent_id""",
+            (scope, account_scope, f"-{max(1, int(days))} days"),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def mark_intent_reconcile_required(self, intent_id, reason):
+        """Re-lock an account contour when a previously resolved order becomes ambiguous."""
+        intent_id = str(intent_id)
+        with self.transaction():
+            row = self.conn.execute(
+                "SELECT execution_scope,account_scope,symbol,client_order_id,order_id FROM execution_intents WHERE intent_id=?",
+                (intent_id,),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError(f"execution intent not found: {intent_id}")
+            scope = str(row["execution_scope"] or "spot").lower()
+            account_scope = str(row["account_scope"] or self._default_account_scope(scope))
+            key = self._execution_lock_key(scope, account_scope)
+            payload = json.dumps({
+                "scope": scope, "account_scope": account_scope,
+                "intent_id": intent_id, "reason": str(reason),
+                "state": "RECONCILE_REQUIRED",
+            }, sort_keys=True)
+            self.conn.execute(
+                "UPDATE execution_intents SET status='RECONCILE_REQUIRED',reason=? WHERE intent_id=?",
+                (str(reason), intent_id),
+            )
+            self.conn.execute(
+                """INSERT INTO bot_state(key,value) VALUES(?,?)
+                   ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
+                (key, payload),
+            )
+            self.conn.execute(
+                "INSERT INTO execution_events(intent_id,event,payload_json) VALUES(?,?,?)",
+                (intent_id, "RECONCILE_REQUIRED", payload),
+            )
+            return {"scope": scope, "account_scope": account_scope, "symbol": row["symbol"]}
+
+    def record_reconciliation_refresh(self, intent_id, evidence, *, changed=False):
+        """Persist a verified refresh for an already resolved order without unlocking other intents."""
+        with self.transaction():
+            row = self.conn.execute(
+                "SELECT status FROM execution_intents WHERE intent_id=?",
+                (str(intent_id),),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError(f"execution intent not found: {intent_id}")
+            payload = {
+                "evidence_id": evidence.evidence_id,
+                "exchange": evidence.exchange,
+                "account_scope": evidence.account_scope,
+                "execution_scope": evidence.execution_scope,
+                "symbol": evidence.symbol,
+                "client_order_id": evidence.client_order_id,
+                "order_id": evidence.order_id,
+                "status": evidence.status,
+                "executed_qty": evidence.executed_qty,
+                "history_qty": evidence.history_qty,
+                "trade_ids": list(evidence.trade_ids),
+                "observed_at": evidence.observed_at,
+                "changed": bool(changed),
+            }
+            if changed or str(row["status"]).upper() != evidence.status:
+                self.conn.execute(
+                    "UPDATE execution_intents SET status=?,order_id=COALESCE(order_id,?),reason=? WHERE intent_id=?",
+                    (evidence.status, evidence.order_id, "refreshed:" + evidence.evidence_id, str(intent_id)),
+                )
+                self.conn.execute(
+                    "INSERT INTO execution_events(intent_id,event,payload_json) VALUES(?,?,?)",
+                    (str(intent_id), "RECONCILIATION_REFRESHED", json.dumps(payload, sort_keys=True)),
+                )
+            return True
+
     def list_unresolved_execution_intents(self, scope=None, account_scope=None):
         query = """SELECT * FROM execution_intents
                    WHERE status IN ('PENDING','SUBMITTING','SUBMITTED','UNKNOWN','AMBIGUOUS','RECONCILE_REQUIRED')"""
