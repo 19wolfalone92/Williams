@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from campaign_engine import CampaignEngine
 from campaign_execution import CampaignExecutionService
 from campaign_model import CampaignState, SignalRole, SignalSpec, SignalType
-from execution_barrier import ExecutionBarrier
+from execution_barrier import ExecutionBarrier, OrderIntent
 from mock_exchange import MockExchange
 from db import Database
 
@@ -340,3 +340,66 @@ def test_structural_invalidation_blocks_before_fake_exchange_mutation(monkeypatc
         except Exception as exc:
             assert "structurally invalidated" in str(exc)
         assert client.orders == []
+
+
+
+def test_execution_intent_lifecycle_update_preserves_immutable_payload():
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "intent.sqlite3"))
+        intent = OrderIntent.new(
+            symbol="BTCUSDT",
+            side="BUY",
+            order_type="MARKET",
+            required_context_versions={"1h": 7},
+            purpose="CAMPAIGN_ENTRY",
+            client_order_id="wms-test-intent-1",
+        )
+        db.save_execution_intent(intent, "PREPARED")
+        db.save_execution_intent(intent, "IN_FLIGHT")
+        row = db.conn.execute(
+            "SELECT status, symbol, side, order_type, required_context_versions_json "
+            "FROM execution_intents WHERE intent_id=?",
+            (intent.intent_id,),
+        ).fetchone()
+        assert row["status"] == "IN_FLIGHT"
+        assert row["symbol"] == "BTCUSDT"
+        assert row["side"] == "BUY"
+        assert row["order_type"] == "MARKET"
+        assert __import__("json").loads(row["required_context_versions_json"]) == {"1h": 7}
+        db.close()
+
+
+def test_execution_intent_rejects_conflicting_payload_for_same_id():
+    with tempfile.TemporaryDirectory() as d:
+        db = Database(os.path.join(d, "intent-conflict.sqlite3"))
+        intent = OrderIntent.new(
+            symbol="BTCUSDT",
+            side="BUY",
+            order_type="MARKET",
+            required_context_versions={"1h": 7},
+            purpose="CAMPAIGN_ENTRY",
+            client_order_id="wms-test-intent-2",
+        )
+        db.save_execution_intent(intent, "PREPARED")
+        conflicting = OrderIntent(
+            intent_id=intent.intent_id,
+            symbol="BTCUSDT",
+            side="SELL",
+            order_type="MARKET",
+            required_context_versions={"1h": 7},
+            purpose="CAMPAIGN_ENTRY",
+            client_order_id="wms-test-intent-2",
+        )
+        try:
+            db.save_execution_intent(conflicting, "IN_FLIGHT")
+        except ValueError as exc:
+            assert "identity conflict" in str(exc)
+        else:
+            raise AssertionError("conflicting payload must not overwrite the original intent")
+        row = db.conn.execute(
+            "SELECT status, side FROM execution_intents WHERE intent_id=?",
+            (intent.intent_id,),
+        ).fetchone()
+        assert row["status"] == "PREPARED"
+        assert row["side"] == "BUY"
+        db.close()
