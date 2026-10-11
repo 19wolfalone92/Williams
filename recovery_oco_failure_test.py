@@ -78,7 +78,6 @@ def _offline_fake_verify_all(service, *args, **kwargs):
     return fake_ready_preflight()
 
 
-PreflightCheckService.verify_all = _offline_fake_verify_all
 
 
 def bind_fake_execution(trader):
@@ -88,72 +87,79 @@ def bind_fake_execution(trader):
     )
 
 
-os.environ["MAX_OPEN_POSITIONS"] = "1"
-t=Trader(testnet=True)
-# TEST ONLY: FakeClient simulation, no real exchange.
-t.dry_run=False
-t.client=FakeClient()
-bind_fake_execution(t)
-t.symbol="BTCUSDT"
-t.active_symbol="BTCUSDT"
-t.filters={"LOT_SIZE":{"minQty":"0.00001","stepSize":"0.00001"},"PRICE_FILTER":{"tickSize":"0.01"},"NOTIONAL":{"minNotional":"5"}}
-t.symbol_rules=SymbolRules.from_exchange_info(t.client.exchange_info("BTCUSDT"), "BTCUSDT")
-t.foreign_base_balance=0
-t.db.state_set("position_state","FLAT")
-
-# Simulate the baseline that the real application persists
-# before opening a managed position.
-t.db.state_set("foreign_base_balance:BTCUSDT", 0.0)
-
-print("1) BUY")
-order,qty,entry=t.market_buy(100)
-assert qty>0 and entry>0
-print("[PASS] BUY FILLED:",qty,entry)
-assert t.state()=="ENTRY_PENDING"
-
-print("2) SAVE TRADE")
-tid=t.db.save_trade(symbol="BTCUSDT",entry_price=entry,quantity=qty,entry_order_id=str(order["orderId"]))
-assert tid
-print("[PASS] trade_id =",tid)
-
-print("3) OCO FAILURE")
+# This legacy script executes at import time under pytest. Keep the synthetic
+# preflight seam strictly inside this offline scenario and always restore it,
+# so it cannot make unrelated safety tests observe fabricated READY evidence.
 try:
-    t.place_oco(qty,entry,trade_id=tid)
-except Exception as e:
-    print("[EXPECTED]",e)
-
-assert t.state()=="RECONCILE_REQUIRED"
-print("[PASS] state = RECONCILE_REQUIRED")
-
-print("4) RESTART")
-t2=Trader(testnet=True)
-# TEST ONLY: FakeClient simulation, no real exchange.
-t2.dry_run=False
-t2.client=t.client
-bind_fake_execution(t2)
-t2.symbol="BTCUSDT"
-t2.active_symbol="BTCUSDT"
-t2.filters=t.filters
-t2.symbol_rules=t.symbol_rules
-# Baseline is persisted in the test SQLite DB,
-# so a new Trader instance can recover it after restart.
-t2.recover_state()
-
-state=t2.state()
-trade=t2.db.open_trade("BTCUSDT")
-print("[INFO] RECOVERY STATE =",state)
-print("[INFO] TRADE =",trade)
-
-assert trade is not None
-assert state == "RECONCILE_REQUIRED"
-assert state!="OPEN"
-assert state!="FLAT"
-
-print()
-print("================================")
-print("BUY -> OCO FAILURE -> RECOVERY")
-print("PASS")
-print("STATE:",state)
-print("TRADE PRESERVED: YES")
-print("HARD RECOVERY BLOCK: YES")
-print("================================")
+    PreflightCheckService.verify_all = _offline_fake_verify_all
+    os.environ["MAX_OPEN_POSITIONS"] = "1"
+    t=Trader(testnet=True)
+    # TEST ONLY: FakeClient simulation, no real exchange.
+    t.dry_run=False
+    t.client=FakeClient()
+    bind_fake_execution(t)
+    t.symbol="BTCUSDT"
+    t.active_symbol="BTCUSDT"
+    t.filters={"LOT_SIZE":{"minQty":"0.00001","stepSize":"0.00001"},"PRICE_FILTER":{"tickSize":"0.01"},"NOTIONAL":{"minNotional":"5"}}
+    t.symbol_rules=SymbolRules.from_exchange_info(t.client.exchange_info("BTCUSDT"), "BTCUSDT")
+    t.foreign_base_balance=0
+    t.db.state_set("position_state","FLAT")
+    
+    # Simulate the baseline that the real application persists
+    # before opening a managed position.
+    t.db.state_set("foreign_base_balance:BTCUSDT", 0.0)
+    
+    print("1) BUY")
+    order,qty,entry=t.market_buy(100)
+    assert qty>0 and entry>0
+    print("[PASS] BUY FILLED:",qty,entry)
+    assert t.state()=="ENTRY_PENDING"
+    
+    print("2) SAVE TRADE")
+    tid=t.db.save_trade(symbol="BTCUSDT",entry_price=entry,quantity=qty,entry_order_id=str(order["orderId"]))
+    assert tid
+    print("[PASS] trade_id =",tid)
+    
+    print("3) OCO FAILURE")
+    try:
+        t.place_oco(qty,entry,trade_id=tid)
+    except Exception as e:
+        print("[EXPECTED]",e)
+    
+    assert t.state()=="RECONCILE_REQUIRED"
+    print("[PASS] state = RECONCILE_REQUIRED")
+    
+    print("4) RESTART")
+    t2=Trader(testnet=True)
+    # TEST ONLY: FakeClient simulation, no real exchange.
+    t2.dry_run=False
+    t2.client=t.client
+    bind_fake_execution(t2)
+    t2.symbol="BTCUSDT"
+    t2.active_symbol="BTCUSDT"
+    t2.filters=t.filters
+    t2.symbol_rules=t.symbol_rules
+    # Baseline is persisted in the test SQLite DB,
+    # so a new Trader instance can recover it after restart.
+    t2.recover_state()
+    
+    state=t2.state()
+    trade=t2.db.open_trade("BTCUSDT")
+    print("[INFO] RECOVERY STATE =",state)
+    print("[INFO] TRADE =",trade)
+    
+    assert trade is not None
+    assert state == "RECONCILE_REQUIRED"
+    assert state!="OPEN"
+    assert state!="FLAT"
+    
+    print()
+    print("================================")
+    print("BUY -> OCO FAILURE -> RECOVERY")
+    print("PASS")
+    print("STATE:",state)
+    print("TRADE PRESERVED: YES")
+    print("HARD RECOVERY BLOCK: YES")
+    print("================================")
+finally:
+    PreflightCheckService.verify_all = _original_verify_all
