@@ -1618,6 +1618,60 @@ class Database:
                 raise RuntimeError("financial effect application did not persist")
             return {"effect_id": effect_id, "status": "APPLIED", "duplicate": False}
 
+    def resolve_financial_effect_fee(self, effect_id, commission, commission_asset, projection_writer):
+        """Resolve an UNKNOWN commission and apply the still-pending fill effect atomically."""
+        asset = str(commission_asset or "").strip().upper()
+        if not asset:
+            raise ValueError("commission_asset is required to resolve a fee")
+        amount = self._canonical_decimal(commission, "commission")
+        with self.transaction():
+            row = self.conn.execute(
+                "SELECT * FROM financial_effect_journal WHERE effect_id=?", (str(effect_id),)
+            ).fetchone()
+            if row is None:
+                raise KeyError("financial effect does not exist")
+            if row["projection_status"] == "APPLIED":
+                if row["commission_status"] != "KNOWN" or row["commission_asset"] != asset or row["commission_decimal"] != amount:
+                    raise RuntimeError("cannot change fee after financial effect is applied; reconciliation required")
+                return {"effect_id": str(effect_id), "status": "APPLIED", "duplicate": True}
+            normalized = {
+                "exchange": row["exchange_name"], "environment": row["environment"],
+                "account_scope": row["account_scope"], "symbol": row["symbol"],
+                "exchange_fill_id": row["exchange_fill_id"],
+                "quantity": row["quantity_decimal"], "price": row["price_decimal"],
+                "quote_quantity": row["quote_quantity_decimal"],
+                "commission": amount, "commission_asset": asset,
+                "commission_status": "KNOWN",
+            }
+            canonical = json.dumps(normalized, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+            self.conn.execute(
+                """UPDATE financial_effect_journal
+                   SET commission_decimal=?,commission_asset=?,commission_status='KNOWN',
+                       projection_status='PENDING',canonical_payload_json=?,last_error=NULL
+                   WHERE effect_id=? AND projection_status='PENDING_FEE'""",
+                (amount, asset, canonical, str(effect_id)),
+            )
+            current = self.conn.execute(
+                "SELECT commission_status,projection_status FROM financial_effect_journal WHERE effect_id=?",
+                (str(effect_id),),
+            ).fetchone()
+            if current is None or current["commission_status"] != "KNOWN" or current["projection_status"] != "PENDING":
+                raise RuntimeError("fee resolution did not persist as pending")
+            projection_writer(self, normalized)
+            self.conn.execute(
+                """UPDATE financial_effect_journal
+                   SET projection_status='APPLIED',applied_at=CURRENT_TIMESTAMP,last_error=NULL
+                   WHERE effect_id=? AND projection_status='PENDING'""",
+                (str(effect_id),),
+            )
+            final = self.conn.execute(
+                "SELECT projection_status FROM financial_effect_journal WHERE effect_id=?",
+                (str(effect_id),),
+            ).fetchone()
+            if final is None or final["projection_status"] != "APPLIED":
+                raise RuntimeError("resolved financial effect did not persist")
+            return {"effect_id": str(effect_id), "status": "APPLIED", "duplicate": False}
+
     def financial_effect(self, effect_id):
         row = self.conn.execute(
             "SELECT * FROM financial_effect_journal WHERE effect_id=?", (str(effect_id),)
