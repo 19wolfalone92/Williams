@@ -16,6 +16,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
+import java.io.Reader
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
@@ -227,6 +228,62 @@ private data class BaseAnalysis(
     val campaignReady: Boolean = false
 )
 
+internal class ApiHttpException(
+    val statusCode: Int,
+    override val message: String
+) : RuntimeException(message)
+
+internal const val MAX_API_REQUEST_BODY_BYTES = 1_048_576
+
+internal fun readApiRequestBody(reader: Reader, length: Int): String {
+    if (length < 0) throw ApiHttpException(400, "Invalid Content-Length")
+    if (length > MAX_API_REQUEST_BODY_BYTES) {
+        throw ApiHttpException(413, "Request body too large")
+    }
+    val chars = CharArray(length)
+    var offset = 0
+    while (offset < length) {
+        val count = reader.read(chars, offset, length - offset)
+        if (count < 0) throw ApiHttpException(400, "Incomplete request body")
+        if (count == 0) continue
+        offset += count
+    }
+    return String(chars)
+}
+
+internal fun parseApiQuery(target: String): Map<String, String> {
+    val queryIndex = target.indexOf('?')
+    if (queryIndex < 0) return emptyMap()
+    val result = LinkedHashMap<String, String>()
+    target.substring(queryIndex + 1)
+        .split("&")
+        .filter { it.contains("=") }
+        .forEach { item ->
+            val pair = item.split("=", limit = 2)
+            // Match FastAPI's scalar query lookup: the last occurrence wins.
+            result[URLDecoder.decode(pair[0], "UTF-8")] =
+                URLDecoder.decode(pair[1], "UTF-8")
+        }
+    return result
+}
+
+internal fun apiErrorStatus(error: Throwable): Int = when (error) {
+    is ApiHttpException -> error.statusCode
+    is org.json.JSONException, is IllegalArgumentException -> 400
+    else -> 500
+}
+
+internal fun apiReasonPhrase(status: Int): String = when (status) {
+    200 -> "OK"
+    400 -> "Bad Request"
+    401 -> "Unauthorized"
+    403 -> "Forbidden"
+    404 -> "Not Found"
+    413 -> "Payload Too Large"
+    422 -> "Unprocessable Entity"
+    else -> "Internal Server Error"
+}
+
 private class StandaloneServer(private val context: Context) {
     private val port = 18080
     private val prefs = EncryptedSharedPreferences.create(
@@ -339,6 +396,7 @@ private class StandaloneServer(private val context: Context) {
                 val target = parts[1]
 
                 var length = 0
+                var sawContentLength = false
                 while (true) {
                     val line = reader.readLine() ?: return
                     if (line.isEmpty()) break
@@ -348,52 +406,47 @@ private class StandaloneServer(private val context: Context) {
                         header.size == 2 &&
                         header[0].equals("Content-Length", ignoreCase = true)
                     ) {
-                        length = header[1].trim().toIntOrNull() ?: 0
+                        length = header[1].trim().toIntOrNull()
+                            ?: throw ApiHttpException(400, "Invalid Content-Length")
+                        sawContentLength = true
                     }
                 }
 
-                val chars = CharArray(length)
-                if (length > 0) {
-                    reader.read(chars)
-                }
-
-                val body = route(method, target, String(chars))
-                val bytes = body.toByteArray(StandardCharsets.UTF_8)
-
-                val output = s.getOutputStream()
-                output.write(
-                    (
-                        "HTTP/1.1 200 OK\r\n" +
-                            "Content-Type: application/json; charset=utf-8\r\n" +
-                            "Cache-Control: no-store\r\n" +
-                            "Content-Length: " + bytes.size + "\r\n" +
-                            "Connection: close\r\n\r\n"
-                        ).toByteArray(StandardCharsets.UTF_8)
-                )
-                output.write(bytes)
-                output.flush()
+                val body = readApiRequestBody(reader, if (sawContentLength) length else 0)
+                val responseBody = route(method, target, body)
+                writeApiResponse(s, 200, responseBody)
             } catch (x: Exception) {
-                val bytes = JSONObject()
-                    .put("error", x.message ?: x.javaClass.simpleName)
-                    .toString()
-                    .toByteArray(StandardCharsets.UTF_8)
-
                 try {
-                    val out = s.getOutputStream()
-                    out.write(
-                        (
-                            "HTTP/1.1 500 Internal Server Error\r\n" +
-                                "Content-Type: application/json\r\n" +
-                                "Content-Length: " + bytes.size + "\r\n" +
-                                "Connection: close\r\n\r\n"
-                            ).toByteArray(StandardCharsets.UTF_8)
-                    )
-                    out.write(bytes)
-                    out.flush()
+                    val status = apiErrorStatus(x)
+                    val message = if (status >= 500) {
+                        "Internal server error"
+                    } else {
+                        x.message ?: apiReasonPhrase(status)
+                    }
+                    val responseBody = JSONObject()
+                        .put("detail", message)
+                        .toString()
+                    writeApiResponse(s, status, responseBody)
                 } catch (_: Exception) {
                 }
             }
         }
+    }
+
+    private fun writeApiResponse(socket: Socket, status: Int, body: String) {
+        val bytes = body.toByteArray(StandardCharsets.UTF_8)
+        val output = socket.getOutputStream()
+        output.write(
+            (
+                "HTTP/1.1 " + status + " " + apiReasonPhrase(status) + "\r\n" +
+                    "Content-Type: application/json; charset=utf-8\r\n" +
+                    "Cache-Control: no-store\r\n" +
+                    "Content-Length: " + bytes.size + "\r\n" +
+                    "Connection: close\r\n\r\n"
+                ).toByteArray(StandardCharsets.UTF_8)
+        )
+        output.write(bytes)
+        output.flush()
     }
 
     private fun route(
@@ -401,25 +454,11 @@ private class StandaloneServer(private val context: Context) {
         target: String,
         body: String
     ): String {
-        val queryIndex = target.indexOf('?')
-        val path = if (queryIndex < 0) {
-            target
-        } else {
-            target.substring(0, queryIndex)
-        }
-
-        val params = if (queryIndex < 0) {
-            emptyMap()
-        } else {
-            target
-                .substring(queryIndex + 1)
-                .split("&")
-                .filter { it.contains("=") }
-                .associate {
-                    val item = it.split("=", limit = 2)
-                    URLDecoder.decode(item[0], "UTF-8") to
-                        URLDecoder.decode(item[1], "UTF-8")
-                }
+        val path = target.substringBefore('?')
+        val params = try {
+            parseApiQuery(target)
+        } catch (x: Exception) {
+            throw ApiHttpException(400, "Invalid query string")
         }
 
         val x = e()
@@ -451,8 +490,13 @@ private class StandaloneServer(private val context: Context) {
             method == "GET" && path == "/api/v1/portfolio" ->
                 x.portfolio().toString()
 
-            method == "GET" && path == "/api/v1/trades" ->
-                x.trades().toString()
+            method == "GET" && path == "/api/v1/trades" -> {
+                val rawLimit = params["limit"]
+                val limit = rawLimit?.toIntOrNull()
+                    ?: if (rawLimit == null) 50 else
+                        throw ApiHttpException(422, "limit must be an integer")
+                x.trades(limit.coerceIn(1, 200)).toString()
+            }
 
             method == "GET" && path == "/api/v1/trade-stats" ->
                 x.tradeStats().toString()
@@ -511,11 +555,11 @@ private class StandaloneServer(private val context: Context) {
                 path == "/api/v1/control/sell" ->
                 x.sell(
                     params["symbol"]
-                        ?: error("symbol is required")
+                        ?: throw ApiHttpException(422, "symbol is required")
                 ).toString()
 
             else ->
-                JSONObject().put("error", "Not found").toString()
+                throw ApiHttpException(404, "Not Found")
         }
     }
 }
@@ -8086,7 +8130,15 @@ private class NativeEngine(
             .put("positions", positions)
     }
 
-    fun trades(): JSONArray = TradeJournal.trades(prefs)
+    fun trades(limit: Int = 50): JSONArray {
+        val all = TradeJournal.trades(prefs)
+        val bounded = limit.coerceIn(1, 200)
+        val result = JSONArray()
+        for (i in 0 until min(all.length(), bounded)) {
+            result.put(all.get(i))
+        }
+        return result
+    }
 
     fun tradeStats(): JSONObject = TradeJournal.stats(prefs)
 
