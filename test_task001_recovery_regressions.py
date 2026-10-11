@@ -709,3 +709,75 @@ def test_legacy_exit_fee_reconciliation_records_exact_fill_and_confirms_zero_fee
     assert rows[0]["commission_amount_text"] == "0"
     assert rows[0]["commission_asset"] == "USDT"
     assert rows[0]["financial_state"] == "CONFIRMED"
+
+
+def test_legacy_authoritative_execution_persists_unknown_fee_and_blocks(tmp_path):
+    db = ready_db(tmp_path)
+
+    class FakeClient:
+        def my_trades(self, symbol, order_id=None, limit=1000):
+            return [{
+                "id": 501, "orderId": order_id, "symbol": symbol,
+                "qty": "0.010000000000000001", "price": "100.123456789123456789",
+                "quoteQty": "1.00123456789123456789",
+            }]
+
+    trader = PortfolioTrader.__new__(PortfolioTrader)
+    trader.client = FakeClient()
+    trader.db = db
+
+    with pytest.raises(RuntimeError, match="commission amount or asset is unknown"):
+        trader._authoritative_execution("BTCUSDT", {
+            "symbol": "BTCUSDT", "orderId": 88, "executedQty": "0.010000000000000001",
+            "cummulativeQuoteQty": "1.00123456789123456789", "status": "FILLED",
+        })
+
+    row = db.conn.execute(
+        "SELECT * FROM exchange_fill_ledger WHERE symbol='BTCUSDT' AND exchange_trade_id='501'"
+    ).fetchone()
+    assert row is not None
+    assert row["quantity_text"] == "0.010000000000000001"
+    assert row["price_text"] == "100.123456789123456789"
+    assert row["financial_state"] == "UNKNOWN"
+    assert db.state_get("position_state") == "RECONCILE_REQUIRED"
+    assert db.state_get("position_state:BTCUSDT") == "RECONCILE_REQUIRED"
+    db.conn.close()
+
+
+def test_legacy_authoritative_execution_accepts_explicit_zero_fee_idempotently(tmp_path):
+    db = ready_db(tmp_path)
+
+    class FakeClient:
+        def my_trades(self, symbol, order_id=None, limit=1000):
+            return [{
+                "id": 502, "orderId": order_id, "symbol": symbol,
+                "qty": "0.010000000000000001", "price": "100.123456789123456789",
+                "quoteQty": "1.00123456789123456789",
+                "commission": "0", "commissionAsset": "USDT",
+            }]
+
+    trader = PortfolioTrader.__new__(PortfolioTrader)
+    trader.client = FakeClient()
+    trader.db = db
+    order = {
+        "symbol": "BTCUSDT", "orderId": 89, "executedQty": "0.010000000000000001",
+        "cummulativeQuoteQty": "1.00123456789123456789", "status": "FILLED",
+    }
+    first = trader._authoritative_execution("BTCUSDT", order)
+    second = trader._authoritative_execution("BTCUSDT", order)
+    rows = db.conn.execute(
+        "SELECT COUNT(*) AS n FROM exchange_fill_ledger WHERE symbol='BTCUSDT' AND exchange_trade_id='502'"
+    ).fetchone()
+    ledger = db.conn.execute(
+        "SELECT financial_state,commission_amount_text,commission_asset,quantity_text,price_text "
+        "FROM exchange_fill_ledger WHERE symbol='BTCUSDT' AND exchange_trade_id='502'"
+    ).fetchone()
+    assert rows["n"] == 1
+    assert ledger["financial_state"] == "CONFIRMED"
+    assert ledger["commission_amount_text"] == "0"
+    assert ledger["commission_asset"] == "USDT"
+    assert ledger["quantity_text"] == "0.010000000000000001"
+    assert ledger["price_text"] == "100.123456789123456789"
+    assert first.executed_qty == second.executed_qty
+    assert db.state_get("position_state") == "FLAT"
+    db.conn.close()
