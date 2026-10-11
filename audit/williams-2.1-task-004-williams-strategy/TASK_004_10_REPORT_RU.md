@@ -6,22 +6,22 @@
 **Branch:** `audit/williams-2.1-task-004-williams-strategy`  
 **PR:** #49 — OPEN, Draft, not merged  
 **Base/main SHA observed:** `04da5f9c09572e99ff310be3a1908179165e528c`  
-**HEAD SHA audited:** `1585355312312e74b9c4bf6ebdb3990225f36109`  
+**HEAD SHA rechecked for this report update:** `e8a741a8799dcd13b467557dfb6cbe0f5ffc9ad7`  
 **Scope of this report:** live GitHub baseline, targeted source inspection, CI evidence and explicit blockers. This report does not claim implementation or exhaustive mutation-sink closure.
 
 ## 1. Baseline recheck
 
-GitHub PR metadata returned PR #49 as OPEN, Draft, base `main`, base SHA `04da5f9c09572e99ff310be3a1908179165e528c`, head branch `audit/williams-2.1-task-004-williams-strategy`, head SHA `1585355312312e74b9c4bf6ebdb3990225f36109`, and `merged=false`. The branch search returned the expected branch. The PR changed-file list was re-read; it includes Python campaign/execution/DB files, Android runtime/audit store, strategy fixtures/tests and workflow/report files. No action was taken on `main`; PR was not merged or moved out of Draft.
+GitHub PR metadata returned PR #49 as OPEN, Draft, base `main`, base SHA `04da5f9c09572e99ff310be3a1908179165e528c`, head branch `audit/williams-2.1-task-004-williams-strategy`, head SHA `e8a741a8799dcd13b467557dfb6cbe0f5ffc9ad7`, and `merged=false`. The branch search returned the expected branch. The PR changed-file list was re-read; it includes Python campaign/execution/DB files, Android runtime/audit store, strategy fixtures/tests and workflow/report files. No action was taken on `main`; PR was not merged or moved out of Draft.
 
 ### CI on the exact audited HEAD
 
 | Workflow | Run ID | Result | Jobs reported |
 |---|---:|---|---|
-| Python backend tests | 38120994983 | SUCCESS | `backend-test` |
-| Williams Campaign CI | 38120995052 | SUCCESS | `Android build and static checks`; `Python tests` |
-| Build Android APK | 38120995012 | SUCCESS | `Build APKs` |
+| Python backend tests | 38126230479 | SUCCESS | `backend-test` |
+| Williams Campaign CI | 38126230493 | SUCCESS | `Android build and static checks`; `Python tests` |
+| Build Android APK | 38126230472 | SUCCESS | `Build APKs` |
 
-These results establish only that the configured jobs succeeded at this SHA. They do **not** prove durable-intent enforcement, process-death recovery, exhaustive sink coverage, Android instrumentation recovery, or the task's unconfigured fault-injection scenarios.
+These results establish only that the configured jobs succeeded at SHA `e8a741a8799dcd13b467557dfb6cbe0f5ffc9ad7`. They do **not** prove durable-intent enforcement, process-death recovery, exhaustive sink coverage, Android instrumentation recovery, or the task's unconfigured fault-injection scenarios.
 
 ## 2. Source evidence observed at HEAD
 
@@ -39,7 +39,13 @@ File: `app/src/main/java/com/williamsbot/StandaloneRuntime.kt`.
 
 This is a P0 blocker. Caller-side checks, campaign mutation locks, and signal claims do not establish that every request reaching this network boundary has a durable intent.
 
-### Python network boundary
+### Python execution-intent persistence versus network boundary
+
+Files: `execution_barrier.py`, `db.py`, `binance_client.py`.
+
+- The current branch does have a campaign execution-intent persistence path: `ExecutionBarrier._persist(...)` calls `Database.save_execution_intent(...)`; required event persistence is exposed through `_persist_event_required(...)`. The barrier also has a separate `_claim_signal_once(...)` for entry-signal deduplication. These are distinct mechanisms, and signal claim is not operation intent.
+- The inspected `Database.save_execution_intent(...)` writes an `execution_intents` row keyed by `intent_id`, but uses `INSERT OR REPLACE`; the current excerpt does not prove immutable payload-conflict semantics, a full operation lifecycle schema, or permit exclusivity at the network boundary.
+- The campaign barrier is not universally enforced by the common network client: `BinanceSpotClient._request(method, path, ...)` still does not require an operation-bound permit immediately before `session.request(...)`.
 
 File: `binance_client.py`.
 
