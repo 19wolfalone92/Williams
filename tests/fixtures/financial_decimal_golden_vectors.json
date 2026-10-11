@@ -1,0 +1,285 @@
+{
+  "fixture_set": "williams-financial-decimal-golden-vectors",
+  "contract_version": "draft-0.1",
+  "status": "PROPOSED_NOT_EXECUTED",
+  "purpose": "Language-neutral semantic vectors. These vectors define required state distinctions, not proof that either runtime conforms. Rounding and instrument-specific filter policy must be approved before numeric rounding vectors can be accepted.",
+  "cases": [
+    {
+      "id": "D001-scale-preserved",
+      "field": "price",
+      "input": {
+        "raw": "12.3400"
+      },
+      "expected": {
+        "state": "KNOWN",
+        "canonical_value": "12.3400",
+        "numeric_equal_to": "12.34",
+        "source_scale": 4,
+        "operation": "ACCEPT_PARSE"
+      }
+    },
+    {
+      "id": "D002-tiny-quantity",
+      "field": "quantity",
+      "input": {
+        "raw": "0.00000001"
+      },
+      "expected": {
+        "state": "KNOWN",
+        "canonical_value": "0.00000001",
+        "operation": "ACCEPT_PARSE"
+      }
+    },
+    {
+      "id": "D003-not-binary-exact",
+      "field": "price",
+      "input": {
+        "raw": "0.1"
+      },
+      "expected": {
+        "state": "KNOWN",
+        "canonical_value": "0.1",
+        "binary_float_round_trip_allowed": false,
+        "operation": "ACCEPT_PARSE"
+      }
+    },
+    {
+      "id": "D004-fractional-fee",
+      "field": "commission",
+      "input": {
+        "raw": "0.00000037",
+        "asset": "BNB"
+      },
+      "expected": {
+        "state": "KNOWN",
+        "canonical_value": "0.00000037",
+        "valuation_state": "UNKNOWN_UNTIL_AUTHORITATIVE_CONVERSION",
+        "operation": "STORE_FEE_WITH_ASSET"
+      }
+    },
+    {
+      "id": "D005-known-zero-fee",
+      "field": "commission",
+      "input": {
+        "raw": "0",
+        "asset": "USDT",
+        "authoritative": true
+      },
+      "expected": {
+        "state": "KNOWN",
+        "canonical_value": "0",
+        "operation": "ACCEPT_ZERO_IF_FIELD_PRESENT_AND_VALID"
+      }
+    },
+    {
+      "id": "D006-missing-fee",
+      "field": "commission",
+      "input": {
+        "raw": null,
+        "asset": null
+      },
+      "expected": {
+        "state": "UNKNOWN",
+        "canonical_value": null,
+        "operation": "BLOCK_EFFECT_IF_FEE_REQUIRED"
+      }
+    },
+    {
+      "id": "D007-empty-price",
+      "field": "price",
+      "input": {
+        "raw": ""
+      },
+      "expected": {
+        "state": "UNKNOWN",
+        "canonical_value": null,
+        "operation": "REJECT_REQUIRED_FINANCIAL_EFFECT"
+      }
+    },
+    {
+      "id": "D008-invalid-quantity",
+      "field": "quantity",
+      "input": {
+        "raw": "NaN"
+      },
+      "expected": {
+        "state": "INVALID",
+        "canonical_value": null,
+        "operation": "BLOCK_RELEVANT_MUTATION"
+      }
+    },
+    {
+      "id": "D009-invalid-decimal",
+      "field": "price",
+      "input": {
+        "raw": "1.2.3"
+      },
+      "expected": {
+        "state": "INVALID",
+        "canonical_value": null,
+        "operation": "BLOCK_RELEVANT_MUTATION"
+      }
+    },
+    {
+      "id": "D010-conflicting-authorities",
+      "field": "executedQty",
+      "input": {
+        "exchange_order": "0.300",
+        "trade_ledger": "0.301"
+      },
+      "expected": {
+        "state": "CONFLICTED",
+        "canonical_value": null,
+        "operation": "RECONCILE_NO_LAST_WRITE_WINS"
+      }
+    },
+    {
+      "id": "D011-round-trip",
+      "field": "quote_quantity",
+      "input": {
+        "raw": "123456789.00000001"
+      },
+      "expected": {
+        "state": "KNOWN",
+        "canonical_value": "123456789.00000001",
+        "after_serialize_deserialize_equal": true,
+        "operation": "EXACT_ROUND_TRIP_REQUIRED"
+      }
+    },
+    {
+      "id": "D012-fill-aggregation",
+      "field": "fill_aggregate",
+      "input": {
+        "fills": [
+          {
+            "qty": "0.1",
+            "price": "10.25"
+          },
+          {
+            "qty": "0.2",
+            "price": "10.30"
+          }
+        ]
+      },
+      "expected": {
+        "state": "KNOWN",
+        "executed_qty": "0.3",
+        "executed_quote": "3.085",
+        "vwap_exact_expression": "3.085 / 0.3",
+        "vwap_is_terminating_decimal": false,
+        "operation": "DO_NOT_ROUND_UNTIL_NAMED_BOUNDARY"
+      }
+    },
+    {
+      "id": "D013-partial-fill",
+      "field": "fill_state",
+      "input": {
+        "order_status": "PARTIALLY_FILLED",
+        "executedQty": "0.125",
+        "origQty": "1.000"
+      },
+      "expected": {
+        "state": "KNOWN",
+        "executed_qty": "0.125",
+        "remaining_qty": "0.875",
+        "order_terminal": false,
+        "operation": "RECONCILE_ORDER_AND_EXPOSURE"
+      }
+    },
+    {
+      "id": "D014-late-fee-enrichment",
+      "field": "commission",
+      "input": {
+        "before": {
+          "state": "UNKNOWN"
+        },
+        "authoritative_later": {
+          "raw": "0.0004",
+          "asset": "USDT"
+        }
+      },
+      "expected": {
+        "state": "KNOWN",
+        "canonical_value": "0.0004",
+        "effect_update": "IDEMPOTENT_ADJUSTMENT_REQUIRED",
+        "operation": "REAPPLY_NO_DUPLICATE_FINANCIAL_EFFECT"
+      }
+    },
+    {
+      "id": "D015-filter-step-mismatch",
+      "field": "quantity",
+      "input": {
+        "raw": "0.1234",
+        "stepSize": "0.001"
+      },
+      "expected": {
+        "state": "KNOWN",
+        "canonical_value": "0.1234",
+        "filter_valid": false,
+        "operation": "REJECT_OR_APPLY_EXPLICIT_APPROVED_QUANTIZATION_POLICY"
+      }
+    },
+    {
+      "id": "D016-scale-boundary",
+      "field": "quantity",
+      "input": {
+        "raw": "0.000000000000000001"
+      },
+      "expected": {
+        "state": "KNOWN",
+        "canonical_value": "0.000000000000000001",
+        "operation": "ACCEPT_ONLY_IF_FIELD_AND_SYMBOL_CONTRACT_ALLOW_SCALE"
+      }
+    },
+    {
+      "id": "D017-negative-quantity",
+      "field": "quantity",
+      "input": {
+        "raw": "-0.1"
+      },
+      "expected": {
+        "state": "INVALID",
+        "canonical_value": null,
+        "operation": "REJECT_NON_POSITIVE_ORDER_QUANTITY"
+      }
+    },
+    {
+      "id": "D018-negative-realized-pnl",
+      "field": "realized_pnl",
+      "input": {
+        "raw": "-12.3400"
+      },
+      "expected": {
+        "state": "KNOWN",
+        "canonical_value": "-12.3400",
+        "operation": "ACCEPT_SIGNED_PNL"
+      }
+    },
+    {
+      "id": "D019-negative-commission",
+      "field": "commission",
+      "input": {
+        "raw": "-0.01",
+        "asset": "USDT"
+      },
+      "expected": {
+        "state": "INVALID",
+        "canonical_value": null,
+        "operation": "BLOCK_AND_RECONCILE"
+      }
+    },
+    {
+      "id": "D020-vwap-zero-qty",
+      "field": "vwap",
+      "input": {
+        "executed_qty": "0",
+        "executed_quote": "0"
+      },
+      "expected": {
+        "state": "UNKNOWN",
+        "canonical_value": null,
+        "operation": "DO_NOT_EMIT_AUTHORITATIVE_ZERO_VWAP"
+      }
+    }
+  ]
+}
