@@ -321,3 +321,17 @@ The global recovery contract also still lacks one end-to-end authoritative proof
 | All mandatory CI on final SHA | PENDING | Recheck after report commit |
 
 **TASK 006.6 decision: BLOCKED — NOT ACCEPTED.** Do not set `RECOVERY_COMPLETE` or `effect_state='APPLIED'` without the missing proof. No `main` changes, no merge, no Mainnet or live orders.
+
+
+### TASK 006.6 follow-up — Python entry barrier, supported legacy schemas, exact-head recheck
+
+Further changes after the first TASK 006.6 report section:
+
+- `execution_barrier.py` now checks both the durable `recovery_status` and the canonical fill ledger before admitting a Spot BUY. A missing/unreadable ledger API or any row whose `effect_state` is not `APPLIED` blocks the entry even if a status string was manually changed to `RECOVERY_COMPLETE`.
+- `test_financial_integrity.py` adds a regression proving that a manually set completion string cannot override a pending canonical financial effect.
+- Added populated legacy-database migration tests for schema versions 6, 7 and 8. They preserve the existing row, create no fabricated canonical fill, upgrade the schema version, and leave recovery blocked with a diagnostic until explicit reconciliation.
+- Added a cross-platform contract test confirming that Android cannot admit entries with an absent global financial proof even when the legacy reconciliation flag is clear.
+
+**Interim exact-code candidate evidence (not the current final SHA):** on `ffc6951e3da515f031fc8ad6c40483b33edc19cf`, Python backend run [38116951301](https://github.com/19wolfalone92/Williams/actions/runs/38116951301) completed **SUCCESS — 219 passed, 4 warnings**; Campaign CI Python job run [38116951243](https://github.com/19wolfalone92/Williams/actions/runs/38116951243) completed **SUCCESS — 230 passed, 4 warnings**. On that same SHA, APK run [38116951232](https://github.com/19wolfalone92/Williams/actions/runs/38116951232) and Campaign CI Android job were still **IN_PROGRESS** at the last check. The populated v6/v7/v8 migration tests and the last report/code commits postdate this interim candidate, so these successes do not prove the final SHA.
+
+**Revalidation rule:** after this report commit, re-fetch the actual PR head and verify Python backend, Campaign Python, Campaign Android and APK conclusions on that exact SHA. Keep TASK 006.6 blocked if any required job is pending, failing, cancelled or absent.
