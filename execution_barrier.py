@@ -118,31 +118,51 @@ class ExecutionBarrier:
                 pass
 
     def _claim_signal_once(self, intent: OrderIntent) -> None:
-        """Durably reserve one logical entry signal before any network mutation."""
+        """Durably reserve one logical entry signal before network mutation."""
         purpose = str(intent.purpose or "").strip().upper()
         if purpose not in {"ENTRY", "CAMPAIGN_ENTRY", "ADD_ON", "CAMPAIGN_ADD_ON"}:
             return
         if self.db is None:
-            # A DB-less barrier is useful for validation-only callers, but must not
-            # be mistaken for a durable production execution authority.
-            return
+            # Validation-only use may be DB-less; production entry admission
+            # must inject durable storage. _validate's caller contract is not
+            # itself proof of persistence.
+            raise RuntimeError("durable signal idempotency unavailable; refusing entry mutation")
+
         signal_id = str(intent.signal_id or "").strip()
         if not signal_id:
             raise RuntimeError("durable signal idempotency blocked: missing signal_id")
+
+        canonical = {
+            "symbol": str(intent.symbol or "").strip().upper(),
+            "side": str(intent.side or "").strip().upper(),
+            "timeframe": str(intent.signal_timeframe or "").strip().lower(),
+            "signal_bar_time_ms": int(intent.signal_bar_time_ms or 0),
+            "confirmation_time_ms": int(intent.confirmation_time_ms or 0),
+            "campaign_id": str(intent.campaign_id or "").strip(),
+            "signal_type": purpose,
+        }
+        claim_once = getattr(self.db, "claim_signal_once", None)
+        if callable(claim_once):
+            try:
+                outcome = claim_once(signal_id, canonical)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"durable signal idempotency reservation failed: {type(exc).__name__}"
+                ) from exc
+            if outcome == "CLAIMED":
+                return
+            if outcome == "CONFLICT":
+                raise RuntimeError("signal identity conflict: canonical payload differs for existing signal_id")
+            raise RuntimeError("duplicate signal blocked: durable signal was already claimed")
+
+        # Compatibility for narrow test doubles and legacy DB adapters. The
+        # production Database implementation must expose claim_signal_once.
         claim = getattr(self.db, "try_claim_state", None)
         if not callable(claim):
             raise RuntimeError("durable signal idempotency unavailable; refusing entry mutation")
-        # The key is derived from the stable signal identity, not intent/client-order
-        # IDs. Store provenance for audit; an existing claim blocks all retries,
-        # including across initial-entry/add-on and process restart.
-        provenance = "|".join((
-            str(intent.symbol).upper(),
-            str(intent.side).upper(),
-            str(intent.signal_timeframe).strip().lower(),
-            str(int(intent.signal_bar_time_ms or 0)),
-            str(int(intent.confirmation_time_ms or 0)),
-            str(intent.campaign_id or ""),
-            purpose,
+        provenance = "|".join(str(canonical[k]) for k in (
+            "symbol", "side", "timeframe", "signal_bar_time_ms",
+            "confirmation_time_ms", "campaign_id", "signal_type",
         ))
         try:
             claimed = claim(f"consumed_signal:{signal_id}", provenance)
