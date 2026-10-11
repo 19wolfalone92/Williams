@@ -427,3 +427,59 @@ These are focused regression tests. They do **not** yet replace required tests u
 | Binance Spot Testnet | NOT VERIFIED | No Testnet order tests performed |
 
 **Decision: IN PROGRESS — NOT APPROVED.** The new Python barrier changes are a partial safety improvement, not completion of TASK 004.6 and not proof of full Williams strategy parity.
+
+
+---
+
+# TASK 004.7 — Cross-platform durable idempotency and recovery (interim checkpoint)
+
+## Verified repository baseline
+
+- TASK 004.7 start SHA supplied by the previous checkpoint: `982840a5f81d0c3eac7eb6e026b8ce2e8bb5f364`. This was confirmed as the branch HEAD before TASK 004.7 changes.
+- At baseline, Python backend tests run [38115797177](https://github.com/19wolfalone92/Williams/actions/runs/38115797177), Williams Campaign CI run [38115797174](https://github.com/19wolfalone92/Williams/actions/runs/38115797174), and Build Android APK run [38115797222](https://github.com/19wolfalone92/Williams/actions/runs/38115797222) all completed SUCCESS on exactly that SHA.
+- PR [#49](https://github.com/19wolfalone92/Williams/pull/49) remains OPEN, Draft, unmerged. Base/main is `04da5f9c09572e99ff310be3a1908179165e528c`; `main` was not modified.
+- These CI results validate the TASK 004.6 baseline only. They are not evidence for TASK 004.7 changes below.
+
+## Changes made in this checkpoint
+
+- `db.py`: added `Database.claim_signal_once(signal_id, canonical_payload)`. It uses SQLite `BEGIN IMMEDIATE`, a unique `bot_state.key` primary key and `INSERT OR IGNORE`, compares the persisted canonical payload, commits, and performs a post-commit read-back before returning `CLAIMED`. It returns `DUPLICATE` for a matching prior claim and `CONFLICT` when the same signal ID is presented with different canonical data. SQLite, commit, or read-back errors raise and therefore must block the caller.
+- `execution_barrier.py`: production `Database` instances now use the canonical claim method. The currently available canonical fields are symbol, side, signal timeframe, source-bar timestamp, confirmation timestamp, campaign ID and execution purpose. Missing durable DB or missing signal ID blocks entry mutation.
+- `test_signal_claim_processes.py`: added independent OS-process tests against one temporary on-disk SQLite DB, restart persistence with a new attempt identity, and same-ID/different-payload conflict detection.
+- `.github/workflows/python-ci.yml` and `.github/workflows/campaign-ci.yml`: included the new process tests in both Python CI suites.
+
+## Concurrency and transaction interpretation
+
+The claim relies on SQLite's database-level write serialization and the primary-key constraint, not an in-memory lock shared between workers. `BEGIN IMMEDIATE` serializes competing writers; only one process can insert the key. A duplicate or conflicting canonical payload is denied. If the operation raises due to `SQLITE_BUSY`, `SQLITE_LOCKED`, commit failure, or read-back failure, the barrier does not receive `CLAIMED` and must not call the network callback. If a commit succeeded but the subsequent read-back failed, the claim may remain consumed; this is intentionally conservative and does not authorize a retry.
+
+The newly added tests cover two independently spawned OS processes racing for one signal, persistence after closing/reopening the DB, and canonical conflict detection. They do **not** yet cover all ten requested fault-injection windows (especially deterministic commit failure, post-commit read-back failure, process kill at every boundary, or forced SQLITE_BUSY/LOCKED recovery). Those remain open P0 verification items until CI and dedicated fault-injection tests prove them.
+
+## Canonical identity — incomplete
+
+The canonical payload currently captures the fields that are present on `OrderIntent`, but the contract is not yet complete: explicit strategy/rule-set version, input dataset/version, and a first-class Williams signal type distinct from execution purpose are not yet carried end-to-end by Python producers and Android. A timestamp by itself is not treated as identity; the persistent key is the supplied stable `signal_id`, and the payload is compared to detect conflicts. The fallback compatibility path for narrow test doubles/legacy DB adapters still uses `try_claim_state`; production `Database` uses `claim_signal_once`.
+
+## Android and end-to-end status
+
+- `ExecutionGate.kt` is a process-local in-memory symbol reservation and is not a durable consumed-signal ledger.
+- `TradingAuditStore.kt` currently has order/execution/event tables, but this checkpoint has not yet wired a persistent canonical signal claim into the Android entry/add-on path before the signed network sink.
+- Android mutation-spy negative tests, process-restart idempotency, shared Python/Android golden replay, causal replay, complete mutation-sink call graph closure, UNKNOWN POST fault injection, and exit/protection/reconciliation recovery have not been completed in this checkpoint.
+- `PHYSICAL DEVICE — NOT VERIFIED`; Binance Spot Testnet execution was not performed; Futures scenarios are `NOT VERIFIED`.
+
+## TASK 004.7 acceptance matrix at this checkpoint
+
+| Requirement | Status | Evidence / remaining work |
+|---|---|---|
+| Verify actual starting HEAD, PR and baseline CI | PASS for baseline only | Branch/PR/main and three required workflows checked on `982840a` |
+| Durable atomic SQLite signal claim | IMPLEMENTED — CI pending | New `claim_signal_once`, unique primary key, `BEGIN IMMEDIATE`, commit and read-back |
+| Two independent OS processes compete for one signal | TEST ADDED — CI pending | `test_signal_claim_processes.py`; exact-SHA CI required |
+| Restart/new attempt replay and conflicting canonical payload | TEST ADDED — CI pending | Same stable signal ID is reused despite any new attempt ID; conflicting payload returns `CONFLICT` |
+| SQLite BUSY/LOCKED, commit and read-back fault injection | UNRESOLVED | Full deterministic fault matrix not yet implemented |
+| Complete canonical contract including strategy/rule version and dataset identity | UNRESOLVED | Producers and shared cross-platform contract not yet updated |
+| Python all-production mutation sinks and UNKNOWN POST | UNRESOLVED | Full call graph and fault-injection closure not yet demonstrated |
+| Android durable ledger and mutation-spy | UNRESOLVED | Store exists but signal claim is not wired before every actual signed mutation |
+| Python↔Android golden replay and causal replay | UNRESOLVED | Not implemented/verified |
+| Exit, protection, cancel-replace and recovery tests | UNRESOLVED | Separate sink-level proof outstanding |
+| Final required CI on one final SHA | PENDING | Changes trigger new runs; no result on final TASK 004.7 report SHA yet |
+| Physical Android / Spot Testnet / Futures | NOT VERIFIED | No physical-device or exchange execution evidence |
+| main unchanged / PR not merged | PASS | `main` remains `04da5f9c09572e99ff310be3a1908179165e528c`; PR #49 open Draft |
+
+**Decision: IN PROGRESS — NOT APPROVED.** This checkpoint improves Python SQLite signal claiming but does not close the cross-platform P0 requirements. Do not resume trading or treat the branch as execution-safe until the remaining acceptance criteria are independently proven.
