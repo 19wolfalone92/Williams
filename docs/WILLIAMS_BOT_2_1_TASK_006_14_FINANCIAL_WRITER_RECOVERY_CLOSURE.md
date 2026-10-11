@@ -220,3 +220,29 @@ The workflows also do not substitute for the missing dedicated financial concurr
 - **Applier / new production fill path:** not added.
 - **P0 blockers:** incomplete source-to-sink graph; unresolved direct writers and transaction boundaries; Recovery Gate coverage not proven for all BUY/add-on paths; float/REAL compatibility projection and recovery-side zero-fee fallback; no full duplicate/concurrency/crash/fee-resolution tests; Android and Futures reachability unresolved; emergency SELL safety not proven.
 - **PR:** remains Open / Draft / unmerged; `main` unchanged.
+
+
+## 11. Post-report exact-SHA CI verification (TASK 006.15 baseline)
+
+A fresh workflow lookup was performed for the TASK 006.14 final report commit
+`42fa73dc48a4aa7a522cec45f3e96e06ae159eb7`. All three workflows have now
+completed successfully on that exact SHA:
+
+| Workflow | Run ID | Conclusion | Verified job-level evidence |
+|---|---:|---|---|
+| Python backend tests | `38130095367` | success | release contract gate, Python compile, full static safety audit, safe offline tests |
+| Build Android APK | `38130095335` | success | release contract gate, required Android lint, Android unit tests, debug/release APK builds, APK metadata/signature/checksum verification |
+| Williams Campaign CI | `38130095342` | success | deterministic safety/campaign tests; Android build and static checks |
+
+Run links:
+- https://github.com/19wolfalone92/Williams/actions/runs/38130095367
+- https://github.com/19wolfalone92/Williams/actions/runs/38130095335
+- https://github.com/19wolfalone92/Williams/actions/runs/38130095342
+
+This closes only the previous report's missing *general exact-SHA CI status*. It does
+not establish the dedicated acceptance matrix required by TASK 006.15: independent
+process concurrency, financial projection crash injection, late fee resolution,
+cross-source exactly-once application, all-path Recovery Gate reachability, Android
+process-death financial recovery, Futures mutation coverage, or emergency SELL
+no-duplicate proof. The report's overall disposition therefore remains
+**BLOCKED — NOT ACCEPTED**.
