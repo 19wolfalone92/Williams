@@ -6,6 +6,7 @@ import threading
 
 import pytest
 
+from db import Database
 from execution_barrier import (
     ExecutionBarrier,
     ExecutionOutcomeUnknown,
@@ -131,3 +132,29 @@ def test_exchange_response_persistence_failure_is_unknown_not_success():
 
     assert calls == ["submitted"], "do not resubmit after result-storage failure"
     assert store.statuses == ["PENDING", "SUBMITTING", "UNKNOWN"], "intent remains unresolved for reconciliation"
+
+
+def test_timeout_after_possible_submit_persists_unknown_and_blocks_second_mutation(tmp_path):
+    db = Database(str(tmp_path / "barrier-timeout.sqlite3"))
+    barrier = ExecutionBarrier(_Cache(), db)
+    first = _intent()
+    calls = []
+
+    def timeout_after_send():
+        calls.append("sent")
+        raise TimeoutError("simulated response timeout after request may have reached exchange")
+
+    with pytest.raises(ExecutionOutcomeUnknown):
+        barrier.execute(first, timeout_after_send)
+
+    assert calls == ["sent"]
+    assert db.execution_readiness()["ready"] is False
+    row = db.conn.execute(
+        "SELECT status FROM execution_intents WHERE intent_id=?", (first.intent_id,)
+    ).fetchone()
+    assert row["status"] == "UNKNOWN"
+
+    second_calls = []
+    result = barrier.execute(_intent(), lambda: second_calls.append("sent"))
+    assert result.accepted is False
+    assert second_calls == []
