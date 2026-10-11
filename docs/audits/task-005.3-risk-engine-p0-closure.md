@@ -246,3 +246,121 @@ Important scope: these successful runs are evidence for the PR merge ref, not pr
 **TASK 005.6 = BLOCKED — NOT ACCEPTED.** The central emergency SELL crash window is code-confirmed and remains unresolved. Current green CI is useful regression evidence for the tested merge tree, but cannot satisfy P0 acceptance while durable pre-submit intent, stable client-order identity, atomic exactly-once accounting, Decimal integrity, independent-process recovery, and the complete fault-injection matrix remain open.
 
 PR #50 must remain Draft. Do not merge, do not modify `main`, and do not enable live trading based on this evidence.
+
+
+
+---
+
+# TASK 005.8 Addendum — Durable Emergency SELL Identity and Pre-submit Intent
+
+**Decision: BLOCKED — NOT ACCEPTED**  
+**Branch:** `audit/williams-2.1-task-005-risk-management`  
+**PR:** #50 — open, Draft, not merged  
+**Base SHA:** `04da5f9c09572e99ff310be3a1908179165e528c`  
+**Final code/test commit at report update:** `74910334c64362690f64f265cf5ba141b06d3322`  
+**Safety:** no Binance Mainnet request and no Binance Testnet trading mutation was performed.
+
+## 1. Fresh repository state — CODE-CONFIRMED
+
+- PR #50 is open, Draft, not merged, base `main`, base SHA `04da5f9c09572e99ff310be3a1908179165e528c`.
+- The existing branch `audit/williams-2.1-task-005-risk-management` remains the PR head branch.
+- Head at report update: `74910334c64362690f64f265cf5ba141b06d3322`.
+- No branch was created; PR #50 was not merged; `main` was not changed by this task.
+- Historical CI runs `38119397495`, `38119397553`, and `38119397594` belong to the earlier code/report SHA `7fb3f57e261a934cd5f1aa24a8bc2c3c0337aba6`. They are **not** evidence for the new code SHA.
+- A workflow lookup for the current head returned no PR-triggered runs at the time of this report. Current-head CI is therefore **NOT VERIFIED**.
+
+## 2. Production changes made
+
+### `db.py` — CODE-CONFIRMED
+
+Added `emergency_sell_intents` with:
+- stable `operation_id` primary key;
+- identity contract version, environment and non-secret account scope fingerprint;
+- symbol, trade linkage, operation type, reason and canonical quantity string;
+- immutable parameter hash and unique `client_order_id`;
+- lifecycle status, exchange order/status, timestamps and last error.
+
+Added `claim_emergency_sell_intent()`:
+- claims under SQLite `BEGIN IMMEDIATE` through the existing transaction context;
+- uses insert-if-absent and validates all identity parameters rather than overwriting a prior row;
+- reads back the row and rejects incompatible parameters or client-ID conflicts;
+- returns only after the transaction commits and the persisted identity is checked.
+
+Added `transition_emergency_sell_intent()` with a restricted lifecycle transition map. A second process cannot also transition an already-`SUBMITTING` operation to `SUBMITTING`; it fails closed.
+
+### `portfolio_trader.py` — CODE-CONFIRMED
+
+The emergency SELL now:
+1. Requires account identity to be available; stores only a one-way hash of the API-key identifier, never the key or secret.
+2. Derives a stable operation ID from contract version, environment, account scope, symbol, managed trade ID and operation type.
+3. Derives a stable Binance client order ID from that operation ID and checks its length/character contract.
+4. Computes a canonical decimal quantity string after existing balance/market-lot normalization.
+5. Claims and commits the intent before mutation.
+6. Commits `SUBMITTING` before `order_safe()`.
+7. On POST exception, order-lookup failure, non-terminal exchange status or unresolved authoritative fill/fee data, latches `RECONCILE_REQUIRED`; it does not mint a new client ID or blindly retry.
+8. Records response/order evidence and marks the intent `APPLIED` only after the existing local accounting statements complete.
+
+A repeat call for the same managed trade resolves to the same operation/client ID. Any changed reason or quantity conflicts with the immutable intent rather than silently replacing it.
+
+### `test_task005_risk_safety.py` — CODE-CONFIRMED
+
+Added tests for:
+- immutable intent and canonical quantity persistence;
+- conflicting parameters being rejected;
+- illegal repeated `SUBMITTING` transition being rejected;
+- eight independent processes sharing one SQLite file, where only one may claim the `PREPARED → SUBMITTING` transition.
+
+These tests were added to the branch but their execution on the current SHA has not yet been observed. They are **NOT VERIFIED**, not TEST-PROVEN.
+
+## 3. Emergency SELL call graph and remaining barrier gap
+
+Observed legacy path:
+
+`_create_oco()` detects the market already crossed TP/SL → `_emergency_market_sell()` → `Database.claim_emergency_sell_intent()` → `Database.transition_emergency_sell_intent(SUBMITTING)` → `client.order_safe(... SELL MARKET ...)` → `client.get_order(... stable clientOrderId ...)` → `_authoritative_execution()` / `myTrades` evidence → `close_trade()` or `update_trade_quantity()` → intent finalization.
+
+The separate `ExecutionBarrier` persists generic campaign intents, but this legacy emergency path does not invoke it. The shared lower-level signed mutation sink also does not yet enforce an emergency-intent permit itself. Therefore a direct or alternate reachable SELL mutation path may bypass the new intent gate. This is a **P0 blocker**.
+
+## 4. P0 blockers still open
+
+| Criterion | Status | Evidence / gap |
+|---|---|---|
+| Stable logical operation identity | CODE-CONFIRMED; TEST-PROVEN pending | Deterministic identity code added; golden/collision tests not run on current SHA. |
+| Durable intent before SELL | CODE-CONFIRMED; TEST-PROVEN pending | SQLite claim + readback and committed `SUBMITTING` precede `order_safe()`; no current-SHA fault-injection proof. |
+| No independent retry after UNKNOWN POST | PARTIAL | This call path blocks on an existing non-`PREPARED` intent. A complete exchange reconciliation worker for the stored operation is not demonstrated. |
+| Mutation-sink Execution Barrier | BLOCKED | Legacy method now gates its own call, but direct/lower-level sink invocation is not protected by an intent-bound permit. |
+| Authoritative order recovery | BLOCKED | Stable ID is persisted, but restart recovery that queries Binance by client ID and resolves all unknown states is not implemented/proven end-to-end. |
+| Exactly-once financial effects | BLOCKED | Existing `close_trade()` / `update_trade_quantity()` remain outside a demonstrated atomic canonical fill/effect transaction. Crash between projection updates and `APPLIED` can leave partial local state. |
+| Fill ledger and late fee correction | BLOCKED | Emergency fills are not yet proven to use the single canonical fill/effect applier with durable per-component fee state. |
+| Decimal integrity | BLOCKED | Intent quantity is a decimal string, but downstream normalization and financial projections still use `float` and SQLite REAL. No migration was attempted. |
+| Residual Spot exposure and reservations | BLOCKED | Authoritative free balance is read before intent, but complete open-order reservation, commission-base debit and post-fill residual reconciliation is not proven. |
+| Global Recovery Gate | BLOCKED | Position state is latched on several failure paths, but every new-entry route has not been proven to consult one global unresolved-intent/fill/effect gate. |
+| Eight-process concurrency | NOT VERIFIED | Test source added; no test execution evidence yet. |
+| Full crash/fault matrix | NOT VERIFIED | Only code guards and initial concurrency test source added; required crash points have not all been exercised. |
+| Android contract | NOT VERIFIED | No Android runtime contract changes or process-death/golden-fixture evidence in this task. |
+| Current-SHA CI | NOT VERIFIED | No workflow run was returned for current head `74910334c64362690f64f265cf5ba141b06d3322`. |
+| PR/main integrity | CODE-CONFIRMED | PR remains open/Draft/unmerged; work stayed on the existing branch. |
+
+## 5. Classification discipline
+
+- **CODE-CONFIRMED:** new schema/methods and emergency call-path changes are present in branch source.
+- **TEST-PROVEN:** none claimed for the new tests; their source exists but execution result is not yet observed.
+- **CI-PROVEN:** none for final SHA `74910334c64362690f64f265cf5ba141b06d3322`.
+- **TESTNET-OBSERVED:** none; no real Testnet mutation was performed.
+- **NOT VERIFIED:** complete recovery worker, sink enforcement, financial-effect idempotency, Decimal-only accounting, all required fault points, Android runtime equivalence, and final-SHA CI.
+
+## 6. Minimum next steps
+
+1. Run the new tests and all existing Python/Android required workflows against the exact current head; inspect checkout SHA and logs.
+2. Extend the execution barrier down to every reachable SELL mutation sink so the sink itself verifies a committed, immutable, operation-bound permit.
+3. Implement recovery for `PREPARED`, `SUBMITTING`, `SUBMITTED`, and `RECONCILE_REQUIRED` using the persisted client ID plus authoritative Binance order and trade history; unresolved state must remain blocked.
+4. Route authoritative fills and fee components through the existing canonical fill ledger and one idempotent financial-effect applier; add crash tests around every projection/commit boundary.
+5. Replace float/REAL as canonical values on this path only after auditing all readers/writers and specifying a safe migration; do not rewrite historical REAL values without evidence.
+6. Add eight-process, lost-response, process-death, conflicting fill, unknown/late fee, balance/commission/reservation, direct-sink bypass and new-entry-gate tests.
+7. Verify Android contract or explicitly retain it as an unresolved cross-platform blocker.
+8. Re-run required CI on the final SHA and record exact workflow IDs, checkout SHAs and test output.
+
+## 7. Final decision
+
+**TASK 005.8 = BLOCKED — NOT ACCEPTED.** This iteration closes part of the original pre-submit intent gap in the legacy emergency method and adds immutable, cross-process SQLite intent claiming. It does not yet prove the full P0 contract. In particular, sink-level enforcement, authoritative restart reconciliation, exactly-once financial effects, Decimal integrity, the full fault-injection matrix, Android parity, and current-head CI remain unresolved.
+
+PR #50 must remain Draft. Do not merge, do not modify `main`, and do not enable live trading based on this evidence.
