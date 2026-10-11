@@ -67,7 +67,24 @@ def test_execution_barrier_rejects_stale_context():
 def test_execution_barrier_serializes_publish_and_submit():
     cache = ContextCache()
     cache.publish(context())
-    barrier = ExecutionBarrier(cache)
+    class DurableTestDB:
+        def __init__(self):
+            self.claims = {}
+            self.intents = []
+            self.events = []
+        def save_execution_intent(self, intent, status, reason=""):
+            self.intents.append((intent.intent_id, status, reason))
+        def save_execution_event(self, intent_id, event, payload=None):
+            self.events.append((intent_id, event))
+        def claim_signal_once(self, signal_id, canonical_payload):
+            if signal_id not in self.claims:
+                self.claims[signal_id] = dict(canonical_payload)
+                return "CLAIMED"
+            return "DUPLICATE" if self.claims[signal_id] == dict(canonical_payload) else "CONFLICT"
+        def state_get(self, key, default=None):
+            return default
+
+    barrier = ExecutionBarrier(cache, db=DurableTestDB())
     version = cache.snapshot().context("BTCUSDT", "1h").version
     started = threading.Event()
     published = threading.Event()
