@@ -131,16 +131,23 @@ def collect(args: argparse.Namespace) -> int:
 
     # Preserve pre-existing device logs; do not clear logcat.
     launch = run(["adb", "-s", serial, "shell", "monkey", "-p", EXPECTED_PACKAGE, "1"], timeout=30)
-    (out / "launch-result.txt").write_text(launch.stdout, encoding="utf-8")
+    safe_launch, launch_sensitive = redact(launch.stdout)
+    if not launch_sensitive:
+        (out / "launch-result-redacted.txt").write_text(safe_launch, encoding="utf-8")
+    else:
+        (out / "launch-export-status.txt").write_text(
+            "BLOCKED: potential sensitive marker remains after redaction; raw launch output not exported.\\n",
+            encoding="utf-8")
     log_result = run(["adb", "-s", serial, "logcat", "-d", "-v", "threadtime", "-t", "2500"], timeout=45)
     log_text = log_result.stdout if log_result.returncode == 0 else ""
-    safe_log, unresolved = redact(log_text)
-    if not unresolved:
+    safe_log, log_sensitive = redact(log_text)
+    unresolved = launch_sensitive or log_sensitive
+    if not unresolved and log_result.returncode == 0:
         (out / "logcat-redacted.txt").write_text(safe_log, encoding="utf-8")
     else:
         # Never publish uncertain logs. Keep only a non-sensitive summary.
         (out / "logcat-export-status.txt").write_text(
-            "BLOCKED: potential sensitive marker remains after redaction; raw log not exported.\n",
+            "BLOCKED: potential sensitive marker remains after redaction or logcat is unavailable; raw log not exported.\\n",
             encoding="utf-8")
 
     snapshot = {
