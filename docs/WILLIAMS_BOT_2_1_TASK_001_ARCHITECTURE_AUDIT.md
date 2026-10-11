@@ -692,3 +692,93 @@ The first CI candidate SHA `d942b5abfaed69637c3dd573a056615b54b49191` exposed th
 No Binance Mainnet or real trading operations were used. No physical Android process-death test or Binance Spot Testnet lifecycle was performed. `main` was not modified; PR #47 remains open Draft.
 
 **TASK 001.5 remains FAIL / NOT ACCEPTED.** The legacy missing-fee fallback is now fail-closed and focused tests were added, but exactly-once financial application, Decimal canonicalization, position/risk reconciliation, protection/OCO closure, complete fault injection, inter-process proof, and a universal recovery gate remain unproven.
+
+
+---
+
+## 14. TASK 001.6 — Atomic Financial Effects, Exactly-Once Application & Crash-Recovery Proof (2026-10-11)
+
+**Decision: BLOCKED — NOT ACCEPTED.** This section records a fresh evidence-based baseline and the blockers established by source inspection. It does not claim that TASK 001.6 implementation or its acceptance tests are complete. No production financial schema or execution behavior was changed as part of this baseline pass because a partial journal disconnected from the actual position/Campaign/risk writers would create false assurance rather than prove atomicity.
+
+### 14.1 Exact baseline, PR and CI
+
+- Requested prior SHA: `263def49da38231b5ba1ac4735dba757a1ecf1ec`.
+- Verified working branch HEAD before this report update: `263def49da38231b5ba1ac4735dba757a1ecf1ec`.
+- Verified `main` HEAD: `04da5f9c09572e99ff310be3a1908179165e528c` (unchanged).
+- PR #47 is still open, Draft, targets `main`, and is not merged. No merge was performed.
+- The three required workflows completed successfully on baseline HEAD `263def49da38231b5ba1ac4735dba757a1ecf1ec`:
+  - [Python backend tests — run 38115681555](https://github.com/19wolfalone92/Williams/actions/runs/38115681555): `backend-test: success`.
+  - [Williams Campaign CI — run 38115681574](https://github.com/19wolfalone92/Williams/actions/runs/38115681574): `Android build and static checks: success`; `Python tests: success`.
+  - [Build Android APK — run 38115681575](https://github.com/19wolfalone92/Williams/actions/runs/38115681575): `Build APKs: success`.
+- These runs validate only the baseline source tree. They do not validate a TASK 001.6 implementation. The report update creates a new SHA, which must be checked separately.
+
+### 14.2 Source-confirmed financial-effect path and blockers
+
+The inspected path is not a single atomic financial transaction:
+
+```text
+Binance Spot myTrades / order evidence
+  -> MultiPositionTrader._authoritative_execution()
+  -> Database.record_exchange_fill()
+       -> exchange_fill_ledger (unique key: symbol + exchange_trade_id;
+          exact decimal text; transaction around ledger insert/enrichment)
+  -> legacy execution summary / campaign execution path
+  -> save_campaign_fill() / save_campaign()
+       -> campaign_fills / campaigns financial columns (SQLite REAL,
+          Python float conversions; independently committed when outside
+          an explicit enclosing Database.transaction())
+  -> position/trades state, aggregate risk and protection state
+       -> separate writers / recovery and reconciliation paths
+```
+
+Confirmed source facts:
+
+1. `record_exchange_fill()` is idempotent for its ledger identity and validates immutable fill fields. Its key is `(symbol, exchange_trade_id)`, but the current schema does not include venue/market identity or a durable local intent/campaign association in that ledger row. A Binance Spot trade ID must not be assumed globally unique across every venue and market.
+2. Ledger insertion/enrichment is transactional locally. This does **not** make downstream position, Campaign, PnL/fee, risk reservation, or protection updates atomic with it.
+3. `campaign_fills` has an auto-increment row ID and no exchange-fill uniqueness constraint. `Database.save_campaign_fill()` converts quantity, price, quote quantity and fee fields through `float(...)`; duplicate delivery can therefore produce another downstream row unless every caller separately prevents it.
+4. `campaigns` stores position quantity, average entry price, realized/unrealized PnL, open/pending risk and capital reservation as SQLite REAL columns. `Database.save_campaign()` converts these values to Python floats. Exact canonical Decimal integrity is therefore not established end-to-end.
+5. Legacy `trades` and `orders` also retain REAL-backed financial values. Existing display/reporting aggregations intentionally use float, but the code does not yet prove that all those values are non-authoritative projections derived from an exact canonical ledger.
+6. The existing `exchange_fill_ledger.financial_state` records fee-evidence state (`UNKNOWN` / `CONFIRMED`), not a complete exactly-once application state machine spanning each financial entity.
+7. Existing transaction support in `Database.transaction()` does not by itself establish a transaction boundary across every production writer. A same-connection nested transaction context yields into the current transaction, but no source proof establishes that all fill, position, Campaign, risk and protection mutations use that shared boundary.
+8. Spot uses the `/api/v3/*` adapter; this does not prove Futures lifecycle behavior. Futures position mode, margin, leverage, commission and exposure contracts remain a separate verification task.
+
+### 14.3 TASK 001.6 acceptance matrix
+
+| Acceptance item | Baseline evidence | Status |
+|---|---|---|
+| Stable identity includes venue/market/symbol/trade and intent linkage | Ledger key currently `(symbol, exchange_trade_id)`; no complete per-effect identity contract | **BLOCKED** |
+| Atomic exactly-once application to fill, position, Campaign and risk | Ledger transaction exists; downstream writes are separate paths | **BLOCKED** |
+| Durable replayable financial-effect journal | No proven journal that tracks per-entity application and safely resumes missing projections | **BLOCKED** |
+| Decimal canonical quantity/price/commission/PnL/risk | Ledger fields are text, but Campaign/legacy writes still convert through float and REAL | **BLOCKED** |
+| Unknown commission and conflicting exchange evidence fail closed | TASK 001.5 strict fee evidence and reconciliation behavior exists on the inspected path; complete coverage of all execution paths not proven | **PARTIAL / NOT ACCEPTED** |
+| Crash injection at all transaction and recovery boundaries | No complete fault-injection suite for all 14 requested points was verified | **NOT VERIFIED** |
+| Two independent OS processes racing one fill | No inter-process exactly-once proof verified | **NOT VERIFIED** |
+| Complete exchange-to-local reconciliation including balance, PnL, risk and protection | No complete end-to-end reconciler proof | **BLOCKED** |
+| Global recovery gate covers every entry path | Not proven across campaign, legacy, manual and alternate entry paths | **BLOCKED** |
+| Spot residual exposure and protection quantity | Not proven through partial fills, pending sells, cancel/replace and restart as one contract | **NOT VERIFIED** |
+| Futures one-way and hedge mode | Separate complete lifecycle evidence not available | **NOT VERIFIED — keep production path blocked** |
+| Populated v6/v7/v8 migrations and interrupted migration recovery | No evidence of populated fixtures, exact-value preservation and interruption/retry proof | **NOT VERIFIED** |
+| Physical Android process death/restart | Not run | **NOT VERIFIED** |
+| Binance Spot Testnet full lifecycle | Not run during this pass | **NOT RUN / NOT VERIFIED** |
+| Three mandatory CI workflows on the final report SHA | Baseline SHA passed; report-update SHA must be checked separately | **PENDING until final-SHA runs finish** |
+
+### 14.4 Required implementation sequence before acceptance
+
+1. Define one canonical fill/effect identity scoped to venue, market, symbol and exchange trade ID, plus order and durable local intent linkage. Reject identity collisions whose immutable financial facts differ.
+2. Introduce a durable financial-effect journal with explicit states such as `OBSERVED`, `READY_TO_APPLY`, `APPLIED`, and `RECONCILE_REQUIRED`; make its uniqueness and per-entity application markers durable.
+3. Refactor the real production write path so exact decimal facts and all local effects that can share SQLite commit in one `BEGIN IMMEDIATE` transaction. Where a projection cannot be updated in that transaction, use an outbox/replayable journal with idempotent per-entity application keys and verified read-back. Do not mark an effect complete until all required projections are reconciled.
+4. Migrate canonical financial quantities from REAL to exact decimal text or scaled integers under a versioned, restart-safe migration. Keep REAL only for explicitly non-authoritative analytics/display projections.
+5. Add deterministic fault injection at each requested boundary and a separate-process race test using two independent SQLite connections/processes. Assert final position, Campaign, fees, PnL, risk reservation and protection quantity—not just ledger row counts.
+6. Prove one recovery gate on every production entry route. Unresolved fees, migrations, identity conflicts, unknown orders or exposure/protection mismatches must block new entries and prevent blind retries.
+7. Verify Spot separately from Futures. Keep untested Futures position modes blocked. Test populated v6/v7/v8 fixtures and interrupted migration recovery.
+8. Run the three required workflows plus all new financial-effect, fault-injection, multi-process, migration, release-gate and execution-safety tests on one exact final SHA.
+
+### 14.5 Scope and final decision
+
+- **Corrected in the prior TASK 001.5 pass:** missing/invalid commission evidence on the inspected legacy fill path no longer silently becomes zero; focused regressions and recovery fake-exchange evidence were added.
+- **Proven by current baseline CI:** Python backend suite, Williams Campaign CI (Python and Android/static jobs), and Android APK build pass on baseline SHA `263def49da38231b5ba1ac4735dba757a1ecf1ec`.
+- **Static inspection only:** exact-text ledger storage, composite symbol/trade uniqueness, REAL/float downstream persistence, and separation between ledger and financial projections.
+- **Not proven:** exactly-once financial effects, end-to-end Decimal integrity, independent-process concurrency, complete crash recovery/reconciliation, complete protection/OCO coverage, populated legacy migrations, physical Android process restart, Spot Testnet lifecycle, and Futures lifecycle.
+- **No Mainnet calls or real trading were performed. `main` remains unchanged and PR #47 remains open Draft.**
+
+**TASK 001.6 remains BLOCKED — NOT ACCEPTED. Do not resume trading and do not advance to a dependent task as if financial integrity were closed.** A green baseline CI or APK build is not proof of exactly-once financial effects.
