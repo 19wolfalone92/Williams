@@ -15,6 +15,7 @@ on:
       - "tests/**"
       - "requirements.txt"
       - ".github/workflows/**"
+      - "audit/**"
   workflow_dispatch:
 
 concurrency:
