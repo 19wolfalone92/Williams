@@ -3078,7 +3078,7 @@ private class NativeEngine(
             }
         }
         if (killLatched) error("KILL_SWITCH_LATCHED")
-        require(executionGate.tryReserve(symbol))
+        require(executionGate.tryReserve(symbol)) {
             "Campaign execution already reserved for " + symbol
         }
 
