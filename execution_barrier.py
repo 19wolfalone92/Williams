@@ -81,11 +81,34 @@ class ExecutionBarrier:
         self.db = db
 
     def _persist(self, intent: OrderIntent, status: str, reason: str = "") -> None:
-        if self.db is not None and hasattr(self.db, "save_execution_intent"):
-            try:
-                self.db.save_execution_intent(intent, status, reason)
-            except Exception:
-                pass
+        """Persist execution state or raise; callers must never treat a failed write as success."""
+        if self.db is None:
+            # Non-persistent barriers are allowed for pure validation/test use only.
+            # Production campaign paths are expected to inject the durable DB.
+            return
+        writer = getattr(self.db, "save_execution_intent", None)
+        if not callable(writer):
+            raise RuntimeError("required execution-intent persistence is unavailable")
+        try:
+            writer(intent, status, reason)
+        except Exception as exc:
+            raise RuntimeError(
+                f"required execution-intent persistence failed ({status}): {type(exc).__name__}"
+            ) from exc
+
+    def _persist_event_required(self, intent: OrderIntent, event: str, payload=None) -> None:
+        """Required audit event: a failure before submit blocks mutation."""
+        if self.db is None:
+            return
+        writer = getattr(self.db, "save_execution_event", None)
+        if not callable(writer):
+            raise RuntimeError("required execution-event persistence is unavailable")
+        try:
+            writer(intent.intent_id, event, payload or {})
+        except Exception as exc:
+            raise RuntimeError(
+                f"required execution-event persistence failed ({event}): {type(exc).__name__}"
+            ) from exc
 
     def _record(self, level: str, event: str, intent: OrderIntent, message: str, raw=None) -> None:
         if self.db is not None and hasattr(self.db, "log_event"):
@@ -188,12 +211,13 @@ class ExecutionBarrier:
         with self.context_cache.execution_lock:
             order_fsm = OrderStateMachine()
             order_fsm.transition(OrderState.ADMISSION)
+            # Durable admission record and event are prerequisites for any entry mutation.
+            # If either write/commit fails, execution stops before the submit callback.
             self._persist(intent, "PENDING")
-            if self.db is not None and hasattr(self.db, "save_execution_event"):
-                try:
-                    self.db.save_execution_event(intent.intent_id, "ADMISSION_STARTED", dict(intent.required_context_versions))
-                except Exception:
-                    pass
+            self._persist_event_required(
+                intent, "ADMISSION_STARTED",
+                dict(intent.required_context_versions),
+            )
             snapshot = self.context_cache.snapshot()
             reason = self._validate(intent, snapshot)
             if (
@@ -226,7 +250,14 @@ class ExecutionBarrier:
                     return ExecutionResult(intent.intent_id, False, reason=reason)
 
             order_fsm.transition(OrderState.SUBMITTING)
-            order_fsm.transition(OrderState.SUBMITTING)
+            # Record the irreversible boundary before touching the network.
+            # A restart seeing SUBMITTING without an authoritative result must reconcile,
+            # never infer that the request was not sent.
+            self._persist(intent, "SUBMITTING")
+            self._persist_event_required(
+                intent, "SUBMIT_ATTEMPT_STARTED",
+                {"symbol": intent.symbol, "side": intent.side, "purpose": intent.purpose},
+            )
             self._record(
                 "INFO",
                 "execution_admitted",
@@ -332,11 +363,22 @@ class ExecutionBarrier:
                         "ExecutionBarrier: exchange response lacks authoritative order state"
                     )
             self._persist(intent, "SUBMITTED")
-            if self.db is not None and hasattr(self.db, "save_execution_event"):
+            # The exchange call has already happened. Failure to persist its outcome
+            # must surface as ambiguous and force reconciliation; it must not be reported
+            # as a clean successful local completion.
+            try:
+                self._persist_event_required(
+                    intent, "BINANCE_SUBMITTED",
+                    {"symbol": intent.symbol, "side": intent.side},
+                )
+            except Exception:
                 try:
-                    self.db.save_execution_event(intent.intent_id, "BINANCE_SUBMITTED", {"symbol": intent.symbol, "side": intent.side})
-                except Exception:
-                    pass
+                    self._persist(intent, "AMBIGUOUS", "submission returned but result event persistence failed")
+                finally:
+                    raise RuntimeError(
+                        "ExecutionBarrier: submission outcome requires reconciliation; "
+                        "BINANCE_SUBMITTED event persistence failed"
+                    )
             self._record("INFO", "execution_submitted", intent, "Binance accepted request", {
                 "intent_id": intent.intent_id,
             })
