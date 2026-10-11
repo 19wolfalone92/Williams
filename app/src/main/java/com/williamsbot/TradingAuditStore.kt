@@ -4,6 +4,7 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import androidx.core.database.sqlite.transaction
 import org.json.JSONObject
 
 /**
@@ -206,8 +207,7 @@ class TradingAuditStore(context: Context) :
         val db = writableDatabase
         var inserted = false
         var stored: String? = null
-        db.beginTransaction()
-        try {
+        db.transaction {
             val values = ContentValues().apply {
                 put("signal_id", signalId)
                 put("canonical_payload", canonicalPayload)
@@ -226,9 +226,6 @@ class TradingAuditStore(context: Context) :
                 if (!cursor.moveToFirst()) error("signal claim read-before-commit returned no row")
                 stored = cursor.getString(0)
             }
-            db.setTransactionSuccessful()
-        } finally {
-            db.endTransaction()
         }
 
         // Explicit post-commit read-back: failure must stop the caller even if
