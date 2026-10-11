@@ -25,9 +25,10 @@
 
 - Signed `GET /api/v3/order`: look up by durable order id or client order id and compare symbol, side, target id and returned ids.
 - Signed `GET /api/v3/myTrades`: obtain individual Binance trade ids, quantity, price, commission and commission asset. These identifiers form the unique fill key `(exchange, account_scope, symbol, trade_id)`.
-- `exchangeInfo` is read before entering a fill transaction to resolve the base and quote assets. No exchange network read is intended to occur inside the SQLite financial transaction.
-- The current implementation blocks if the returned trade history reaches the configured 1000-row limit or does not match `executedQty`/`cummulativeQuoteQty`. More complete history pagination/retention-proof guarantees remain an acceptance gate. A snapshot can go stale between REST calls; the coordinator must rerun when the evidence conflicts.
-- SQLite transactions do not make an external Binance POST/DELETE atomic. Each mutation retains a durable intent and is recovered from exchange state afterward.
+- `exchangeInfo` is read before entering a fill transaction to resolve base and quote assets. No exchange network read is intended to occur inside the SQLite financial transaction.
+- The recorded `account_scope` is currently an operator-configured logical label (for example, `WILLIAMS_ACCOUNT_SCOPE`), not a Binance-attested immutable account UID. If credentials change while the label stays the same, the recovery service has no independent identity primitive that proves the account is unchanged. Account binding/credential fingerprint verification is therefore a P0 acceptance gap.
+- The current implementation blocks if trade history reaches the configured 1000-row limit or does not match `executedQty`/`cummulativeQuoteQty`. Full pagination and retention-proof guarantees remain an acceptance gate. REST snapshots can go stale between calls; conflicting evidence must cause another reconciliation pass or a retained lock.
+- SQLite transactions do not make an external Binance POST/DELETE atomic. Each mutation requires a durable intent and subsequent exchange reconciliation.
 
 ### Durable state and transaction boundaries
 
