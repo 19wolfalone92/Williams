@@ -991,9 +991,10 @@ class Trader:
                 )
         if fills:
             order['fills'] = fills
-            summary = accumulate_fills(fills)
-        else:
-            summary = accumulate_order(order)
+        # Validate per-trade history against the exchange order aggregates even
+        # when myTrades returned rows. A non-empty fill list is not sufficient
+        # if it is incomplete or belongs to a different execution total.
+        summary = accumulate_order(order)
         return order, summary
 
     def market_buy(self, quote):
