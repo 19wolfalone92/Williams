@@ -80,6 +80,14 @@ class ExecutionBarrier:
             raise RuntimeError("durable execution-intent persistence is unavailable: save_execution_intent is missing")
         save_intent(intent, status, reason)
 
+    def _mark_reconciliation_required(self, intent: OrderIntent) -> None:
+        """Durably block later order actions until exchange reconciliation completes."""
+        if self.db is None or not callable(getattr(self.db, "state_set", None)):
+            raise RuntimeError("durable RECONCILE_REQUIRED state storage is unavailable")
+        self.db.state_set("position_state", "RECONCILE_REQUIRED")
+        if intent.campaign_id:
+            self.db.state_set(f"campaign_state:{intent.campaign_id}", "RECONCILE_REQUIRED")
+
     def _record(self, level: str, event: str, intent: OrderIntent, message: str, raw=None) -> None:
         if self.db is not None and hasattr(self.db, "log_event"):
             try:
@@ -215,10 +223,17 @@ class ExecutionBarrier:
                     self._persist(intent, "AMBIGUOUS", ambiguity_reason)
                 except Exception as persist_exc:
                     ambiguity_reason += (
-                        "; reconciliation_state_persistence_failed: "
-                        f"{type(persist_exc).__name__}: {persist_exc}; "
-                        "exchange reconciliation is mandatory before any retry"
+                        "; ambiguous_intent_persistence_failed: "
+                        f"{type(persist_exc).__name__}: {persist_exc}"
                     )
+                try:
+                    self._mark_reconciliation_required(intent)
+                except Exception as state_exc:
+                    ambiguity_reason += (
+                        "; reconciliation_state_persistence_failed: "
+                        f"{type(state_exc).__name__}: {state_exc}"
+                    )
+                ambiguity_reason += "; exchange reconciliation is mandatory before any retry"
                 self._record(
                     "ERROR",
                     "execution_ambiguous",
@@ -226,10 +241,10 @@ class ExecutionBarrier:
                     "Binance submission failed or timed out; reconciliation required",
                     {"error": ambiguity_reason},
                 )
-                if "reconciliation_state_persistence_failed" in ambiguity_reason:
+                if "persistence_failed" in ambiguity_reason:
                     raise RuntimeError(
-                        "submission outcome is ambiguous and durable reconciliation state "
-                        f"could not be saved: {ambiguity_reason}"
+                        "submission outcome is ambiguous and reconciliation must be completed "
+                        f"before any retry: {ambiguity_reason}"
                     ) from exc
                 raise
 
@@ -284,10 +299,17 @@ class ExecutionBarrier:
                     self._persist(intent, "AMBIGUOUS", reason)
                 except Exception as ambiguous_exc:
                     reason += (
-                        "; reconciliation_state_persistence_failed: "
-                        f"{type(ambiguous_exc).__name__}: {ambiguous_exc}; "
-                        "exchange reconciliation is mandatory before any retry"
+                        "; ambiguous_intent_persistence_failed: "
+                        f"{type(ambiguous_exc).__name__}: {ambiguous_exc}"
                     )
+                try:
+                    self._mark_reconciliation_required(intent)
+                except Exception as state_exc:
+                    reason += (
+                        "; reconciliation_state_persistence_failed: "
+                        f"{type(state_exc).__name__}: {state_exc}"
+                    )
+                reason += "; exchange reconciliation is mandatory before any retry"
                 self._record(
                     "ERROR",
                     "execution_reconcile_required",
