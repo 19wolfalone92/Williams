@@ -189,14 +189,200 @@ class CampaignExecutionService:
             )
         return True
 
+    def _apply_recovered_campaign_sell_fill(
+        self, intent: dict[str, Any], order: dict[str, Any], fill: dict[str, Any]
+    ) -> None:
+        """Apply an actual SELL trade once; a residual position becomes reconcile-required."""
+        campaign_id = str(fill.get("campaign_id") or intent.get("campaign_id") or "")
+        if not campaign_id:
+            raise CampaignExecutionError("sell fill has no durable campaign_id")
+        campaign = self.engine.load_campaign(campaign_id)
+        if campaign is None:
+            raise CampaignExecutionError("sell fill campaign is missing from durable storage")
+        if campaign.state == CampaignState.CLOSED:
+            raise CampaignExecutionError("late sell fill conflicts with a closed campaign; manual reconciliation required")
+
+        symbol = str(fill["symbol"]).upper()
+        order_id = str(fill["order_id"])
+        qty = Decimal(str(fill["quantity"]))
+        price = Decimal(str(fill["price"]))
+        commission = Decimal(str(fill.get("commission") or "0"))
+        commission_asset = str(fill.get("commission_asset") or "")
+        base_asset = str(fill.get("base_asset") or "").upper()
+        quote_asset = str(fill.get("quote_asset") or "").upper()
+        fee_quote, base_fee_qty = self._fee_in_quote(
+            symbol, commission, commission_asset, price,
+            base_asset=base_asset, quote_asset=quote_asset,
+        )
+        if qty <= 0 or price <= 0:
+            raise CampaignExecutionError("sell fill quantity and price must be positive")
+        sold_inventory = qty + base_fee_qty
+        position_before = Decimal(str(campaign.position_qty or 0))
+        entry_price = Decimal(str(campaign.average_entry_price or 0))
+        if position_before <= 0 or entry_price <= 0 or sold_inventory > position_before + Decimal("0.000000000001"):
+            raise CampaignExecutionError("sell fill exceeds the durable campaign position")
+        trade_id = int(campaign.tags.get("trade_id") or 0)
+        if trade_id:
+            trade_row = self.db.conn.execute(
+                "SELECT * FROM trades WHERE id=? AND exit_time IS NULL", (trade_id,)
+            ).fetchone()
+            trade = dict(trade_row) if trade_row else None
+        else:
+            trade = self.db.open_trade(symbol)
+            if trade:
+                campaign.tags["trade_id"] = int(trade["id"])
+        if trade is None:
+            raise CampaignExecutionError("sell fill has no matching open financial trade row")
+
+        fee_remaining = Decimal(str(
+            campaign.tags.get(
+                "entry_fee_unallocated_quote",
+                campaign.tags.get("entry_fee_quote", 0) or 0,
+            ) or 0
+        ))
+        if fee_remaining < 0:
+            raise CampaignExecutionError("negative unallocated entry fee state")
+        entry_fee_allocated = min(
+            fee_remaining,
+            fee_remaining * sold_inventory / position_before,
+        )
+        fee_remaining_after = fee_remaining - entry_fee_allocated
+        pnl_delta = (
+            qty * price
+            - sold_inventory * entry_price
+            - fee_quote
+            - entry_fee_allocated
+        )
+        remaining = max(Decimal("0"), position_before - sold_inventory)
+        tolerance = max(
+            Decimal(str(os.getenv("MIN_RECOVERY_QTY", "0.000001"))),
+            position_before * Decimal(str(os.getenv("BALANCE_TOLERANCE_PCT", "0.005"))),
+        )
+        quote_qty = qty * price
+        cumulative_exit_qty = Decimal(str(campaign.tags.get("exit_filled_qty", 0) or 0)) + qty
+        cumulative_exit_quote = Decimal(str(campaign.tags.get("exit_filled_quote", 0) or 0)) + quote_qty
+        cumulative_exit_fees = Decimal(str(campaign.tags.get("exit_fee_quote", 0) or 0)) + fee_quote
+        cumulative_pnl = Decimal(str(trade.get("pnl") or 0)) + pnl_delta
+        cumulative_fees = Decimal(str(trade.get("fees") or 0)) + fee_quote
+
+        self.db.conn.execute(
+            """INSERT INTO campaign_fills(
+                campaign_id,order_id,symbol,side,quantity,price,quote_quantity,
+                fee_quote,commission_base,commission_asset,raw_json
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                campaign_id, order_id, symbol, "SELL", str(qty), str(price),
+                str(quote_qty), str(fee_quote), str(base_fee_qty),
+                commission_asset, json.dumps(fill.get("raw", fill), default=str, sort_keys=True),
+            ),
+        )
+        campaign.position_qty = float(remaining)
+        campaign.realized_pnl_quote = float(
+            Decimal(str(campaign.realized_pnl_quote or 0)) + pnl_delta
+        )
+        campaign.tags["entry_fee_unallocated_quote"] = float(fee_remaining_after)
+        campaign.tags["exit_filled_qty"] = str(cumulative_exit_qty)
+        campaign.tags["exit_filled_quote"] = str(cumulative_exit_quote)
+        campaign.tags["exit_fee_quote"] = str(cumulative_exit_fees)
+        campaign.tags["last_exit_order_id"] = order_id
+        campaign.tags["last_exit_trade_id"] = str(fill["trade_id"])
+        campaign.open_risk_quote = (
+            float(Decimal(str(campaign.open_risk_quote or 0)) * remaining / position_before)
+            if remaining > 0 else 0.0
+        )
+        campaign.next_action = "WAIT" if remaining <= tolerance else "RECONCILE_REQUIRED"
+        if remaining <= tolerance:
+            campaign.position_qty = 0.0
+            campaign.open_risk_quote = 0.0
+            campaign.pending_risk_quote = 0.0
+            campaign.capital_reserved_quote = 0.0
+            campaign.exit_reason = campaign.exit_reason or (
+                "PROTECTIVE_STOP" if "PROTECTION" in str(intent.get("purpose", "")).upper()
+                else "CAMPAIGN_EXIT"
+            )
+            if campaign.state == CampaignState.CLOSED:
+                raise CampaignExecutionError("duplicate terminal campaign fill cannot mutate a closed campaign")
+            if campaign.state in {
+                CampaignState.OPEN_INITIAL, CampaignState.TREND_ACTIVE,
+                CampaignState.TRAILING, CampaignState.EXHAUSTION_WATCH,
+            }:
+                campaign.transition(CampaignState.EXIT_SIGNALLED, reason="exchange-confirmed sell fill")
+            if campaign.state != CampaignState.EXIT_PENDING:
+                if campaign.state == CampaignState.RECONCILE_REQUIRED:
+                    campaign.transition(CampaignState.EXIT_PENDING, reason="exchange position is flat")
+                elif campaign.state == CampaignState.EXIT_SIGNALLED:
+                    campaign.transition(CampaignState.EXIT_PENDING, reason="exchange position is flat")
+                else:
+                    raise CampaignExecutionError(
+                        f"cannot close campaign from {campaign.state.value} after sell fill"
+                    )
+            campaign.transition(CampaignState.CLOSED, reason="exchange-confirmed flat position")
+            campaign.next_action = "WAIT"
+            self.db.state_set(f"position_state:{symbol}", "FLAT")
+            avg_exit = cumulative_exit_quote / cumulative_exit_qty if cumulative_exit_qty > 0 else price
+            self.db.close_trade(
+                trade["id"],
+                datetime.now(timezone.utc).isoformat(),
+                float(avg_exit),
+                float(cumulative_pnl),
+                (float(avg_exit) / float(trade.get("entry_price") or entry_price) - 1.0)
+                if float(trade.get("entry_price") or entry_price) > 0 else 0.0,
+                campaign.exit_reason,
+                fees=float(cumulative_fees),
+            )
+        else:
+            campaign.state = CampaignState.RECONCILE_REQUIRED
+            campaign.health = "RED"
+            campaign.reconciliation_state = "RECONCILE_REQUIRED"
+            self.db.state_set(f"position_state:{symbol}", "RECONCILE_REQUIRED")
+            self.db.log_campaign_event(
+                campaign_id,
+                "PARTIAL_SELL_FILL_RECONCILE_REQUIRED",
+                order_id=order_id,
+                reason="partial/late sell fill changes residual position and requires protection reconciliation",
+                payload={
+                    "trade_id": str(fill["trade_id"]),
+                    "filled_qty": str(qty),
+                    "residual_qty": str(remaining),
+                    "fee_quote": str(fee_quote),
+                    "realized_pnl_delta": str(pnl_delta),
+                },
+            )
+        self.db.conn.execute(
+            """UPDATE trades SET pnl=?,fees=?,updated_at=? WHERE id=? AND exit_time IS NULL""",
+            (
+                float(cumulative_pnl),
+                float(cumulative_fees),
+                datetime.now(timezone.utc).isoformat(),
+                int(trade["id"]),
+            ),
+        ) if remaining > tolerance else None
+        self.db.save_campaign(campaign)
+        self.db.log_campaign_event(
+            campaign_id,
+            "EXIT_FILL_APPLIED",
+            order_id=order_id,
+            reason=campaign.exit_reason or "exchange-confirmed sell fill",
+            payload={
+                "trade_id": str(fill["trade_id"]),
+                "quantity": str(qty),
+                "price": str(price),
+                "fee_quote": str(fee_quote),
+                "realized_pnl_delta": str(pnl_delta),
+                "remaining_qty": str(remaining),
+            },
+        )
+
     def _apply_recovered_campaign_fill(
         self, intent: dict[str, Any], order: dict[str, Any], fill: dict[str, Any]
     ) -> None:
-        """Apply one BUY trade to fills, position/campaign, fees and trade row atomically."""
-        if str(fill.get("side", intent.get("side", ""))).upper() != "BUY":
-            raise CampaignExecutionError(
-                "sell-side campaign fill accounting is not yet integrated; keep execution UNKNOWN"
-            )
+        """Apply one exchange trade to campaign position, fee, PnL and journal in this DB transaction."""
+        side = str(fill.get("side", intent.get("side", ""))).upper()
+        if side == "SELL":
+            self._apply_recovered_campaign_sell_fill(intent, order, fill)
+            return
+        if side != "BUY":
+            raise CampaignExecutionError(f"unsupported campaign fill side {side!r}")
         campaign_id = str(fill.get("campaign_id") or intent.get("campaign_id") or "")
         if not campaign_id:
             raise CampaignExecutionError("fill has no durable campaign_id")
