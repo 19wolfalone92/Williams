@@ -126,6 +126,27 @@ class Database:
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY(symbol, side)
         );
+        CREATE TABLE IF NOT EXISTS emergency_sell_intents(
+            operation_id TEXT PRIMARY KEY,
+            identity_version INTEGER NOT NULL,
+            environment TEXT NOT NULL,
+            account_scope TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            trade_id TEXT NOT NULL,
+            operation_type TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            requested_qty TEXT NOT NULL,
+            parameters_hash TEXT NOT NULL,
+            client_order_id TEXT NOT NULL UNIQUE,
+            status TEXT NOT NULL,
+            exchange_order_id TEXT,
+            exchange_status TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            last_error TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_emergency_sell_status
+            ON emergency_sell_intents(status, symbol);
         CREATE TABLE IF NOT EXISTS execution_intents(
             intent_id TEXT PRIMARY KEY,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -449,6 +470,110 @@ class Database:
             return json.loads(row["state_json"])
         except Exception:
             return None
+
+    def claim_emergency_sell_intent(self, intent):
+        """Durably claim one logical emergency SELL across SQLite connections/processes.
+
+        Caller must provide canonical strings and a stable operation/client ID.
+        Existing identities are immutable: incompatible parameters raise rather
+        than being overwritten. PREPARED is the only state safe to submit.
+        """
+        required = (
+            "operation_id", "identity_version", "environment", "account_scope",
+            "symbol", "trade_id", "operation_type", "reason", "requested_qty",
+            "parameters_hash", "client_order_id",
+        )
+        missing = [key for key in required if key not in intent]
+        if missing:
+            raise ValueError(f"emergency SELL intent missing fields: {missing}")
+        now = datetime.now(timezone.utc).isoformat()
+        with self.transaction():
+            self.conn.execute(
+                """INSERT OR IGNORE INTO emergency_sell_intents(
+                    operation_id,identity_version,environment,account_scope,symbol,
+                    trade_id,operation_type,reason,requested_qty,parameters_hash,
+                    client_order_id,status,created_at,updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,'PREPARED',?,?)""",
+                (
+                    str(intent["operation_id"]), int(intent["identity_version"]),
+                    str(intent["environment"]), str(intent["account_scope"]),
+                    str(intent["symbol"]).upper(), str(intent["trade_id"]),
+                    str(intent["operation_type"]), str(intent["reason"]),
+                    str(intent["requested_qty"]), str(intent["parameters_hash"]),
+                    str(intent["client_order_id"]), now, now,
+                ),
+            )
+            row = self.conn.execute(
+                "SELECT * FROM emergency_sell_intents WHERE operation_id=?",
+                (str(intent["operation_id"]),),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("emergency SELL intent commit/readback missing")
+            for key in required:
+                stored = row[key]
+                expected = int(intent[key]) if key == "identity_version" else str(intent[key])
+                if str(stored) != str(expected):
+                    raise RuntimeError(
+                        f"emergency SELL identity conflict for {key}; execution blocked"
+                    )
+            # A unique client ID claimed by another operation is a hard conflict.
+            other = self.conn.execute(
+                "SELECT operation_id FROM emergency_sell_intents WHERE client_order_id=?",
+                (str(intent["client_order_id"]),),
+            ).fetchone()
+            if other is None or str(other["operation_id"]) != str(intent["operation_id"]):
+                raise RuntimeError("emergency SELL clientOrderId identity conflict")
+            # transaction() committed before returning; readback above is inside
+            # the same write transaction, so explicitly verify durability outside it.
+        committed = self.conn.execute(
+            "SELECT operation_id,status,parameters_hash,client_order_id FROM emergency_sell_intents WHERE operation_id=?",
+            (str(intent["operation_id"]),),
+        ).fetchone()
+        if committed is None or str(committed["parameters_hash"]) != str(intent["parameters_hash"]):
+            raise RuntimeError("emergency SELL durable commit/readback uncertain")
+        return dict(committed)
+
+    def transition_emergency_sell_intent(self, operation_id, status, *, exchange_order_id=None,
+                                         exchange_status=None, last_error=None):
+        """Durably transition an emergency intent without resetting its identity."""
+        allowed = {
+            "PREPARED": {"SUBMITTING", "RECONCILE_REQUIRED"},
+            "SUBMITTING": {"SUBMITTED", "RECONCILE_REQUIRED"},
+            "SUBMITTED": {"RECONCILE_REQUIRED", "APPLIED"},
+            "RECONCILE_REQUIRED": {"RECONCILE_REQUIRED", "SUBMITTED", "APPLIED"},
+            "APPLIED": {"APPLIED"},
+        }
+        now = datetime.now(timezone.utc).isoformat()
+        with self.transaction():
+            row = self.conn.execute(
+                "SELECT status FROM emergency_sell_intents WHERE operation_id=?",
+                (str(operation_id),),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("emergency SELL intent does not exist")
+            current = str(row["status"])
+            if status not in allowed.get(current, set()):
+                raise RuntimeError(
+                    f"illegal emergency SELL intent transition {current}->{status}"
+                )
+            self.conn.execute(
+                """UPDATE emergency_sell_intents SET status=?,updated_at=?,
+                   exchange_order_id=COALESCE(?,exchange_order_id),
+                   exchange_status=COALESCE(?,exchange_status),
+                   last_error=? WHERE operation_id=?""",
+                (str(status), now,
+                 None if exchange_order_id is None else str(exchange_order_id),
+                 None if exchange_status is None else str(exchange_status),
+                 None if last_error is None else str(last_error)[:1000],
+                 str(operation_id)),
+            )
+            check = self.conn.execute(
+                "SELECT status FROM emergency_sell_intents WHERE operation_id=?",
+                (str(operation_id),),
+            ).fetchone()
+            if check is None or str(check["status"]) != str(status):
+                raise RuntimeError("emergency SELL status readback mismatch")
+        return True
 
     def save_order(self, data):
         oid = (
