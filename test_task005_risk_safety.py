@@ -17,6 +17,7 @@ import equity_breaker as equity_breaker_module
 from mock_exchange import MockExchange
 from risk_engine import RiskEngine
 from portfolio_trader import MultiPositionTrader
+from binance_client import BinanceAPIError, BinanceSpotClient
 
 from test_campaign_execution import service, signal
 
@@ -608,3 +609,97 @@ def test_independent_processes_cannot_both_claim_emergency_sell_submit_permissio
         assert rows[0]["status"] == "SUBMITTING"
     finally:
         verify.conn.close()
+
+
+
+def _prepare_emergency_sink_intent(db):
+    intent = _emergency_intent_fixture()
+    db.claim_emergency_sell_intent(intent)
+    db.transition_emergency_sell_intent(intent["operation_id"], "SUBMITTING")
+    return intent
+
+
+def test_emergency_sell_rest_sink_denies_direct_call_without_durable_authorizer():
+    client = BinanceSpotClient("fake-api-key", "fake-api-secret", testnet=True)
+    calls = []
+    client.session.request = lambda *args, **kwargs: calls.append((args, kwargs))
+    with pytest.raises(BinanceAPIError, match="authorizer unavailable"):
+        client.order(
+            "BTCUSDT", "SELL", "MARKET", quantity="0.001000",
+            new_client_order_id="WILLV4_EMERGENCY_aaaaaaaaaaaaaaaaaa",
+        )
+    assert calls == []
+
+
+def test_emergency_sell_rest_sink_consumes_durable_permit_exactly_once():
+    from types import SimpleNamespace
+
+    db = Database(":memory:")
+    try:
+        intent = _prepare_emergency_sink_intent(db)
+        client = BinanceSpotClient("fake-api-key", "fake-api-secret", testnet=True)
+        client.emergency_sell_authorizer = db.authorize_emergency_sell_mutation
+        calls = []
+
+        class Response:
+            status_code = 200
+            headers = {}
+            content = b'{"symbol":"BTCUSDT","orderId":7,"status":"FILLED"}'
+            text = content.decode()
+
+            def json(self):
+                return {"symbol": "BTCUSDT", "orderId": 7, "status": "FILLED"}
+
+        def fake_request(*args, **kwargs):
+            calls.append((args, kwargs))
+            return Response()
+
+        client.session.request = fake_request
+        result = client.order(
+            "BTCUSDT", "SELL", "MARKET", quantity="0.001000",
+            new_client_order_id=intent["client_order_id"],
+        )
+        assert result["status"] == "FILLED"
+        assert len(calls) == 1
+        row = db.conn.execute(
+            "SELECT mutation_started_at,status FROM emergency_sell_intents WHERE operation_id=?",
+            (intent["operation_id"],),
+        ).fetchone()
+        assert row["mutation_started_at"]
+        assert row["status"] == "SUBMITTING"
+
+        with pytest.raises(BinanceAPIError, match="permit not proven"):
+            client.order(
+                "BTCUSDT", "SELL", "MARKET", quantity="0.001000",
+                new_client_order_id=intent["client_order_id"],
+            )
+        assert len(calls) == 1
+    finally:
+        db.conn.close()
+
+
+def test_emergency_sell_rest_sink_rejects_quantity_and_account_mismatch():
+    db = Database(":memory:")
+    try:
+        intent = _prepare_emergency_sink_intent(db)
+        with pytest.raises(RuntimeError, match="quantity mismatch"):
+            db.authorize_emergency_sell_mutation(
+                symbol="BTCUSDT", quantity="0.001001",
+                client_order_id=intent["client_order_id"],
+                environment="BINANCE_SPOT_TESTNET",
+                account_scope="b" * 24,
+            )
+        with pytest.raises(RuntimeError, match="account_scope mismatch"):
+            db.authorize_emergency_sell_mutation(
+                symbol="BTCUSDT", quantity="0.001000",
+                client_order_id=intent["client_order_id"],
+                environment="BINANCE_SPOT_TESTNET",
+                account_scope="x" * 24,
+            )
+        row = db.conn.execute(
+            "SELECT mutation_started_at FROM emergency_sell_intents WHERE operation_id=?",
+            (intent["operation_id"],),
+        ).fetchone()
+        assert row["mutation_started_at"] is None
+    finally:
+        db.conn.close()
