@@ -43,7 +43,8 @@ class ApiHttpContractTest {
 
     @Test
     fun malformedJsonMapsTo4xxAndUnexpectedErrorTo500() {
-        assertEquals(400, apiErrorStatus(org.json.JSONException("bad json")))
+        assertEquals(422, apiErrorStatus(org.json.JSONException("bad json")))
+        assertEquals(408, apiErrorStatus(java.net.SocketTimeoutException("timeout")))
         assertEquals(500, apiErrorStatus(IllegalStateException("internal")))
     }
 
