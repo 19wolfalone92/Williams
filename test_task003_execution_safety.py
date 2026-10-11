@@ -1015,7 +1015,7 @@ def test_independent_processes_apply_one_financial_fill_effect(tmp_path):
     assert len(journal) == 1
     assert journal[0]["projection_status"] == "APPLIED"
     assert len(projection) == 1
-    assert projection[0]["quantity_decimal"] == "0.01000000"
+    assert projection[0]["quantity_decimal"] == "0.01"
 
 
 def test_fill_identity_conflict_is_fail_closed_and_does_not_reapply(tmp_path):
