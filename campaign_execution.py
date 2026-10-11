@@ -1867,7 +1867,7 @@ class CampaignExecutionService:
         quote = float(order.get("cummulativeQuoteQty", 0) or 0)
         if executed <= 0 or quote <= 0:
             raise CampaignExecutionError(
-                f"{symbol}: campaign exit returned no authoritative fill"
+                f"{symbol}: campaign exit has no reconciled authoritative fill"
             )
         self.db.save_campaign_order(
             PendingOrderRecord(
@@ -1883,62 +1883,32 @@ class CampaignExecutionService:
                 signal_id=campaign.current_signal_id,
             )
         )
-        exit_price = quote / executed
-        remaining = max(0.0, float(campaign.position_qty) - executed)
-        self.db.log_campaign_event(
-            campaign.campaign_id,
-            "EXIT_SUBMITTED",
-            order_id=str(order.get("orderId", "")),
-            reason=reason,
-            payload={
-                "quantity": executed,
-                "exit_price": exit_price,
-                "requested_quantity": qty,
-            },
-        )
-        if remaining <= max(
-            float(os.getenv("MIN_RECOVERY_QTY", "0.000001")),
-            float(campaign.position_qty) * float(os.getenv("BALANCE_TOLERANCE_PCT", "0.005")),
-        ):
-            campaign.position_qty = 0.0
-            campaign.open_risk_quote = 0.0
-            campaign.pending_risk_quote = 0.0
-            campaign.capital_reserved_quote = 0.0
-            campaign.exit_reason = reason
-            campaign.next_action = "WAIT"
-            campaign.transition(CampaignState.EXIT_PENDING, reason=reason)
-            campaign.transition(CampaignState.CLOSED, reason="exit fill complete")
-            self.db.save_campaign(campaign)
-            trade = self.db.open_trade(symbol)
-            if trade is not None:
-                entry = float(trade.get("entry_price") or campaign.average_entry_price or 0.0)
-                entry_fee = float(trade.get("fees") or 0.0)
-                pnl = quote - entry * float(trade.get("quantity") or campaign.position_qty) - entry_fee
-                self.db.close_trade(
-                    trade["id"],
-                    datetime.now(timezone.utc).isoformat(),
-                    exit_price,
-                    pnl,
-                    (exit_price / entry - 1.0) if entry > 0 else 0.0,
-                    reason,
-                    fees=entry_fee,
-                )
-            self.db.state_set(f"position_state:{symbol}", "FLAT")
+        # Financial effects have already been applied exactly once through
+        # execution_fills + _apply_recovered_campaign_sell_fill. Do not recompute
+        # PnL from cummulativeQuoteQty or mutate campaign quantity a second time.
+        reconciled = self.engine.load_campaign(campaign.campaign_id)
+        if reconciled is None:
+            raise CampaignExecutionError("campaign missing after verified exit fills")
+        exit_qty = Decimal(str(reconciled.tags.get("exit_filled_qty", "0") or "0"))
+        exit_quote = Decimal(str(reconciled.tags.get("exit_filled_quote", "0") or "0"))
+        exit_price = float(exit_quote / exit_qty) if exit_qty > 0 else quote / executed
+        if reconciled.state == CampaignState.CLOSED and float(reconciled.position_qty) <= 0:
             return {
-                "campaign_id": campaign.campaign_id,
+                "campaign_id": reconciled.campaign_id,
                 "symbol": symbol,
                 "state": "CLOSED",
                 "quantity": executed,
                 "exit_price": exit_price,
-                "reason": reason,
+                "reason": reconciled.exit_reason or reason,
             }
-
-        campaign.position_qty = remaining
-        self.db.save_campaign(campaign)
-        campaign.state = CampaignState.RECONCILE_REQUIRED
+        remaining = float(reconciled.position_qty)
+        self.engine.mark_reconcile_required(
+            reconciled,
+            f"exit execution reconciled but residual position {remaining:.12g} remains",
+        )
         self.db.state_set(f"position_state:{symbol}", "RECONCILE_REQUIRED")
         raise CampaignExecutionError(
-            f"{symbol}: campaign exit partially filled; residual {remaining:.12g} requires reconciliation"
+            f"{symbol}: exit fill left residual {remaining:.12g}; position and protection reconciliation required"
         )
 
     def replace_structural_stop(
