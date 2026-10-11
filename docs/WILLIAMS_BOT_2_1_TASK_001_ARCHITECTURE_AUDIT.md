@@ -634,15 +634,17 @@ After the source audit, a narrow fail-closed correction was committed in the sam
 
 ### 13.3 TASK 001.5 code change
 
-Implementation SHA immediately before this report refresh: `468d97e296b79fc02841f3577ef191fe9c7d5731`. The report refresh itself creates a new commit; mandatory CI must therefore be checked against the resulting exact report SHA.
+Implementation SHA immediately before this report refresh: `84e4785f268129b56add3cc6214a115e1c4336af`. The report refresh itself creates a new commit; mandatory CI must therefore be checked against the resulting exact report SHA.
 
 Changed files:
 1. `portfolio_trader.py`
 2. `test_task001_recovery_regressions.py`
-3. `.github/workflows/android-apk.yml` — Android APK CI now also runs for root Python/tests and audit-report changes, so backend financial changes can be checked on the same SHA.
-4. `.github/workflows/python-ci.yml` — backend CI now runs on audit branches and for audit-report changes, allowing the exact feature-branch SHA to be tested.
-5. `.github/workflows/android-apk.yml` — APK CI now runs on audit branches as well as backend/test/report changes.
-6. This existing report.
+3. `test_multi_position_lifecycle.py` — fake exchange now returns trade-history rows for synthetic manual/emergency fills.
+4. `test_integration_bindings.py` — recovery fake now returns explicit authoritative trade/fee evidence.
+5. `.github/workflows/android-apk.yml` — Android APK CI now also runs for root Python/tests and audit-report changes, so backend financial changes can be checked on the same SHA.
+6. `.github/workflows/python-ci.yml` — backend CI now runs on audit branches and for audit-report changes, allowing the exact feature-branch SHA to be tested.
+7. `.github/workflows/android-apk.yml` — APK CI now runs on audit branches as well as backend/test/report changes.
+8. This existing report.
 
 In `MultiPositionTrader._authoritative_execution()` (exposed through the legacy PortfolioTrader compatibility import), a filled order without local fill details now requires authoritative `myTrades` evidence. Lookup failure, empty history, malformed identity, missing trade ID, missing fee amount/asset, invalid numeric data, or a ledger conflict latches global and symbol `RECONCILE_REQUIRED` and raises instead of silently falling back to order-level quantity data or treating missing commission as zero.
 
@@ -651,6 +653,15 @@ Each validated fill is recorded through `record_exchange_fill()` before a legacy
 The new tests exercise:
 - missing commission → durable `UNKNOWN` ledger evidence, both recovery latches set, exception raised;
 - explicitly confirmed zero commission → one ledger row after two deliveries, exact decimal quantity/price strings preserved.
+
+### 13.3.1 CI regression and correction
+
+The first CI candidate SHA `d942b5abfaed69637c3dd573a056615b54b49191` exposed three regressions in tests whose fake exchanges returned executed order quantities but no authoritative `myTrades` rows:
+- Python backend tests — [run 38115592076](https://github.com/19wolfalone92/Williams/actions/runs/38115592076): **FAIL**, 3 failed / 162 passed.
+- Williams Campaign CI — [run 38115592068](https://github.com/19wolfalone92/Williams/actions/runs/38115592068): Python job failed with the same fake-exchange contract issue; Android job was still running at the time of the log inspection.
+- The failing cases were partial manual sell, partial emergency sell, and terminal partial-entry recovery. The production path correctly refused to infer fee-complete financial evidence from order status/quantity alone.
+- Corrective change: the test doubles in `test_multi_position_lifecycle.py` and `test_integration_bindings.py` now return explicit stable trade IDs, quantities, prices, quote quantities, and confirmed zero commission/asset evidence for their synthetic fills. Production checks were not relaxed.
+- These corrections are on the next candidate SHA and must be re-tested; no success is claimed until final-SHA CI completes.
 
 ### 13.4 Exactness and fee matrix: remaining limits
 
