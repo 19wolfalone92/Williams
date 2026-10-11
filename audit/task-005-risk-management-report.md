@@ -197,3 +197,87 @@ Regression tests cover quote-fee accounting on a full exit and a partial exit wi
 ### Next required step
 
 Wait for all required workflows on the final source SHA, inspect their exact checkout SHA and logs, fix any failures without weakening assertions, and continue the missing recovery/financial-ledger/Decimal/Global Gate work. PR #50 remains Draft. No acceptance is implied by this checkpoint.
+
+
+## TASK 005.10 — Emergency SELL authoritative recovery and sink audit (2026-10-11)
+
+**Status: BLOCKED — NOT ACCEPTED.** This is a source audit and CI checkpoint, not an assertion that the missing recovery/financial-owner contract has been implemented.
+
+### Git/CI baseline revalidated before work
+
+- Branch HEAD: `6e97611465e483430adf9093f25d44ef3f37af55`.
+- `main`: `04da5f9c09572e99ff310be3a1908179165e528c`; unchanged from the task base.
+- PR #50: Open, Draft, not merged; base remains `main`; head matches the branch SHA above.
+- No local working-tree metadata is exposed by the GitHub connector; remote branch/PR refs were checked directly.
+- No real Binance Mainnet or Testnet trading mutation was performed.
+
+### Exact-SHA CI results for baseline `6e97611465e483430adf9093f25d44ef3f37af55`
+
+| Workflow | Run | Final status | Evidence |
+|---|---:|---|---|
+| Python backend tests | 38121986509 | SUCCESS | Exact `head_sha`; backend-test job succeeded. |
+| Build Android APK | 38121986490 | SUCCESS | Exact `head_sha`; Build APKs job succeeded. |
+| Williams Campaign CI | 38121982624 | SUCCESS | Exact `head_sha`; Android build/static checks and Python tests succeeded. |
+| Additional Williams Campaign CI | 38121986442 | FAILURE | Exact `head_sha`; Python job failed, Android job succeeded. |
+
+Failure log: [run 38121986442](https://github.com/19wolfalone92/Williams/actions/runs/38121986442), job `114418965385`. Result: `1 failed, 196 passed, 4 warnings`; failing test `test_task005_risk_safety.py::test_two_symbols_cannot_reserve_same_portfolio_capacity_concurrently`. The exception is `sqlite3.OperationalError: cannot start a transaction within a transaction` from `db.py:36` when `campaign_execution.py:396` enters `Database.transaction()`. This is a real concurrency/transaction-ownership defect, not an acceptable flaky-test waiver. It must be corrected and re-tested on a new exact SHA. The three successful runs do not cancel this failure.
+
+### Source-to-sink audit — initial inventory
+
+The repository tree at the baseline SHA contains no `execution_recovery.py`. That absence is material: there is no dedicated production worker file with which to prove durable UNKNOWN POST recovery across restart, read-only retries/backoff, multi-process ownership, and authoritative order/fill reconciliation.
+
+| Mutation type / path | Caller → network sink | Durable intent / authorization | UNKNOWN POST / financial handoff | Status |
+|---|---|---|---|---|
+| Emergency MARKET SELL | `portfolio_trader.py::_emergency_market_sell()` → `client.order_safe(... SELL, MARKET ...)` → `binance_client.py::order()` → `_request(POST, /api/v3/order)` | `claim_emergency_sell_intent()` and transition to `SUBMITTING` occur before submission; REST boundary checks the `WILLV4_EMERGENCY_` namespace and consumes a one-shot DB permit. | Caller marks ambiguity `RECONCILE_REQUIRED` and refuses resubmit, but no complete restart worker is present. The caller directly updates local trade quantity/PnL and then transitions intent to `APPLIED`; a single canonical financial effect owner and durable per-fill exactly-once handoff are not demonstrated. | CODE-CONFIRMED for this path; end-to-end TEST-PROVEN: NOT VERIFIED |
+| Ordinary Python order creation (BUY/SELL/STOP/OCO-related) | `portfolio_trader.py`, `campaign_execution.py`, other callers → `BinanceSpotClient.order()/order_safe()` → REST `_request` | The emergency-specific namespace guard does not apply to general client IDs. Campaign paths use `ExecutionBarrier` in selected routes, but the whole repository sink/caller graph has not been proven to converge on one universal barrier. | Generic POST transport failures are marked unknown and not blindly retried, but durable intent/recovery coverage varies by caller and mutation type. | NOT VERIFIED globally |
+| Cancel / cancel-replace | REST mutation paths in `binance_client.py::_request` including order/cancelReplace handling | Emergency namespace rejects unsupported emergency-ID POST/DELETE shapes, but this is not universal authorization for every ordinary cancellation or replacement. | HTTP 409 is classified ambiguous; source inventory does not prove every caller persists/reconciles both sides of a partial cancel-replace. | CODE-CONFIRMED for 409 handling; full sink proof NOT VERIFIED |
+| OCO / order-list create/cancel | `order_list` and `open_order_lists/all_order_lists` are read methods; order-list mutation paths and callers require a complete separate inventory. | No universal emergency-intent authorization established. | No complete durable reconciliation proof established for all order-list outcomes. | NOT VERIFIED |
+| Direct REST / alternate Python callers | `BinanceSpotClient._request()` is the low-level network boundary; repository-wide callers include order wrappers and additional execution modules. | Current special guard is selected by client-ID prefix, not by an operation capability attached to every SELL/cancel/replace sink. An ordinary SELL without that prefix is not forced through the emergency permit. | Cannot prove bypass exclusion across all callers from the current guard. | NOT VERIFIED; universal Execution Barrier NOT PROVEN |
+| Android execution | `StandaloneRuntime.kt` and `ExecutionGate.kt`; local Android execution uses its own execution gate and signed REST helpers in the runtime. | `ExecutionGate` shown in source is an in-memory synchronized symbol reservation, not a durable emergency-intent/recovery lock. No cross-platform atomicity is implied. | Android process-death UNKNOWN POST recovery and exactly-once financial effect handoff were not demonstrated. | CODE-CONFIRMED for in-memory gate; DEVICE-PROVEN: NOT VERIFIED |
+
+This is an initial source audit, not a claim that every individual reachable sink is enumerated and tested. The required complete source-to-sink graph remains an acceptance blocker. In particular, the absence of a dedicated recovery worker and the general order API remaining usable outside the emergency client-ID namespace mean universal mutation-sink enforcement is not proven.
+
+### Emergency intent and identity findings
+
+The existing `emergency_sell_intents` table uses `operation_id` as its primary key and stores environment, account scope, symbol, trade ID, operation type, reason, requested quantity, parameter hash, client order ID, state, exchange order ID/status, timestamps, and `mutation_started_at`. Schema marker is 8; an additive migration adds `mutation_started_at`. `claim_emergency_sell_intent()` verifies immutable identity fields and rejects a conflicting client ID. `authorize_emergency_sell_mutation()` checks symbol, quantity, environment/account scope, client ID, `SUBMITTING` state and one-shot permit consumption.
+
+Current state contract in `db.py` is `PREPARED → SUBMITTING → SUBMITTED/RECONCILE_REQUIRED → APPLIED`, with `RECONCILE_REQUIRED` permitted to remain unresolved or move to `SUBMITTED/APPLIED`. This is narrower than a fully reconciled exchange lifecycle: it does not by itself persist a complete reconciliation cursor, every fill identity, commission-resolution state, or a recovery lease/owner. The one-shot permit proves only authorization to attempt a mutation; it does not prove order acceptance, fills, financial application, or terminal exposure reconciliation.
+
+The caller uses a stable client order ID derived from the operation identity. Exchange order ID and fill identity are not shown to have a complete durable, conflict-checked association to the operation across every crash point. First lookup miss, temporary Binance unavailability, contradictory order/fill sources, and recovery lease contention are not covered by a proven production worker. Required rule remains: unknown result → durable reconciliation-required gate; never infer rejection from a lookup miss and never issue a replacement SELL while unresolved.
+
+### Financial handoff and residual exposure — blockers
+
+The current emergency caller invokes `_authoritative_execution()`, but then uses floating-point conversions for executed quantity, average price, commissions, managed quantity and PnL. It directly updates the local trade projection before setting the intent to `APPLIED`. The source does not establish that all those writes are one atomic effect transaction keyed by durable fill identity and owned exclusively by the canonical Financial Effect Applier. A crash between projection update and intent finalization can therefore leave recovery unable to distinguish “effect already applied” from “effect not applied” unless a separate durable idempotency contract exists; that contract is NOT VERIFIED here.
+
+The existing campaign fill ledger is not sufficient proof of emergency exit accounting without tracing the exact emergency call path into the same ledger and proving uniqueness/conflict handling, late fee correction, UNKNOWN/INVALID/CONFLICTED fee states, and atomic effect application. No second ledger is introduced by this audit.
+
+Residual Spot quantity is not proven to be reconstructed from a consistent snapshot of free/locked base balance, open SELL orders, fills, base-asset commissions and pending mutations before a subsequent SELL. The local managed trade quantity is not equivalent to currently available Spot balance. Decimal exactness is also not proven because the audited emergency path converts authoritative values to `float`.
+
+### Global Recovery Gate / Android
+
+Python has local `RECONCILE_REQUIRED` state checks in selected entry paths, but the audit has not established a single durable gate consulted by every BUY, add-on, retry, background worker, alternate client, cancel-replace and OCO mutation sink. The REST emergency-prefix check is not a global gate.
+
+Android's `ExecutionGate` is an in-memory one-campaign reservation; it does not prove durable recovery of an emergency order after process death. Android uses a separate local store and no shared atomic transaction with Python/SQLite. No emulator/device process-kill recovery test was run. Classification: `EMULATOR-PROVEN — NOT VERIFIED`; `DEVICE-PROVEN — NOT VERIFIED`; `TESTNET-OBSERVED — NOT PERFORMED`.
+
+### Required next minimal safe steps
+
+1. Fix the real SQLite transaction ownership defect; add a regression proving concurrent callers cannot enter a transaction while the connection already has an unowned active transaction. Do not suppress the exception or weaken the concurrency assertion.
+2. Build a repository-wide source-to-sink inventory for every Python and Android network mutation, including ordinary SELL, cancel, replace and order-list operations; ensure each sink requires a durable mutation capability or blocks the operation.
+3. Implement one durable emergency-intent recovery worker using authoritative read-only Binance lookups and bounded backoff, with an atomic recovery claim/lease and no re-POST while any prior result remains unknown.
+4. Integrate recovered fills with the existing canonical Financial Effect Applier only after verifying its contract; if unavailable, persist fills as pending and keep the global gate closed.
+5. Replace float-based emergency accounting with exact Decimal/string persistence; reconcile available Spot quantity from authoritative balances, open orders, fills and commissions before permitting another SELL.
+6. Add SQLite/process fault-injection for the specified ES scenarios, then rerun all required CI after the last code/report change and attach only exact-final-SHA evidence.
+
+### TASK 005.10 acceptance matrix
+
+- Durable UNKNOWN POST recovery worker: **NOT VERIFIED / P0 BLOCKER**.
+- Complete SELL/cancel/replace/OCO mutation-sink enforcement: **NOT VERIFIED / P0 BLOCKER**.
+- Exactly-once financial effect handoff: **NOT VERIFIED / P0 BLOCKER**.
+- Decimal-exact emergency financial path: **NOT VERIFIED / P0 BLOCKER**.
+- Residual Spot exposure reconciliation: **NOT VERIFIED / P0 BLOCKER**.
+- Global Recovery Gate across Python and Android: **NOT VERIFIED / P0 BLOCKER**.
+- Full SQLite/process fault-injection matrix on one SHA: **NOT VERIFIED / P0 BLOCKER**.
+- Exact-SHA CI at baseline: 3 SUCCESS, 1 FAILURE; therefore CI acceptance gate **FAIL**.
+- Main unchanged; PR #50 remains Open/Draft/unmerged; no real trading mutation performed.
+
+**TASK 005.10 — BLOCKED — NOT ACCEPTED.**
