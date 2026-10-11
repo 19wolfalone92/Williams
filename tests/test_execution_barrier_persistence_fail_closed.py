@@ -10,6 +10,13 @@ class FailingIntentDB:
         self.fail_statuses = set(fail_statuses)
         self.saved_statuses = []
         self.events = []
+        self.states = {"position_state": "FLAT"}
+
+    def state_get(self, key, default=None):
+        return self.states.get(key, default)
+
+    def state_set(self, key, value):
+        self.states[key] = str(value)
 
     def save_execution_intent(self, intent, status, reason):
         self.saved_statuses.append(status)
@@ -134,3 +141,22 @@ def test_timeout_with_ambiguous_persistence_failure_reports_mandatory_reconcilia
 
     submit.assert_called_once()
     assert db.saved_statuses == ["PENDING", "AMBIGUOUS"]
+
+
+def test_post_submit_persistence_failure_locks_subsequent_execution_until_reconciliation():
+    db = FailingIntentDB({"SUBMITTED"})
+    submit = Mock(return_value={"status": "NEW", "executedQty": "0", "orderId": 789})
+    barrier = ExecutionBarrier(ContextCache(), db)
+
+    first = barrier.execute(campaign_intent(), submit)
+
+    assert first.accepted is False
+    assert db.state_get("position_state") == "RECONCILE_REQUIRED"
+    submit.assert_called_once()
+
+    second_submit = Mock(return_value={"status": "NEW", "executedQty": "0", "orderId": 790})
+    second = barrier.execute(campaign_intent(), second_submit)
+
+    assert second.accepted is False
+    assert second.reason == "RECONCILE_REQUIRED"
+    second_submit.assert_not_called()
