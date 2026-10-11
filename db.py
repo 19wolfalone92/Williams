@@ -1,5 +1,6 @@
 import os
 import json, sqlite3, math
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from datetime import datetime, timezone
 from contextlib import contextmanager
@@ -10,7 +11,7 @@ _FILL_CONFLICT = object()
 
 
 class Database:
-    SCHEMA_VERSION = 8
+    SCHEMA_VERSION = 9
 
     def __init__(self, path=None):
         path = path or os.getenv('WILLIAMS_DB_PATH') or 'data/trader.sqlite3'
@@ -245,6 +246,29 @@ class Database:
             commission_asset TEXT,
             raw_json TEXT
         );
+        -- Canonical exchange execution evidence. Decimal fields are text;
+        -- campaign_fills is a legacy/reporting projection only.
+        CREATE TABLE IF NOT EXISTS exchange_fill_ledger(
+            exchange TEXT NOT NULL,
+            account_id TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            trade_id TEXT NOT NULL,
+            order_id TEXT NOT NULL,
+            intent_id TEXT NOT NULL DEFAULT '',
+            campaign_id TEXT NOT NULL DEFAULT '',
+            side TEXT NOT NULL,
+            quantity_decimal TEXT NOT NULL,
+            price_decimal TEXT NOT NULL,
+            quote_quantity_decimal TEXT NOT NULL,
+            commission_decimal TEXT NOT NULL,
+            commission_asset TEXT NOT NULL,
+            effect_state TEXT NOT NULL DEFAULT 'PENDING',
+            raw_json TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY(exchange,account_id,symbol,trade_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_exchange_fill_effect_state
+            ON exchange_fill_ledger(effect_state);
         CREATE TABLE IF NOT EXISTS campaign_events(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             campaign_id TEXT NOT NULL,
@@ -1135,8 +1159,39 @@ class Database:
         if not self._transaction_active:
             self.conn.commit()
 
+    @staticmethod
+    def _canonical_decimal(value, field, *, positive=False, nonnegative=False):
+        """Validate an exchange decimal without accepting a binary float."""
+        if isinstance(value, (float, bool)) or value is None:
+            raise ValueError(f"exchange_fill_{field}_invalid")
+        text = str(value).strip()
+        if not text:
+            raise ValueError(f"exchange_fill_{field}_invalid")
+        try:
+            number = Decimal(text)
+        except (InvalidOperation, ValueError, TypeError):
+            raise ValueError(f"exchange_fill_{field}_invalid") from None
+        if not number.is_finite():
+            raise ValueError(f"exchange_fill_{field}_invalid")
+        if positive and number <= 0:
+            raise ValueError(f"exchange_fill_{field}_invalid")
+        if nonnegative and number < 0:
+            raise ValueError(f"exchange_fill_{field}_invalid")
+        canonical = format(number, "f")
+        if "." in canonical:
+            canonical = canonical.rstrip("0").rstrip(".")
+        if canonical in ("", "-0"):
+            canonical = "0"
+        return number, canonical
+
     def save_campaign_fill(self, fill, _defer_conflict=False):
-        """Idempotently persist one exchange fill; conflicting duplicates fail closed."""
+        """Persist exact exchange evidence and a compatibility projection atomically.
+
+        exchange_fill_ledger is the canonical decimal-string evidence. Each
+        inserted row remains PENDING until a separately proven financial-effect
+        applier commits dependent position/campaign/risk changes. A ledger row
+        alone never proves that its financial effect has been applied.
+        """
         data = redact_value(fill if isinstance(fill, dict) else dict(fill))
         trade_id = data.get("trade_id", data.get("tradeId"))
         symbol = str(data.get("symbol", "")).upper().strip()
@@ -1145,61 +1200,70 @@ class Database:
         if not trade_id or not symbol or not exchange or not account_id:
             raise ValueError("exchange_fill_identity_required")
         identity = (exchange, account_id, symbol, str(trade_id))
-        # Missing commission is unknown, not a zero-fee execution. Require the
-        # explicit exchange field even when its value is genuinely zero.
-        commission_key = "commission" if "commission" in data else "fee_amount" if "fee_amount" in data else None
-        if commission_key is None or data.get(commission_key) is None or str(data.get(commission_key)).strip() == "":
+
+        commission_key = (
+            "commission" if "commission" in data
+            else "fee_amount" if "fee_amount" in data else None
+        )
+        if (
+            commission_key is None or data.get(commission_key) is None
+            or str(data.get(commission_key)).strip() == ""
+        ):
             raise ValueError("exchange_fill_commission_unknown")
         commission_asset = data.get("commission_asset", data.get("commissionAsset"))
         if commission_asset is None or not str(commission_asset).strip():
             raise ValueError("exchange_fill_commission_asset_unknown")
-        try:
-            quantity = float(data.get("quantity", data.get("qty")))
-            price = float(data.get("price"))
-            quote_quantity = float(data.get("quote_quantity", data.get("quoteQty")))
-            commission = float(data[commission_key])
-        except (TypeError, ValueError, OverflowError):
-            raise ValueError("exchange_fill_financial_fields_invalid") from None
-        if (not all(math.isfinite(v) for v in (quantity, price, quote_quantity, commission))
-                or quantity <= 0 or price <= 0 or quote_quantity <= 0 or commission < 0):
-            raise ValueError("exchange_fill_financial_fields_invalid")
-        values = (
-            str(data.get("campaign_id", "")), str(data.get("order_id", data.get("orderId", ""))),
-            str(data.get("side", "")).upper(), quantity, price, quote_quantity,
-            commission, str(commission_asset).upper().strip(),
+
+        quantity_dec, quantity_text = self._canonical_decimal(
+            data.get("quantity", data.get("qty")), "quantity", positive=True
         )
+        price_dec, price_text = self._canonical_decimal(
+            data.get("price"), "price", positive=True
+        )
+        quote_dec, quote_text = self._canonical_decimal(
+            data.get("quote_quantity", data.get("quoteQty")),
+            "quote_quantity", positive=True,
+        )
+        commission_dec, commission_text = self._canonical_decimal(
+            data[commission_key], "commission", nonnegative=True
+        )
+        order_id = str(data.get("order_id", data.get("orderId", ""))).strip()
+        side = str(data.get("side", "")).upper().strip()
+        if not order_id or side not in {"BUY", "SELL"}:
+            raise ValueError("exchange_fill_order_identity_required")
+        commission_asset = str(commission_asset).upper().strip()
+        campaign_id = str(data.get("campaign_id", ""))
+        intent_id = str(data.get("intent_id", ""))
         payload = json.dumps(data, default=str, sort_keys=True)
+
         if not self._transaction_active:
-            # Commit the durable recovery block/event before surfacing a
-            # conflicting trade ID to the caller. Raising inside the SQLite
-            # transaction would roll back the very block meant to protect it.
             with self.transaction():
                 result = self.save_campaign_fill(data, _defer_conflict=True)
             if result is _FILL_CONFLICT:
                 raise RuntimeError("conflicting_duplicate_trade_id")
             return result
+
         prior = self.conn.execute(
-            """SELECT campaign_id,order_id,side,quantity,price,quote_quantity,
-                      commission_asset,commission_amount,raw_json
-               FROM campaign_fills
+            """SELECT campaign_id,order_id,side,quantity_decimal,price_decimal,
+                      quote_quantity_decimal,commission_asset,commission_decimal,intent_id
+               FROM exchange_fill_ledger
                WHERE exchange=? AND account_id=? AND symbol=? AND trade_id=?""",
             identity,
         ).fetchone()
         if prior:
             expected = (
-                values[0], values[1], values[2], values[3], values[4], values[5],
-                values[7], float(data[commission_key]),
+                campaign_id, order_id, side, quantity_text, price_text,
+                quote_text, commission_asset, commission_text, intent_id,
             )
-            actual = (
-                prior["campaign_id"], prior["order_id"], prior["side"],
-                prior["quantity"], prior["price"], prior["quote_quantity"],
-                prior["commission_asset"], prior["commission_amount"],
-            )
+            actual = tuple(prior[k] for k in (
+                "campaign_id", "order_id", "side", "quantity_decimal",
+                "price_decimal", "quote_quantity_decimal", "commission_asset",
+                "commission_decimal", "intent_id",
+            ))
             if actual != expected:
                 self.state_set("recovery_status", "RECOVERY_REQUIRED")
                 self.save_execution_event(
-                    str(data.get("intent_id", "fill-ledger")),
-                    "CONFLICTING_DUPLICATE_TRADE_ID",
+                    intent_id or "fill-ledger", "CONFLICTING_DUPLICATE_TRADE_ID",
                     {"exchange": exchange, "account_id": account_id,
                      "symbol": symbol, "trade_id": str(trade_id)},
                 )
@@ -1207,6 +1271,37 @@ class Database:
                     return _FILL_CONFLICT
                 raise RuntimeError("conflicting_duplicate_trade_id")
             return False
+
+        # Existing REAL-only rows cannot be promoted to canonical evidence
+        # without explicit reconciliation. Preserve them and fail closed.
+        legacy = self.conn.execute(
+            """SELECT id FROM campaign_fills
+               WHERE exchange=? AND account_id=? AND symbol=? AND trade_id=? LIMIT 1""",
+            identity,
+        ).fetchone()
+        if legacy:
+            self.state_set("recovery_status", "RECOVERY_REQUIRED")
+            self.save_execution_event(
+                intent_id or "fill-ledger", "LEGACY_FILL_REQUIRES_DECIMAL_RECONCILIATION",
+                {"exchange": exchange, "account_id": account_id,
+                 "symbol": symbol, "trade_id": str(trade_id)},
+            )
+            raise RuntimeError("legacy_fill_missing_canonical_ledger")
+
+        self.conn.execute(
+            """INSERT INTO exchange_fill_ledger(
+                exchange,account_id,symbol,trade_id,order_id,intent_id,campaign_id,
+                side,quantity_decimal,price_decimal,quote_quantity_decimal,
+                commission_decimal,commission_asset,effect_state,raw_json
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'PENDING',?)""",
+            (
+                exchange, account_id, symbol, str(trade_id), order_id, intent_id,
+                campaign_id, side, quantity_text, price_text, quote_text,
+                commission_text, commission_asset, payload,
+            ),
+        )
+        # Compatibility/reporting projection only. If this insert fails, the
+        # enclosing transaction rolls back the canonical ledger insert too.
         self.conn.execute(
             """INSERT INTO campaign_fills(
                 campaign_id,order_id,symbol,side,quantity,price,quote_quantity,
@@ -1214,10 +1309,11 @@ class Database:
                 exchange,account_id,trade_id,commission_amount,financial_state
             ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
-                values[0], values[1], symbol, values[2], values[3], values[4], values[5],
+                campaign_id, order_id, symbol, side,
+                float(quantity_dec), float(price_dec), float(quote_dec),
                 float(data.get("fee_quote", 0) or 0),
-                float(data.get("commission_base", 0) or 0), values[7], payload,
-                exchange, account_id, str(trade_id), values[6], "COMPLETE",
+                float(data.get("commission_base", 0) or 0), commission_asset, payload,
+                exchange, account_id, str(trade_id), float(commission_dec), "PENDING_EFFECT",
             ),
         )
         return True
