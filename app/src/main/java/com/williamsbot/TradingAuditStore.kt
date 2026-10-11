@@ -13,7 +13,7 @@ import org.json.JSONObject
  * Binance told the bot, without relying on RAM or SharedPreferences.
  */
 class TradingAuditStore(context: Context) :
-    SQLiteOpenHelper(context, "williams_trading_audit.db", null, 3) {
+    SQLiteOpenHelper(context, "williams_trading_audit.db", null, 4) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("""
@@ -98,6 +98,13 @@ class TradingAuditStore(context: Context) :
         """.trimIndent())
 
         db.execSQL("""
+            CREATE TABLE signal_claims(
+                signal_id TEXT PRIMARY KEY,
+                canonical_payload TEXT NOT NULL,
+                claimed_at INTEGER NOT NULL
+            )
+        """.trimIndent())
+        db.execSQL("""
             CREATE TABLE state_transitions(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 from_state TEXT NOT NULL,
@@ -177,6 +184,66 @@ class TradingAuditStore(context: Context) :
         """.trimIndent())
     }
 
+    /**
+     * Durable one-time signal claim. Returns CLAIMED, DUPLICATE or CONFLICT.
+     * A caller must invoke this before any entry/add-on network mutation.
+     * SQLite errors, commit failures and post-commit read-back failures throw.
+     */
+    @Synchronized
+    fun claimSignalOnce(signalId: String, canonicalPayload: String): String {
+        require(signalId.isNotBlank()) { "signal_id is required" }
+        require(canonicalPayload.isNotBlank()) { "canonical signal payload is required" }
+        val db = writableDatabase
+        var inserted = false
+        var stored: String? = null
+        db.beginTransaction()
+        try {
+            val values = ContentValues().apply {
+                put("signal_id", signalId)
+                put("canonical_payload", canonicalPayload)
+                put("claimed_at", System.currentTimeMillis())
+            }
+            inserted = db.insertWithOnConflict(
+                "signal_claims",
+                null,
+                values,
+                SQLiteDatabase.CONFLICT_IGNORE
+            ) != -1L
+            db.rawQuery(
+                "SELECT canonical_payload FROM signal_claims WHERE signal_id=?",
+                arrayOf(signalId)
+            ).use { cursor ->
+                if (!cursor.moveToFirst()) error("signal claim read-before-commit returned no row")
+                stored = cursor.getString(0)
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+
+        // Explicit post-commit read-back: failure must stop the caller even if
+        // the durable claim may already exist.
+        var verified: String? = null
+        readableDatabase.rawQuery(
+            "SELECT canonical_payload FROM signal_claims WHERE signal_id=?",
+            arrayOf(signalId)
+        ).use { cursor ->
+            if (!cursor.moveToFirst()) error("signal claim post-commit read-back returned no row")
+            verified = cursor.getString(0)
+        }
+        if (verified != stored) error("signal claim post-commit read-back mismatch")
+        if (inserted) return "CLAIMED"
+        return if (stored == canonicalPayload) "DUPLICATE" else "CONFLICT"
+    }
+        if (oldVersion < 4) {
+            db.execSQL("""
+                CREATE TABLE IF NOT EXISTS signal_claims(
+                    signal_id TEXT PRIMARY KEY,
+                    canonical_payload TEXT NOT NULL,
+                    claimed_at INTEGER NOT NULL
+                )
+            """.trimIndent())
+        }
     @Synchronized
     fun recordRestCall(
         method: String,
