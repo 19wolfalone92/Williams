@@ -66,3 +66,19 @@ PR #51 remains open and Draft, with head `2518a69f96a41f74a18445017c666855b420b4
 No new source evidence closes P1-1: conservative ambiguity classification and reconciliation-required state are present, but durable recovery of both old and replacement order legs remains unproven. No new source evidence closes P1-2: full interprocedural caller reachability for OCO, cancel-all, aliases, callbacks and dynamic dispatch remains incomplete. The Android jobs were still in progress at the last observation.
 
 **Disposition unchanged: BLOCKED — PYTHON PRODUCTION PATH INVENTORY INCOMPLETE. Do not merge PR #51.**
+
+
+## TASK 000.4 revalidation — 2026-10-11
+
+Required immutable source SHA remains `f6dd193f9147ba49ff7f11efc81b18e10c1e2c44`. The Git tree contains 123 Python files; path/blob hashes are listed in `TASK_000_4_PYTHON_FILE_INVENTORY.csv`. The inventory does not imply all files were semantically reviewed; the companion report records the targeted subset and the remaining scope gap.
+
+### P1-1 remains OPEN — cancelReplace two-leg recovery
+`replace_structural_stop` persists a regular intent for the replacement order, while the old order ID is passed to the cancelReplace closure. The source does not demonstrate a dedicated durable two-leg operation record with independent recovery of the original and replacement orders and both legs' fills after timeout, partial response, crash, or persistence failure. The low-level client avoids blind mutation retries and HTTP 409 is marked ambiguous, but that is not sufficient proof of restart recovery. No fix or new fault-injection test is claimed.
+
+### P1-2 remains OPEN — complete execution-barrier coverage
+Canonical campaign paths use `_submit` and `ExecutionBarrier.execute`; existing tests block selected legacy routes and the static registry rejects representative raw/dynamic transport examples. The bounded AST gate is not a whole-program interprocedural proof. All 123 Python files have not been reviewed line by line; aliases, callback references, dynamic dispatch, OCO routes, and `cancel_open_orders` reachability remain incompletely established.
+
+### Evidence status
+No local tests were run, and no isolated test run on exact SHA `f6dd193f9147ba49ff7f11efc81b18e10c1e2c44` was verified. Earlier successful CI logs refer to PR merge checkouts and cannot satisfy the exact-source criterion. See `TASK_000_4_EXECUTION_SAFETY_AUDIT.md` and `TASK_000_4_PYTHON_FILE_INVENTORY.csv`.
+
+**Disposition: BLOCKED — DO NOT MERGE PR #51.**
