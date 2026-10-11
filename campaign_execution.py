@@ -110,6 +110,44 @@ class CampaignExecutionService:
             raise CampaignExecutionError(
                 "add-on recovery requires atomic protective-stop resize; entry remains blocked"
             )
+        order_status = str(order.get("status", "")).upper()
+        if order_status == "PARTIALLY_FILLED" and str(intent.get("order_type", "")).upper() != "CANCEL":
+            if order.get("orderId") is None:
+                raise CampaignExecutionError("partial order cannot be canceled without authoritative orderId")
+            self._execute_cancel(
+                campaign,
+                int(order["orderId"]),
+                "CAMPAIGN_ENTRY_CANCEL",
+            )
+            canceled = self.client.get_order(campaign.symbol, order_id=order["orderId"])
+            canceled_status = str(canceled.get("status", "")).upper()
+            if canceled_status not in {"CANCELED", "EXPIRED", "FILLED", "REJECTED"}:
+                raise CampaignExecutionError(
+                    f"partial entry remains non-terminal after cancel: {canceled_status}"
+                )
+            trade_reader = getattr(self.client, "my_trades", None)
+            if not callable(trade_reader):
+                raise CampaignExecutionError("cannot prove cancel/fill race without signed myTrades")
+            fresh_trades = trade_reader(campaign.symbol, order_id=order["orderId"], limit=1000)
+            if not isinstance(fresh_trades, list) or len(fresh_trades) >= 1000:
+                raise CampaignExecutionError("post-cancel trade history is incomplete")
+            exchange_qty = sum(
+                (Decimal(str(x.get("qty", "0") or "0")) for x in fresh_trades),
+                Decimal("0"),
+            )
+            reported_qty = Decimal(str(canceled.get("executedQty", "0") or "0"))
+            if abs(exchange_qty - reported_qty) > Decimal("0.000000000001"):
+                raise CampaignExecutionError(
+                    "cancel/fill race remains ambiguous: post-cancel myTrades does not match executedQty"
+                )
+            initial_qty = sum(
+                (Decimal(str(x.get("qty", "0") or "0")) for x in trades),
+                Decimal("0"),
+            )
+            if exchange_qty != initial_qty:
+                raise CampaignExecutionError(
+                    "a fill arrived during cancellation; rerun reconciliation before protecting/unlocking"
+                )
         stop_price = float(
             campaign.current_stop_price
             or campaign.initial_stop_price
