@@ -544,6 +544,26 @@ def test_partial_manual_sell_keeps_residual_position_protected(tmp_path: Path):
                 self.manual_order or {},
             ]
 
+        def my_trades(self, symbol, order_id=None, limit=1000):
+            # Explicit offline exchange trade history for both sides of the
+            # partial exit; order status/aggregate totals alone are not fills.
+            order_id = str(order_id)
+            if order_id == "manual-1":
+                return [{
+                    "id": "manual-trade-1", "orderId": "manual-1",
+                    "symbol": symbol, "price": "100", "qty": "0.6",
+                    "quoteQty": "60", "commission": "0",
+                    "commissionAsset": "USDT",
+                }]
+            if order_id == "buy-1":
+                return [{
+                    "id": "entry-trade-1", "orderId": "buy-1",
+                    "symbol": symbol, "price": "100", "qty": "1.0",
+                    "quoteQty": "100", "commission": "0",
+                    "commissionAsset": "USDT",
+                }]
+            return []
+
         def book_ticker(self, symbol=None):
             return {"symbol": symbol or "BTCUSDT", "bidPrice": "100", "askPrice": "100"}
 
