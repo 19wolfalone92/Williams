@@ -158,12 +158,15 @@ class CampaignExecutionService:
                 raise CampaignExecutionError(
                     "a fill arrived during cancellation; rerun reconciliation before protecting/unlocking"
                 )
-        stop_price = float(
+        raw_stop_price = float(
             campaign.current_stop_price
             or campaign.initial_stop_price
             or campaign.tags.get("initial_stop_price", 0.0)
             or 0.0
         )
+        # Compare the exchange's tick-rounded stop with the same normalized target
+        # we would actually submit, not with an unrounded structural float.
+        stop_price = self._normalize_price(campaign.symbol, raw_stop_price)
         if stop_price <= 0:
             raise CampaignExecutionError("recovered campaign lacks a valid structural stop")
         position_qty = float(campaign.position_qty)
@@ -1199,9 +1202,10 @@ class CampaignExecutionService:
                     protective_status = str(protective.get("status", "")).upper()
                     protective_qty = Decimal(str(protective.get("origQty", "0") or "0"))
                     campaign_qty = Decimal(str(campaign.position_qty))
-                    stop_price = Decimal(str(
+                    raw_stop_price = float(
                         campaign.current_stop_price or campaign.initial_stop_price or 0
-                    ))
+                    )
+                    stop_price = Decimal(str(self._normalize_price(symbol, raw_stop_price)))
                     exchange_stop = Decimal(str(protective.get("stopPrice", "0") or "0"))
                     if (
                         protective_status != "NEW"
