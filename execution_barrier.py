@@ -123,7 +123,9 @@ class ExecutionBarrier:
         if getattr(service, "client", None) is not self.exchange_client:
             return "preflight_execution_client_mismatch"
         try:
-            # Invoke the class implementation directly so an instance-level\n            # method replacement cannot forge an execution-ready report.\n            report = PreflightCheckService.verify_all(service)
+            # Invoke the class implementation directly so an instance-level
+            # method replacement cannot forge an execution-ready report.
+            report = PreflightCheckService.verify_all(service)
         except Exception as exc:
             return f"preflight_exception:{type(exc).__name__}"
         if not isinstance(report, Mapping):
