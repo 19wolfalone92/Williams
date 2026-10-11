@@ -492,16 +492,25 @@ class Database:
                     if not allowed_scoped_protection:
                         return {"claimed": False, "reason": "EXECUTION_LOCKED", "existing": lock_payload or lock["value"]}
             unresolved_rows = self.conn.execute(
-                """SELECT intent_id,status FROM execution_intents
+                """SELECT intent_id,status,purpose FROM execution_intents
                    WHERE execution_scope=? AND account_scope=?
                      AND status IN ('PENDING','SUBMITTING','SUBMITTED','UNKNOWN','AMBIGUOUS','RECONCILE_REQUIRED','PROTECTION_PENDING')
                    ORDER BY created_at,intent_id""",
                 (scope, account_scope),
             ).fetchall()
             if unresolved_rows:
+                repair_purposes = {"CAMPAIGN_PROTECTION", "CAMPAIGN_ENTRY_CANCEL"}
+                repair_inflight_statuses = {"PENDING", "SUBMITTING", "SUBMITTED"}
                 protection_repair_only = (
-                    purpose in {"CAMPAIGN_PROTECTION", "CAMPAIGN_ENTRY_CANCEL"}
-                    and all(str(row["status"]).upper() == "PROTECTION_PENDING" for row in unresolved_rows)
+                    purpose in repair_purposes
+                    and all(
+                        str(row["status"]).upper() == "PROTECTION_PENDING"
+                        or (
+                            str(row["purpose"]).upper() in repair_purposes
+                            and str(row["status"]).upper() in repair_inflight_statuses
+                        )
+                        for row in unresolved_rows
+                    )
                 )
                 if not protection_repair_only:
                     return {"claimed": False, "reason": "UNRESOLVED_INTENT", "existing": dict(unresolved_rows[0])}
@@ -580,7 +589,7 @@ class Database:
             if legacy_unresolved:
                 return {"ready": False, "reason": "LEGACY_SCOPE_REQUIRES_MANUAL_RECONCILIATION", "detail": dict(legacy_unresolved)}
             unresolved_rows = self.conn.execute(
-                """SELECT intent_id,status,symbol,client_order_id,order_id
+                """SELECT intent_id,status,purpose,symbol,client_order_id,order_id
                    FROM execution_intents
                    WHERE execution_scope=? AND account_scope=?
                      AND status IN ('PENDING','SUBMITTING','SUBMITTED','UNKNOWN','AMBIGUOUS','RECONCILE_REQUIRED','PROTECTION_PENDING')
@@ -588,9 +597,18 @@ class Database:
                 (scope, account_scope),
             ).fetchall()
             if unresolved_rows:
+                repair_purposes = {"CAMPAIGN_PROTECTION", "CAMPAIGN_ENTRY_CANCEL"}
+                repair_inflight_statuses = {"PENDING", "SUBMITTING", "SUBMITTED"}
                 protection_repair_only = (
-                    purpose in {"CAMPAIGN_PROTECTION", "CAMPAIGN_ENTRY_CANCEL"}
-                    and all(str(row["status"]).upper() == "PROTECTION_PENDING" for row in unresolved_rows)
+                    purpose in repair_purposes
+                    and all(
+                        str(row["status"]).upper() == "PROTECTION_PENDING"
+                        or (
+                            str(row["purpose"]).upper() in repair_purposes
+                            and str(row["status"]).upper() in repair_inflight_statuses
+                        )
+                        for row in unresolved_rows
+                    )
                 )
                 if not protection_repair_only:
                     return {"ready": False, "reason": "UNRESOLVED_INTENT", "detail": dict(unresolved_rows[0])}
