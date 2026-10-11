@@ -11,6 +11,10 @@ on:
       - 'gradle/**'
       - 'settings.gradle.kts'
       - '.github/workflows/**'
+      - '*.py'
+      - 'test_*.py'
+      - 'docs/**'
+      - 'requirements.txt'
   pull_request:
     paths:
       - 'app/**'
@@ -19,6 +23,10 @@ on:
       - 'gradle/**'
       - 'settings.gradle.kts'
       - '.github/workflows/**'
+      - '*.py'
+      - 'test_*.py'
+      - 'docs/**'
+      - 'requirements.txt'
   workflow_dispatch:
 
 permissions:
