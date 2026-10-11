@@ -272,6 +272,28 @@ class Database:
             commission_asset TEXT,
             raw_json TEXT
         );
+        CREATE TABLE IF NOT EXISTS financial_effect_journal(
+            effect_id TEXT PRIMARY KEY,
+            exchange_name TEXT NOT NULL,
+            environment TEXT NOT NULL,
+            account_scope TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            exchange_fill_id TEXT NOT NULL,
+            quantity_decimal TEXT NOT NULL,
+            price_decimal TEXT NOT NULL,
+            quote_quantity_decimal TEXT NOT NULL,
+            commission_decimal TEXT,
+            commission_asset TEXT,
+            commission_status TEXT NOT NULL,
+            projection_status TEXT NOT NULL,
+            canonical_payload_json TEXT NOT NULL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            applied_at TEXT,
+            last_error TEXT,
+            UNIQUE(exchange_name, environment, account_scope, symbol, exchange_fill_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_financial_effect_status
+            ON financial_effect_journal(projection_status, commission_status);
         CREATE TABLE IF NOT EXISTS campaign_events(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             campaign_id TEXT NOT NULL,
@@ -1502,6 +1524,105 @@ class Database:
         )
         if not self._transaction_active:
             self.conn.commit()
+
+    @staticmethod
+    def _canonical_decimal(value, field_name):
+        """Serialize a required financial value without binary-float arithmetic."""
+        from decimal import Decimal, InvalidOperation
+
+        if value is None or isinstance(value, bool):
+            raise ValueError(f"{field_name} is required")
+        try:
+            number = Decimal(str(value))
+        except (InvalidOperation, ValueError, TypeError) as exc:
+            raise ValueError(f"{field_name} is not a valid decimal") from exc
+        if not number.is_finite():
+            raise ValueError(f"{field_name} must be finite")
+        return format(number, "f")
+
+    def apply_financial_fill_effect(self, fill, projection_writer):
+        """Atomically deduplicate a fill and apply same-database projections once.
+
+        projection_writer(db, normalized_fill) MUST only write through this
+        Database connection. External calls and writes to other databases are
+        forbidden inside the callback. Unknown commission is durably journaled
+        but deliberately blocks projection application until reconciled.
+        """
+        from decimal import Decimal
+        import hashlib
+
+        data = dict(fill)
+        exchange = str(data.get("exchange", "BINANCE")).strip().upper()
+        environment = str(data.get("environment", "")).strip().upper()
+        account_scope = str(data.get("account_scope", "")).strip()
+        symbol = str(data.get("symbol", "")).strip().upper()
+        fill_id = str(data.get("exchange_fill_id", "")).strip()
+        if not all((exchange, environment, account_scope, symbol, fill_id)):
+            raise ValueError("exchange, environment, account_scope, symbol and exchange_fill_id are required")
+        quantity = self._canonical_decimal(data.get("quantity"), "quantity")
+        price = self._canonical_decimal(data.get("price"), "price")
+        quote_quantity = self._canonical_decimal(data.get("quote_quantity"), "quote_quantity")
+        commission_raw = data.get("commission")
+        commission_asset = str(data.get("commission_asset") or "").strip().upper()
+        commission_known = commission_raw is not None and bool(commission_asset)
+        commission = self._canonical_decimal(commission_raw, "commission") if commission_known else None
+        commission_status = "KNOWN" if commission_known else "UNKNOWN"
+        normalized = {
+            "exchange": exchange, "environment": environment,
+            "account_scope": account_scope, "symbol": symbol,
+            "exchange_fill_id": fill_id, "quantity": quantity,
+            "price": price, "quote_quantity": quote_quantity,
+            "commission": commission, "commission_asset": commission_asset or None,
+            "commission_status": commission_status,
+        }
+        canonical = json.dumps(normalized, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        effect_id = hashlib.sha256(
+            "\x1f".join((exchange, environment, account_scope, symbol, fill_id)).encode("utf-8")
+        ).hexdigest()
+        with self.transaction():
+            self.conn.execute(
+                """INSERT OR IGNORE INTO financial_effect_journal(
+                    effect_id,exchange_name,environment,account_scope,symbol,exchange_fill_id,
+                    quantity_decimal,price_decimal,quote_quantity_decimal,commission_decimal,
+                    commission_asset,commission_status,projection_status,canonical_payload_json
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (effect_id, exchange, environment, account_scope, symbol, fill_id,
+                 quantity, price, quote_quantity, commission, commission_asset or None,
+                 commission_status, "PENDING_FEE" if not commission_known else "PENDING",
+                 canonical),
+            )
+            row = self.conn.execute(
+                "SELECT * FROM financial_effect_journal WHERE effect_id=?", (effect_id,)
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("financial effect journal read-back failed")
+            if row["canonical_payload_json"] != canonical:
+                raise RuntimeError("fill identity collision: immutable fill payload differs")
+            if row["projection_status"] == "APPLIED":
+                return {"effect_id": effect_id, "status": "APPLIED", "duplicate": True}
+            if row["commission_status"] != "KNOWN":
+                return {"effect_id": effect_id, "status": "PENDING_FEE", "duplicate": row["created_at"] is not None}
+            # Same SQLite transaction: projection writes and APPLIED marker commit together.
+            projection_writer(self, normalized)
+            self.conn.execute(
+                """UPDATE financial_effect_journal
+                   SET projection_status='APPLIED', applied_at=CURRENT_TIMESTAMP, last_error=NULL
+                   WHERE effect_id=? AND projection_status='PENDING'""",
+                (effect_id,),
+            )
+            check = self.conn.execute(
+                "SELECT projection_status FROM financial_effect_journal WHERE effect_id=?",
+                (effect_id,),
+            ).fetchone()
+            if check is None or check["projection_status"] != "APPLIED":
+                raise RuntimeError("financial effect application did not persist")
+            return {"effect_id": effect_id, "status": "APPLIED", "duplicate": False}
+
+    def financial_effect(self, effect_id):
+        row = self.conn.execute(
+            "SELECT * FROM financial_effect_journal WHERE effect_id=?", (str(effect_id),)
+        ).fetchone()
+        return dict(row) if row else None
 
     def save_campaign_fill(self, fill):
         data=fill if isinstance(fill,dict) else dict(fill)
