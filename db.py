@@ -1,12 +1,13 @@
 import os
 import json, sqlite3
+import threading
 from pathlib import Path
 from datetime import datetime, timezone
 from contextlib import contextmanager
 
 
 class Database:
-    SCHEMA_VERSION = 6
+    SCHEMA_VERSION = 7
 
     def __init__(self, path=None):
         path = path or os.getenv('WILLIAMS_DB_PATH') or 'data/trader.sqlite3'
@@ -15,27 +16,45 @@ class Database:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute('PRAGMA busy_timeout=20000')
         self.conn.execute('PRAGMA journal_mode=WAL')
-        self.conn.execute('PRAGMA synchronous=NORMAL')
+        # FULL synchronous durability is important for the write-ahead execution intent.
+        self.conn.execute('PRAGMA synchronous=FULL')
+        self._db_lock = threading.RLock()
         self._transaction_active = False
+        self._transaction_owner = None
         self.init()
+
+    def _commit_durable(self):
+        """Single injectable commit boundary for safety-critical writes."""
+        self.conn.commit()
 
     @contextmanager
     def transaction(self):
-        """Atomic transaction for multi-step DB operations."""
-        if self._transaction_active:
-            yield self
-            return
+        """Atomic transaction; serialize callers sharing this SQLite connection."""
+        with self._db_lock:
+            owner = threading.get_ident()
+            if self._transaction_active:
+                if self._transaction_owner != owner:
+                    # The RLock should make this unreachable; fail closed if the
+                    # transaction-owner invariant is ever broken.
+                    raise RuntimeError("SQLite transaction owned by another thread")
+                yield self
+                return
 
-        self._transaction_active = True
-        try:
-            self.conn.execute('BEGIN')
-            yield self
-            self.conn.commit()
-        except Exception:
-            self.conn.rollback()
-            raise
-        finally:
-            self._transaction_active = False
+            self._transaction_active = True
+            self._transaction_owner = owner
+            try:
+                self.conn.execute('BEGIN IMMEDIATE')
+                yield self
+                self._commit_durable()
+            except Exception:
+                try:
+                    self.conn.rollback()
+                except Exception:
+                    pass
+                raise
+            finally:
+                self._transaction_active = False
+                self._transaction_owner = None
 
     def init(self):
         self.conn.executescript('''
@@ -133,7 +152,28 @@ class Database:
             invalidation_level REAL,
             status TEXT NOT NULL,
             reason TEXT,
-            client_order_id TEXT
+            client_order_id TEXT,
+            campaign_id TEXT,
+            signal_id TEXT,
+            risk_quote REAL DEFAULT 0,
+            capital_reserved_quote REAL DEFAULT 0,
+            quantity TEXT,
+            quote_order_quantity TEXT,
+            created_at_ms INTEGER,
+            max_age_ms INTEGER DEFAULT 15000,
+            signal_type TEXT,
+            operation_kind TEXT DEFAULT 'PLACE',
+            related_order_id TEXT,
+            related_order_list_id TEXT,
+            exchange_status TEXT,
+            resolution_evidence TEXT,
+            resolved_at_ms INTEGER,
+            exchange_order_id TEXT,
+            exchange_order_list_id TEXT,
+            exchange_executed_qty TEXT,
+            exchange_cumulative_quote_qty TEXT,
+            exchange_response_json TEXT,
+            result_recorded_at_ms INTEGER
         );
         CREATE TABLE IF NOT EXISTS execution_events(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -232,6 +272,28 @@ class Database:
             commission_asset TEXT,
             raw_json TEXT
         );
+        CREATE TABLE IF NOT EXISTS financial_effect_journal(
+            effect_id TEXT PRIMARY KEY,
+            exchange_name TEXT NOT NULL,
+            environment TEXT NOT NULL,
+            account_scope TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            exchange_fill_id TEXT NOT NULL,
+            quantity_decimal TEXT NOT NULL,
+            price_decimal TEXT NOT NULL,
+            quote_quantity_decimal TEXT NOT NULL,
+            commission_decimal TEXT,
+            commission_asset TEXT,
+            commission_status TEXT NOT NULL,
+            projection_status TEXT NOT NULL,
+            canonical_payload_json TEXT NOT NULL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            applied_at TEXT,
+            last_error TEXT,
+            UNIQUE(exchange_name, environment, account_scope, symbol, exchange_fill_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_financial_effect_status
+            ON financial_effect_journal(projection_status, commission_status);
         CREATE TABLE IF NOT EXISTS campaign_events(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             campaign_id TEXT NOT NULL,
@@ -261,9 +323,54 @@ class Database:
             ON campaign_events(campaign_id, id);
         ''')
         self._migrate_trade_columns()
+        self._migrate_execution_intent_columns()
+        self.conn.execute(
+            'CREATE INDEX IF NOT EXISTS idx_execution_intents_client_order_id '
+            'ON execution_intents(client_order_id)'
+        )
+        self.conn.execute(
+            'CREATE INDEX IF NOT EXISTS idx_execution_intents_status '
+            'ON execution_intents(status)'
+        )
         self.state_set('schema_version', self.SCHEMA_VERSION)
         self.state_set('position_state', self.state_get('position_state', 'FLAT'))
         self.conn.commit()
+
+    def _migrate_execution_intent_columns(self):
+        columns = {
+            row["name"]
+            for row in self.conn.execute(
+                "PRAGMA table_info(execution_intents)"
+            ).fetchall()
+        }
+        additions = {
+            "campaign_id": "TEXT",
+            "signal_id": "TEXT",
+            "risk_quote": "REAL DEFAULT 0",
+            "capital_reserved_quote": "REAL DEFAULT 0",
+            "quantity": "TEXT",
+            "quote_order_quantity": "TEXT",
+            "created_at_ms": "INTEGER",
+            "max_age_ms": "INTEGER DEFAULT 15000",
+            "signal_type": "TEXT",
+            "operation_kind": "TEXT DEFAULT 'PLACE'",
+            "related_order_id": "TEXT",
+            "related_order_list_id": "TEXT",
+            "exchange_status": "TEXT",
+            "resolution_evidence": "TEXT",
+            "resolved_at_ms": "INTEGER",
+            "exchange_order_id": "TEXT",
+            "exchange_order_list_id": "TEXT",
+            "exchange_executed_qty": "TEXT",
+            "exchange_cumulative_quote_qty": "TEXT",
+            "exchange_response_json": "TEXT",
+            "result_recorded_at_ms": "INTEGER",
+        }
+        for name, sql_type in additions.items():
+            if name not in columns:
+                self.conn.execute(
+                    f"ALTER TABLE execution_intents ADD COLUMN {name} {sql_type}"
+                )
 
     def _migrate_trade_columns(self):
         columns = {
@@ -285,66 +392,514 @@ class Database:
                 )
 
     def state_get(self, key, default=None):
-        r = self.conn.execute(
-            'SELECT value FROM bot_state WHERE key=?',
-            (key,)
-        ).fetchone()
-        return default if r is None else r['value']
+        with self._db_lock:
+            r = self.conn.execute(
+                'SELECT value FROM bot_state WHERE key=?',
+                (key,)
+            ).fetchone()
+            return default if r is None else r['value']
 
     def state_set(self, key, value):
-        self.conn.execute(
-            'INSERT INTO bot_state(key,value) VALUES(?,?) '
-            'ON CONFLICT(key) DO UPDATE SET value=excluded.value',
-            (key, str(value))
-        )
-        if not self._transaction_active:
-            self.conn.commit()
+        with self._db_lock:
+            self.conn.execute(
+                'INSERT INTO bot_state(key,value) VALUES(?,?) '
+                'ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+                (key, str(value))
+            )
+            if not self._transaction_active:
+                self._commit_durable()
 
     def try_claim_state(self, key, value) -> bool:
-        """Atomically create a state key only if it does not already exist.
-
-        Used for durable entry intents: concurrent execution loops/processes
-        may both observe FLAT, but only one can successfully claim the
-        pending-entry key in SQLite.
-        """
-        cur = self.conn.execute(
-            'INSERT OR IGNORE INTO bot_state(key,value) VALUES(?,?)',
-            (str(key), str(value)),
-        )
-        if not self._transaction_active:
-            self.conn.commit()
-        return cur.rowcount == 1
+        """Durably claim a unique bot_state key (cross-thread/process safe)."""
+        with self._db_lock:
+            cur = self.conn.execute(
+                'INSERT OR IGNORE INTO bot_state(key,value) VALUES(?,?)',
+                (str(key), str(value)),
+            )
+            if not self._transaction_active:
+                self._commit_durable()
+            return cur.rowcount == 1
 
     def state_delete(self, key):
-        self.conn.execute(
-            'DELETE FROM bot_state WHERE key=?',
-            (key,)
+        with self._db_lock:
+            self.conn.execute(
+                'DELETE FROM bot_state WHERE key=?',
+                (key,)
+            )
+            if not self._transaction_active:
+                self._commit_durable()
+
+    def release_state_claim(self, key, owner) -> bool:
+        """Delete a claim only when the recorded owner still matches."""
+        with self._db_lock:
+            cur = self.conn.execute(
+                'DELETE FROM bot_state WHERE key=? AND value=?',
+                (str(key), str(owner)),
+            )
+            if not self._transaction_active:
+                self._commit_durable()
+            return cur.rowcount == 1
+
+    def claim_execution_identity(
+        self,
+        intent_id,
+        client_order_id,
+        logical_key="",
+    ) -> bool:
+        """Atomically claim exchange and logical-signal identities before mutation."""
+        keys = []
+        cid = str(client_order_id or "").strip()
+        logical = str(logical_key or "").strip()
+        if cid:
+            keys.append(f"execution_client_order_id:{cid}")
+        if logical:
+            keys.append(f"execution_logical_order:{logical}")
+        if not keys:
+            return False
+
+        with self._db_lock:
+            if self._transaction_active:
+                raise RuntimeError(
+                    "execution identity claims require their own durable transaction"
+                )
+            try:
+                self.conn.execute("BEGIN IMMEDIATE")
+                for key in keys:
+                    cur = self.conn.execute(
+                        "INSERT OR IGNORE INTO bot_state(key,value) VALUES(?,?)",
+                        (key, str(intent_id)),
+                    )
+                    if cur.rowcount != 1:
+                        self.conn.rollback()
+                        return False
+                self._commit_durable()
+                for key in keys:
+                    row = self.conn.execute(
+                        "SELECT value FROM bot_state WHERE key=?", (key,)
+                    ).fetchone()
+                    if row is None or str(row["value"]) != str(intent_id):
+                        raise RuntimeError(
+                            f"execution identity claim read-back failed: {key}"
+                        )
+                return True
+            except Exception:
+                try:
+                    self.conn.rollback()
+                except Exception:
+                    pass
+                raise
+
+    def release_execution_identity(
+        self,
+        intent_id,
+        client_order_id,
+        logical_key="",
+    ) -> None:
+        """Release only pre-submit claims owned by this intent."""
+        cid = str(client_order_id or "").strip()
+        logical = str(logical_key or "").strip()
+        keys = []
+        if cid:
+            keys.append(f"execution_client_order_id:{cid}")
+        if logical:
+            keys.append(f"execution_logical_order:{logical}")
+        with self._db_lock:
+            for key in keys:
+                self.conn.execute(
+                    "DELETE FROM bot_state WHERE key=? AND value=?",
+                    (key, str(intent_id)),
+                )
+            if not self._transaction_active:
+                self._commit_durable()
+
+    @staticmethod
+    def _execution_intent_identity(intent):
+        return (
+            str(intent.symbol).upper(),
+            str(intent.side).upper(),
+            str(intent.order_type).upper(),
+            str(intent.purpose).upper(),
+            json.dumps(dict(intent.required_context_versions), sort_keys=True),
+            str(getattr(intent, "client_order_id", "") or ""),
+            str(getattr(intent, "campaign_id", "") or ""),
+            str(getattr(intent, "signal_id", "") or ""),
+            str(getattr(intent, "signal_type", "") or "").upper(),
+            str(getattr(intent, "operation_kind", "PLACE") or "PLACE").upper(),
+            str(getattr(intent, "related_order_id", "") or ""),
+            str(getattr(intent, "related_order_list_id", "") or ""),
         )
-        if not self._transaction_active:
-            self.conn.commit()
 
     def save_execution_intent(self, intent, status, reason=''):
-        self.conn.execute(
-            '''INSERT OR REPLACE INTO execution_intents(
-                intent_id,symbol,side,order_type,purpose,
-                required_context_versions_json,hypothesis_id,invalidation_level,status,reason,client_order_id
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?)''',
-            (
-                intent.intent_id,
-                intent.symbol,
-                intent.side,
-                intent.order_type,
-                intent.purpose,
-                json.dumps(dict(intent.required_context_versions), sort_keys=True),
-                intent.hypothesis_id,
-                float(intent.invalidation_level or 0.0),
-                status,
-                reason,
-                getattr(intent, 'client_order_id', ''),
-            ),
+        """Write-ahead state update with collision checks, COMMIT, and read-back.
+
+        This method intentionally does not use INSERT OR REPLACE: an identity
+        collision must fail rather than overwrite evidence of a prior request.
+        """
+        identity = self._execution_intent_identity(intent)
+        cid = identity[5]
+        with self._db_lock:
+            if self._transaction_active:
+                raise RuntimeError(
+                    "execution intent must commit in its own durable transaction"
+                )
+            try:
+                self.conn.execute("BEGIN IMMEDIATE")
+                existing = self.conn.execute(
+                    "SELECT * FROM execution_intents WHERE intent_id=?",
+                    (str(intent.intent_id),),
+                ).fetchone()
+                if existing is not None:
+                    actual = (
+                        str(existing["symbol"]).upper(),
+                        str(existing["side"]).upper(),
+                        str(existing["order_type"]).upper(),
+                        str(existing["purpose"]).upper(),
+                        str(existing["required_context_versions_json"]),
+                        str(existing["client_order_id"] or ""),
+                        str(existing["campaign_id"] or ""),
+                        str(existing["signal_id"] or ""),
+                        str(existing["signal_type"] or "").upper(),
+                        str(existing["operation_kind"] or "PLACE").upper(),
+                        str(existing["related_order_id"] or ""),
+                        str(existing["related_order_list_id"] or ""),
+                    )
+                    if actual != identity:
+                        raise sqlite3.IntegrityError(
+                            "execution intent_id collision with different immutable fields"
+                        )
+                    self.conn.execute(
+                        "UPDATE execution_intents SET status=?, reason=? WHERE intent_id=?",
+                        (str(status).upper(), str(reason or ""), str(intent.intent_id)),
+                    )
+                else:
+                    if cid:
+                        prior = self.conn.execute(
+                            "SELECT intent_id,status FROM execution_intents "
+                            "WHERE client_order_id=? LIMIT 1",
+                            (cid,),
+                        ).fetchone()
+                        if prior is not None:
+                            raise sqlite3.IntegrityError(
+                                f"client_order_id already recorded by intent {prior['intent_id']}"
+                            )
+                    self.conn.execute(
+                        """INSERT INTO execution_intents(
+                            intent_id,symbol,side,order_type,purpose,
+                            required_context_versions_json,hypothesis_id,
+                            invalidation_level,status,reason,client_order_id,
+                            campaign_id,signal_id,risk_quote,capital_reserved_quote,
+                            quantity,quote_order_quantity,created_at_ms,max_age_ms,
+                            signal_type,operation_kind,related_order_id,related_order_list_id
+                        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        (
+                            str(intent.intent_id),
+                            identity[0],
+                            identity[1],
+                            identity[2],
+                            identity[3],
+                            identity[4],
+                            str(getattr(intent, "hypothesis_id", "") or ""),
+                            float(getattr(intent, "invalidation_level", 0.0) or 0.0),
+                            str(status).upper(),
+                            str(reason or ""),
+                            cid,
+                            identity[6],
+                            identity[7],
+                            float(getattr(intent, "risk_quote", 0.0) or 0.0),
+                            float(getattr(intent, "capital_reserved_quote", 0.0) or 0.0),
+                            str(getattr(intent, "quantity", "") or ""),
+                            str(getattr(intent, "quote_order_quantity", "") or ""),
+                            int(getattr(intent, "created_at_ms", 0) or 0),
+                            int(getattr(intent, "max_age_ms", 15000) or 15000),
+                            str(getattr(intent, "signal_type", "") or ""),
+                            str(getattr(intent, "operation_kind", "PLACE") or "PLACE").upper(),
+                            str(getattr(intent, "related_order_id", "") or ""),
+                            str(getattr(intent, "related_order_list_id", "") or ""),
+                        ),
+                    )
+                self._commit_durable()
+            except Exception:
+                try:
+                    self.conn.rollback()
+                except Exception:
+                    pass
+                raise
+
+        # Read only after the COMMIT call returned successfully. A failed read
+        # is a failed durability confirmation, even if the row may exist.
+        row = self.load_execution_intent(intent.intent_id)
+        if row is None or self._execution_intent_identity_from_row(row) != identity:
+            raise RuntimeError("execution intent committed but read-back verification failed")
+        if str(row.get("status", "")).upper() != str(status).upper():
+            raise RuntimeError("execution intent status read-back verification failed")
+        return True
+
+    @staticmethod
+    def _execution_intent_identity_from_row(row):
+        return (
+            str(row["symbol"]).upper(),
+            str(row["side"]).upper(),
+            str(row["order_type"]).upper(),
+            str(row["purpose"]).upper(),
+            str(row["required_context_versions_json"]),
+            str(row.get("client_order_id") or ""),
+            str(row.get("campaign_id") or ""),
+            str(row.get("signal_id") or ""),
+            str(row.get("signal_type") or "").upper(),
+            str(row.get("operation_kind") or "PLACE").upper(),
+            str(row.get("related_order_id") or ""),
+            str(row.get("related_order_list_id") or ""),
         )
-        if not self._transaction_active:
-            self.conn.commit()
+
+    def load_execution_intent(self, intent_id):
+        with self._db_lock:
+            row = self.conn.execute(
+                "SELECT * FROM execution_intents WHERE intent_id=?",
+                (str(intent_id),),
+            ).fetchone()
+            return dict(row) if row is not None else None
+
+    def find_execution_intent_by_client_order_id(self, client_order_id, symbol=None):
+        with self._db_lock:
+            if symbol is None:
+                row = self.conn.execute(
+                    "SELECT * FROM execution_intents WHERE client_order_id=? "
+                    "ORDER BY created_at DESC LIMIT 1",
+                    (str(client_order_id),),
+                ).fetchone()
+            else:
+                row = self.conn.execute(
+                    "SELECT * FROM execution_intents WHERE client_order_id=? AND symbol=? "
+                    "ORDER BY created_at DESC LIMIT 1",
+                    (str(client_order_id), str(symbol).upper()),
+                ).fetchone()
+            return dict(row) if row is not None else None
+
+    def unresolved_execution_intents(self):
+        """List order mutations whose exchange outcome must be reconciled."""
+        with self._db_lock:
+            rows = self.conn.execute(
+                "SELECT * FROM execution_intents "
+                "WHERE UPPER(status) IN ('PENDING','SUBMITTING','AMBIGUOUS','RECONCILE_REQUIRED') "
+                "ORDER BY created_at, intent_id"
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def has_unresolved_execution_intents(self):
+        with self._db_lock:
+            row = self.conn.execute(
+                "SELECT 1 FROM execution_intents "
+                "WHERE UPPER(status) IN ('PENDING','SUBMITTING','AMBIGUOUS','RECONCILE_REQUIRED') "
+                "LIMIT 1"
+            ).fetchone()
+            return row is not None
+
+    def has_reconcile_required_state(self):
+        """Thread-safe cross-symbol/campaign state gate used before new exposure."""
+        with self._db_lock:
+            row = self.conn.execute(
+                "SELECT key FROM bot_state WHERE UPPER(value)='RECONCILE_REQUIRED' "
+                "AND (key='position_state' OR key LIKE 'position_state:%' "
+                "OR key LIKE 'campaign_state:%') LIMIT 1"
+            ).fetchone()
+            return str(row["key"]) if row is not None else ""
+
+    def save_execution_result(
+        self,
+        intent_id,
+        response,
+        final_status="SUBMITTED",
+        reason="",
+    ):
+        """Persist the actual exchange response as mandatory execution state.
+
+        This write is deliberately separate from optional event telemetry. A
+        successful return from the exchange adapter is not an execution
+        confirmation until the raw response, order identity, status and fill
+        quantities have committed and passed a post-commit read-back.
+        """
+        intent_id = str(intent_id or "").strip()
+        status = str(final_status or "").upper()
+        if not intent_id or status not in {"SUBMITTING", "SUBMITTED", "AMBIGUOUS", "RECONCILE_REQUIRED"}:
+            raise ValueError("valid intent_id and execution result status are required")
+        try:
+            response_json = json.dumps(
+                response, sort_keys=True, separators=(",", ":"), default=str
+            )
+        except Exception as exc:
+            raise TypeError("exchange response cannot be serialized for durable storage") from exc
+
+        payload = response if isinstance(response, dict) else {}
+        order_id = payload.get("orderId")
+        order_list_id = payload.get("orderListId")
+        exchange_status = str(
+            payload.get("status")
+            or payload.get("algoStatus")
+            or payload.get("listStatusType")
+            or payload.get("listOrderStatus")
+            or ""
+        ).upper()
+        executed_qty = payload.get("executedQty")
+        cumulative_quote_qty = payload.get(
+            "cummulativeQuoteQty",
+            payload.get("cumulativeQuoteQty"),
+        )
+        result_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+
+        with self._db_lock:
+            if self._transaction_active:
+                raise RuntimeError(
+                    "exchange result requires its own durable transaction"
+                )
+            try:
+                self.conn.execute("BEGIN IMMEDIATE")
+                prior = self.conn.execute(
+                    "SELECT status FROM execution_intents WHERE intent_id=?",
+                    (intent_id,),
+                ).fetchone()
+                if prior is None:
+                    raise RuntimeError(
+                        f"cannot persist exchange result without durable intent {intent_id}"
+                    )
+                self.conn.execute(
+                    """UPDATE execution_intents
+                       SET status=?, reason=?, exchange_status=?,
+                           exchange_order_id=?, exchange_order_list_id=?,
+                           exchange_executed_qty=?, exchange_cumulative_quote_qty=?,
+                           exchange_response_json=?, result_recorded_at_ms=?
+                       WHERE intent_id=?""",
+                    (
+                        status,
+                        str(reason or ""),
+                        exchange_status,
+                        None if order_id is None else str(order_id),
+                        None if order_list_id is None else str(order_list_id),
+                        None if executed_qty is None else str(executed_qty),
+                        None if cumulative_quote_qty is None else str(cumulative_quote_qty),
+                        response_json,
+                        result_ms,
+                        intent_id,
+                    ),
+                )
+                self._commit_durable()
+            except Exception:
+                try:
+                    self.conn.rollback()
+                except Exception:
+                    pass
+                raise
+
+        row = self.load_execution_intent(intent_id)
+        if row is None:
+            raise RuntimeError("committed execution result is not readable")
+        if (
+            str(row.get("status", "")).upper() != status
+            or row.get("exchange_response_json") != response_json
+            or str(row.get("exchange_status") or "").upper() != exchange_status
+            or str(row.get("exchange_order_id") or "") != (str(order_id) if order_id is not None else "")
+            or str(row.get("exchange_order_list_id") or "") != (str(order_list_id) if order_list_id is not None else "")
+            or str(row.get("exchange_executed_qty") or "") != (str(executed_qty) if executed_qty is not None else "")
+            or str(row.get("exchange_cumulative_quote_qty") or "") != (str(cumulative_quote_qty) if cumulative_quote_qty is not None else "")
+            or not row.get("result_recorded_at_ms")
+        ):
+            raise RuntimeError("post-commit exchange-result read-back verification failed")
+        return True
+
+    def mark_execution_intent_reconciled(
+        self,
+        client_order_id,
+        observed_status,
+        *,
+        authoritative=False,
+        evidence_source="",
+        related_order_id=None,
+    ):
+        """Resolve a write-ahead intent only from explicitly authoritative exchange evidence.
+
+        observed_status='NOT_FOUND' is reserved for an exchange query that
+        definitively searched this clientOrderId, not for a timeout or 5xx.
+        """
+        if not authoritative:
+            raise PermissionError("authoritative exchange reconciliation is required")
+        cid = str(client_order_id or "").strip()
+        status = str(observed_status or "").strip().upper()
+        evidence = str(evidence_source or "").strip()
+        if not cid or not evidence:
+            raise ValueError("client_order_id and reconciliation evidence are required")
+        accepted = {
+            "NEW", "PENDING_NEW", "PARTIALLY_FILLED", "FILLED",
+            "CANCELED", "CANCELLED", "EXPIRED", "REJECTED", "NOT_FOUND",
+        }
+        if status not in accepted:
+            raise ValueError(f"unsupported authoritative exchange status: {status}")
+        resolved_status = "ABORTED_NOT_FOUND" if status == "NOT_FOUND" else "RECONCILED"
+        with self._db_lock:
+            if self._transaction_active:
+                raise RuntimeError("reconciliation must commit in its own durable transaction")
+            try:
+                self.conn.execute("BEGIN IMMEDIATE")
+                if related_order_id is None:
+                    rows = self.conn.execute(
+                        "SELECT * FROM execution_intents WHERE client_order_id=?",
+                        (cid,),
+                    ).fetchall()
+                else:
+                    rows = self.conn.execute(
+                        "SELECT * FROM execution_intents "
+                        "WHERE client_order_id=? OR related_order_id=?",
+                        (cid, str(related_order_id)),
+                    ).fetchall()
+                if not rows:
+                    self.conn.rollback()
+                    return False
+                now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+                for row in rows:
+                    self.conn.execute(
+                        "UPDATE execution_intents SET status=?, exchange_status=?, "
+                        "resolution_evidence=?, resolved_at_ms=? WHERE intent_id=?",
+                        (
+                            resolved_status,
+                            status,
+                            evidence,
+                            now_ms,
+                            row["intent_id"],
+                        ),
+                    )
+                self._commit_durable()
+            except Exception:
+                try:
+                    self.conn.rollback()
+                except Exception:
+                    pass
+                raise
+
+        # Release only claims whose next identical action is justified by
+        # authoritative absence, or when a cancel query proves its target remains
+        # active (so a same-identity cancel retry—not a new order—is permissible).
+        for row in rows:
+            operation = str(row["operation_kind"] or "PLACE").upper()
+            retry_same_cancel = (
+                status in {"NEW", "PENDING_NEW"}
+                and operation in {"CANCEL", "CANCEL_OCO"}
+            )
+            if status != "NOT_FOUND" and not retry_same_cancel:
+                continue
+            logical_key = (
+                f"{str(row['symbol']).upper()}:"
+                f"{str(row['purpose']).upper()}:"
+                f"{str(row['signal_id'] or '').strip()}"
+            )
+            self.release_execution_identity(
+                str(row["intent_id"]),
+                str(row["client_order_id"] or ""),
+                logical_key if str(row["signal_id"] or "").strip() else "",
+            )
+        reread = self.find_execution_intent_by_client_order_id(cid)
+        if reread is None or str(reread.get("status", "")).upper() != resolved_status:
+            raise RuntimeError("reconciled execution intent read-back failed")
+        if str(reread.get("exchange_status", "")).upper() != status:
+            raise RuntimeError("reconciled exchange status read-back failed")
+        return True
 
     def save_execution_event(self, intent_id, event, payload=None):
         self.conn.execute(
@@ -969,6 +1524,167 @@ class Database:
         )
         if not self._transaction_active:
             self.conn.commit()
+
+    @staticmethod
+    def _canonical_decimal(value, field_name):
+        """Serialize a required financial value without binary-float arithmetic."""
+        from decimal import Decimal, InvalidOperation
+
+        if value is None or isinstance(value, bool):
+            raise ValueError(f"{field_name} is required")
+        try:
+            number = Decimal(str(value))
+        except (InvalidOperation, ValueError, TypeError) as exc:
+            raise ValueError(f"{field_name} is not a valid decimal") from exc
+        if not number.is_finite():
+            raise ValueError(f"{field_name} must be finite")
+        if number == 0:
+            return "0"
+        # Avoid Decimal.normalize(): it obeys the active precision context and
+        # can round a valid high-precision exchange value. Strip only fractional
+        # trailing zeros from the fixed-point representation instead.
+        text = format(number, "f")
+        if "." in text:
+            text = text.rstrip("0").rstrip(".")
+        return text or "0"
+
+    def apply_financial_fill_effect(self, fill, projection_writer):
+        """Atomically deduplicate a fill and apply same-database projections once.
+
+        projection_writer(db, normalized_fill) MUST only write through this
+        Database connection. External calls and writes to other databases are
+        forbidden inside the callback. Unknown commission is durably journaled
+        but deliberately blocks projection application until reconciled.
+        """
+        from decimal import Decimal
+        import hashlib
+
+        data = dict(fill)
+        exchange = str(data.get("exchange", "BINANCE")).strip().upper()
+        environment = str(data.get("environment", "")).strip().upper()
+        account_scope = str(data.get("account_scope", "")).strip()
+        symbol = str(data.get("symbol", "")).strip().upper()
+        fill_id = str(data.get("exchange_fill_id", "")).strip()
+        if not all((exchange, environment, account_scope, symbol, fill_id)):
+            raise ValueError("exchange, environment, account_scope, symbol and exchange_fill_id are required")
+        quantity = self._canonical_decimal(data.get("quantity"), "quantity")
+        price = self._canonical_decimal(data.get("price"), "price")
+        quote_quantity = self._canonical_decimal(data.get("quote_quantity"), "quote_quantity")
+        commission_raw = data.get("commission")
+        commission_asset = str(data.get("commission_asset") or "").strip().upper()
+        commission_known = commission_raw is not None and bool(commission_asset)
+        commission = self._canonical_decimal(commission_raw, "commission") if commission_known else None
+        commission_status = "KNOWN" if commission_known else "UNKNOWN"
+        normalized = {
+            "exchange": exchange, "environment": environment,
+            "account_scope": account_scope, "symbol": symbol,
+            "exchange_fill_id": fill_id, "quantity": quantity,
+            "price": price, "quote_quantity": quote_quantity,
+            "commission": commission, "commission_asset": commission_asset or None,
+            "commission_status": commission_status,
+        }
+        canonical = json.dumps(normalized, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        effect_id = hashlib.sha256(
+            "\x1f".join((exchange, environment, account_scope, symbol, fill_id)).encode("utf-8")
+        ).hexdigest()
+        with self.transaction():
+            inserted = self.conn.execute(
+                """INSERT OR IGNORE INTO financial_effect_journal(
+                    effect_id,exchange_name,environment,account_scope,symbol,exchange_fill_id,
+                    quantity_decimal,price_decimal,quote_quantity_decimal,commission_decimal,
+                    commission_asset,commission_status,projection_status,canonical_payload_json
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (effect_id, exchange, environment, account_scope, symbol, fill_id,
+                 quantity, price, quote_quantity, commission, commission_asset or None,
+                 commission_status, "PENDING_FEE" if not commission_known else "PENDING",
+                 canonical),
+            ).rowcount == 1
+            row = self.conn.execute(
+                "SELECT * FROM financial_effect_journal WHERE effect_id=?", (effect_id,)
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("financial effect journal read-back failed")
+            if row["canonical_payload_json"] != canonical:
+                raise RuntimeError("fill identity collision: immutable fill payload differs")
+            if row["projection_status"] == "APPLIED":
+                return {"effect_id": effect_id, "status": "APPLIED", "duplicate": True}
+            if row["commission_status"] != "KNOWN":
+                return {"effect_id": effect_id, "status": "PENDING_FEE", "duplicate": not inserted}
+            # Same SQLite transaction: projection writes and APPLIED marker commit together.
+            projection_writer(self, normalized)
+            self.conn.execute(
+                """UPDATE financial_effect_journal
+                   SET projection_status='APPLIED', applied_at=CURRENT_TIMESTAMP, last_error=NULL
+                   WHERE effect_id=? AND projection_status='PENDING'""",
+                (effect_id,),
+            )
+            check = self.conn.execute(
+                "SELECT projection_status FROM financial_effect_journal WHERE effect_id=?",
+                (effect_id,),
+            ).fetchone()
+            if check is None or check["projection_status"] != "APPLIED":
+                raise RuntimeError("financial effect application did not persist")
+            return {"effect_id": effect_id, "status": "APPLIED", "duplicate": False}
+
+    def resolve_financial_effect_fee(self, effect_id, commission, commission_asset, projection_writer):
+        """Resolve an UNKNOWN commission and apply the still-pending fill effect atomically."""
+        asset = str(commission_asset or "").strip().upper()
+        if not asset:
+            raise ValueError("commission_asset is required to resolve a fee")
+        amount = self._canonical_decimal(commission, "commission")
+        with self.transaction():
+            row = self.conn.execute(
+                "SELECT * FROM financial_effect_journal WHERE effect_id=?", (str(effect_id),)
+            ).fetchone()
+            if row is None:
+                raise KeyError("financial effect does not exist")
+            if row["projection_status"] == "APPLIED":
+                if row["commission_status"] != "KNOWN" or row["commission_asset"] != asset or row["commission_decimal"] != amount:
+                    raise RuntimeError("cannot change fee after financial effect is applied; reconciliation required")
+                return {"effect_id": str(effect_id), "status": "APPLIED", "duplicate": True}
+            normalized = {
+                "exchange": row["exchange_name"], "environment": row["environment"],
+                "account_scope": row["account_scope"], "symbol": row["symbol"],
+                "exchange_fill_id": row["exchange_fill_id"],
+                "quantity": row["quantity_decimal"], "price": row["price_decimal"],
+                "quote_quantity": row["quote_quantity_decimal"],
+                "commission": amount, "commission_asset": asset,
+                "commission_status": "KNOWN",
+            }
+            canonical = json.dumps(normalized, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+            self.conn.execute(
+                """UPDATE financial_effect_journal
+                   SET commission_decimal=?,commission_asset=?,commission_status='KNOWN',
+                       projection_status='PENDING',canonical_payload_json=?,last_error=NULL
+                   WHERE effect_id=? AND projection_status='PENDING_FEE'""",
+                (amount, asset, canonical, str(effect_id)),
+            )
+            current = self.conn.execute(
+                "SELECT commission_status,projection_status FROM financial_effect_journal WHERE effect_id=?",
+                (str(effect_id),),
+            ).fetchone()
+            if current is None or current["commission_status"] != "KNOWN" or current["projection_status"] != "PENDING":
+                raise RuntimeError("fee resolution did not persist as pending")
+            projection_writer(self, normalized)
+            self.conn.execute(
+                """UPDATE financial_effect_journal
+                   SET projection_status='APPLIED',applied_at=CURRENT_TIMESTAMP,last_error=NULL
+                   WHERE effect_id=? AND projection_status='PENDING'""",
+                (str(effect_id),),
+            )
+            final = self.conn.execute(
+                "SELECT projection_status FROM financial_effect_journal WHERE effect_id=?",
+                (str(effect_id),),
+            ).fetchone()
+            if final is None or final["projection_status"] != "APPLIED":
+                raise RuntimeError("resolved financial effect did not persist")
+            return {"effect_id": str(effect_id), "status": "APPLIED", "duplicate": False}
+
+    def financial_effect(self, effect_id):
+        row = self.conn.execute(
+            "SELECT * FROM financial_effect_journal WHERE effect_id=?", (str(effect_id),)
+        ).fetchone()
+        return dict(row) if row else None
 
     def save_campaign_fill(self, fill):
         data=fill if isinstance(fill,dict) else dict(fill)

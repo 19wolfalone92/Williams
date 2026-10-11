@@ -8,6 +8,8 @@ as foreign.
 from __future__ import annotations
 
 from typing import Any
+import hashlib
+import re
 
 ENTRY_PREFIXES = (
     "WILLV5_ENTRY_",
@@ -30,6 +32,23 @@ EXIT_PREFIXES = (
 )
 
 MANAGED_PREFIXES = ENTRY_PREFIXES + PROTECTION_PREFIXES + EXIT_PREFIXES
+
+
+def stable_client_order_id(prefix: str, *identity_parts: object) -> str:
+    """Create a deterministic Binance clientOrderId for one logical mutation.
+
+    The caller must supply stable business identity (signal, campaign, action
+    and order generation), not a random UUID. Output stays within Binance's
+    36-character clientOrderId limit and contains only safe ASCII characters.
+    """
+    normalized_prefix = re.sub(r"[^A-Za-z0-9_-]", "_", str(prefix or "WILL_"))
+    if not normalized_prefix:
+        normalized_prefix = "WILL_"
+    material = "\x1f".join(str(part or "") for part in identity_parts)
+    suffix = hashlib.sha256(material.encode("utf-8")).hexdigest()[:20]
+    prefix_limit = 36 - len(suffix)
+    normalized_prefix = normalized_prefix[:prefix_limit]
+    return normalized_prefix + suffix
 
 
 def client_order_id(order: dict[str, Any] | None) -> str:

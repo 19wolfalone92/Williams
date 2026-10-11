@@ -15,6 +15,7 @@ from trading_config import TradingConfig
 from market_context import ContextCache, TFMarketContext
 from hypothesis_engine import build_hypotheses
 from execution_barrier import ExecutionBarrier, OrderIntent
+from order_identity import stable_client_order_id
 from execution_accumulator import accumulate_order, accumulate_fills
 from l2_slippage import L2SlippageGuard
 from equity_breaker import EquityCircuitBreaker
@@ -444,6 +445,16 @@ class Trader:
             f'position_state:{self.symbol}',
             state,
         )
+
+    def _execution_recovery_blocked(self):
+        """Fail closed if durable execution state is unavailable or unresolved."""
+        try:
+            return bool(self.execution_barrier.mutation_locked) or bool(
+                self.db.has_unresolved_execution_intents()
+            )
+        except Exception:
+            # A failed state read cannot authorize replacing a pending identity.
+            return True
 
     def normalize_qty(self, qty):
         if self.symbol_rules is None:
@@ -1032,7 +1043,14 @@ class Trader:
             tf: snap.context(self.symbol, tf).version
             for tf in self.config.structural_timeframes
         }
-        cid = f'WILLV4_ENTRY_{uuid.uuid4().hex[:20]}'
+        operative_context = snap.context(self.symbol, self.interval)
+        if operative_context is None:
+            raise RuntimeError('BUY blocked: operative market context is unavailable')
+        signal_id = (
+            f'{self.symbol}:{self.interval.lower()}:ENTRY:'
+            f'{int(operative_context.candle_close_time_ms)}'
+        )
+        cid = stable_client_order_id('WILLV4_ENTRY_', signal_id)
         intent = OrderIntent.new(
             self.symbol,
             'BUY',
@@ -1041,8 +1059,21 @@ class Trader:
             purpose='ENTRY',
             permission_interval=self.interval,
             client_order_id=cid,
+            signal_id=signal_id,
             quote_order_quantity=self.client.decimal_format(quote_d),
+            risk_quote=float(quote_d) * max(
+                0.0, float(os.getenv("STOP_LOSS_PCT", "0.02"))
+            ),
+            capital_reserved_quote=float(quote_d),
         )
+
+        # Do not overwrite a prior pending identity while an earlier order
+        # result is unresolved. Recovery must query the exchange first.
+        if self._execution_recovery_blocked():
+            self._set_state('RECONCILE_REQUIRED')
+            raise RuntimeError(
+                'BUY blocked: unresolved execution state requires authoritative reconciliation'
+            )
 
         # Durable reservation is written BEFORE the Binance POST. If the
         # process dies after Binance accepts the order but before the HTTP
@@ -1080,7 +1111,18 @@ class Trader:
                 pre_submit_checks=_pre_submit,
             )
             if not result.accepted:
-                self.db.state_delete('entry_client_order_id')
+                # The admission decision may have observed a concurrently-created
+                # unresolved mutation. Never clear a recovery key on that path.
+                if self._execution_recovery_blocked():
+                    self._set_state('RECONCILE_REQUIRED')
+                    raise RuntimeError(
+                        'BUY blocked: unresolved execution state retained for reconciliation; '
+                        + result.reason
+                    )
+                if self.db.state_get('entry_client_order_id') == cid:
+                    self.db.state_delete('entry_client_order_id')
+                if self.db.state_get(f'entry_client_order_id:{self.symbol}') == cid:
+                    self.db.state_delete(f'entry_client_order_id:{self.symbol}')
                 self._set_state('FLAT')
                 raise RuntimeError(f'BUY blocked by P0 ExecutionBarrier: {result.reason}')
             order = result.response
@@ -1200,15 +1242,25 @@ class Trader:
             self.refresh_execution_context(self.symbol)
             snap = self.context_cache.snapshot()
             required_versions = {tf: snap.context(self.symbol, tf).version for tf in self.config.structural_timeframes}
+            operative_context = snap.context(self.symbol, self.interval)
+            exit_signal_id = (
+                f'{self.symbol}:{self.interval.lower()}:EXIT:'
+                f'{int(getattr(operative_context, "candle_close_time_ms", 0) or 0) if operative_context else 0}:'
+                f'{trade_id if trade_id is not None else "UNTRACKED"}:'
+                f'{self.client.decimal_format(actual_qty)}:'
+                f'{self.client.decimal_format(sl_d)}:{self.client.decimal_format(tp_d)}'
+            )
+            cid = stable_client_order_id('WILLV4_OCO_', exit_signal_id)
             intent = OrderIntent.new(
                 self.symbol,
                 'SELL',
                 'OCO',
                 required_context_versions=required_versions,
                 purpose='EXIT',
+                signal_id=exit_signal_id,
+                client_order_id=cid,
                 quantity=self.client.decimal_format(actual_qty),
             )
-            cid = f'WILLV4_OCO_{uuid.uuid4().hex[:20]}'
             self._set_state('EXIT_PENDING')
             result = self.execution_barrier.execute(
                 intent,

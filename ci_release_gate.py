@@ -6,7 +6,7 @@ import ast
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-EXPECTED_VERSION = '4.24.0'
+EXPECTED_VERSION = '4.25.0'
 
 def read(path: str) -> str:
     p = ROOT / path
@@ -73,6 +73,12 @@ def main() -> None:
     must(android, "http://127.0.0.1:18080", "MainActivity.kt")
     gradle = read("app/build.gradle.kts")
     must(gradle, f'versionName = "{EXPECTED_VERSION}"', "app/build.gradle.kts")
+    wrapper = read("gradle/wrapper/gradle-wrapper.properties")
+    android_ci = read(".github/workflows/android-apk.yml")
+    campaign_ci = read(".github/workflows/campaign-ci.yml")
+    must(wrapper, "gradle-8.14.6-bin.zip", "Gradle wrapper")
+    must(android_ci, "GRADLE_VERSION: '8.14.6'", "Android workflow Gradle version")
+    must(campaign_ci, 'gradle-version: "8.14.6"', "Campaign workflow Gradle version")
     must(android, "val maxOpenPositions: Int = 5", "MainActivity.kt")
     runtime = read("app/src/main/java/com/williamsbot/StandaloneRuntime.kt")
     must(runtime, 'prefs.getInt("max_open_positions", 5)', "StandaloneRuntime.kt")

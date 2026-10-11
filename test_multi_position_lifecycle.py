@@ -67,6 +67,9 @@ class FakeClient:
             and (symbol is None or str(x.get("symbol", "")).upper() == symbol.upper())
         ]
 
+    def ticker_price(self, symbol):
+        return {"price": {"SOLUSDT": "200", "ETHUSDT": "100", "BTCUSDT": "100"}.get(symbol.upper(), "100")}
+
     def open_order_lists(self, symbol=None):
         rows = list(self.open_lists)
         if symbol:
@@ -123,7 +126,7 @@ class FakeClient:
             "listStatusType": "EXEC_STARTED",
             "listOrderStatus": "EXECUTING",
         })
-        return {
+        response = {
             "orderListId": order_list_id,
             "listClientOrderId": list_client_order_id,
             "orderReports": [
@@ -153,6 +156,12 @@ class FakeClient:
                 },
             ],
         }
+        # Make a successful OCO response visible through subsequent authoritative
+        # open-order reads, as it would be on Binance after accepting the list.
+        self.orders_by_symbol.setdefault(symbol.upper(), []).extend(
+            response["orderReports"]
+        )
+        return response
 
     @staticmethod
     def decimal_floor(value, step):
@@ -460,16 +469,47 @@ def test_partial_manual_sell_keeps_residual_position_protected(tmp_path: Path):
             self.manual_order = None
 
         def account(self):
+            # Before OCO cancellation the managed base quantity is exchange-locked.
+            # Cancellation releases it; after a 0.6 market fill only 0.4 remains.
+            free_btc = 0.4 if self.manual_order is not None else (
+                1.0 if self.cancelled else 0.4
+            )
             return {
                 "balances": [
                     {"asset": "USDT", "free": "9400", "locked": "0"},
-                    {"asset": "BTC", "free": "0.4", "locked": "0"},
+                    {"asset": "BTC", "free": str(free_btc), "locked": "0"},
                 ],
             }
 
         def cancel_oco(self, symbol, order_list_id=None, list_client_order_id=None):
             self.cancelled = True
-            return {"orderListId": order_list_id or 10}
+            list_id = order_list_id or 10
+            # Binance cancel-order-list responses carry per-leg orderReports.
+            # A list-level acknowledgement without leg states is not enough.
+            reports = [
+                {
+                    "symbol": symbol, "orderId": 101, "orderListId": list_id,
+                    "clientOrderId": "WILLV4_OCO_TEST-TP",
+                    "status": "CANCELED", "executedQty": "0",
+                },
+                {
+                    "symbol": symbol, "orderId": 102, "orderListId": list_id,
+                    "clientOrderId": "WILLV4_OCO_TEST-SL",
+                    "status": "CANCELED", "executedQty": "0",
+                },
+            ]
+            return {
+                "symbol": symbol,
+                "orderListId": list_id,
+                "listClientOrderId": list_client_order_id or "WILLV4_OCO_TEST",
+                "listStatusType": "ALL_DONE",
+                "listOrderStatus": "ALL_DONE",
+                "orders": [
+                    {"symbol": symbol, "orderId": 101, "clientOrderId": reports[0]["clientOrderId"]},
+                    {"symbol": symbol, "orderId": 102, "clientOrderId": reports[1]["clientOrderId"]},
+                ],
+                "orderReports": reports,
+            }
 
         def order_safe(self, symbol, side, type_, *, quantity=None, new_client_order_id=None, **kwargs):
             assert side == "SELL"

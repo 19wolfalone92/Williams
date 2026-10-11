@@ -53,6 +53,7 @@ class FakeBinance:
         self.entry_qty = entry_qty
         self.exit_qty = exit_qty
         self.created_oco_qty = None
+        self.created_oco_client_id = None
         self.oco_calls = 0
         self.open_orders_calls = 0
 
@@ -114,7 +115,17 @@ class FakeBinance:
         }
 
     def open_order_lists(self, symbol=None):
-        return []
+        if self.created_oco_qty is None or not self.created_oco_client_id:
+            return []
+        if symbol and str(symbol).upper() != "BTCUSDT":
+            return []
+        return [{
+            "symbol": "BTCUSDT",
+            "orderListId": "20",
+            "listClientOrderId": self.created_oco_client_id,
+            "listStatusType": "EXEC_STARTED",
+            "listOrderStatus": "EXECUTING",
+        }]
 
     def all_order_lists(self, symbol=None, limit=100):
         if float(self.exit_qty) > 0:
@@ -175,6 +186,7 @@ class FakeBinance:
     ):
         self.oco_calls += 1
         self.created_oco_qty = float(quantity)
+        self.created_oco_client_id = str(list_client_order_id)
         return {
             "orderListId": "20",
             "listClientOrderId": list_client_order_id,
@@ -215,7 +227,20 @@ def test_terminal_partial_entry_is_materialized_and_protected(tmp_path):
     class NoOpenOrdersFakeBinance(FakeBinance):
         def open_orders(self, symbol=None):
             self.open_orders_calls += 1
-            return []
+            if self.created_oco_qty is None or not self.created_oco_client_id:
+                return []
+            qty = str(self.created_oco_qty)
+            cid = self.created_oco_client_id
+            return [
+                {"symbol": "BTCUSDT", "side": "SELL", "type": "TAKE_PROFIT_LIMIT",
+                 "orderId": "21", "orderListId": "20", "clientOrderId": cid + "_TP",
+                 "status": "NEW", "origQty": qty, "executedQty": "0",
+                 "price": "104", "stopPrice": "104"},
+                {"symbol": "BTCUSDT", "side": "SELL", "type": "STOP_LOSS_LIMIT",
+                 "orderId": "22", "orderListId": "20", "clientOrderId": cid + "_SL",
+                 "status": "NEW", "origQty": qty, "executedQty": "0",
+                 "price": "97.5", "stopPrice": "98"},
+            ]
 
     client = NoOpenOrdersFakeBinance(entry_status="CANCELED", entry_qty="0.4")
     trader = MultiPositionTrader(client, db=db, symbols=[])
@@ -239,7 +264,27 @@ def test_terminal_partial_oco_is_counted_once_and_reprotected(tmp_path):
     class TerminalOcoFakeBinance(FakeBinance):
         def open_orders(self, symbol=None):
             self.open_orders_calls += 1
-            return []
+            if self.created_oco_qty is None or not self.created_oco_client_id:
+                return []
+            # Once the replacement OCO exists, the exchange must reveal its
+            # two active child orders. A second recovery pass should adopt these
+            # rows instead of sending the same logical protection order again.
+            qty = str(self.created_oco_qty)
+            cid = self.created_oco_client_id
+            return [
+                {
+                    "symbol": "BTCUSDT", "side": "SELL", "type": "TAKE_PROFIT_LIMIT",
+                    "orderId": "21", "orderListId": "20", "clientOrderId": cid + "_TP",
+                    "status": "NEW", "origQty": qty, "executedQty": "0",
+                    "price": "104", "stopPrice": "104",
+                },
+                {
+                    "symbol": "BTCUSDT", "side": "SELL", "type": "STOP_LOSS_LIMIT",
+                    "orderId": "22", "orderListId": "20", "clientOrderId": cid + "_SL",
+                    "status": "NEW", "origQty": qty, "executedQty": "0",
+                    "price": "97.5", "stopPrice": "98",
+                },
+            ]
 
     client = TerminalOcoFakeBinance(
         entry_status="FILLED",
@@ -276,7 +321,7 @@ def test_terminal_partial_oco_is_counted_once_and_reprotected(tmp_path):
     second = trader._reconcile_trade(trade_id)
     assert second["state"] == "OPEN"
     assert abs(float(db.open_trade("BTCUSDT")["quantity"]) - 0.7) < 1e-9
-    assert client.oco_calls == 2
+    assert client.oco_calls == 1
 
 
 def test_pending_entry_is_a_durable_duplicate_entry_barrier(tmp_path):

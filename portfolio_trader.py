@@ -11,7 +11,9 @@ from execution_accumulator import ExecutionSummary, accumulate_order
 from campaign_execution import CampaignExecutionService, CampaignExecutionError
 from campaign_model import SignalSpec, SignalType, SignalRole
 from campaign_monitor import CampaignMonitor
-from order_identity import is_entry_id, is_exit_id, is_managed_order
+from order_identity import is_entry_id, is_exit_id, is_managed_order, stable_client_order_id
+from execution_barrier import ExecutionBarrier, ExecutionAmbiguousError, OrderIntent
+from market_context import ContextCache
 
 
 POSITION_STATES = {
@@ -91,7 +93,12 @@ class MultiPositionTrader:
         self.max_trades_per_day = max(0, int(os.getenv("MAX_TRADES_PER_DAY", "5")))
         self.max_consecutive_losses = max(0, int(os.getenv("MAX_CONSECUTIVE_LOSSES", "3")))
         self.cooldown_minutes = max(0, int(os.getenv("COOLDOWN_MINUTES", "30")))
-        self.execution_barrier = execution_barrier
+        # Even standalone construction must not create a legacy direct-to-exchange
+        # route. The empty cache fails closed for entries, but still permits a
+        # durable, ownership-checked reduction/cancellation when safe.
+        self.execution_barrier = execution_barrier or ExecutionBarrier(
+            ContextCache(), self.db
+        )
         self.campaign_engine_enabled = (
             os.getenv("CAMPAIGN_ENGINE", "true").lower() == "true"
         )
@@ -104,6 +111,45 @@ class MultiPositionTrader:
             self.client,
             self.db,
             self.campaign_execution,
+        )
+
+    def _submit_mutation(self, intent, submit, pre_submit_checks=None):
+        """All portfolio order mutations pass through the canonical barrier."""
+        if self.execution_barrier is None:
+            raise CampaignExecutionError(
+                "ExecutionBarrier unavailable; direct Binance mutation is forbidden"
+            )
+        result = self.execution_barrier.execute(
+            intent,
+            submit,
+            pre_submit_checks=pre_submit_checks,
+        )
+        if not result.accepted:
+            raise CampaignExecutionError(
+                f"ExecutionBarrier blocked {intent.purpose}: {result.reason}"
+            )
+        return result.response
+
+    def _intent_for_legacy_mutation(
+        self, symbol, side, order_type, client_order_id, *, purpose,
+        quantity="", quote_order_quantity="", trade_id=None, signal_id="",
+        operation_kind="PLACE", related_order_id="", related_order_list_id="",
+    ):
+        campaign_id = f"LEGACY_TRADE:{trade_id}" if trade_id is not None else ""
+        return OrderIntent.new(
+            str(symbol).upper(),
+            str(side).upper(),
+            str(order_type).upper(),
+            required_context_versions={},
+            purpose=purpose,
+            campaign_id=campaign_id,
+            signal_id=signal_id,
+            client_order_id=client_order_id,
+            quantity=str(quantity or ""),
+            quote_order_quantity=str(quote_order_quantity or ""),
+            operation_kind=operation_kind,
+            related_order_id=str(related_order_id or ""),
+            related_order_list_id=str(related_order_list_id or ""),
         )
 
     # ------------------------------------------------------------------
@@ -718,13 +764,46 @@ class MultiPositionTrader:
                 f"{symbol}: emergency exit quantity below Binance LOT_SIZE"
             )
 
-        client_id = f"{self.EMERGENCY_PREFIX}{uuid.uuid4().hex[:16]}"
-        sell = self.client.order_safe(
-            symbol,
-            "SELL",
-            "MARKET",
+        signal_id = (
+            f"EMERGENCY_EXIT:{symbol}:{trade_id}:{reason}:"
+            f"{self.client.decimal_format(sell_qty)}"
+        )
+        client_id = stable_client_order_id(
+            self.EMERGENCY_PREFIX, signal_id
+        )
+        intent = self._intent_for_legacy_mutation(
+            symbol, "SELL", "MARKET", client_id,
+            purpose="EMERGENCY_EXIT",
             quantity=self.client.decimal_format(sell_qty),
-            new_client_order_id=client_id,
+            trade_id=trade_id,
+            signal_id=signal_id,
+        )
+
+        def _check_emergency_exit(_snapshot):
+            owned_trade = next(
+                (
+                    row for row in self.open_trades()
+                    if int(row.get("id", -1)) == int(trade_id)
+                    and str(row.get("symbol", "")).upper() == symbol
+                ),
+                None,
+            )
+            if owned_trade is None:
+                raise RuntimeError("managed position ownership could not be confirmed")
+            current_free = self._asset_balance(symbol, account=self.client.account())
+            if current_free + 1e-12 < sell_qty:
+                raise RuntimeError("confirmed free inventory is smaller than emergency exit quantity")
+
+        sell = self._submit_mutation(
+            intent,
+            lambda: self.client.order_safe(
+                symbol,
+                "SELL",
+                "MARKET",
+                quantity=self.client.decimal_format(sell_qty),
+                new_client_order_id=client_id,
+            ),
+            pre_submit_checks=_check_emergency_exit,
         )
         self.db.save_order(sell)
 
@@ -735,8 +814,9 @@ class MultiPositionTrader:
             orig_client_order_id=client_id if order_id is None else None,
         )
         if str(confirmed.get("status", "")).upper() != "FILLED":
+            self.set_state(symbol, "RECONCILE_REQUIRED")
             raise RuntimeError(
-                f"{symbol}: emergency SELL is not fully filled"
+                f"{symbol}: emergency SELL is not fully filled; reconciliation required"
             )
 
         execution = self._authoritative_execution(symbol, confirmed)
@@ -929,17 +1009,54 @@ class MultiPositionTrader:
                 f"{symbol}: invalid rounded TP/SL"
             )
 
-        client_id = f"{self.OCO_PREFIX}{uuid.uuid4().hex[:20]}"
+        signal_id = (
+            f"OCO_PROTECTION:{symbol}:{trade_id}:"
+            f"{self.client.decimal_format(qty)}:"
+            f"{self.client.decimal_format(tp)}:"
+            f"{self.client.decimal_format(sl)}:"
+            f"{self.client.decimal_format(sl_limit)}"
+        )
+        client_id = stable_client_order_id(self.OCO_PREFIX, signal_id)
         self.set_state(symbol, "EXIT_PENDING")
 
+        intent = self._intent_for_legacy_mutation(
+            symbol, "SELL", "OCO", client_id,
+            purpose="PROTECTION",
+            quantity=self.client.decimal_format(qty),
+            trade_id=trade_id,
+            signal_id=signal_id,
+        )
         create_oco = getattr(self.client, "create_oco_sell_safe", None) or self.client.create_oco_sell
-        result = create_oco(
-            symbol,
-            self.client.decimal_format(qty),
-            self.client.decimal_format(tp),
-            self.client.decimal_format(sl),
-            self.client.decimal_format(sl_limit),
-            client_id,
+
+        def _check_oco_protection(_snapshot):
+            owned_trade = next(
+                (
+                    row for row in self.open_trades()
+                    if int(row.get("id", -1)) == int(trade_id)
+                    and str(row.get("symbol", "")).upper() == symbol
+                ),
+                None,
+            )
+            if owned_trade is None:
+                raise RuntimeError("OCO protection rejected: managed position is not durable")
+            free_now = self._asset_balance(symbol, account=self.client.account())
+            if free_now + 1e-12 < qty:
+                raise RuntimeError("OCO protection quantity exceeds confirmed free inventory")
+            current_price = float(self.client.ticker_price(symbol).get("price", 0) or 0)
+            if current_price <= 0 or not (tp > current_price > sl):
+                raise RuntimeError("OCO protection levels no longer bracket current market price")
+
+        result = self._submit_mutation(
+            intent,
+            lambda: create_oco(
+                symbol,
+                self.client.decimal_format(qty),
+                self.client.decimal_format(tp),
+                self.client.decimal_format(sl),
+                self.client.decimal_format(sl_limit),
+                client_id,
+            ),
+            pre_submit_checks=_check_oco_protection,
         )
 
         for leg in result.get("orderReports", []):
@@ -1576,7 +1693,32 @@ class MultiPositionTrader:
             repaired = self._repair_stale_reconcile_states()
             unresolved = self.unresolved_symbols()
             pending_keys = self._pending_entries()
-            ok = not unresolved and not pending_keys
+            unresolved_intents = self.db.unresolved_execution_intents()
+            # Recompute the legacy/global mirror only after every per-symbol
+            # check has had a chance to clear a demonstrably stale symbol latch.
+            # This avoids treating the old global mirror itself as new evidence
+            # that an otherwise reconciled account remains ambiguous.
+            canonical_state = self._sync_legacy_state()
+            # An exchange-known pending entry may still keep the scanner from
+            # proposing another entry, but it is not an UNKNOWN mutation. Clear
+            # the global mutation latch only after all intent/order/position
+            # reconciliations have completed without unresolved state.
+            reconcile_state = self.db.has_reconcile_required_state()
+            reconciled = (
+                not unresolved
+                and not unresolved_intents
+                and not reconcile_state
+            )
+            if reconciled and self.execution_barrier is not None:
+                try:
+                    latch_cleared = self.execution_barrier.clear_mutation_lock_after_reconciliation(
+                        reconciliation_verified=True,
+                        evidence="startup: pending entry queries, campaign positions, open orders, and unresolved intent table reconciled",
+                    )
+                    reconciled = bool(latch_cleared)
+                except Exception:
+                    reconciled = False
+            ok = reconciled and not pending_keys
             canonical_state = self._sync_legacy_state()
             results = pending + active
             results.extend(
@@ -1592,6 +1734,16 @@ class MultiPositionTrader:
                     "open_campaigns": len(self.db.open_campaigns()),
                     "unresolved_symbols": unresolved,
                     "pending_entries": [x[0] for x in pending_keys],
+                    "unresolved_execution_intents": [
+                        {
+                            "intent_id": x.get("intent_id"),
+                            "symbol": x.get("symbol"),
+                            "purpose": x.get("purpose"),
+                            "operation_kind": x.get("operation_kind"),
+                            "status": x.get("status"),
+                        }
+                        for x in unresolved_intents
+                    ],
                 },
             )
             return {
@@ -1600,6 +1752,16 @@ class MultiPositionTrader:
                 "open_positions": len(self.open_trades()),
                 "open_campaigns": len(self.db.open_campaigns()),
                 "unresolved_symbols": unresolved,
+                "unresolved_execution_intents": [
+                    {
+                        "intent_id": x.get("intent_id"),
+                        "symbol": x.get("symbol"),
+                        "purpose": x.get("purpose"),
+                        "operation_kind": x.get("operation_kind"),
+                        "status": x.get("status"),
+                    }
+                    for x in unresolved_intents
+                ],
                 "state": canonical_state,
             }
 
@@ -1607,7 +1769,23 @@ class MultiPositionTrader:
         repaired = self._repair_stale_reconcile_states()
         unresolved = self.unresolved_symbols()
         pending = self._pending_entries()
-        ok = not unresolved and not pending
+        unresolved_intents = self.db.unresolved_execution_intents()
+        # Refresh the legacy/global mirror from authoritative per-symbol results
+        # before inspecting for any remaining RECONCILE_REQUIRED state.
+        canonical_state = self._sync_legacy_state()
+        reconcile_state = self.db.has_reconcile_required_state()
+        reconciled = not unresolved and not unresolved_intents and not reconcile_state
+        if reconciled and self.execution_barrier is not None:
+            try:
+                reconciled = bool(
+                    self.execution_barrier.clear_mutation_lock_after_reconciliation(
+                        reconciliation_verified=True,
+                        evidence="startup: legacy positions, order history, pending entries, and unresolved intents reconciled",
+                    )
+                )
+            except Exception:
+                reconciled = False
+        ok = reconciled and not pending
         canonical_state = self._sync_legacy_state()
         results.extend(
             {"symbol": symbol, "state": "FLAT", "stale_reconcile_cleared": True}
@@ -1621,6 +1799,16 @@ class MultiPositionTrader:
                 "open_positions": len(self.open_trades()),
                 "unresolved_symbols": unresolved,
                 "pending_entries": [x[0] for x in self._pending_entries()],
+                "unresolved_execution_intents": [
+                    {
+                        "intent_id": x.get("intent_id"),
+                        "symbol": x.get("symbol"),
+                        "purpose": x.get("purpose"),
+                        "operation_kind": x.get("operation_kind"),
+                        "status": x.get("status"),
+                    }
+                    for x in unresolved_intents
+                ],
             },
         )
         return {
@@ -1628,6 +1816,16 @@ class MultiPositionTrader:
             "results": results,
             "open_positions": len(self.open_trades()),
             "unresolved_symbols": unresolved,
+            "unresolved_execution_intents": [
+                {
+                    "intent_id": x.get("intent_id"),
+                    "symbol": x.get("symbol"),
+                    "purpose": x.get("purpose"),
+                    "operation_kind": x.get("operation_kind"),
+                    "status": x.get("status"),
+                }
+                for x in unresolved_intents
+            ],
         }
 
     # ------------------------------------------------------------------
@@ -1654,11 +1852,43 @@ class MultiPositionTrader:
             )
             if list_id or list_client:
                 cancel = getattr(self.client, "cancel_oco", None)
-                if cancel is not None:
-                    if list_id:
+                if cancel is None:
+                    raise RuntimeError("cannot safely exit: OCO cancellation endpoint is unavailable")
+                if list_client and not is_exit_id(list_client):
+                    raise RuntimeError("refusing to cancel an OCO list not owned by Williams")
+                cancel_signal_id = f"OCO_CANCEL:{symbol}:{trade['id']}:{list_id}:{list_client}"
+                cancel_cid = stable_client_order_id(
+                    f"{self.MANUAL_PREFIX}CANCEL_", cancel_signal_id
+                )
+                cancel_intent = self._intent_for_legacy_mutation(
+                    symbol, "SELL", "CANCEL", cancel_cid,
+                    purpose="CANCEL",
+                    trade_id=int(trade["id"]),
+                    signal_id=cancel_signal_id,
+                    operation_kind="CANCEL_OCO",
+                    related_order_list_id=(list_id or list_client),
+                )
+
+                def _check_oco_owner(_snapshot):
+                    current_trade = self.db.open_trade(symbol)
+                    if current_trade is None or int(current_trade["id"]) != int(trade["id"]):
+                        raise RuntimeError("OCO cancellation target no longer belongs to the managed trade")
+                    current_list_id = str(current_trade.get("exit_order_list_id") or "")
+                    current_list_client = str(current_trade.get("exit_order_list_client_id") or "")
+                    if list_id and current_list_id != list_id:
+                        raise RuntimeError("OCO order-list ID changed before cancellation")
+                    if list_client and current_list_client != list_client:
+                        raise RuntimeError("OCO client identity changed before cancellation")
+
+                self._submit_mutation(
+                    cancel_intent,
+                    lambda: (
                         cancel(symbol, order_list_id=list_id)
-                    else:
-                        cancel(symbol, list_client_order_id=list_client)
+                        if list_id
+                        else cancel(symbol, list_client_order_id=list_client)
+                    ),
+                    pre_submit_checks=_check_oco_owner,
+                )
 
             account = self.client.account()
             free_qty = self._asset_balance(
@@ -1675,12 +1905,37 @@ class MultiPositionTrader:
                     f"{symbol}: managed quantity is no longer available"
                 )
 
-            sell = self.client.order_safe(
-                symbol,
-                "SELL",
-                "MARKET",
+            exit_signal_id = (
+                f"MANUAL_EXIT:{symbol}:{trade['id']}:"
+                f"{self.client.decimal_format(sell_qty)}"
+            )
+            client_id = stable_client_order_id(self.MANUAL_PREFIX, exit_signal_id)
+            exit_intent = self._intent_for_legacy_mutation(
+                symbol, "SELL", "MARKET", client_id,
+                purpose="EXIT",
                 quantity=self.client.decimal_format(sell_qty),
-                new_client_order_id=f"{self.MANUAL_PREFIX}{uuid.uuid4().hex[:20]}",
+                trade_id=int(trade["id"]),
+                signal_id=exit_signal_id,
+            )
+
+            def _check_manual_exit(_snapshot):
+                current_trade = self.db.open_trade(symbol)
+                if current_trade is None or int(current_trade["id"]) != int(trade["id"]):
+                    raise RuntimeError("managed trade ownership changed before manual exit")
+                free_now = self._asset_balance(symbol, account=self.client.account())
+                if free_now + 1e-12 < sell_qty:
+                    raise RuntimeError("manual exit exceeds currently confirmed free inventory")
+
+            sell = self._submit_mutation(
+                exit_intent,
+                lambda: self.client.order_safe(
+                    symbol,
+                    "SELL",
+                    "MARKET",
+                    quantity=self.client.decimal_format(sell_qty),
+                    new_client_order_id=client_id,
+                ),
+                pre_submit_checks=_check_manual_exit,
             )
             self.db.save_order(sell)
 
@@ -2180,9 +2435,33 @@ class MultiPositionTrader:
                 continue
 
             self._locks.add(symbol)
-            client_id = (
-                f"{self.ENTRY_PREFIX}{uuid.uuid4().hex[:20]}"
+            barrier_cache = self.execution_barrier.context_cache
+            snapshot = barrier_cache.snapshot()
+            permission_interval = str(
+                getattr(
+                    selection.candidate,
+                    "timeframe",
+                    os.getenv("INTERVAL", "1h"),
+                )
+            ).strip().lower()
+            permission_context = snapshot.context(symbol, permission_interval)
+            frames = snapshot.by_symbol.get(symbol, {})
+            required_versions = {
+                interval: context.version
+                for interval, context in frames.items()
+            }
+            signal_type = str(
+                getattr(selection.candidate, "entry_signal_type", "LEGACY_SCANNER")
             )
+            candle_time = (
+                int(permission_context.candle_close_time_ms)
+                if permission_context is not None else 0
+            )
+            signal_id = (
+                f"{symbol}:{permission_interval}:LEGACY_ENTRY:"
+                f"{candle_time}:{signal_type}"
+            )
+            client_id = stable_client_order_id(self.ENTRY_PREFIX, signal_id)
             self.set_state(
                 symbol,
                 "ENTRY_PENDING",
@@ -2214,12 +2493,53 @@ class MultiPositionTrader:
                     float(quote),
                 )
 
-                order = self.client.order_safe(
+                intent = OrderIntent.new(
                     symbol,
                     "BUY",
                     "MARKET",
-                    quote_order_qty=self.client.decimal_format(quote),
-                    new_client_order_id=client_id,
+                    required_context_versions=required_versions,
+                    hypothesis_id="LEGACY_SCANNER_ENTRY",
+                    purpose="ENTRY",
+                    permission_interval=permission_interval,
+                    campaign_id="",
+                    signal_id=signal_id,
+                    client_order_id=client_id,
+                    quote_order_quantity=self.client.decimal_format(quote),
+                    risk_quote=float(balance) * float(requested_risk_pct),
+                    capital_reserved_quote=float(quote),
+                )
+
+                def _check_legacy_entry(_snapshot):
+                    if str(self.db.state_get(self._pending_key(symbol), "")) != client_id:
+                        raise RuntimeError("pending-entry owner changed before submission")
+                    if self.state(symbol) != "ENTRY_PENDING":
+                        raise RuntimeError("symbol state changed before legacy entry")
+                    if self.db.open_trade(symbol) is not None:
+                        raise RuntimeError("managed position already exists")
+                    current_equity = self._balance()
+                    equity_ok, equity_reason = self.equity_breaker.check(
+                        self.db, current_equity, symbol
+                    )
+                    if not equity_ok:
+                        raise RuntimeError(equity_reason)
+                    if self.reserved_risk_quote() + float(balance) * float(requested_risk_pct) > (
+                        current_equity * self.max_total_risk_pct + 1e-9
+                    ):
+                        raise RuntimeError("portfolio risk budget changed before entry")
+                    if float(quote) > self._quote_free() + 1e-9:
+                        raise RuntimeError("available quote balance changed before entry")
+                    self.l2_guard.check_buy_quote(self.client, symbol, float(quote))
+
+                order = self._submit_mutation(
+                    intent,
+                    lambda: self.client.order_safe(
+                        symbol,
+                        "BUY",
+                        "MARKET",
+                        quote_order_qty=self.client.decimal_format(quote),
+                        new_client_order_id=client_id,
+                    ),
+                    pre_submit_checks=_check_legacy_entry,
                 )
                 self.db.save_order(order)
 
@@ -2310,13 +2630,17 @@ class MultiPositionTrader:
                     }
                 )
             except Exception as exc:
-                # Do NOT issue an emergency SELL here. The durable entry
-                # intent remains on disk and startup/next cycle recovery
-                # will inspect the exact Binance clientOrderId.
-                self.set_state(
-                    symbol,
-                    "RECONCILE_REQUIRED",
-                )
+                # Only a known pre-submit rejection may release the reservation.
+                # Once submit() could have run, keep state for exchange recovery.
+                ambiguous_or_post_submit = isinstance(exc, ExecutionAmbiguousError)
+                if ambiguous_or_post_submit:
+                    self.set_state(symbol, "RECONCILE_REQUIRED")
+                else:
+                    try:
+                        self.db.release_state_claim(self._pending_key(symbol), client_id)
+                    except Exception:
+                        pass
+                    self.set_state(symbol, "FLAT")
                 self.db.log_event(
                     "ERROR",
                     "multi_position_entry_error",
@@ -2324,13 +2648,14 @@ class MultiPositionTrader:
                     {
                         "symbol": symbol,
                         "clientOrderId": client_id,
+                        "reconcile_required": ambiguous_or_post_submit,
                     },
                 )
                 results.append(
                     {
                         "symbol": symbol,
                         "error": str(exc),
-                        "reconcile_required": True,
+                        "reconcile_required": ambiguous_or_post_submit,
                     }
                 )
             finally:

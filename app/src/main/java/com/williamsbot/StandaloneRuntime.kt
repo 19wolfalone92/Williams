@@ -1517,6 +1517,353 @@ private class NativeEngine(
         error("Binance HTTP " + lastCode + ": " + lastBody)
     }
 
+    private data class ExecutionMutationSpec(
+        val intentId: String,
+        val logicalKey: String,
+        val clientOrderId: String?,
+        val targetClientOrderId: String?,
+        val symbol: String,
+        val operation: String,
+        val method: String,
+        val path: String,
+        val targetOrderId: String?,
+        val targetOrderListId: String?,
+        val requestJson: String,
+        val increasesExposure: Boolean
+    )
+
+    private fun parseSignedParams(params: String): Map<String, String> =
+        params.split("&").filter { it.isNotBlank() }.associate { part ->
+            val split = part.indexOf('=')
+            val name = if (split >= 0) part.substring(0, split) else part
+            val value = if (split >= 0) part.substring(split + 1) else ""
+            URLDecoder.decode(name, StandardCharsets.UTF_8.name()) to
+                URLDecoder.decode(value, StandardCharsets.UTF_8.name())
+        }
+
+    private fun stableNativeClientOrderId(prefix: String, vararg parts: String): String {
+        val safePrefix = prefix.filter { it.isLetterOrDigit() || it == '_' || it == '-' }
+            .take(14).ifBlank { "WMS_" }
+        val material = parts.joinToString("|")
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(material.toByteArray(StandardCharsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+        return (safePrefix + digest.take(20)).take(36)
+    }
+
+    private fun executionMutationSpec(method: String, path: String, params: String): ExecutionMutationSpec? {
+        val verb = method.uppercase(Locale.US)
+        val p = parseSignedParams(params)
+        val supported =
+            (verb == "POST" && path in setOf("/api/v3/order", "/api/v3/orderList/oco", "/api/v3/order/cancelReplace")) ||
+            (verb == "DELETE" && path in setOf("/api/v3/order", "/api/v3/orderList"))
+        if (!supported) return null
+
+        val symbol = p["symbol"].orEmpty().uppercase(Locale.US)
+        require(symbol.isNotBlank()) { "Mutation blocked: missing symbol" }
+        val side = p["side"].orEmpty().uppercase(Locale.US)
+        val type = p["type"].orEmpty().uppercase(Locale.US)
+        val targetOrder = p["orderId"] ?: p["cancelOrderId"]
+        val targetList = p["orderListId"] ?: p["cancelOrderListId"]
+        val targetClient = p["origClientOrderId"] ?: p["cancelOrigClientOrderId"] ?: p["listClientOrderId"]
+        val exchangeClient = when (path) {
+            "/api/v3/order" -> if (verb == "POST") p["newClientOrderId"] else null
+            "/api/v3/orderList/oco" -> p["listClientOrderId"]
+            "/api/v3/order/cancelReplace" -> p["newClientOrderId"]
+            else -> null
+        }
+        val operation = when {
+            verb == "POST" && path == "/api/v3/order" && side == "BUY" -> "ENTRY_ORDER"
+            verb == "POST" && path == "/api/v3/order" && side == "SELL" && type == "MARKET" -> "MARKET_EXIT"
+            verb == "POST" && path == "/api/v3/order" -> "PROTECTION_ORDER"
+            verb == "POST" && path == "/api/v3/orderList/oco" -> "OCO_CREATE"
+            verb == "POST" && path == "/api/v3/order/cancelReplace" -> "CANCEL_REPLACE"
+            verb == "DELETE" && path == "/api/v3/order" -> "CANCEL_ORDER"
+            else -> "CANCEL_OCO"
+        }
+        if (verb == "POST" && exchangeClient.isNullOrBlank()) {
+            throw IllegalStateException("Mutation blocked before network: stable clientOrderId/listClientOrderId missing for $path")
+        }
+        if (verb == "DELETE" && path == "/api/v3/order" && targetOrder.isNullOrBlank() && p["origClientOrderId"].isNullOrBlank()) {
+            throw IllegalStateException("Cancel blocked before network: order identity missing")
+        }
+        if (verb == "DELETE" && path == "/api/v3/orderList" && targetList.isNullOrBlank() && p["listClientOrderId"].isNullOrBlank()) {
+            throw IllegalStateException("OCO cancel blocked before network: list identity missing")
+        }
+        if (operation == "CANCEL_REPLACE" && targetOrder.isNullOrBlank() && p["cancelOrigClientOrderId"].isNullOrBlank()) {
+            throw IllegalStateException("cancelReplace blocked before network: old order identity missing")
+        }
+
+        val stable = when (verb) {
+            "POST" -> if (operation == "CANCEL_REPLACE") "$operation|$symbol|${targetOrder ?: p["cancelOrigClientOrderId"].orEmpty()}|$exchangeClient"
+                      else "$operation|$symbol|$exchangeClient"
+            else -> "$operation|$symbol|${targetOrder.orEmpty()}|${targetList.orEmpty()}|${p["origClientOrderId"].orEmpty()}|${p["listClientOrderId"].orEmpty()}"
+        }
+        val requestJson = JSONObject(p.toSortedMap()).toString()
+        val logical = "$verb|$path|$stable"
+        return ExecutionMutationSpec(
+            intentId = stableNativeClientOrderId("WMS_INTENT_", logical),
+            logicalKey = logical,
+            clientOrderId = exchangeClient ?: stableNativeClientOrderId("WMS_MUT_", stable),
+            targetClientOrderId = if (verb == "DELETE" || operation == "CANCEL_REPLACE") targetClient else null,
+            symbol = symbol,
+            operation = operation,
+            method = verb,
+            path = path,
+            targetOrderId = targetOrder,
+            targetOrderListId = targetList,
+            requestJson = requestJson,
+            increasesExposure = verb == "POST" && side == "BUY"
+        )
+    }
+
+    private fun latchMutationReconciliation(reason: String) {
+        reconcileRequired = true
+        stateMachine.force(TradingState.RECONCILE_REQUIRED, "Execution mutation unresolved: $reason")
+        val saved = runCatching {
+            prefs.edit()
+                .putBoolean("reconcile_required", true)
+                .putBoolean("reconcileRequired", true)
+                .commit()
+        }.getOrDefault(false)
+        lastError = if (saved) "RECONCILE_REQUIRED: $reason"
+            else "RECONCILE_REQUIRED: $reason; durable latch write failed"
+        paused = true
+    }
+
+    private fun isPotentialOrderMutation(method: String, path: String): Boolean {
+        val verb = method.uppercase(Locale.US)
+        if (verb !in setOf("POST", "PUT", "PATCH", "DELETE")) return false
+        // Central fail-closed default: any write-like request to an order,
+        // order-list, algo-order or open-orders endpoint must be explicitly
+        // modelled above; otherwise it is rejected before opening a socket.
+        return path.contains("/order", ignoreCase = true) ||
+            path.contains("/algoOrder", ignoreCase = true) ||
+            path.contains("/openOrders", ignoreCase = true) ||
+            path.contains("cancelReplace", ignoreCase = true)
+    }
+
+    private fun validateAndPersistMutationIntent(spec: ExecutionMutationSpec) {
+        if (spec.increasesExposure) {
+            check(!killLatched) { "New entry blocked: KILL_SWITCH_LATCHED" }
+            check(!reconcileRequired) { "New entry blocked: RECONCILE_REQUIRED" }
+            check(auditStore.unresolvedExecutionMutationCount() == 0) {
+                "New entry blocked: unresolved execution mutations require reconciliation"
+            }
+        }
+        check(auditStore.unresolvedExecutionMutationCount(spec.symbol) == 0) {
+            "Mutation blocked for ${spec.symbol}: previous result remains unresolved"
+        }
+        auditStore.beginExecutionMutation(
+            intentId = spec.intentId,
+            logicalKey = spec.logicalKey,
+            clientOrderId = spec.clientOrderId,
+            targetClientOrderId = spec.targetClientOrderId,
+            symbol = spec.symbol,
+            operation = spec.operation,
+            method = spec.method,
+            path = spec.path,
+            targetOrderId = spec.targetOrderId,
+            targetOrderListId = spec.targetOrderListId,
+            requestJson = spec.requestJson
+        )
+        auditStore.markExecutionMutationSubmitting(spec.intentId)
+    }
+
+    private fun mutationResultStatus(
+        spec: ExecutionMutationSpec,
+        httpStatus: Int,
+        body: String
+    ): Pair<String, String> {
+        if (httpStatus !in 200..299) {
+            val errorBody = runCatching { JSONObject(body) }.getOrNull()
+            val code = errorBody?.optInt("code", 0) ?: 0
+            if (spec.operation in setOf("ENTRY_ORDER", "PROTECTION_ORDER") &&
+                code in setOf(-1013, -1100, -1101, -1102, -1104, -1111)
+            ) {
+                // These Binance order-parameter/filter rejections establish that
+                // the new order was not accepted. They do not validate the
+                // strategy, but they do not leave an unknown live order either.
+                return "REJECTED" to ("authoritative Binance order rejection code " + code)
+            }
+            return "AMBIGUOUS" to ("Binance HTTP " + httpStatus + "; reconcile exact identity before retry")
+        }
+        val response = runCatching { JSONObject(body) }.getOrNull()
+            ?: return "RECONCILE_REQUIRED" to "Mutation response is not valid JSON"
+        fun status(row: JSONObject?): String =
+            row?.optString("status").orEmpty().uppercase(Locale.US)
+        fun executed(row: JSONObject?): Double? {
+            if (row == null || !row.has("executedQty")) return 0.0
+            return row.optString("executedQty").toDoubleOrNull()
+        }
+
+        if (spec.operation == "CANCEL_REPLACE") {
+            val cancelResult = response.optString("cancelResult").uppercase(Locale.US)
+            val newResult = response.optString("newOrderResult").uppercase(Locale.US)
+            val cancelResponse = response.optJSONObject("cancelResponse")
+            val newResponse = response.optJSONObject("newOrderResponse")
+            if (cancelResult != "SUCCESS" ||
+                status(cancelResponse) !in setOf("CANCELED", "CANCELLED", "EXPIRED", "REJECTED") ||
+                executed(cancelResponse) != 0.0
+            ) {
+                return "RECONCILE_REQUIRED" to "cancelReplace old order not proven terminal and unfilled"
+            }
+            if (newResult == "SUCCESS" &&
+                status(newResponse) in setOf("NEW", "PENDING_NEW") &&
+                executed(newResponse) == 0.0
+            ) return "SUBMITTED" to ""
+            return "RECONCILE_REQUIRED" to "cancelReplace did not prove a safe old/new order pair"
+        }
+
+        if (spec.operation == "OCO_CREATE" || spec.operation == "CANCEL_OCO") {
+            val reports = response.optJSONArray("orderReports")
+                ?: return "RECONCILE_REQUIRED" to "OCO response lacks per-leg reports"
+            if (reports.length() == 0) return "RECONCILE_REQUIRED" to "OCO response contains no leg reports"
+            val states = mutableListOf<String>()
+            for (i in 0 until reports.length()) {
+                val leg = reports.optJSONObject(i)
+                    ?: return "RECONCILE_REQUIRED" to "OCO response contains malformed leg data"
+                val legStatus = status(leg)
+                val qty = executed(leg)
+                if (qty == null || qty < 0.0) {
+                    return "RECONCILE_REQUIRED" to "OCO leg executedQty is invalid"
+                }
+                if (legStatus in setOf("FILLED", "PARTIALLY_FILLED") || qty > 0.0) {
+                    return "RECONCILE_REQUIRED" to "OCO leg fill detected; position must be reconciled"
+                }
+                states += legStatus
+            }
+            if (spec.operation == "OCO_CREATE" && states.all { it in setOf("NEW", "PENDING_NEW") }) {
+                return "SUBMITTED" to ""
+            }
+            if (spec.operation == "CANCEL_OCO" && states.all { it in setOf("CANCELED", "CANCELLED", "EXPIRED", "REJECTED") }) {
+                return "SUBMITTED" to ""
+            }
+            return "RECONCILE_REQUIRED" to "OCO leg statuses do not prove a safe mutation outcome"
+        }
+
+        val orderStatus = status(response)
+        val executedQty = executed(response)
+        if (executedQty == null || executedQty < 0.0) {
+            return "RECONCILE_REQUIRED" to "Order response has invalid executedQty"
+        }
+        return when (spec.operation) {
+            "CANCEL_ORDER" -> if (
+                orderStatus in setOf("CANCELED", "CANCELLED", "EXPIRED", "REJECTED") &&
+                executedQty == 0.0
+            ) "SUBMITTED" to "" else
+                "RECONCILE_REQUIRED" to "Order cancellation raced with a fill or lacks a terminal state"
+            "PROTECTION_ORDER" -> if (
+                orderStatus in setOf("NEW", "PENDING_NEW") && executedQty == 0.0
+            ) "SUBMITTED" to "" else
+                "RECONCILE_REQUIRED" to "Protective order is not an untouched active order"
+            "MARKET_EXIT" -> if (orderStatus == "FILLED" && executedQty > 0.0) {
+                "SUBMITTED" to ""
+            } else {
+                "RECONCILE_REQUIRED" to "Market exit is partial, unfilled or has unknown state"
+            }
+            "ENTRY_ORDER" -> if (
+                orderStatus in setOf("NEW", "PENDING_NEW", "PARTIALLY_FILLED", "FILLED") &&
+                (orderStatus !in setOf("PARTIALLY_FILLED", "FILLED") || executedQty > 0.0)
+            ) "SUBMITTED" to "" else
+                "RECONCILE_REQUIRED" to "Entry order has no authoritative status or fill quantity"
+            else -> "RECONCILE_REQUIRED" to "Unsupported execution mutation response"
+        }
+    }
+
+    private fun reconcileMutationFromAuthoritativeRead(path: String, params: String, body: String) {
+        val query = parseSignedParams(params)
+        val response = runCatching { JSONObject(body) }.getOrNull()
+            ?: throw IllegalStateException("Exchange read used for reconciliation is not valid JSON")
+        var evidenceBody = body
+
+        when (path) {
+            "/api/v3/order" -> {
+                val exchangeStatus = response.optString("status").uppercase(Locale.US)
+                val clientId = query["origClientOrderId"]
+                val orderId = query["orderId"]
+                if (!clientId.isNullOrBlank()) {
+                    val executed = response.optString("executedQty").toDoubleOrNull() ?: -1.0
+                    auditStore.reconcileExecutionMutationByClientOrderId(
+                        clientId, exchangeStatus, body
+                    )
+                    auditStore.reconcileExecutionMutationByTargetClientOrderId(
+                        clientId, exchangeStatus, executed, body
+                    )
+                }
+                if (!orderId.isNullOrBlank()) {
+                    auditStore.reconcileExecutionMutationByTargetOrderId(
+                        orderId,
+                        exchangeStatus,
+                        response.optString("executedQty").toDoubleOrNull() ?: -1.0,
+                        body
+                    )
+                }
+            }
+            "/api/v3/orderList" -> {
+                val listClientId = query["origClientOrderId"] ?: query["listClientOrderId"]
+                val listId = query["orderListId"]
+                val listStatus = response.optString("listOrderStatus").ifBlank {
+                    response.optString("listStatusType")
+                }.uppercase(Locale.US)
+
+                // Spot GET /api/v3/orderList normally returns order IDs, not
+                // orderReports. Query every child by exchange orderId before
+                // resolving an ambiguous list creation/cancellation.
+                if (response.optJSONArray("orderReports") == null) {
+                    val orderSummaries = response.optJSONArray("orders")
+                        ?: throw IllegalStateException(
+                            "order-list response lacks both orderReports and orders"
+                        )
+                    if (orderSummaries.length() == 0) {
+                        throw IllegalStateException("order-list query returned no leg identities")
+                    }
+                    val detailedReports = JSONArray()
+                    for (index in 0 until orderSummaries.length()) {
+                        val summary = orderSummaries.optJSONObject(index)
+                            ?: throw IllegalStateException("malformed order-list leg summary")
+                        val orderId = summary.optString("orderId").takeIf { it.isNotBlank() }
+                            ?: throw IllegalStateException("order-list leg has no exchange orderId")
+                        val symbol = summary.optString("symbol").ifBlank {
+                            query["symbol"].orEmpty()
+                        }.uppercase(Locale.US)
+                        if (symbol.isBlank()) {
+                            throw IllegalStateException("order-list leg has no symbol for authoritative lookup")
+                        }
+                        detailedReports.put(
+                            signedRequest(
+                                "GET",
+                                "/api/v3/order",
+                                "symbol=" + symbol + "&orderId=" + orderId
+                            )
+                        )
+                    }
+                    response.put("orderReports", detailedReports)
+                    evidenceBody = response.toString()
+                }
+
+                if (!listClientId.isNullOrBlank()) {
+                    auditStore.reconcileExecutionMutationByClientOrderId(
+                        listClientId, listStatus, evidenceBody
+                    )
+                    auditStore.reconcileExecutionMutationByTargetOrderListClientId(
+                        listClientId, evidenceBody
+                    )
+                }
+                if (!listId.isNullOrBlank()) {
+                    auditStore.reconcileExecutionMutationByTargetOrderListId(listId, evidenceBody)
+                }
+            }
+        }
+        val unresolved = auditStore.unresolvedExecutionMutationCount()
+        if (unresolved > 0) {
+            latchMutationReconciliation(
+                "authoritative order lookup completed but " + unresolved +
+                    " mutation(s) still require fill/position accounting"
+            )
+        }
+    }
+
     private fun signedAccount(): JSONObject =
         signedRequest(
             method = "GET",
@@ -1529,51 +1876,211 @@ private class NativeEngine(
         path: String,
         params: String
     ): JSONObject {
-        var lastBody = "{}"
-        repeat(2) { attempt ->
-            val query = if (params.isBlank()) {
-                "timestamp=" + signedTimestamp() + "&recvWindow=" + BINANCE_RECV_WINDOW_MS
-            } else {
-                params + "&timestamp=" + signedTimestamp() + "&recvWindow=" + BINANCE_RECV_WINDOW_MS
-            }
-            val signature = hmac(query, secret())
-            val request = when (method) {
-                "POST" -> Request.Builder()
-                    .url(baseUrl + path)
-                    .header("X-MBX-APIKEY", key())
-                    .post((query + "&signature=" + signature).toRequestBody("application/x-www-form-urlencoded".toMediaType()))
-                    .build()
-                "DELETE" -> Request.Builder()
-                    .url(baseUrl + path + "?" + query + "&signature=" + signature)
-                    .header("X-MBX-APIKEY", key())
-                    .delete()
-                    .build()
-                else -> Request.Builder()
-                    .url(baseUrl + path + "?" + query + "&signature=" + signature)
-                    .header("X-MBX-APIKEY", key())
-                    .get()
-                    .build()
-            }
-            rateGuard.beforeRequest()
-            http.newCall(request).execute().use { response ->
-                rateGuard.observe(response.headers, response.code)
-                lastBody = response.body?.string() ?: "{}"
-                auditStore.recordRestCall(
-                    method,
-                    path,
-                    response.code,
-                    params.ifBlank { null },
-                    lastBody
-                )
-                if (response.isSuccessful) return JSONObject(lastBody)
-                if (attempt == 0 && lastBody.contains("-1021")) {
-                    runCatching { syncServerTime() }
-                    return@use
+        val mutation = executionMutationSpec(method, path, params)
+        if (mutation == null && isPotentialOrderMutation(method, path)) {
+            throw IllegalStateException(
+                "Unsupported Binance order mutation blocked before network: $method $path"
+            )
+        }
+        if (mutation != null) {
+            try {
+                validateAndPersistMutationIntent(mutation)
+            } catch (failure: Exception) {
+                // No network request has started. Keep the mutation fail-closed;
+                // if a partial durable write exists, latch recovery for restart.
+                val unresolved = runCatching {
+                    auditStore.unresolvedExecutionMutationCount(mutation.symbol)
+                }.getOrDefault(1)
+                if (unresolved > 0) {
+                    latchMutationReconciliation(
+                        "write-ahead intent admission failed for " + mutation.operation +
+                            ": " + (failure.message ?: failure.javaClass.simpleName)
+                    )
                 }
-                error("Binance " + response.code + ": " + lastBody)
+                throw IllegalStateException(
+                    "Binance mutation blocked before network: mandatory intent was not durably confirmed",
+                    failure
+                )
             }
         }
-        error("Binance timestamp retry failed: " + lastBody)
+
+        var lastBody = "{}"
+        try {
+            repeat(2) { attempt ->
+                val query = if (params.isBlank()) {
+                    "timestamp=" + signedTimestamp() + "&recvWindow=" + BINANCE_RECV_WINDOW_MS
+                } else {
+                    params + "&timestamp=" + signedTimestamp() + "&recvWindow=" + BINANCE_RECV_WINDOW_MS
+                }
+                val signature = hmac(query, secret())
+                val request = when (method.uppercase(Locale.US)) {
+                    "POST" -> Request.Builder()
+                        .url(baseUrl + path)
+                        .header("X-MBX-APIKEY", key())
+                        .post((query + "&signature=" + signature).toRequestBody("application/x-www-form-urlencoded".toMediaType()))
+                        .build()
+                    "DELETE" -> Request.Builder()
+                        .url(baseUrl + path + "?" + query + "&signature=" + signature)
+                        .header("X-MBX-APIKEY", key())
+                        .delete()
+                        .build()
+                    else -> Request.Builder()
+                        .url(baseUrl + path + "?" + query + "&signature=" + signature)
+                        .header("X-MBX-APIKEY", key())
+                        .get()
+                        .build()
+                }
+                rateGuard.beforeRequest()
+                http.newCall(request).execute().use { response ->
+                    rateGuard.observe(response.headers, response.code)
+                    lastBody = response.body?.string() ?: "{}"
+
+                    // Binance's explicit timestamp rejection means this attempt
+                    // did not execute the mutation. Keep the same durable intent
+                    // and retry once with corrected time; never mint a new ID.
+                    if (attempt == 0 && lastBody.contains("-1021")) {
+                        // Binance explicitly rejected this timestamped request before
+                        // mutation. Keep optional REST telemetry out of the mandatory
+                        // execution-result path; the same durable intent is retried
+                        // with corrected time and the same clientOrderId.
+                        runCatching { syncServerTime() }
+                        return@use
+                    }
+
+                    if (mutation != null) {
+                        val classified = if (response.isSuccessful) {
+                            mutationResultStatus(mutation, response.code, lastBody)
+                        } else {
+                            "AMBIGUOUS" to (
+                                "Binance HTTP " + response.code +
+                                    "; authoritative follow-up query required before retry"
+                            )
+                        }
+                        try {
+                            auditStore.recordExecutionMutationResult(
+                                intentId = mutation.intentId,
+                                httpStatus = response.code,
+                                finalStatus = classified.first,
+                                responseJson = lastBody,
+                                reason = classified.second
+                            )
+                        } catch (resultWriteFailure: Exception) {
+                            runCatching {
+                                auditStore.markExecutionMutationAmbiguous(
+                                    mutation.intentId,
+                                    "mandatory exchange result write/read-back failed: " +
+                                        (resultWriteFailure.message ?: resultWriteFailure.javaClass.simpleName)
+                                )
+                            }
+                            latchMutationReconciliation(
+                                "Binance may have accepted " + mutation.operation +
+                                    ", but its response could not be durably verified"
+                            )
+                            throw IllegalStateException(
+                                "Execution outcome UNKNOWN: durable Binance response storage failed; blind retry forbidden",
+                                resultWriteFailure
+                            )
+                        }
+
+                        if (classified.first in setOf("AMBIGUOUS", "RECONCILE_REQUIRED")) {
+                            latchMutationReconciliation(
+                                mutation.operation + " requires authoritative reconciliation: " +
+                                    classified.second
+                            )
+                        }
+                    }
+
+                    // REST-call diagnostics are optional telemetry. A logger
+                    // outage must not override the durable mutation result or
+                    // prevent a known protective/reducing response from returning.
+                    runCatching {
+                        auditStore.recordRestCall(
+                            method,
+                            path,
+                            response.code,
+                            params.ifBlank { null },
+                            lastBody
+                        )
+                    }
+
+                    if (!response.isSuccessful) {
+                        if (mutation == null &&
+                            method.equals("GET", ignoreCase = true) &&
+                            path == "/api/v3/order" &&
+                            parseSignedParams(params)["origClientOrderId"].isNullOrBlank().not()
+                        ) {
+                            val exchangeError = runCatching { JSONObject(lastBody) }.getOrNull()
+                            if (exchangeError?.optInt("code", 0) == -2013) {
+                                val absentClientId = parseSignedParams(params)["origClientOrderId"].orEmpty()
+                                runCatching {
+                                    auditStore.reconcileExecutionMutationByClientOrderId(
+                                        absentClientId,
+                                        "NOT_FOUND",
+                                        lastBody,
+                                        notFound = true
+                                    )
+                                }.onFailure { reconcileFailure ->
+                                    latchMutationReconciliation(
+                                        "could not durably record Binance -2013 absence: " +
+                                            (reconcileFailure.message ?: reconcileFailure.javaClass.simpleName)
+                                    )
+                                    throw IllegalStateException(
+                                        "Order absence could not be durably reconciled",
+                                        reconcileFailure
+                                    )
+                                }
+                            }
+                        }
+                        error("Binance " + response.code + ": " + lastBody)
+                    }
+                    if (mutation != null) {
+                        val classified = mutationResultStatus(mutation, response.code, lastBody)
+                        if (classified.first != "SUBMITTED") {
+                            throw IllegalStateException(
+                                "Execution outcome requires reconciliation: " + classified.second
+                            )
+                        }
+                    } else if (method.equals("GET", ignoreCase = true) &&
+                        path in setOf("/api/v3/order", "/api/v3/orderList")
+                    ) {
+                        try {
+                            reconcileMutationFromAuthoritativeRead(path, params, lastBody)
+                        } catch (reconcileFailure: Exception) {
+                            latchMutationReconciliation(
+                                "mandatory exchange read-back reconciliation failed: " +
+                                    (reconcileFailure.message ?: reconcileFailure.javaClass.simpleName)
+                            )
+                            throw IllegalStateException(
+                                "Exchange state cannot be authoritatively reconciled; trading remains blocked",
+                                reconcileFailure
+                            )
+                        }
+                    }
+                    return JSONObject(lastBody)
+                }
+            }
+            error("Binance timestamp retry failed: " + lastBody)
+        } catch (failure: Exception) {
+            if (mutation != null) {
+                val unresolved = runCatching {
+                    auditStore.unresolvedExecutionMutationCount(mutation.symbol)
+                }.getOrDefault(1)
+                if (unresolved > 0) {
+                    runCatching {
+                        auditStore.markExecutionMutationAmbiguous(
+                            mutation.intentId,
+                            "request/response path failed after SUBMITTING: " +
+                                (failure.message ?: failure.javaClass.simpleName)
+                        )
+                    }
+                    latchMutationReconciliation(
+                        "mutation result is unknown for " + mutation.operation +
+                            ": " + (failure.message ?: failure.javaClass.simpleName)
+                    )
+                }
+            }
+            throw failure
+        }
     }
 
     private fun signedRawGet(
@@ -1609,13 +2116,15 @@ private class NativeEngine(
             http.newCall(request).execute().use { response ->
                 rateGuard.observe(response.headers, response.code)
                 lastBody = response.body?.string() ?: "{}"
-                auditStore.recordRestCall(
-                    "GET",
-                    path,
-                    response.code,
-                    params.ifBlank { null },
-                    lastBody
-                )
+                runCatching {
+                    auditStore.recordRestCall(
+                        "GET",
+                        path,
+                        response.code,
+                        params.ifBlank { null },
+                        lastBody
+                    )
+                }
                 if (response.isSuccessful) return lastBody
                 if (attempt == 0 && lastBody.contains("-1021")) {
                     runCatching { syncServerTime() }
@@ -2651,10 +3160,13 @@ private class NativeEngine(
         }.getOrDefault(0.0)
         if (rules.maxPosition.isFinite() && existingBase + qty > rules.maxPosition) return
 
-        val clientId =
-            "W5E_" + signal.type + "_" + signal.signalBarTimeMs + "_" +
-                System.nanoTime().toString(16).takeLast(10)
-        val campaignId = "W5C_" + System.nanoTime().toString(16)
+        val clientId = stableNativeClientOrderId(
+            "W5E_", candidate.symbol, signal.signalId, signal.type,
+            signal.signalBarTimeMs.toString(), "INITIAL_ENTRY"
+        )
+        val campaignId = stableNativeClientOrderId(
+            "W5C_", candidate.symbol, signal.signalId, "CAMPAIGN"
+        )
 
         val pending = PendingEntry(
             symbol = candidate.symbol,
@@ -2743,7 +3255,10 @@ private class NativeEngine(
             symbol + ": market price is already at/below campaign stop"
         }
 
-        val clientId = "W5S_" + System.nanoTime().toString(16)
+        val clientId = stableNativeClientOrderId(
+            "W5S_", position.symbol, position.campaignId, position.signalId,
+            qty.toString(), stop.toString(), "PROTECTIVE_STOP"
+        )
         val order = withCampaignMutation(symbol, "CAMPAIGN_PROTECTION") {
             checkCampaignOrderCapacity(symbol, 1)
             signedPost(
@@ -2786,7 +3301,11 @@ private class NativeEngine(
             return
         }
 
-        val newClientId = "W5S_" + System.nanoTime().toString(16)
+        val newClientId = stableNativeClientOrderId(
+            "W5S_", position.symbol, position.campaignId, position.signalId,
+            oldId.toString(), position.qty.toString(), stop.toString(),
+            "PROTECTIVE_STOP_REPLACE"
+        )
         val result = withCampaignMutation(position.symbol, "CAMPAIGN_TRAIL") {
             signedCancelReplace(
                 position.symbol,
@@ -2863,7 +3382,10 @@ private class NativeEngine(
                 symbol + ": campaign exit quantity below minimum"
             }
 
-            val cid = "W5X_" + System.nanoTime().toString(16)
+            val cid = stableNativeClientOrderId(
+                "W5X_", position.symbol, position.campaignId, position.signalId,
+                qty.toString(), reason, "CAMPAIGN_EXIT"
+            )
             val order = withCampaignMutation(symbol, "CAMPAIGN_EXIT") {
                 signedPost(
                     "/api/v3/order",
@@ -3250,7 +3772,10 @@ private class NativeEngine(
                         if (rules.marketMinQty > 0.0) rules.marketMinQty else rules.minQty
                     )
                 )
-                val cid = "W5EM_" + System.nanoTime().toString(16)
+                val cid = stableNativeClientOrderId(
+                    "W5EM_", intent.symbol, intent.campaignId, intent.signalId,
+                    emergencyQty.toString(), "PROTECTION_FAILURE_EXIT"
+                )
                 val emergency = withCampaignMutation(
                     intent.symbol,
                     "CAMPAIGN_EMERGENCY_EXIT"
@@ -3540,9 +4065,11 @@ private class NativeEngine(
             campaignBaseBalance(candidate.symbol) + qty > rules.maxPosition
         ) return
 
-        val clientId =
-            "W5E_ADD_" + signal.type + "_" + signal.signalBarTimeMs + "_" +
-                System.nanoTime().toString(16).takeLast(8)
+        val clientId = stableNativeClientOrderId(
+            "W5A_", candidate.symbol, position.campaignId, signal.signalId,
+            signal.type, signal.signalBarTimeMs.toString(), trigger.toString(),
+            "CAMPAIGN_ADD_ON"
+        )
         val pending = PendingEntry(
             symbol = candidate.symbol,
             clientOrderId = clientId,
@@ -4143,11 +4670,16 @@ private class NativeEngine(
                         require(qty >= rules.minQty) {
                             "Emergency SELL quantity below Binance minimum"
                         }
+                        val emergencyClientId = stableNativeClientOrderId(
+                            "W5X_", stored.symbol, stored.campaignId, stored.signalId,
+                            qty.toString(), "UNPROTECTED_POSITION_EXIT"
+                        )
                         val sell = signedPost(
                             "/api/v3/order",
                             "symbol=" + stored.symbol +
                                 "&side=SELL&type=MARKET&quantity=" +
-                                fmtQty(qty, rules.decimals)
+                                fmtQty(qty, rules.decimals) +
+                                "&newClientOrderId=" + emergencyClientId
                         )
                         val exitPrice = sell.optString("cummulativeQuoteQty")
                             .toDoubleOrNull()
@@ -5118,7 +5650,13 @@ private class NativeEngine(
         if (!price.isNullOrBlank()) params.append("&price=").append(price)
         if (!stopPrice.isNullOrBlank()) params.append("&stopPrice=").append(stopPrice)
         if (!timeInForce.isNullOrBlank()) params.append("&timeInForce=").append(timeInForce)
-        if (!newClientOrderId.isNullOrBlank()) params.append("&newClientOrderId=").append(newClientOrderId)
+        val replacementClientId = newClientOrderId?.takeIf { it.isNotBlank() }
+            ?: stableNativeClientOrderId(
+                "W5R_", symbol, cancelOrderId.toString(), side, type,
+                quantity.orEmpty(), price.orEmpty(), stopPrice.orEmpty(),
+                timeInForce.orEmpty(), "CANCEL_REPLACE"
+            )
+        params.append("&newClientOrderId=").append(replacementClientId)
         return signedPost("/api/v3/order/cancelReplace", params.toString())
     }
 
@@ -5679,12 +6217,17 @@ private class NativeEngine(
                 "% for " + candidate.symbol
         }
 
-        val clientOrderId =
-            "W4B_" +
-                java.util.UUID.randomUUID()
-                    .toString()
-                    .replace("-", "")
-                    .take(28)
+        val signalIdentity = candidate.campaignSignals
+            .firstOrNull()?.signalId
+            .orEmpty()
+            .ifBlank {
+                candidate.symbol + "|" +
+                    (candidate.candles.lastOrNull()?.t ?: 0L).toString() + "|" +
+                    candidate.score.toString() + "|" + candidate.atrPct.toString()
+            }
+        val clientOrderId = stableNativeClientOrderId(
+            "W4B_", candidate.symbol, signalIdentity, "MARKET_ENTRY"
+        )
 
         if (!gated) {
             if (!stateMachine.transition(
@@ -6015,7 +6558,12 @@ private class NativeEngine(
                                     "symbol=" + candidate.symbol +
                                         "&side=SELL&type=MARKET" +
                                         "&quantity=" +
-                                        fmtQty(filled, rules.decimals)
+                                        fmtQty(filled, rules.decimals) +
+                                        "&newClientOrderId=" +
+                                        stableNativeClientOrderId(
+                                            "W4X_", candidate.symbol, clientOrderId,
+                                            filled.toString(), "UNPROTECTED_BUY_EXIT"
+                                        )
                                 )
                             }.onFailure {
                                 setReconcileRequired(
@@ -6123,12 +6671,11 @@ private class NativeEngine(
             error("OCO notional above Binance maximum")
         }
 
-        val ocoClientId =
-            "W4O_" +
-                java.util.UUID.randomUUID()
-                    .toString()
-                    .replace("-", "")
-                    .take(28)
+        val ocoClientId = stableNativeClientOrderId(
+            "W4O_", symbol, normalizedQty.toString(), entry.toString(),
+            takeLimit.toString(), stop.toString(), stopLimit.toString(),
+            "PROTECTIVE_OCO"
+        )
 
         val oco =
             signedPost(
@@ -6298,6 +6845,10 @@ private class NativeEngine(
                     .put("state", stateName())
             }
 
+            val sellClientOrderId = stableNativeClientOrderId(
+                "W4M_", symbol, stored.campaignId, stored.signalId,
+                stored.entry.toString(), qty.toString(), "MANUAL_MARKET_EXIT"
+            )
             val sell =
                 signedPost(
                     "/api/v3/order",
@@ -6307,7 +6858,8 @@ private class NativeEngine(
                         fmtQty(
                             qty,
                             rules.decimals
-                        )
+                        ) +
+                        "&newClientOrderId=" + sellClientOrderId
                 )
 
             val exitPrice =

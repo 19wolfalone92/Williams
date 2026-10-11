@@ -7,11 +7,13 @@ from typing import Any
 import json
 import os
 import uuid
+import time
 
 from binance_client import BinanceAPIError
 from campaign_engine import CampaignEngine
 from campaign_model import CampaignState, PendingOrderRecord, SignalSpec, SignalState, SignalType
 from decision_trace import DecisionTrace
+from order_identity import stable_client_order_id
 from execution_barrier import ExecutionBarrier, OrderIntent
 
 
@@ -190,6 +192,104 @@ class CampaignExecutionService:
             )
         return result.response
 
+    def _validate_campaign_position(
+        self,
+        campaign,
+        requested_quantity: float,
+        *,
+        exclude_order_id=None,
+        target_order_id=None,
+        require_no_other_stop=False,
+    ):
+        """Final ownership/state check for position-reducing/protection mutations."""
+        latest = self.engine.load_campaign(campaign.campaign_id)
+        if latest is None or str(latest.symbol).upper() != str(campaign.symbol).upper():
+            raise CampaignExecutionError(
+                f"{campaign.symbol}: durable campaign ownership is unavailable at final submission"
+            )
+        latest_state = getattr(latest.state, "value", latest.state)
+        if str(latest_state).upper() in {
+            CampaignState.CLOSED.value,
+            CampaignState.FLAT.value,
+            CampaignState.RECONCILE_REQUIRED.value,
+        }:
+            raise CampaignExecutionError(
+                f"{campaign.symbol}: campaign state {latest_state} forbids this mutation"
+            )
+        if target_order_id is not None:
+            target_text = str(target_order_id)
+            stored_target = self.db.conn.execute(
+                "SELECT campaign_id,symbol,side,status FROM campaign_orders "
+                "WHERE order_id=? AND symbol=? ORDER BY id DESC LIMIT 1",
+                (target_text, str(campaign.symbol).upper()),
+            ).fetchone()
+            tag_owned = str(latest.tags.get("protective_order_id", "")) == target_text
+            if stored_target is None:
+                if not tag_owned:
+                    raise CampaignExecutionError(
+                        f"{campaign.symbol}: replacement target ownership cannot be proven"
+                    )
+            elif str(stored_target["campaign_id"]) != str(campaign.campaign_id):
+                raise CampaignExecutionError(
+                    f"{campaign.symbol}: replacement target belongs to another campaign"
+                )
+            target = self.client.get_order(
+                campaign.symbol,
+                order_id=target_text,
+            )
+            target_status = str(target.get("status", "")).upper()
+            try:
+                target_executed = float(target.get("executedQty", 0) or 0)
+            except (TypeError, ValueError):
+                target_executed = -1.0
+            if target_status not in {"NEW", "PENDING_NEW"} or target_executed != 0.0:
+                raise CampaignExecutionError(
+                    f"{campaign.symbol}: replacement target is not an untouched active order; reconcile first"
+                )
+
+        confirmed_qty = float(latest.position_qty or 0.0)
+        requested_qty = float(requested_quantity or 0.0)
+        tolerance = max(
+            float(os.getenv("MIN_RECOVERY_QTY", "0.000001")),
+            confirmed_qty * float(os.getenv("BALANCE_TOLERANCE_PCT", "0.005")),
+        )
+        if confirmed_qty <= 0.0 or requested_qty <= 0.0:
+            raise CampaignExecutionError(
+                f"{campaign.symbol}: no confirmed campaign position for requested mutation"
+            )
+        if requested_qty > confirmed_qty + tolerance:
+            raise CampaignExecutionError(
+                f"{campaign.symbol}: requested quantity {requested_qty} exceeds confirmed campaign quantity {confirmed_qty}"
+            )
+
+        if require_no_other_stop:
+            # An unknown/foreign live SELL stop must not be treated as absent.
+            # The open-order query is authoritative and failure blocks creation.
+            open_orders = self.client.open_orders(campaign.symbol)
+            for order in open_orders:
+                if not isinstance(order, dict):
+                    raise CampaignExecutionError(
+                        f"{campaign.symbol}: malformed order in final protection check"
+                    )
+                if str(order.get("side", "")).upper() != "SELL":
+                    continue
+                if str(order.get("type", "")).upper() not in {
+                    "STOP_LOSS", "STOP_LOSS_LIMIT", "STOP"
+                }:
+                    continue
+                if str(order.get("status", "")).upper() not in {
+                    "NEW", "PENDING_NEW", "PARTIALLY_FILLED"
+                }:
+                    continue
+                order_id = str(order.get("orderId", "") or "")
+                if exclude_order_id is not None and order_id == str(exclude_order_id):
+                    continue
+                raise CampaignExecutionError(
+                    f"{campaign.symbol}: existing active SELL stop {order_id or '<unknown-id>'} "
+                    "must be reconciled before another protection mutation"
+                )
+        return latest
+
     def arm_initial_entry(
         self,
         signal: SignalSpec,
@@ -244,7 +344,10 @@ class CampaignExecutionService:
             risk_quote / max(effective_loss_fraction, 1e-12),
         )
         qty = self._normalized_entry_qty(signal.symbol, notional, trigger)
-        client_id = f"{self.ENTRY_PREFIX}{uuid.uuid4().hex[:20]}"
+        client_id = stable_client_order_id(
+            self.ENTRY_PREFIX, signal.symbol, signal.timeframe,
+            signal.signal_id, signal.signal_type.value, "INITIAL_ENTRY",
+        )
 
         claimed = self.db.try_claim_state(
             f"entry_client_order_id:{signal.symbol}",
@@ -282,6 +385,7 @@ class CampaignExecutionService:
             "STOP_LOSS",
             required_context_versions=dict(signal.context_versions),
             hypothesis_id=f"WILLIAMS_{signal.signal_type.value}",
+            signal_type=signal.signal_type.value,
             invalidation_level=stop,
             quantity=self.client.decimal_format(qty),
             client_order_id=client_id,
@@ -294,6 +398,53 @@ class CampaignExecutionService:
         )
 
         def check(snapshot):
+            # PendingSignal is immutable. A stale/terminal signal cannot be
+            # revived by reusing its object after a restart or retry.
+            if signal.expires_at_ms and int(time.time() * 1000) > int(signal.expires_at_ms):
+                raise CampaignExecutionError(
+                    f"{signal.symbol}: PendingSignal expired before exchange submission"
+                )
+            signal_row = self.db.conn.execute(
+                "SELECT state FROM campaign_signals WHERE campaign_id=? AND signal_id=?",
+                (campaign.campaign_id, signal.signal_id),
+            ).fetchone()
+            if signal_row is not None and str(signal_row["state"]).upper() in {
+                "INVALIDATED", "EXPIRED", "CANCELLED", "REPLACED", "FILLED"
+            }:
+                raise CampaignExecutionError(
+                    f"{signal.symbol}: PendingSignal is terminal ({signal_row['state']})"
+                )
+            operative = snapshot.context(signal.symbol, signal.timeframe)
+            if operative is None:
+                raise CampaignExecutionError(
+                    f"{signal.symbol}: operative context missing at final admission"
+                )
+            if int(operative.candle_close_time_ms) < int(signal.signal_bar_time_ms):
+                raise CampaignExecutionError(
+                    f"{signal.symbol}: execution context predates the source signal bar"
+                )
+
+            equity_now = float(self._current_equity_quote())
+            if equity_now <= 0:
+                raise CampaignExecutionError(
+                    "fresh exchange equity is unavailable before initial entry submission"
+                )
+            reserved_now = float(self.engine.portfolio_reserved_risk_quote())
+            portfolio_capacity_now = equity_now * float(
+                self.engine.portfolio_risk_limit_pct
+            )
+            if reserved_now > portfolio_capacity_now + max(1e-9, portfolio_capacity_now * 1e-9):
+                raise CampaignExecutionError(
+                    "portfolio risk reservation changed before initial entry submission"
+                )
+            campaign_capacity_now = equity_now * float(
+                self.engine.campaign_risk_limit_pct
+            )
+            if float(campaign.pending_risk_quote or 0.0) > campaign_capacity_now + 1e-9:
+                raise CampaignExecutionError(
+                    "campaign risk reservation exceeds its limit before submission"
+                )
+
             # Last-mile market condition: this is a conditional order, never a
             # substitute for a missed trigger. If price already crossed the
             # trigger, abort rather than turn it into a MARKET BUY.
@@ -436,10 +587,23 @@ class CampaignExecutionService:
             client_id = str(row["value"])
             campaign = None
             try:
-                order = self.client.get_order(
-                    symbol,
-                    orig_client_order_id=client_id,
-                )
+                try:
+                    order = self.client.get_order(
+                        symbol,
+                        orig_client_order_id=client_id,
+                    )
+                except Exception as lookup_exc:
+                    if self._authoritative_order_not_found(lookup_exc):
+                        campaign = self._find_campaign_by_pending_client_id(client_id)
+                        results.append(
+                            self._resolve_definitive_not_found(
+                                symbol, client_id, campaign
+                            )
+                        )
+                        continue
+                    # Timeout, 5xx, auth or rate limit is NOT proof that the
+                    # exchange has no order. Keep the reservation unresolved.
+                    raise
                 self.db.save_order(order)
                 status = str(order.get("status", "")).upper()
                 campaign = self._find_campaign_by_pending_client_id(client_id)
@@ -461,11 +625,29 @@ class CampaignExecutionService:
                     "WHERE client_order_id=? ORDER BY id DESC LIMIT 1",
                     (client_id,),
                 ).fetchone()
-                purpose = str(order_row["purpose"] if order_row else "ENTRY").upper()
+                if order_row is not None:
+                    purpose = str(order_row["purpose"] or "ENTRY").upper()
+                elif (
+                    campaign.state in {
+                        CampaignState.ADD_ON_PENDING,
+                        CampaignState.ADD_ON_ARMING,
+                        CampaignState.RECONCILE_REQUIRED,
+                    }
+                    and bool(campaign.tags.get("pending_add_signal_id"))
+                ):
+                    # A timeout may happen before campaign_orders is written.
+                    # The durable pending add-on tag remains the source of truth.
+                    purpose = "ADD_ON"
+                else:
+                    purpose = "ENTRY"
                 signal_id = str(
                     order_row["signal_id"]
                     if order_row
-                    else campaign.current_signal_id
+                    else (
+                        campaign.tags.get("pending_add_signal_id")
+                        if purpose == "ADD_ON"
+                        else campaign.current_signal_id
+                    )
                 )
 
                 executed = float(order.get("executedQty", 0) or 0)
@@ -485,8 +667,86 @@ class CampaignExecutionService:
                     except Exception:
                         pass
 
+                if status in {"NEW", "PENDING_NEW"} and executed <= 0 and order.get("orderId") is not None:
+                    pending_cancel = self.db.conn.execute(
+                        "SELECT purpose FROM execution_intents "
+                        "WHERE operation_kind='CANCEL' AND related_order_id=? "
+                        "AND UPPER(status) IN ('PENDING','SUBMITTING','AMBIGUOUS','RECONCILE_REQUIRED') "
+                        "ORDER BY created_at_ms DESC LIMIT 1",
+                        (str(order.get("orderId")),),
+                    ).fetchone()
+                    if pending_cancel is not None:
+                        # A prior cancellation had an ambiguous response. The
+                        # current GET proves the order still exists, so one
+                        # same-identity retry is allowed; never mint a new CID.
+                        try:
+                            self._execute_cancel(
+                                campaign,
+                                int(order["orderId"]),
+                                str(pending_cancel["purpose"]),
+                                target_client_id=client_id,
+                            )
+                        except Exception:
+                            pass
+                        try:
+                            latest = self.client.get_order(
+                                symbol,
+                                order_id=order.get("orderId"),
+                            )
+                            latest_status = str(latest.get("status", "")).upper()
+                            latest_executed = float(latest.get("executedQty", 0) or 0)
+                            latest_quote = float(latest.get("cummulativeQuoteQty", 0) or 0)
+                            if latest_status not in {
+                                "NEW", "PENDING_NEW", "PARTIALLY_FILLED",
+                                "FILLED", "CANCELED", "CANCELLED", "EXPIRED", "REJECTED"
+                            } or latest_executed < 0 or (
+                                latest_executed > 0 and latest_quote <= 0
+                            ):
+                                raise CampaignExecutionError(
+                                    "re-query after cancellation did not prove authoritative order state"
+                                )
+                            order = latest
+                            status = latest_status
+                            executed = latest_executed
+                            quote = latest_quote
+                            self.db.save_order(latest)
+                        except Exception as reconcile_exc:
+                            self.engine.mark_reconcile_required(
+                                campaign,
+                                f"previous cancel remains ambiguous: {reconcile_exc}",
+                            )
+                            self.db.state_set(f"position_state:{symbol}", "RECONCILE_REQUIRED")
+                            results.append({
+                                "symbol": symbol,
+                                "campaign_id": campaign.campaign_id,
+                                "state": "RECONCILE_REQUIRED",
+                                "reason": "ambiguous cancel could not be reconciled",
+                            })
+                            continue
+                        if status in {"NEW", "PENDING_NEW", "PARTIALLY_FILLED"}:
+                            self.engine.mark_reconcile_required(
+                                campaign,
+                                "authoritative GET confirms cancel target remains active",
+                            )
+                            self.db.state_set(f"position_state:{symbol}", "RECONCILE_REQUIRED")
+                            results.append({
+                                "symbol": symbol,
+                                "campaign_id": campaign.campaign_id,
+                                "state": "RECONCILE_REQUIRED",
+                                "reason": "cancel target remains active; retry only after next authoritative recovery pass",
+                                "order_status": status,
+                            })
+                            continue
+
                 if status in {"NEW", "PENDING_NEW"} and executed <= 0:
-                    # Still waiting for the conditional trigger.
+                    # The exchange has authoritatively confirmed that this stable
+                    # clientOrderId exists and remains pending. Resolve only the
+                    # submission ambiguity; keep the pending campaign reservation.
+                    self._mark_intent_reconciled(
+                        client_id,
+                        status,
+                        evidence="Binance GET /api/v3/order confirmed the conditional order remains open",
+                    )
                     results.append({
                         "symbol": symbol,
                         "campaign_id": campaign.campaign_id,
@@ -502,13 +762,49 @@ class CampaignExecutionService:
                             f"{symbol}: partial conditional BUY cannot be safely cancelled"
                         )
                     try:
-                        cancel(symbol, order_id=order.get("orderId"))
-                    except Exception as exc:
-                        self.engine.mark_reconcile_required(
+                        self._execute_cancel(
                             campaign,
-                            f"partial conditional BUY cancel ambiguous: {exc}",
+                            int(order.get("orderId")),
+                            "CAMPAIGN_ENTRY_CANCEL",
+                            target_client_id=client_id,
                         )
-                        raise
+                    except Exception as cancel_exc:
+                        # Never infer the cancel result from the DELETE response.
+                        # Read back the same exchange order and continue only if
+                        # Binance gives a known state with a valid executedQty.
+                        try:
+                            latest = self.client.get_order(
+                                symbol,
+                                order_id=order.get("orderId"),
+                            )
+                            latest_status = str(latest.get("status", "")).upper()
+                            latest_executed = float(latest.get("executedQty", 0) or 0)
+                            latest_quote = float(latest.get("cummulativeQuoteQty", 0) or 0)
+                            terminal = latest_status in {
+                                "FILLED", "CANCELED", "CANCELLED", "EXPIRED", "REJECTED"
+                            }
+                            if (
+                                not terminal
+                                or latest_executed < 0
+                                or (latest_executed > 0 and latest_quote <= 0)
+                            ):
+                                raise CampaignExecutionError(
+                                    "cancel/fill state is not yet authoritative"
+                                )
+                            order = latest
+                            status = latest_status
+                            executed = latest_executed
+                            quote = latest_quote
+                            self.db.save_order(latest)
+                        except Exception as reconcile_exc:
+                            self.engine.mark_reconcile_required(
+                                campaign,
+                                f"partial conditional BUY cancel/fill conflict unresolved: "
+                                f"cancel={cancel_exc}; reconcile={reconcile_exc}",
+                            )
+                            raise CampaignExecutionError(
+                                "conditional order cancellation remains ambiguous; no new entry or duplicate cancel until exchange reconciliation"
+                            ) from reconcile_exc
 
                 if executed > 0:
                     if quote <= 0:
@@ -533,16 +829,33 @@ class CampaignExecutionService:
                                 f"is invalid for add-on average {avg:.12g}"
                             )
 
+                        # Persist the exchange-confirmed incremental fill before
+                        # resizing protection. After this commit, recovery knows the
+                        # actual total quantity even if STOP replacement is interrupted.
+                        self.engine.record_add_on_fill(
+                            campaign,
+                            quantity=executed,
+                            average_entry_price=avg,
+                            fill_order_id=str(order.get("orderId", "")),
+                            risk_quote=float(campaign.pending_risk_quote),
+                            fee_quote=0.0,
+                        )
+
                         protective_id = str(
                             campaign.tags.get("protective_order_id", "") or ""
                         )
                         if protective_id:
-                            self.replace_structural_stop(
+                            replacement = self.replace_structural_stop(
                                 campaign,
                                 existing_order_id=int(protective_id),
                                 quantity=total_qty,
                                 proposed_stop=current_stop,
                             )
+                            new_id = str(
+                                (replacement.get("newOrderResponse") or {}).get("orderId", "")
+                            )
+                            if new_id:
+                                campaign.tags["protective_order_id"] = new_id
                         else:
                             protection = self.create_hard_stop(
                                 campaign,
@@ -552,15 +865,7 @@ class CampaignExecutionService:
                             campaign.tags["protective_order_id"] = protection.get(
                                 "order_id", ""
                             )
-
-                        self.engine.record_add_on_fill(
-                            campaign,
-                            quantity=executed,
-                            average_entry_price=avg,
-                            fill_order_id=str(order.get("orderId", "")),
-                            risk_quote=float(campaign.pending_risk_quote),
-                            fee_quote=0.0,
-                        )
+                        self.db.save_campaign(campaign)
                         self.db.set_campaign_signal_state(
                             signal_id,
                             SignalState.FILLED.value,
@@ -591,6 +896,12 @@ class CampaignExecutionService:
                         self.db.state_set(f"position_state:{symbol}", "OPEN")
                         campaign.tags.pop("pending_order_id", None)
                         self.db.save_campaign(campaign)
+                        self._mark_intent_reconciled(
+                            client_id,
+                            status,
+                            evidence="Binance order status and executed quantity reconciled against durable add-on campaign state",
+                            related_order_id=order.get("orderId"),
+                        )
                         results.append({
                             "symbol": symbol,
                             "campaign_id": campaign.campaign_id,
@@ -634,15 +945,11 @@ class CampaignExecutionService:
                             f"{symbol}: campaign has no initial structural stop"
                         )
 
-                    protection = self.create_hard_stop(
-                        campaign,
-                        quantity=executed,
-                        stop_price=stop,
-                    )
-                    campaign.tags["protective_order_id"] = protection.get(
-                        "order_id", ""
-                    )
-
+                    # The Binance GET above is authoritative fill evidence.
+                    # Commit actual quantity/VWAP first so protection validation can
+                    # compare against a confirmed campaign position. If STOP creation
+                    # fails or the process dies here, the campaign remains durable
+                    # and recovery must restore protection before trading resumes.
                     self.engine.record_initial_fill(
                         campaign,
                         quantity=executed,
@@ -652,6 +959,15 @@ class CampaignExecutionService:
                         risk_quote=float(campaign.pending_risk_quote),
                         fee_quote=0.0,
                     )
+                    protection = self.create_hard_stop(
+                        campaign,
+                        quantity=executed,
+                        stop_price=stop,
+                    )
+                    campaign.tags["protective_order_id"] = protection.get(
+                        "order_id", ""
+                    )
+                    self.db.save_campaign(campaign)
                     self.db.set_campaign_signal_state(
                         signal_id,
                         SignalState.FILLED.value,
@@ -686,12 +1002,18 @@ class CampaignExecutionService:
                     self.db.state_set(f"position_state:{symbol}", "OPEN")
                     campaign.tags.pop("pending_order_id", None)
                     self.db.save_campaign(campaign)
+                    self._mark_intent_reconciled(
+                        client_id,
+                        status,
+                        evidence="Binance order status and executed quantity reconciled against durable initial campaign/position state",
+                        related_order_id=order.get("orderId"),
+                    )
                     results.append({
                         "symbol": symbol,
                         "campaign_id": campaign.campaign_id,
                         "state": "OPEN",
                         "filled_quantity": executed,
-                        "partial_entry": status == "PARTIALLY_FILLED",
+                        "partial_entry": status != "FILLED",
                     })
                     continue
 
@@ -725,6 +1047,12 @@ class CampaignExecutionService:
                         "OPEN" if self.db.open_trade(symbol) else "FLAT",
                     )
                     self.db.save_campaign(campaign)
+                    self._mark_intent_reconciled(
+                        client_id,
+                        status,
+                        evidence="Binance terminal order state confirmed; no unaccounted fills remain",
+                        related_order_id=order.get("orderId"),
+                    )
                     results.append({
                         "symbol": symbol,
                         "campaign_id": campaign.campaign_id,
@@ -759,10 +1087,105 @@ class CampaignExecutionService:
                 )
                 results.append({
                     "symbol": symbol,
+                    "campaign_id": campaign.campaign_id if campaign is not None else "",
                     "state": "RECONCILE_REQUIRED",
                     "error": str(exc),
                 })
         return results
+
+    @staticmethod
+    def _authoritative_order_not_found(exc: Exception) -> bool:
+        """Only Binance's explicit -2013 response is proof of order absence."""
+        if not isinstance(exc, BinanceAPIError):
+            return False
+        payload = getattr(exc, "payload", None)
+        return (
+            getattr(exc, "status_code", None) == 400
+            and isinstance(payload, dict)
+            and payload.get("code") == -2013
+        )
+
+    def _mark_intent_reconciled(
+        self,
+        client_id: str,
+        status: str,
+        *,
+        evidence: str,
+        related_order_id=None,
+    ) -> None:
+        resolve = getattr(self.db, "mark_execution_intent_reconciled", None)
+        if callable(resolve):
+            resolve(
+                client_id,
+                status,
+                authoritative=True,
+                evidence_source=evidence,
+                related_order_id=related_order_id,
+            )
+
+    def _resolve_definitive_not_found(
+        self,
+        symbol: str,
+        client_id: str,
+        campaign,
+    ) -> dict[str, Any]:
+        """Release an entry reservation only after Binance's definitive -2013."""
+        if campaign is None:
+            raise CampaignExecutionError(
+                f"{symbol}: Binance reports clientOrderId absent but no durable campaign owns it"
+            )
+        signal_id = str(campaign.current_signal_id or "")
+        signal_row = self.db.conn.execute(
+            "SELECT state FROM campaign_signals WHERE campaign_id=? AND signal_id=?",
+            (campaign.campaign_id, signal_id),
+        ).fetchone()
+        if signal_row is None:
+            raise CampaignExecutionError(
+                f"{symbol}: cannot release missing Binance order; durable signal provenance is absent"
+            )
+
+        is_add_on = (
+            campaign.state in {CampaignState.ADD_ON_PENDING, CampaignState.ADD_ON_ARMING}
+            or float(campaign.position_qty or 0.0) > 0.0
+            or bool(campaign.tags.get("pending_add_signal_id"))
+        )
+        campaign.tags.pop("pending_order_id", None)
+        campaign.tags.pop("pending_order_client_id", None)
+        campaign.pending_risk_quote = 0.0
+        campaign.capital_reserved_quote = 0.0
+        self.db.set_campaign_signal_state(signal_id, SignalState.INVALIDATED.value)
+        if is_add_on:
+            campaign.tags.pop("pending_add_signal_id", None)
+            try:
+                campaign.transition(
+                    CampaignState.TREND_ACTIVE,
+                    reason="authoritative Binance query confirmed add-on order absent",
+                )
+            except ValueError:
+                campaign.state = CampaignState.TREND_ACTIVE
+            position_state = "OPEN"
+        else:
+            campaign.state = CampaignState.CLOSED
+            campaign.next_action = "WAIT"
+            position_state = "OPEN" if self.db.open_trade(symbol) else "FLAT"
+
+        self.db.save_campaign(campaign)
+        self.db.state_set(f"campaign_state:{campaign.campaign_id}", campaign.state.value)
+        self.db.state_set(f"position_state:{symbol}", position_state)
+        if self.db.state_get(f"entry_client_order_id:{symbol}", "") == client_id:
+            self.db.release_state_claim(f"entry_client_order_id:{symbol}", client_id)
+        self._mark_intent_reconciled(
+            client_id,
+            "NOT_FOUND",
+            evidence="Binance GET /api/v3/order returned explicit code -2013 for origClientOrderId; pending campaign safely invalidated",
+        )
+        return {
+            "symbol": symbol,
+            "campaign_id": campaign.campaign_id,
+            "state": position_state,
+            "action": "NOT_FOUND_ABORTED",
+            "client_order_id": client_id,
+        }
 
     def _current_equity_quote(self) -> float:
         account = self.client.account()
@@ -771,6 +1194,186 @@ class CampaignExecutionService:
             if str(row.get("asset", "")).upper() == "USDT":
                 equity += float(row.get("free", 0) or 0) + float(row.get("locked", 0) or 0)
         return max(equity, 0.0)
+
+    def _reconcile_non_entry_mutations(self, symbol: str, campaign) -> None:
+        """Resolve only mutations whose current exchange state is authoritative.
+
+        A confirmed fill is not merely an order-status update: it requires position,
+        commission and campaign accounting. Until that accounting is complete, keep
+        the mutation unresolved and block new exposure.
+        """
+        unresolved = self.db.unresolved_execution_intents()
+        terminal_zero_fill = {"CANCELED", "CANCELLED", "EXPIRED", "REJECTED"}
+        active_zero_fill = {"NEW", "PENDING_NEW"}
+        for item in unresolved:
+            if (
+                str(item.get("symbol", "")).upper() != str(symbol).upper()
+                or str(item.get("campaign_id", "")) != str(campaign.campaign_id)
+            ):
+                continue
+            purpose = str(item.get("purpose", "")).upper()
+            operation = str(item.get("operation_kind", "PLACE") or "PLACE").upper()
+            cid = str(item.get("client_order_id", "") or "")
+            related_id = str(item.get("related_order_id", "") or "")
+            list_ref = str(item.get("related_order_list_id", "") or "")
+
+            # Pending entry/add-on orders are reconciled by reconcile_pending_entries.
+            if purpose in {"ENTRY", "ADD_ON", "CAMPAIGN_ENTRY", "CAMPAIGN_ADD_ON"}:
+                continue
+            # Protective place/cancelReplace intents are reconciled against the
+            # current active-stop list and stable clientOrderId below.
+            if purpose in {"PROTECTION", "CAMPAIGN_PROTECTION", "CAMPAIGN_TRAIL"} and operation in {"PLACE", "CANCEL_REPLACE"}:
+                continue
+
+            if operation == "CANCEL_OCO":
+                if not list_ref:
+                    raise CampaignExecutionError(
+                        "ambiguous OCO cancel has no durable target list identity"
+                    )
+                try:
+                    if list_ref.isdigit():
+                        order_list = self.client.order_list(symbol, order_list_id=list_ref)
+                    else:
+                        order_list = self.client.order_list(
+                            symbol,
+                            list_client_order_id=list_ref,
+                        )
+                    legs = order_list.get("orders", [])
+                    if not isinstance(legs, list) or not legs:
+                        raise CampaignExecutionError(
+                            "OCO list query did not return leg identities"
+                        )
+                    statuses = []
+                    for leg in legs:
+                        if not isinstance(leg, dict) or leg.get("orderId") is None:
+                            raise CampaignExecutionError(
+                                "OCO list leg is missing authoritative orderId"
+                            )
+                        current_leg = self.client.get_order(
+                            symbol,
+                            order_id=leg["orderId"],
+                        )
+                        status = str(current_leg.get("status", "")).upper()
+                        executed = float(current_leg.get("executedQty", 0) or 0)
+                        if executed < 0 or status not in (
+                            active_zero_fill | terminal_zero_fill | {"PARTIALLY_FILLED", "FILLED"}
+                        ):
+                            raise CampaignExecutionError(
+                                "OCO leg status or executedQty is invalid"
+                            )
+                        if executed > 0 or status in {"PARTIALLY_FILLED", "FILLED"}:
+                            raise CampaignExecutionError(
+                                "OCO cancellation raced with a fill; position reconciliation is required"
+                            )
+                        statuses.append(status)
+                    if all(status in terminal_zero_fill for status in statuses):
+                        self._mark_intent_reconciled(
+                            cid,
+                            "CANCELED",
+                            evidence="Binance orderList and every orderId leg were queried; all terminal with zero executions",
+                        )
+                        continue
+                    raise CampaignExecutionError(
+                        "OCO list still has active legs after ambiguous cancellation"
+                    )
+                except Exception as exc:
+                    self.engine.mark_reconcile_required(
+                        campaign,
+                        f"OCO cancellation is not fully reconciled: {exc}",
+                    )
+                    self.db.state_set(f"position_state:{symbol}", "RECONCILE_REQUIRED")
+                    raise CampaignExecutionError(
+                        "OCO cancellation remains ambiguous; no market exit or new entry is allowed"
+                    ) from exc
+
+            if operation == "CANCEL":
+                if not related_id:
+                    raise CampaignExecutionError(
+                        "ambiguous cancellation has no durable target orderId"
+                    )
+                try:
+                    target = self.client.get_order(symbol, order_id=related_id)
+                    status = str(target.get("status", "")).upper()
+                    executed = float(target.get("executedQty", 0) or 0)
+                    if executed < 0:
+                        raise CampaignExecutionError("cancel target has invalid executedQty")
+                    if executed > 0 or status in {"PARTIALLY_FILLED", "FILLED"}:
+                        raise CampaignExecutionError(
+                            "cancel/fill conflict confirmed; actual fills must be reconciled"
+                        )
+                    if status not in active_zero_fill | terminal_zero_fill:
+                        raise CampaignExecutionError(
+                            f"cancel target has unresolved status {status}"
+                        )
+                    # This records what GET proved, not that DELETE succeeded.
+                    # Active target means cancel did not take effect; terminal
+                    # target means it is safe to resume order-list/position checks.
+                    self._mark_intent_reconciled(
+                        cid,
+                        status,
+                        evidence="Binance GET by target orderId authoritatively resolved cancellation outcome",
+                    )
+                    continue
+                except Exception as exc:
+                    self.engine.mark_reconcile_required(
+                        campaign,
+                        f"cancel target {related_id} cannot be safely reconciled: {exc}",
+                    )
+                    self.db.state_set(f"position_state:{symbol}", "RECONCILE_REQUIRED")
+                    raise CampaignExecutionError(
+                        "cancel/fill state is ambiguous; campaign remains blocked pending exchange reconciliation"
+                    ) from exc
+
+            if purpose in {"EXIT", "CAMPAIGN_EXIT", "EMERGENCY_EXIT", "MANUAL_EXIT"} and operation == "PLACE":
+                if not cid:
+                    raise CampaignExecutionError("ambiguous exit has no stable clientOrderId")
+                try:
+                    observed = self.client.get_order(
+                        symbol,
+                        orig_client_order_id=cid,
+                    )
+                except Exception as exc:
+                    if self._authoritative_order_not_found(exc):
+                        self._mark_intent_reconciled(
+                            cid,
+                            "NOT_FOUND",
+                            evidence="Binance GET by exit clientOrderId returned explicit -2013; no exit order exists",
+                        )
+                        continue
+                    self.engine.mark_reconcile_required(
+                        campaign,
+                        f"exit order {cid} cannot be queried authoritatively: {exc}",
+                    )
+                    self.db.state_set(f"position_state:{symbol}", "RECONCILE_REQUIRED")
+                    raise CampaignExecutionError(
+                        "exit order remains UNKNOWN; blind exit retry is forbidden"
+                    ) from exc
+                status = str(observed.get("status", "")).upper()
+                executed = float(observed.get("executedQty", 0) or 0)
+                quote = float(observed.get("cummulativeQuoteQty", 0) or 0)
+                self.db.save_order(observed)
+                if executed < 0 or (executed > 0 and quote <= 0):
+                    raise CampaignExecutionError(
+                        "exit order returned invalid fill quantity/quote during recovery"
+                    )
+                if status in terminal_zero_fill and executed == 0:
+                    self._mark_intent_reconciled(
+                        cid,
+                        status,
+                        evidence="Binance GET by stable exit clientOrderId confirmed terminal order with zero fills",
+                    )
+                    continue
+                # A filled/partial market exit changes the owned position. Leave
+                # the write-ahead intent unresolved until campaign and trade rows
+                # are updated from authoritative fills; never resend it.
+                self.engine.mark_reconcile_required(
+                    campaign,
+                    f"exit order found during recovery: status={status}, executedQty={executed}; fill accounting required",
+                )
+                self.db.state_set(f"position_state:{symbol}", "RECONCILE_REQUIRED")
+                raise CampaignExecutionError(
+                    "exit order exists but campaign fill accounting is not yet reconciled; no duplicate exit permitted"
+                )
 
     def reconcile_active_campaigns(self) -> list[dict[str, Any]]:
         """Rebuild active campaign protection without invoking the legacy OCO path."""
@@ -827,6 +1430,7 @@ class CampaignExecutionService:
                     continue
 
                 open_orders = self.client.open_orders(symbol)
+                self._reconcile_non_entry_mutations(symbol, campaign)
                 unknown_sells = [
                     o for o in open_orders
                     if str(o.get("side", "")).upper() == "SELL"
@@ -850,6 +1454,126 @@ class CampaignExecutionService:
                     self.db.save_campaign(campaign)
                     self.db.state_set(f"position_state:{symbol}", "RECONCILE_REQUIRED")
                     continue
+
+                if not managed_stops:
+                    unresolved_for_campaign = [
+                        intent for intent in self.db.unresolved_execution_intents()
+                        if str(intent.get("symbol", "")).upper() == symbol
+                        and str(intent.get("campaign_id", "")) == str(campaign.campaign_id)
+                    ]
+                    unresolved_protection = [
+                        intent for intent in unresolved_for_campaign
+                        if str(intent.get("purpose", "")).upper()
+                        in {"PROTECTION", "CAMPAIGN_PROTECTION", "CAMPAIGN_TRAIL"}
+                        and str(intent.get("operation_kind", "PLACE")).upper()
+                        in {"PLACE", "CANCEL_REPLACE"}
+                    ]
+                    for pending_intent in unresolved_protection:
+                        pending_cid = str(pending_intent.get("client_order_id", "") or "")
+                        pending_operation = str(
+                            pending_intent.get("operation_kind", "PLACE")
+                        ).upper()
+                        try:
+                            observed = self.client.get_order(
+                                symbol,
+                                orig_client_order_id=pending_cid,
+                            )
+                        except Exception as lookup_exc:
+                            if self._authoritative_order_not_found(lookup_exc) and pending_operation == "PLACE":
+                                self._mark_intent_reconciled(
+                                    pending_cid,
+                                    "NOT_FOUND",
+                                    evidence="Binance GET by stable clientOrderId returned definitive -2013; no protective order exists",
+                                )
+                                continue
+                            if self._authoritative_order_not_found(lookup_exc) and pending_operation == "CANCEL_REPLACE":
+                                # A missing replacement is safe to retry only if the
+                                # old protection is authoritatively still active.
+                                try:
+                                    old_order = self.client.get_order(
+                                        symbol,
+                                        order_id=pending_intent.get("related_order_id"),
+                                    )
+                                    old_status = str(old_order.get("status", "")).upper()
+                                    old_executed = float(old_order.get("executedQty", 0) or 0)
+                                    if old_status in {"NEW", "PENDING_NEW"} and old_executed == 0:
+                                        self._mark_intent_reconciled(
+                                            pending_cid,
+                                            "NOT_FOUND",
+                                            evidence="replacement clientOrderId is absent and original protective order is authoritatively still active",
+                                        )
+                                        if str(old_order.get("side", "")).upper() == "SELL" and str(old_order.get("type", "")).upper() in {"STOP_LOSS", "STOP_LOSS_LIMIT"}:
+                                            managed_stops.append(old_order)
+                                        continue
+                                except Exception:
+                                    pass
+                            self.engine.mark_reconcile_required(
+                                campaign,
+                                f"protective mutation {pending_cid} cannot be authoritatively queried: {lookup_exc}",
+                            )
+                            self.db.state_set(f"position_state:{symbol}", "RECONCILE_REQUIRED")
+                            raise CampaignExecutionError(
+                                "protective mutation outcome remains UNKNOWN; refusing to create another stop"
+                            ) from lookup_exc
+
+                        observed_status = str(observed.get("status", "")).upper()
+                        observed_executed = float(observed.get("executedQty", 0) or 0)
+                        observed_qty = float(observed.get("origQty", 0) or 0)
+                        if (
+                            str(observed.get("side", "")).upper() != "SELL"
+                            or str(observed.get("type", "")).upper() not in {"STOP_LOSS", "STOP_LOSS_LIMIT"}
+                            or observed_status not in {"NEW", "PENDING_NEW"}
+                            or observed_executed != 0
+                            or observed_qty <= 0
+                        ):
+                            self.engine.mark_reconcile_required(
+                                campaign,
+                                f"protective mutation {pending_cid} has exchange state {observed_status} with executedQty={observed_executed}",
+                            )
+                            self.db.state_set(f"position_state:{symbol}", "RECONCILE_REQUIRED")
+                            raise CampaignExecutionError(
+                                "protective order state is not an untouched active stop; position reconciliation is required"
+                            )
+                        if pending_operation == "CANCEL_REPLACE":
+                            old_order = self.client.get_order(
+                                symbol,
+                                order_id=pending_intent.get("related_order_id"),
+                            )
+                            old_status = str(old_order.get("status", "")).upper()
+                            old_executed = float(old_order.get("executedQty", 0) or 0)
+                            if old_status not in {"CANCELED", "CANCELLED", "EXPIRED", "REJECTED"} or old_executed != 0:
+                                self.engine.mark_reconcile_required(
+                                    campaign,
+                                    "cancelReplace new stop exists but old stop is not proven canceled without fills",
+                                )
+                                self.db.state_set(f"position_state:{symbol}", "RECONCILE_REQUIRED")
+                                raise CampaignExecutionError(
+                                    "cancelReplace old/new order pair is not fully reconciled"
+                                )
+                        self.db.save_order(observed)
+                        self._mark_intent_reconciled(
+                            pending_cid,
+                            observed_status,
+                            evidence="Binance GET by stable clientOrderId confirms the active protective stop and quantity",
+                            related_order_id=(
+                                pending_intent.get("related_order_id")
+                                if pending_operation == "CANCEL_REPLACE"
+                                else None
+                            ),
+                        )
+                        managed_stops.append(observed)
+
+                    if not managed_stops and unresolved_for_campaign:
+                        # An ambiguous exit/cancel or an unrecognized mutation is
+                        # not permission to create another protective order.
+                        self.engine.mark_reconcile_required(
+                            campaign,
+                            "unresolved execution intent exists while no active protection is visible",
+                        )
+                        self.db.state_set(f"position_state:{symbol}", "RECONCILE_REQUIRED")
+                        raise CampaignExecutionError(
+                            "missing protection with unresolved mutation; reconcile that mutation before replacement"
+                        )
 
                 if not managed_stops:
                     protection = self.create_hard_stop(
@@ -899,6 +1623,45 @@ class CampaignExecutionService:
                     continue
 
                 campaign.tags["protective_order_id"] = str(stop.get("orderId", ""))
+                # The open-order query is authoritative exchange evidence for
+                # an ambiguously acknowledged protective STOP. Persist campaign
+                # state first, then resolve the write-ahead intent.
+                stop_client_id = str(stop.get("clientOrderId", "") or "")
+                self.db.save_order(stop)
+                intent_row = (
+                    self.db.find_execution_intent_by_client_order_id(stop_client_id)
+                    if stop_client_id and callable(getattr(self.db, "find_execution_intent_by_client_order_id", None))
+                    else None
+                )
+                if intent_row and str(intent_row.get("operation_kind", "")).upper() == "CANCEL_REPLACE":
+                    old_target = self.client.get_order(
+                        symbol,
+                        order_id=intent_row.get("related_order_id"),
+                    )
+                    old_status = str(old_target.get("status", "")).upper()
+                    old_executed = float(old_target.get("executedQty", 0) or 0)
+                    if (
+                        old_status not in {"CANCELED", "CANCELLED", "EXPIRED", "REJECTED"}
+                        or old_executed != 0
+                    ):
+                        self.engine.mark_reconcile_required(
+                            campaign,
+                            "new replacement STOP is visible but the old STOP is not proven terminal without fills",
+                        )
+                        self.db.state_set(f"position_state:{symbol}", "RECONCILE_REQUIRED")
+                        raise CampaignExecutionError(
+                            "cancelReplace old/new STOP pair requires authoritative reconciliation"
+                        )
+                self._mark_intent_reconciled(
+                    stop_client_id,
+                    str(stop.get("status", "NEW")).upper(),
+                    evidence="Binance openOrders contains the campaign-owned active protective STOP",
+                    related_order_id=(
+                        intent_row.get("related_order_id")
+                        if intent_row and str(intent_row.get("operation_kind", "")).upper() == "CANCEL_REPLACE"
+                        else None
+                    ),
+                )
                 campaign.health = "GREEN"
                 campaign.next_action = "MONITOR_CAMPAIGN"
                 campaign.reconciliation_state = "CLEAN"
@@ -929,7 +1692,57 @@ class CampaignExecutionService:
         ).fetchall()
         return self.engine.load_campaign(str(rows[0]["campaign_id"])) if rows else None
 
-    def _validate_add_on_submission(self, symbol: str, qty: float, trigger: float) -> None:
+    def _validate_add_on_submission(
+        self,
+        symbol: str,
+        qty: float,
+        trigger: float,
+        *,
+        signal: SignalSpec,
+        campaign_id: str,
+        equity_quote: float,
+    ) -> None:
+        if signal.expires_at_ms and int(time.time() * 1000) > int(signal.expires_at_ms):
+            raise CampaignExecutionError(f"{symbol}: add-on PendingSignal expired before submission")
+        campaign = self.engine.load_campaign(campaign_id)
+        if campaign is None or campaign.campaign_id != campaign_id:
+            raise CampaignExecutionError(f"{symbol}: add-on campaign ownership is not confirmed")
+        if campaign.state == CampaignState.RECONCILE_REQUIRED:
+            raise CampaignExecutionError(f"{symbol}: campaign requires reconciliation before add-on")
+        if str(campaign.tags.get("pending_add_signal_id", "")) != signal.signal_id:
+            raise CampaignExecutionError(
+                f"{symbol}: pending add-on signal no longer owns this campaign admission"
+            )
+        if campaign.state != CampaignState.ADD_ON_PENDING:
+            raise CampaignExecutionError(
+                f"{symbol}: campaign state changed before add-on submission ({campaign.state.value})"
+            )
+        signal_row = self.db.conn.execute(
+            "SELECT state FROM campaign_signals WHERE campaign_id=? AND signal_id=?",
+            (campaign_id, signal.signal_id),
+        ).fetchone()
+        if signal_row is not None and str(signal_row["state"]).upper() in {
+            "INVALIDATED", "EXPIRED", "CANCELLED", "REPLACED", "FILLED"
+        }:
+            raise CampaignExecutionError(f"{symbol}: add-on signal is terminal")
+        equity_now = float(self._current_equity_quote())
+        if equity_now <= 0:
+            raise CampaignExecutionError(
+                f"{symbol}: fresh exchange equity is unavailable before add-on submission"
+            )
+        reserved_now = float(self.engine.portfolio_reserved_risk_quote())
+        portfolio_capacity_now = equity_now * float(
+            self.engine.portfolio_risk_limit_pct
+        )
+        if reserved_now > portfolio_capacity_now + max(1e-9, portfolio_capacity_now * 1e-9):
+            raise CampaignExecutionError("portfolio risk budget changed before add-on submission")
+        campaign_capacity_now = equity_now * float(self.engine.campaign_risk_limit_pct)
+        if (
+            float(campaign.open_risk_quote or 0.0)
+            + float(campaign.pending_risk_quote or 0.0)
+            > campaign_capacity_now + 1e-9
+        ):
+            raise CampaignExecutionError("campaign risk budget changed before add-on submission")
         if self._current_price(symbol) >= trigger:
             raise CampaignExecutionError(
                 f"{symbol}: add-on trigger crossed before submission"
@@ -990,7 +1803,10 @@ class CampaignExecutionService:
             requested / max(effective_loss_fraction, 1e-12),
         )
         qty = self._normalized_entry_qty(signal.symbol, notional, trigger)
-        cid = f"{self.ENTRY_PREFIX}ADD_{uuid.uuid4().hex[:16]}"
+        cid = stable_client_order_id(
+            f"{self.ENTRY_PREFIX}ADD_", signal.symbol, signal.timeframe,
+            campaign.campaign_id, signal.signal_id, "ADD_ON",
+        )
 
         prior = self.db.conn.execute(
             "SELECT state FROM campaign_signals WHERE campaign_id=? AND signal_id=?",
@@ -1036,10 +1852,12 @@ class CampaignExecutionService:
             "STOP_LOSS",
             required_context_versions=dict(signal.context_versions),
             hypothesis_id=f"WILLIAMS_ADD_{signal.signal_type.value}",
+            signal_type=signal.signal_type.value,
             invalidation_level=stop,
             quantity=self.client.decimal_format(qty),
             client_order_id=cid,
             purpose="CAMPAIGN_ADD_ON",
+            permission_interval=signal.timeframe,
             campaign_id=campaign.campaign_id,
             signal_id=signal.signal_id,
             risk_quote=requested,
@@ -1055,10 +1873,13 @@ class CampaignExecutionService:
                 stop_price=self.client.decimal_format(trigger),
                 new_client_order_id=cid,
             ),
-            lambda _snapshot: self._validate_add_on_submission(
+            lambda snapshot: self._validate_add_on_submission(
                 signal.symbol,
                 qty,
                 trigger,
+                signal=signal,
+                campaign_id=campaign.campaign_id,
+                equity_quote=float(equity_quote),
             ),
         )
         self.db.save_campaign_order(
@@ -1107,7 +1928,11 @@ class CampaignExecutionService:
                 f"{campaign.symbol}: protective stop notional {qty * stop:.8f} below Binance minimum {min_notional:.8f}"
             )
         self._check_algo_capacity(campaign.symbol, 1)
-        cid = f"{self.STOP_PREFIX}{uuid.uuid4().hex[:20]}"
+        cid = stable_client_order_id(
+            self.STOP_PREFIX, campaign.campaign_id, campaign.current_signal_id,
+            self.client.decimal_format(qty), self.client.decimal_format(stop),
+            "CAMPAIGN_PROTECTION",
+        )
         intent = OrderIntent.new(
             campaign.symbol,
             "SELL",
@@ -1131,7 +1956,14 @@ class CampaignExecutionService:
                 stop_price=self.client.decimal_format(stop),
                 new_client_order_id=cid,
             ),
-            lambda _snapshot: self._check_algo_capacity(campaign.symbol, 1),
+            lambda _snapshot: (
+                self._validate_campaign_position(
+                    campaign,
+                    qty,
+                    require_no_other_stop=True,
+                ),
+                self._check_algo_capacity(campaign.symbol, 1),
+            ),
         )
         self.db.save_campaign_order(
             PendingOrderRecord(
@@ -1156,24 +1988,75 @@ class CampaignExecutionService:
             "quantity": qty,
         }
 
-    def _execute_cancel(self, campaign, order_id: int, purpose: str) -> dict[str, Any]:
+    def _execute_cancel(
+        self,
+        campaign,
+        order_id: int,
+        purpose: str,
+        *,
+        target_client_id: str = "",
+    ) -> dict[str, Any]:
+        client_id = stable_client_order_id(
+            f"{self.STOP_PREFIX}CANCEL_", campaign.campaign_id,
+            str(order_id), purpose,
+        )
         intent = OrderIntent.new(
             campaign.symbol,
             "SELL",
             "CANCEL",
             required_context_versions={},
-            client_order_id=f"{self.STOP_PREFIX}CANCEL_{uuid.uuid4().hex[:14]}",
+            client_order_id=client_id,
             purpose=purpose,
             campaign_id=campaign.campaign_id,
             signal_id=campaign.current_signal_id,
+            operation_kind="CANCEL",
+            related_order_id=str(order_id),
         )
+
+        def _check_cancel_ownership(_snapshot):
+            current_campaign = self.engine.load_campaign(campaign.campaign_id)
+            if current_campaign is None or str(current_campaign.symbol).upper() != str(campaign.symbol).upper():
+                raise CampaignExecutionError("cancel rejected: campaign owner is unavailable")
+            order_row = self.db.conn.execute(
+                "SELECT campaign_id,symbol,client_order_id,status FROM campaign_orders "
+                "WHERE order_id=? AND symbol=? ORDER BY id DESC LIMIT 1",
+                (str(order_id), str(campaign.symbol).upper()),
+            ).fetchone()
+            if order_row is not None:
+                if str(order_row["campaign_id"]) != str(campaign.campaign_id):
+                    raise CampaignExecutionError("cancel rejected: order belongs to another campaign")
+                stored_cid = str(order_row["client_order_id"] or "")
+                if target_client_id and stored_cid != str(target_client_id):
+                    raise CampaignExecutionError("cancel rejected: target clientOrderId mismatch")
+                if stored_cid and not (
+                    stored_cid.startswith(self.STOP_PREFIX)
+                    or stored_cid.startswith(self.ENTRY_PREFIX)
+                ):
+                    raise CampaignExecutionError("cancel rejected: target order is not Williams-managed")
+            else:
+                tags = current_campaign.tags
+                known_pending = (
+                    target_client_id
+                    and str(tags.get("pending_order_client_id", "")) == str(target_client_id)
+                )
+                known_protection = str(tags.get("protective_order_id", "")) == str(order_id)
+                if not (known_pending or known_protection):
+                    raise CampaignExecutionError(
+                        "cancel rejected: target order ownership cannot be proven from durable campaign state"
+                    )
+                if target_client_id and not (
+                    str(target_client_id).startswith(self.ENTRY_PREFIX)
+                    or str(target_client_id).startswith(self.STOP_PREFIX)
+                ):
+                    raise CampaignExecutionError("cancel rejected: unmanaged clientOrderId")
+
         return self._submit(
             intent,
             lambda: self.client.cancel_order(
                 campaign.symbol,
                 order_id=order_id,
             ),
-            lambda _snapshot: None,
+            _check_cancel_ownership,
         )
 
     def exit_market(
@@ -1203,7 +2086,23 @@ class CampaignExecutionService:
                         order_id=int(protective_id),
                     )
                     status = str(current.get("status", "")).upper()
-                    if status not in {"CANCELED", "EXPIRED", "FILLED", "REJECTED"}:
+                    try:
+                        executed_during_cancel = float(current.get("executedQty", 0) or 0)
+                    except (TypeError, ValueError):
+                        executed_during_cancel = -1.0
+                    if executed_during_cancel < 0:
+                        raise CampaignExecutionError(
+                            "protective order returned invalid executedQty during cancellation"
+                        )
+                    if status in {"FILLED", "PARTIALLY_FILLED"} or executed_during_cancel > 0:
+                        self.engine.mark_reconcile_required(
+                            campaign,
+                            "protective order filled/part-filled during cancellation; reconcile fills before market exit",
+                        )
+                        raise CampaignExecutionError(
+                            "protection cancel raced with execution; market exit is forbidden until fills are reconciled"
+                        )
+                    if status not in {"CANCELED", "EXPIRED", "REJECTED"}:
                         raise
                 except Exception:
                     self.engine.mark_reconcile_required(
@@ -1241,13 +2140,20 @@ class CampaignExecutionService:
             ),
             0.0,
         )
-        qty = self._normalize_qty(symbol, free_qty)
+        # Sell no more than the confirmed campaign lot. The account may
+        # contain unrelated base-asset inventory; free balance is a ceiling,
+        # not proof that every unit belongs to this campaign.
+        campaign_qty = max(0.0, float(campaign.position_qty or 0.0))
+        qty = self._normalize_qty(symbol, min(free_qty, campaign_qty))
         if qty <= 0:
             raise CampaignExecutionError(
                 f"{symbol}: no free campaign inventory after protection cancel"
             )
 
-        cid = f"{self.EXIT_PREFIX}{uuid.uuid4().hex[:20]}"
+        cid = stable_client_order_id(
+            self.EXIT_PREFIX, campaign.campaign_id, campaign.current_signal_id,
+            reason, self.client.decimal_format(qty), "CAMPAIGN_EXIT",
+        )
         intent = OrderIntent.new(
             symbol,
             "SELL",
@@ -1268,7 +2174,10 @@ class CampaignExecutionService:
                 quantity=self.client.decimal_format(qty),
                 new_client_order_id=cid,
             ),
-            lambda _snapshot: self._check_algo_capacity(symbol, 0),
+            lambda _snapshot: (
+                self._validate_campaign_position(campaign, qty),
+                self._check_algo_capacity(symbol, 0),
+            ),
         )
         self.db.save_order(order)
         executed = float(order.get("executedQty", 0) or 0)
@@ -1360,7 +2269,11 @@ class CampaignExecutionService:
         if not campaign.current_stop_price <= proposed_stop:
             raise CampaignExecutionError("structural stop would loosen LONG risk")
         new_stop = self._normalize_price(campaign.symbol, proposed_stop)
-        cid = f"{self.STOP_PREFIX}{uuid.uuid4().hex[:20]}"
+        cid = stable_client_order_id(
+            self.STOP_PREFIX, campaign.campaign_id, str(existing_order_id),
+            self.client.decimal_format(quantity), self.client.decimal_format(new_stop),
+            campaign.current_signal_id, "CANCEL_REPLACE",
+        )
         intent = OrderIntent.new(
             campaign.symbol,
             "SELL",
@@ -1372,6 +2285,8 @@ class CampaignExecutionService:
             purpose="CAMPAIGN_TRAIL",
             campaign_id=campaign.campaign_id,
             signal_id=campaign.current_signal_id,
+            operation_kind="CANCEL_REPLACE",
+            related_order_id=str(existing_order_id),
         )
         result = self._submit(
             intent,
@@ -1384,7 +2299,16 @@ class CampaignExecutionService:
                 stop_price=self.client.decimal_format(new_stop),
                 new_client_order_id=cid,
             ),
-            lambda _snapshot: self._check_algo_capacity(campaign.symbol, 0),
+            lambda _snapshot: (
+                self._validate_campaign_position(
+                    campaign,
+                    quantity,
+                    exclude_order_id=existing_order_id,
+                    target_order_id=existing_order_id,
+                    require_no_other_stop=True,
+                ),
+                self._check_algo_capacity(campaign.symbol, 0),
+            ),
         )
 
         cancel_result = str(result.get("cancelResult", "")).upper()
