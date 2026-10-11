@@ -17,7 +17,7 @@ class Database:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute('PRAGMA busy_timeout=20000')
         self.conn.execute('PRAGMA journal_mode=WAL')
-        self.conn.execute('PRAGMA synchronous=NORMAL')
+        self.conn.execute('PRAGMA synchronous=FULL')
         self._transaction_active = False
         self.init()
 
@@ -296,11 +296,12 @@ class Database:
         self.conn.commit()
 
     def _migrate_execution_columns(self):
-        """Add execution identity/scope columns without rewriting existing intent history."""
+        """Migrate legacy rows without inventing an exchange/account contour."""
         columns = {
             row["name"]
             for row in self.conn.execute("PRAGMA table_info(execution_intents)").fetchall()
         }
+        legacy_without_scope = "execution_scope" not in columns
         additions = {
             "exchange": "TEXT NOT NULL DEFAULT 'BINANCE'",
             "account_scope": "TEXT NOT NULL DEFAULT 'spot-default'",
@@ -311,8 +312,13 @@ class Database:
         for name, sql_type in additions.items():
             if name not in columns:
                 self.conn.execute(f"ALTER TABLE execution_intents ADD COLUMN {name} {sql_type}")
-        # A missing/invalid historical scope is deliberately not inferred from another
-        # contour. Existing schema-v7 rows retain the conservative Spot default.
+        if legacy_without_scope:
+            # Old rows did not persist the account/execution contour. Do not assign
+            # these potentially ambiguous records to Spot or Futures automatically.
+            self.conn.execute(
+                "UPDATE execution_intents SET execution_scope='legacy-unscoped',"
+                "account_scope='legacy-unscoped'"
+            )
         self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_execution_intents_scope_status "
             "ON execution_intents(execution_scope,account_scope,status)"
@@ -441,6 +447,28 @@ class Database:
         exchange = str(getattr(intent, "exchange", "BINANCE") or "BINANCE").upper()
         campaign_id = str(getattr(intent, "campaign_id", "") or "") or None
         with self.transaction():
+            # Identity collisions are classified before readiness locks, but never
+            # authorize a network call. This preserves stable idempotency semantics.
+            prior = self.conn.execute(
+                """SELECT intent_id,status,client_order_id,execution_scope,account_scope
+                   FROM execution_intents
+                   WHERE intent_id=? OR (? IS NOT NULL AND client_order_id=?)
+                   LIMIT 1""",
+                (str(intent.intent_id), client_order_id, client_order_id),
+            ).fetchone()
+            if prior:
+                return {
+                    "claimed": False, "reason": "IDENTITY_CONFLICT",
+                    "existing": dict(prior),
+                }
+            legacy_unresolved = self.conn.execute(
+                """SELECT intent_id,status FROM execution_intents
+                   WHERE execution_scope='legacy-unscoped'
+                     AND status IN ('PENDING','SUBMITTING','SUBMITTED','UNKNOWN','AMBIGUOUS','RECONCILE_REQUIRED')
+                   LIMIT 1"""
+            ).fetchone()
+            if legacy_unresolved:
+                return {"claimed": False, "reason": "LEGACY_SCOPE_REQUIRES_MANUAL_RECONCILIATION", "existing": dict(legacy_unresolved)}
             lock_keys = (
                 self._execution_lock_key(scope, account_scope),
                 self._execution_lock_key(scope),
@@ -516,6 +544,14 @@ class Database:
                 ).fetchone()
                 if lock:
                     return {"ready": False, "reason": "EXECUTION_LOCKED", "detail": lock["value"]}
+            legacy_unresolved = self.conn.execute(
+                """SELECT intent_id,status FROM execution_intents
+                   WHERE execution_scope='legacy-unscoped'
+                     AND status IN ('PENDING','SUBMITTING','SUBMITTED','UNKNOWN','AMBIGUOUS','RECONCILE_REQUIRED')
+                   LIMIT 1"""
+            ).fetchone()
+            if legacy_unresolved:
+                return {"ready": False, "reason": "LEGACY_SCOPE_REQUIRES_MANUAL_RECONCILIATION", "detail": dict(legacy_unresolved)}
             unresolved = self.conn.execute(
                 """SELECT intent_id,status,symbol,client_order_id,order_id
                    FROM execution_intents
