@@ -699,7 +699,7 @@ Do not resume trading. Overall status remains **BLOCKED — NOT ACCEPTED**.
 - Base / `main`: `04da5f9c09572e99ff310be3a1908179165e528c`.
 - Existing PR #48 remains Open / Draft / unmerged.
 - Existing required CI on starting SHA `0794f918...`: Python backend tests run `38118044987`, Build Android APK run `38118045001`, Williams Campaign CI run `38118044998` all completed Success. Jobs `114406851606`, `114406851800`, `114406894423`, `114406894642` completed successfully. These runs do not apply to later commits.
-- Current implementation/test commits in this checkpoint: `a4dd3d9fbebbb0ce3cfbedf0498022215a5dd198` (Decimal canonicalization and accurate first-vs-duplicate status) and `4486eeb6b286c7849db1e3808aa3f8fc62a8faed` (regression tests).
+- Current implementation/test commits in this checkpoint: `a4dd3d9fbebbb0ce3cfbedf0498022215a5dd198` (Decimal canonicalization and accurate first-vs-duplicate status), `4486eeb6b286c7849db1e3808aa3f8fc62a8faed` (conflict/duplicate regression tests), and `f35d67e1d1dd860b0bb510477615961336e5a8b8` (align earlier assertions with canonical Decimal serialization). The final report-bearing SHA is the documentation commit created after these code/test changes; required CI must be checked against that exact final SHA.
 - No main write or merge performed. No exchange mutation was performed.
 
 #### Source-to-sink findings (CODE-CONFIRMED; integration NOT VERIFIED)
@@ -718,7 +718,7 @@ This table is a partial source map, not a claim that every production caller and
 
 - `Database._canonical_decimal()` now normalizes Decimal-equivalent values to a canonical string (including trailing-zero variants) without binary float arithmetic. Zero is serialized as `"0"`.
 - `apply_financial_fill_effect()` now reports first insertion versus duplicate correctly for the `PENDING_FEE` path instead of inferring duplication from a timestamp that exists for both new and existing rows.
-- Tests added: `test_fill_identity_conflict_is_fail_closed_and_does_not_reapply`, `test_decimal_equivalent_fill_payload_is_canonical_duplicate`, and `test_unknown_fee_first_delivery_and_duplicate_are_distinguished`.
+- Tests added: `test_fill_identity_conflict_is_fail_closed_and_does_not_reapply`, `test_decimal_equivalent_fill_payload_is_canonical_duplicate`, and `test_unknown_fee_first_delivery_and_duplicate_are_distinguished`. Existing journal assertions were updated to expect the newly canonicalized strings (`0.01`, `61234.12`, `0.00001`) rather than preserving irrelevant trailing zeros.
 - Expected invariant: the same identity with conflicting immutable quantity/price/quote/fee data raises a conflict and does not invoke the projection callback again. Decimal-equivalent string representations map to the same canonical payload.
 
 #### Financial bypasses still open (CODE-CONFIRMED)
