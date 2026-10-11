@@ -110,3 +110,21 @@ The scan confirmed an additional recovery-identity gap in the baseline OCO path:
 Latest PR CI passed on merge checkout `bc8d2a88da81dece541cb36bb2cd00646ae21150` (branch HEAD `d0c3a4fe71025f69e3356fa0d397b5544898d240` merged into base `04da5f9c09572e99ff310be3a1908179165e528c`): backend 148 passed, campaign 208 passed, mutation registry 14 passed, and Android checks/build passed. Baseline-associated PR runs checked out merge commit `c24e28defc38e19baf20c777a069e80b87c7aecf`, not the literal required baseline SHA. No isolated exact-SHA test is proven and no local tests were run.
 
 See `TASK_000_5_EXECUTION_SAFETY_REMEDIATION.md` for source evidence, CI links, confirmed defects, limitations and next steps. P1-1 and P1-2 remain open. **BLOCKED — DO NOT MERGE PR #51.**
+
+
+## TASK 000.5 execution record — 2026-10-11
+
+The follow-up branch `audit/task-0005-p1-remediation` was created from the re-resolved prior work-branch HEAD `839d3928609350cf975840781ca50c6d3b5258a8`. Its first documentation commit is `471cf82c6ce7a17183480c49c6325385be8a79c3`. The immutable audit baseline remains `f6dd193f9147ba49ff7f11efc81b18e10c1e2c44`.
+
+No executable checkout/test runner was available through the current environment, so no test command was run and no new Python implementation or failure-injection test is claimed. The existing 123-path inventory is retained as an inventory only; 112 files remain not reviewed line-by-line and 11 are targeted-review-only. The confirmed two-leg `cancelReplace` recovery gap and repository-wide barrier reachability gap remain open. See `TASK_000_5_EXECUTION_SAFETY_REMEDIATION.md` for the current attempt record.
+
+| TASK 000.5 criterion | Result |
+|---|---|
+| Separate branch from verified current HEAD | PASS — `audit/task-0005-p1-remediation`, base `839d3928609350cf975840781ca50c6d3b5258a8` |
+| All 123 Python files reviewed line-by-line | BLOCKED — inventory exists; full semantic review not completed |
+| cancelReplace two-leg durable journal/recovery fixed | BLOCKED — not implemented or tested |
+| Offline persistence/timeout/partial-fill/restart/bypass tests | BLOCKED — no test command executed |
+| Exact baseline and final HEAD test evidence | BLOCKED — no runner/test logs for this attempt |
+| Strategy unchanged; Kotlin untouched; no exchange orders | PASS — no such changes or requests made |
+
+**Final status: BLOCKED. Do not merge PR #51 or enable automated Testnet trading.**
