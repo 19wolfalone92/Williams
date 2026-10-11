@@ -899,11 +899,25 @@ class MultiPositionTrader:
             ) from exc
 
         order_id = sell.get("orderId")
-        confirmed = self.client.get_order(
-            symbol,
-            order_id=order_id,
-            orig_client_order_id=client_id if order_id is None else None,
-        )
+        try:
+            confirmed = self.client.get_order(
+                symbol,
+                order_id=order_id,
+                orig_client_order_id=client_id if order_id is None else None,
+            )
+        except Exception as exc:
+            self.set_state(symbol, "RECONCILE_REQUIRED")
+            try:
+                self.db.transition_emergency_sell_intent(
+                    operation_id, "RECONCILE_REQUIRED",
+                    exchange_order_id=order_id,
+                    last_error=f"authoritative order lookup failed: {type(exc).__name__}: {exc}",
+                )
+            except Exception:
+                pass
+            raise RuntimeError(
+                f"{symbol}: emergency SELL order lookup failed; reconcile {client_id}; no retry permitted"
+            ) from exc
         status = str(confirmed.get("status", "")).upper()
         # A market SELL can terminate with a partial execution (for example,
         # EXPIRED after partial matching). Only terminal exchange states may be
@@ -912,6 +926,11 @@ class MultiPositionTrader:
         terminal_statuses = {"FILLED", "CANCELED", "EXPIRED", "REJECTED"}
         if status not in terminal_statuses:
             self.set_state(symbol, "RECONCILE_REQUIRED")
+            self.db.transition_emergency_sell_intent(
+                operation_id, "RECONCILE_REQUIRED",
+                exchange_order_id=order_id, exchange_status=status,
+                last_error="exchange order is non-terminal; reconciliation required",
+            )
             self.db.log_event(
                 "ERROR",
                 "emergency_market_exit_unresolved",
