@@ -229,3 +229,32 @@ def test_projection_write_failure_rolls_back_canonical_fill(tmp_path):
     assert db.conn.execute("SELECT COUNT(*) FROM exchange_fill_ledger").fetchone()[0] == 0
     assert db.conn.execute("SELECT COUNT(*) FROM campaign_fills").fetchone()[0] == 0
 
+def test_legacy_real_only_fill_migration_preserves_row_and_latches_recovery(tmp_path):
+    path = str(tmp_path / "legacy-v8.sqlite3")
+    db = Database(path)
+    db.conn.execute(
+        """INSERT INTO campaign_fills(
+            campaign_id,order_id,symbol,side,quantity,price,quote_quantity,
+            commission_asset,raw_json
+        ) VALUES('legacy-campaign','old-order','BTCUSDT','BUY',0.123456789,100,12.3456789,
+                 'USDT','{}')"""
+    )
+    db.conn.commit()
+    db.conn.close()
+
+    reopened = Database(path)
+    assert reopened.conn.execute("SELECT COUNT(*) FROM campaign_fills").fetchone()[0] == 1
+    assert reopened.state_get("recovery_status") == "RECOVERY_REQUIRED"
+    import json
+    migration = json.loads(reopened.state_get("legacy_fill_decimal_migration"))
+    assert migration == {"status": "BLOCKED", "unverified_rows": 1}
+
+
+def test_canonical_fill_stays_recovery_blocking_until_effect_is_applied(tmp_path):
+    db = Database(str(tmp_path / "pending-effect.sqlite3"))
+    assert db.save_campaign_fill(ledger_fill()) is True
+    pending = db.pending_exchange_fill_effects()
+    assert len(pending) == 1
+    assert pending[0]["trade_id"] == "17"
+    assert pending[0]["effect_state"] == "PENDING"
+
