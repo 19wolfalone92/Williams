@@ -5,91 +5,76 @@
 **Приоритет:** P0 — CRITICAL  
 **Рабочая ветка:** `audit/williams-2.1-task-006-android-runtime`  
 **PR:** #46 — Open / Draft / Unmerged (по доступному снимку GitHub)  
-**Baseline main:** `04da5f9c09572e99ff310be3a1908179165e528c`  
-**Последний проверенный commit ветки в доступном снимке:** `36c22327774b2bd3c0a3df4130cb10cc0e483766`  
-**Режим:** документация и аудит; production-код не менялся в рамках этого отчёта; Mainnet и реальные торговые операции не использовались.
+**Baseline main в описании PR:** `04da5f9c09572e99ff310be3a1908179165e528c`  
+**Workflow head SHA для полученного APK:** `dc634573eb26c491d125feecd158319f1f5daa79`  
+**Режим:** аудит доказательств; Mainnet и реальные торговые операции не использовались.
 
-> SHA выше — наблюдавшиеся значения из доступных GitHub-данных, а не заявление о криптографически подтверждённом доверенном baseline. Перед принятием отчёта требуется повторно снять фактический HEAD и refs.
+## 1. Итог
 
-## 1. Краткий вердикт
+TASK 006.1 остаётся **BLOCKED**. Целевая ветка обнаружена, и фактический unsigned APK удалось получить из GitHub Actions. SHA-256 ZIP и вложенного APK независимо вычислены. Однако trusted source gate не пройден: независимый доверенный checkout/Git bundle и локальные результаты `git bundle verify`, `git fsck --full`, `git status` отсутствуют. Физическое Android-устройство и оригинальные ADB-логи также недоступны.
 
-Задача не может быть принята. Исходники ветки доступны для чтения через подключённый GitHub, но независимый доверенный checkout/Git bundle, проверка происхождения, локальные `git bundle verify`, `git fsck --full` и состояние рабочего дерева в настоящем запуске не получены. Физическое Android-устройство и оригинальные ADB-логи недоступны. Поэтому нельзя подтверждать работу NativeEngine, реальное восстановление SQLite/FSM, поведение после force-stop/reboot, REST/WebSocket/scanner, защиту секретов или fail-closed на устройстве.
-
-**Запрещено интерпретировать CI, unit-тесты, APK или статический анализ как доказательство физического runtime.** Никакие синтетические device logs не создавались.
+Наличие APK и успешный workflow не доказывают автономную работу приложения на устройстве. Синтетические device logs не создавались.
 
 ## 2. Trusted Source Gate
 
 | Проверка | Результат | Примечание |
 |---|---|---|
-| GitHub repository/ветка доступны для чтения | NOT VERIFIED как доверенный источник | Репозиторий и целевая ветка обнаружены через подключённый GitHub; это не подтверждает независимую provenance |
-| Git bundle/full trusted checkout получен | BLOCKED | В этом запуске артефакт не предоставлен |
-| SHA-256 bundle/архива | NOT RUN | Нет полученного артефакта |
-| Целевой commit и родители | NOT VERIFIED | Есть ранее наблюдавшийся SHA; родители нужно подтвердить повторным снимком |
-| Все refs и актуальный HEAD | NOT VERIFIED | Выполнен поиск целевой ветки, но не полный локальный inventory refs |
+| Целевая ветка | FOUND | `audit/williams-2.1-task-006-android-runtime` обнаружена в GitHub |
+| Фактический branch HEAD после текущих документов | PARTIALLY VERIFIED | Workflow run связан с head SHA `dc634573eb26c491d125feecd158319f1f5daa79`; необходимо повторно проверить актуальный HEAD после всех операций |
+| Baseline | NOT VERIFIED independently | SHA `04da5f9c09572e99ff310be3a1908179165e528c` взят из описания PR |
+| Trusted Git bundle/full checkout | BLOCKED | Не предоставлен как проверяемый артефакт |
+| SHA-256 исходного bundle/архива | NOT RUN | Нет доверенного архива |
 | `git bundle verify` | NOT RUN | Bundle отсутствует |
-| `git fsck --full` | NOT RUN | Локального Git object database нет |
-| `git status --short` / состояние рабочего дерева | NOT RUN | Локального checkout нет |
-| Сопоставление baseline и рабочего дерева | BLOCKED | Доступно сравнение PR, но не локальная воспроизводимая проверка |
-| Изменения относительно baseline | Частично видны в PR #46 | PR содержит накопленный широкий diff; это не изолированный патч TASK 006 |
+| `git fsck --full` | NOT RUN | Нет локального Git object database |
+| `git status --short` | NOT RUN | Нет локального checkout |
+| Родители и полная цепочка refs | NOT VERIFIED | Требуется локальная проверка доверенного checkout |
+| Происхождение исходников | BLOCKED | GitHub доступен для чтения, но это не заменяет независимое подтверждение происхождения |
 
-**Gate result: BLOCKED — TRUSTED SOURCE NOT PROVIDED.** До прохождения gate запрещены изменения торговой логики, схемы хранения и execution safety mechanisms. Этот отчёт меняет только документацию в существующей целевой ветке.
+**Gate result: BLOCKED — TRUSTED SOURCE NOT PROVIDED.** Не изменять торговую логику, схему хранения или защитные механизмы до прохождения gate.
 
-## 3. Ветка и PR
+## 3. APK и workflow provenance
 
-- Целевая ветка `audit/williams-2.1-task-006-android-runtime` существует по результату поиска GitHub branches.
-- PR #46 «WILLIAMS BOT 2.1 — Task 006: Android runtime reliability» найден открытым Draft; его описание прямо отмечает отсутствие физического device test.
-- Базовый SHA в описании PR: `04da5f9c09572e99ff310be3a1908179165e528c`.
-- Ранее наблюдавшийся commit: `36c22327774b2bd3c0a3df4130cb10cc0e483766`.
-- В этой операции main не изменялся; merge не выполнялся; новая ветка не создавалась.
-- Требуется повторная фиксация текущего branch HEAD после добавления документов.
+Из GitHub Actions workflow run `38143567123` (run #2117) получен artifact `williams-bot-release-unsigned-2117`, artifact ID `11703862596`. GitHub metadata связывает workflow artifact с веткой `audit/williams-2.1-task-006-android-runtime` и head SHA `dc634573eb26c491d125feecd158319f1f5daa79`.
 
-## 4. APK provenance
+- SHA-256 ZIP, независимо вычисленный: `394ff75cf04a4f4cbbf458b7df311f83fd3e760c255940a1a89395e377e781ad`.
+- GitHub-reported artifact digest: совпадает.
+- Вложенный файл: `app-release-unsigned.apk`.
+- SHA-256 APK, независимо вычисленный: `08fdd472bcb6ab0fc88f3ca03593636582d76beea4ca2e981dd27bf8e88ccad1`.
+- Вложенный checksum-файл совпадает с вычисленным SHA-256 APK.
+- APK явно обозначен как unsigned.
 
-Справочный SHA-256, переданный ранее:
+Ранее зарегистрированный справочный SHA-256 `4823d5a414afa3343be65e4bdb15c030ad86d29ffb487bcda3378fe270ebccd5` **не совпадает** с полученным APK. Их нельзя считать одним артефактом.
 
-`4823d5a414afa3343be65e4bdb15c030ad86d29ffb487bcda3378fe270ebccd5`
+applicationId, versionName/versionCode, сертификат, воспроизводимость сборки и соответствие APK установленному на устройстве приложению пока не проверены. В доступном окружении `adb`, `aapt` и `apksigner` не найдены в PATH. Полная таблица — в `APK_PROVENANCE.md`.
 
-Он не пересчитан в этом запуске: фактический APK не был получен как локальный артефакт. Поэтому application ID, versionName, versionCode, подпись/сертификат, Git SHA сборки и воспроизводимость сборки — **NOT RUN / NOT VERIFIED**. Нельзя утверждать, что справочный APK соответствует commit `36c223…` или любому другому SHA. Детали в `APK_PROVENANCE.md`.
+## 4. Физическое устройство
 
-## 5. Физическое устройство и сценарии
+Модель устройства, Android/API level, установленная версия APK, ADB, временные метки испытаний и оригинальные device logs не получены. DEV-001…DEV-010 на физическом устройстве не выполнялись. Статусы находятся в `DEVICE_EVIDENCE_MATRIX.md` и `RECOVERY_TEST_MATRIX.md`.
 
-Физическое устройство не подключено в доступной среде; модель, Android/API level, установленный APK, ADB и временные метки реальных испытаний не установлены. Оригинальные device logs отсутствуют. DEV-001…DEV-010 не выполнялись на физическом устройстве. Матрицы: `DEVICE_EVIDENCE_MATRIX.md` и `RECOVERY_TEST_MATRIX.md`.
+## 5. Runtime-компоненты
 
-## 6. Статус компонентов
-
-| Компонент/утверждение | Статус | Почему |
+| Компонент/утверждение | Статус | Причина |
 |---|---|---|
 | NativeEngine запускается на устройстве | NOT VERIFIED | Нет device logs |
-| Dashboard UI не владеет торговым состоянием | NOT VERIFIED | Исходный путь частично виден; runtime-проверки нет |
-| SQLite/FSM переживают перезапуск | NOT RUN | Нет снимков состояния до/после |
-| Recover → Reconcile → Validate → Trade Eligibility | NOT RUN | Нет событий с UTC timestamp/run ID |
-| Binance state сверяется до входов | NOT VERIFIED | Требуется device/Testnet trace |
-| REST/WebSocket/history/scanner/balances | NOT RUN | Нет runtime diagnostics |
-| Credentials читаются и авторизация диагностируется | NOT RUN | Нет физического теста с Testnet credentials |
-| Секреты не передаются backend/telemetry | NOT VERIFIED | Полный контролируемый сетевой аудит не проводился |
-| Safe Mode / kill switch / fail-closed | NOT RUN | Нет сценариев на устройстве |
-| Исполнение не требует VPS | NOT VERIFIED | Статический код не доказывает runtime-независимость |
-| APK связан с проверенным исходным SHA | BLOCKED | Нет подтверждённой provenance |
+| Dashboard UI не владеет торговым состоянием | NOT VERIFIED | Нет физического runtime trace |
+| SQLite/FSM переживают перезапуск | NOT RUN | Нет снимков до/после |
+| Recover → Reconcile → Validate → Trade Eligibility | NOT RUN | Нет событий устройства с UTC timestamp/run ID |
+| Binance state сверяется до входов | NOT VERIFIED | Нет Testnet device trace |
+| REST/WebSocket/history/scanner/balances | NOT RUN | Нет runtime samples |
+| Credentials и авторизация | NOT RUN | Нет контролируемого device/Testnet теста |
+| Защита секретов в сетевых путях | NOT VERIFIED | Контролируемый сетевой аудит не проводился |
+| Safe Mode / kill switch / fail-closed | NOT RUN | Нет испытаний на устройстве |
+| Локальное исполнение без обязательного VPS | NOT VERIFIED | Runtime-независимость не доказана |
 
-## 7. Зависимости и блокеры
+## 6. Следующие шаги
 
-- **TASK 001:** необходим подтверждённый контракт архитектуры и согласование; не обходить его созданием параллельной ветки.
-- **TASK 002:** блокирует trusted baseline, release/version contract и доказуемую provenance.
-- **TASK 003:** необходимы доказательства durable mutation intent, отсутствия blind retry и fail-closed исполнения.
-- **TASK 005:** необходимы подтверждённые risk invariants и блокировка риск-увеличивающих действий при неопределённости.
-- **TASK 007:** необходимы recovery/reconciliation и финансовый ledger proof.
-- **TASK 008:** необходимы Spot Testnet market/execution pipeline evidence.
+1. Получить доверенный Git bundle или checkout и пройти Trusted Source Gate.
+2. Проверить APK metadata/signing state в Android SDK environment.
+3. Выполнить controlled rebuild из доверенного SHA и зафиксировать сравнение артефактов.
+4. Подключить физическое Android-устройство, сохранить оригинальные ADB-логи и выполнить DEV-001…DEV-010 в безопасной Testnet-конфигурации без отправки ордеров.
+5. Сохранить sanitized SQLite/FSM snapshots, runtime diagnostics и сетевые evidence.
+6. Привязать каждый PASS к точному source SHA, APK SHA, версии устройства/приложения, временным меткам и воспроизводимым командам.
 
-## 8. Что нужно для снятия BLOCKED
+## 7. Решение
 
-1. Предоставить доверенный Git bundle или полный checkout и подтвердить его происхождение.
-2. Зафиксировать hash артефакта, refs, HEAD, родителей, `git bundle verify`, `git fsck --full`, `git status` и коды возврата.
-3. Получить реальный APK, пересчитать SHA-256, извлечь metadata и проверить сертификат/provenance.
-4. Подключить физическое Android-устройство и сохранить оригинальные ADB-логи.
-5. Выполнить DEV-001…DEV-010 в безопасной Testnet-конфигурации без торговых мутаций.
-6. Сохранить sanitized runtime diagnostics и снимки SQLite/FSM без credentials.
-7. Проверить все результаты на конкретном исходном SHA и APK SHA; приложить временные метки и воспроизводимые команды.
-
-## 9. Итог
-
-**TASK 006: BLOCKED — NOT ACCEPTED.** Никакие физические испытания не заявлены выполненными. Отсутствие доказательств не доказывает дефект приложения, но запрещает PASS. Не закрывать задачу и не разрешать live trading до прохождения обязательных критериев.
+**TASK 006.1: BLOCKED — NOT ACCEPTED.** Подтверждено получение и хеширование unsigned APK из workflow; это частичный прогресс по APK acquisition. Trusted source provenance и физические испытания остаются блокирующими. Не закрывать задачу и не разрешать live trading.
