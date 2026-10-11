@@ -766,3 +766,107 @@ def test_independent_processes_can_consume_emergency_sink_permit_only_once(tmp_p
         assert row["status"] == "SUBMITTING"
     finally:
         verify.conn.close()
+
+
+def test_database_nested_transaction_uses_savepoint_and_outer_rollback_is_safe():
+    db = Database(":memory:")
+    db.conn.execute("CREATE TABLE tx_probe (value INTEGER PRIMARY KEY)")
+    try:
+        with db.transaction():
+            db.conn.execute("INSERT INTO tx_probe(value) VALUES(1)")
+            with pytest.raises(ValueError, match="inner failure"):
+                with db.transaction():
+                    db.conn.execute("INSERT INTO tx_probe(value) VALUES(2)")
+                    raise ValueError("inner failure")
+            db.conn.execute("INSERT INTO tx_probe(value) VALUES(3)")
+
+        assert [r["value"] for r in db.conn.execute(
+            "SELECT value FROM tx_probe ORDER BY value"
+        ).fetchall()] == [1, 3]
+        assert not db.conn.in_transaction
+
+        with pytest.raises(RuntimeError, match="outer failure"):
+            with db.transaction():
+                db.conn.execute("INSERT INTO tx_probe(value) VALUES(4)")
+                raise RuntimeError("outer failure")
+
+        assert [r["value"] for r in db.conn.execute(
+            "SELECT value FROM tx_probe ORDER BY value"
+        ).fetchall()] == [1, 3]
+        assert not db.conn.in_transaction
+
+        with db.transaction():
+            db.conn.execute("INSERT INTO tx_probe(value) VALUES(5)")
+        assert [r["value"] for r in db.conn.execute(
+            "SELECT value FROM tx_probe ORDER BY value"
+        ).fetchall()] == [1, 3, 5]
+        assert not db.conn.in_transaction
+    finally:
+        db.conn.close()
+
+
+def test_shared_connection_blocks_other_thread_sql_until_transaction_finishes():
+    import threading
+    import time
+
+    db = Database(":memory:")
+    db.conn.execute("CREATE TABLE tx_probe (value INTEGER PRIMARY KEY)")
+    transaction_entered = threading.Event()
+    outside_write_done = threading.Event()
+    errors = []
+
+    def outside_write():
+        try:
+            assert transaction_entered.wait(timeout=5)
+            db.conn.execute("INSERT INTO tx_probe(value) VALUES(2)")
+            outside_write_done.set()
+        except Exception as exc:
+            errors.append(exc)
+            outside_write_done.set()
+
+    worker = threading.Thread(target=outside_write)
+    worker.start()
+    try:
+        with db.transaction():
+            db.conn.execute("INSERT INTO tx_probe(value) VALUES(1)")
+            transaction_entered.set()
+            time.sleep(0.05)
+            assert not outside_write_done.is_set(), (
+                "another thread executed SQL inside the transaction owner's scope"
+            )
+        assert outside_write_done.wait(timeout=5)
+        worker.join(timeout=5)
+        assert not worker.is_alive()
+        assert not errors
+        assert [r["value"] for r in db.conn.execute(
+            "SELECT value FROM tx_probe ORDER BY value"
+        ).fetchall()] == [1, 2]
+        assert not db.conn.in_transaction
+    finally:
+        if worker.is_alive():
+            worker.join(timeout=5)
+        db.conn.close()
+
+
+def test_database_rejects_unowned_open_transaction_without_rolling_it_back():
+    db = Database(":memory:")
+    db.conn.execute("CREATE TABLE tx_probe (value INTEGER PRIMARY KEY)")
+    try:
+        # Explicit low-level BEGIN is intentionally outside Database.transaction().
+        db.conn.execute("BEGIN IMMEDIATE")
+        db.conn.execute("INSERT INTO tx_probe(value) VALUES(7)")
+        with pytest.raises(RuntimeError, match="unowned active transaction"):
+            with db.transaction():
+                pass
+        # The transaction API must not roll back a transaction it does not own.
+        assert db.conn.in_transaction
+        assert db.conn.execute("SELECT value FROM tx_probe").fetchone()["value"] == 7
+        db.conn.rollback()
+        assert not db.conn.in_transaction
+        with db.transaction():
+            db.conn.execute("INSERT INTO tx_probe(value) VALUES(8)")
+        assert db.conn.execute("SELECT value FROM tx_probe").fetchone()["value"] == 8
+    finally:
+        if db.conn.in_transaction:
+            db.conn.rollback()
+        db.conn.close()
