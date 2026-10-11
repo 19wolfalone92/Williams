@@ -34,6 +34,15 @@ class _Store:
         self.statuses = []
         self.states = {}
 
+    def execution_readiness(self, scope="spot"):
+        if self.states.get(f"execution_lock:{scope}"):
+            return {"ready": False, "reason": "EXECUTION_LOCKED"}
+        return {"ready": True, "reason": ""}
+
+    def claim_execution_intent(self, intent, scope="spot"):
+        self.save_execution_intent(intent, "PENDING")
+        return {"claimed": True, "reason": "", "existing": None}
+
     def save_execution_intent(self, intent, status, reason=""):
         self.statuses.append(status)
         if status == self.fail_on_status:
@@ -42,6 +51,16 @@ class _Store:
     def save_execution_event(self, intent_id, event, payload=None):
         if self.fail_on_result and event == "BINANCE_RESULT":
             raise OSError("simulated exchange-result persistence failure")
+
+    def save_execution_result(self, intent, response):
+        self.save_execution_event(intent.intent_id, "BINANCE_RESULT", response)
+        self.save_execution_intent(intent, "SUBMITTED")
+
+    def mark_execution_unknown(self, intent, reason, scope="spot"):
+        self.statuses.append("UNKNOWN")
+        self.states[f"execution_lock:{scope}"] = {
+            "intent_id": intent.intent_id, "reason": reason
+        }
 
     def state_get(self, key, default=None):
         return self.states.get(key, default)
@@ -97,7 +116,7 @@ def test_result_persistence_failure_after_submit_is_unknown_not_success():
         )
 
     assert calls == ["submitted"], "submit is called once and never retried by the barrier"
-    assert store.statuses == ["PENDING", "SUBMITTED"]
+    assert store.statuses == ["PENDING", "SUBMITTING", "SUBMITTED", "UNKNOWN"]
 
 def test_exchange_response_persistence_failure_is_unknown_not_success():
     store = _Store(fail_on_result=True)
@@ -111,4 +130,4 @@ def test_exchange_response_persistence_failure_is_unknown_not_success():
         )
 
     assert calls == ["submitted"], "do not resubmit after result-storage failure"
-    assert store.statuses == ["PENDING"], "intent remains unresolved for reconciliation"
+    assert store.statuses == ["PENDING", "SUBMITTING", "UNKNOWN"], "intent remains unresolved for reconciliation"
