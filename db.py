@@ -7,7 +7,7 @@ from contextlib import contextmanager
 
 
 class Database:
-    SCHEMA_VERSION = 9
+    SCHEMA_VERSION = 10
 
     def __init__(self, path=None):
         path = path or os.getenv('WILLIAMS_DB_PATH') or 'data/trader.sqlite3'
@@ -155,6 +155,17 @@ class Database:
         CREATE UNIQUE INDEX IF NOT EXISTS uq_execution_intents_client_order_id
             ON execution_intents(client_order_id)
             WHERE client_order_id IS NOT NULL AND client_order_id <> '';
+        CREATE TABLE IF NOT EXISTS execution_account_bindings(
+            exchange TEXT NOT NULL,
+            execution_scope TEXT NOT NULL,
+            account_scope TEXT NOT NULL,
+            credential_fingerprint TEXT NOT NULL,
+            account_uid TEXT,
+            account_type TEXT,
+            testnet INTEGER NOT NULL,
+            verified_at TEXT NOT NULL,
+            PRIMARY KEY(exchange, execution_scope, account_scope)
+        );
         CREATE TABLE IF NOT EXISTS execution_fills(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             exchange TEXT NOT NULL,
@@ -442,6 +453,77 @@ class Database:
                 row["account_scope"] or self._default_account_scope(scope)
             )
         return str(scope or "spot"), self._default_account_scope(scope)
+
+    def verify_or_pin_execution_account(self, *, exchange, execution_scope, account_scope,
+                                         credential_fingerprint, account_uid=None,
+                                         account_type=None, testnet=False):
+        """Pin an authenticated credential identity; any later change fails closed.
+
+        The fingerprint is SHA-256 of the API key, never the secret. A key rotation
+        requires an explicit offline rebind while trading is stopped. Binance Spot
+        account responses do not always expose a stable UID, so UID is an additional
+        cross-check when supplied, not an assumed field.
+        """
+        import hmac
+        from datetime import datetime, timezone
+
+        exchange = str(exchange).upper()
+        execution_scope = str(execution_scope).strip().lower()
+        account_scope = str(account_scope).strip()
+        fingerprint = str(credential_fingerprint).lower()
+        if not exchange or not execution_scope or not account_scope:
+            raise ValueError("exchange/execution_scope/account_scope are required")
+        if len(fingerprint) != 64 or any(ch not in "0123456789abcdef" for ch in fingerprint):
+            raise ValueError("credential fingerprint must be a SHA-256 hex digest")
+        uid = None if account_uid in (None, "") else str(account_uid)
+        atype = None if account_type in (None, "") else str(account_type)
+        with self.transaction():
+            row = self.conn.execute(
+                """SELECT credential_fingerprint,account_uid,account_type,testnet
+                   FROM execution_account_bindings
+                   WHERE exchange=? AND execution_scope=? AND account_scope=?""",
+                (exchange, execution_scope, account_scope),
+            ).fetchone()
+            if row is None:
+                self.conn.execute(
+                    """INSERT INTO execution_account_bindings(
+                        exchange,execution_scope,account_scope,credential_fingerprint,
+                        account_uid,account_type,testnet,verified_at
+                    ) VALUES(?,?,?,?,?,?,?,?)""",
+                    (exchange, execution_scope, account_scope, fingerprint, uid, atype,
+                     int(bool(testnet)), datetime.now(timezone.utc).isoformat()),
+                )
+                self.conn.execute(
+                    "INSERT INTO execution_events(intent_id,event,payload_json) VALUES(NULL,?,?)",
+                    ("ACCOUNT_IDENTITY_PINNED", json.dumps({
+                        "exchange": exchange, "execution_scope": execution_scope,
+                        "account_scope": account_scope, "account_uid": uid,
+                        "account_type": atype, "testnet": bool(testnet),
+                        "fingerprint_prefix": fingerprint[:12],
+                    }, sort_keys=True)),
+                )
+                return {"verified": True, "pinned": True, "account_uid": uid,
+                        "account_type": atype, "testnet": bool(testnet)}
+            if not hmac.compare_digest(str(row["credential_fingerprint"]), fingerprint):
+                raise PermissionError("Binance credential identity changed; explicit stopped-state rebind required")
+            if bool(row["testnet"]) != bool(testnet):
+                raise PermissionError("Binance Testnet/live execution domain changed; explicit rebind required")
+            stored_uid = None if row["account_uid"] in (None, "") else str(row["account_uid"])
+            if stored_uid and uid and stored_uid != uid:
+                raise PermissionError("Binance account UID changed for the pinned execution scope")
+            stored_type = None if row["account_type"] in (None, "") else str(row["account_type"])
+            if stored_type and atype and stored_type != atype:
+                raise PermissionError("Binance account type changed for the pinned execution scope")
+            self.conn.execute(
+                """UPDATE execution_account_bindings SET
+                     account_uid=COALESCE(account_uid,?),
+                     account_type=COALESCE(account_type,?), verified_at=?
+                   WHERE exchange=? AND execution_scope=? AND account_scope=?""",
+                (uid, atype, datetime.now(timezone.utc).isoformat(),
+                 exchange, execution_scope, account_scope),
+            )
+            return {"verified": True, "pinned": False, "account_uid": stored_uid or uid,
+                    "account_type": stored_type or atype, "testnet": bool(testnet)}
 
     def claim_execution_intent(self, intent, scope=None, account_scope=None, purpose=None):
         """Atomically claim one immutable intent inside its exchange/account contour."""
