@@ -18,8 +18,8 @@ Relevant baseline files were inspected: db.py, execution_barrier.py, execution_r
 - db.py: schema version 10; durable execution_account_bindings table keyed by exchange, execution scope, and configured account scope; pins credential fingerprint, optional Binance account UID/type, and Testnet/live domain. A changed key, domain, or observed UID fails closed.
 - execution_account_identity.py: performs an authenticated client.account() request before campaign recovery or mutation; fingerprints only the API key (SHA-256), never the API secret; supports optional WILLIAMS_EXPECTED_API_KEY_SHA256; does not emit full fingerprint or credentials to logs.
 - campaign_execution.py: checks account identity before recovery and before the canonical barrier submission path.
-- portfolio_trader.py: removed legacy direct emergency SELL and OCO implementations; manual SELL routes through CampaignExecutionService.exit_market; legacy direct-entry fallback is disabled.
-- trader.py: removed legacy single-symbol BUY and OCO implementations that used a barrier but did not share the campaign fill/position ledger.
+- portfolio_trader.py: production BinanceSpotClient legacy emergency SELL and OCO sinks are blocked before mutation; production manual SELL routes through CampaignExecutionService.exit_market; production legacy direct-entry fallback is blocked. Fake exchange adapters remain available to offline regression tests only.
+- trader.py: production BinanceSpotClient legacy single-symbol BUY and OCO entry points are blocked before mutation because they do not share the campaign fill/position ledger. Offline fake clients retain the legacy fixture path for regression tests.
 - StandaloneRuntime.kt: autonomous Android start is hard-blocked and executionReady() remains false while its independent durable-mutation/account-identity/recovery contract is unverified. This is containment, not a completed Android implementation.
 - ci_release_gate.py: changed expected version from 4.24.0 to 4.25.0 because the checked-in authoritative source files agree on server.py VERSION = '4.25.0', MainActivity.kt header “Williams 4.25.0”, and app/build.gradle.kts versionName = "4.25.0". This corrects a stale gate; it does not fabricate a source version.
 - Added test_task0094_account_identity.py and included it in Campaign CI.
@@ -60,12 +60,12 @@ TASK 009.4 does not claim add-on resize or residual SELL protection recovery is 
 | CampaignExecutionService._submit → ExecutionBarrier.execute | Canonical campaign mutation path; account identity and exchange recovery gate run before mutation |
 | CampaignExecutionService.create_hard_stop, replace_structural_stop, exit_market, _execute_cancel | Uses durable campaign intents/barrier; resize, cancel/fill race and residual-protection edge cases remain BLOCKED unless verified |
 | MultiPositionTrader.execute_campaign | Canonical dispatch to CampaignExecutionService |
-| MultiPositionTrader.execute legacy BUY fallback | Disabled; attempting to use legacy path raises and submits nothing |
-| MultiPositionTrader._emergency_market_sell | Legacy direct sink removed and replaced by fail-closed error; use campaign exit path |
-| MultiPositionTrader._create_oco | Legacy direct OCO sink removed and replaced by fail-closed error; use campaign hard-stop path |
+| MultiPositionTrader.execute legacy BUY fallback | Blocked for production BinanceSpotClient; fake exchange adapters remain for offline regression only |
+| MultiPositionTrader._emergency_market_sell | Production BinanceSpotClient is blocked before direct sink; use campaign exit path. Fake adapters exercise old regression fixture only |
+| MultiPositionTrader._create_oco | Production BinanceSpotClient is blocked before direct sink; use campaign hard-stop path. Fake adapters exercise old recovery fixtures only |
 | MultiPositionTrader.manual_sell | Routes only to an authoritative active campaign and CampaignExecutionService.exit_market; otherwise blocked |
-| Trader.market_buy | Legacy single-symbol direct order path removed and blocked |
-| Trader.place_oco | Legacy single-symbol OCO path removed and blocked |
+| Trader.market_buy | Production BinanceSpotClient is blocked before legacy order path; dry-run and live-authorization gates still run first |
+| Trader.place_oco | Production BinanceSpotClient is blocked before legacy OCO path |
 | BinanceSpotClient.order/order_safe, create_oco_sell, cancel_order, cancel_oco, cancel_replace | Low-level client methods still exist; safety depends on callers being the approved campaign barrier path. The Python call-site inventory must remain a CI-enforced allowlist in a follow-up; this report does not claim static proof that no future caller can bypass it. |
 
 This containment intentionally disables legacy direct Python execution rather than treating the existence of a barrier as proof of shared financial accounting. The canonical campaign route remains subject to the P0 limitations above.
@@ -105,7 +105,7 @@ Protective-order, add-on, partial SELL, cancel/fill, and late-fill tests from TA
 
 The source version contract is 4.25.0 across backend, Android header, and Gradle versionName; ci_release_gate.py was stale at 4.24.0 and now checks 4.25.0. The release gate must still be rerun on the final HEAD; its passing status is not assumed here.
 
-The previous Android lint failure was caused by Gradle Wrapper 8.14.5 being flagged as older than 8.14.6. No wrapper upgrade is made in this task without confirming AGP compatibility. A built APK, artifact SHA-256, install test, and device launch are not claimed unless the exact-head workflow produces and verifies them.
+The previous Android lint failure was caused by Gradle Wrapper 8.14.5 being flagged as older than 8.14.6. The checked-in Android Gradle Plugin is 8.13.2; Gradle 8.14.6 is a patch-level update above the AGP 8.13 minimum Gradle baseline. The wrapper and both CI Gradle settings have therefore been aligned to 8.14.6. Exact-head lint/unit/build results are still required. A built APK, artifact SHA-256, install test, and device launch are not claimed unless the exact-head workflow produces and verifies them.
 
 ## Remaining P0 blockers
 
