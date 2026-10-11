@@ -28,8 +28,9 @@ class _Cache:
 
 
 class _Store:
-    def __init__(self, fail_on_status=None):
+    def __init__(self, fail_on_status=None, fail_on_result=False):
         self.fail_on_status = fail_on_status
+        self.fail_on_result = fail_on_result
         self.statuses = []
         self.states = {}
 
@@ -37,6 +38,10 @@ class _Store:
         self.statuses.append(status)
         if status == self.fail_on_status:
             raise OSError("simulated durable-store failure")
+
+    def save_execution_event(self, intent_id, event, payload=None):
+        if self.fail_on_result and event == "BINANCE_RESULT":
+            raise OSError("simulated exchange-result persistence failure")
 
     def state_get(self, key, default=None):
         return self.states.get(key, default)
@@ -93,3 +98,17 @@ def test_result_persistence_failure_after_submit_is_unknown_not_success():
 
     assert calls == ["submitted"], "submit is called once and never retried by the barrier"
     assert store.statuses == ["PENDING", "SUBMITTED"]
+
+def test_exchange_response_persistence_failure_is_unknown_not_success():
+    store = _Store(fail_on_result=True)
+    barrier = ExecutionBarrier(_Cache(), store)
+    calls = []
+
+    with pytest.raises(ExecutionOutcomeUnknown):
+        barrier.execute(
+            _intent(),
+            lambda: calls.append("submitted") or {"status": "NEW", "executedQty": "0"},
+        )
+
+    assert calls == ["submitted"], "do not resubmit after result-storage failure"
+    assert store.statuses == ["PENDING"], "intent remains unresolved for reconciliation"
