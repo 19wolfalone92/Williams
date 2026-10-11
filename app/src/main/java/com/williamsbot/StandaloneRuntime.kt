@@ -768,6 +768,10 @@ private class NativeEngine(
     @Volatile private var lastServerTimeSyncMs = 0L
     @Volatile private var lastOrder: JSONObject? = null
     @Volatile private var reconcileRequired = false
+    // No Android-side proof currently covers authoritative fills, fee valuation,
+    // balance/position, risk ledger and actual protection as one recovery unit.
+    // Keep entries closed until such a proof producer is implemented and verified.
+    @Volatile private var globalFinancialRecoveryComplete = false
     @Volatile private var killLatched = false
     @Volatile private var userStreamConnected = false
     @Volatile private var userStreamSyncRequired = true
@@ -923,6 +927,7 @@ private class NativeEngine(
         running &&
             !paused &&
             !reconcileRequired &&
+            globalFinancialRecoveryComplete &&
             !killLatched &&
             marketDataFresh() &&
             marketWebSocketFresh() &&
@@ -938,6 +943,7 @@ private class NativeEngine(
             if (!running) add("runtime_not_running")
             if (paused) add("paused")
             if (reconcileRequired) add("reconcile_required")
+            if (!globalFinancialRecoveryComplete) add("global_financial_recovery_incomplete")
             if (killLatched) add("kill_switch_latched")
             if (!marketDataFresh()) add("rest_market_stale_or_not_ready")
             if (!marketSocketConnected) add("market_websocket_disconnected")
@@ -1094,6 +1100,17 @@ private class NativeEngine(
         }
 
         reconcileRequired = prefs.getBoolean("reconcile_required", false)
+        // Deliberately ignore any stale affirmative flag from a prior runtime:
+        // there is not yet an end-to-end financial recovery proof to validate.
+        globalFinancialRecoveryComplete = false
+        val globalGatePersisted = runCatching {
+            prefs.edit().putBoolean("global_financial_recovery_complete", false).commit() &&
+                !prefs.getBoolean("global_financial_recovery_complete", true)
+        }.getOrDefault(false)
+        if (!globalGatePersisted) {
+            reconcileRequired = true
+            runCatching { prefs.edit().putBoolean("reconcile_required", true).commit() }
+        }
         killLatched = prefs.getBoolean("kill_latched", false)
 
         if (persistedStateReadError != null) {
@@ -1802,6 +1819,21 @@ private class NativeEngine(
 
     @Synchronized
     fun recover(): JSONObject {
+        // A restart/recovery attempt invalidates prior entry permission first.
+        // The current implementation cannot prove the complete financial ledger.
+        globalFinancialRecoveryComplete = false
+        val gatePersisted = runCatching {
+            prefs.edit().putBoolean("global_financial_recovery_complete", false).commit() &&
+                !prefs.getBoolean("global_financial_recovery_complete", true)
+        }.getOrDefault(false)
+        if (!gatePersisted) {
+            setReconcileRequired("global financial recovery gate persistence failed")
+            return JSONObject()
+                .put("recovered", false)
+                .put("state", "RECONCILE_REQUIRED")
+                .put("execution_enabled", false)
+                .put("error", "GLOBAL_RECOVERY_GATE_PERSISTENCE_FAILED")
+        }
         require(
             key().isNotBlank() &&
                 secret().isNotBlank()
@@ -1816,7 +1848,10 @@ private class NativeEngine(
             clearReconcileRequired()
 
             JSONObject()
-                .put("recovered", !reconcileRequired)
+                .put("recovered", false)
+                .put("recovery_gate_status", "BLOCKED")
+                .put("global_financial_recovery_complete", false)
+                .put("reason", "global financial ledger/fee/balance/risk/protection proof is not implemented")
                 .put("state", stateName())
                 .put("execution_enabled", executionReady())
                 .put("execution_blockers", JSONArray(executionBlockers()))
@@ -3009,6 +3044,7 @@ private class NativeEngine(
         running &&
             !paused &&
             !reconcileRequired &&
+            globalFinancialRecoveryComplete &&
             !killLatched &&
             marketDataFresh() &&
             marketSocketConnected &&
@@ -3027,8 +3063,11 @@ private class NativeEngine(
         if (!running) error("Runtime is not running")
         if (paused) error("Runtime is paused")
         if (reconcileRequired) error("RECONCILE_REQUIRED")
+        require(globalFinancialRecoveryComplete || (purpose != "CAMPAIGN_ENTRY" && purpose != "CAMPAIGN_ADD_ON")) {
+            "GLOBAL_FINANCIAL_RECOVERY_INCOMPLETE: new exposure blocked"
+        }
         if (killLatched) error("KILL_SWITCH_LATCHED")
-        require(executionGate.tryReserve(symbol)) {
+        require(executionGate.tryReserve(symbol))
             "Campaign execution already reserved for " + symbol
         }
 
