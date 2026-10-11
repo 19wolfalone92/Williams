@@ -642,6 +642,12 @@ class CampaignExecutionService:
         campaign.tags["entry_fee_quote"] = float(entry_fee_before + fee_quote)
         campaign.tags["entry_fee_unallocated_quote"] = float(unallocated_fee_before + fee_quote)
         self.db.save_campaign(campaign)
+        # Keep the contour locked until post-commit exchange verification proves
+        # that a hard stop covers this recovered BUY position.
+        self.db.mark_execution_protection_pending(
+            str(intent.get("intent_id") or ""),
+            "exchange-confirmed BUY fill requires verified campaign protection",
+        )
 
     @staticmethod
     def _symbols_rows(info: dict[str, Any]) -> dict[str, dict]:
