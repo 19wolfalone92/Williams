@@ -706,3 +706,63 @@ def test_emergency_sell_rest_sink_rejects_quantity_and_account_mismatch():
         assert row["mutation_started_at"] is None
     finally:
         db.conn.close()
+
+
+
+def _process_consume_emergency_permit(db_path, start_event, result_queue):
+    from db import Database
+    db = Database(db_path)
+    try:
+        if not start_event.wait(timeout=10):
+            result_queue.put("start-timeout")
+            return
+        try:
+            operation_id = db.authorize_emergency_sell_mutation(
+                symbol="BTCUSDT",
+                quantity="0.001000",
+                client_order_id="WILLV4_EMERGENCY_aaaaaaaaaaaaaaaaaa",
+                environment="BINANCE_SPOT_TESTNET",
+                account_scope="b" * 24,
+            )
+            result_queue.put("authorized:" + operation_id)
+        except Exception as exc:
+            result_queue.put("blocked:" + type(exc).__name__)
+    finally:
+        db.conn.close()
+
+
+def test_independent_processes_can_consume_emergency_sink_permit_only_once(tmp_path):
+    ctx = multiprocessing.get_context("spawn")
+    db_path = str(tmp_path / "emergency-sink-permit.sqlite3")
+    db = Database(db_path)
+    intent = _prepare_emergency_sink_intent(db)
+    db.conn.close()
+    start_event = ctx.Event()
+    result_queue = ctx.Queue()
+    workers = [
+        ctx.Process(
+            target=_process_consume_emergency_permit,
+            args=(db_path, start_event, result_queue),
+        )
+        for _ in range(8)
+    ]
+    for worker in workers:
+        worker.start()
+    start_event.set()
+    outcomes = [result_queue.get(timeout=30) for _ in workers]
+    for worker in workers:
+        worker.join(timeout=30)
+        assert not worker.is_alive()
+        assert worker.exitcode == 0
+    assert sum(x.startswith("authorized:") for x in outcomes) == 1, outcomes
+    assert sum(x.startswith("blocked:") for x in outcomes) == 7, outcomes
+    verify = Database(db_path)
+    try:
+        row = verify.conn.execute(
+            "SELECT mutation_started_at,status FROM emergency_sell_intents WHERE operation_id=?",
+            (intent["operation_id"],),
+        ).fetchone()
+        assert row["mutation_started_at"]
+        assert row["status"] == "SUBMITTING"
+    finally:
+        verify.conn.close()
