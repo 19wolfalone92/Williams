@@ -403,9 +403,15 @@ class Database:
             float(intent.invalidation_level or 0.0),
             str(getattr(intent, 'client_order_id', '') or ''),
         )
-        owns_transaction = not self._transaction_active
-        if owns_transaction:
-            self.conn.execute("BEGIN IMMEDIATE")
+        # A caller-owned open transaction is not a durable intent. Refuse
+        # rather than allow the execution barrier to mistake an uncommitted row
+        # for a write-ahead record before network I/O.
+        if self._transaction_active:
+            raise RuntimeError(
+                "execution intent cannot be persisted inside an uncommitted caller transaction"
+            )
+        owns_transaction = True
+        self.conn.execute("BEGIN IMMEDIATE")
         try:
             existing = self.conn.execute(
                 '''SELECT symbol,side,order_type,purpose,
